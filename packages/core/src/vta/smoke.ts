@@ -701,3 +701,187 @@ export async function smokeMediatorNotifications(): Promise<SmokeLiveDeliveryRes
     mediator?.dispose();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Full wallet-boot smoke: WalletSession from-scratch → mediator
+// enrollment → live mode → passkey-management/1.0 enroll-challenge
+// against a fake VTA, then a resume-boot that verifies the
+// persisted state is loaded (no re-enrollment).
+// ---------------------------------------------------------------------------
+
+import { InMemoryKVStore } from "../store/index.js";
+import { WalletSession } from "./wallet-session.js";
+
+export interface SmokeWalletBootResult {
+  ok: boolean;
+  /** Holder DID was identical across the two boots (persistence works). */
+  didStablePerBoot?: boolean;
+  /** First boot's enrollment with the mediator returned a routing DID. */
+  firstBootEnrolled?: boolean;
+  /** Live delivery flag flipped on after enrollment. */
+  liveMode?: boolean;
+  /** Fake VTA's enroll-challenge reply round-tripped through the
+   *  bootstrapped DidcommVtaTransport. */
+  recoveredChallenge?: string;
+  /** Second boot resumed without re-enrolling. */
+  resumeSkippedEnrollment?: boolean;
+  error?: string;
+}
+
+export async function smokeWalletBoot(): Promise<SmokeWalletBootResult> {
+  // Identities representing the network the wallet talks to. These
+  // would normally be resolved from the VTA's DID document and the
+  // mediator's `routing_did`.
+  let vtaIdentity: Identity | null = null;
+  let mediatorIdentity: Identity | null = null;
+  let session1: WalletSession | null = null;
+  let session2: WalletSession | null = null;
+
+  try {
+    vtaIdentity = Identity.generate("did:webvh:vta.example.com:abc");
+    mediatorIdentity = Identity.generate("did:key:zMediatorWallet");
+    const vtaPub = vtaIdentity.publicJwk() as { kid: string; jwk: PublicJwk };
+    const medPub = mediatorIdentity.publicJwk() as { kid: string; jwk: PublicJwk };
+
+    const store = new InMemoryKVStore();
+
+    // Build a fake mediator+VTA bridge that's reusable across both
+    // sessions. We use closures over `vtaIdentity` and
+    // `mediatorIdentity` so the bridge keeps working between boots.
+    const makeBridge = (holderPubJwk: { kid: string; jwk: PublicJwk }) =>
+      new InMemoryDidcommBridge({
+        vta: vtaIdentity!,
+        mediator: mediatorIdentity!,
+        holderPublicJwk: holderPubJwk,
+        mediatorHandlers: {
+          [CoordinateMediationProtocol.mediateRequest]: () => ({
+            type: CoordinateMediationProtocol.mediateGrant,
+            body: { routing_did: ["did:key:zMediatorWalletRouting"] },
+          }),
+          [CoordinateMediationProtocol.keylistUpdate]: (req) => {
+            const body = req.body as {
+              updates?: Array<{ recipient_did: string; action: "add" | "remove" }>;
+            };
+            return {
+              type: CoordinateMediationProtocol.keylistUpdateResponse,
+              body: {
+                updated:
+                  body.updates?.map((u) => ({
+                    recipient_did: u.recipient_did,
+                    action: u.action,
+                    result: "success",
+                  })) ?? [],
+              },
+            };
+          },
+          [PickupProtocol.liveDeliveryChange]: () => null,
+        },
+        vtaHandlers: {
+          [PasskeyManagementProtocol.enrollChallenge]: () => ({
+            type: PasskeyManagementProtocol.enrollChallengeResponse,
+            body: {
+              challenge: "Y2hhbGwtd2FsbGV0LWJvb3Q",
+              rpId: "wallet.example.com",
+              rpName: "Wallet Boot Smoke",
+              userHandle: "dXNlcg",
+              userName: "alice",
+              userDisplayName: "Alice",
+              timeoutMs: 60_000,
+            },
+          }),
+        },
+      });
+
+    // ---- First boot: from-scratch ----
+    // We can't pass the holder pub JWK to the bridge before we know
+    // the holder identity, so we construct the bridge after
+    // bootstrap reads/generates the holder. The WalletSession's
+    // bridgeOverride takes a fully-formed bridge — so we wire a
+    // late-binding factory by deferring the InMemoryDidcommBridge
+    // construction until we know the holder JWK.
+    //
+    // To keep WalletSession's contract clean, we instead use
+    // WalletSession's natural bridge creation but with a no-op
+    // WebSocket factory and a manual InMemoryDidcommBridge running
+    // alongside that "delivers" replies in-process. The simpler
+    // option: pre-load holder identity via the KVStore by running
+    // generateOrLoadHolderIdentity ourselves first, build the
+    // bridge with the resulting holder JWK, then pass via
+    // bridgeOverride.
+    const { generateOrLoadHolderIdentity: gen } = await import(
+      "../store/index.js"
+    );
+    const peek = await gen(store);
+    const holderPub = peek.identity.publicJwk() as { kid: string; jwk: PublicJwk };
+    peek.identity.dispose();
+
+    const bridge1 = makeBridge(holderPub);
+
+    session1 = new WalletSession({
+      store,
+      mediator: {
+        did: mediatorIdentity.did,
+        keyAgreementKid: medPub.kid,
+        keyAgreementPublicJwk: medPub.jwk,
+        websocketUrl: "wss://test.invalid/",
+      },
+      vta: {
+        did: vtaIdentity.did,
+        keyAgreementKid: vtaPub.kid,
+        keyAgreementPublicJwk: vtaPub.jwk,
+      },
+      bridgeOverride: bridge1,
+      timeoutMs: 5_000,
+    });
+    const state1 = await session1.bootstrap();
+    await session1.setLiveDelivery(true);
+    const challenge1 = await session1
+      .transport()
+      .requestEnrollmentChallenge(state1.holder.did);
+
+    // Capture before close() disposes the holder.
+    const did1 = state1.holder.did;
+    const liveMode1 = state1.liveMode;
+    const enrolled1 = state1.freshlyEnrolled;
+    const routing1Length = state1.routingDids.length;
+
+    session1.close();
+
+    // ---- Second boot: resume from persisted state ----
+    const bridge2 = makeBridge(holderPub);
+    session2 = new WalletSession({
+      store,
+      mediator: {
+        did: mediatorIdentity.did,
+        keyAgreementKid: medPub.kid,
+        keyAgreementPublicJwk: medPub.jwk,
+        websocketUrl: "wss://test.invalid/",
+      },
+      vta: {
+        did: vtaIdentity.did,
+        keyAgreementKid: vtaPub.kid,
+        keyAgreementPublicJwk: vtaPub.jwk,
+      },
+      bridgeOverride: bridge2,
+      timeoutMs: 5_000,
+    });
+    const state2 = await session2.bootstrap();
+    const did2 = state2.holder.did;
+    const enrolled2 = state2.freshlyEnrolled;
+    session2.close();
+
+    return {
+      ok: true,
+      didStablePerBoot: did1 === did2,
+      firstBootEnrolled: enrolled1 && routing1Length > 0,
+      liveMode: liveMode1,
+      recoveredChallenge: challenge1.challenge,
+      resumeSkippedEnrollment: !enrolled2,
+    };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  } finally {
+    vtaIdentity?.dispose();
+    mediatorIdentity?.dispose();
+  }
+}

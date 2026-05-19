@@ -10,6 +10,7 @@ import {
   smokeMediatorEnrollment,
   smokeMediatorNotifications,
   smokePickupDispatch,
+  smokeWalletBoot,
   smokeWsBridgeDemux,
 } from "@pnm/core";
 import { App } from "./App.js";
@@ -28,6 +29,7 @@ if (import.meta.env.DEV) {
     smokeMediatorEnrollment,
     smokeMediatorNotifications,
     smokePickupDispatch,
+    smokeWalletBoot,
     didcommCrateVersion,
   };
 }

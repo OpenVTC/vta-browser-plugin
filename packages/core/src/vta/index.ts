@@ -10,3 +10,4 @@ export * from "./protocol.js";
 export * from "./smoke.js";
 export * from "./transport.js";
 export * from "./types.js";
+export * from "./wallet-session.js";

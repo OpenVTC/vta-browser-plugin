@@ -701,11 +701,15 @@ dependencies = [
  "base64ct",
  "console_error_panic_hook",
  "getrandom 0.2.17",
+ "k256",
+ "p256",
+ "rand_core 0.6.4",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
  "uuid",
  "wasm-bindgen",
+ "zeroize",
 ]
 
 [[package]]

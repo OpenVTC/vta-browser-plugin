@@ -16,8 +16,10 @@ use affinidi_messaging_didcomm::message::pack::{
     pack_encrypted_anoncrypt, pack_encrypted_authcrypt,
 };
 use affinidi_messaging_didcomm::message::unpack::{UnpackResult, unpack as didcomm_unpack};
+use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
+use zeroize::Zeroizing;
 
 #[wasm_bindgen(start)]
 pub fn start() {
@@ -62,6 +64,29 @@ pub struct Identity {
     did: String,
     key_agreement_kid: String,
     key_agreement_private: PrivateKeyAgreement,
+    /// Raw secret bytes retained so we can export them via
+    /// `secretJwk()` for browser-side persistence. Zeroised on
+    /// drop. The dalek-owned copy inside `key_agreement_private`
+    /// is also zeroised on drop via the crate's `ZeroizeOnDrop`.
+    secret_bytes: Zeroizing<Vec<u8>>,
+}
+
+fn generate_secret_bytes(curve: Curve) -> Vec<u8> {
+    match curve {
+        Curve::X25519 => {
+            let mut bytes = [0u8; 32];
+            OsRng.fill_bytes(&mut bytes);
+            bytes.to_vec()
+        }
+        Curve::P256 => {
+            let key = p256::SecretKey::random(&mut OsRng);
+            key.to_bytes().to_vec()
+        }
+        Curve::K256 => {
+            let key = k256::SecretKey::random(&mut OsRng);
+            key.to_bytes().to_vec()
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -85,12 +110,15 @@ impl Identity {
     pub fn generate(did: String, curve: Option<String>) -> Result<Identity, JsError> {
         let curve = curve.as_deref().unwrap_or("X25519");
         let curve = parse_curve(curve)?;
-        let key_agreement_private = PrivateKeyAgreement::generate(curve);
+        let raw = generate_secret_bytes(curve);
+        let key_agreement_private = PrivateKeyAgreement::from_raw_bytes(curve, &raw)
+            .map_err(|e| err("from_raw_bytes", e))?;
         let key_agreement_kid = format!("{did}#key-agreement-1");
         Ok(Identity {
             did,
             key_agreement_kid,
             key_agreement_private,
+            secret_bytes: Zeroizing::new(raw),
         })
     }
 
@@ -121,6 +149,7 @@ impl Identity {
             did,
             key_agreement_kid: kid,
             key_agreement_private,
+            secret_bytes: Zeroizing::new(raw),
         })
     }
 
@@ -144,6 +173,35 @@ impl Identity {
             jwk: pk.to_jwk(),
         };
         to_plain_js(&out).map_err(|e| err("publicJwk", e))
+    }
+
+    /// Export the secret as a JWK (`kty`/`crv`/`x`(/`y`)/`d`) plus
+    /// `did` and `kid` for reconstruction via `fromSecretJwk`. Use
+    /// only for persistence; callers are responsible for handling
+    /// the result with care (best-effort zeroisation after writing
+    /// to encrypted storage).
+    ///
+    /// JS strings are immutable, so this method offers no
+    /// in-language guarantee of zeroisation — wrap the persistence
+    /// step in WebAuthn PRF or similar protection at the
+    /// application layer.
+    #[wasm_bindgen(js_name = secretJwk)]
+    pub fn secret_jwk(&self) -> Result<JsValue, JsError> {
+        use base64ct::{Base64UrlUnpadded, Encoding};
+
+        let mut jwk = self.key_agreement_private.public_key().to_jwk();
+        let d_b64 = Base64UrlUnpadded::encode_string(&self.secret_bytes);
+        if let serde_json::Value::Object(ref mut map) = jwk {
+            map.insert("d".to_string(), serde_json::Value::String(d_b64));
+        } else {
+            return Err(JsError::new("secret_jwk: public JWK was not an object"));
+        }
+        let out = serde_json::json!({
+            "did": self.did,
+            "kid": self.key_agreement_kid,
+            "jwk": jwk,
+        });
+        to_plain_js(&out).map_err(|e| err("secretJwk", e))
     }
 
     /// Drop the private key. After this the handle is unusable. Calls
