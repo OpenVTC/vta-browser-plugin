@@ -1,0 +1,39 @@
+{
+  "name": "@pnm/core",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Shared core: WebAuthn ceremony helpers, COSE→Multikey conversion, DID verificationMethod builder, VTA REST client.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./webauthn": {
+      "types": "./dist/webauthn/index.d.ts",
+      "import": "./dist/webauthn/index.js"
+    },
+    "./did": {
+      "types": "./dist/did/index.d.ts",
+      "import": "./dist/did/index.js"
+    },
+    "./vta": {
+      "types": "./dist/vta/index.d.ts",
+      "import": "./dist/vta/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b",
+    "lint": "tsc -b --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@scure/base": "^1.1.9"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

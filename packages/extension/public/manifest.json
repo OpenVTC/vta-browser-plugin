@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "PNM Wallet",
+  "version": "0.1.0",
+  "description": "Bridge between WebAuthn passkeys and VTA-managed DIDs.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PNM Wallet"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["storage"],
+  "host_permissions": []
+}
