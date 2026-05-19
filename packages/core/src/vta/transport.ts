@@ -22,14 +22,13 @@ export interface VtaTransport {
  * Seam for the DIDComm transport's send/receive plumbing. Lets us
  * separate "build the right DIDComm message bytes" from "actually
  * push them through a mediator". The first concern lives in
- * `@pnm/core`; the second is the next milestone (WebSocket mediator
- * pickup, etc.).
+ * `@pnm/core`; the second is the WebSocket / HTTPS bridge
+ * implementation.
  *
- * Implementations are responsible for transmitting the packed
- * (anoncrypt'd, forward-wrapped) JWE bytes to the configured
- * mediator and awaiting a single reply DIDComm message bound for
- * the holder — returned to the caller as the raw JWE/JWS/plaintext
- * string.
+ * Implementations transmit packed JWE bytes to the configured
+ * mediator. `sendAndAwaitReply` registers a reply expectation by
+ * `thid`; `send` is fire-and-forget for DIDComm notifications
+ * (e.g. `pickup/3.0/live-delivery-change`, `messages-received`).
  */
 export interface DidcommMessageBridge {
   sendAndAwaitReply(
@@ -39,4 +38,13 @@ export interface DidcommMessageBridge {
     expectThreadId: string,
     options?: { timeoutMs?: number },
   ): Promise<string>;
+
+  /**
+   * Fire-and-forget. The DIDComm protocol message in
+   * `outerPackedJwe` is one-way (notification) — caller doesn't
+   * expect a reply. Implementations resolve once the bytes are
+   * handed off to the underlying transport; they do not track
+   * delivery acknowledgement at this layer.
+   */
+  send(outerPackedJwe: string): Promise<void>;
 }

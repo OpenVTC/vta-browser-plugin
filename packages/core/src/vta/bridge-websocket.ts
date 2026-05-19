@@ -297,6 +297,17 @@ export class WebSocketDidcommBridge implements DidcommMessageBridge {
     return reply;
   }
 
+  async send(outerPackedJwe: string): Promise<void> {
+    await this.ensureOpen();
+    const socket = this.socket;
+    if (!socket) throw new VtaClientError("e.client.network", "socket unavailable");
+    try {
+      socket.send(outerPackedJwe);
+    } catch (err) {
+      throw new VtaClientError("e.client.network", (err as Error).message);
+    }
+  }
+
   close(): void {
     if (this.socket) {
       try {

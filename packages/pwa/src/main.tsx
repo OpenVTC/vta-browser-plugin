@@ -8,6 +8,7 @@ import {
   smokeBuildDidcommEnrollChallenge,
   smokeDidcommVtaTransportRoundtrip,
   smokeMediatorEnrollment,
+  smokeMediatorNotifications,
   smokePickupDispatch,
   smokeWsBridgeDemux,
 } from "@pnm/core";
@@ -25,6 +26,7 @@ if (import.meta.env.DEV) {
     smokeDidcommVtaTransportRoundtrip,
     smokeWsBridgeDemux,
     smokeMediatorEnrollment,
+    smokeMediatorNotifications,
     smokePickupDispatch,
     didcommCrateVersion,
   };

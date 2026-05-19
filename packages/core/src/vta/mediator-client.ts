@@ -16,6 +16,11 @@ import {
   type MediateGrantBody,
   type MediateRequestBody,
 } from "./mediation.js";
+import {
+  PickupProtocol,
+  type LiveDeliveryChangeBody,
+  type MessagesReceivedBody,
+} from "./pickup.js";
 import type { DidcommMessageBridge } from "./transport.js";
 
 export interface MediatorClientOptions {
@@ -110,6 +115,34 @@ export class MediatorClient {
       body,
       [CoordinateMediationProtocol.keylist],
     );
+  }
+
+  /**
+   * Toggle Pickup 3.0 live-delivery mode. When enabled, the
+   * mediator pushes inbound DIDComm messages on the same channel
+   * (via `pickup/3.0/delivery`) as soon as they arrive — the
+   * pattern the `Pickup3Dispatcher` expects.
+   *
+   * Fire-and-forget per spec; no reply.
+   */
+  async setLiveDelivery(enabled: boolean): Promise<void> {
+    const body: LiveDeliveryChangeBody = { live_delivery: enabled };
+    const { outer } = this.buildOutbound(PickupProtocol.liveDeliveryChange, body);
+    await this.bridge.send(outer);
+  }
+
+  /**
+   * Acknowledge delivery of one or more queued messages by their
+   * mediator-assigned IDs. Tells the mediator it can drop them
+   * from the holder's queue.
+   *
+   * Fire-and-forget per spec; no reply.
+   */
+  async acknowledgeMessages(messageIds: string[]): Promise<void> {
+    if (messageIds.length === 0) return;
+    const body: MessagesReceivedBody = { message_id_list: messageIds };
+    const { outer } = this.buildOutbound(PickupProtocol.messagesReceived, body);
+    await this.bridge.send(outer);
   }
 
   private async exchange<Req extends object, Res>(

@@ -18,7 +18,7 @@ import {
   type MediateGrantBody,
 } from "./mediation.js";
 import { MediatorClient } from "./mediator-client.js";
-import { PickupProtocol } from "./pickup.js";
+import { PickupProtocol, type LiveDeliveryChangeBody } from "./pickup.js";
 import { PasskeyManagementProtocol } from "./protocol.js";
 import type { DidcommMessageBridge } from "./transport.js";
 import type { EnrollmentChallengeResponse } from "./types.js";
@@ -63,6 +63,7 @@ export function smokeBuildDidcommEnrollChallenge(): SmokeDidcommEnrollChallengeR
       sendAndAwaitReply: () => {
         throw new Error("smoke bridge not callable — construction-only test");
       },
+      send: () => Promise.resolve(),
     };
 
     const transport = new DidcommVtaTransport({
@@ -614,6 +615,89 @@ export async function smokePickupDispatch(): Promise<SmokePickupDispatchResult> 
   } finally {
     holder?.dispose();
     vta?.dispose();
+    mediator?.dispose();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Notification smoke: setLiveDelivery dispatches a one-way DIDComm
+// notification through bridge.send(). The fake mediator handler
+// records the flag and returns null (no reply). Validates that the
+// in-memory bridge correctly handles the "no reply" path.
+// ---------------------------------------------------------------------------
+
+export interface SmokeLiveDeliveryResult {
+  ok: boolean;
+  recordedFlag?: boolean;
+  ackedIdsCount?: number;
+  error?: string;
+}
+
+export async function smokeMediatorNotifications(): Promise<SmokeLiveDeliveryResult> {
+  let holder: Identity | null = null;
+  let mediator: Identity | null = null;
+  try {
+    holder = Identity.generate("did:key:zHolderNotify");
+    mediator = Identity.generate("did:key:zMediatorNotify");
+
+    const mediatorPub = mediator.publicJwk() as { kid: string; jwk: PublicJwk };
+    const holderPub = holder.publicJwk() as { kid: string; jwk: PublicJwk };
+
+    let recordedFlag: boolean | undefined;
+    let ackedIds: string[] = [];
+
+    const bridge = new InMemoryDidcommBridge({
+      mediator,
+      holderPublicJwk: holderPub,
+      mediatorHandlers: {
+        [PickupProtocol.liveDeliveryChange]: (req) => {
+          const body = req.body as LiveDeliveryChangeBody;
+          recordedFlag = body.live_delivery;
+          return null; // notification — no reply
+        },
+        [PickupProtocol.messagesReceived]: (req) => {
+          const body = req.body as { message_id_list?: string[] };
+          ackedIds = body.message_id_list ?? [];
+          return null; // notification — no reply
+        },
+      },
+    });
+
+    const client = new MediatorClient({
+      bridge,
+      holder,
+      mediator: {
+        did: mediator.did,
+        keyAgreementKid: mediatorPub.kid,
+        keyAgreementPublicJwk: mediatorPub.jwk,
+      },
+    });
+
+    await client.setLiveDelivery(true);
+    if (recordedFlag !== true) {
+      return {
+        ok: false,
+        error: `expected recordedFlag=true, got ${recordedFlag}`,
+      };
+    }
+
+    await client.acknowledgeMessages(["msg-1", "msg-2", "msg-3"]);
+    if (ackedIds.length !== 3) {
+      return {
+        ok: false,
+        error: `expected 3 acked ids, got ${ackedIds.length}`,
+      };
+    }
+
+    return {
+      ok: true,
+      recordedFlag,
+      ackedIdsCount: ackedIds.length,
+    };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  } finally {
+    holder?.dispose();
     mediator?.dispose();
   }
 }

@@ -9,7 +9,10 @@ import type { DidcommMessageBridge } from "./transport.js";
 
 const FORWARD_TYPE = "https://didcomm.org/routing/2.0/forward";
 
-/** Reply contract a fake-VTA or fake-mediator handler returns to the bridge. */
+/** Reply contract a fake-VTA or fake-mediator handler returns to the bridge.
+ *  Returning `null` or `undefined` signals "no reply" — appropriate for
+ *  DIDComm notifications like `pickup/3.0/live-delivery-change` and
+ *  `pickup/3.0/messages-received`. */
 export interface InMemoryHandlerReply {
   type: string;
   body: unknown;
@@ -20,7 +23,7 @@ export type InMemoryHandler = (request: {
   from?: string;
   body: unknown;
   id: string;
-}) => Promise<InMemoryHandlerReply> | InMemoryHandlerReply;
+}) => Promise<InMemoryHandlerReply | null | undefined> | InMemoryHandlerReply | null | undefined;
 
 export interface InMemoryDidcommBridgeOptions {
   /** Fake VTA identity (unpacks inner authcrypt + signs replies). */
@@ -97,6 +100,26 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
     _expectThreadId: string,
     _options?: { timeoutMs?: number },
   ): Promise<string> {
+    const reply = await this.process(outerPackedJwe);
+    if (reply === null) {
+      throw new Error(
+        "bridge: handler returned no reply (notification) but caller awaited one",
+      );
+    }
+    return reply;
+  }
+
+  async send(outerPackedJwe: string): Promise<void> {
+    // Fire-and-forget. The in-memory bridge still routes through
+    // the same dispatch path so that handlers see notifications,
+    // but it discards any reply (which should be null for proper
+    // notification message types).
+    await this.process(outerPackedJwe);
+  }
+
+  /** Internal: route the outer envelope to the right pattern's
+   *  handler and return its reply JWE (or null for notifications). */
+  private async process(outerPackedJwe: string): Promise<string | null> {
     // ── Pattern 1 + 2: mediator configured → try mediator-unpack first
     if (this.mediator) {
       const outerIsAuthcrypt = readJweSenderKid(outerPackedJwe) !== undefined;
@@ -127,7 +150,7 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
     return this.handleDirectVta(outerPackedJwe);
   }
 
-  private async handleForwarded(outer: ForwardEnvelope): Promise<string> {
+  private async handleForwarded(outer: ForwardEnvelope): Promise<string | null> {
     if (!this.vta) {
       throw new Error("bridge: forward envelope received but no VTA identity configured");
     }
@@ -140,7 +163,7 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
     return this.handleDirectVta(innerJwe);
   }
 
-  private async handleDirectVta(innerJwe: string): Promise<string> {
+  private async handleDirectVta(innerJwe: string): Promise<string | null> {
     if (!this.vta) {
       throw new Error("bridge: direct-to-VTA path requires `vta` identity");
     }
@@ -161,7 +184,7 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
     );
   }
 
-  private async handleMediatorDirect(decrypted: InnerRequest): Promise<string> {
+  private async handleMediatorDirect(decrypted: InnerRequest): Promise<string | null> {
     if (!this.mediator) {
       throw new Error("unreachable: mediator-direct without mediator");
     }
@@ -172,7 +195,7 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
     req: InnerRequest,
     handlers: Record<string, InMemoryHandler>,
     replier: Identity,
-  ): Promise<string> {
+  ): Promise<string | null> {
     if (!req.type) throw new Error("bridge: message missing `type`");
     if (!req.id) throw new Error("bridge: message missing `id`");
     if (!req.from) {
@@ -188,6 +211,7 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
       body: req.body ?? {},
       id: req.id,
     });
+    if (reply == null) return null;
     const replyJwe = packAuthcrypt(
       {
         type: reply.type,
