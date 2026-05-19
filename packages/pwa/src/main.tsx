@@ -6,6 +6,7 @@ import {
   didcommCrateVersion,
   smokeAuthcryptRoundtrip,
   smokeBuildDidcommEnrollChallenge,
+  smokeDidcommVtaTransportRoundtrip,
 } from "@pnm/core";
 import { App } from "./App.js";
 import "./styles.css";
@@ -18,6 +19,7 @@ if (import.meta.env.DEV) {
   (window as unknown as { pnm?: unknown }).pnm = {
     smokeAuthcryptRoundtrip,
     smokeBuildDidcommEnrollChallenge,
+    smokeDidcommVtaTransportRoundtrip,
     didcommCrateVersion,
   };
 }

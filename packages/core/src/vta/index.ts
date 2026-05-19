@@ -1,3 +1,4 @@
+export * from "./bridge-memory.js";
 export * from "./client.js";
 export * from "./didcomm.js";
 export * from "./errors.js";
