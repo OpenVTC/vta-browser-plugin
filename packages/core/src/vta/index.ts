@@ -3,6 +3,8 @@ export * from "./bridge-websocket.js";
 export * from "./client.js";
 export * from "./didcomm.js";
 export * from "./errors.js";
+export * from "./mediation.js";
+export * from "./mediator-client.js";
 export * from "./protocol.js";
 export * from "./smoke.js";
 export * from "./transport.js";

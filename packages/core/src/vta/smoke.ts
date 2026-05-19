@@ -5,6 +5,12 @@ import {
   type WebSocketLike,
 } from "./bridge-websocket.js";
 import { DidcommVtaTransport } from "./didcomm.js";
+import {
+  CoordinateMediationProtocol,
+  type KeylistUpdateResponseBody,
+  type MediateGrantBody,
+} from "./mediation.js";
+import { MediatorClient } from "./mediator-client.js";
 import { PasskeyManagementProtocol } from "./protocol.js";
 import type { DidcommMessageBridge } from "./transport.js";
 import type { EnrollmentChallengeResponse } from "./types.js";
@@ -128,7 +134,7 @@ export async function smokeDidcommVtaTransportRoundtrip(): Promise<SmokeDidcommR
       vta,
       mediator,
       holderPublicJwk: holderPub,
-      handlers: {
+      vtaHandlers: {
         [PasskeyManagementProtocol.enrollChallenge]: (req) => {
           const body = req.body as { did?: string };
           const reply: EnrollmentChallengeResponse = {
@@ -275,7 +281,7 @@ export async function smokeWsBridgeDemux(): Promise<SmokeWsBridgeDemuxResult> {
       vta,
       mediator,
       holderPublicJwk: holderPub,
-      handlers: {
+      vtaHandlers: {
         [PasskeyManagementProtocol.enrollChallenge]: (req) => {
           const body = req.body as { did?: string };
           // Use the DID as a stable per-request tag so we can return
@@ -304,7 +310,7 @@ export async function smokeWsBridgeDemux(): Promise<SmokeWsBridgeDemuxResult> {
     const bridge = new WebSocketDidcommBridge({
       url: "wss://test.invalid/",
       holder,
-      expectedSenderJwk: vtaPub.jwk,
+      expectedSenders: { [vta.did]: vtaPub.jwk },
       webSocketFactory: (_url: string) => {
         fakeSocket = new FakeMediatorWebSocket((outer) => {
           void inMemory
@@ -370,6 +376,102 @@ export async function smokeWsBridgeDemux(): Promise<SmokeWsBridgeDemuxResult> {
   } finally {
     holder?.dispose();
     vta?.dispose();
+    mediator?.dispose();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Coordinate-mediation/2.0 enrollment smoke. Drives mediate-request
+// → grant and keylist-update through the in-memory bridge (the same
+// bridge used for VTA traffic, exercising the "direct authcrypt to
+// mediator, NOT forward-wrapped" path).
+// ---------------------------------------------------------------------------
+
+export interface SmokeMediatorEnrollmentResult {
+  ok: boolean;
+  routingDid?: string;
+  keylistUpdateResult?: string;
+  error?: string;
+}
+
+const FAKE_ROUTING_DID = "did:key:zMediatorRouting";
+
+export async function smokeMediatorEnrollment(): Promise<SmokeMediatorEnrollmentResult> {
+  let holder: Identity | null = null;
+  let mediator: Identity | null = null;
+  try {
+    holder = Identity.generate("did:key:zHolderForMediation");
+    mediator = Identity.generate("did:key:zMediatorEnrollment");
+
+    const mediatorPub = mediator.publicJwk() as { kid: string; jwk: PublicJwk };
+    const holderPub = holder.publicJwk() as { kid: string; jwk: PublicJwk };
+
+    const bridge = new InMemoryDidcommBridge({
+      mediator,
+      holderPublicJwk: holderPub,
+      mediatorHandlers: {
+        [CoordinateMediationProtocol.mediateRequest]: () => {
+          const reply: MediateGrantBody = { routing_did: [FAKE_ROUTING_DID] };
+          return { type: CoordinateMediationProtocol.mediateGrant, body: reply };
+        },
+        [CoordinateMediationProtocol.keylistUpdate]: (req) => {
+          const body = req.body as {
+            updates?: Array<{ recipient_did: string; action: "add" | "remove" }>;
+          };
+          const updated =
+            body.updates?.map((u) => ({
+              recipient_did: u.recipient_did,
+              action: u.action,
+              result: "success" as const,
+            })) ?? [];
+          const reply: KeylistUpdateResponseBody = { updated };
+          return {
+            type: CoordinateMediationProtocol.keylistUpdateResponse,
+            body: reply,
+          };
+        },
+      },
+    });
+
+    const client = new MediatorClient({
+      bridge,
+      holder,
+      mediator: {
+        did: mediator.did,
+        keyAgreementKid: mediatorPub.kid,
+        keyAgreementPublicJwk: mediatorPub.jwk,
+      },
+      timeoutMs: 5_000,
+    });
+
+    const grant = await client.requestMediation();
+    if (grant.routing_did[0] !== FAKE_ROUTING_DID) {
+      return {
+        ok: false,
+        error: `routing_did mismatch: ${grant.routing_did[0]} != ${FAKE_ROUTING_DID}`,
+      };
+    }
+
+    const updateResp = await client.updateKeylist([
+      { recipient_did: holder.did, action: "add" },
+    ]);
+    const first = updateResp.updated[0];
+    if (!first || first.result !== "success") {
+      return {
+        ok: false,
+        error: `keylist-update did not return success (${first?.result ?? "(none)"})`,
+      };
+    }
+
+    return {
+      ok: true,
+      routingDid: grant.routing_did[0],
+      keylistUpdateResult: first.result,
+    };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  } finally {
+    holder?.dispose();
     mediator?.dispose();
   }
 }

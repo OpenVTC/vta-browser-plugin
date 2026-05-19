@@ -70,11 +70,17 @@ export interface WebSocketDidcommBridgeOptions {
   /** Holder identity used to unpack every inner JWE. */
   holder: Identity;
   /**
-   * Public JWK of the *expected sender* of inner JWEs (typically the
-   * VTA, used to authenticate authcrypt). Pass undefined to accept
-   * any sender (anoncrypt-only flows).
+   * Public JWKs of every expected counterparty, keyed by their DID
+   * (no `#fragment`). When peeking an inbound JWE, the bridge parses
+   * the protected header's `skid` to resolve which sender's JWK to
+   * use for ECDH-1PU decryption. Senders not in the map fall back
+   * to anoncrypt unpack (no sender authentication).
+   *
+   * Components that share a bridge (e.g. DidcommVtaTransport +
+   * MediatorClient) should each register their counterparty here or
+   * via `addExpectedSender()`.
    */
-  expectedSenderJwk?: PublicJwk;
+  expectedSenders?: Record<string, PublicJwk>;
   /** How to extract inner JWEs from each WebSocket frame. */
   dispatcher?: MessageDispatcher;
   /**
@@ -86,6 +92,39 @@ export interface WebSocketDidcommBridgeOptions {
   onInbox?: (msg: { type: string; thid?: string; body: unknown }) => void;
   /** Per-request timeout (ms). Default 30s. */
   timeoutMs?: number;
+}
+
+/**
+ * Parse a JWE protected-header `skid` (sender kid) without
+ * decrypting. The protected header is base64url-encoded JSON; `skid`
+ * is set for authcrypt (ECDH-1PU) and absent for anoncrypt
+ * (ECDH-ES).
+ *
+ * Exported for tests; production callers should rely on the
+ * bridge's automatic resolution.
+ */
+export function readJweSenderKid(jwe: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(jwe);
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    const protectedB64 = (parsed as { protected?: unknown }).protected;
+    if (typeof protectedB64 !== "string") return undefined;
+    const headerJson = atob(
+      protectedB64.replaceAll("-", "+").replaceAll("_", "/"),
+    );
+    const header: unknown = JSON.parse(headerJson);
+    if (typeof header !== "object" || header === null) return undefined;
+    const skid = (header as { skid?: unknown }).skid;
+    return typeof skid === "string" ? skid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Strip the `#fragment` from a DID URL to get the bare DID. */
+export function didFromKid(kid: string): string {
+  const hash = kid.indexOf("#");
+  return hash === -1 ? kid : kid.slice(0, hash);
 }
 
 interface Pending {
@@ -115,7 +154,7 @@ interface Pending {
 export class WebSocketDidcommBridge implements DidcommMessageBridge {
   private readonly url: string;
   private readonly holder: Identity;
-  private readonly expectedSenderJwk?: PublicJwk;
+  private readonly senders = new Map<string, PublicJwk>();
   private readonly dispatcher: MessageDispatcher;
   private readonly factory: WebSocketFactory;
   private readonly onInbox?: (msg: {
@@ -132,13 +171,35 @@ export class WebSocketDidcommBridge implements DidcommMessageBridge {
   constructor(opts: WebSocketDidcommBridgeOptions) {
     this.url = opts.url;
     this.holder = opts.holder;
-    if (opts.expectedSenderJwk !== undefined) this.expectedSenderJwk = opts.expectedSenderJwk;
+    if (opts.expectedSenders) {
+      for (const [did, jwk] of Object.entries(opts.expectedSenders)) {
+        this.senders.set(did, jwk);
+      }
+    }
     this.dispatcher = opts.dispatcher ?? new RawDispatcher();
     this.factory =
       opts.webSocketFactory ??
       ((url: string) => new (globalThis as { WebSocket: new (u: string) => WebSocketLike }).WebSocket(url));
     if (opts.onInbox !== undefined) this.onInbox = opts.onInbox;
     this.defaultTimeoutMs = opts.timeoutMs ?? 30_000;
+  }
+
+  /**
+   * Register an expected counterparty after construction. Returns
+   * the bridge so callers can chain
+   * (`new WebSocketDidcommBridge(...).addExpectedSender(...)`).
+   */
+  addExpectedSender(senderDid: string, jwk: PublicJwk): this {
+    this.senders.set(senderDid, jwk);
+    return this;
+  }
+
+  /** Resolve the JWK we should use to decrypt the given JWE, by
+   *  parsing the protected header for `skid` and looking up the DID. */
+  private resolveSenderJwk(jwe: string): PublicJwk | undefined {
+    const skid = readJweSenderKid(jwe);
+    if (!skid) return undefined;
+    return this.senders.get(didFromKid(skid));
   }
 
   async sendAndAwaitReply(
@@ -241,36 +302,34 @@ export class WebSocketDidcommBridge implements DidcommMessageBridge {
     }
   }
 
-  private routeOne(innerJwe: string): void {
-    // Don't unpack here — let the caller of sendAndAwaitReply
-    // re-unpack with its expected sender JWK for full sender
-    // authentication. We only need to peek the `thid` to know who
-    // is waiting on this message. Quickest path: parse the JWE,
-    // unpack, read thid, then re-emit the raw JWE.
-    //
-    // Trade-off: we unpack the same JWE twice (here + in
-    // DidcommVtaTransport.exchange). For the wallet's expected
-    // message rates this is fine; revisit if profiling shows it
-    // matters.
-    let thid: string | undefined;
+  private peekMessage(
+    innerJwe: string,
+  ): { type?: string; thid?: string; body?: unknown } | undefined {
+    const senderJwk = this.resolveSenderJwk(innerJwe);
     try {
       const result = unpackMessage(
         {
           input: innerJwe,
-          ...(this.expectedSenderJwk !== undefined
-            ? { sender_public_jwk: this.expectedSenderJwk }
-            : {}),
+          ...(senderJwk !== undefined ? { sender_public_jwk: senderJwk } : {}),
         },
         this.holder,
       );
-      if (result.kind === "encrypted" || result.kind === "signed" || result.kind === "plaintext") {
-        const msg = result.message as { thid?: string };
-        thid = msg.thid;
-      }
+      return result.message as { type?: string; thid?: string; body?: unknown };
     } catch (err) {
       console.warn("[pnm/ws-bridge] unable to peek inner JWE:", err);
-      return;
+      return undefined;
     }
+  }
+
+  private routeOne(innerJwe: string): void {
+    // Peek the JWE once, here, to read the `thid` and (for the
+    // inbox fallback) the `type` + `body`. Callers of
+    // sendAndAwaitReply re-unpack with their own expected sender
+    // JWK for proper authentication; this peek is purely for
+    // routing. Trade-off: an extra HPKE decrypt per inbound
+    // message. Acceptable at expected wallet rates.
+    const msg = this.peekMessage(innerJwe);
+    const thid = msg?.thid;
 
     if (thid !== undefined) {
       const pending = this.pending.get(thid);
@@ -282,29 +341,12 @@ export class WebSocketDidcommBridge implements DidcommMessageBridge {
       }
     }
 
-    if (this.onInbox) {
-      // Best-effort decode for the inbox callback — re-using the
-      // unpack above isn't cheap to thread through, just hand the
-      // type+thid+body summary.
-      try {
-        const result = unpackMessage(
-          {
-            input: innerJwe,
-            ...(this.expectedSenderJwk !== undefined
-              ? { sender_public_jwk: this.expectedSenderJwk }
-              : {}),
-          },
-          this.holder,
-        );
-        const msg = result.message as { type?: string; thid?: string; body?: unknown };
-        this.onInbox({
-          type: msg.type ?? "(unknown)",
-          ...(msg.thid !== undefined ? { thid: msg.thid } : {}),
-          body: msg.body,
-        });
-      } catch (err) {
-        console.warn("[pnm/ws-bridge] inbox decode failed:", err);
-      }
+    if (this.onInbox && msg) {
+      this.onInbox({
+        type: msg.type ?? "(unknown)",
+        ...(msg.thid !== undefined ? { thid: msg.thid } : {}),
+        body: msg.body,
+      });
       return;
     }
 
