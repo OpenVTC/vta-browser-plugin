@@ -1,0 +1,315 @@
+import { Identity, unpackMessage, type PublicJwk } from "../didcomm/index.js";
+import { VtaClientError } from "./errors.js";
+import type { DidcommMessageBridge } from "./transport.js";
+
+/**
+ * Extract zero or more inner DIDComm message strings from a single
+ * WebSocket frame. The simplest case (`RawDispatcher`) passes the
+ * frame straight through. A `Pickup3Dispatcher` would unpack the
+ * frame as a `pickup/3.0/delivery` envelope and return its
+ * attachments.
+ *
+ * Returning multiple strings is supported because a single pickup
+ * delivery can carry batched messages.
+ */
+export interface MessageDispatcher {
+  extract(frame: string): Promise<string[]> | string[];
+}
+
+/**
+ * Pass-through dispatcher. Use against mediators that deliver each
+ * inner JWE as its own WebSocket frame (the simplest live-mode
+ * pattern). For Pickup 3.0 mediators, swap in a Pickup 3.0
+ * dispatcher.
+ */
+export class RawDispatcher implements MessageDispatcher {
+  extract(frame: string): string[] {
+    return [frame];
+  }
+}
+
+/**
+ * **TODO** — placeholder for a `pickup/3.0/delivery`-aware
+ * dispatcher. Unpacks the frame as a mediator-authcrypt'd delivery
+ * message, validates the sender is the configured mediator, and
+ * returns each `attachments[].data.json` as an inner JWE.
+ *
+ * Not implemented yet; tracked separately so the demuxer surface
+ * stays stable.
+ */
+export class Pickup3DispatcherTodo implements MessageDispatcher {
+  extract(_frame: string): never {
+    throw new VtaClientError(
+      "e.client.unsupported",
+      "Pickup3Dispatcher not implemented yet — use RawDispatcher",
+    );
+  }
+}
+
+/**
+ * Minimal WebSocket-like surface we depend on. The browser's
+ * `WebSocket` global satisfies it; Node 22+ has the same global.
+ * Tests can inject any duck-typed implementation.
+ */
+export interface WebSocketLike {
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  addEventListener(event: "open", handler: () => void): void;
+  addEventListener(event: "message", handler: (e: { data: unknown }) => void): void;
+  addEventListener(event: "close", handler: () => void): void;
+  addEventListener(event: "error", handler: () => void): void;
+  readyState: number;
+  // 0 = CONNECTING, 1 = OPEN, 2 = CLOSING, 3 = CLOSED
+}
+
+export type WebSocketFactory = (url: string) => WebSocketLike;
+
+export interface WebSocketDidcommBridgeOptions {
+  /** Mediator WebSocket URL (`wss://…`). */
+  url: string;
+  /** Holder identity used to unpack every inner JWE. */
+  holder: Identity;
+  /**
+   * Public JWK of the *expected sender* of inner JWEs (typically the
+   * VTA, used to authenticate authcrypt). Pass undefined to accept
+   * any sender (anoncrypt-only flows).
+   */
+  expectedSenderJwk?: PublicJwk;
+  /** How to extract inner JWEs from each WebSocket frame. */
+  dispatcher?: MessageDispatcher;
+  /**
+   * WebSocket constructor. Defaults to `globalThis.WebSocket`. Tests
+   * inject a fake.
+   */
+  webSocketFactory?: WebSocketFactory;
+  /** Handler for delivered messages with no matching thid (unsolicited inbox). */
+  onInbox?: (msg: { type: string; thid?: string; body: unknown }) => void;
+  /** Per-request timeout (ms). Default 30s. */
+  timeoutMs?: number;
+}
+
+interface Pending {
+  resolve: (reply: string) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * Concrete `DidcommMessageBridge` over a WebSocket mediator. Holds
+ * one connection, multiplexes concurrent request/reply exchanges by
+ * DIDComm `thid`.
+ *
+ * Connection lifecycle: lazy — the WebSocket is opened on the first
+ * `sendAndAwaitReply`. Subsequent sends reuse the connection until
+ * `close()` is called or the socket drops. Reconnection is not
+ * automatic — callers detect `e.client.network` errors and rebuild.
+ *
+ * Frame demultiplexing: each frame is handed to the configured
+ * `MessageDispatcher`. Each extracted string is unpacked with the
+ * holder identity; if the result is a JWE message with a `thid`
+ * matching a pending request, the waiting promise resolves with
+ * that inner JWE string (callers re-unpack with their expected
+ * sender JWK for type-aware validation). Otherwise the message is
+ * delivered to `onInbox` if set, or logged via `console.warn`.
+ */
+export class WebSocketDidcommBridge implements DidcommMessageBridge {
+  private readonly url: string;
+  private readonly holder: Identity;
+  private readonly expectedSenderJwk?: PublicJwk;
+  private readonly dispatcher: MessageDispatcher;
+  private readonly factory: WebSocketFactory;
+  private readonly onInbox?: (msg: {
+    type: string;
+    thid?: string;
+    body: unknown;
+  }) => void;
+  private readonly defaultTimeoutMs: number;
+
+  private socket: WebSocketLike | null = null;
+  private openPromise: Promise<void> | null = null;
+  private readonly pending = new Map<string, Pending>();
+
+  constructor(opts: WebSocketDidcommBridgeOptions) {
+    this.url = opts.url;
+    this.holder = opts.holder;
+    if (opts.expectedSenderJwk !== undefined) this.expectedSenderJwk = opts.expectedSenderJwk;
+    this.dispatcher = opts.dispatcher ?? new RawDispatcher();
+    this.factory =
+      opts.webSocketFactory ??
+      ((url: string) => new (globalThis as { WebSocket: new (u: string) => WebSocketLike }).WebSocket(url));
+    if (opts.onInbox !== undefined) this.onInbox = opts.onInbox;
+    this.defaultTimeoutMs = opts.timeoutMs ?? 30_000;
+  }
+
+  async sendAndAwaitReply(
+    outerPackedJwe: string,
+    expectThreadId: string,
+    options?: { timeoutMs?: number },
+  ): Promise<string> {
+    await this.ensureOpen();
+    const socket = this.socket;
+    if (!socket) throw new VtaClientError("e.client.network", "socket unavailable");
+
+    const timeoutMs = options?.timeoutMs ?? this.defaultTimeoutMs;
+    const reply = new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(expectThreadId);
+        reject(
+          new VtaClientError(
+            "e.client.network",
+            `timed out waiting for thid ${expectThreadId} after ${timeoutMs}ms`,
+          ),
+        );
+      }, timeoutMs);
+      this.pending.set(expectThreadId, { resolve, reject, timer });
+    });
+
+    try {
+      socket.send(outerPackedJwe);
+    } catch (err) {
+      const p = this.pending.get(expectThreadId);
+      if (p) {
+        clearTimeout(p.timer);
+        this.pending.delete(expectThreadId);
+      }
+      throw new VtaClientError("e.client.network", (err as Error).message);
+    }
+
+    return reply;
+  }
+
+  close(): void {
+    if (this.socket) {
+      try {
+        this.socket.close();
+      } catch {
+        // ignore
+      }
+    }
+    this.socket = null;
+    this.openPromise = null;
+    for (const [thid, p] of this.pending.entries()) {
+      clearTimeout(p.timer);
+      p.reject(new VtaClientError("e.client.network", "bridge closed"));
+      this.pending.delete(thid);
+    }
+  }
+
+  private ensureOpen(): Promise<void> {
+    if (this.openPromise) return this.openPromise;
+    this.openPromise = new Promise<void>((resolve, reject) => {
+      let socket: WebSocketLike;
+      try {
+        socket = this.factory(this.url);
+      } catch (err) {
+        reject(new VtaClientError("e.client.network", (err as Error).message));
+        return;
+      }
+      this.socket = socket;
+
+      socket.addEventListener("open", () => resolve());
+      socket.addEventListener("error", () =>
+        reject(new VtaClientError("e.client.network", "websocket error")),
+      );
+      socket.addEventListener("close", () => {
+        this.socket = null;
+        this.openPromise = null;
+        for (const [thid, p] of this.pending.entries()) {
+          clearTimeout(p.timer);
+          p.reject(new VtaClientError("e.client.network", "socket closed mid-request"));
+          this.pending.delete(thid);
+        }
+      });
+      socket.addEventListener("message", (e: { data: unknown }) => {
+        void this.handleFrame(typeof e.data === "string" ? e.data : String(e.data));
+      });
+    });
+    return this.openPromise;
+  }
+
+  private async handleFrame(frame: string): Promise<void> {
+    let extracted: string[];
+    try {
+      extracted = await this.dispatcher.extract(frame);
+    } catch (err) {
+      console.warn("[pnm/ws-bridge] dispatcher.extract failed:", err);
+      return;
+    }
+
+    for (const innerJwe of extracted) {
+      this.routeOne(innerJwe);
+    }
+  }
+
+  private routeOne(innerJwe: string): void {
+    // Don't unpack here — let the caller of sendAndAwaitReply
+    // re-unpack with its expected sender JWK for full sender
+    // authentication. We only need to peek the `thid` to know who
+    // is waiting on this message. Quickest path: parse the JWE,
+    // unpack, read thid, then re-emit the raw JWE.
+    //
+    // Trade-off: we unpack the same JWE twice (here + in
+    // DidcommVtaTransport.exchange). For the wallet's expected
+    // message rates this is fine; revisit if profiling shows it
+    // matters.
+    let thid: string | undefined;
+    try {
+      const result = unpackMessage(
+        {
+          input: innerJwe,
+          ...(this.expectedSenderJwk !== undefined
+            ? { sender_public_jwk: this.expectedSenderJwk }
+            : {}),
+        },
+        this.holder,
+      );
+      if (result.kind === "encrypted" || result.kind === "signed" || result.kind === "plaintext") {
+        const msg = result.message as { thid?: string };
+        thid = msg.thid;
+      }
+    } catch (err) {
+      console.warn("[pnm/ws-bridge] unable to peek inner JWE:", err);
+      return;
+    }
+
+    if (thid !== undefined) {
+      const pending = this.pending.get(thid);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pending.delete(thid);
+        pending.resolve(innerJwe);
+        return;
+      }
+    }
+
+    if (this.onInbox) {
+      // Best-effort decode for the inbox callback — re-using the
+      // unpack above isn't cheap to thread through, just hand the
+      // type+thid+body summary.
+      try {
+        const result = unpackMessage(
+          {
+            input: innerJwe,
+            ...(this.expectedSenderJwk !== undefined
+              ? { sender_public_jwk: this.expectedSenderJwk }
+              : {}),
+          },
+          this.holder,
+        );
+        const msg = result.message as { type?: string; thid?: string; body?: unknown };
+        this.onInbox({
+          type: msg.type ?? "(unknown)",
+          ...(msg.thid !== undefined ? { thid: msg.thid } : {}),
+          body: msg.body,
+        });
+      } catch (err) {
+        console.warn("[pnm/ws-bridge] inbox decode failed:", err);
+      }
+      return;
+    }
+
+    console.warn(
+      `[pnm/ws-bridge] dropped delivery: no pending thid${thid ? ` (${thid})` : ""} and no inbox handler`,
+    );
+  }
+}
