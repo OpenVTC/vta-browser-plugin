@@ -1,0 +1,15 @@
+{
+  "name": "@pnm/didcomm-wasm",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Browser-side WASM bindings over affinidi-messaging-didcomm.",
+  "type": "module",
+  "main": "pkg/pnm_didcomm_wasm.js",
+  "types": "pkg/pnm_didcomm_wasm.d.ts",
+  "files": ["pkg"],
+  "scripts": {
+    "build": "wasm-pack build --target bundler --out-dir pkg --release",
+    "build:dev": "wasm-pack build --target bundler --out-dir pkg --dev",
+    "clean": "rm -rf pkg target"
+  }
+}

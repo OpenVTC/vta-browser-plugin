@@ -41,7 +41,8 @@ Two shells over one shared TypeScript core:
 
 | Package | Role |
 |---|---|
-| `@pnm/core` | Wire types, WebAuthn ceremony helpers, COSE→Multikey conversion, DID `verificationMethod` builder, VTA REST client. Zero runtime dependencies on a framework. |
+| `@pnm/core` | Wire types, WebAuthn ceremony helpers, COSE→Multikey conversion, DID `verificationMethod` builder, VTA REST + DIDComm client surfaces. Zero runtime dependencies on a framework. |
+| `@pnm/didcomm-wasm` | wasm-bindgen wrapper over `affinidi-messaging-didcomm` (Rust crate, same version `vta-service` pins). Byte-compatible with the VTA. Vendored locally; expected to be replaced by an upstream npm package when `affinidi-tdk-rs` ships its own WASM build. |
 | `@pnm/pwa` | Installable web app (Vite + React 19). Operator-facing wallet for connecting to a VTA and managing passkeys. |
 | `@pnm/extension` | Manifest v3 browser extension. Same flows, plus future ability to intercept RP login pages and inject SIOPv2/OpenID4VP responses. |
 
@@ -90,9 +91,21 @@ pnm-browser-plugin/
 
 ## Development
 
+Prereqs: Node 20+, the Rust toolchain (1.94+), and
+[`wasm-pack`](https://rustwasm.github.io/wasm-pack/installer/). The
+WASM crate is rebuilt as part of `npm run build`, so the Rust
+toolchain is needed for the full build but not for editing
+TypeScript-only packages.
+
 ```bash
 npm install
+npm run build              # builds @pnm/didcomm-wasm (wasm-pack)
+                           # then tsc -b + vite build across TS workspaces
 npm run dev:pwa            # http://localhost:5173
 npm run dev:extension      # load packages/extension/dist as unpacked
-npm run build              # tsc -b + vite build across workspaces
 ```
+
+After editing `packages/didcomm-wasm/src/lib.rs` or bumping the
+`affinidi-messaging-didcomm` dependency, run
+`npm run build --workspace @pnm/didcomm-wasm` to regenerate the
+WASM bundle.

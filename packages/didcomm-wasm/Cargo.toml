@@ -1,0 +1,29 @@
+[package]
+name = "pnm-didcomm-wasm"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Browser-side WASM bindings over affinidi-messaging-didcomm. Vendored locally; will be replaced by an upstream npm package when affinidi-tdk-rs ships its own WASM build."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+affinidi-messaging-didcomm = "0.13"
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde-wasm-bindgen = "0.6"
+# Force `getrandom` to use the JS `Crypto.getRandomValues` source when
+# the dep graph reaches it via rand_core / dalek.
+getrandom = { version = "0.2", features = ["js"] }
+# `uuid` 1.x requires an explicit WASM RNG feature; affinidi-messaging-didcomm
+# pulls it in transitively, and feature unification means declaring it here
+# enables `js` everywhere it's used.
+uuid = { version = "1", features = ["v4", "js"] }
+console_error_panic_hook = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
