@@ -1,5 +1,7 @@
 import { Identity, unpackMessage, type PublicJwk } from "../didcomm/index.js";
+import type { RemoteDidcommEndpoint } from "./didcomm.js";
 import { VtaClientError } from "./errors.js";
+import { PickupProtocol } from "./pickup.js";
 import type { DidcommMessageBridge } from "./transport.js";
 
 /**
@@ -28,21 +30,77 @@ export class RawDispatcher implements MessageDispatcher {
   }
 }
 
+export interface Pickup3DispatcherOptions {
+  holder: Identity;
+  mediator: Pick<RemoteDidcommEndpoint, "did" | "keyAgreementPublicJwk">;
+}
+
+interface DeliveryAttachmentShape {
+  id?: string;
+  data?: { json?: unknown };
+}
+
+interface PickupMessageShape {
+  type?: string;
+  from?: string;
+  attachments?: DeliveryAttachmentShape[];
+}
+
 /**
- * **TODO** — placeholder for a `pickup/3.0/delivery`-aware
- * dispatcher. Unpacks the frame as a mediator-authcrypt'd delivery
- * message, validates the sender is the configured mediator, and
- * returns each `attachments[].data.json` as an inner JWE.
+ * `pickup/3.0/delivery`-aware dispatcher.
  *
- * Not implemented yet; tracked separately so the demuxer surface
- * stays stable.
+ * For each WebSocket frame:
+ * 1. Parse the JWE protected header for `skid`. If the sender DID
+ *    isn't the configured mediator, pass the frame through
+ *    unchanged — the bridge's standard peek handles it.
+ * 2. Otherwise unpack as authcrypt mediator → holder. If the
+ *    decoded message's `type` is `pickup/3.0/delivery`, return each
+ *    `attachments[].data.json` as an inner JWE string. The bridge
+ *    then re-peeks each inner JWE with its own sender registry to
+ *    find the right pending thid (typically the VTA's reply).
+ * 3. Anything else from the mediator (status, status-request reply,
+ *    etc.) passes through so the bridge's normal thid demuxer can
+ *    route it to the awaiting MediatorClient request.
+ *
+ * Failure modes (malformed delivery, sender-auth failure) are
+ * silent here — the bridge's `console.warn` for dropped frames
+ * provides operator visibility.
  */
-export class Pickup3DispatcherTodo implements MessageDispatcher {
-  extract(_frame: string): never {
-    throw new VtaClientError(
-      "e.client.unsupported",
-      "Pickup3Dispatcher not implemented yet — use RawDispatcher",
-    );
+export class Pickup3Dispatcher implements MessageDispatcher {
+  private readonly holder: Identity;
+  private readonly mediator: Pickup3DispatcherOptions["mediator"];
+
+  constructor(opts: Pickup3DispatcherOptions) {
+    this.holder = opts.holder;
+    this.mediator = opts.mediator;
+  }
+
+  extract(frame: string): string[] {
+    const skid = readJweSenderKid(frame);
+    if (!skid || didFromKid(skid) !== this.mediator.did) return [frame];
+
+    let msg: PickupMessageShape;
+    try {
+      const result = unpackMessage(
+        { input: frame, sender_public_jwk: this.mediator.keyAgreementPublicJwk },
+        this.holder,
+      );
+      if (result.kind !== "encrypted" || !result.authenticated) return [frame];
+      msg = result.message as PickupMessageShape;
+    } catch {
+      return [frame];
+    }
+
+    if (msg.type !== PickupProtocol.delivery) return [frame];
+    if (msg.from !== this.mediator.did) return [frame];
+
+    const out: string[] = [];
+    for (const att of msg.attachments ?? []) {
+      const json = att.data?.json;
+      if (json === undefined) continue;
+      out.push(typeof json === "string" ? json : JSON.stringify(json));
+    }
+    return out;
   }
 }
 

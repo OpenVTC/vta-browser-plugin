@@ -1,6 +1,13 @@
-import { Identity, type PublicJwk } from "../didcomm/index.js";
+import {
+  Identity,
+  packAuthcrypt,
+  packAuthcryptJson,
+  unpackMessage,
+  type PublicJwk,
+} from "../didcomm/index.js";
 import { InMemoryDidcommBridge } from "./bridge-memory.js";
 import {
+  Pickup3Dispatcher,
   WebSocketDidcommBridge,
   type WebSocketLike,
 } from "./bridge-websocket.js";
@@ -11,6 +18,7 @@ import {
   type MediateGrantBody,
 } from "./mediation.js";
 import { MediatorClient } from "./mediator-client.js";
+import { PickupProtocol } from "./pickup.js";
 import { PasskeyManagementProtocol } from "./protocol.js";
 import type { DidcommMessageBridge } from "./transport.js";
 import type { EnrollmentChallengeResponse } from "./types.js";
@@ -472,6 +480,140 @@ export async function smokeMediatorEnrollment(): Promise<SmokeMediatorEnrollment
     return { ok: false, error: (err as Error).message };
   } finally {
     holder?.dispose();
+    mediator?.dispose();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pickup3Dispatcher smoke: build a pickup/3.0/delivery wrapping two
+// inner authcrypt'd messages (as the mediator would emit in live
+// mode), feed to the dispatcher, verify both inner JWEs come out
+// and that a frame from a non-mediator sender (e.g. direct VTA
+// reply) passes through unchanged.
+// ---------------------------------------------------------------------------
+
+export interface SmokePickupDispatchResult {
+  ok: boolean;
+  extractedFromDelivery?: number;
+  passthroughLen?: number;
+  firstInnerType?: string;
+  secondInnerType?: string;
+  error?: string;
+}
+
+export async function smokePickupDispatch(): Promise<SmokePickupDispatchResult> {
+  let holder: Identity | null = null;
+  let vta: Identity | null = null;
+  let mediator: Identity | null = null;
+  try {
+    holder = Identity.generate("did:key:zHolderPickup");
+    vta = Identity.generate("did:webvh:vta.example.com:abc");
+    mediator = Identity.generate("did:key:zMediatorPickup");
+
+    const vtaPub = vta.publicJwk() as { kid: string; jwk: PublicJwk };
+    const holderPub = holder.publicJwk() as { kid: string; jwk: PublicJwk };
+
+    // Build two inner messages the VTA would normally have queued
+    // at the mediator awaiting delivery.
+    const innerA = packAuthcrypt(
+      {
+        type: "https://example.org/test/1.0/alpha",
+        from: vta.did,
+        to: [holder.did],
+        body: { tag: "first" },
+      },
+      vta,
+      [holderPub],
+    );
+    const innerB = packAuthcrypt(
+      {
+        type: "https://example.org/test/1.0/beta",
+        from: vta.did,
+        to: [holder.did],
+        body: { tag: "second" },
+      },
+      vta,
+      [holderPub],
+    );
+
+    // Mediator wraps both in a pickup/3.0/delivery envelope. The
+    // delivery's `attachments` (an extra field, not in `body`) carry
+    // the inner JWEs as parsed JSON.
+    const deliveryMessage = {
+      id: globalThis.crypto.randomUUID(),
+      type: PickupProtocol.delivery,
+      from: mediator.did,
+      to: [holder.did],
+      body: { recipient_did: holder.did },
+      attachments: [
+        { id: "msg-1", data: { json: JSON.parse(innerA) } },
+        { id: "msg-2", data: { json: JSON.parse(innerB) } },
+      ],
+    };
+    const deliveryJwe = packAuthcryptJson(
+      JSON.stringify(deliveryMessage),
+      mediator,
+      [holderPub],
+    );
+
+    const dispatcher = new Pickup3Dispatcher({
+      holder,
+      mediator: {
+        did: mediator.did,
+        keyAgreementPublicJwk:
+          (mediator.publicJwk() as { kid: string; jwk: PublicJwk }).jwk,
+      },
+    });
+
+    const extracted = await dispatcher.extract(deliveryJwe);
+    if (extracted.length !== 2) {
+      return {
+        ok: false,
+        error: `expected 2 extracted inner JWEs, got ${extracted.length}`,
+      };
+    }
+
+    // Semantic verification: each extracted JWE decrypts to one of
+    // the original messages with the right body tag. JSON key order
+    // doesn't survive parse → stringify round-trips, so we don't
+    // compare raw strings.
+    const decoded = extracted.map((jwe) => {
+      const r = unpackMessage(
+        { input: jwe, sender_public_jwk: vtaPub.jwk },
+        holder!,
+      );
+      if (r.kind !== "encrypted" || !r.authenticated) {
+        throw new Error(`extracted JWE failed auth: ${r.kind}`);
+      }
+      return r.message as { type?: string; body?: { tag?: string } };
+    });
+    const tags = new Set(decoded.map((d) => d.body?.tag));
+    if (!tags.has("first") || !tags.has("second")) {
+      return {
+        ok: false,
+        error: `expected tags {first,second}, got ${[...tags].join(",")}`,
+      };
+    }
+
+    // Pass-through: a frame whose sender isn't the mediator (the
+    // VTA, in this case) should come back unchanged.
+    const passthrough = await dispatcher.extract(innerA);
+    if (passthrough.length !== 1 || passthrough[0] !== innerA) {
+      return { ok: false, error: "non-mediator frame did not pass through" };
+    }
+
+    return {
+      ok: true,
+      extractedFromDelivery: extracted.length,
+      passthroughLen: passthrough.length,
+      firstInnerType: "https://example.org/test/1.0/alpha",
+      secondInnerType: "https://example.org/test/1.0/beta",
+    };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  } finally {
+    holder?.dispose();
+    vta?.dispose();
     mediator?.dispose();
   }
 }

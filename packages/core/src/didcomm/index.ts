@@ -4,6 +4,7 @@ import {
   packAnoncrypt as wasmPackAnoncrypt,
   packAnoncryptJson as wasmPackAnoncryptJson,
   packAuthcrypt as wasmPackAuthcrypt,
+  packAuthcryptJson as wasmPackAuthcryptJson,
   unpack as wasmUnpack,
   wrapForward as wasmWrapForward,
   didcommCrateVersion as wasmDidcommCrateVersion,
@@ -90,6 +91,21 @@ export function packAnoncryptJson(
   recipients: DidcommRecipient[],
 ): string {
   return wasmPackAnoncryptJson(messageJson, recipients);
+}
+
+/**
+ * Pack an already-serialized DIDComm Message JSON as authcrypt.
+ * Sibling of `packAnoncryptJson`; needed for messages whose shape
+ * exceeds the builder (attachments, custom extras) **and** whose
+ * sender must be authenticated to the recipient. The
+ * `pickup/3.0/delivery` envelope is the primary case.
+ */
+export function packAuthcryptJson(
+  messageJson: string,
+  sender: Identity,
+  recipients: DidcommRecipient[],
+): string {
+  return wasmPackAuthcryptJson(messageJson, sender, recipients);
 }
 
 /**

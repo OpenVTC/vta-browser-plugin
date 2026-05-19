@@ -263,6 +263,31 @@ pub fn pack_anoncrypt_json(message_json: String, recipients: JsValue) -> Result<
     pack_encrypted_anoncrypt(&msg, &rs_refs).map_err(|e| err("pack anoncrypt json", e))
 }
 
+/// Pack an already-serialized DIDComm Message JSON as authcrypt.
+/// Sibling of `packAnoncryptJson` for messages whose shape exceeds
+/// the builder (attachments, custom extras) and whose sender must be
+/// authenticated. The pickup/3.0/delivery envelope is the primary
+/// use case — its attachments don't survive the builder path.
+#[wasm_bindgen(js_name = packAuthcryptJson)]
+pub fn pack_authcrypt_json(
+    message_json: String,
+    sender: &Identity,
+    recipients: JsValue,
+) -> Result<String, JsError> {
+    let msg: Message =
+        serde_json::from_str(&message_json).map_err(|e| err("parse message JSON", e))?;
+    let rs = parse_recipients(recipients)?;
+    let rs_refs: Vec<(&str, &PublicKeyAgreement)> =
+        rs.iter().map(|(k, p)| (k.as_str(), p)).collect();
+    pack_encrypted_authcrypt(
+        &msg,
+        &sender.key_agreement_kid,
+        &sender.key_agreement_private,
+        &rs_refs,
+    )
+    .map_err(|e| err("pack authcrypt json", e))
+}
+
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum UnpackOutput {
