@@ -1,6 +1,7 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { Connect } from "./pages/Connect.js";
 import { Passkeys } from "./pages/Passkeys.js";
+import { Smokes } from "./pages/Smokes.js";
 import { useConnectionStore } from "./store.js";
 
 export function App() {
@@ -16,6 +17,7 @@ export function App() {
           <NavLink to="/passkeys" aria-disabled={!connection}>
             Passkeys
           </NavLink>
+          <NavLink to="/smokes">Diagnostics</NavLink>
         </nav>
       </header>
       <main className="app-main">
@@ -25,6 +27,7 @@ export function App() {
             path="/passkeys"
             element={connection ? <Passkeys /> : <Navigate to="/" replace />}
           />
+          <Route path="/smokes" element={<Smokes />} />
         </Routes>
       </main>
     </div>
