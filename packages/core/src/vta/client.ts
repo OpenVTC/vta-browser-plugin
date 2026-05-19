@@ -1,6 +1,19 @@
-import type { PasskeyVerificationMethod } from "../did/verification-method.js";
 import type { PasskeyEnrollmentResult } from "../webauthn/register.js";
 import { errorFromResponse, VtaClientError } from "./errors.js";
+import type { VtaTransport } from "./transport.js";
+import type {
+  EnrollmentChallengeResponse,
+  EnrollmentSubmitRequest,
+  EnrollmentSubmitResponse,
+  PasskeyList,
+} from "./types.js";
+
+export type {
+  EnrollmentChallengeResponse,
+  EnrollmentSubmitRequest,
+  EnrollmentSubmitResponse,
+  PasskeyList,
+};
 
 export interface VtaClientConfig {
   /** Base URL of the VTA, e.g. `https://vta.example.com`. */
@@ -12,44 +25,7 @@ export interface VtaClientConfig {
   fetch?: typeof fetch;
 }
 
-export interface EnrollmentChallengeResponse {
-  /** Server-issued challenge (base64url). The browser passes the raw bytes
-   *  to `navigator.credentials.create`; the VTA verifies the returned
-   *  clientDataJSON against the same value. */
-  challenge: string;
-  /** Relying-Party identifier — typically the VTA's hostname. */
-  rpId: string;
-  rpName: string;
-  /** Stable user handle to associate with the credential. Bytes the VTA
-   *  picked; opaque to the client. */
-  userHandle: string;
-  userName: string;
-  userDisplayName: string;
-  /** Server-suggested timeout in milliseconds. */
-  timeoutMs?: number;
-}
-
-export interface EnrollmentSubmitRequest {
-  did: string;
-  credentialId: string;
-  publicKeyMultibase: string;
-  coseAlgorithm: number;
-  /** Raw WebAuthn fields the VTA needs for its own verification. */
-  attestationObject: string;
-  clientDataJson: string;
-  authenticatorData: string;
-  transports: AuthenticatorTransport[];
-  /** Optional human-friendly label. */
-  label?: string;
-}
-
-export interface EnrollmentSubmitResponse {
-  verificationMethod: PasskeyVerificationMethod;
-  /** WebVH log entry index that recorded the change. */
-  webvhVersion: string;
-}
-
-export class VtaClient {
+export class VtaClient implements VtaTransport {
   private readonly baseUrl: string;
   private readonly accessToken: string;
   private readonly fetchImpl: typeof fetch;
@@ -112,7 +88,7 @@ export class VtaClient {
     });
   }
 
-  listPasskeys(did: string): Promise<{ verificationMethods: PasskeyVerificationMethod[] }> {
+  listPasskeys(did: string): Promise<PasskeyList> {
     const qs = new URLSearchParams({ did }).toString();
     return this.request(`/did/verification-methods/passkey?${qs}`);
   }

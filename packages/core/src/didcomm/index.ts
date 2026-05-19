@@ -2,8 +2,10 @@ import {
   Identity as WasmIdentity,
   buildPlaintextMessage as wasmBuildPlaintextMessage,
   packAnoncrypt as wasmPackAnoncrypt,
+  packAnoncryptJson as wasmPackAnoncryptJson,
   packAuthcrypt as wasmPackAuthcrypt,
   unpack as wasmUnpack,
+  wrapForward as wasmWrapForward,
   didcommCrateVersion as wasmDidcommCrateVersion,
 } from "@pnm/didcomm-wasm";
 
@@ -75,6 +77,28 @@ export function packAnoncrypt(
   recipients: DidcommRecipient[],
 ): string {
   return wasmPackAnoncrypt(message, recipients);
+}
+
+/**
+ * Pack an already-serialized DIDComm Message JSON as anoncrypt.
+ * Use this for forward-envelope composition where the inner Message
+ * has fields (attachments, custom extras) that the builder shape
+ * doesn't carry.
+ */
+export function packAnoncryptJson(
+  messageJson: string,
+  recipients: DidcommRecipient[],
+): string {
+  return wasmPackAnoncryptJson(messageJson, recipients);
+}
+
+/**
+ * Wrap an already-encrypted JWE in a Routing 2.0 forward envelope.
+ * Returns the **plaintext** forward Message JSON; pair with
+ * `packAnoncryptJson` to anoncrypt it to the mediator.
+ */
+export function wrapForward(next: string, encryptedJwe: string): string {
+  return wasmWrapForward(next, encryptedJwe);
 }
 
 /**

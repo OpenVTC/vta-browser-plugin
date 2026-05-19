@@ -15,3 +15,4 @@ coverage/
 # `npm run build --workspace @pnm/didcomm-wasm` (which calls wasm-pack).
 target/
 packages/didcomm-wasm/pkg/
+packages/didcomm-wasm/pkg-node/

@@ -11,6 +11,7 @@ use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_didcomm::crypto::key_agreement::{
     Curve, PrivateKeyAgreement, PublicKeyAgreement,
 };
+use affinidi_messaging_didcomm::message::forward::wrap_in_forward;
 use affinidi_messaging_didcomm::message::pack::{
     pack_encrypted_anoncrypt, pack_encrypted_authcrypt,
 };
@@ -25,6 +26,15 @@ pub fn start() {
 
 fn err<E: std::fmt::Display>(prefix: &str, e: E) -> JsError {
     JsError::new(&format!("{prefix}: {e}"))
+}
+
+/// Serialize a value as a plain JS object (rather than a JS `Map`,
+/// which is what `serde_wasm_bindgen` produces by default for
+/// dictionary-shaped data). Plain objects are what consumers expect
+/// when doing `result.message.type`.
+fn to_plain_js<T: Serialize>(value: &T) -> Result<JsValue, serde_wasm_bindgen::Error> {
+    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    value.serialize(&serializer)
 }
 
 fn parse_curve(s: &str) -> Result<Curve, JsError> {
@@ -133,7 +143,7 @@ impl Identity {
             kid: self.key_agreement_kid.clone(),
             jwk: pk.to_jwk(),
         };
-        serde_wasm_bindgen::to_value(&out).map_err(|e| err("publicJwk", e))
+        to_plain_js(&out).map_err(|e| err("publicJwk", e))
     }
 
     /// Drop the private key. After this the handle is unusable. Calls
@@ -239,6 +249,20 @@ pub fn pack_anoncrypt(message: JsValue, recipients: JsValue) -> Result<String, J
     pack_encrypted_anoncrypt(&msg, &rs_refs).map_err(|e| err("pack anoncrypt", e))
 }
 
+/// Pack an already-serialized DIDComm Message JSON as anoncrypt.
+/// Use this when the message has fields the builder shape doesn't
+/// carry — notably the `attachments` that `wrapForward` puts in the
+/// envelope. The full Message serde shape round-trips intact here.
+#[wasm_bindgen(js_name = packAnoncryptJson)]
+pub fn pack_anoncrypt_json(message_json: String, recipients: JsValue) -> Result<String, JsError> {
+    let msg: Message =
+        serde_json::from_str(&message_json).map_err(|e| err("parse message JSON", e))?;
+    let rs = parse_recipients(recipients)?;
+    let rs_refs: Vec<(&str, &PublicKeyAgreement)> =
+        rs.iter().map(|(k, p)| (k.as_str(), p)).collect();
+    pack_encrypted_anoncrypt(&msg, &rs_refs).map_err(|e| err("pack anoncrypt json", e))
+}
+
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum UnpackOutput {
@@ -322,7 +346,21 @@ pub fn unpack(input: JsValue, recipient: &Identity) -> Result<JsValue, JsError> 
         },
     };
 
-    serde_wasm_bindgen::to_value(&out).map_err(|e| err("encode output", e))
+    to_plain_js(&out).map_err(|e| err("encode output", e))
+}
+
+/// Wrap an already-encrypted JWE in a DIDComm Routing 2.0 forward
+/// envelope. Returns the **plaintext** forward message JSON — the
+/// caller is expected to immediately anoncrypt it to the mediator's
+/// key agreement key via `packAnoncrypt` before transmitting.
+///
+/// Layered composition: `pack* (inner) → wrapForward (envelope) →
+/// packAnoncrypt (outer for mediator) → mediator delivers inner to
+/// `next` DID`.
+#[wasm_bindgen(js_name = wrapForward)]
+pub fn wrap_forward(next: String, encrypted_jwe: String) -> Result<String, JsError> {
+    let msg = wrap_in_forward(&next, &encrypted_jwe).map_err(|e| err("wrap_in_forward", e))?;
+    serde_json::to_string(&msg).map_err(|e| err("serialize forward", e))
 }
 
 /// Return the linked `affinidi-messaging-didcomm` crate version.

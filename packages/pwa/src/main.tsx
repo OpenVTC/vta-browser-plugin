@@ -2,7 +2,11 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { smokeAuthcryptRoundtrip, didcommCrateVersion } from "@pnm/core";
+import {
+  didcommCrateVersion,
+  smokeAuthcryptRoundtrip,
+  smokeBuildDidcommEnrollChallenge,
+} from "@pnm/core";
 import { App } from "./App.js";
 import "./styles.css";
 
@@ -13,6 +17,7 @@ const queryClient = new QueryClient({
 if (import.meta.env.DEV) {
   (window as unknown as { pnm?: unknown }).pnm = {
     smokeAuthcryptRoundtrip,
+    smokeBuildDidcommEnrollChallenge,
     didcommCrateVersion,
   };
 }
