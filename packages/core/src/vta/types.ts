@@ -7,6 +7,10 @@ import type { PasskeyVerificationMethod } from "../did/verification-method.js";
  */
 
 export interface EnrollmentChallengeResponse {
+  /** Opaque ceremony id bound server-side to this challenge. Echo it
+   *  back on submit so the VTA can correlate the WebAuthn registration
+   *  ceremony (a WebAuthn security requirement). */
+  ceremonyId: string;
   /** Server-issued challenge (base64url). The browser passes the raw bytes
    *  to `navigator.credentials.create`; the VTA verifies the returned
    *  clientDataJSON against the same value. */
@@ -25,6 +29,8 @@ export interface EnrollmentChallengeResponse {
 
 export interface EnrollmentSubmitRequest {
   did: string;
+  /** Ceremony id from the matching `EnrollmentChallengeResponse`. */
+  ceremonyId: string;
   credentialId: string;
   publicKeyMultibase: string;
   coseAlgorithm: number;

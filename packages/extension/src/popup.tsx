@@ -47,7 +47,12 @@ function Popup() {
         ...(challenge.timeoutMs !== undefined ? { timeout: challenge.timeoutMs } : {}),
       });
       const submitted = await client.submitPasskeyEnrollment(
-        enrollmentSubmitFromResult(connection.did, result, label || undefined),
+        enrollmentSubmitFromResult(
+          connection.did,
+          result,
+          challenge.ceremonyId,
+          label || undefined,
+        ),
       );
       setStatus(`Enrolled ${submitted.verificationMethod.id}`);
     } catch (err) {

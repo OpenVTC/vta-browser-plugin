@@ -7,15 +7,15 @@ import {
 } from "../didcomm/index.js";
 import { VtaClientError, type VtaErrorCode } from "./errors.js";
 import {
-  PasskeyManagementProtocol,
-  type EnrollChallengeRequestBody,
-  type EnrollChallengeResponseBody,
-  type EnrollSubmitRequestBody,
-  type EnrollSubmitResponseBody,
-  type ListRequestBody,
-  type ListResponseBody,
-  type ProblemReportBody,
-  type RevokeRequestBody,
+  PasskeyVmTask,
+  TRUST_TASK_ENVELOPE_TYPE,
+  TRUST_TASK_ERROR_TYPE,
+  type EnrollChallengePayload,
+  type EnrollSubmitPayload,
+  type ListPayload,
+  type RevokePayload,
+  type TrustTask,
+  type TrustTaskErrorPayload,
 } from "./protocol.js";
 import type { DidcommMessageBridge, VtaTransport } from "./transport.js";
 import type {
@@ -72,16 +72,16 @@ export class DidcommVtaTransport implements VtaTransport {
   }
 
   requestEnrollmentChallenge(did: string): Promise<EnrollmentChallengeResponse> {
-    return this.exchange<EnrollChallengeRequestBody, EnrollChallengeResponseBody>(
-      PasskeyManagementProtocol.enrollChallenge,
+    return this.exchange<EnrollChallengePayload, EnrollmentChallengeResponse>(
+      PasskeyVmTask.enrollChallenge,
       { did },
-      PasskeyManagementProtocol.enrollChallengeResponse,
     );
   }
 
   submitPasskeyEnrollment(req: EnrollmentSubmitRequest): Promise<EnrollmentSubmitResponse> {
-    const body: EnrollSubmitRequestBody = {
+    const payload: EnrollSubmitPayload = {
       did: req.did,
+      ceremonyId: req.ceremonyId,
       credentialId: req.credentialId,
       publicKeyMultibase: req.publicKeyMultibase,
       coseAlgorithm: req.coseAlgorithm,
@@ -91,39 +91,34 @@ export class DidcommVtaTransport implements VtaTransport {
       transports: req.transports,
       ...(req.label !== undefined ? { label: req.label } : {}),
     };
-    return this.exchange<EnrollSubmitRequestBody, EnrollSubmitResponseBody>(
-      PasskeyManagementProtocol.enrollSubmit,
-      body,
-      PasskeyManagementProtocol.enrollSubmitResponse,
+    return this.exchange<EnrollSubmitPayload, EnrollmentSubmitResponse>(
+      PasskeyVmTask.enrollSubmit,
+      payload,
     );
   }
 
   listPasskeys(did: string): Promise<PasskeyList> {
-    return this.exchange<ListRequestBody, ListResponseBody>(
-      PasskeyManagementProtocol.list,
-      { did },
-      PasskeyManagementProtocol.listResponse,
-    );
+    return this.exchange<ListPayload, PasskeyList>(PasskeyVmTask.list, { did });
   }
 
   async removePasskey(did: string, fragment: string): Promise<void> {
-    await this.exchange<RevokeRequestBody, Record<string, never>>(
-      PasskeyManagementProtocol.revoke,
-      { did, fragment },
-      PasskeyManagementProtocol.revokeResponse,
-    );
+    await this.exchange<RevokePayload, unknown>(PasskeyVmTask.revoke, {
+      did,
+      fragment,
+    });
   }
 
   /**
-   * Build, pack, transmit, unpack, validate. The reusable core for
-   * every request-response exchange.
+   * Build, transmit, and unwrap a Trust-Task request/response exchange.
+   * The reply is a binding envelope whose body is a `TrustTask`
+   * document — either the operation's success response (return its
+   * `payload`) or a `trust-task-error/0.1` (throw a mapped error).
    */
   private async exchange<Req extends object, Res>(
-    requestType: string,
-    body: Req,
-    expectedResponseType: string,
+    taskUri: string,
+    payload: Req,
   ): Promise<Res> {
-    const packed = await this.buildOutbound(requestType, body);
+    const packed = await this.buildOutbound(taskUri, payload);
 
     // The bridge returns the decrypted, sender-authenticated reply (it
     // owns unpacking; only authenticated authcrypt frames are surfaced).
@@ -132,16 +127,10 @@ export class DidcommVtaTransport implements VtaTransport {
       packed.requestId,
       { timeoutMs: this.timeoutMs },
     );
-    if (msg.type === PasskeyManagementProtocol.problemReport) {
-      const pr = (msg.body ?? {}) as ProblemReportBody;
-      throw new VtaClientError(coerceProblemCode(pr.code), pr.comment ?? pr.code, {
-        details: pr,
-      });
-    }
-    if (msg.type !== expectedResponseType) {
+    if (msg.type !== TRUST_TASK_ENVELOPE_TYPE) {
       throw new VtaClientError(
         "e.client.parse",
-        `reply type ${msg.type ?? "(none)"} != ${expectedResponseType}`,
+        `reply type ${msg.type ?? "(none)"} != Trust-Task binding envelope`,
       );
     }
     if (msg.thid !== packed.requestId) {
@@ -156,24 +145,43 @@ export class DidcommVtaTransport implements VtaTransport {
         `reply from ${msg.from ?? "(none)"} != VTA ${this.vta.did}`,
       );
     }
-    return (msg.body ?? {}) as Res;
+
+    const doc = (msg.body ?? {}) as TrustTask<unknown>;
+    if (doc.type === TRUST_TASK_ERROR_TYPE) {
+      const err = (doc.payload ?? {}) as TrustTaskErrorPayload;
+      throw new VtaClientError(
+        coerceTrustTaskCode(err.code),
+        err.message ?? err.code ?? "trust-task error",
+        { details: err },
+      );
+    }
+    return (doc.payload ?? {}) as Res;
   }
 
   /**
-   * Build the wire form. Public-ish for the smoke helper — keeps the
-   * envelope-construction logic introspectable from tests/console.
+   * Build the wire form: a `TrustTask` envelope (the request) carried as
+   * the body of a binding-typed DIDComm message, authcrypt'd to the VTA
+   * and (when a mediator is configured) wrapped in a routing/2.0/forward.
+   * Public-ish so the smoke helper can introspect the envelope.
    */
   async buildOutbound<Req extends object>(
-    requestType: string,
-    body: Req,
+    taskUri: string,
+    payload: Req,
   ): Promise<{ outer: string; inner: string; requestId: string }> {
     const requestId = newMessageId();
+    const envelope: TrustTask<Req> = {
+      id: requestId,
+      type: taskUri,
+      issuer: this.holder.did,
+      issuedAt: new Date().toISOString(),
+      payload,
+    };
     const message = {
       id: requestId,
-      type: requestType,
+      type: TRUST_TASK_ENVELOPE_TYPE,
       from: this.holder.did,
       to: [this.vta.did],
-      body,
+      body: envelope,
     };
 
     const inner = await packAuthcrypt(message, this.holder, [
@@ -198,16 +206,19 @@ export class DidcommVtaTransport implements VtaTransport {
   }
 }
 
-function coerceProblemCode(code: string | undefined): VtaErrorCode {
+/** Map a framework Trust-Task status `code` to a typed `VtaErrorCode`
+ *  so the CLI/UI layer can give targeted guidance. */
+function coerceTrustTaskCode(code: string | undefined): VtaErrorCode {
   switch (code) {
-    case "e.p.msg.unauthorized":
-    case "e.p.msg.forbidden":
-    case "e.p.msg.notfound":
-    case "e.p.msg.conflict":
-    case "e.p.msg.rate_limited":
-    case "e.p.msg.bad_request":
-    case "e.p.msg.internal":
-      return code;
+    case "permission_denied":
+      return "e.p.msg.forbidden";
+    case "internal_error":
+    case "unavailable":
+      return "e.p.msg.internal";
+    case "malformed_request":
+    case "unsupported_type":
+    case "task_failed":
+      return "e.p.msg.bad_request";
     default:
       return "e.p.msg.bad_request";
   }

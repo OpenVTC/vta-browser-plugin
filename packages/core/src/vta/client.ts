@@ -109,10 +109,12 @@ export class VtaClient implements VtaTransport {
 export function enrollmentSubmitFromResult(
   did: string,
   result: PasskeyEnrollmentResult,
+  ceremonyId: string,
   label?: string,
 ): EnrollmentSubmitRequest {
   const req: EnrollmentSubmitRequest = {
     did,
+    ceremonyId,
     credentialId: result.credentialId,
     publicKeyMultibase: result.publicKeyMultikey,
     coseAlgorithm: result.coseAlg,
