@@ -1,7 +1,7 @@
 import {
   Identity,
-  packAnoncryptJson,
   packAuthcrypt,
+  packAuthcryptJson,
   wrapForward,
   type PublicJwk,
 } from "../didcomm/index.js";
@@ -182,8 +182,13 @@ export class DidcommVtaTransport implements VtaTransport {
 
     if (!this.mediator) return { outer: inner, inner, requestId };
 
-    const forwardJson = wrapForward(this.vta.did, inner);
-    const outer = await packAnoncryptJson(forwardJson, [
+    const forwardJson = wrapForward(
+      this.vta.did,
+      this.holder.did,
+      this.mediator.did,
+      inner,
+    );
+    const outer = await packAuthcryptJson(forwardJson, this.holder, [
       {
         kid: this.mediator.keyAgreementKid,
         jwk: this.mediator.keyAgreementPublicJwk,

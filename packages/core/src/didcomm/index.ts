@@ -59,14 +59,6 @@ export interface SecretJwk extends PublicJwk {
   d: string;
 }
 
-// `buildForward` accepts an anoncrypt form (no `from`/`mediatorDid`),
-// but the library's generated `.d.ts` marks both as required. Re-type
-// it to the shape we actually call.
-const buildAnoncryptForward = vtiBuildForward as (args: {
-  next: string;
-  innerJwe: string;
-}) => Record<string, unknown>;
-
 // Private key material is held off the Identity instance so it never
 // appears on the public shape and can be dropped on `dispose()`.
 interface IdentitySecret {
@@ -240,12 +232,28 @@ export function packAuthcryptJson(
 }
 
 /**
- * Wrap an already-encrypted JWE in a Routing 2.0 forward envelope.
- * Returns the **plaintext** forward Message JSON; pair with
- * `packAnoncryptJson` to anoncrypt it to the mediator.
+ * Wrap an already-encrypted JWE in a Routing 2.0 forward envelope
+ * addressed to `mediatorDid`, with `from` set so the envelope is
+ * **authcrypt**-packed to the mediator. An authenticated mediator
+ * relays a forward only when it can verify the sender is the
+ * authenticated client, so the forward must carry a sender — an
+ * anoncrypt forward is silently dropped. Returns the plaintext forward
+ * Message JSON; pair with `packAuthcryptJson(_, sender, [mediator])`.
  */
-export function wrapForward(next: string, encryptedJwe: string): string {
-  return JSON.stringify(buildAnoncryptForward({ next, innerJwe: encryptedJwe }));
+export function wrapForward(
+  next: string,
+  from: string,
+  mediatorDid: string,
+  encryptedJwe: string,
+): string {
+  return JSON.stringify(
+    vtiBuildForward({
+      next,
+      from,
+      mediatorDid,
+      innerJwe: encryptedJwe,
+    }) as Record<string, unknown>,
+  );
 }
 
 /**
