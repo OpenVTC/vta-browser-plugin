@@ -6,9 +6,7 @@ import {
   smokeDidcommVtaTransportRoundtrip,
   smokeMediatorEnrollment,
   smokeMediatorNotifications,
-  smokePickupDispatch,
   smokeWalletBoot,
-  smokeWsBridgeDemux,
 } from "@pnm/core";
 
 interface SmokeResult {
@@ -27,9 +25,7 @@ const SMOKES: ReadonlyArray<readonly [string, SmokeFn]> = [
   ["authcrypt round-trip (crypto layer)", smokeAuthcryptRoundtrip],
   ["build DIDComm enroll-challenge (compose only)", smokeBuildDidcommEnrollChallenge],
   ["DIDComm enroll-challenge round-trip (in-memory bridge)", smokeDidcommVtaTransportRoundtrip],
-  ["WS demux — concurrent + out-of-order", smokeWsBridgeDemux],
   ["mediator enrollment (coordinate-mediation/2.0)", smokeMediatorEnrollment],
-  ["pickup dispatcher (pickup/3.0/delivery)", smokePickupDispatch],
   ["mediator notifications (live-delivery + ack)", smokeMediatorNotifications],
   ["wallet boot (full session bootstrap + resume)", smokeWalletBoot],
 ];

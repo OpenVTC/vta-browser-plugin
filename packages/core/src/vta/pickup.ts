@@ -11,9 +11,8 @@
  *   `messages-received` to ACK so the mediator can free them.
  * - **Live mode**: wallet sends `live-delivery-change` with
  *   `live_delivery: true` and the mediator pushes `delivery`
- *   messages immediately when traffic arrives. This is the mode
- *   intended for the `WebSocketDidcommBridge` and the
- *   `Pickup3Dispatcher`.
+ *   messages immediately when traffic arrives. This is the mode the
+ *   library's `MediatorSession` enables on connect.
  *
  * In both modes, the `delivery` envelope carries attachments where
  * each attachment is one inner DIDComm message originally sent

@@ -1,8 +1,7 @@
 import {
   Identity,
-  packAnoncryptJson,
   packAuthcrypt,
-  unpackMessage,
+  packAuthcryptJson,
   wrapForward,
   type PublicJwk,
 } from "../didcomm/index.js";
@@ -126,34 +125,13 @@ export class DidcommVtaTransport implements VtaTransport {
   ): Promise<Res> {
     const packed = await this.buildOutbound(requestType, body);
 
-    const replyRaw = await this.bridge.sendAndAwaitReply(
+    // The bridge returns the decrypted, sender-authenticated reply (it
+    // owns unpacking; only authenticated authcrypt frames are surfaced).
+    const msg = await this.bridge.sendAndAwaitReply(
       packed.outer,
       packed.requestId,
       { timeoutMs: this.timeoutMs },
     );
-
-    const result = await unpackMessage(
-      { input: replyRaw, sender_public_jwk: this.vta.keyAgreementPublicJwk },
-      this.holder,
-    );
-    if (result.kind !== "encrypted") {
-      throw new VtaClientError(
-        "e.client.parse",
-        `reply was ${result.kind}, expected encrypted`,
-      );
-    }
-    if (!result.authenticated) {
-      throw new VtaClientError(
-        "e.p.msg.unauthorized",
-        "reply not authenticated as VTA",
-      );
-    }
-    const msg = result.message as {
-      type?: string;
-      thid?: string;
-      from?: string;
-      body?: unknown;
-    };
     if (msg.type === PasskeyManagementProtocol.problemReport) {
       const pr = (msg.body ?? {}) as ProblemReportBody;
       throw new VtaClientError(coerceProblemCode(pr.code), pr.comment ?? pr.code, {
@@ -204,8 +182,13 @@ export class DidcommVtaTransport implements VtaTransport {
 
     if (!this.mediator) return { outer: inner, inner, requestId };
 
-    const forwardJson = wrapForward(this.vta.did, inner);
-    const outer = await packAnoncryptJson(forwardJson, [
+    const forwardJson = wrapForward(
+      this.vta.did,
+      this.holder.did,
+      this.mediator.did,
+      inner,
+    );
+    const outer = await packAuthcryptJson(forwardJson, this.holder, [
       {
         kid: this.mediator.keyAgreementKid,
         jwk: this.mediator.keyAgreementPublicJwk,
