@@ -1,4 +1,5 @@
 import type { Identity, PublicJwk } from "../didcomm/index.js";
+import { resolveKeyAgreement, resolveMediatorEndpoint } from "../didcomm/index.js";
 import {
   generateOrLoadHolderIdentity,
   type KVStore,
@@ -45,6 +46,29 @@ export interface WalletSessionConfig {
   timeoutMs?: number;
 }
 
+/**
+ * Config for {@link WalletSession.fromDids} — supply DIDs instead of
+ * pre-resolved endpoints. The VTA + mediator are resolved to their
+ * key-agreement material (and the mediator's WebSocket URL) via the
+ * DID hosting service.
+ */
+export interface WalletSessionFromDidsConfig {
+  /** Persistent store for holder identity + enrollment state. */
+  store: KVStore;
+  /** VTA DID (`did:webvh` or `did:key`). Resolved to its key-agreement endpoint. */
+  vtaDid: string;
+  /** Mediator DID. Resolved to its key-agreement endpoint + WebSocket URL. */
+  mediatorDid: string;
+  /** Custom WS factory for tests (defaults to globalThis.WebSocket). */
+  webSocketFactory?: WebSocketFactory;
+  /** Bridge dispatcher (defaults to Pickup3Dispatcher when omitted). */
+  dispatcher?: MessageDispatcher;
+  /** Per-request timeout. */
+  timeoutMs?: number;
+  /** Allow `ws://`/`http://` mediator endpoints. Local dev only. */
+  allowInsecure?: boolean;
+}
+
 export interface WalletSessionState {
   holder: Identity;
   routingDids: string[];
@@ -85,6 +109,36 @@ export class WalletSession {
 
   constructor(config: WalletSessionConfig) {
     this.config = config;
+  }
+
+  /**
+   * Resolve the VTA + mediator DIDs to their key-agreement endpoints
+   * (hitting the DID hosting service for `did:webvh`) and construct a
+   * ready-to-bootstrap session. The returned session still needs
+   * `bootstrap()` called on it.
+   */
+  static async fromDids(cfg: WalletSessionFromDidsConfig): Promise<WalletSession> {
+    const [vta, mediator] = await Promise.all([
+      resolveKeyAgreement(cfg.vtaDid),
+      resolveMediatorEndpoint(cfg.mediatorDid, {
+        allowInsecure: cfg.allowInsecure ?? false,
+      }),
+    ]);
+    return new WalletSession({
+      store: cfg.store,
+      vta,
+      mediator: {
+        did: mediator.did,
+        keyAgreementKid: mediator.keyAgreementKid,
+        keyAgreementPublicJwk: mediator.keyAgreementPublicJwk,
+        websocketUrl: mediator.websocketUrl,
+      },
+      ...(cfg.webSocketFactory !== undefined
+        ? { webSocketFactory: cfg.webSocketFactory }
+        : {}),
+      ...(cfg.dispatcher !== undefined ? { dispatcher: cfg.dispatcher } : {}),
+      ...(cfg.timeoutMs !== undefined ? { timeoutMs: cfg.timeoutMs } : {}),
+    });
   }
 
   /** Run the full first-or-resume boot sequence. */

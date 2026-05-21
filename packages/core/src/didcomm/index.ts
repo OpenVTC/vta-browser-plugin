@@ -20,6 +20,8 @@ import {
   packAnoncrypt as vtiPackAnoncrypt,
   unpack as vtiUnpack,
   buildForward as vtiBuildForward,
+  resolveX25519KeyAgreement as vtiResolveKeyAgreement,
+  resolveMediator as vtiResolveMediator,
   x25519,
   jwk as vtiJwk,
 } from "@openvtc/vti-didcomm-js";
@@ -318,6 +320,81 @@ export async function unpackMessage(
 /** Identifier of the underlying DIDComm implementation. */
 export function didcommCrateVersion(): string {
   return "@openvtc/vti-didcomm-js";
+}
+
+// ---------------------------------------------------------------------------
+// DID resolution. did:key resolves in-tree (deterministic); did:webvh is
+// fetched from its hosting service (the `did.jsonl` host named in the DID).
+// These turn a DID string into the key-agreement material a DIDComm
+// transport needs, so callers configure endpoints by DID rather than by
+// hand-supplying keys.
+// ---------------------------------------------------------------------------
+
+function x25519PublicJwk(bytes: Uint8Array): PublicJwk {
+  const okp = vtiJwk.publicJwk("X25519", bytes);
+  return { kty: "OKP", crv: "X25519", x: okp.x };
+}
+
+/** A DID resolved to its X25519 key-agreement endpoint. */
+export interface ResolvedKeyAgreement {
+  did: string;
+  keyAgreementKid: string;
+  keyAgreementPublicJwk: PublicJwk;
+}
+
+/**
+ * Resolve a DID to its first X25519 key-agreement verification method.
+ * `kid` is the canonical verification-method id; the public JWK is the
+ * X25519 key to authcrypt to. Throws if the DID has no X25519
+ * key-agreement entry.
+ */
+export async function resolveKeyAgreement(did: string): Promise<ResolvedKeyAgreement> {
+  const { kid, x25519Pub } = await vtiResolveKeyAgreement(did);
+  return {
+    did,
+    keyAgreementKid: kid,
+    keyAgreementPublicJwk: x25519PublicJwk(x25519Pub),
+  };
+}
+
+/** A resolved mediator: key-agreement endpoint plus its transport URLs. */
+export interface ResolvedMediatorEndpoint extends ResolvedKeyAgreement {
+  /** WebSocket URL for live delivery (the bridge connects here). */
+  websocketUrl: string;
+  /** REST DIDCommMessaging endpoint. */
+  restEndpoint: string;
+  /** Mediator authentication endpoint. */
+  authEndpoint: string;
+}
+
+/**
+ * Resolve a mediator DID to its key-agreement material + transport
+ * endpoints. Refuses plaintext (`ws://`/`http://`) endpoints unless
+ * `allowInsecure` is set (local dev only) — a tampered/stale DID
+ * document must not be able to downgrade the transport. Throws if the
+ * mediator advertises no WebSocket endpoint, since the bridge needs one
+ * for live delivery.
+ */
+export async function resolveMediatorEndpoint(
+  mediatorDid: string,
+  options: { allowInsecure?: boolean } = {},
+): Promise<ResolvedMediatorEndpoint> {
+  const m = await vtiResolveMediator(mediatorDid, {
+    allowInsecure: options.allowInsecure ?? false,
+  });
+  if (!m.wsEndpoint) {
+    throw new Error(
+      `mediator ${mediatorDid} advertises no WebSocket endpoint for live delivery`,
+    );
+  }
+  return {
+    did: m.did,
+    keyAgreementKid: m.kid,
+    keyAgreementPublicJwk: x25519PublicJwk(m.x25519Pub),
+    websocketUrl: m.wsEndpoint,
+    restEndpoint: m.restEndpoint,
+    authEndpoint: m.authEndpoint,
+  };
 }
 
 // ---------------------------------------------------------------------------
