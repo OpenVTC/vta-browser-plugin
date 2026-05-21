@@ -1,11 +1,32 @@
 import {
   Identity,
-  packAuthcrypt,
   unpackMessage,
   type PublicJwk,
 } from "../didcomm/index.js";
-import { readJweSenderKid } from "./bridge-websocket.js";
-import type { DidcommMessageBridge } from "./transport.js";
+import type { DidcommMessageBridge, DidcommReply } from "./transport.js";
+
+/**
+ * Parse a JWE protected-header `skid` without decrypting. Authcrypt
+ * (ECDH-1PU) sets it; anoncrypt (ECDH-ES) doesn't — so its presence
+ * tells the in-memory bridge whether to expect a sender for unpack.
+ */
+function readJweSenderKid(jwe: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(jwe);
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    const protectedB64 = (parsed as { protected?: unknown }).protected;
+    if (typeof protectedB64 !== "string") return undefined;
+    const headerJson = atob(
+      protectedB64.replaceAll("-", "+").replaceAll("_", "/"),
+    );
+    const header: unknown = JSON.parse(headerJson);
+    if (typeof header !== "object" || header === null) return undefined;
+    const skid = (header as { skid?: unknown }).skid;
+    return typeof skid === "string" ? skid : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const FORWARD_TYPE = "https://didcomm.org/routing/2.0/forward";
 
@@ -99,7 +120,7 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
     outerPackedJwe: string,
     _expectThreadId: string,
     _options?: { timeoutMs?: number },
-  ): Promise<string> {
+  ): Promise<DidcommReply> {
     const reply = await this.process(outerPackedJwe);
     if (reply === null) {
       throw new Error(
@@ -118,8 +139,8 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
   }
 
   /** Internal: route the outer envelope to the right pattern's
-   *  handler and return its reply JWE (or null for notifications). */
-  private async process(outerPackedJwe: string): Promise<string | null> {
+   *  handler and return its decrypted reply (or null for notifications). */
+  private async process(outerPackedJwe: string): Promise<DidcommReply | null> {
     // ── Pattern 1 + 2: mediator configured → try mediator-unpack first
     if (this.mediator) {
       const outerIsAuthcrypt = readJweSenderKid(outerPackedJwe) !== undefined;
@@ -150,7 +171,7 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
     return this.handleDirectVta(outerPackedJwe);
   }
 
-  private async handleForwarded(outer: ForwardEnvelope): Promise<string | null> {
+  private async handleForwarded(outer: ForwardEnvelope): Promise<DidcommReply | null> {
     if (!this.vta) {
       throw new Error("bridge: forward envelope received but no VTA identity configured");
     }
@@ -163,7 +184,7 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
     return this.handleDirectVta(innerJwe);
   }
 
-  private async handleDirectVta(innerJwe: string): Promise<string | null> {
+  private async handleDirectVta(innerJwe: string): Promise<DidcommReply | null> {
     if (!this.vta) {
       throw new Error("bridge: direct-to-VTA path requires `vta` identity");
     }
@@ -184,7 +205,7 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
     );
   }
 
-  private async handleMediatorDirect(decrypted: InnerRequest): Promise<string | null> {
+  private async handleMediatorDirect(decrypted: InnerRequest): Promise<DidcommReply | null> {
     if (!this.mediator) {
       throw new Error("unreachable: mediator-direct without mediator");
     }
@@ -195,7 +216,7 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
     req: InnerRequest,
     handlers: Record<string, InMemoryHandler>,
     replier: Identity,
-  ): Promise<string | null> {
+  ): Promise<DidcommReply | null> {
     if (!req.type) throw new Error("bridge: message missing `type`");
     if (!req.id) throw new Error("bridge: message missing `id`");
     if (!req.from) {
@@ -212,17 +233,15 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
       id: req.id,
     });
     if (reply == null) return null;
-    const replyJwe = await packAuthcrypt(
-      {
-        type: reply.type,
-        from: replier.did,
-        to: [req.from],
-        body: reply.body,
-        thid: req.id,
-      },
-      replier,
-      [this.holderPublicJwk],
-    );
-    return replyJwe;
+    // The real mediator-session bridge returns the *decrypted* reply, so
+    // this simulator returns the reply message directly rather than
+    // packing it (it holds only the holder's public key and couldn't
+    // unpack a self-packed reply anyway).
+    return {
+      type: reply.type,
+      from: replier.did,
+      thid: req.id,
+      body: reply.body,
+    };
   }
 }

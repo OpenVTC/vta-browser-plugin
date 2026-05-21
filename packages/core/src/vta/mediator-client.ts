@@ -1,7 +1,6 @@
 import {
   Identity,
   packAuthcrypt,
-  unpackMessage,
   type PublicJwk,
 } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";
@@ -120,8 +119,7 @@ export class MediatorClient {
   /**
    * Toggle Pickup 3.0 live-delivery mode. When enabled, the
    * mediator pushes inbound DIDComm messages on the same channel
-   * (via `pickup/3.0/delivery`) as soon as they arrive — the
-   * pattern the `Pickup3Dispatcher` expects.
+   * (via `pickup/3.0/delivery`) as soon as they arrive.
    *
    * Fire-and-forget per spec; no reply.
    */
@@ -152,32 +150,10 @@ export class MediatorClient {
   ): Promise<Res> {
     const { outer, requestId } = await this.buildOutbound(requestType, body);
 
-    const replyRaw = await this.bridge.sendAndAwaitReply(outer, requestId, {
+    // The bridge returns the decrypted, sender-authenticated reply.
+    const msg = await this.bridge.sendAndAwaitReply(outer, requestId, {
       timeoutMs: this.timeoutMs,
     });
-
-    const result = await unpackMessage(
-      { input: replyRaw, sender_public_jwk: this.mediator.keyAgreementPublicJwk },
-      this.holder,
-    );
-    if (result.kind !== "encrypted") {
-      throw new VtaClientError(
-        "e.client.parse",
-        `mediator reply was ${result.kind}, expected encrypted`,
-      );
-    }
-    if (!result.authenticated) {
-      throw new VtaClientError(
-        "e.p.msg.unauthorized",
-        "mediator reply not authenticated",
-      );
-    }
-    const msg = result.message as {
-      type?: string;
-      thid?: string;
-      from?: string;
-      body?: unknown;
-    };
     if (msg.type === "https://didcomm.org/report-problem/2.0/problem-report") {
       const pr = (msg.body ?? {}) as ProblemReportBody;
       throw new VtaClientError(coerceProblemCode(pr.code), pr.comment ?? pr.code ?? "problem-report", {

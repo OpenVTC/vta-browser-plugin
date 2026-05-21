@@ -19,25 +19,38 @@ export interface VtaTransport {
 }
 
 /**
+ * An inbound DIDComm message after the bridge has decrypted it. The
+ * bridge owns unpacking — and, for the mediator-session bridge,
+ * authentication: only successfully sender-authenticated authcrypt
+ * frames are ever surfaced (anoncrypt frames are dropped). Callers
+ * validate `type` / `thid` / `from` on this shape.
+ */
+export interface DidcommReply {
+  type?: string;
+  thid?: string;
+  from?: string;
+  body?: unknown;
+}
+
+/**
  * Seam for the DIDComm transport's send/receive plumbing. Lets us
  * separate "build the right DIDComm message bytes" from "actually
  * push them through a mediator". The first concern lives in
- * `@pnm/core`; the second is the WebSocket / HTTPS bridge
- * implementation.
+ * `@pnm/core`; the second is the bridge implementation.
  *
  * Implementations transmit packed JWE bytes to the configured
- * mediator. `sendAndAwaitReply` registers a reply expectation by
- * `thid`; `send` is fire-and-forget for DIDComm notifications
- * (e.g. `pickup/3.0/live-delivery-change`, `messages-received`).
+ * mediator and surface the **decrypted** reply. `sendAndAwaitReply`
+ * registers a reply expectation by `thid`; `send` is fire-and-forget
+ * for DIDComm notifications.
  */
 export interface DidcommMessageBridge {
   sendAndAwaitReply(
-    /** Outer JWE (anoncrypt'd forward envelope) to push to the mediator. */
+    /** Outer JWE (forward envelope) to push to the mediator. */
     outerPackedJwe: string,
     /** Expected `thid` of the reply, so the bridge can demultiplex. */
     expectThreadId: string,
     options?: { timeoutMs?: number },
-  ): Promise<string>;
+  ): Promise<DidcommReply>;
 
   /**
    * Fire-and-forget. The DIDComm protocol message in

@@ -22,6 +22,8 @@ import {
   buildForward as vtiBuildForward,
   resolveX25519KeyAgreement as vtiResolveKeyAgreement,
   resolveMediator as vtiResolveMediator,
+  authenticateToMediator as vtiAuthenticateToMediator,
+  MediatorSession as VtiMediatorSession,
   x25519,
   jwk as vtiJwk,
 } from "@openvtc/vti-didcomm-js";
@@ -394,6 +396,142 @@ export async function resolveMediatorEndpoint(
     websocketUrl: m.wsEndpoint,
     restEndpoint: m.restEndpoint,
     authEndpoint: m.authEndpoint,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Authenticated mediator session. The library's MediatorSession owns the
+// whole inbound path: challenge → JWT → bearer-subprotocol WebSocket →
+// pickup live-delivery → unpack → thid-correlation. We expose a connect
+// helper that hands back a transport-neutral handle, so the bridge layer
+// in vta/ never imports the library directly.
+// ---------------------------------------------------------------------------
+
+// The library's mediator-auth `.d.ts` is abbreviated (its `mediator`
+// return omits `did`/`x25519Pub`; its args omit `allowInsecure`), though
+// the runtime provides both. Re-type accurately here so the rest of the
+// file stays cast-free.
+interface VtiResolvedMediator {
+  did: string;
+  restEndpoint: string;
+  wsEndpoint: string;
+  authEndpoint: string;
+  kid: string;
+  x25519Pub: Uint8Array;
+}
+const authenticateToMediator = vtiAuthenticateToMediator as unknown as (args: {
+  mediatorDid: string;
+  clientDid: string;
+  clientX25519Private: Uint8Array;
+  clientX25519Public: Uint8Array;
+  clientKid?: string;
+  fetch?: typeof fetch;
+  allowInsecure?: boolean;
+}) => Promise<{ accessToken: string; mediator: VtiResolvedMediator }>;
+
+/** WebSocket constructor compatible with the library session (the
+ *  browser global `WebSocket` satisfies it). */
+export type WebSocketCtor = new (
+  url: string,
+  protocols?: string | string[],
+) => unknown;
+
+/**
+ * A live, authenticated mediator session plus the resolved endpoints
+ * the DIDComm transport needs. `waitFor` resolves with the decrypted,
+ * sender-authenticated reply correlated by `thid`.
+ */
+export interface MediatorConnection {
+  send(jwe: string): void;
+  waitFor(thid: string, timeoutMs: number): Promise<Record<string, unknown>>;
+  close(): void;
+  /** Resolved VTA key-agreement endpoint (inner authcrypt target). */
+  vta: ResolvedKeyAgreement;
+  /** Resolved mediator key-agreement endpoint (forward-envelope target). */
+  mediator: ResolvedKeyAgreement;
+}
+
+export interface ConnectMediatorSessionOptions {
+  /** Holder identity (its X25519 key authenticates to the mediator). */
+  holder: Identity;
+  /** Mediator DID — resolved + authenticated against. */
+  mediatorDid: string;
+  /** VTA DID — resolved so its replies unpack by skid. */
+  vtaDid: string;
+  /** fetch impl for the mediator auth handshake. */
+  fetch?: typeof fetch;
+  /** WebSocket ctor (defaults to globalThis.WebSocket). */
+  webSocketImpl?: WebSocketCtor;
+  /** Allow ws://, http:// endpoints. Local dev only. */
+  allowInsecure?: boolean;
+}
+
+/**
+ * Authenticate to the mediator and open a live-delivery session.
+ * Resolves once the WebSocket is open and live delivery is enabled.
+ * The returned handle's `send`/`waitFor` drive request/response over
+ * the mediator; `close()` tears the socket down.
+ */
+export async function connectMediatorSession(
+  opts: ConnectMediatorSessionOptions,
+): Promise<MediatorConnection> {
+  const secret = requireSecret(opts.holder);
+  const okp = secret.privateJwk as {
+    kty: "OKP";
+    crv: "X25519";
+    x: string;
+    d: string;
+  };
+  const clientPrivate = vtiJwk.rawPrivate(okp);
+  const clientPublic = vtiJwk.rawPublic(okp);
+
+  const auth = await authenticateToMediator({
+    mediatorDid: opts.mediatorDid,
+    clientDid: opts.holder.did,
+    clientX25519Private: clientPrivate,
+    clientX25519Public: clientPublic,
+    clientKid: opts.holder.kid,
+    allowInsecure: opts.allowInsecure ?? false,
+    ...(opts.fetch ? { fetch: opts.fetch } : {}),
+  });
+
+  const vta = await resolveKeyAgreement(opts.vtaDid);
+
+  // Seed the VTA's key so its replies unpack by skid; resolve any other
+  // sender on demand.
+  const senderKeys = new Map<string, { publicJwk: PublicJwk }>([
+    [opts.vtaDid, { publicJwk: vta.keyAgreementPublicJwk }],
+  ]);
+
+  const session = new VtiMediatorSession({
+    mediator: auth.mediator,
+    mediatorJwt: auth.accessToken,
+    client: {
+      did: opts.holder.did,
+      kid: opts.holder.kid,
+      privateKey: clientPrivate,
+      publicKey: clientPublic,
+    },
+    senderKeys,
+    resolveSender: async (did: string) => {
+      const r = await vtiResolveKeyAgreement(did);
+      return { publicJwk: x25519PublicJwk(r.x25519Pub) };
+    },
+    ...(opts.webSocketImpl ? { WebSocketImpl: opts.webSocketImpl } : {}),
+  });
+  await session.connect();
+
+  return {
+    send: (jwe: string) => session.send(jwe),
+    waitFor: (thid: string, timeoutMs: number) =>
+      session.waitFor(thid, timeoutMs) as Promise<Record<string, unknown>>,
+    close: () => session.close(),
+    vta,
+    mediator: {
+      did: auth.mediator.did,
+      keyAgreementKid: auth.mediator.kid,
+      keyAgreementPublicJwk: x25519PublicJwk(auth.mediator.x25519Pub),
+    },
   };
 }
 

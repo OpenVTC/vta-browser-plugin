@@ -9,9 +9,7 @@ import {
   smokeDidcommVtaTransportRoundtrip,
   smokeMediatorEnrollment,
   smokeMediatorNotifications,
-  smokePickupDispatch,
   smokeWalletBoot,
-  smokeWsBridgeDemux,
 } from "@pnm/core";
 import { App } from "./App.js";
 import "./styles.css";
@@ -25,10 +23,8 @@ if (import.meta.env.DEV) {
     smokeAuthcryptRoundtrip,
     smokeBuildDidcommEnrollChallenge,
     smokeDidcommVtaTransportRoundtrip,
-    smokeWsBridgeDemux,
     smokeMediatorEnrollment,
     smokeMediatorNotifications,
-    smokePickupDispatch,
     smokeWalletBoot,
     didcommCrateVersion,
   };
