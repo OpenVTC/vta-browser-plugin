@@ -32,11 +32,13 @@ export interface HolderIdentityResult {
  * Generate-or-load the wallet's holder identity from a `KVStore`.
  *
  * On first run:
- *   1. Generate an X25519 keypair in WASM (Identity.generate).
+ *   1. Generate an X25519 keypair (Identity.generate).
  *   2. Derive a conformant `did:key` from the X25519 public key.
- *   3. Re-create the Identity with the proper DID via fromSecretJwk
- *      so the `kid` is `<did>#key-agreement-1` referencing the
- *      computed DID, not a placeholder.
+ *   3. Re-create the Identity with the proper DID via fromSecretJwk so
+ *      the `kid` is the canonical did:key key-agreement id
+ *      (`<did>#<multibase>`, fragment == the DID's multibase), which is
+ *      what a counterparty resolving the did:key will address replies
+ *      to.
  *   4. Persist the secret JWK to the KVStore.
  *
  * On subsequent runs:
@@ -70,9 +72,15 @@ export async function generateOrLoadHolderIdentity(
   const tmpSecret = tmp.secretJwk() as PersistedHolder;
   tmp.dispose();
 
+  // Canonical did:key key-agreement id: the fragment equals the DID's
+  // multibase (`did:key:zABC` → `did:key:zABC#zABC`). This is what a
+  // counterparty resolving our did:key will use as the recipient kid
+  // when authcrypting replies to us, so advertising it here makes those
+  // replies strict-kid-match on unpack.
+  const multibase = did.slice("did:key:".length);
   const persistedRecord: PersistedHolder = {
     did,
-    kid: `${did}#key-agreement-1`,
+    kid: `${did}#${multibase}`,
     jwk: tmpSecret.jwk,
   };
   await store.put(STORE_KEY, persistedRecord);
