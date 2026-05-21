@@ -123,7 +123,7 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
     // ── Pattern 1 + 2: mediator configured → try mediator-unpack first
     if (this.mediator) {
       const outerIsAuthcrypt = readJweSenderKid(outerPackedJwe) !== undefined;
-      const outerView = unpackMessage(
+      const outerView = await unpackMessage(
         {
           input: outerPackedJwe,
           ...(outerIsAuthcrypt
@@ -167,7 +167,7 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
     if (!this.vta) {
       throw new Error("bridge: direct-to-VTA path requires `vta` identity");
     }
-    const inner = unpackMessage(
+    const inner = await unpackMessage(
       { input: innerJwe, sender_public_jwk: this.holderPublicJwk.jwk },
       this.vta,
     );
@@ -212,7 +212,7 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
       id: req.id,
     });
     if (reply == null) return null;
-    const replyJwe = packAuthcrypt(
+    const replyJwe = await packAuthcrypt(
       {
         type: reply.type,
         from: replier.did,

@@ -75,13 +75,13 @@ export class Pickup3Dispatcher implements MessageDispatcher {
     this.mediator = opts.mediator;
   }
 
-  extract(frame: string): string[] {
+  async extract(frame: string): Promise<string[]> {
     const skid = readJweSenderKid(frame);
     if (!skid || didFromKid(skid) !== this.mediator.did) return [frame];
 
     let msg: PickupMessageShape;
     try {
-      const result = unpackMessage(
+      const result = await unpackMessage(
         { input: frame, sender_public_jwk: this.mediator.keyAgreementPublicJwk },
         this.holder,
       );
@@ -367,16 +367,16 @@ export class WebSocketDidcommBridge implements DidcommMessageBridge {
     }
 
     for (const innerJwe of extracted) {
-      this.routeOne(innerJwe);
+      await this.routeOne(innerJwe);
     }
   }
 
-  private peekMessage(
+  private async peekMessage(
     innerJwe: string,
-  ): { type?: string; thid?: string; body?: unknown } | undefined {
+  ): Promise<{ type?: string; thid?: string; body?: unknown } | undefined> {
     const senderJwk = this.resolveSenderJwk(innerJwe);
     try {
-      const result = unpackMessage(
+      const result = await unpackMessage(
         {
           input: innerJwe,
           ...(senderJwk !== undefined ? { sender_public_jwk: senderJwk } : {}),
@@ -390,14 +390,14 @@ export class WebSocketDidcommBridge implements DidcommMessageBridge {
     }
   }
 
-  private routeOne(innerJwe: string): void {
+  private async routeOne(innerJwe: string): Promise<void> {
     // Peek the JWE once, here, to read the `thid` and (for the
     // inbox fallback) the `type` + `body`. Callers of
     // sendAndAwaitReply re-unpack with their own expected sender
     // JWK for proper authentication; this peek is purely for
     // routing. Trade-off: an extra HPKE decrypt per inbound
     // message. Acceptable at expected wallet rates.
-    const msg = this.peekMessage(innerJwe);
+    const msg = await this.peekMessage(innerJwe);
     const thid = msg?.thid;
 
     if (thid !== undefined) {

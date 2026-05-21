@@ -47,7 +47,7 @@ export interface SmokeDidcommEnrollChallengeResult {
  * non-empty (i.e. crypto ran end-to-end) and that the forward
  * wrapping actually grew the bundle (i.e. the mediator step fired).
  */
-export function smokeBuildDidcommEnrollChallenge(): SmokeDidcommEnrollChallengeResult {
+export async function smokeBuildDidcommEnrollChallenge(): Promise<SmokeDidcommEnrollChallengeResult> {
   let holder: Identity | null = null;
   let vta: Identity | null = null;
   let mediator: Identity | null = null;
@@ -81,7 +81,7 @@ export function smokeBuildDidcommEnrollChallenge(): SmokeDidcommEnrollChallengeR
       },
     });
 
-    const built = transport.buildOutbound(PasskeyManagementProtocol.enrollChallenge, {
+    const built = await transport.buildOutbound(PasskeyManagementProtocol.enrollChallenge, {
       did: holder.did,
     });
 
@@ -516,7 +516,7 @@ export async function smokePickupDispatch(): Promise<SmokePickupDispatchResult> 
 
     // Build two inner messages the VTA would normally have queued
     // at the mediator awaiting delivery.
-    const innerA = packAuthcrypt(
+    const innerA = await packAuthcrypt(
       {
         type: "https://example.org/test/1.0/alpha",
         from: vta.did,
@@ -526,7 +526,7 @@ export async function smokePickupDispatch(): Promise<SmokePickupDispatchResult> 
       vta,
       [holderPub],
     );
-    const innerB = packAuthcrypt(
+    const innerB = await packAuthcrypt(
       {
         type: "https://example.org/test/1.0/beta",
         from: vta.did,
@@ -551,7 +551,7 @@ export async function smokePickupDispatch(): Promise<SmokePickupDispatchResult> 
         { id: "msg-2", data: { json: JSON.parse(innerB) } },
       ],
     };
-    const deliveryJwe = packAuthcryptJson(
+    const deliveryJwe = await packAuthcryptJson(
       JSON.stringify(deliveryMessage),
       mediator,
       [holderPub],
@@ -578,16 +578,18 @@ export async function smokePickupDispatch(): Promise<SmokePickupDispatchResult> 
     // the original messages with the right body tag. JSON key order
     // doesn't survive parse → stringify round-trips, so we don't
     // compare raw strings.
-    const decoded = extracted.map((jwe) => {
-      const r = unpackMessage(
-        { input: jwe, sender_public_jwk: vtaPub.jwk },
-        holder!,
-      );
-      if (r.kind !== "encrypted" || !r.authenticated) {
-        throw new Error(`extracted JWE failed auth: ${r.kind}`);
-      }
-      return r.message as { type?: string; body?: { tag?: string } };
-    });
+    const decoded = await Promise.all(
+      extracted.map(async (jwe) => {
+        const r = await unpackMessage(
+          { input: jwe, sender_public_jwk: vtaPub.jwk },
+          holder!,
+        );
+        if (r.kind !== "encrypted" || !r.authenticated) {
+          throw new Error(`extracted JWE failed auth: ${r.kind}`);
+        }
+        return r.message as { type?: string; body?: { tag?: string } };
+      }),
+    );
     const tags = new Set(decoded.map((d) => d.body?.tag));
     if (!tags.has("first") || !tags.has("second")) {
       return {

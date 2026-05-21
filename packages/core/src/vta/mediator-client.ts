@@ -127,7 +127,7 @@ export class MediatorClient {
    */
   async setLiveDelivery(enabled: boolean): Promise<void> {
     const body: LiveDeliveryChangeBody = { live_delivery: enabled };
-    const { outer } = this.buildOutbound(PickupProtocol.liveDeliveryChange, body);
+    const { outer } = await this.buildOutbound(PickupProtocol.liveDeliveryChange, body);
     await this.bridge.send(outer);
   }
 
@@ -141,7 +141,7 @@ export class MediatorClient {
   async acknowledgeMessages(messageIds: string[]): Promise<void> {
     if (messageIds.length === 0) return;
     const body: MessagesReceivedBody = { message_id_list: messageIds };
-    const { outer } = this.buildOutbound(PickupProtocol.messagesReceived, body);
+    const { outer } = await this.buildOutbound(PickupProtocol.messagesReceived, body);
     await this.bridge.send(outer);
   }
 
@@ -150,13 +150,13 @@ export class MediatorClient {
     body: Req,
     acceptedResponseTypes: string[],
   ): Promise<Res> {
-    const { outer, requestId } = this.buildOutbound(requestType, body);
+    const { outer, requestId } = await this.buildOutbound(requestType, body);
 
     const replyRaw = await this.bridge.sendAndAwaitReply(outer, requestId, {
       timeoutMs: this.timeoutMs,
     });
 
-    const result = unpackMessage(
+    const result = await unpackMessage(
       { input: replyRaw, sender_public_jwk: this.mediator.keyAgreementPublicJwk },
       this.holder,
     );
@@ -216,10 +216,10 @@ export class MediatorClient {
    * Construct the outbound authcrypt envelope (no forward wrap —
    * the mediator IS the recipient). Exposed for tests/inspection.
    */
-  buildOutbound<Req extends object>(
+  async buildOutbound<Req extends object>(
     requestType: string,
     body: Req,
-  ): { outer: string; requestId: string } {
+  ): Promise<{ outer: string; requestId: string }> {
     const requestId = newMessageId();
     const message = {
       id: requestId,
@@ -228,7 +228,7 @@ export class MediatorClient {
       to: [this.mediator.did],
       body,
     };
-    const outer = packAuthcrypt(message, this.holder, [
+    const outer = await packAuthcrypt(message, this.holder, [
       {
         kid: this.mediator.keyAgreementKid,
         jwk: this.mediator.keyAgreementPublicJwk,

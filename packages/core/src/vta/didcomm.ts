@@ -124,7 +124,7 @@ export class DidcommVtaTransport implements VtaTransport {
     body: Req,
     expectedResponseType: string,
   ): Promise<Res> {
-    const packed = this.buildOutbound(requestType, body);
+    const packed = await this.buildOutbound(requestType, body);
 
     const replyRaw = await this.bridge.sendAndAwaitReply(
       packed.outer,
@@ -132,7 +132,7 @@ export class DidcommVtaTransport implements VtaTransport {
       { timeoutMs: this.timeoutMs },
     );
 
-    const result = unpackMessage(
+    const result = await unpackMessage(
       { input: replyRaw, sender_public_jwk: this.vta.keyAgreementPublicJwk },
       this.holder,
     );
@@ -185,10 +185,10 @@ export class DidcommVtaTransport implements VtaTransport {
    * Build the wire form. Public-ish for the smoke helper — keeps the
    * envelope-construction logic introspectable from tests/console.
    */
-  buildOutbound<Req extends object>(
+  async buildOutbound<Req extends object>(
     requestType: string,
     body: Req,
-  ): { outer: string; inner: string; requestId: string } {
+  ): Promise<{ outer: string; inner: string; requestId: string }> {
     const requestId = newMessageId();
     const message = {
       id: requestId,
@@ -198,14 +198,14 @@ export class DidcommVtaTransport implements VtaTransport {
       body,
     };
 
-    const inner = packAuthcrypt(message, this.holder, [
+    const inner = await packAuthcrypt(message, this.holder, [
       { kid: this.vta.keyAgreementKid, jwk: this.vta.keyAgreementPublicJwk },
     ]);
 
     if (!this.mediator) return { outer: inner, inner, requestId };
 
     const forwardJson = wrapForward(this.vta.did, inner);
-    const outer = packAnoncryptJson(forwardJson, [
+    const outer = await packAnoncryptJson(forwardJson, [
       {
         kid: this.mediator.keyAgreementKid,
         jwk: this.mediator.keyAgreementPublicJwk,
