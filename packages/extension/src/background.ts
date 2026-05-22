@@ -13,12 +13,15 @@ import {
   OFFSCREEN_DIDCOMM_LOGIN,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
+  RUNTIME_API_GET,
   RUNTIME_CONSENT_RESULT,
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
   RUNTIME_STEP_UP_VTA,
   type OffscreenDidcommLoginRequest,
   type OffscreenStepUpVtaRequest,
+  type RuntimeApiGetRequest,
+  type RuntimeApiGetResponse,
   type RuntimeConsentResult,
   type RuntimeLoginDidcommRequest,
   type RuntimeLoginRequest,
@@ -159,10 +162,37 @@ async function handleStepUpVta(
   return (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
 }
 
+// An authenticated GET the wallet runs on a page's behalf. The service
+// worker has host permissions, so this isn't subject to the page's
+// cross-origin CORS restriction. Read-only, so no consent prompt.
+async function handleApiGet(req: RuntimeApiGetRequest): Promise<RuntimeApiGetResponse> {
+  const base = req.params.baseUrl.replace(/\/+$/, "");
+  const res = await fetch(base + req.params.path, {
+    headers: { authorization: `Bearer ${req.params.accessToken}` },
+  });
+  const text = await res.text();
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = text;
+  }
+  return { ok: true, result: { status: res.status, body } };
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   // Messages addressed to the offscreen document are not ours — let its
   // listener claim the channel and respond.
   if ((message as { target?: string })?.target === OFFSCREEN_TARGET) return false;
+
+  if ((message as { type?: string })?.type === RUNTIME_API_GET) {
+    handleApiGet(message as RuntimeApiGetRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
 
   if ((message as { type?: string })?.type === RUNTIME_LOGIN) {
     handleLogin(message as RuntimeLoginRequest)

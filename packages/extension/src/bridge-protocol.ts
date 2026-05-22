@@ -17,8 +17,10 @@ export const INPAGE_SOURCE = "vta-wallet/inpage" as const;
 export const CONTENT_SOURCE = "vta-wallet/content" as const;
 
 /** RP-callable wallet methods. `login` = REST SIOPv2; `loginDidcomm` =
- *  DIDComm authcrypt-sender auth via the RP's mediator. */
-export type BridgeMethod = "login" | "loginDidcomm" | "stepUpVta";
+ *  DIDComm authcrypt-sender auth; `stepUpVta` = VTA-approval step-up;
+ *  `apiGet` = authenticated GET proxied through the wallet (avoids the
+ *  page's cross-origin CORS block). */
+export type BridgeMethod = "login" | "loginDidcomm" | "stepUpVta" | "apiGet";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
 export interface LoginParams {
@@ -53,6 +55,24 @@ export interface StepUpVtaParams {
   vtaMediatorDid: string;
 }
 
+/** Parameters for `window.vtaWallet.apiGet(...)` — an authenticated GET the
+ *  wallet performs on the page's behalf (it has host permissions, so it
+ *  isn't subject to the page's cross-origin CORS restriction). */
+export interface ApiGetParams {
+  /** Base URL of the API (e.g. `https://admin.webvh.storm.ws/api`). */
+  baseUrl: string;
+  /** Path appended to `baseUrl`, e.g. `/auth/step-up/check`. */
+  path: string;
+  /** Bearer token sent in the `Authorization` header. */
+  accessToken: string;
+}
+
+/** Result of `apiGet` — the raw status + parsed/raw body. */
+export interface ApiGetResult {
+  status: number;
+  body: unknown;
+}
+
 /** Result handed back to the RP page on a successful login. */
 export interface LoginResult {
   accessToken: string;
@@ -67,12 +87,13 @@ export interface InpageRequest {
   source: typeof INPAGE_SOURCE;
   id: string;
   method: BridgeMethod;
-  params: LoginParams | DidcommLoginParams | StepUpVtaParams;
+  params: LoginParams | DidcommLoginParams | StepUpVtaParams | ApiGetParams;
 }
 
-/** content → provider (content world → page world). */
+/** content → provider (content world → page world). `result` is untyped
+ *  wire data — each provider method casts to its own result type. */
 export type ContentResponse =
-  | { source: typeof CONTENT_SOURCE; id: string; ok: true; result: LoginResult }
+  | { source: typeof CONTENT_SOURCE; id: string; ok: true; result: unknown }
   | { source: typeof CONTENT_SOURCE; id: string; ok: false; error: string };
 
 // ─── content ↔ background (chrome.runtime messaging) ───
@@ -80,6 +101,7 @@ export type ContentResponse =
 export const RUNTIME_LOGIN = "vta-wallet/login" as const;
 export const RUNTIME_LOGIN_DIDCOMM = "vta-wallet/login-didcomm" as const;
 export const RUNTIME_STEP_UP_VTA = "vta-wallet/step-up-vta" as const;
+export const RUNTIME_API_GET = "vta-wallet/api-get" as const;
 export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
 
 /** content → background: perform a REST SIOPv2 login for the calling page. */
@@ -104,9 +126,21 @@ export interface RuntimeStepUpVtaRequest {
   origin: string;
 }
 
+/** content → background: an authenticated GET proxied through the wallet. */
+export interface RuntimeApiGetRequest {
+  type: typeof RUNTIME_API_GET;
+  params: ApiGetParams;
+  origin: string;
+}
+
 /** background → content (sendResponse). */
 export type RuntimeLoginResponse =
   | { ok: true; result: LoginResult }
+  | { ok: false; error: string };
+
+/** background → content for an `apiGet` (sendResponse). */
+export type RuntimeApiGetResponse =
+  | { ok: true; result: ApiGetResult }
   | { ok: false; error: string };
 
 /** consent window → background: the user's approve/deny decision. */

@@ -4,6 +4,8 @@
 // `window.postMessage` using the bridge protocol.
 
 import type {
+  ApiGetParams,
+  ApiGetResult,
   ContentResponse,
   DidcommLoginParams,
   LoginParams,
@@ -27,6 +29,9 @@ interface VtaWallet {
   /** Elevate an existing `aal1` session to `aal2` via VTA approval over
    *  DIDComm. Same result shape as `login`. */
   stepUpVta(params: StepUpVtaParams): Promise<LoginResult>;
+  /** Perform an authenticated GET via the wallet (not subject to the
+   *  page's cross-origin CORS). Returns the status + parsed body. */
+  apiGet(params: ApiGetParams): Promise<ApiGetResult>;
 }
 
 declare global {
@@ -37,7 +42,7 @@ declare global {
 
 const pending = new Map<
   string,
-  { resolve: (r: LoginResult) => void; reject: (e: Error) => void }
+  { resolve: (r: unknown) => void; reject: (e: Error) => void }
 >();
 
 window.addEventListener("message", (event: MessageEvent) => {
@@ -55,13 +60,13 @@ window.addEventListener("message", (event: MessageEvent) => {
   else entry.reject(new Error(data.error));
 });
 
-function call(
-  method: "login" | "loginDidcomm" | "stepUpVta",
-  params: LoginParams | DidcommLoginParams | StepUpVtaParams,
-): Promise<LoginResult> {
+function call<T>(
+  method: "login" | "loginDidcomm" | "stepUpVta" | "apiGet",
+  params: LoginParams | DidcommLoginParams | StepUpVtaParams | ApiGetParams,
+): Promise<T> {
   const id = crypto.randomUUID();
-  return new Promise<LoginResult>((resolve, reject) => {
-    pending.set(id, { resolve, reject });
+  return new Promise<T>((resolve, reject) => {
+    pending.set(id, { resolve: (r) => resolve(r as T), reject });
     window.postMessage({ source: INPAGE_SOURCE, id, method, params }, window.origin);
   });
 }
@@ -70,8 +75,9 @@ function call(
 // re-runs the content script) must not clobber an existing one.
 if (!window.vtaWallet) {
   window.vtaWallet = {
-    login: (params) => call("login", params),
-    loginDidcomm: (params) => call("loginDidcomm", params),
-    stepUpVta: (params) => call("stepUpVta", params),
+    login: (params) => call<LoginResult>("login", params),
+    loginDidcomm: (params) => call<LoginResult>("loginDidcomm", params),
+    stepUpVta: (params) => call<LoginResult>("stepUpVta", params),
+    apiGet: (params) => call<ApiGetResult>("apiGet", params),
   };
 }

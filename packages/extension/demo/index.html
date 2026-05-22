@@ -237,19 +237,18 @@
         resetLog("su");
         if (!baseSession) { log("su", "no base session — log in first", "err"); return; }
         const { baseUrl, accessToken } = baseSession;
-        log("su", "GET /auth/step-up/check (Bearer <current token>)");
+        log("su", "wallet.apiGet GET /auth/step-up/check (Bearer current token)");
         try {
-          const res = await fetch(baseUrl.replace(/\/+$/, "") + "/auth/step-up/check", {
-            headers: { Authorization: "Bearer " + accessToken },
+          // Routed through the wallet (host permission) so it isn't CORS-blocked.
+          const { status, body } = await window.vtaWallet.apiGet({
+            baseUrl, path: "/auth/step-up/check", accessToken,
           });
-          const text = await res.text();
-          let body; try { body = JSON.parse(text); } catch { body = text; }
-          if (res.status === 403) {
+          if (status === 403) {
             log("su", "403 step_up_required — token is only aal1 (" + JSON.stringify(body) + ")", "err");
-          } else if (res.ok) {
-            log("su", "200 OK — " + JSON.stringify(body), "ok");
+          } else if (status >= 200 && status < 300) {
+            log("su", status + " OK — " + JSON.stringify(body), "ok");
           } else {
-            log("su", res.status + " — " + JSON.stringify(body), "err");
+            log("su", status + " — " + JSON.stringify(body), "err");
           }
         } catch (e) {
           log("su", "FAILED: " + (e?.message ?? e), "err");
