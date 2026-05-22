@@ -11,15 +11,19 @@
 import { generateOrLoadHolderIdentity, IndexedDBKVStore, loginViaSiop } from "@pnm/core";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
+  OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
   RUNTIME_CONSENT_RESULT,
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
+  RUNTIME_STEP_UP_VTA,
   type OffscreenDidcommLoginRequest,
+  type OffscreenStepUpVtaRequest,
   type RuntimeConsentResult,
   type RuntimeLoginDidcommRequest,
   type RuntimeLoginRequest,
   type RuntimeLoginResponse,
+  type RuntimeStepUpVtaRequest,
 } from "./bridge-protocol.js";
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -132,6 +136,29 @@ async function handleLoginDidcomm(
   return (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
 }
 
+async function handleStepUpVta(
+  req: RuntimeStepUpVtaRequest,
+): Promise<RuntimeLoginResponse> {
+  // Load the holder here only to show its DID in the consent prompt; the
+  // step-up orchestration (REST + DIDComm) runs in the offscreen document.
+  const { signing } = await generateOrLoadHolderIdentity(new IndexedDBKVStore());
+
+  const approved = await requestConsent({
+    origin: req.origin,
+    rpDid: req.params.rpDid,
+    holderDid: signing.did,
+  });
+  if (!approved) return { ok: false, error: "step-up denied by user" };
+
+  await ensureOffscreenDocument();
+  const offscreenRequest: OffscreenStepUpVtaRequest = {
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_STEP_UP_VTA,
+    params: req.params,
+  };
+  return (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   // Messages addressed to the offscreen document are not ours — let its
   // listener claim the channel and respond.
@@ -148,6 +175,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_LOGIN_DIDCOMM) {
     handleLoginDidcomm(message as RuntimeLoginDidcommRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_STEP_UP_VTA) {
+    handleStepUpVta(message as RuntimeStepUpVtaRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

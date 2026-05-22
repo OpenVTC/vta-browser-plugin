@@ -8,6 +8,7 @@ import type {
   DidcommLoginParams,
   LoginParams,
   LoginResult,
+  StepUpVtaParams,
 } from "./bridge-protocol.js";
 
 // Bundled as a standalone page-world script, so it must be self-contained
@@ -23,6 +24,9 @@ interface VtaWallet {
   /** Request a DIDComm login (authcrypt-sender auth via the RP's
    *  mediator). Same result shape as `login`. */
   loginDidcomm(params: DidcommLoginParams): Promise<LoginResult>;
+  /** Elevate an existing `aal1` session to `aal2` via VTA approval over
+   *  DIDComm. Same result shape as `login`. */
+  stepUpVta(params: StepUpVtaParams): Promise<LoginResult>;
 }
 
 declare global {
@@ -52,8 +56,8 @@ window.addEventListener("message", (event: MessageEvent) => {
 });
 
 function call(
-  method: "login" | "loginDidcomm",
-  params: LoginParams | DidcommLoginParams,
+  method: "login" | "loginDidcomm" | "stepUpVta",
+  params: LoginParams | DidcommLoginParams | StepUpVtaParams,
 ): Promise<LoginResult> {
   const id = crypto.randomUUID();
   return new Promise<LoginResult>((resolve, reject) => {
@@ -68,5 +72,6 @@ if (!window.vtaWallet) {
   window.vtaWallet = {
     login: (params) => call("login", params),
     loginDidcomm: (params) => call("loginDidcomm", params),
+    stepUpVta: (params) => call("stepUpVta", params),
   };
 }

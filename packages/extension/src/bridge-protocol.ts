@@ -18,7 +18,7 @@ export const CONTENT_SOURCE = "vta-wallet/content" as const;
 
 /** RP-callable wallet methods. `login` = REST SIOPv2; `loginDidcomm` =
  *  DIDComm authcrypt-sender auth via the RP's mediator. */
-export type BridgeMethod = "login" | "loginDidcomm";
+export type BridgeMethod = "login" | "loginDidcomm" | "stepUpVta";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
 export interface LoginParams {
@@ -38,6 +38,21 @@ export interface DidcommLoginParams {
   mediatorDid: string;
 }
 
+/** Parameters for `window.vtaWallet.stepUpVta(...)` (VTA-approval step-up).
+ *  Elevates an existing `aal1` session (its `accessToken`) to `aal2`. */
+export interface StepUpVtaParams {
+  /** Base URL of the RP's auth API (same one used for the base login). */
+  baseUrl: string;
+  /** The RP's DID — bound into the approval the VTA signs. */
+  rpDid: string;
+  /** The existing `aal1` session access token to elevate. */
+  accessToken: string;
+  /** The holder's VTA DID — approves the step-up over DIDComm. */
+  vtaDid: string;
+  /** The VTA's mediator DID (for the forward envelope). */
+  vtaMediatorDid: string;
+}
+
 /** Result handed back to the RP page on a successful login. */
 export interface LoginResult {
   accessToken: string;
@@ -52,7 +67,7 @@ export interface InpageRequest {
   source: typeof INPAGE_SOURCE;
   id: string;
   method: BridgeMethod;
-  params: LoginParams | DidcommLoginParams;
+  params: LoginParams | DidcommLoginParams | StepUpVtaParams;
 }
 
 /** content → provider (content world → page world). */
@@ -64,6 +79,7 @@ export type ContentResponse =
 
 export const RUNTIME_LOGIN = "vta-wallet/login" as const;
 export const RUNTIME_LOGIN_DIDCOMM = "vta-wallet/login-didcomm" as const;
+export const RUNTIME_STEP_UP_VTA = "vta-wallet/step-up-vta" as const;
 export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
 
 /** content → background: perform a REST SIOPv2 login for the calling page. */
@@ -78,6 +94,13 @@ export interface RuntimeLoginRequest {
 export interface RuntimeLoginDidcommRequest {
   type: typeof RUNTIME_LOGIN_DIDCOMM;
   params: DidcommLoginParams;
+  origin: string;
+}
+
+/** content → background: perform a VTA-approval step-up for the calling page. */
+export interface RuntimeStepUpVtaRequest {
+  type: typeof RUNTIME_STEP_UP_VTA;
+  params: StepUpVtaParams;
   origin: string;
 }
 
@@ -104,6 +127,7 @@ export interface RuntimeConsentResult {
 
 export const OFFSCREEN_TARGET = "offscreen" as const;
 export const OFFSCREEN_DIDCOMM_LOGIN = "offscreen/didcomm-login" as const;
+export const OFFSCREEN_STEP_UP_VTA = "offscreen/step-up-vta" as const;
 
 /** background → offscreen: run a DIDComm login. Reply is a
  *  [`RuntimeLoginResponse`] via `sendResponse`. */
@@ -111,4 +135,12 @@ export interface OffscreenDidcommLoginRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_DIDCOMM_LOGIN;
   params: DidcommLoginParams;
+}
+
+/** background → offscreen: run a VTA-approval step-up. Reply is a
+ *  [`RuntimeLoginResponse`] via `sendResponse`. */
+export interface OffscreenStepUpVtaRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_STEP_UP_VTA;
+  params: StepUpVtaParams;
 }
