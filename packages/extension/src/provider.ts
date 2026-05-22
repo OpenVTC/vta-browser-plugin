@@ -6,6 +6,7 @@
 import type {
   ApiGetParams,
   ApiGetResult,
+  ApiPostParams,
   ContentResponse,
   DidcommLoginParams,
   LoginParams,
@@ -32,6 +33,8 @@ interface VtaWallet {
   /** Perform an authenticated GET via the wallet (not subject to the
    *  page's cross-origin CORS). Returns the status + parsed body. */
   apiGet(params: ApiGetParams): Promise<ApiGetResult>;
+  /** Perform an authenticated POST via the wallet (not subject to CORS). */
+  apiPost(params: ApiPostParams): Promise<ApiGetResult>;
 }
 
 declare global {
@@ -61,8 +64,8 @@ window.addEventListener("message", (event: MessageEvent) => {
 });
 
 function call<T>(
-  method: "login" | "loginDidcomm" | "stepUpVta" | "apiGet",
-  params: LoginParams | DidcommLoginParams | StepUpVtaParams | ApiGetParams,
+  method: "login" | "loginDidcomm" | "stepUpVta" | "apiGet" | "apiPost",
+  params: LoginParams | DidcommLoginParams | StepUpVtaParams | ApiGetParams | ApiPostParams,
 ): Promise<T> {
   const id = crypto.randomUUID();
   return new Promise<T>((resolve, reject) => {
@@ -79,5 +82,6 @@ if (!window.vtaWallet) {
     loginDidcomm: (params) => call<LoginResult>("loginDidcomm", params),
     stepUpVta: (params) => call<LoginResult>("stepUpVta", params),
     apiGet: (params) => call<ApiGetResult>("apiGet", params),
+    apiPost: (params) => call<ApiGetResult>("apiPost", params),
   };
 }

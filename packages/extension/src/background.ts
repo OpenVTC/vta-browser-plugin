@@ -17,6 +17,7 @@ import {
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
   RUNTIME_API_GET,
+  RUNTIME_API_POST,
   RUNTIME_CONSENT_RESULT,
   RUNTIME_INBOUND_CONSENT,
   RUNTIME_LOGIN,
@@ -26,6 +27,7 @@ import {
   type OffscreenStepUpVtaRequest,
   type RuntimeApiGetRequest,
   type RuntimeApiGetResponse,
+  type RuntimeApiPostRequest,
   type RuntimeConsentResult,
   type RuntimeInboundConsentRequest,
   type RuntimeLoginDidcommRequest,
@@ -220,6 +222,27 @@ async function handleApiGet(req: RuntimeApiGetRequest): Promise<RuntimeApiGetRes
   return { ok: true, result: { status: res.status, body } };
 }
 
+// Authenticated POST proxied through the wallet (host permission → no CORS).
+async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetResponse> {
+  const base = req.params.baseUrl.replace(/\/+$/, "");
+  const res = await fetch(base + req.params.path, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${req.params.accessToken}`,
+    },
+    body: JSON.stringify(req.params.body),
+  });
+  const text = await res.text();
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = text;
+  }
+  return { ok: true, result: { status: res.status, body } };
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   // Messages addressed to the offscreen document are not ours — let its
   // listener claim the channel and respond.
@@ -227,6 +250,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_API_GET) {
     handleApiGet(message as RuntimeApiGetRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_API_POST) {
+    handleApiPost(message as RuntimeApiPostRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

@@ -20,7 +20,7 @@ export const CONTENT_SOURCE = "vta-wallet/content" as const;
  *  DIDComm authcrypt-sender auth; `stepUpVta` = VTA-approval step-up;
  *  `apiGet` = authenticated GET proxied through the wallet (avoids the
  *  page's cross-origin CORS block). */
-export type BridgeMethod = "login" | "loginDidcomm" | "stepUpVta" | "apiGet";
+export type BridgeMethod = "login" | "loginDidcomm" | "stepUpVta" | "apiGet" | "apiPost";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
 export interface LoginParams {
@@ -67,9 +67,19 @@ export interface ApiGetParams {
   accessToken: string;
 }
 
-/** Result of `apiGet` — the raw status + parsed/raw body. */
+/** Result of `apiGet`/`apiPost` — the raw status + parsed/raw body. */
 export interface ApiGetResult {
   status: number;
+  body: unknown;
+}
+
+/** Parameters for `window.vtaWallet.apiPost(...)` — an authenticated POST the
+ *  wallet performs on the page's behalf (not subject to the page's CORS). */
+export interface ApiPostParams {
+  baseUrl: string;
+  path: string;
+  accessToken: string;
+  /** JSON request body. */
   body: unknown;
 }
 
@@ -89,7 +99,7 @@ export interface InpageRequest {
   source: typeof INPAGE_SOURCE;
   id: string;
   method: BridgeMethod;
-  params: LoginParams | DidcommLoginParams | StepUpVtaParams | ApiGetParams;
+  params: LoginParams | DidcommLoginParams | StepUpVtaParams | ApiGetParams | ApiPostParams;
 }
 
 /** content → provider (content world → page world). `result` is untyped
@@ -104,6 +114,7 @@ export const RUNTIME_LOGIN = "vta-wallet/login" as const;
 export const RUNTIME_LOGIN_DIDCOMM = "vta-wallet/login-didcomm" as const;
 export const RUNTIME_STEP_UP_VTA = "vta-wallet/step-up-vta" as const;
 export const RUNTIME_API_GET = "vta-wallet/api-get" as const;
+export const RUNTIME_API_POST = "vta-wallet/api-post" as const;
 export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
 /** offscreen → background: an inbound RP confirm request needs user consent. */
 export const RUNTIME_INBOUND_CONSENT = "vta-wallet/inbound-consent" as const;
@@ -146,6 +157,13 @@ export interface RuntimeStepUpVtaRequest {
 export interface RuntimeApiGetRequest {
   type: typeof RUNTIME_API_GET;
   params: ApiGetParams;
+  origin: string;
+}
+
+/** content → background: an authenticated POST proxied through the wallet. */
+export interface RuntimeApiPostRequest {
+  type: typeof RUNTIME_API_POST;
+  params: ApiPostParams;
   origin: string;
 }
 

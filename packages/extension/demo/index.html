@@ -98,6 +98,16 @@
         <ol class="log" id="su-log"></ol>
         <div class="jwt" id="su-jwt"></div>
       </section>
+
+      <!-- ── RP → wallet · inbound confirm ── -->
+      <section class="panel">
+        <h2>RP → wallet · confirm</h2>
+        <div class="sub">The inverse direction: the RP sends a <code>confirm/1.0</code> over DIDComm to your wallet's did:peer; the wallet pops a consent prompt and signs the decision back. Needs an admin base login + a service-bearing holder did:peer.</div>
+        <label>Action to confirm</label>
+        <input id="cf-action" value="Approve a high-value transfer" />
+        <button id="cf-go" disabled>Request confirmation (RP → wallet)</button>
+        <ol class="log" id="cf-log"></ol>
+      </section>
     </main>
 
     <script>
@@ -192,6 +202,7 @@
           baseSession = { accessToken: r.accessToken, rpDid, baseUrl, holderDid: r.holderDid };
           $("su-go").disabled = false;
           $("su-check").disabled = false;
+          $("cf-go").disabled = false;
         };
       }
 
@@ -263,6 +274,32 @@
           }
         } catch (e) {
           log("su", "FAILED: " + (e?.message ?? e), "err");
+        }
+      });
+
+      // ── RP → wallet · inbound confirm ──
+      $("cf-go").addEventListener("click", async () => {
+        $("cf-log").innerHTML = "";
+        if (!baseSession) { log("cf", "log in first (admin)", "err"); return; }
+        const { baseUrl, accessToken, holderDid } = baseSession;
+        const action = $("cf-action").value.trim();
+        log("cf", "wallet.apiPost /confirm/request { holder_did, action }");
+        log("cf", "RP → confirm/1.0 → your wallet — approve the consent popup…");
+        try {
+          // POST through the wallet (host permission) so it isn't CORS-blocked.
+          const { status, body } = await window.vtaWallet.apiPost({
+            baseUrl, path: "/confirm/request", accessToken,
+            body: { holder_did: holderDid, action },
+          });
+          if (status >= 200 && status < 300) {
+            const approved = body && body.approved;
+            log("cf", "RP result: " + JSON.stringify(body), approved ? "ok" : "err");
+            log("cf", approved ? "confirmed ✓ — the wallet signed an approval back" : "denied", approved ? "ok" : "err");
+          } else {
+            log("cf", status + " — " + JSON.stringify(body), "err");
+          }
+        } catch (e) {
+          log("cf", "FAILED: " + (e?.message ?? e), "err");
         }
       });
     </script>
