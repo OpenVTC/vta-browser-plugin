@@ -32,6 +32,6 @@
       ]
     }
   ],
-  "permissions": ["storage", "offscreen"],
+  "permissions": ["storage", "offscreen", "notifications"],
   "host_permissions": ["https://admin.webvh.storm.ws/*"]
 }
