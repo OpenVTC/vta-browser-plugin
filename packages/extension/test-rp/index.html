@@ -1,0 +1,75 @@
+<!doctype html>
+<!--
+  Throwaway test RP page for the wallet login bridge. Serve over a real
+  origin (NOT file://) so the extension's content script injects, e.g.:
+
+    cd packages/extension/test-rp && python3 -m http.server 8787
+    open http://localhost:8787/
+
+  The extension's content_scripts must match this origin (localhost is
+  whitelisted in the manifest for dev). Click "Login with VTA", approve the
+  consent popup, and the RP-issued session token appears below.
+
+  NOTE: the extension mints its OWN holder did:key (shown in the consent
+  popup). That DID must be ACL-granted on the did-hosting service, e.g.
+  `did-hosting-control add-acl --did <holder> --role admin`.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Test RP — VTA Wallet login</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+      label { display: block; margin: 12px 0 4px; font-size: 13px; color: #555; }
+      input { width: 100%; padding: 8px; box-sizing: border-box; font-family: ui-monospace, monospace; font-size: 12px; }
+      button { margin-top: 16px; padding: 10px 18px; font-size: 14px; }
+      pre { background: #f5f5f5; padding: 12px; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
+    </style>
+  </head>
+  <body>
+    <h2>Test RP — log in with the VTA wallet</h2>
+    <p><code>window.vtaWallet</code>: <span id="present">checking…</span></p>
+
+    <label for="rpDid">RP DID (id_token <code>aud</code>)</label>
+    <input id="rpDid" value="did:webvh:QmUcydmZKWsAUcuAGzyQRjXnSvnMdSRF1YM7gyhugYGS9s:webvh.storm.ws" />
+
+    <label for="baseUrl">Auth API base URL</label>
+    <input id="baseUrl" value="https://admin.webvh.storm.ws/api" />
+
+    <button id="login">Login with VTA</button>
+
+    <h3>Result</h3>
+    <pre id="out">(none yet)</pre>
+
+    <script>
+      const out = document.getElementById("out");
+      const present = document.getElementById("present");
+
+      // The provider is injected at document_start, but give it a beat.
+      const check = () => {
+        present.textContent = window.vtaWallet ? "available ✓" : "NOT injected ✗";
+      };
+      setTimeout(check, 200);
+
+      document.getElementById("login").addEventListener("click", async () => {
+        if (!window.vtaWallet) {
+          out.textContent = "window.vtaWallet is not available — is the extension loaded and matching this origin?";
+          return;
+        }
+        out.textContent = "requesting login (approve the consent popup)…";
+        try {
+          const r = await window.vtaWallet.login({
+            rpDid: document.getElementById("rpDid").value.trim(),
+            baseUrl: document.getElementById("baseUrl").value.trim(),
+          });
+          out.textContent =
+            "LOGIN OK\n\nholder DID (grant this in the ACL):\n" + r.holderDid +
+            "\n\nsession_id: " + r.sessionId +
+            "\n\naccess_token:\n" + r.accessToken;
+        } catch (e) {
+          out.textContent = "LOGIN FAILED: " + (e?.message ?? e);
+        }
+      });
+    </script>
+  </body>
+</html>

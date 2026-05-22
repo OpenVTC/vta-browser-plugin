@@ -12,11 +12,28 @@ export default defineConfig({
     rollupOptions: {
       input: {
         popup: resolve(__dirname, "popup.html"),
+        confirm: resolve(__dirname, "confirm.html"),
         background: resolve(__dirname, "src/background.ts"),
+        content: resolve(__dirname, "src/content.ts"),
+        provider: resolve(__dirname, "src/provider.ts"),
       },
       output: {
+        // Fixed names for the files the manifest references by path.
+        // `content.js` is injected as a classic content script and
+        // `provider.js` as a page-world script, so both must be
+        // self-contained (no shared-chunk `import`s) — see `manualChunks`.
         entryFileNames: (chunk) =>
-          chunk.name === "background" ? "background.js" : "assets/[name]-[hash].js",
+          chunk.name === "background"
+            ? "background.js"
+            : chunk.name === "content"
+              ? "content.js"
+              : chunk.name === "provider"
+                ? "provider.js"
+                : "assets/[name]-[hash].js",
+        // Keep the content/provider entries dependency-free: inline their
+        // (tiny) shared `bridge-protocol` constants rather than emitting a
+        // shared chunk a classic content script could not `import`.
+        manualChunks: undefined,
       },
     },
   },
