@@ -231,6 +231,53 @@ export interface RuntimeConsentResult {
   approved: boolean;
 }
 
+// ─── Onboarding (popup → background → offscreen) ───
+// Connect the wallet to a VTA via the ephemeral-did:key → swap-acl flow:
+// PREPARE resolves the VTA's transports + mints an ephemeral did:key the
+// operator grants; CONNECT authenticates as that ephemeral and swaps the ACL
+// entry onto the wallet's holder did:peer.
+
+export const RUNTIME_ONBOARD_PREPARE = "vta-wallet/onboard-prepare" as const;
+export const RUNTIME_ONBOARD_CONNECT = "vta-wallet/onboard-connect" as const;
+
+/** popup → background: resolve a VTA DID + mint the ephemeral to be granted. */
+export interface RuntimeOnboardPrepareRequest {
+  type: typeof RUNTIME_ONBOARD_PREPARE;
+  vtaDid: string;
+}
+
+export interface OnboardPrepareResult {
+  /** The ephemeral did:key the operator must grant. */
+  ephemeralDid: string;
+  /** The verbatim command the operator should run to grant it. */
+  command: string;
+  /** The VTA's mediator DID, if it advertises DIDComm. */
+  mediatorDid?: string;
+  /** The VTA's REST base URL, if it advertises REST. */
+  restBaseUrl?: string;
+}
+
+export type RuntimeOnboardPrepareResponse =
+  | { ok: true; result: OnboardPrepareResult }
+  | { ok: false; error: string };
+
+/** popup → background: finish onboarding — connect as the granted ephemeral
+ *  and swap its ACL entry onto the holder did:peer. */
+export interface RuntimeOnboardConnectRequest {
+  type: typeof RUNTIME_ONBOARD_CONNECT;
+}
+
+export interface OnboardConnectResult {
+  /** The wallet's holder DID the ACL entry was swapped onto. */
+  holderDid: string;
+  /** The role the new entry carries (inherited from the ephemeral grant). */
+  role: string;
+}
+
+export type RuntimeOnboardConnectResponse =
+  | { ok: true; result: OnboardConnectResult }
+  | { ok: false; error: string };
+
 // ─── background ↔ offscreen document ───
 //
 // The DIDComm login runs in an offscreen document, not the service worker:
@@ -248,6 +295,10 @@ export const OFFSCREEN_START_INBOUND = "offscreen/start-inbound" as const;
 /** background → offscreen: report the warm mediator-session status. Reply is
  *  a [`MediatorStatusResult`] via `sendResponse`. */
 export const OFFSCREEN_GET_STATUS = "offscreen/get-status" as const;
+/** background → offscreen: resolve a VTA + mint the ephemeral to be granted. */
+export const OFFSCREEN_ONBOARD_PREPARE = "offscreen/onboard-prepare" as const;
+/** background → offscreen: connect as the granted ephemeral + swap-acl. */
+export const OFFSCREEN_ONBOARD_CONNECT = "offscreen/onboard-connect" as const;
 
 export interface OffscreenStartInboundRequest {
   target: typeof OFFSCREEN_TARGET;
@@ -257,6 +308,17 @@ export interface OffscreenStartInboundRequest {
 export interface OffscreenGetStatusRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_GET_STATUS;
+}
+
+export interface OffscreenOnboardPrepareRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_ONBOARD_PREPARE;
+  vtaDid: string;
+}
+
+export interface OffscreenOnboardConnectRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_ONBOARD_CONNECT;
 }
 
 /** background → offscreen: run a DIDComm login. Reply is a

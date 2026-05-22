@@ -10,6 +10,9 @@ import {
   buildConfirmResponse,
   connectMediatorSession,
   createStopwatch,
+  didcommKeyAgreementFromSigning,
+  generateSigningIdentity,
+  Identity,
   IndexedDBKVStore,
   loginViaDidcomm,
   markInboundHandled,
@@ -18,19 +21,27 @@ import {
   parseConfirmRequest,
   requestVtaApproval,
   resolveKeyAgreement,
+  resolveVtaServices,
+  signingIdentityFromSecret,
   stepUpVtaFinish,
   stepUpVtaStart,
+  swapAclDidcomm,
 } from "@pnm/core";
 import { getWalletMediatorDid, loadHolder } from "./holder.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
   OFFSCREEN_GET_STATUS,
+  OFFSCREEN_ONBOARD_CONNECT,
+  OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
   RUNTIME_INBOUND_CONSENT,
   type OffscreenDidcommLoginRequest,
+  type OffscreenOnboardPrepareRequest,
   type OffscreenStepUpVtaRequest,
+  type OnboardConnectResult,
+  type OnboardPrepareResult,
   type RuntimeLoginResponse,
 } from "./bridge-protocol.js";
 
@@ -61,8 +72,107 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ mediators: statusSnapshot() });
     return false; // synchronous response
   }
+  if (msg.type === OFFSCREEN_ONBOARD_PREPARE) {
+    doOnboardPrepare((message as OffscreenOnboardPrepareRequest).vtaDid)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_ONBOARD_CONNECT) {
+    doOnboardConnect()
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
   return false;
 });
+
+// ─── Onboarding: ephemeral did:key → holder did:peer (swap-acl) ───
+// PREPARE resolves the VTA's transports, mints an ephemeral did:key, and
+// persists it (so it survives the popup round-trip while the operator grants
+// it). CONNECT authenticates as that ephemeral over DIDComm and swaps its ACL
+// entry onto the wallet's holder did:peer, then discards the ephemeral.
+
+const ONBOARD_KEY = "onboard:pending";
+
+interface PendingOnboard {
+  ephemeralSecret: Uint8Array;
+  vtaDid: string;
+  mediatorDid?: string;
+  restBaseUrl?: string;
+}
+
+async function doOnboardPrepare(vtaDid: string): Promise<OnboardPrepareResult> {
+  const services = await resolveVtaServices(vtaDid);
+  if (!services.didcomm && !services.rest) {
+    throw new Error(`${vtaDid} advertises no #vta-didcomm or #vta-rest service`);
+  }
+  const eph = generateSigningIdentity();
+  const store = new IndexedDBKVStore();
+  const pending: PendingOnboard = {
+    ephemeralSecret: eph.privateKey,
+    vtaDid,
+    ...(services.didcomm ? { mediatorDid: services.didcomm.mediatorDid } : {}),
+    ...(services.rest ? { restBaseUrl: services.rest.baseUrl } : {}),
+  };
+  await store.put(ONBOARD_KEY, pending);
+  return {
+    ephemeralDid: eph.did,
+    command: `pnm acl create --did ${eph.did} --role admin`,
+    ...(services.didcomm ? { mediatorDid: services.didcomm.mediatorDid } : {}),
+    ...(services.rest ? { restBaseUrl: services.rest.baseUrl } : {}),
+  };
+}
+
+async function doOnboardConnect(): Promise<OnboardConnectResult> {
+  const store = new IndexedDBKVStore();
+  const pending = await store.get<PendingOnboard>(ONBOARD_KEY);
+  if (!pending) throw new Error("no pending onboarding — prepare first");
+  if (!pending.mediatorDid) {
+    throw new Error(
+      "VTA advertises no DIDComm mediator; REST-only onboarding is not yet supported",
+    );
+  }
+
+  // Reconstruct the operator-granted ephemeral as an X25519 DIDComm identity
+  // (the authcrypt sender = the "old" DID being rotated away from).
+  const ephSigning = signingIdentityFromSecret(new Uint8Array(pending.ephemeralSecret));
+  const ka = didcommKeyAgreementFromSigning(ephSigning);
+  const ephemeral = Identity.fromSecretJwk({
+    did: ephSigning.did,
+    kid: ka.keyAgreementKid,
+    jwk: ka.secretJwk,
+  });
+
+  // The holder did:peer #key-2 signs the VP-JWT — it's the "new" DID.
+  const { signing } = await loadHolder();
+
+  const conn = await connectMediatorSession({
+    holder: ephemeral,
+    mediatorDid: pending.mediatorDid,
+    vtaDid: pending.vtaDid,
+  });
+  try {
+    const service = await resolveKeyAgreement(pending.vtaDid);
+    const bridge = new MediatorSessionBridge(conn);
+    const entry = await swapAclDidcomm({
+      bridge,
+      ephemeral,
+      holderSigning: signing,
+      service,
+      mediator: conn.mediator,
+      vtaDid: pending.vtaDid,
+    });
+    await store.delete(ONBOARD_KEY);
+    return { holderDid: entry.did, role: entry.role };
+  } finally {
+    conn.close();
+  }
+}
 
 // ─── Warm mediator-session pool ───
 // One authenticated, live-delivery session per mediator DID, reused for every

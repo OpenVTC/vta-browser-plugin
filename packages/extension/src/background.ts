@@ -14,6 +14,8 @@ import { subscribeToPush } from "./push.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
   OFFSCREEN_GET_STATUS,
+  OFFSCREEN_ONBOARD_CONNECT,
+  OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
@@ -24,6 +26,8 @@ import {
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
   RUNTIME_MEDIATOR_STATUS,
+  RUNTIME_ONBOARD_CONNECT,
+  RUNTIME_ONBOARD_PREPARE,
   RUNTIME_STEP_UP_VTA,
   RUNTIME_WALLET_DEFAULTS,
   type MediatorStatusResult,
@@ -38,6 +42,9 @@ import {
   type RuntimeLoginRequest,
   type RuntimeLoginResponse,
   type RuntimeMediatorStatusResponse,
+  type RuntimeOnboardConnectResponse,
+  type RuntimeOnboardPrepareRequest,
+  type RuntimeOnboardPrepareResponse,
   type RuntimeStepUpVtaRequest,
   type RuntimeWalletDefaultsResponse,
 } from "./bridge-protocol.js";
@@ -241,6 +248,28 @@ async function handleMediatorStatus(): Promise<RuntimeMediatorStatusResponse> {
   return { ok: true, result };
 }
 
+// Onboarding (popup-driven): both phases run in the offscreen doc (DID
+// resolution + the mediator session need import()/DOM). The background just
+// brings the offscreen up and relays.
+async function handleOnboardPrepare(
+  req: RuntimeOnboardPrepareRequest,
+): Promise<RuntimeOnboardPrepareResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_ONBOARD_PREPARE,
+    vtaDid: req.vtaDid,
+  })) as RuntimeOnboardPrepareResponse;
+}
+
+async function handleOnboardConnect(): Promise<RuntimeOnboardConnectResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_ONBOARD_CONNECT,
+  })) as RuntimeOnboardConnectResponse;
+}
+
 // Operator-configured defaults a page may prefill (e.g. the step-up VTA).
 async function handleWalletDefaults(): Promise<RuntimeWalletDefaultsResponse> {
   const s = await getSettings();
@@ -301,6 +330,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_MEDIATOR_STATUS) {
     handleMediatorStatus()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_ONBOARD_PREPARE) {
+    handleOnboardPrepare(message as RuntimeOnboardPrepareRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_ONBOARD_CONNECT) {
+    handleOnboardConnect()
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

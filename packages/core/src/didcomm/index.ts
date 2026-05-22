@@ -22,6 +22,7 @@ import {
   buildForward as vtiBuildForward,
   resolveX25519KeyAgreement as vtiResolveKeyAgreement,
   resolveMediator as vtiResolveMediator,
+  resolve as vtiResolve,
   authenticateToMediator as vtiAuthenticateToMediator,
   MediatorSession as VtiMediatorSession,
   x25519,
@@ -405,6 +406,57 @@ export async function resolveMediatorEndpoint(
     restEndpoint: m.restEndpoint,
     authEndpoint: m.authEndpoint,
   };
+}
+
+/** The transports a VTA advertises in its DID document. A VTA may enable
+ *  REST, DIDComm, or both (runtime service management) — onboarding resolves
+ *  the DID once and uses whichever is present. */
+export interface VtaServices {
+  /** REST base URL from the `#vta-rest` service (`type: "VTARest"`). */
+  rest?: { baseUrl: string };
+  /** Mediator DID from the `#vta-didcomm` service (`type: "DIDCommMessaging"`). */
+  didcomm?: { mediatorDid: string };
+}
+
+/**
+ * Resolve a VTA/RP DID to its advertised transports — so a caller supplies a
+ * single DID and the wallet derives the REST endpoint and/or DIDComm mediator
+ * itself, rather than asking the operator for URLs. Returns whichever of
+ * `#vta-rest` / `#vta-didcomm` the document carries (possibly both, possibly
+ * one).
+ */
+export async function resolveVtaServices(did: string): Promise<VtaServices> {
+  const resolution = (await vtiResolve(did, {})) as {
+    didDocument?: { service?: Array<{ id?: string; type?: string; serviceEndpoint?: unknown }> };
+  };
+  const services = resolution.didDocument?.service ?? [];
+  const out: VtaServices = {};
+
+  for (const svc of services) {
+    const fragment = (svc.id ?? "").split("#")[1];
+
+    if (fragment === "vta-rest" || svc.type === "VTARest") {
+      // `#vta-rest` serviceEndpoint is a plain URL string.
+      if (typeof svc.serviceEndpoint === "string") {
+        out.rest = { baseUrl: svc.serviceEndpoint };
+      }
+    }
+
+    if (fragment === "vta-didcomm" || svc.type === "DIDCommMessaging") {
+      // `#vta-didcomm` serviceEndpoint is `[{ uri: <mediator-did>, ... }]`;
+      // tolerate the object and bare-string encodings too.
+      const ep = svc.serviceEndpoint;
+      let mediatorDid: string | undefined;
+      if (Array.isArray(ep)) mediatorDid = (ep[0] as { uri?: string } | undefined)?.uri;
+      else if (ep && typeof ep === "object") mediatorDid = (ep as { uri?: string }).uri;
+      else if (typeof ep === "string") mediatorDid = ep;
+      // Prefer the VTA-specific fragment over a generic DIDCommMessaging entry.
+      if (mediatorDid && (fragment === "vta-didcomm" || !out.didcomm)) {
+        out.didcomm = { mediatorDid };
+      }
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

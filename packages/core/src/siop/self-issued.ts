@@ -80,6 +80,49 @@ export function issueIdToken(opts: IssueIdTokenOptions): string {
   return `${signingInput}.${base64url.encode(sig)}`;
 }
 
+export interface IssueSwapPresentationOptions {
+  /** The signing identity proving control of the **new** DID (the wallet's
+   *  long-term holder did:peer, `#key-2`). The presentation's `holder` is its
+   *  DID — what the swap creates the new ACL entry for. */
+  holder: SigningIdentity;
+  /** The VTA's DID — bound as `aud` so the proof can't be replayed elsewhere. */
+  audience: string;
+  /** Lifetime in seconds (default 300). */
+  ttlSeconds?: number;
+  /** Optional explicit nonce; a random one is generated when omitted. */
+  nonce?: string;
+}
+
+/**
+ * Issue a swap-acl presentation: a W3C Verifiable Presentation secured as a
+ * compact EdDSA JWS (VP-JWT), proving control of the holder DID. The VTA's
+ * `swap-acl` handler resolves `iss` and verifies this signature against the
+ * holder's key, then moves the caller's ACL entry onto it. Same signing
+ * primitive as {@link issueIdToken} — just a VP envelope instead of an
+ * id_token.
+ */
+export function issueSwapPresentation(opts: IssueSwapPresentationOptions): string {
+  const now = Math.floor(Date.now() / 1000);
+  const nonce =
+    opts.nonce ?? base64url.encode(globalThis.crypto.getRandomValues(new Uint8Array(16)));
+  const header = { alg: "EdDSA", typ: "JWT", kid: opts.holder.kid };
+  const payload = {
+    iss: opts.holder.did,
+    aud: opts.audience,
+    iat: now,
+    exp: now + (opts.ttlSeconds ?? 300),
+    nonce,
+    vp: {
+      "@context": ["https://www.w3.org/ns/credentials/v2"],
+      type: ["VerifiablePresentation", "AclSwapRequest"],
+      holder: opts.holder.did,
+    },
+  };
+  const signingInput = `${b64uJson(header)}.${b64uJson(payload)}`;
+  const sig = ed25519.sign(new TextEncoder().encode(signingInput), opts.holder.privateKey);
+  return `${signingInput}.${base64url.encode(sig)}`;
+}
+
 export interface VerifiedIdToken {
   /** The holder DID that signed the token (`iss`/`sub`). */
   did: string;
