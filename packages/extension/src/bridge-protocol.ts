@@ -16,10 +16,11 @@ export const INPAGE_SOURCE = "vta-wallet/inpage" as const;
 /** `source` on messages the content script posts back toward the provider. */
 export const CONTENT_SOURCE = "vta-wallet/content" as const;
 
-/** The only RP-callable method today. */
-export type BridgeMethod = "login";
+/** RP-callable wallet methods. `login` = REST SIOPv2; `loginDidcomm` =
+ *  DIDComm authcrypt-sender auth via the RP's mediator. */
+export type BridgeMethod = "login" | "loginDidcomm";
 
-/** Parameters for `window.vtaWallet.login(...)`. */
+/** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
 export interface LoginParams {
   /** The RP's identifier (its server DID) — becomes the `id_token` `aud`. */
   rpDid: string;
@@ -27,6 +28,14 @@ export interface LoginParams {
    *  Supplied by the RP because the API host need not match the DID's
    *  domain (did:webvh domain ≠ admin host). */
   baseUrl: string;
+}
+
+/** Parameters for `window.vtaWallet.loginDidcomm(...)` (DIDComm transport). */
+export interface DidcommLoginParams {
+  /** The RP's control DID — authcrypt recipient + the DID the RP ACL-checks. */
+  controlDid: string;
+  /** The RP's mediator DID (from the control DID's DIDCommMessaging service). */
+  mediatorDid: string;
 }
 
 /** Result handed back to the RP page on a successful login. */
@@ -43,7 +52,7 @@ export interface InpageRequest {
   source: typeof INPAGE_SOURCE;
   id: string;
   method: BridgeMethod;
-  params: LoginParams;
+  params: LoginParams | DidcommLoginParams;
 }
 
 /** content → provider (content world → page world). */
@@ -54,13 +63,21 @@ export type ContentResponse =
 // ─── content ↔ background (chrome.runtime messaging) ───
 
 export const RUNTIME_LOGIN = "vta-wallet/login" as const;
+export const RUNTIME_LOGIN_DIDCOMM = "vta-wallet/login-didcomm" as const;
 export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
 
-/** content → background: perform a login for the calling page. */
+/** content → background: perform a REST SIOPv2 login for the calling page. */
 export interface RuntimeLoginRequest {
   type: typeof RUNTIME_LOGIN;
   params: LoginParams;
   /** The RP page's origin — shown in the consent prompt, never trusted as auth. */
+  origin: string;
+}
+
+/** content → background: perform a DIDComm login for the calling page. */
+export interface RuntimeLoginDidcommRequest {
+  type: typeof RUNTIME_LOGIN_DIDCOMM;
+  params: DidcommLoginParams;
   origin: string;
 }
 

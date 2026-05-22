@@ -19,6 +19,7 @@ import type {
 const INPAGE_SOURCE = "vta-wallet/inpage";
 const CONTENT_SOURCE = "vta-wallet/content";
 const RUNTIME_LOGIN = "vta-wallet/login";
+const RUNTIME_LOGIN_DIDCOMM = "vta-wallet/login-didcomm";
 
 // ─── 1. Inject the provider into the page world. ───
 // The content script runs in an isolated world, so assigning
@@ -42,8 +43,9 @@ window.addEventListener("message", (event: MessageEvent) => {
   void (async () => {
     let response: ContentResponse;
     try {
+      const runtimeType = req.method === "loginDidcomm" ? RUNTIME_LOGIN_DIDCOMM : RUNTIME_LOGIN;
       const runtimeResponse = (await chrome.runtime.sendMessage({
-        type: RUNTIME_LOGIN,
+        type: runtimeType,
         params: req.params,
         origin: window.location.origin,
       })) as RuntimeLoginResponse;

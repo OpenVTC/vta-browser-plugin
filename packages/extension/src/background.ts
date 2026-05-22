@@ -7,14 +7,19 @@
 // tokens back to the content script → page.
 
 import {
+  connectMediatorSession,
   generateOrLoadHolderIdentity,
   IndexedDBKVStore,
+  loginViaDidcomm,
   loginViaSiop,
+  MediatorSessionBridge,
 } from "@pnm/core";
 import {
   RUNTIME_CONSENT_RESULT,
   RUNTIME_LOGIN,
+  RUNTIME_LOGIN_DIDCOMM,
   type RuntimeConsentResult,
+  type RuntimeLoginDidcommRequest,
   type RuntimeLoginRequest,
   type RuntimeLoginResponse,
 } from "./bridge-protocol.js";
@@ -84,9 +89,57 @@ async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginRespon
   return { ok: true, result: { ...tokens, holderDid: signing.did } };
 }
 
+async function handleLoginDidcomm(
+  req: RuntimeLoginDidcommRequest,
+): Promise<RuntimeLoginResponse> {
+  const { identity, signing } = await generateOrLoadHolderIdentity(new IndexedDBKVStore());
+
+  const approved = await requestConsent({
+    origin: req.origin,
+    rpDid: req.params.controlDid,
+    holderDid: signing.did,
+  });
+  if (!approved) return { ok: false, error: "login denied by user" };
+
+  const conn = await connectMediatorSession({
+    holder: identity,
+    mediatorDid: req.params.mediatorDid,
+    vtaDid: req.params.controlDid,
+  });
+  try {
+    const bridge = new MediatorSessionBridge(conn);
+    const tokens = await loginViaDidcomm({
+      bridge,
+      holder: identity,
+      service: conn.vta,
+      mediator: conn.mediator,
+    });
+    return {
+      ok: true,
+      result: {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        sessionId: tokens.sessionId,
+        holderDid: signing.did,
+      },
+    };
+  } finally {
+    conn.close();
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if ((message as { type?: string })?.type === RUNTIME_LOGIN) {
     handleLogin(message as RuntimeLoginRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_LOGIN_DIDCOMM) {
+    handleLoginDidcomm(message as RuntimeLoginDidcommRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

@@ -3,7 +3,12 @@
 // has NO access to `chrome.*`; it speaks to the content script purely via
 // `window.postMessage` using the bridge protocol.
 
-import type { ContentResponse, LoginParams, LoginResult } from "./bridge-protocol.js";
+import type {
+  ContentResponse,
+  DidcommLoginParams,
+  LoginParams,
+  LoginResult,
+} from "./bridge-protocol.js";
 
 // Bundled as a standalone page-world script, so it must be self-contained
 // (no shared-chunk imports). Inline the protocol constants — keep in sync
@@ -12,9 +17,12 @@ const INPAGE_SOURCE = "vta-wallet/inpage";
 const CONTENT_SOURCE = "vta-wallet/content";
 
 interface VtaWallet {
-  /** Request a SIOPv2 login. Resolves with the RP-issued session tokens,
-   *  or rejects if the user denies or the login fails. */
+  /** Request a REST SIOPv2 login. Resolves with the RP-issued session
+   *  tokens, or rejects if the user denies or the login fails. */
   login(params: LoginParams): Promise<LoginResult>;
+  /** Request a DIDComm login (authcrypt-sender auth via the RP's
+   *  mediator). Same result shape as `login`. */
+  loginDidcomm(params: DidcommLoginParams): Promise<LoginResult>;
 }
 
 declare global {
@@ -43,7 +51,10 @@ window.addEventListener("message", (event: MessageEvent) => {
   else entry.reject(new Error(data.error));
 });
 
-function call(method: "login", params: LoginParams): Promise<LoginResult> {
+function call(
+  method: "login" | "loginDidcomm",
+  params: LoginParams | DidcommLoginParams,
+): Promise<LoginResult> {
   const id = crypto.randomUUID();
   return new Promise<LoginResult>((resolve, reject) => {
     pending.set(id, { resolve, reject });
@@ -56,5 +67,6 @@ function call(method: "login", params: LoginParams): Promise<LoginResult> {
 if (!window.vtaWallet) {
   window.vtaWallet = {
     login: (params) => call("login", params),
+    loginDidcomm: (params) => call("loginDidcomm", params),
   };
 }
