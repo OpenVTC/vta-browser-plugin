@@ -1,29 +1,36 @@
+import { base64url } from "@openvtc/vti-didcomm-js";
 import { Identity, type SecretJwk } from "../didcomm/index.js";
-import { base64urlToBytes } from "../webauthn/base64url.js";
-import { encodeMultikey } from "../webauthn/multikey.js";
+import {
+  didcommKeyAgreementFromSigning,
+  generateSigningIdentity,
+  signingIdentityFromSecret,
+  type SigningIdentity,
+} from "../siop/index.js";
 import type { KVStore } from "./kv-store.js";
 
-const STORE_KEY = "pnm/holder-identity/v1";
+// v2: the holder is an Ed25519 `did:key`. v1 (X25519-only) is superseded
+// — an X25519 key can't sign, so it couldn't self-issue a SIOPv2 login
+// `id_token`. The Ed25519 key signs login AND derives the X25519
+// keyAgreement key for DIDComm, so one DID covers both roles.
+const STORE_KEY = "pnm/holder-identity/v2";
 
 interface PersistedHolder {
-  /** `did` of the holder. */
+  /** The holder's Ed25519 `did:key`. */
   did: string;
-  /** Key-agreement key id (`<did>#…`). */
-  kid: string;
-  /** Secret JWK as exported by `Identity.secretJwk()` — `{kty, crv, x, d}`. */
-  jwk: SecretJwk;
-}
-
-/** Multicodec for `x25519-pub`: `0xec`. Varint-encoded as `[0xec, 0x01]`. */
-const X25519_PUB_MULTICODEC = 0xec;
-
-function didKeyFromX25519PublicX(xB64u: string): string {
-  const pub = base64urlToBytes(xB64u);
-  return `did:key:${encodeMultikey(X25519_PUB_MULTICODEC, pub)}`;
+  /** Ed25519 signing verification-method id (`<did>#<multibase>`). */
+  signingKid: string;
+  /** Ed25519 secret scalar, base64url. The root key — the X25519
+   *  keyAgreement key is derived from it on load, never stored. */
+  edSecretB64u: string;
 }
 
 export interface HolderIdentityResult {
+  /** DIDComm key-agreement identity (the X25519 derived from the holder's
+   *  Ed25519 key) — used for authcrypt. */
   identity: Identity;
+  /** Signing identity (the holder's Ed25519 key) — used to self-issue
+   *  SIOPv2 login `id_token`s and to sign trust-task proofs. */
+  signing: SigningIdentity;
   /** True if this run minted a fresh identity (first launch); false if loaded. */
   freshlyMinted: boolean;
 }
@@ -31,66 +38,50 @@ export interface HolderIdentityResult {
 /**
  * Generate-or-load the wallet's holder identity from a `KVStore`.
  *
- * On first run:
- *   1. Generate an X25519 keypair (Identity.generate).
- *   2. Derive a conformant `did:key` from the X25519 public key.
- *   3. Re-create the Identity with the proper DID via fromSecretJwk so
- *      the `kid` is the canonical did:key key-agreement id
- *      (`<did>#<multibase>`, fragment == the DID's multibase), which is
- *      what a counterparty resolving the did:key will address replies
- *      to.
- *   4. Persist the secret JWK to the KVStore.
+ * The holder is a single **Ed25519 `did:key`**. From it we expose two
+ * verification methods:
+ *   - **signing** (authentication) — the Ed25519 key, for SIOPv2 login.
+ *   - **keyAgreement** — the X25519 key derived (Montgomery form) from
+ *     the same Ed25519 key, for DIDComm authcrypt.
  *
- * On subsequent runs:
- *   1. Read the persisted JWK from the KVStore.
- *   2. Reconstruct Identity via fromSecretJwk.
+ * Only the Ed25519 secret is persisted; the X25519 keyAgreement key is
+ * re-derived on every load (matching the `did:key` resolver exactly).
  *
- * Persistence is plaintext at the store layer. Production wrappers
- * should encrypt via WebAuthn PRF-derived key or similar before
- * writing.
+ * Persistence is plaintext at the store layer. Production wrappers should
+ * encrypt via a WebAuthn PRF-derived key or similar before writing.
  */
 export async function generateOrLoadHolderIdentity(
   store: KVStore,
 ): Promise<HolderIdentityResult> {
   const persisted = await store.get<PersistedHolder>(STORE_KEY);
   if (persisted) {
-    const identity = Identity.fromSecretJwk({
-      did: persisted.did,
-      kid: persisted.kid,
-      jwk: persisted.jwk,
-    });
-    return { identity, freshlyMinted: false };
+    const signing = signingIdentityFromSecret(base64url.decode(persisted.edSecretB64u));
+    return { ...buildHolder(signing), freshlyMinted: false };
   }
 
-  // First-run generation. Mint with a temporary DID, compute the
-  // proper did:key from the public X, then rebuild with the real
-  // DID so kids reference it correctly.
-  const tmp = Identity.generate("did:pnm:tmp-bootstrap");
-  const tmpPub = tmp.publicJwk() as { kid: string; jwk: { x: string } };
-  const did = didKeyFromX25519PublicX(tmpPub.jwk.x);
-
-  const tmpSecret = tmp.secretJwk() as PersistedHolder;
-  tmp.dispose();
-
-  // Canonical did:key key-agreement id: the fragment equals the DID's
-  // multibase (`did:key:zABC` → `did:key:zABC#zABC`). This is what a
-  // counterparty resolving our did:key will use as the recipient kid
-  // when authcrypting replies to us, so advertising it here makes those
-  // replies strict-kid-match on unpack.
-  const multibase = did.slice("did:key:".length);
-  const persistedRecord: PersistedHolder = {
-    did,
-    kid: `${did}#${multibase}`,
-    jwk: tmpSecret.jwk,
+  const signing = generateSigningIdentity();
+  const record: PersistedHolder = {
+    did: signing.did,
+    signingKid: signing.kid,
+    edSecretB64u: base64url.encode(signing.privateKey),
   };
-  await store.put(STORE_KEY, persistedRecord);
+  await store.put(STORE_KEY, record);
+  return { ...buildHolder(signing), freshlyMinted: true };
+}
 
+/** Build the DIDComm key-agreement `Identity` (derived X25519) that
+ *  pairs with the holder's Ed25519 signing identity. */
+function buildHolder(signing: SigningIdentity): {
+  identity: Identity;
+  signing: SigningIdentity;
+} {
+  const ka = didcommKeyAgreementFromSigning(signing);
   const identity = Identity.fromSecretJwk({
-    did: persistedRecord.did,
-    kid: persistedRecord.kid,
-    jwk: persistedRecord.jwk,
+    did: signing.did,
+    kid: ka.keyAgreementKid,
+    jwk: ka.secretJwk as SecretJwk,
   });
-  return { identity, freshlyMinted: true };
+  return { identity, signing };
 }
 
 /** Forget the persisted holder identity. Mostly for tests / hard reset. */
