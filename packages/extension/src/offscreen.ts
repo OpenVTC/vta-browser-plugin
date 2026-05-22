@@ -7,19 +7,25 @@
 // those, which is why this lives here rather than in `background.ts`.
 
 import {
+  buildConfirmResponse,
   connectMediatorSession,
   createStopwatch,
   loginViaDidcomm,
+  type MediatorConnection,
   MediatorSessionBridge,
+  parseConfirmRequest,
   requestVtaApproval,
+  resolveKeyAgreement,
   stepUpVtaFinish,
   stepUpVtaStart,
 } from "@pnm/core";
-import { loadHolder } from "./holder.js";
+import { loadHolder, WALLET_MEDIATOR_DID } from "./holder.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
+  OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
+  RUNTIME_INBOUND_CONSENT,
   type OffscreenDidcommLoginRequest,
   type OffscreenStepUpVtaRequest,
   type RuntimeLoginResponse,
@@ -44,8 +50,69 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       );
     return true; // async sendResponse
   }
+  if (msg.type === OFFSCREEN_START_INBOUND) {
+    void startInbound();
+    return false; // fire-and-forget
+  }
   return false;
 });
+
+// ─── Persistent inbound session (RP-initiated confirm requests) ───
+// One long-lived mediator session listens for unsolicited inbound. Held at
+// module scope so it (and its WebSocket) aren't GC'd while the offscreen doc
+// lives. Best-effort keep-alive: the background re-issues START_INBOUND when
+// it (re)spawns the offscreen doc.
+let inboundConn: MediatorConnection | null = null;
+
+async function startInbound(): Promise<void> {
+  if (inboundConn) return; // already listening
+  const { identity } = await loadHolder();
+  const conn = await connectMediatorSession({
+    holder: identity,
+    mediatorDid: WALLET_MEDIATOR_DID,
+    // No specific peer for inbound; the session resolves each sender on
+    // demand. Seed with our own DID (harmless) to satisfy the API.
+    vtaDid: identity.did,
+  });
+  inboundConn = conn;
+  conn.onInbound((message) => {
+    void handleInbound(conn, identity, message);
+  });
+  console.info("[pnm inbound] listening for confirm requests via", WALLET_MEDIATOR_DID);
+}
+
+async function handleInbound(
+  conn: MediatorConnection,
+  identity: Parameters<typeof buildConfirmResponse>[0]["holder"],
+  message: Record<string, unknown>,
+): Promise<void> {
+  const parsed = parseConfirmRequest(message);
+  if (!parsed) return; // not a confirm/1.0 — ignore other traffic
+  try {
+    // Ask the background to prompt the user (consent UI is a background API).
+    const consent = (await chrome.runtime.sendMessage({
+      type: RUNTIME_INBOUND_CONSENT,
+      rpDid: parsed.rpDid,
+      action: parsed.request.action,
+      ...(parsed.request.rpName ? { rpName: parsed.request.rpName } : {}),
+    })) as { approved?: boolean } | undefined;
+    const approved = consent?.approved === true;
+
+    const rp = await resolveKeyAgreement(parsed.rpDid);
+    const outer = await buildConfirmResponse({
+      holder: identity,
+      rp,
+      mediator: conn.mediator,
+      approved,
+      challenge: parsed.request.challenge,
+      thid: parsed.thid,
+    });
+    conn.send(outer);
+    console.info("[pnm inbound] confirm responded:", approved ? "approved" : "denied");
+  } catch (e) {
+    console.error("[pnm inbound] confirm handling failed:", e);
+  }
+}
 
 async function doDidcommLogin(
   req: OffscreenDidcommLoginRequest,

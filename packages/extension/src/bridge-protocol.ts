@@ -105,6 +105,20 @@ export const RUNTIME_LOGIN_DIDCOMM = "vta-wallet/login-didcomm" as const;
 export const RUNTIME_STEP_UP_VTA = "vta-wallet/step-up-vta" as const;
 export const RUNTIME_API_GET = "vta-wallet/api-get" as const;
 export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
+/** offscreen → background: an inbound RP confirm request needs user consent. */
+export const RUNTIME_INBOUND_CONSENT = "vta-wallet/inbound-consent" as const;
+
+/** offscreen → background: prompt the user to approve an inbound RP confirm.
+ *  Reply via `sendResponse` is `{ approved: boolean }`. */
+export interface RuntimeInboundConsentRequest {
+  type: typeof RUNTIME_INBOUND_CONSENT;
+  /** The requesting RP's DID (authcrypt-authenticated). */
+  rpDid: string;
+  /** Human-readable action being confirmed (shown in the prompt). */
+  action: string;
+  /** Optional RP display name. */
+  rpName?: string;
+}
 
 /** content → background: perform a REST SIOPv2 login for the calling page. */
 export interface RuntimeLoginRequest {
@@ -164,6 +178,14 @@ export interface RuntimeConsentResult {
 export const OFFSCREEN_TARGET = "offscreen" as const;
 export const OFFSCREEN_DIDCOMM_LOGIN = "offscreen/didcomm-login" as const;
 export const OFFSCREEN_STEP_UP_VTA = "offscreen/step-up-vta" as const;
+/** background → offscreen: open the persistent inbound mediator session that
+ *  listens for RP-initiated confirm requests. Fire-and-forget. */
+export const OFFSCREEN_START_INBOUND = "offscreen/start-inbound" as const;
+
+export interface OffscreenStartInboundRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_START_INBOUND;
+}
 
 /** background → offscreen: run a DIDComm login. Reply is a
  *  [`RuntimeLoginResponse`] via `sendResponse`. */

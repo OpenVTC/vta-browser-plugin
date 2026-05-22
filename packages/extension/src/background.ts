@@ -13,10 +13,12 @@ import { loadHolder } from "./holder.js";
 import { subscribeToPush } from "./push.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
+  OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
   RUNTIME_API_GET,
   RUNTIME_CONSENT_RESULT,
+  RUNTIME_INBOUND_CONSENT,
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
   RUNTIME_STEP_UP_VTA,
@@ -25,6 +27,7 @@ import {
   type RuntimeApiGetRequest,
   type RuntimeApiGetResponse,
   type RuntimeConsentResult,
+  type RuntimeInboundConsentRequest,
   type RuntimeLoginDidcommRequest,
   type RuntimeLoginRequest,
   type RuntimeLoginResponse,
@@ -56,6 +59,16 @@ self.addEventListener("push", (event) => {
 // install — MV3 workers are ephemeral).
 void subscribeToPush();
 
+// Bring up the offscreen doc + its persistent inbound mediator session so the
+// wallet can receive RP-initiated confirm requests. Idempotent (both
+// ensureOffscreenDocument and the offscreen's startInbound no-op if already
+// running), so it's safe to call on every worker spin-up.
+async function startInboundListener(): Promise<void> {
+  await ensureOffscreenDocument();
+  await chrome.runtime.sendMessage({ target: OFFSCREEN_TARGET, type: OFFSCREEN_START_INBOUND });
+}
+void startInboundListener();
+
 // ─── Offscreen document lifecycle ───
 // One offscreen document per extension; create it lazily on first DIDComm
 // login and reuse it thereafter.
@@ -83,17 +96,21 @@ async function ensureOffscreenDocument(): Promise<void> {
 const pendingConsents = new Map<string, (approved: boolean) => void>();
 
 function requestConsent(args: {
-  origin: string;
+  origin?: string;
   rpDid: string;
-  holderDid: string;
+  holderDid?: string;
+  /** When set, the prompt frames an RP-initiated action to confirm (inbound)
+   *  rather than a login. */
+  action?: string;
 }): Promise<boolean> {
   const consentId = crypto.randomUUID();
   const url =
     chrome.runtime.getURL("confirm.html") +
     `?cid=${consentId}` +
-    `&origin=${encodeURIComponent(args.origin)}` +
     `&rpDid=${encodeURIComponent(args.rpDid)}` +
-    `&holder=${encodeURIComponent(args.holderDid)}`;
+    (args.origin ? `&origin=${encodeURIComponent(args.origin)}` : "") +
+    (args.holderDid ? `&holder=${encodeURIComponent(args.holderDid)}` : "") +
+    (args.action ? `&action=${encodeURIComponent(args.action)}` : "");
 
   return new Promise<boolean>((resolve) => {
     let settled = false;
@@ -241,6 +258,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
+    return true; // async sendResponse
+  }
+
+  // Offscreen asks us to prompt the user for an inbound RP confirm request.
+  if ((message as { type?: string })?.type === RUNTIME_INBOUND_CONSENT) {
+    const req = message as RuntimeInboundConsentRequest;
+    requestConsent({ rpDid: req.rpDid, action: req.action })
+      .then((approved) => sendResponse({ approved }))
+      .catch(() => sendResponse({ approved: false }));
     return true; // async sendResponse
   }
 
