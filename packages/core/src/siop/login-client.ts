@@ -54,8 +54,9 @@ export async function loginViaSiop(
       `siop login: challenge failed (${challengeRes.status}): ${await challengeRes.text()}`,
     );
   }
+  // Response is camelCase (`ChallengeResponse` is `rename_all = "camelCase"`).
   const challenge = (await challengeRes.json()) as {
-    session_id: string;
+    sessionId: string;
     data: { challenge: string };
   };
 
@@ -74,7 +75,7 @@ export async function loginViaSiop(
     issuedAt: new Date().toISOString(),
     payload: {
       id_token: idToken,
-      session_id: challenge.session_id,
+      session_id: challenge.sessionId,
       ...(opts.sessionPubkeyB58btc
         ? { session_pubkey_b58btc: opts.sessionPubkeyB58btc }
         : {}),
@@ -92,14 +93,15 @@ export async function loginViaSiop(
       `siop login: authenticate failed (${authRes.status}): ${await authRes.text()}`,
     );
   }
+  // Response is camelCase with the tokens nested under `data`
+  // (`AuthenticateResponse` → `AuthenticateData`).
   const r = (await authRes.json()) as {
-    session_id: string;
-    access_token: string;
-    refresh_token: string;
+    sessionId: string;
+    data: { accessToken: string; refreshToken: string };
   };
   return {
-    accessToken: r.access_token,
-    refreshToken: r.refresh_token,
-    sessionId: r.session_id,
+    accessToken: r.data.accessToken,
+    refreshToken: r.data.refreshToken,
+    sessionId: r.sessionId,
   };
 }
