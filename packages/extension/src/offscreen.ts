@@ -10,7 +10,9 @@ import {
   buildConfirmResponse,
   connectMediatorSession,
   createStopwatch,
+  IndexedDBKVStore,
   loginViaDidcomm,
+  markInboundHandled,
   type MediatorConnection,
   MediatorSessionBridge,
   parseConfirmRequest,
@@ -88,6 +90,20 @@ async function handleInbound(
 ): Promise<void> {
   const parsed = parseConfirmRequest(message);
   if (!parsed) return; // not a confirm/1.0 — ignore other traffic
+
+  // De-dup: the mediator replays un-acked messages on every reconnect, and
+  // the MV3 worker respawns the offscreen session often. Skip a confirm we've
+  // already handled so a replay doesn't pop a second consent prompt. Marked
+  // before prompting so a replay during the consent window is also skipped.
+  // Persisted (survives respawns — exactly when replays arrive).
+  const messageId = typeof message.id === "string" ? message.id : undefined;
+  if (messageId) {
+    const isNew = await markInboundHandled(new IndexedDBKVStore(), messageId);
+    if (!isNew) {
+      console.info("[pnm inbound] skipping replayed confirm:", messageId);
+      return;
+    }
+  }
   try {
     // Ask the background to prompt the user (consent UI is a background API).
     const consent = (await chrome.runtime.sendMessage({
