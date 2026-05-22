@@ -26,6 +26,7 @@ import {
   stepUpVtaFinish,
   stepUpVtaStart,
   swapAclDidcomm,
+  swapAclRest,
 } from "@pnm/core";
 import { getWalletMediatorDid, loadHolder } from "./holder.js";
 import {
@@ -132,10 +133,8 @@ async function doOnboardConnect(): Promise<OnboardConnectResult> {
   const store = new IndexedDBKVStore();
   const pending = await store.get<PendingOnboard>(ONBOARD_KEY);
   if (!pending) throw new Error("no pending onboarding — prepare first");
-  if (!pending.mediatorDid) {
-    throw new Error(
-      "VTA advertises no DIDComm mediator; REST-only onboarding is not yet supported",
-    );
+  if (!pending.mediatorDid && !pending.restBaseUrl) {
+    throw new Error("VTA advertises neither #vta-didcomm nor #vta-rest — cannot connect");
   }
 
   // Reconstruct the operator-granted ephemeral as an X25519 DIDComm identity
@@ -150,28 +149,42 @@ async function doOnboardConnect(): Promise<OnboardConnectResult> {
 
   // The holder did:peer #key-2 signs the VP-JWT — it's the "new" DID.
   const { signing } = await loadHolder();
+  const service = await resolveKeyAgreement(pending.vtaDid);
 
-  const conn = await connectMediatorSession({
-    holder: ephemeral,
-    mediatorDid: pending.mediatorDid,
-    vtaDid: pending.vtaDid,
-  });
-  try {
-    const service = await resolveKeyAgreement(pending.vtaDid);
-    const bridge = new MediatorSessionBridge(conn);
-    const entry = await swapAclDidcomm({
-      bridge,
+  // Prefer DIDComm when advertised (the authcrypt envelope is the caller
+  // authentication — one round-trip, no token). Fall back to REST.
+  let entry;
+  if (pending.mediatorDid) {
+    const conn = await connectMediatorSession({
+      holder: ephemeral,
+      mediatorDid: pending.mediatorDid,
+      vtaDid: pending.vtaDid,
+    });
+    try {
+      const bridge = new MediatorSessionBridge(conn);
+      entry = await swapAclDidcomm({
+        bridge,
+        ephemeral,
+        holderSigning: signing,
+        service,
+        mediator: conn.mediator,
+        vtaDid: pending.vtaDid,
+      });
+    } finally {
+      conn.close();
+    }
+  } else {
+    entry = await swapAclRest({
+      baseUrl: pending.restBaseUrl!,
       ephemeral,
       holderSigning: signing,
       service,
-      mediator: conn.mediator,
       vtaDid: pending.vtaDid,
     });
-    await store.delete(ONBOARD_KEY);
-    return { holderDid: entry.did, role: entry.role };
-  } finally {
-    conn.close();
   }
+
+  await store.delete(ONBOARD_KEY);
+  return { holderDid: entry.did, role: entry.role };
 }
 
 // ─── Warm mediator-session pool ───
