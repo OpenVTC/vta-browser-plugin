@@ -13,6 +13,7 @@ import { loadHolder } from "./holder.js";
 import { subscribeToPush } from "./push.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
+  OFFSCREEN_GET_STATUS,
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
@@ -22,7 +23,10 @@ import {
   RUNTIME_INBOUND_CONSENT,
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
+  RUNTIME_MEDIATOR_STATUS,
   RUNTIME_STEP_UP_VTA,
+  RUNTIME_WALLET_DEFAULTS,
+  type MediatorStatusResult,
   type OffscreenDidcommLoginRequest,
   type OffscreenStepUpVtaRequest,
   type RuntimeApiGetRequest,
@@ -33,8 +37,11 @@ import {
   type RuntimeLoginDidcommRequest,
   type RuntimeLoginRequest,
   type RuntimeLoginResponse,
+  type RuntimeMediatorStatusResponse,
   type RuntimeStepUpVtaRequest,
+  type RuntimeWalletDefaultsResponse,
 } from "./bridge-protocol.js";
+import { getSettings } from "./config.js";
 
 chrome.runtime.onInstalled.addListener(() => {
   console.info("[pnm] extension installed");
@@ -222,6 +229,32 @@ async function handleApiGet(req: RuntimeApiGetRequest): Promise<RuntimeApiGetRes
   return { ok: true, result: { status: res.status, body } };
 }
 
+// Query the offscreen doc for its warm mediator-session status (for the
+// demo's connection indicator). Brings the offscreen up if it isn't running
+// so the very first poll reflects real state.
+async function handleMediatorStatus(): Promise<RuntimeMediatorStatusResponse> {
+  await ensureOffscreenDocument();
+  const result = (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_GET_STATUS,
+  })) as MediatorStatusResult;
+  return { ok: true, result };
+}
+
+// Operator-configured defaults a page may prefill (e.g. the step-up VTA).
+async function handleWalletDefaults(): Promise<RuntimeWalletDefaultsResponse> {
+  const s = await getSettings();
+  return {
+    ok: true,
+    result: {
+      ...(s.defaultStepUpVtaDid ? { stepUpVtaDid: s.defaultStepUpVtaDid } : {}),
+      ...(s.defaultStepUpVtaMediatorDid
+        ? { stepUpVtaMediatorDid: s.defaultStepUpVtaMediatorDid }
+        : {}),
+    },
+  };
+}
+
 // Authenticated POST proxied through the wallet (host permission → no CORS).
 async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetResponse> {
   const base = req.params.baseUrl.replace(/\/+$/, "");
@@ -259,6 +292,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_API_POST) {
     handleApiPost(message as RuntimeApiPostRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_MEDIATOR_STATUS) {
+    handleMediatorStatus()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_WALLET_DEFAULTS) {
+    handleWalletDefaults()
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

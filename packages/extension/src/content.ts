@@ -23,6 +23,8 @@ const RUNTIME_LOGIN_DIDCOMM = "vta-wallet/login-didcomm";
 const RUNTIME_STEP_UP_VTA = "vta-wallet/step-up-vta";
 const RUNTIME_API_GET = "vta-wallet/api-get";
 const RUNTIME_API_POST = "vta-wallet/api-post";
+const RUNTIME_MEDIATOR_STATUS = "vta-wallet/mediator-status";
+const RUNTIME_WALLET_DEFAULTS = "vta-wallet/wallet-defaults";
 
 // ─── 1. Inject the provider into the page world. ───
 // The content script runs in an isolated world, so assigning
@@ -55,7 +57,11 @@ window.addEventListener("message", (event: MessageEvent) => {
               ? RUNTIME_API_GET
               : req.method === "apiPost"
                 ? RUNTIME_API_POST
-                : RUNTIME_LOGIN;
+                : req.method === "mediatorStatus"
+                  ? RUNTIME_MEDIATOR_STATUS
+                  : req.method === "walletDefaults"
+                    ? RUNTIME_WALLET_DEFAULTS
+                    : RUNTIME_LOGIN;
       const runtimeResponse = (await chrome.runtime.sendMessage({
         type: runtimeType,
         params: req.params,

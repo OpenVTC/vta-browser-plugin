@@ -20,7 +20,14 @@ export const CONTENT_SOURCE = "vta-wallet/content" as const;
  *  DIDComm authcrypt-sender auth; `stepUpVta` = VTA-approval step-up;
  *  `apiGet` = authenticated GET proxied through the wallet (avoids the
  *  page's cross-origin CORS block). */
-export type BridgeMethod = "login" | "loginDidcomm" | "stepUpVta" | "apiGet" | "apiPost";
+export type BridgeMethod =
+  | "login"
+  | "loginDidcomm"
+  | "stepUpVta"
+  | "apiGet"
+  | "apiPost"
+  | "mediatorStatus"
+  | "walletDefaults";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
 export interface LoginParams {
@@ -83,6 +90,23 @@ export interface ApiPostParams {
   body: unknown;
 }
 
+/** Per-mediator warm-session connection state, for status display. */
+export type MediatorConnectionState = "connecting" | "live" | "closed";
+
+/** Result of `window.vtaWallet.mediatorStatus()` — the wallet's current
+ *  warm mediator sessions and their connection state. Lets a demo/RP show
+ *  whether the DIDComm transport is already connected. */
+export interface MediatorStatusResult {
+  mediators: { mediatorDid: string; state: MediatorConnectionState }[];
+}
+
+/** Result of `window.vtaWallet.walletDefaults()` — operator-configured
+ *  defaults a page can prefill (e.g. the step-up VTA). */
+export interface WalletDefaultsResult {
+  stepUpVtaDid?: string;
+  stepUpVtaMediatorDid?: string;
+}
+
 /** Result handed back to the RP page on a successful login. */
 export interface LoginResult {
   accessToken: string;
@@ -115,6 +139,8 @@ export const RUNTIME_LOGIN_DIDCOMM = "vta-wallet/login-didcomm" as const;
 export const RUNTIME_STEP_UP_VTA = "vta-wallet/step-up-vta" as const;
 export const RUNTIME_API_GET = "vta-wallet/api-get" as const;
 export const RUNTIME_API_POST = "vta-wallet/api-post" as const;
+export const RUNTIME_MEDIATOR_STATUS = "vta-wallet/mediator-status" as const;
+export const RUNTIME_WALLET_DEFAULTS = "vta-wallet/wallet-defaults" as const;
 export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
 /** offscreen → background: an inbound RP confirm request needs user consent. */
 export const RUNTIME_INBOUND_CONSENT = "vta-wallet/inbound-consent" as const;
@@ -167,6 +193,26 @@ export interface RuntimeApiPostRequest {
   origin: string;
 }
 
+/** content → background: query the wallet's warm mediator-session status. */
+export interface RuntimeMediatorStatusRequest {
+  type: typeof RUNTIME_MEDIATOR_STATUS;
+}
+
+/** background → content for `mediatorStatus` (sendResponse). */
+export type RuntimeMediatorStatusResponse =
+  | { ok: true; result: MediatorStatusResult }
+  | { ok: false; error: string };
+
+/** content → background: query operator-configured wallet defaults. */
+export interface RuntimeWalletDefaultsRequest {
+  type: typeof RUNTIME_WALLET_DEFAULTS;
+}
+
+/** background → content for `walletDefaults` (sendResponse). */
+export type RuntimeWalletDefaultsResponse =
+  | { ok: true; result: WalletDefaultsResult }
+  | { ok: false; error: string };
+
 /** background → content (sendResponse). */
 export type RuntimeLoginResponse =
   | { ok: true; result: LoginResult }
@@ -199,10 +245,18 @@ export const OFFSCREEN_STEP_UP_VTA = "offscreen/step-up-vta" as const;
 /** background → offscreen: open the persistent inbound mediator session that
  *  listens for RP-initiated confirm requests. Fire-and-forget. */
 export const OFFSCREEN_START_INBOUND = "offscreen/start-inbound" as const;
+/** background → offscreen: report the warm mediator-session status. Reply is
+ *  a [`MediatorStatusResult`] via `sendResponse`. */
+export const OFFSCREEN_GET_STATUS = "offscreen/get-status" as const;
 
 export interface OffscreenStartInboundRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_START_INBOUND;
+}
+
+export interface OffscreenGetStatusRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_GET_STATUS;
 }
 
 /** background → offscreen: run a DIDComm login. Reply is a

@@ -56,6 +56,7 @@
       <h1>VTA Auth Lab</h1>
       <span class="status">wallet provider: <b id="provider">checking…</b></span>
       <span class="status">holder: <b id="holder">—</b></span>
+      <span class="status">mediator: <b id="mediator-status">—</b></span>
     </header>
 
     <main>
@@ -125,6 +126,57 @@
         el.className = ok ? "ok" : "no";
       };
       setTimeout(checkProvider, 200);
+
+      // Live warm-session status. The wallet keeps one authenticated mediator
+      // session warm and reuses it for every DIDComm op — once it's "live",
+      // a DIDComm login is just a round-trip (no reconnect), so it should be
+      // on par with REST. Poll so the header reflects the current state.
+      function shortDid(did) {
+        // did:webvh:<hash>:host[:path] → host[:path] for readability.
+        const parts = String(did).split(":");
+        return parts.length > 3 ? parts.slice(3).join(":") : did;
+      }
+      async function pollMediatorStatus() {
+        const el = $("mediator-status");
+        if (!window.vtaWallet || !window.vtaWallet.mediatorStatus) {
+          el.textContent = "—";
+          el.className = "";
+          return;
+        }
+        try {
+          const { mediators } = await window.vtaWallet.mediatorStatus();
+          if (!mediators || mediators.length === 0) {
+            el.textContent = "idle (no session yet)";
+            el.className = "";
+            return;
+          }
+          const live = mediators.filter((m) => m.state === "live").length;
+          el.textContent = mediators
+            .map((m) => `${shortDid(m.mediatorDid)} ${m.state}`)
+            .join(" · ");
+          el.className = live > 0 ? "ok" : "no";
+        } catch {
+          el.textContent = "unavailable";
+          el.className = "no";
+        }
+      }
+      setInterval(pollMediatorStatus, 1500);
+      setTimeout(pollMediatorStatus, 400);
+
+      // Prefill the step-up VTA from the wallet's operator-configured defaults
+      // (set in the extension's options page), if the fields are still empty.
+      async function prefillDefaults() {
+        if (!window.vtaWallet || !window.vtaWallet.walletDefaults) return;
+        try {
+          const d = await window.vtaWallet.walletDefaults();
+          if (d.stepUpVtaDid && !$("su-vtaDid").value) $("su-vtaDid").value = d.stepUpVtaDid;
+          if (d.stepUpVtaMediatorDid && !$("su-mediatorDid").value)
+            $("su-mediatorDid").value = d.stepUpVtaMediatorDid;
+        } catch {
+          /* no defaults configured — leave the inputs as-is */
+        }
+      }
+      setTimeout(prefillDefaults, 500);
 
       function log(panel, msg, cls) {
         const li = document.createElement("li");

@@ -453,6 +453,9 @@ export interface MediatorConnection {
   send(jwe: string): void;
   waitFor(thid: string, timeoutMs: number): Promise<Record<string, unknown>>;
   close(): void;
+  /** True while the underlying WebSocket is open (live delivery active). A
+   *  warm-session holder checks this before reusing a cached connection. */
+  readonly isOpen: boolean;
   /** Register a handler for unsolicited inbound messages (those no `waitFor`
    *  claims) — e.g. an RP-initiated `confirm` request. The handler should
    *  filter by message `type`. Replaces any previously-registered handler. */
@@ -476,6 +479,9 @@ export interface ConnectMediatorSessionOptions {
   webSocketImpl?: WebSocketCtor;
   /** Allow ws://, http:// endpoints. Local dev only. */
   allowInsecure?: boolean;
+  /** Called once if the socket drops unexpectedly (not via `close()`).
+   *  A warm-session holder uses this to evict + reconnect. */
+  onClose?: () => void;
 }
 
 /**
@@ -529,15 +535,20 @@ export async function connectMediatorSession(
       const r = await vtiResolveKeyAgreement(did);
       return { publicJwk: x25519PublicJwk(r.x25519Pub) };
     },
+    ...(opts.onClose ? { onClose: opts.onClose } : {}),
     ...(opts.webSocketImpl ? { WebSocketImpl: opts.webSocketImpl } : {}),
   });
   await session.connect();
 
+  const liveSession = session as unknown as { isOpen: boolean };
   return {
     send: (jwe: string) => session.send(jwe),
     waitFor: (thid: string, timeoutMs: number) =>
       session.waitFor(thid, timeoutMs) as Promise<Record<string, unknown>>,
     close: () => session.close(),
+    get isOpen() {
+      return liveSession.isOpen;
+    },
     // The session reads `onMessage` dynamically on each inbound frame, so a
     // post-connect assignment takes effect immediately.
     onInbound: (handler) => {

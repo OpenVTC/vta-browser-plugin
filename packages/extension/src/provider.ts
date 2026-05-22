@@ -11,7 +11,9 @@ import type {
   DidcommLoginParams,
   LoginParams,
   LoginResult,
+  MediatorStatusResult,
   StepUpVtaParams,
+  WalletDefaultsResult,
 } from "./bridge-protocol.js";
 
 // Bundled as a standalone page-world script, so it must be self-contained
@@ -35,6 +37,10 @@ interface VtaWallet {
   apiGet(params: ApiGetParams): Promise<ApiGetResult>;
   /** Perform an authenticated POST via the wallet (not subject to CORS). */
   apiPost(params: ApiPostParams): Promise<ApiGetResult>;
+  /** Query the wallet's warm mediator-session status (connection indicator). */
+  mediatorStatus(): Promise<MediatorStatusResult>;
+  /** Query operator-configured wallet defaults (e.g. step-up VTA) to prefill. */
+  walletDefaults(): Promise<WalletDefaultsResult>;
 }
 
 declare global {
@@ -64,8 +70,21 @@ window.addEventListener("message", (event: MessageEvent) => {
 });
 
 function call<T>(
-  method: "login" | "loginDidcomm" | "stepUpVta" | "apiGet" | "apiPost",
-  params: LoginParams | DidcommLoginParams | StepUpVtaParams | ApiGetParams | ApiPostParams,
+  method:
+    | "login"
+    | "loginDidcomm"
+    | "stepUpVta"
+    | "apiGet"
+    | "apiPost"
+    | "mediatorStatus"
+    | "walletDefaults",
+  params:
+    | LoginParams
+    | DidcommLoginParams
+    | StepUpVtaParams
+    | ApiGetParams
+    | ApiPostParams
+    | Record<string, never>,
 ): Promise<T> {
   const id = crypto.randomUUID();
   return new Promise<T>((resolve, reject) => {
@@ -83,5 +102,7 @@ if (!window.vtaWallet) {
     stepUpVta: (params) => call<LoginResult>("stepUpVta", params),
     apiGet: (params) => call<ApiGetResult>("apiGet", params),
     apiPost: (params) => call<ApiGetResult>("apiPost", params),
+    mediatorStatus: () => call<MediatorStatusResult>("mediatorStatus", {}),
+    walletDefaults: () => call<WalletDefaultsResult>("walletDefaults", {}),
   };
 }

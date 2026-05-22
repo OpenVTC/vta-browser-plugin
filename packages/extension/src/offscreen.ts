@@ -21,9 +21,10 @@ import {
   stepUpVtaFinish,
   stepUpVtaStart,
 } from "@pnm/core";
-import { loadHolder, WALLET_MEDIATOR_DID } from "./holder.js";
+import { getWalletMediatorDid, loadHolder } from "./holder.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
+  OFFSCREEN_GET_STATUS,
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
@@ -56,31 +57,104 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     void startInbound();
     return false; // fire-and-forget
   }
+  if (msg.type === OFFSCREEN_GET_STATUS) {
+    sendResponse({ mediators: statusSnapshot() });
+    return false; // synchronous response
+  }
   return false;
 });
 
-// ─── Persistent inbound session (RP-initiated confirm requests) ───
-// One long-lived mediator session listens for unsolicited inbound. Held at
-// module scope so it (and its WebSocket) aren't GC'd while the offscreen doc
-// lives. Best-effort keep-alive: the background re-issues START_INBOUND when
-// it (re)spawns the offscreen doc.
-let inboundConn: MediatorConnection | null = null;
+// ─── Warm mediator-session pool ───
+// One authenticated, live-delivery session per mediator DID, reused for every
+// operation against that mediator (DIDComm login, step-up, and the
+// RP-initiated inbound `confirm` path). This eliminates the per-operation
+// connect+auth+resolve+teardown that made DIDComm slower than REST — after the
+// first connect, a round-trip is just pack → WS send → WS recv → unpack.
+//
+// Sessions are held at module scope so neither they nor their WebSockets are
+// GC'd while the offscreen doc lives. The DID resolutions they perform
+// (mediator + VTA) are cached in vti-didcomm-js, so even a cold reconnect is
+// cheap on the second hit.
+type MediatorState = "connecting" | "live" | "closed";
+const warmPool = new Map<string, Promise<MediatorConnection>>();
+const mediatorState = new Map<string, MediatorState>();
+const INBOUND_RECONNECT_MS = 2_000;
 
-async function startInbound(): Promise<void> {
-  if (inboundConn) return; // already listening
+// The wallet's inbox mediator DID is configurable; cache it once so the
+// per-session "is this our inbox mediator?" check stays synchronous in the
+// onClose closure.
+let _walletMediatorDid: string | undefined;
+async function walletMediatorDid(): Promise<string> {
+  if (!_walletMediatorDid) _walletMediatorDid = await getWalletMediatorDid();
+  return _walletMediatorDid;
+}
+
+/** Snapshot of every known mediator's connection state, for the demo UI. */
+function statusSnapshot(): { mediatorDid: string; state: MediatorState }[] {
+  return [...mediatorState.entries()].map(([mediatorDid, state]) => ({ mediatorDid, state }));
+}
+
+/** Get (or lazily open) the warm session for a mediator. Reuses a live
+ *  session; transparently reconnects one that has dropped. */
+async function getWarmSession(mediatorDid: string): Promise<MediatorConnection> {
+  const existing = warmPool.get(mediatorDid);
+  if (existing) {
+    const conn = await existing.catch(() => null);
+    if (conn && conn.isOpen) return conn;
+    warmPool.delete(mediatorDid); // stale/closed — fall through to reconnect
+  }
+
+  mediatorState.set(mediatorDid, "connecting");
+  const pending = createWarmSession(mediatorDid).then(
+    (conn) => {
+      mediatorState.set(mediatorDid, "live");
+      return conn;
+    },
+    (err) => {
+      mediatorState.set(mediatorDid, "closed");
+      warmPool.delete(mediatorDid);
+      throw err;
+    },
+  );
+  warmPool.set(mediatorDid, pending);
+  return pending;
+}
+
+async function createWarmSession(mediatorDid: string): Promise<MediatorConnection> {
   const { identity } = await loadHolder();
+  const isInbox = mediatorDid === (await walletMediatorDid());
   const conn = await connectMediatorSession({
     holder: identity,
-    mediatorDid: WALLET_MEDIATOR_DID,
-    // No specific peer for inbound; the session resolves each sender on
-    // demand. Seed with our own DID (harmless) to satisfy the API.
+    mediatorDid,
+    // No fixed peer for a shared session; the session resolves each reply's
+    // sender on demand. Seed with our own DID (harmless) to satisfy the API;
+    // each operation resolves its real VTA target separately (cached).
     vtaDid: identity.did,
+    onClose: () => {
+      warmPool.delete(mediatorDid);
+      mediatorState.set(mediatorDid, "closed");
+      // Keep the inbound path alive: re-arm the wallet's inbox mediator.
+      if (isInbox) setTimeout(() => void startInbound(), INBOUND_RECONNECT_MS);
+    },
   });
-  inboundConn = conn;
-  conn.onInbound((message) => {
-    void handleInbound(conn, identity, message);
-  });
-  console.info("[pnm inbound] listening for confirm requests via", WALLET_MEDIATOR_DID);
+  // Attach the inbound confirm handler whenever this is the wallet's inbox
+  // mediator — regardless of which operation first opened the session.
+  if (isInbox) {
+    conn.onInbound((message) => void handleInbound(conn, identity, message));
+  }
+  return conn;
+}
+
+/** Ensure the warm session to the wallet's inbox mediator is live so
+ *  RP-initiated confirm requests are received. Idempotent. */
+async function startInbound(): Promise<void> {
+  try {
+    const mediatorDid = await walletMediatorDid();
+    await getWarmSession(mediatorDid);
+    console.info("[pnm inbound] listening for confirm requests via", mediatorDid);
+  } catch (e) {
+    console.error("[pnm inbound] failed to start inbound session:", e);
+  }
 }
 
 async function handleInbound(
@@ -139,34 +213,31 @@ async function doDidcommLogin(
   const { identity, signing } = await loadHolder();
   sw.mark("load holder");
 
-  const conn = await connectMediatorSession({
+  // Reuse the warm session (instant if already live); resolve the VTA target
+  // separately (cached). No per-op connect/teardown.
+  const conn = await getWarmSession(req.params.mediatorDid);
+  sw.mark("warm session");
+  const service = await resolveKeyAgreement(req.params.controlDid);
+  sw.mark("resolve vta");
+
+  const bridge = new MediatorSessionBridge(conn);
+  const tokens = await loginViaDidcomm({
+    bridge,
     holder: identity,
-    mediatorDid: req.params.mediatorDid,
-    vtaDid: req.params.controlDid,
+    service,
+    mediator: conn.mediator,
   });
-  sw.mark("mediator connect");
-  try {
-    const bridge = new MediatorSessionBridge(conn);
-    const tokens = await loginViaDidcomm({
-      bridge,
-      holder: identity,
-      service: conn.vta,
-      mediator: conn.mediator,
-    });
-    sw.mark("authenticate (didcomm)");
-    return {
-      ok: true,
-      result: {
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        sessionId: tokens.sessionId,
-        holderDid: signing.did,
-        timings: sw.marks,
-      },
-    };
-  } finally {
-    conn.close();
-  }
+  sw.mark("authenticate (didcomm)");
+  return {
+    ok: true,
+    result: {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      sessionId: tokens.sessionId,
+      holderDid: signing.did,
+      timings: sw.marks,
+    },
+  };
 }
 
 async function doStepUpVta(
@@ -182,28 +253,21 @@ async function doStepUpVta(
   const nonce = await stepUpVtaStart(req.params.baseUrl, req.params.accessToken);
   sw.mark("rp start (nonce)");
 
-  // 2. VTA approve (DIDComm) → approval token.
-  const conn = await connectMediatorSession({
+  // 2. VTA approve (DIDComm) → approval token. Reuse the warm session.
+  const conn = await getWarmSession(req.params.vtaMediatorDid);
+  sw.mark("warm session");
+  const service = await resolveKeyAgreement(req.params.vtaDid);
+  sw.mark("resolve vta");
+  const bridge = new MediatorSessionBridge(conn);
+  const approvalToken = await requestVtaApproval({
+    bridge,
     holder: identity,
-    mediatorDid: req.params.vtaMediatorDid,
-    vtaDid: req.params.vtaDid,
+    service,
+    mediator: conn.mediator,
+    rpDid: req.params.rpDid,
+    nonce,
   });
-  sw.mark("mediator connect");
-  let approvalToken: string;
-  try {
-    const bridge = new MediatorSessionBridge(conn);
-    approvalToken = await requestVtaApproval({
-      bridge,
-      holder: identity,
-      service: conn.vta,
-      mediator: conn.mediator,
-      rpDid: req.params.rpDid,
-      nonce,
-    });
-    sw.mark("vta approve");
-  } finally {
-    conn.close();
-  }
+  sw.mark("vta approve");
 
   // 3. RP finish (REST) → elevated session tokens.
   const tokens = await stepUpVtaFinish(
