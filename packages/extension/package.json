@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --mode development",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && vite build -c vite.config.background.ts",
     "lint": "tsc -b --noEmit"
   },
   "dependencies": {

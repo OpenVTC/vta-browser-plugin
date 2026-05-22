@@ -13,7 +13,7 @@ export default defineConfig({
       input: {
         popup: resolve(__dirname, "popup.html"),
         confirm: resolve(__dirname, "confirm.html"),
-        background: resolve(__dirname, "src/background.ts"),
+        offscreen: resolve(__dirname, "offscreen.html"),
         content: resolve(__dirname, "src/content.ts"),
         provider: resolve(__dirname, "src/provider.ts"),
       },
@@ -21,18 +21,18 @@ export default defineConfig({
         // Fixed names for the files the manifest references by path.
         // `content.js` is injected as a classic content script and
         // `provider.js` as a page-world script, so both must be
-        // self-contained (no shared-chunk `import`s) — see `manualChunks`.
+        // self-contained (no shared-chunk `import`s).
+        //
+        // `background.js` is built separately (vite.config.background.ts)
+        // because an MV3 service worker forbids dynamic `import()`, so it
+        // must be a single inlined bundle — incompatible with the
+        // multi-entry build here.
         entryFileNames: (chunk) =>
-          chunk.name === "background"
-            ? "background.js"
-            : chunk.name === "content"
-              ? "content.js"
-              : chunk.name === "provider"
-                ? "provider.js"
-                : "assets/[name]-[hash].js",
-        // Keep the content/provider entries dependency-free: inline their
-        // (tiny) shared `bridge-protocol` constants rather than emitting a
-        // shared chunk a classic content script could not `import`.
+          chunk.name === "content"
+            ? "content.js"
+            : chunk.name === "provider"
+              ? "provider.js"
+              : "assets/[name]-[hash].js",
         manualChunks: undefined,
       },
     },

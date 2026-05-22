@@ -1,23 +1,21 @@
 /// <reference types="chrome" />
 
-// Service worker. Owns the wallet's holder identity and runs the SIOPv2
-// login on behalf of an RP page, gated by an explicit user-consent prompt.
+// Service worker. Owns the wallet's holder identity, runs the REST SIOPv2
+// login, and gates every login behind a user-consent prompt. The DIDComm
+// login is delegated to an offscreen document (see `offscreen.ts`) because
+// it needs dynamic `import()` + a DOM, which a service worker lacks.
 //
-// Flow: content script → RUNTIME_LOGIN → (consent window) → loginViaSiop →
-// tokens back to the content script → page.
+// REST flow: content → RUNTIME_LOGIN → consent → loginViaSiop → tokens.
+// DIDComm flow: content → RUNTIME_LOGIN_DIDCOMM → consent → offscreen doc.
 
+import { generateOrLoadHolderIdentity, IndexedDBKVStore, loginViaSiop } from "@pnm/core";
 import {
-  connectMediatorSession,
-  generateOrLoadHolderIdentity,
-  IndexedDBKVStore,
-  loginViaDidcomm,
-  loginViaSiop,
-  MediatorSessionBridge,
-} from "@pnm/core";
-import {
+  OFFSCREEN_DIDCOMM_LOGIN,
+  OFFSCREEN_TARGET,
   RUNTIME_CONSENT_RESULT,
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
+  type OffscreenDidcommLoginRequest,
   type RuntimeConsentResult,
   type RuntimeLoginDidcommRequest,
   type RuntimeLoginRequest,
@@ -27,6 +25,27 @@ import {
 chrome.runtime.onInstalled.addListener(() => {
   console.info("[pnm] extension installed");
 });
+
+// ─── Offscreen document lifecycle ───
+// One offscreen document per extension; create it lazily on first DIDComm
+// login and reuse it thereafter.
+let creatingOffscreen: Promise<void> | null = null;
+async function ensureOffscreenDocument(): Promise<void> {
+  if (await chrome.offscreen.hasDocument()) return;
+  if (!creatingOffscreen) {
+    creatingOffscreen = chrome.offscreen
+      .createDocument({
+        url: "offscreen.html",
+        reasons: [chrome.offscreen.Reason.WORKERS],
+        justification:
+          "Run the DIDComm mediator session (WebSocket + did:webvh resolution) for wallet login.",
+      })
+      .finally(() => {
+        creatingOffscreen = null;
+      });
+  }
+  await creatingOffscreen;
+}
 
 // ─── Consent coordination ───
 // A login request opens a consent popup and parks here until the popup
@@ -92,7 +111,10 @@ async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginRespon
 async function handleLoginDidcomm(
   req: RuntimeLoginDidcommRequest,
 ): Promise<RuntimeLoginResponse> {
-  const { identity, signing } = await generateOrLoadHolderIdentity(new IndexedDBKVStore());
+  // Load the holder here only to show its DID in the consent prompt; the
+  // actual DIDComm login runs in the offscreen document (same IndexedDB
+  // holder). did:key derivation is window-free, so this is safe in the SW.
+  const { signing } = await generateOrLoadHolderIdentity(new IndexedDBKVStore());
 
   const approved = await requestConsent({
     origin: req.origin,
@@ -101,34 +123,20 @@ async function handleLoginDidcomm(
   });
   if (!approved) return { ok: false, error: "login denied by user" };
 
-  const conn = await connectMediatorSession({
-    holder: identity,
-    mediatorDid: req.params.mediatorDid,
-    vtaDid: req.params.controlDid,
-  });
-  try {
-    const bridge = new MediatorSessionBridge(conn);
-    const tokens = await loginViaDidcomm({
-      bridge,
-      holder: identity,
-      service: conn.vta,
-      mediator: conn.mediator,
-    });
-    return {
-      ok: true,
-      result: {
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        sessionId: tokens.sessionId,
-        holderDid: signing.did,
-      },
-    };
-  } finally {
-    conn.close();
-  }
+  await ensureOffscreenDocument();
+  const offscreenRequest: OffscreenDidcommLoginRequest = {
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_DIDCOMM_LOGIN,
+    params: req.params,
+  };
+  return (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  // Messages addressed to the offscreen document are not ours — let its
+  // listener claim the channel and respond.
+  if ((message as { target?: string })?.target === OFFSCREEN_TARGET) return false;
+
   if ((message as { type?: string })?.type === RUNTIME_LOGIN) {
     handleLogin(message as RuntimeLoginRequest)
       .then(sendResponse)

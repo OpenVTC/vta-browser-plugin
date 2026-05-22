@@ -93,3 +93,22 @@ export interface RuntimeConsentResult {
   consentId: string;
   approved: boolean;
 }
+
+// ─── background ↔ offscreen document ───
+//
+// The DIDComm login runs in an offscreen document, not the service worker:
+// it resolves `did:webvh` DIDs (didwebvh-ts) and opens a mediator session,
+// which need dynamic `import()` and a DOM — both forbidden in an MV3 service
+// worker. Messages are tagged `target: "offscreen"` so the background's own
+// runtime listener ignores them.
+
+export const OFFSCREEN_TARGET = "offscreen" as const;
+export const OFFSCREEN_DIDCOMM_LOGIN = "offscreen/didcomm-login" as const;
+
+/** background → offscreen: run a DIDComm login. Reply is a
+ *  [`RuntimeLoginResponse`] via `sendResponse`. */
+export interface OffscreenDidcommLoginRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_DIDCOMM_LOGIN;
+  params: DidcommLoginParams;
+}
