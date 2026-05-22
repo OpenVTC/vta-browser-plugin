@@ -9,14 +9,13 @@
 import {
   connectMediatorSession,
   createStopwatch,
-  generateOrLoadHolderIdentity,
-  IndexedDBKVStore,
   loginViaDidcomm,
   MediatorSessionBridge,
   requestVtaApproval,
   stepUpVtaFinish,
   stepUpVtaStart,
 } from "@pnm/core";
+import { loadHolder } from "./holder.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
   OFFSCREEN_STEP_UP_VTA,
@@ -54,7 +53,7 @@ async function doDidcommLogin(
   // Same IndexedDB-backed holder the popup/background use (shared extension
   // origin), so the DID is identical to the REST path.
   const sw = createStopwatch();
-  const { identity, signing } = await generateOrLoadHolderIdentity(new IndexedDBKVStore());
+  const { identity, signing } = await loadHolder();
   sw.mark("load holder");
 
   const conn = await connectMediatorSession({
@@ -93,7 +92,7 @@ async function doStepUpVta(
   // Same IndexedDB-backed holder the popup/background use, so the DID is
   // identical to the base-login path being elevated.
   const sw = createStopwatch();
-  const { identity, signing } = await generateOrLoadHolderIdentity(new IndexedDBKVStore());
+  const { identity, signing } = await loadHolder();
   sw.mark("load holder");
 
   // 1. RP start (REST) → nonce.

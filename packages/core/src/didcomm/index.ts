@@ -453,6 +453,10 @@ export interface MediatorConnection {
   send(jwe: string): void;
   waitFor(thid: string, timeoutMs: number): Promise<Record<string, unknown>>;
   close(): void;
+  /** Register a handler for unsolicited inbound messages (those no `waitFor`
+   *  claims) — e.g. an RP-initiated `confirm` request. The handler should
+   *  filter by message `type`. Replaces any previously-registered handler. */
+  onInbound(handler: (message: Record<string, unknown>, thid: string) => void): void;
   /** Resolved VTA key-agreement endpoint (inner authcrypt target). */
   vta: ResolvedKeyAgreement;
   /** Resolved mediator key-agreement endpoint (forward-envelope target). */
@@ -534,6 +538,11 @@ export async function connectMediatorSession(
     waitFor: (thid: string, timeoutMs: number) =>
       session.waitFor(thid, timeoutMs) as Promise<Record<string, unknown>>,
     close: () => session.close(),
+    // The session reads `onMessage` dynamically on each inbound frame, so a
+    // post-connect assignment takes effect immediately.
+    onInbound: (handler) => {
+      (session as unknown as { onMessage: typeof handler }).onMessage = handler;
+    },
     vta,
     mediator: {
       did: auth.mediator.did,

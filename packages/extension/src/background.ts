@@ -8,7 +8,8 @@
 // REST flow: content → RUNTIME_LOGIN → consent → loginViaSiop → tokens.
 // DIDComm flow: content → RUNTIME_LOGIN_DIDCOMM → consent → offscreen doc.
 
-import { generateOrLoadHolderIdentity, IndexedDBKVStore, loginViaSiop } from "@pnm/core";
+import { loginViaSiop } from "@pnm/core";
+import { loadHolder } from "./holder.js";
 import { subscribeToPush } from "./push.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
@@ -120,7 +121,7 @@ function requestConsent(args: {
 }
 
 async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginResponse> {
-  const { signing } = await generateOrLoadHolderIdentity(new IndexedDBKVStore());
+  const { signing } = await loadHolder();
 
   const approved = await requestConsent({
     origin: req.origin,
@@ -143,7 +144,7 @@ async function handleLoginDidcomm(
   // Load the holder here only to show its DID in the consent prompt; the
   // actual DIDComm login runs in the offscreen document (same IndexedDB
   // holder). did:key derivation is window-free, so this is safe in the SW.
-  const { signing } = await generateOrLoadHolderIdentity(new IndexedDBKVStore());
+  const { signing } = await loadHolder();
 
   const approved = await requestConsent({
     origin: req.origin,
@@ -166,7 +167,7 @@ async function handleStepUpVta(
 ): Promise<RuntimeLoginResponse> {
   // Load the holder here only to show its DID in the consent prompt; the
   // step-up orchestration (REST + DIDComm) runs in the offscreen document.
-  const { signing } = await generateOrLoadHolderIdentity(new IndexedDBKVStore());
+  const { signing } = await loadHolder();
 
   const approved = await requestConsent({
     origin: req.origin,
