@@ -4,5 +4,6 @@ export * from "./vta/index.js";
 export * from "./didcomm/index.js";
 export * from "./siop/index.js";
 export * from "./rp-login/index.js";
+export * from "./inbound/index.js";
 export * from "./store/index.js";
 export * from "./util/timing.js";
