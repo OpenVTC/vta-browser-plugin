@@ -163,10 +163,21 @@
         try {
           steps.forEach((s) => log(panel, s));
           log(panel, "(approve the consent popup…)");
+          const t0 = performance.now();
           const r = await fn();
+          const totalMs = Math.round(performance.now() - t0);
           log(panel, "session token received ✓", "ok");
           renderJwt(panel, r.accessToken, r.holderDid);
-          log(panel, "decoded session JWT → see acr / amr below", "ok");
+          // Per-phase timings (from the wallet) + page-measured total.
+          if (Array.isArray(r.timings) && r.timings.length) {
+            let work = 0;
+            log(panel, "── timings ──");
+            for (const m of r.timings) { work += m.ms; log(panel, `   ${m.label}: ${m.ms} ms`); }
+            log(panel, `   auth work: ${work} ms`, "ok");
+            log(panel, `   total (button→token, incl. consent): ${totalMs} ms`, "ok");
+          } else {
+            log(panel, `total (button→token): ${totalMs} ms`, "ok");
+          }
           if (onSuccess) onSuccess(r);
         } catch (e) {
           log(panel, "FAILED: " + (e?.message ?? e), "err");

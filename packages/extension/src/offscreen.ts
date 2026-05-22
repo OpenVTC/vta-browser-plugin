@@ -8,6 +8,7 @@
 
 import {
   connectMediatorSession,
+  createStopwatch,
   generateOrLoadHolderIdentity,
   IndexedDBKVStore,
   loginViaDidcomm,
@@ -52,13 +53,16 @@ async function doDidcommLogin(
 ): Promise<RuntimeLoginResponse> {
   // Same IndexedDB-backed holder the popup/background use (shared extension
   // origin), so the DID is identical to the REST path.
+  const sw = createStopwatch();
   const { identity, signing } = await generateOrLoadHolderIdentity(new IndexedDBKVStore());
+  sw.mark("load holder");
 
   const conn = await connectMediatorSession({
     holder: identity,
     mediatorDid: req.params.mediatorDid,
     vtaDid: req.params.controlDid,
   });
+  sw.mark("mediator connect");
   try {
     const bridge = new MediatorSessionBridge(conn);
     const tokens = await loginViaDidcomm({
@@ -67,6 +71,7 @@ async function doDidcommLogin(
       service: conn.vta,
       mediator: conn.mediator,
     });
+    sw.mark("authenticate (didcomm)");
     return {
       ok: true,
       result: {
@@ -74,6 +79,7 @@ async function doDidcommLogin(
         refreshToken: tokens.refreshToken,
         sessionId: tokens.sessionId,
         holderDid: signing.did,
+        timings: sw.marks,
       },
     };
   } finally {
@@ -86,10 +92,13 @@ async function doStepUpVta(
 ): Promise<RuntimeLoginResponse> {
   // Same IndexedDB-backed holder the popup/background use, so the DID is
   // identical to the base-login path being elevated.
+  const sw = createStopwatch();
   const { identity, signing } = await generateOrLoadHolderIdentity(new IndexedDBKVStore());
+  sw.mark("load holder");
 
   // 1. RP start (REST) → nonce.
   const nonce = await stepUpVtaStart(req.params.baseUrl, req.params.accessToken);
+  sw.mark("rp start (nonce)");
 
   // 2. VTA approve (DIDComm) → approval token.
   const conn = await connectMediatorSession({
@@ -97,6 +106,7 @@ async function doStepUpVta(
     mediatorDid: req.params.vtaMediatorDid,
     vtaDid: req.params.vtaDid,
   });
+  sw.mark("mediator connect");
   let approvalToken: string;
   try {
     const bridge = new MediatorSessionBridge(conn);
@@ -108,6 +118,7 @@ async function doStepUpVta(
       rpDid: req.params.rpDid,
       nonce,
     });
+    sw.mark("vta approve");
   } finally {
     conn.close();
   }
@@ -118,6 +129,7 @@ async function doStepUpVta(
     req.params.accessToken,
     approvalToken,
   );
+  sw.mark("rp finish (elevate)");
   return {
     ok: true,
     result: {
@@ -125,6 +137,7 @@ async function doStepUpVta(
       refreshToken: tokens.refreshToken,
       sessionId: tokens.sessionId,
       holderDid: signing.did,
+      timings: sw.marks,
     },
   };
 }

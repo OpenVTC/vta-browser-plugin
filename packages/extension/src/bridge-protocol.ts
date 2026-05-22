@@ -78,8 +78,10 @@ export interface LoginResult {
   accessToken: string;
   refreshToken: string;
   sessionId: string;
-  /** The wallet holder's `did:key` — surfaced so the operator can ACL-grant it. */
+  /** The wallet holder DID — surfaced so the operator can ACL-grant it. */
   holderDid: string;
+  /** Per-phase timings (ms) of the auth flow, for the demo to display. */
+  timings?: { label: string; ms: number }[];
 }
 
 /** provider → content (page world → content world). */

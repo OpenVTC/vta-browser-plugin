@@ -5,6 +5,7 @@
 // exchange it for a session JWT. No passkey, no DIDComm to the RP — the
 // RP verifies by resolving the holder DID.
 
+import { createStopwatch, type TimingMark } from "../util/timing.js";
 import { issueIdToken, type SigningIdentity } from "./self-issued.js";
 
 /** The DID-hosting authenticate Trust-Task type (flat did-hosting form,
@@ -16,6 +17,8 @@ export interface SiopLoginResult {
   accessToken: string;
   refreshToken: string;
   sessionId: string;
+  /** Per-phase timings (challenge / id_token / authenticate). */
+  timings: TimingMark[];
 }
 
 export interface SiopLoginOptions {
@@ -42,6 +45,7 @@ export async function loginViaSiop(
 ): Promise<SiopLoginResult> {
   const fetchFn = opts.fetch ?? fetch.bind(globalThis);
   const base = opts.baseUrl.replace(/\/+$/, "");
+  const sw = createStopwatch();
 
   // 1. Request a challenge nonce for the holder DID.
   const challengeRes = await fetchFn(`${base}/auth/challenge`, {
@@ -59,6 +63,7 @@ export async function loginViaSiop(
     sessionId: string;
     data: { challenge: string };
   };
+  sw.mark("challenge");
 
   // 2. Self-issue the id_token — aud = the RP's DID, nonce = the challenge.
   const idToken = issueIdToken({
@@ -66,6 +71,7 @@ export async function loginViaSiop(
     audience: opts.rpDid,
     nonce: challenge.data.challenge,
   });
+  sw.mark("id_token signed");
 
   // 3. Wrap in the RP's authenticate Trust-Task envelope.
   const envelope = {
@@ -99,7 +105,9 @@ export async function loginViaSiop(
     sessionId: string;
     data: { accessToken: string; refreshToken: string };
   };
+  sw.mark("authenticate");
   return {
+    timings: sw.marks,
     accessToken: r.data.accessToken,
     refreshToken: r.data.refreshToken,
     sessionId: r.sessionId,
