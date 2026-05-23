@@ -8,10 +8,9 @@
 import { createStopwatch, type TimingMark } from "../util/timing.js";
 import { issueIdToken, type SigningIdentity } from "./self-issued.js";
 
-/** The DID-hosting authenticate Trust-Task type (flat did-hosting form,
- *  matching the service's `TASK_AUTH_AUTHENTICATE_1_0`). */
-const TASK_AUTH_AUTHENTICATE =
-  "https://trusttasks.org/did-hosting/auth/authenticate/1.0";
+/** The canonical authenticate Trust-Task type from trusttasks-tf.
+ *  did-hosting + VTA + VTC all dispatch on this same URI. */
+const TASK_AUTH_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
 
 export interface SiopLoginResult {
   accessToken: string;

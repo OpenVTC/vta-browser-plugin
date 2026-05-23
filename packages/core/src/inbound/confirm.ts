@@ -9,8 +9,12 @@
 import { packAuthcrypt, packAuthcryptJson, wrapForward, type Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 
-export const CONFIRM_REQUEST_TYPE = "https://trusttasks.org/wallet/confirm/1.0";
-export const CONFIRM_RESPONSE_TYPE = "https://trusttasks.org/wallet/confirm-response/1.0";
+// Canonical RP→wallet consent specs from trusttasks-tf. Replaces
+// the former wallet/confirm/* slugs; conformance + payload shape
+// documented at https://trusttasks.org/spec/confirm/request/0.1 and
+// /spec/confirm/response/0.1.
+export const CONFIRM_REQUEST_TYPE = "https://trusttasks.org/spec/confirm/request/0.1";
+export const CONFIRM_RESPONSE_TYPE = "https://trusttasks.org/spec/confirm/response/0.1";
 
 /** Body of an inbound confirm request (RP → wallet). */
 export interface ConfirmRequest {

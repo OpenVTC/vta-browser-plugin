@@ -19,8 +19,10 @@ import { packAuthcrypt, packAuthcryptJson, wrapForward, type Identity } from "..
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import type { DidcommMessageBridge } from "../vta/transport.js";
 
-const MSG_APPROVE_REQUEST = "https://trusttasks.org/vta/step-up/approve-request/1.0";
-const MSG_APPROVE_RESPONSE = "https://trusttasks.org/vta/step-up/approve-response/1.0";
+// Canonical step-up approval specs from trusttasks-tf. The proof on
+// approve-response is what the RP verifies to elevate the session's acr.
+const MSG_APPROVE_REQUEST = "https://trusttasks.org/spec/auth/step-up/approve-request/0.1";
+const MSG_APPROVE_RESPONSE = "https://trusttasks.org/spec/auth/step-up/approve-response/0.1";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
