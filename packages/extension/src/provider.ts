@@ -12,6 +12,8 @@ import type {
   LoginParams,
   LoginResult,
   MediatorStatusResult,
+  SignTrustTaskParams,
+  SignTrustTaskResult,
   StepUpVtaParams,
   WalletDefaultsResult,
 } from "./bridge-protocol.js";
@@ -41,6 +43,10 @@ interface VtaWallet {
   mediatorStatus(): Promise<MediatorStatusResult>;
   /** Query operator-configured wallet defaults (e.g. step-up VTA) to prefill. */
   walletDefaults(): Promise<WalletDefaultsResult>;
+  /** Sign a Trust-Task envelope with the wallet's holder did:peer #key-2.
+   *  Adds an eddsa-jcs-2022 Data Integrity proof and returns the resulting
+   *  envelope. The caller sets `recipient` (audience binding) before calling. */
+  signTrustTask(params: SignTrustTaskParams): Promise<SignTrustTaskResult>;
 }
 
 declare global {
@@ -77,13 +83,15 @@ function call<T>(
     | "apiGet"
     | "apiPost"
     | "mediatorStatus"
-    | "walletDefaults",
+    | "walletDefaults"
+    | "signTrustTask",
   params:
     | LoginParams
     | DidcommLoginParams
     | StepUpVtaParams
     | ApiGetParams
     | ApiPostParams
+    | SignTrustTaskParams
     | Record<string, never>,
 ): Promise<T> {
   const id = crypto.randomUUID();
@@ -104,5 +112,6 @@ if (!window.vtaWallet) {
     apiPost: (params) => call<ApiGetResult>("apiPost", params),
     mediatorStatus: () => call<MediatorStatusResult>("mediatorStatus", {}),
     walletDefaults: () => call<WalletDefaultsResult>("walletDefaults", {}),
+    signTrustTask: (params) => call<SignTrustTaskResult>("signTrustTask", params),
   };
 }

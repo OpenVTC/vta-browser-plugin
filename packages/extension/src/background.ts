@@ -16,6 +16,7 @@ import {
   OFFSCREEN_GET_STATUS,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
+  OFFSCREEN_SIGN_TRUST_TASK,
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
@@ -28,6 +29,7 @@ import {
   RUNTIME_MEDIATOR_STATUS,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
+  RUNTIME_SIGN_TRUST_TASK,
   RUNTIME_STEP_UP_VTA,
   RUNTIME_WALLET_DEFAULTS,
   type MediatorStatusResult,
@@ -45,6 +47,8 @@ import {
   type RuntimeOnboardConnectResponse,
   type RuntimeOnboardPrepareRequest,
   type RuntimeOnboardPrepareResponse,
+  type RuntimeSignTrustTaskRequest,
+  type RuntimeSignTrustTaskResponse,
   type RuntimeStepUpVtaRequest,
   type RuntimeWalletDefaultsResponse,
 } from "./bridge-protocol.js";
@@ -270,6 +274,22 @@ async function handleOnboardConnect(): Promise<RuntimeOnboardConnectResponse> {
   })) as RuntimeOnboardConnectResponse;
 }
 
+// Sign a Trust-Task envelope with the wallet's holder did:peer #key-2.
+// Forward to the offscreen which loads the holder identity + calls the core
+// `signTrustTask` helper. No additional consent prompt — the user already
+// authorized this site at onboarding/login; per-signature prompts would be
+// crippling for normal RP usage (every ACL operation, etc).
+async function handleSignTrustTask(
+  req: RuntimeSignTrustTaskRequest,
+): Promise<RuntimeSignTrustTaskResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_SIGN_TRUST_TASK,
+    params: req.params,
+  })) as RuntimeSignTrustTaskResponse;
+}
+
 // Operator-configured defaults a page may prefill (e.g. the step-up VTA).
 async function handleWalletDefaults(): Promise<RuntimeWalletDefaultsResponse> {
   const s = await getSettings();
@@ -348,6 +368,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_ONBOARD_CONNECT) {
     handleOnboardConnect()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_SIGN_TRUST_TASK) {
+    handleSignTrustTask(message as RuntimeSignTrustTaskRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

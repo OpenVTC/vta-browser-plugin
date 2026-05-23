@@ -7,4 +7,5 @@ export * from "./rp-login/index.js";
 export * from "./inbound/index.js";
 export * from "./onboarding/index.js";
 export * from "./store/index.js";
+export * from "./trust-tasks/index.js";
 export * from "./util/timing.js";

@@ -25,6 +25,7 @@ import {
   signingIdentityFromSecret,
   stepUpVtaFinish,
   stepUpVtaStart,
+  signTrustTask,
   swapAclDidcomm,
   swapAclRest,
 } from "@pnm/core";
@@ -34,16 +35,19 @@ import {
   OFFSCREEN_GET_STATUS,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
+  OFFSCREEN_SIGN_TRUST_TASK,
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
   RUNTIME_INBOUND_CONSENT,
   type OffscreenDidcommLoginRequest,
   type OffscreenOnboardPrepareRequest,
+  type OffscreenSignTrustTaskRequest,
   type OffscreenStepUpVtaRequest,
   type OnboardConnectResult,
   type OnboardPrepareResult,
   type RuntimeLoginResponse,
+  type SignTrustTaskResult,
 } from "./bridge-protocol.js";
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -89,8 +93,37 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       );
     return true; // async sendResponse
   }
+  if (msg.type === OFFSCREEN_SIGN_TRUST_TASK) {
+    doSignTrustTask((message as OffscreenSignTrustTaskRequest).params.envelope)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
   return false;
 });
+
+// Sign a Trust-Task envelope with the wallet's holder did:peer #key-2. The
+// caller (typically a Relying Party's web UI via window.vtaWallet.signTrustTask)
+// has already populated everything it wants signed — id, type, payload,
+// recipient (audience binding). The wallet adds the eddsa-jcs-2022 Data
+// Integrity proof and returns the envelope. The RP server resolves the
+// did:peer to verify.
+async function doSignTrustTask(
+  envelope: Record<string, unknown>,
+): Promise<SignTrustTaskResult> {
+  const { signing } = await loadHolder();
+  // signTrustTask mutates in place and returns the same reference; clone
+  // first so the caller's input is preserved across the IPC boundary
+  // (chrome.runtime.sendMessage serializes — a defensive copy is cheap and
+  // makes the contract clear).
+  const signedEnvelope = await signTrustTask({
+    envelope: { ...envelope },
+    signing,
+  });
+  return { signedEnvelope, holderDid: signing.did };
+}
 
 // ─── Onboarding: ephemeral did:key → holder did:peer (swap-acl) ───
 // PREPARE resolves the VTA's transports, mints an ephemeral did:key, and

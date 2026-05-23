@@ -27,7 +27,8 @@ export type BridgeMethod =
   | "apiGet"
   | "apiPost"
   | "mediatorStatus"
-  | "walletDefaults";
+  | "walletDefaults"
+  | "signTrustTask";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
 export interface LoginParams {
@@ -107,6 +108,25 @@ export interface WalletDefaultsResult {
   stepUpVtaMediatorDid?: string;
 }
 
+/** Parameters for `window.vtaWallet.signTrustTask(...)`. */
+export interface SignTrustTaskParams {
+  /** The unsigned Trust-Task envelope. The wallet adds an `eddsa-jcs-2022`
+   *  Data Integrity proof signed by the holder did:peer #key-2 and returns
+   *  the resulting envelope as `signedEnvelope`. The caller is responsible
+   *  for setting `recipient` (audience binding) before calling. */
+  envelope: Record<string, unknown>;
+}
+
+/** Result of `window.vtaWallet.signTrustTask(...)`. */
+export interface SignTrustTaskResult {
+  /** The envelope with `proof` attached. */
+  signedEnvelope: Record<string, unknown>;
+  /** The wallet's holder DID — the `iss`-equivalent for the proof. The
+   *  caller can use this to attribute the request (matches the JWT.sub for
+   *  a wallet-authenticated session). */
+  holderDid: string;
+}
+
 /** Result handed back to the RP page on a successful login. */
 export interface LoginResult {
   accessToken: string;
@@ -141,6 +161,7 @@ export const RUNTIME_API_GET = "vta-wallet/api-get" as const;
 export const RUNTIME_API_POST = "vta-wallet/api-post" as const;
 export const RUNTIME_MEDIATOR_STATUS = "vta-wallet/mediator-status" as const;
 export const RUNTIME_WALLET_DEFAULTS = "vta-wallet/wallet-defaults" as const;
+export const RUNTIME_SIGN_TRUST_TASK = "vta-wallet/sign-trust-task" as const;
 export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
 /** offscreen → background: an inbound RP confirm request needs user consent. */
 export const RUNTIME_INBOUND_CONSENT = "vta-wallet/inbound-consent" as const;
@@ -211,6 +232,17 @@ export interface RuntimeWalletDefaultsRequest {
 /** background → content for `walletDefaults` (sendResponse). */
 export type RuntimeWalletDefaultsResponse =
   | { ok: true; result: WalletDefaultsResult }
+  | { ok: false; error: string };
+
+/** content → background: sign a Trust-Task envelope with the holder did:peer. */
+export interface RuntimeSignTrustTaskRequest {
+  type: typeof RUNTIME_SIGN_TRUST_TASK;
+  params: SignTrustTaskParams;
+  origin: string;
+}
+
+export type RuntimeSignTrustTaskResponse =
+  | { ok: true; result: SignTrustTaskResult }
   | { ok: false; error: string };
 
 /** background → content (sendResponse). */
@@ -299,6 +331,15 @@ export const OFFSCREEN_GET_STATUS = "offscreen/get-status" as const;
 export const OFFSCREEN_ONBOARD_PREPARE = "offscreen/onboard-prepare" as const;
 /** background → offscreen: connect as the granted ephemeral + swap-acl. */
 export const OFFSCREEN_ONBOARD_CONNECT = "offscreen/onboard-connect" as const;
+/** background → offscreen: sign a Trust-Task envelope with the holder did:peer.
+ *  Reply is a [`SignTrustTaskResult`] (or `{error}`) via sendResponse. */
+export const OFFSCREEN_SIGN_TRUST_TASK = "offscreen/sign-trust-task" as const;
+
+export interface OffscreenSignTrustTaskRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_SIGN_TRUST_TASK;
+  params: SignTrustTaskParams;
+}
 
 export interface OffscreenStartInboundRequest {
   target: typeof OFFSCREEN_TARGET;
