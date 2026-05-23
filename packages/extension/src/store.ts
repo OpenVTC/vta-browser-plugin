@@ -1,10 +1,22 @@
+/// <reference types="chrome" />
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
+/** A VTA the wallet has been authorized at via the onboarding swap. Populated
+ *  by the popup's onboarding flow on successful `swap-acl`. */
 export interface Connection {
-  vtaUrl: string;
-  did: string;
-  accessToken: string;
+  /** The VTA's DID (did:webvh:…). */
+  vtaDid: string;
+  /** The wallet's holder did:peer — the new DID the swap landed on. */
+  holderDid: string;
+  /** Role inherited from the operator-granted ephemeral (typically `admin`). */
+  role: string;
+  /** REST base URL from `#vta-rest`, if advertised at onboarding time. */
+  restBaseUrl?: string;
+  /** Mediator DID from `#vta-didcomm`, if advertised at onboarding time. */
+  mediatorDid?: string;
+  /** When the connection was established (ms epoch). */
+  connectedAt: number;
 }
 
 interface State {
@@ -16,7 +28,8 @@ interface State {
 /**
  * MV3 doesn't expose `localStorage` to the popup the same way a tab
  * does — and we want state to survive the popup closing. Use
- * `chrome.storage.local` via a small adapter.
+ * `chrome.storage.local` via a small adapter. (The popup has
+ * `chrome.storage` access; the offscreen document does not.)
  */
 const chromeStorage = {
   getItem: (key: string): Promise<string | null> =>
@@ -41,7 +54,9 @@ export const useConnectionStore = create<State>()(
       clearConnection: () => set({ connection: null }),
     }),
     {
-      name: "pnm-connection",
+      // v2: previous shape was `{ vtaUrl, did, accessToken }` (the legacy
+      // URL/DID/enrollment-token form). Ignore that data by bumping the key.
+      name: "pnm-connection/v2",
       storage: createJSONStorage(() => chromeStorage),
     },
   ),

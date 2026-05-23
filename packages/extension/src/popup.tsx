@@ -1,13 +1,6 @@
 /// <reference types="chrome" />
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import {
-  enrollPasskey,
-  enrollmentSubmitFromResult,
-  base64urlToBytes,
-  VtaClient,
-  VtaClientError,
-} from "@pnm/core";
 import { useConnectionStore } from "./store.js";
 import {
   RUNTIME_ONBOARD_CONNECT,
@@ -18,17 +11,63 @@ import {
 } from "./bridge-protocol.js";
 
 const box: React.CSSProperties = { padding: 12, display: "grid", gap: 8 };
-const mono: React.CSSProperties = { fontFamily: "ui-monospace, monospace", fontSize: 11, wordBreak: "break-all" };
+const mono: React.CSSProperties = {
+  fontFamily: "ui-monospace, monospace",
+  fontSize: 11,
+  wordBreak: "break-all",
+};
 
-// ─── Onboarding: connect the wallet to a VTA by DID ───
-// Enter a VTA DID → the wallet resolves its transports + mints an ephemeral
-// did:key → the operator grants it with one command → the wallet connects as
-// the ephemeral and swaps the ACL entry onto its long-term holder did:peer.
-function Onboard() {
+// ─── Connected state ───
+// Shown when the wallet has completed the onboarding swap for a VTA.
+// Persisted via zustand so the state survives the popup closing.
+function ConnectedView() {
+  const connection = useConnectionStore((s) => s.connection)!;
+  const clearConnection = useConnectionStore((s) => s.clearConnection);
+
+  const transports = [
+    connection.mediatorDid ? "DIDComm" : null,
+    connection.restBaseUrl ? "REST" : null,
+  ]
+    .filter(Boolean)
+    .join(" + ");
+
+  return (
+    <div style={box}>
+      <h3 style={{ margin: 0 }}>Connected ✓</h3>
+      <div style={{ fontSize: 12, color: "#555" }}>
+        Your wallet is authorized at this VTA.
+      </div>
+
+      <div style={{ fontSize: 12, color: "#777" }}>VTA</div>
+      <code style={mono}>{connection.vtaDid}</code>
+
+      <div style={{ fontSize: 12, color: "#777" }}>Holder (your wallet DID)</div>
+      <code style={mono}>{connection.holderDid}</code>
+
+      <div style={{ fontSize: 12, color: "#777" }}>
+        Role: <b>{connection.role}</b> &nbsp;·&nbsp; Transports: <b>{transports || "—"}</b>
+      </div>
+
+      <button onClick={clearConnection} style={{ marginTop: 8 }}>
+        Disconnect (forget this VTA)
+      </button>
+      <small style={{ color: "#888" }}>
+        Forgets the connection in this popup. Your wallet DID stays in the VTA&apos;s ACL until
+        the operator revokes it (<code>pnm acl delete</code>).
+      </small>
+    </div>
+  );
+}
+
+// ─── Onboarding ───
+// Enter a VTA DID → wallet resolves transports + mints an ephemeral did:key →
+// operator grants it with one printed command → wallet swaps the grant onto
+// its long-term holder did:peer via `swap-acl`.
+function OnboardView() {
+  const setConnection = useConnectionStore((s) => s.setConnection);
+
   const [vtaDid, setVtaDid] = useState("");
   const [prep, setPrep] = useState<OnboardPrepareResult | null>(null);
-  const [connectedDid, setConnectedDid] = useState<string | null>(null);
-  const [connectedRole, setConnectedRole] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -57,26 +96,20 @@ function Onboard() {
         type: RUNTIME_ONBOARD_CONNECT,
       })) as RuntimeOnboardConnectResponse;
       if (!res.ok) throw new Error(res.error);
-      setConnectedDid(res.result.holderDid);
-      setConnectedRole(res.result.role);
+      setConnection({
+        vtaDid: vtaDid.trim(),
+        holderDid: res.result.holderDid,
+        role: res.result.role,
+        ...(prep?.restBaseUrl ? { restBaseUrl: prep.restBaseUrl } : {}),
+        ...(prep?.mediatorDid ? { mediatorDid: prep.mediatorDid } : {}),
+        connectedAt: Date.now(),
+      });
       setPrep(null);
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }
-
-  if (connectedDid) {
-    return (
-      <div style={box}>
-        <h3 style={{ margin: 0 }}>Connected ✓</h3>
-        <small>Your wallet is now authorized at this VTA as:</small>
-        <code style={mono}>{connectedDid}</code>
-        <small>role: {connectedRole}</small>
-        <button onClick={() => setConnectedDid(null)}>Connect another VTA</button>
-      </div>
-    );
   }
 
   if (prep) {
@@ -90,7 +123,9 @@ function Onboard() {
         <code style={{ ...mono, background: "#f3f4f6", padding: 8, borderRadius: 6 }}>
           {prep.command}
         </code>
-        <button onClick={() => void navigator.clipboard.writeText(prep.command)}>Copy command</button>
+        <button onClick={() => void navigator.clipboard.writeText(prep.command)}>
+          Copy command
+        </button>
         <small>
           Transport:{" "}
           {prep.mediatorDid ? "DIDComm (authcrypt)" : prep.restBaseUrl ? "REST" : "none"}
@@ -109,7 +144,7 @@ function Onboard() {
   return (
     <div style={box}>
       <h3 style={{ margin: 0 }}>Connect to a VTA</h3>
-      <small>Enter the VTA's DID — the wallet resolves its endpoints for you.</small>
+      <small>Enter the VTA&apos;s DID — the wallet resolves its endpoints for you.</small>
       <input
         placeholder="did:webvh:…"
         value={vtaDid}
@@ -124,102 +159,9 @@ function Onboard() {
   );
 }
 
-// ─── Passkey enrollment (advanced / existing flow) ───
-function EnrollPasskey() {
-  const connection = useConnectionStore((s) => s.connection);
-  const setConnection = useConnectionStore((s) => s.setConnection);
-  const clearConnection = useConnectionStore((s) => s.clearConnection);
-
-  const [vtaUrl, setVtaUrl] = useState("");
-  const [did, setDid] = useState("");
-  const [accessToken, setAccessToken] = useState("");
-  const [label, setLabel] = useState("");
-  const [status, setStatus] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function doEnroll() {
-    if (!connection) return;
-    setBusy(true);
-    setStatus(null);
-    const client = new VtaClient({ baseUrl: connection.vtaUrl, accessToken: connection.accessToken });
-    try {
-      const challenge = await client.requestEnrollmentChallenge(connection.did);
-      const result = await enrollPasskey({
-        challenge: base64urlToBytes(challenge.challenge),
-        rp: { id: challenge.rpId, name: challenge.rpName },
-        user: {
-          id: base64urlToBytes(challenge.userHandle),
-          name: challenge.userName,
-          displayName: challenge.userDisplayName,
-        },
-        ...(challenge.timeoutMs !== undefined ? { timeout: challenge.timeoutMs } : {}),
-      });
-      const submitted = await client.submitPasskeyEnrollment(
-        enrollmentSubmitFromResult(connection.did, result, challenge.ceremonyId, label || undefined),
-      );
-      setStatus(`Enrolled ${submitted.verificationMethod.id}`);
-    } catch (err) {
-      const e = err as VtaClientError | Error;
-      setStatus(e instanceof VtaClientError ? `${e.code}: ${e.message}` : (e.message ?? "error"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (!connection) {
-    return (
-      <div style={box}>
-        <input placeholder="VTA URL" value={vtaUrl} onChange={(e) => setVtaUrl(e.target.value)} />
-        <input placeholder="DID" value={did} onChange={(e) => setDid(e.target.value)} />
-        <input
-          placeholder="Enrollment token"
-          type="password"
-          value={accessToken}
-          onChange={(e) => setAccessToken(e.target.value)}
-        />
-        <button
-          onClick={() => {
-            setConnection({ vtaUrl, did, accessToken });
-            setStatus("Connected.");
-          }}
-          disabled={!vtaUrl || !did || !accessToken}
-        >
-          Save
-        </button>
-        {status && <small>{status}</small>}
-      </div>
-    );
-  }
-
-  return (
-    <div style={box}>
-      <small style={mono}>{connection.did}</small>
-      <input placeholder="Label (optional)" value={label} onChange={(e) => setLabel(e.target.value)} />
-      <button onClick={() => void doEnroll()} disabled={busy}>
-        {busy ? "Working…" : "Enroll passkey"}
-      </button>
-      <button onClick={clearConnection}>Disconnect</button>
-      {status && <small>{status}</small>}
-    </div>
-  );
-}
-
 function Popup() {
-  const [showEnroll, setShowEnroll] = useState(false);
-  return (
-    <div>
-      <Onboard />
-      <div style={{ padding: "0 12px 12px" }}>
-        <button
-          style={{ background: "none", border: "none", color: "#2d6cdf", cursor: "pointer", padding: 0, fontSize: 12 }}
-          onClick={() => setShowEnroll((v) => !v)}
-        >
-          {showEnroll ? "▾ Hide passkey enrollment" : "▸ Enroll a passkey (advanced)"}
-        </button>
-      </div>
-      {showEnroll && <EnrollPasskey />}
-    </div>
-  );
+  const connection = useConnectionStore((s) => s.connection);
+  return connection ? <ConnectedView /> : <OnboardView />;
 }
 
 const root = document.getElementById("root");
