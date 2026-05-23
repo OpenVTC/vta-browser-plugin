@@ -57,10 +57,12 @@ export async function loginViaSiop(
       `siop login: challenge failed (${challengeRes.status}): ${await challengeRes.text()}`,
     );
   }
-  // Response is camelCase (`ChallengeResponse` is `rename_all = "camelCase"`).
+  // Canonical wire (spec/auth/challenge/0.1#response): flat
+  // { challenge, sessionId, expiresAt }. No `data` envelope.
   const challenge = (await challengeRes.json()) as {
+    challenge: string;
     sessionId: string;
-    data: { challenge: string };
+    expiresAt: string;
   };
   sw.mark("challenge");
 
@@ -68,7 +70,7 @@ export async function loginViaSiop(
   const idToken = issueIdToken({
     identity: opts.signing,
     audience: opts.rpDid,
-    nonce: challenge.data.challenge,
+    nonce: challenge.challenge,
   });
   sw.mark("id_token signed");
 
@@ -98,17 +100,34 @@ export async function loginViaSiop(
       `siop login: authenticate failed (${authRes.status}): ${await authRes.text()}`,
     );
   }
-  // Response is camelCase with the tokens nested under `data`
-  // (`AuthenticateResponse` → `AuthenticateData`).
+  // Canonical wire (spec/auth/authenticate/0.1#response):
+  // { session: Session, tokens: TokenBundle }. Session.id is the
+  // session identifier; tokens.{accessToken, refreshToken} carry
+  // the bearer material. `expiresIn` is seconds-from-issuance per
+  // RFC 6749 §5.1 — clients compute the absolute moment as
+  // Date.parse(session.issuedAt) + tokens.expiresIn * 1000.
   const r = (await authRes.json()) as {
-    sessionId: string;
-    data: { accessToken: string; refreshToken: string };
+    session: {
+      id: string;
+      subject: string;
+      issuedAt: string;
+      expiresAt: string;
+      amr?: string[];
+      acr?: string;
+    };
+    tokens: {
+      accessToken: string;
+      refreshToken?: string;
+      tokenType: string;
+      expiresIn: number;
+      refreshExpiresIn?: number;
+    };
   };
   sw.mark("authenticate");
   return {
     timings: sw.marks,
-    accessToken: r.data.accessToken,
-    refreshToken: r.data.refreshToken,
-    sessionId: r.sessionId,
+    accessToken: r.tokens.accessToken,
+    refreshToken: r.tokens.refreshToken ?? "",
+    sessionId: r.session.id,
   };
 }
