@@ -16,6 +16,10 @@ const holderDid = params.get("holder");
 // When present, this prompt is an RP-initiated action to confirm (inbound),
 // not an outbound login.
 const action = params.get("action");
+// M5: when set, the rpDid this origin previously used. Render a
+// louder warning so the operator sees the swap and decides
+// whether to approve it.
+const changedFromRpDid = params.get("changedFrom");
 
 function decide(approved: boolean): void {
   chrome.runtime.sendMessage({ type: RUNTIME_CONSENT_RESULT, consentId, approved });
@@ -26,6 +30,29 @@ function Confirm() {
   return (
     <div style={{ padding: 16, fontSize: 14, lineHeight: 1.4 }}>
       <h3 style={{ margin: "0 0 12px" }}>{action ? "Confirmation request" : "Login request"}</h3>
+      {changedFromRpDid && (
+        <div
+          role="alert"
+          style={{
+            border: "2px solid #c0392b",
+            background: "#fdecea",
+            color: "#7a1a13",
+            padding: 12,
+            margin: "0 0 12px",
+            borderRadius: 4,
+          }}
+        >
+          <strong style={{ display: "block", marginBottom: 4 }}>
+            ⚠ Relying-party identity changed
+          </strong>
+          <div style={{ marginBottom: 6 }}>
+            <strong>{origin}</strong> previously asked you to sign in to a different RP. Verify
+            the new RP is correct before approving.
+          </div>
+          <div style={{ color: "#666", fontSize: 12 }}>Previously:</div>
+          <div style={{ wordBreak: "break-all", fontSize: 12 }}>{changedFromRpDid}</div>
+        </div>
+      )}
       <p style={{ margin: "0 0 12px" }}>
         {action ? (
           <>

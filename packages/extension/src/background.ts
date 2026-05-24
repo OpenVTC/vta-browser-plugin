@@ -10,6 +10,7 @@
 
 import { loginViaSiop } from "@pnm/core";
 import { loadHolder } from "./holder.js";
+import { checkOriginPin, pinOrigin } from "./origin-pin.js";
 import { subscribeToPush } from "./push.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
@@ -122,6 +123,13 @@ function requestConsent(args: {
   /** When set, the prompt frames an RP-initiated action to confirm (inbound)
    *  rather than a login. */
   action?: string;
+  /**
+   * M5: when set, the previously-pinned rpDid for this origin
+   * — the consent prompt shows a louder warning because the
+   * site is now asking for a *different* RP identity. The
+   * operator has to explicitly approve the swap.
+   */
+  changedFromRpDid?: string;
 }): Promise<boolean> {
   const consentId = crypto.randomUUID();
   const url =
@@ -130,7 +138,10 @@ function requestConsent(args: {
     `&rpDid=${encodeURIComponent(args.rpDid)}` +
     (args.origin ? `&origin=${encodeURIComponent(args.origin)}` : "") +
     (args.holderDid ? `&holder=${encodeURIComponent(args.holderDid)}` : "") +
-    (args.action ? `&action=${encodeURIComponent(args.action)}` : "");
+    (args.action ? `&action=${encodeURIComponent(args.action)}` : "") +
+    (args.changedFromRpDid
+      ? `&changedFrom=${encodeURIComponent(args.changedFromRpDid)}`
+      : "");
 
   return new Promise<boolean>((resolve) => {
     let settled = false;
@@ -160,12 +171,28 @@ function requestConsent(args: {
 async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginResponse> {
   const { signing } = await loadHolder();
 
-  const approved = await requestConsent({
+  // M5: pin the rpDid against the requesting origin. First-sight
+  // origins seed the pin on approval; subsequent origins asking
+  // for a *different* rpDid get a louder consent prompt so the
+  // operator can spot a redirect-to-attacker-RP attempt.
+  const pin = req.origin
+    ? await checkOriginPin(req.origin, req.params.rpDid)
+    : { firstSeen: true, rpDidChanged: false, pinnedRpDid: undefined };
+
+  const consent: Parameters<typeof requestConsent>[0] = {
     origin: req.origin,
     rpDid: req.params.rpDid,
     holderDid: signing.did,
-  });
+  };
+  if (pin.rpDidChanged && pin.pinnedRpDid) {
+    consent.changedFromRpDid = pin.pinnedRpDid;
+  }
+  const approved = await requestConsent(consent);
   if (!approved) return { ok: false, error: "login denied by user" };
+
+  if (req.origin) {
+    await pinOrigin(req.origin, req.params.rpDid);
+  }
 
   const tokens = await loginViaSiop({
     baseUrl: req.params.baseUrl,
@@ -183,12 +210,26 @@ async function handleLoginDidcomm(
   // holder). did:key derivation is window-free, so this is safe in the SW.
   const { signing } = await loadHolder();
 
-  const approved = await requestConsent({
+  // M5: origin → controlDid pinning (analogous to the SIOP
+  // login path; the DIDComm rpDid here is the RP's controlDid).
+  const pin = req.origin
+    ? await checkOriginPin(req.origin, req.params.controlDid)
+    : { firstSeen: true, rpDidChanged: false, pinnedRpDid: undefined };
+
+  const consent: Parameters<typeof requestConsent>[0] = {
     origin: req.origin,
     rpDid: req.params.controlDid,
     holderDid: signing.did,
-  });
+  };
+  if (pin.rpDidChanged && pin.pinnedRpDid) {
+    consent.changedFromRpDid = pin.pinnedRpDid;
+  }
+  const approved = await requestConsent(consent);
   if (!approved) return { ok: false, error: "login denied by user" };
+
+  if (req.origin) {
+    await pinOrigin(req.origin, req.params.controlDid);
+  }
 
   await ensureOffscreenDocument();
   const offscreenRequest: OffscreenDidcommLoginRequest = {
@@ -325,7 +366,26 @@ async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetR
   return { ok: true, result: { status: res.status, body } };
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Defence-in-depth: only accept messages from this extension's
+  // own scripts (content scripts, offscreen document, popup,
+  // confirm pages). MV3 isolation already prevents external
+  // pages from calling `chrome.runtime.sendMessage(extensionId,
+  // ...)` without a matching `externally_connectable` manifest
+  // entry, but the explicit `sender.id` check is the belt to
+  // the manifest's braces — and it surfaces a useful warn in
+  // logs if a misconfigured external connection ever sneaks in.
+  //
+  // Closes M4 from the May 2026 security review.
+  if (sender.id !== chrome.runtime.id) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[background] rejecting message from foreign sender id=${sender.id} url=${sender.url}`,
+    );
+    sendResponse({ ok: false, error: "foreign sender rejected" });
+    return false;
+  }
+
   // Messages addressed to the offscreen document are not ours — let its
   // listener claim the channel and respond.
   if ((message as { target?: string })?.target === OFFSCREEN_TARGET) return false;

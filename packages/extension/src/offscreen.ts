@@ -50,7 +50,21 @@ import {
   type SignTrustTaskResult,
 } from "./bridge-protocol.js";
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Defence-in-depth sender check — same rationale as the
+  // background listener (M4 from the May 2026 security review).
+  // MV3 isolation enforces this at the manifest layer; this
+  // re-check surfaces a useful warn if anything ever slips
+  // past.
+  if (sender.id !== chrome.runtime.id) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[offscreen] rejecting message from foreign sender id=${sender.id} url=${sender.url}`,
+    );
+    sendResponse({ ok: false, error: "foreign sender rejected" });
+    return false;
+  }
+
   const msg = message as { target?: string; type?: string };
   if (msg?.target !== OFFSCREEN_TARGET) return false; // not for us
   if (msg.type === OFFSCREEN_DIDCOMM_LOGIN) {
