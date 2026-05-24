@@ -1,14 +1,16 @@
 /// <reference types="chrome" />
-import { StrictMode, useState } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useConnectionStore } from "./store.js";
 import {
+  RUNTIME_LOCK_WALLET,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
   type OnboardPrepareResult,
   type RuntimeOnboardConnectResponse,
   type RuntimeOnboardPrepareResponse,
 } from "./bridge-protocol.js";
+import { getSettings } from "./config.js";
 
 const box: React.CSSProperties = { padding: 12, display: "grid", gap: 8 };
 const mono: React.CSSProperties = {
@@ -23,6 +25,30 @@ const mono: React.CSSProperties = {
 function ConnectedView() {
   const connection = useConnectionStore((s) => s.connection)!;
   const clearConnection = useConnectionStore((s) => s.clearConnection);
+  const [encryptOn, setEncryptOn] = useState(false);
+  const [lockStatus, setLockStatus] = useState<string | null>(null);
+  const [lockBusy, setLockBusy] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const s = await getSettings();
+      setEncryptOn(Boolean(s.encryptHolderSecret));
+    })();
+  }, []);
+
+  async function lockWallet(): Promise<void> {
+    setLockBusy(true);
+    setLockStatus(null);
+    try {
+      const res = await chrome.runtime.sendMessage({ type: RUNTIME_LOCK_WALLET });
+      if (!res?.ok) throw new Error(res?.error ?? "lock failed");
+      setLockStatus("Locked — next operation re-prompts your authenticator.");
+    } catch (e) {
+      setLockStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setLockBusy(false);
+    }
+  }
 
   const transports = [
     connection.mediatorDid ? "DIDComm" : null,
@@ -47,6 +73,24 @@ function ConnectedView() {
       <div style={{ fontSize: 12, color: "#777" }}>
         Role: <b>{connection.role}</b> &nbsp;·&nbsp; Transports: <b>{transports || "—"}</b>
       </div>
+
+      {encryptOn && (
+        <>
+          <button onClick={() => void lockWallet()} disabled={lockBusy} style={{ marginTop: 8 }}>
+            {lockBusy ? "Locking…" : "🔒 Lock wallet"}
+          </button>
+          {lockStatus && (
+            <small style={{ color: lockStatus.startsWith("Error") ? "#c00" : "#3a7" }}>
+              {lockStatus}
+            </small>
+          )}
+          <small style={{ color: "#888" }}>
+            Clears the in-memory key so the next operation re-prompts your
+            authenticator. The wallet identity isn&apos;t forgotten — the locked
+            state survives until a successful unlock OR a browser restart.
+          </small>
+        </>
+      )}
 
       <button onClick={clearConnection} style={{ marginTop: 8 }}>
         Disconnect (forget this VTA)

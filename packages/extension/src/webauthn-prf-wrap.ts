@@ -133,6 +133,28 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
   }
 
   /**
+   * Forget the enrolled WebAuthn credential.
+   *
+   * Use when the operator disables wallet encryption — the
+   * stored credentialId would otherwise block a future
+   * re-enable (the enroll path refuses to mint a new credential
+   * when one already exists, to avoid losing the existing
+   * wrapped secret). Clears both the in-memory key cache
+   * (same as `lock`) and the persisted credentialId + PRF
+   * salt in chrome.storage.local.
+   *
+   * Does NOT call `navigator.credentials.delete` on the
+   * authenticator — that API isn't available in MV3 service
+   * workers; the orphan credential sits inertly on the
+   * authenticator until the operator removes it through their
+   * platform's authenticator settings.
+   */
+  static async unenroll(): Promise<void> {
+    cachedKey = null;
+    await chrome.storage.local.remove([CREDENTIAL_KEY, SALT_KEY]);
+  }
+
+  /**
    * Run the WebAuthn enrollment ceremony with the PRF
    * extension. Persists the credentialId so future unwraps
    * find the same authenticator. Returns `null` if the

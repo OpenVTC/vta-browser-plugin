@@ -166,6 +166,20 @@ export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
 /** offscreen → background: an inbound RP confirm request needs user consent. */
 export const RUNTIME_INBOUND_CONSENT = "vta-wallet/inbound-consent" as const;
 
+/** popup → background → offscreen: flush the WebAuthn-PRF
+ *  derived key cache. The next holder-load that needs the key
+ *  re-prompts the operator for their authenticator. */
+export const RUNTIME_LOCK_WALLET = "vta-wallet/lock-wallet" as const;
+
+export interface RuntimeLockWalletRequest {
+  type: typeof RUNTIME_LOCK_WALLET;
+}
+
+export interface RuntimeLockWalletResponse {
+  ok: boolean;
+  error?: string;
+}
+
 /** offscreen → background: prompt the user to approve an inbound RP confirm.
  *  Reply via `sendResponse` is `{ approved: boolean }`. */
 export interface RuntimeInboundConsentRequest {
@@ -321,6 +335,9 @@ export type RuntimeOnboardConnectResponse =
 export const OFFSCREEN_TARGET = "offscreen" as const;
 export const OFFSCREEN_DIDCOMM_LOGIN = "offscreen/didcomm-login" as const;
 export const OFFSCREEN_STEP_UP_VTA = "offscreen/step-up-vta" as const;
+/** background → offscreen: flush the WebAuthn-PRF derived key
+ *  cache in the offscreen JS context. Fire-and-forget. */
+export const OFFSCREEN_LOCK_WALLET = "offscreen/lock-wallet" as const;
 /** background → offscreen: open the persistent inbound mediator session that
  *  listens for RP-initiated confirm requests. Fire-and-forget. */
 export const OFFSCREEN_START_INBOUND = "offscreen/start-inbound" as const;
