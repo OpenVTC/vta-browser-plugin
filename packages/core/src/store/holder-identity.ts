@@ -4,6 +4,12 @@ import { createDidPeer2 } from "../did/index.js";
 import { Identity, type SecretJwk } from "../didcomm/index.js";
 import type { SigningIdentity } from "../siop/index.js";
 import type { KVStore } from "./kv-store.js";
+import {
+  type SecretWrap,
+  type WrappedSecret,
+  unwrapSecret,
+  wrapSecret,
+} from "./secret-wrap.js";
 
 // v3: the holder is a single **Ed25519-rooted `did:peer:2`**. v2 used a
 // `did:key`, which can sign + derive an X25519 keyAgreement key but CANNOT
@@ -25,8 +31,20 @@ interface PersistedHolder {
   signingKid: string;
   /** X25519 keyAgreement VM id (`<did>#key-1`) — for DIDComm authcrypt. */
   keyAgreementKid: string;
-  /** Ed25519 secret scalar, base64url. The root key; X25519 is derived. */
-  edSecretB64u: string;
+  /**
+   * Legacy plaintext secret slot. New records use [`wrappedSecret`]
+   * instead; this field is retained for backward compatibility
+   * with wallets minted before the H1 wrap landed and is dropped
+   * on the next save. Loader prefers `wrappedSecret` when both
+   * are present.
+   */
+  edSecretB64u?: string;
+  /**
+   * H1: encryption-wrapped Ed25519 secret. Present on records
+   * minted after the wrap landed; absent on legacy records that
+   * still carry the plaintext `edSecretB64u`.
+   */
+  wrappedSecret?: WrappedSecret;
   /** Mediator DID baked into the DID's service endpoint (if any), for
    *  reference — the DID itself is the source of truth. */
   mediatorDid?: string;
@@ -48,6 +66,26 @@ export interface HolderIdentityOptions {
    *  DIDComm. Only honoured on a FRESH mint (the persisted DID is immutable).
    *  Omit to mint a keys-only did:peer (sufficient for outbound login). */
   mediatorDid?: string;
+  /**
+   * H1: encryption wrapper for the persisted Ed25519 secret.
+   * When supplied, fresh mints write `wrappedSecret` instead of
+   * `edSecretB64u`, and existing wallets stored with a matching
+   * wrap require the wrap on load to decrypt.
+   *
+   * Omit (or supply `PassthroughWrap`) for tests and legacy
+   * callers. Production extension wrappers supply a
+   * `WebAuthnPrfSecretWrap` so an exfiltrated IndexedDB row is
+   * useless without the operator's authenticator.
+   *
+   * Backward compatibility: a record written before this option
+   * landed (no `wrappedSecret`, plaintext `edSecretB64u`) loads
+   * regardless of whether a wrap is supplied — the loader
+   * detects the legacy shape and reads the plaintext. The
+   * **next save** (e.g. mediator-DID rotation, future schema
+   * upgrade) will re-persist using the wrap, migrating the
+   * record forward.
+   */
+  secretWrap?: SecretWrap;
 }
 
 /**
@@ -56,8 +94,11 @@ export interface HolderIdentityOptions {
  * persisted alongside it (the DID is immutable once minted), and the X25519
  * keyAgreement key is re-derived on every load.
  *
- * Persistence is plaintext at the store layer. Production wrappers should
- * encrypt via a WebAuthn PRF-derived key or similar before writing.
+ * Persistence is wrapped via the optional [`HolderIdentityOptions.secretWrap`]
+ * — production extensions supply a `WebAuthnPrfSecretWrap` so storage
+ * exfil yields ciphertext, not the wallet's signing key. Callers that
+ * omit the wrap fall back to plaintext (legacy behaviour); the
+ * loader handles both shapes for backward compatibility.
  */
 export async function generateOrLoadHolderIdentity(
   store: KVStore,
@@ -65,7 +106,19 @@ export async function generateOrLoadHolderIdentity(
 ): Promise<HolderIdentityResult> {
   const persisted = await store.get<PersistedHolder>(STORE_KEY);
   if (persisted) {
-    const edSecret = base64url.decode(persisted.edSecretB64u);
+    let edSecret: Uint8Array;
+    if (persisted.wrappedSecret) {
+      // New shape: read through the wrap. A wrap-algorithm
+      // mismatch (record wrapped with X, caller supplied Y)
+      // throws — the loader can't silently fall back without
+      // risking a secret leak.
+      edSecret = await unwrapSecret(persisted.wrappedSecret, opts?.secretWrap);
+    } else if (persisted.edSecretB64u) {
+      // Legacy shape: plaintext base64url. Pre-H1 wallets.
+      edSecret = base64url.decode(persisted.edSecretB64u);
+    } else {
+      throw new Error("persisted holder record missing both wrappedSecret and edSecretB64u");
+    }
     return {
       ...buildHolder(edSecret, persisted.did, persisted.signingKid, persisted.keyAgreementKid),
       freshlyMinted: false,
@@ -82,11 +135,12 @@ export async function generateOrLoadHolderIdentity(
     ...(opts?.mediatorDid ? { service: { serviceEndpoint: opts.mediatorDid } } : {}),
   });
 
+  const wrapped = await wrapSecret(edSecret, opts?.secretWrap);
   const record: PersistedHolder = {
     did: peer.did,
     signingKid: peer.authKid,
     keyAgreementKid: peer.keyAgreementKid,
-    edSecretB64u: base64url.encode(edSecret),
+    wrappedSecret: wrapped,
     ...(opts?.mediatorDid ? { mediatorDid: opts.mediatorDid } : {}),
   };
   await store.put(STORE_KEY, record);
