@@ -9,7 +9,11 @@ import {
 } from "./mediation.js";
 import { MediatorClient } from "./mediator-client.js";
 import { PickupProtocol, type LiveDeliveryChangeBody } from "./pickup.js";
-import { PasskeyManagementProtocol } from "./protocol.js";
+import {
+  PasskeyVmTask,
+  TRUST_TASK_ENVELOPE_TYPE,
+  TRUST_TASK_ERROR_TYPE,
+} from "./protocol.js";
 import type { DidcommMessageBridge } from "./transport.js";
 import type { EnrollmentChallengeResponse } from "./types.js";
 import { WalletSession } from "./wallet-session.js";
@@ -72,7 +76,7 @@ export async function smokeBuildDidcommEnrollChallenge(): Promise<SmokeDidcommEn
       },
     });
 
-    const built = await transport.buildOutbound(PasskeyManagementProtocol.enrollChallenge, {
+    const built = await transport.buildOutbound(PasskeyVmTask.enrollChallenge, {
       did: holder.did,
     });
 
@@ -135,20 +139,38 @@ export async function smokeDidcommVtaTransportRoundtrip(): Promise<SmokeDidcommR
       mediator,
       holderPublicJwk: holderPub,
       vtaHandlers: {
-        [PasskeyManagementProtocol.enrollChallenge]: (req) => {
-          const body = req.body as { did?: string };
-          const reply: EnrollmentChallengeResponse = {
-            challenge: FAKE_CHALLENGE,
-            rpId: FAKE_RP_ID,
-            rpName: "Test Wallet",
-            userHandle: "dXNlci0wMDE",
-            userName: body.did ?? "anon",
-            userDisplayName: "Test User",
-            timeoutMs: 60_000,
-          };
+        // The fake VTA receives one binding-envelope type; it switches on
+        // the inner TrustTask's own `type` and replies with a trust-task
+        // result envelope (matching the real VTA's DIDComm binding).
+        [TRUST_TASK_ENVELOPE_TYPE]: (req) => {
+          const tt = req.body as { type?: string; payload?: { did?: string } };
+          if (tt.type === PasskeyVmTask.enrollChallenge) {
+            const result: EnrollmentChallengeResponse = {
+              ceremonyId: "ceremony-001",
+              challenge: FAKE_CHALLENGE,
+              rpId: FAKE_RP_ID,
+              rpName: "Test Wallet",
+              userHandle: "dXNlci0wMDE",
+              userName: tt.payload?.did ?? "anon",
+              userDisplayName: "Test User",
+              timeoutMs: 60_000,
+            };
+            return {
+              type: TRUST_TASK_ENVELOPE_TYPE,
+              body: {
+                id: "resp-enroll-challenge",
+                type: PasskeyVmTask.enrollChallenge,
+                payload: result,
+              },
+            };
+          }
           return {
-            type: PasskeyManagementProtocol.enrollChallengeResponse,
-            body: reply,
+            type: TRUST_TASK_ENVELOPE_TYPE,
+            body: {
+              id: "resp-error",
+              type: TRUST_TASK_ERROR_TYPE,
+              payload: { code: "unsupported_type", message: tt.type ?? "" },
+            },
           };
         },
       },
@@ -445,16 +467,21 @@ export async function smokeWalletBoot(): Promise<SmokeWalletBootResult> {
         mediator: mediatorIdentity!,
         holderPublicJwk: holderPub,
         vtaHandlers: {
-          [PasskeyManagementProtocol.enrollChallenge]: () => ({
-            type: PasskeyManagementProtocol.enrollChallengeResponse,
+          [TRUST_TASK_ENVELOPE_TYPE]: () => ({
+            type: TRUST_TASK_ENVELOPE_TYPE,
             body: {
-              challenge: "Y2hhbGwtd2FsbGV0LWJvb3Q",
-              rpId: "wallet.example.com",
-              rpName: "Wallet Boot Smoke",
-              userHandle: "dXNlcg",
-              userName: "alice",
-              userDisplayName: "Alice",
-              timeoutMs: 60_000,
+              id: "resp-wallet-boot",
+              type: PasskeyVmTask.enrollChallenge,
+              payload: {
+                ceremonyId: "ceremony-wallet-boot",
+                challenge: "Y2hhbGwtd2FsbGV0LWJvb3Q",
+                rpId: "wallet.example.com",
+                rpName: "Wallet Boot Smoke",
+                userHandle: "dXNlcg",
+                userName: "alice",
+                userDisplayName: "Alice",
+                timeoutMs: 60_000,
+              },
             },
           }),
         },

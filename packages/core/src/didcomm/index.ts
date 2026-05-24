@@ -22,6 +22,7 @@ import {
   buildForward as vtiBuildForward,
   resolveX25519KeyAgreement as vtiResolveKeyAgreement,
   resolveMediator as vtiResolveMediator,
+  resolve as vtiResolve,
   authenticateToMediator as vtiAuthenticateToMediator,
   MediatorSession as VtiMediatorSession,
   x25519,
@@ -407,6 +408,57 @@ export async function resolveMediatorEndpoint(
   };
 }
 
+/** The transports a VTA advertises in its DID document. A VTA may enable
+ *  REST, DIDComm, or both (runtime service management) — onboarding resolves
+ *  the DID once and uses whichever is present. */
+export interface VtaServices {
+  /** REST base URL from the `#vta-rest` service (`type: "VTARest"`). */
+  rest?: { baseUrl: string };
+  /** Mediator DID from the `#vta-didcomm` service (`type: "DIDCommMessaging"`). */
+  didcomm?: { mediatorDid: string };
+}
+
+/**
+ * Resolve a VTA/RP DID to its advertised transports — so a caller supplies a
+ * single DID and the wallet derives the REST endpoint and/or DIDComm mediator
+ * itself, rather than asking the operator for URLs. Returns whichever of
+ * `#vta-rest` / `#vta-didcomm` the document carries (possibly both, possibly
+ * one).
+ */
+export async function resolveVtaServices(did: string): Promise<VtaServices> {
+  const resolution = (await vtiResolve(did, {})) as {
+    didDocument?: { service?: Array<{ id?: string; type?: string; serviceEndpoint?: unknown }> };
+  };
+  const services = resolution.didDocument?.service ?? [];
+  const out: VtaServices = {};
+
+  for (const svc of services) {
+    const fragment = (svc.id ?? "").split("#")[1];
+
+    if (fragment === "vta-rest" || svc.type === "VTARest") {
+      // `#vta-rest` serviceEndpoint is a plain URL string.
+      if (typeof svc.serviceEndpoint === "string") {
+        out.rest = { baseUrl: svc.serviceEndpoint };
+      }
+    }
+
+    if (fragment === "vta-didcomm" || svc.type === "DIDCommMessaging") {
+      // `#vta-didcomm` serviceEndpoint is `[{ uri: <mediator-did>, ... }]`;
+      // tolerate the object and bare-string encodings too.
+      const ep = svc.serviceEndpoint;
+      let mediatorDid: string | undefined;
+      if (Array.isArray(ep)) mediatorDid = (ep[0] as { uri?: string } | undefined)?.uri;
+      else if (ep && typeof ep === "object") mediatorDid = (ep as { uri?: string }).uri;
+      else if (typeof ep === "string") mediatorDid = ep;
+      // Prefer the VTA-specific fragment over a generic DIDCommMessaging entry.
+      if (mediatorDid && (fragment === "vta-didcomm" || !out.didcomm)) {
+        out.didcomm = { mediatorDid };
+      }
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Authenticated mediator session. The library's MediatorSession owns the
 // whole inbound path: challenge → JWT → bearer-subprotocol WebSocket →
@@ -453,6 +505,13 @@ export interface MediatorConnection {
   send(jwe: string): void;
   waitFor(thid: string, timeoutMs: number): Promise<Record<string, unknown>>;
   close(): void;
+  /** True while the underlying WebSocket is open (live delivery active). A
+   *  warm-session holder checks this before reusing a cached connection. */
+  readonly isOpen: boolean;
+  /** Register a handler for unsolicited inbound messages (those no `waitFor`
+   *  claims) — e.g. an RP-initiated `confirm` request. The handler should
+   *  filter by message `type`. Replaces any previously-registered handler. */
+  onInbound(handler: (message: Record<string, unknown>, thid: string) => void): void;
   /** Resolved VTA key-agreement endpoint (inner authcrypt target). */
   vta: ResolvedKeyAgreement;
   /** Resolved mediator key-agreement endpoint (forward-envelope target). */
@@ -472,6 +531,9 @@ export interface ConnectMediatorSessionOptions {
   webSocketImpl?: WebSocketCtor;
   /** Allow ws://, http:// endpoints. Local dev only. */
   allowInsecure?: boolean;
+  /** Called once if the socket drops unexpectedly (not via `close()`).
+   *  A warm-session holder uses this to evict + reconnect. */
+  onClose?: () => void;
 }
 
 /**
@@ -525,15 +587,25 @@ export async function connectMediatorSession(
       const r = await vtiResolveKeyAgreement(did);
       return { publicJwk: x25519PublicJwk(r.x25519Pub) };
     },
+    ...(opts.onClose ? { onClose: opts.onClose } : {}),
     ...(opts.webSocketImpl ? { WebSocketImpl: opts.webSocketImpl } : {}),
   });
   await session.connect();
 
+  const liveSession = session as unknown as { isOpen: boolean };
   return {
     send: (jwe: string) => session.send(jwe),
     waitFor: (thid: string, timeoutMs: number) =>
       session.waitFor(thid, timeoutMs) as Promise<Record<string, unknown>>,
     close: () => session.close(),
+    get isOpen() {
+      return liveSession.isOpen;
+    },
+    // The session reads `onMessage` dynamically on each inbound frame, so a
+    // post-connect assignment takes effect immediately.
+    onInbound: (handler) => {
+      (session as unknown as { onMessage: typeof handler }).onMessage = handler;
+    },
     vta,
     mediator: {
       did: auth.mediator.did,

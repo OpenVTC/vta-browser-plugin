@@ -1,0 +1,359 @@
+<!doctype html>
+<!--
+  VTA Auth Lab — a show-and-tell demo of the wallet's authentication paths.
+
+  Serve over a real origin (NOT file://) so the extension's content script
+  injects window.vtaWallet:
+
+    cd packages/extension/demo && python3 -m http.server 8787
+    open http://localhost:8787/
+
+  Requires the unpacked extension loaded (chrome://extensions). Each panel
+  drives window.vtaWallet, narrates the phases, and decodes the returned
+  session JWT — watch the acr/amr (assurance) fields. Step-up panels are
+  added as that capability lands.
+
+  NOTE: the extension mints its OWN holder did:key (shown after first login /
+  in the consent popup). That DID must be ACL-granted on the did-hosting
+  service: `did-hosting-control add-acl --did <holder> --role admin`.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VTA Auth Lab</title>
+    <style>
+      :root { --bg:#0f1216; --card:#181d24; --line:#2a323d; --fg:#e6edf3; --muted:#8b98a8; --accent:#4ea1ff; --aal1:#e0a23c; --aal2:#3ecf8e; --err:#ff6b6b; }
+      * { box-sizing: border-box; }
+      body { margin:0; background:var(--bg); color:var(--fg); font-family:ui-sans-serif,system-ui,sans-serif; line-height:1.5; }
+      header { padding:20px 24px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; }
+      header h1 { margin:0; font-size:20px; }
+      .status { font-size:13px; color:var(--muted); }
+      .status b.ok { color:var(--aal2); } .status b.no { color:var(--err); }
+      main { display:grid; grid-template-columns:repeat(auto-fit,minmax(380px,1fr)); gap:20px; padding:24px; max-width:1100px; margin:0 auto; }
+      .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; }
+      .panel h2 { margin:0 0 4px; font-size:16px; }
+      .panel .sub { color:var(--muted); font-size:12px; margin-bottom:14px; }
+      label { display:block; font-size:11px; color:var(--muted); margin:10px 0 3px; text-transform:uppercase; letter-spacing:.04em; }
+      input { width:100%; padding:7px 9px; background:#0c0f13; color:var(--fg); border:1px solid var(--line); border-radius:6px; font-family:ui-monospace,monospace; font-size:11px; }
+      button { margin-top:14px; padding:9px 16px; font-size:14px; background:var(--accent); color:#04111f; border:0; border-radius:7px; cursor:pointer; font-weight:600; }
+      button:disabled { opacity:.5; cursor:default; }
+      ol.log { margin:14px 0 0; padding-left:20px; font-size:12.5px; font-family:ui-monospace,monospace; color:var(--muted); min-height:20px; }
+      ol.log li { margin:2px 0; }
+      ol.log li.ok::marker { color:var(--aal2); } ol.log li.err { color:var(--err); }
+      .jwt { margin-top:14px; border-top:1px solid var(--line); padding-top:12px; display:none; }
+      .jwt.show { display:block; }
+      .jwt table { width:100%; border-collapse:collapse; font-size:12px; font-family:ui-monospace,monospace; }
+      .jwt td { padding:3px 4px; vertical-align:top; word-break:break-all; }
+      .jwt td.k { color:var(--muted); width:90px; }
+      .badge { display:inline-block; padding:1px 8px; border-radius:10px; font-weight:700; font-size:11px; }
+      .badge.aal1 { background:rgba(224,162,60,.18); color:var(--aal1); }
+      .badge.aal2 { background:rgba(62,207,142,.18); color:var(--aal2); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>VTA Auth Lab</h1>
+      <span class="status">wallet provider: <b id="provider">checking…</b></span>
+      <span class="status">holder: <b id="holder">—</b></span>
+      <span class="status">mediator: <b id="mediator-status">—</b></span>
+    </header>
+
+    <main>
+      <!-- ── REST SIOPv2 ── -->
+      <section class="panel">
+        <h2>REST · SIOPv2</h2>
+        <div class="sub">Wallet self-issues an <code>id_token</code> (EdDSA JWS) signed by its did:key; the RP verifies it over HTTPS.</div>
+        <label>RP DID (id_token aud)</label>
+        <input id="rest-rpDid" value="did:webvh:QmUcydmZKWsAUcuAGzyQRjXnSvnMdSRF1YM7gyhugYGS9s:webvh.storm.ws" />
+        <label>Auth API base URL</label>
+        <input id="rest-baseUrl" value="https://admin.webvh.storm.ws/api" />
+        <button id="rest-go">Login (REST SIOPv2)</button>
+        <ol class="log" id="rest-log"></ol>
+        <div class="jwt" id="rest-jwt"></div>
+      </section>
+
+      <!-- ── DIDComm ── -->
+      <section class="panel">
+        <h2>DIDComm · authcrypt-sender</h2>
+        <div class="sub">No id_token — authcrypt (ECDH-1PU) authenticates the sender DID; the RP ACL-checks the sender and returns the JWT, all via its mediator.</div>
+        <label>RP control DID</label>
+        <input id="dc-controlDid" value="did:webvh:QmUcydmZKWsAUcuAGzyQRjXnSvnMdSRF1YM7gyhugYGS9s:webvh.storm.ws" />
+        <label>RP mediator DID</label>
+        <input id="dc-mediatorDid" value="did:webvh:QmTS3a3H9Dk4ZMPAZ8jNWGeyPbuKrPbrPZcSbg8CJ6yynD:webvh.storm.ws:mediator" />
+        <button id="dc-go">Login (DIDComm)</button>
+        <ol class="log" id="dc-log"></ol>
+        <div class="jwt" id="dc-jwt"></div>
+      </section>
+
+      <!-- ── Step-up · VTA approval ── -->
+      <section class="panel">
+        <h2>Step-up · VTA approval</h2>
+        <div class="sub">Elevates the current <code>aal1</code> session to <code>aal2</code>: the RP issues a nonce, your VTA signs an approval over DIDComm, the RP swaps it for a higher-assurance token. Needs a base login first.</div>
+        <label>VTA DID <span style="text-transform:none">— paste your VTA DID + mediator DID</span></label>
+        <input id="su-vtaDid" value="" placeholder="did:webvh:…  (paste your VTA DID)" />
+        <label>VTA mediator DID</label>
+        <input id="su-mediatorDid" value="" placeholder="did:webvh:…  (paste your VTA mediator DID)" />
+        <button id="su-go" disabled>Step up via VTA</button>
+        <button id="su-check" disabled>Call sensitive op</button>
+        <ol class="log" id="su-log"></ol>
+        <div class="jwt" id="su-jwt"></div>
+      </section>
+
+      <!-- ── RP → wallet · inbound confirm ── -->
+      <section class="panel">
+        <h2>RP → wallet · confirm</h2>
+        <div class="sub">The inverse direction: the RP sends a <code>confirm/1.0</code> over DIDComm to your wallet's did:peer; the wallet pops a consent prompt and signs the decision back. Needs an admin base login + a service-bearing holder did:peer.</div>
+        <label>Action to confirm</label>
+        <input id="cf-action" value="Approve a high-value transfer" />
+        <button id="cf-go" disabled>Request confirmation (RP → wallet)</button>
+        <ol class="log" id="cf-log"></ol>
+      </section>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      // Stashed base (aal1) session — set by whichever login panel succeeds;
+      // the step-up panel elevates it.
+      let baseSession = null; // { accessToken, rpDid, baseUrl, holderDid }
+
+      // Provider presence
+      const checkProvider = () => {
+        const ok = !!window.vtaWallet;
+        const el = $("provider");
+        el.textContent = ok ? "available ✓" : "NOT injected ✗";
+        el.className = ok ? "ok" : "no";
+      };
+      setTimeout(checkProvider, 200);
+
+      // Live warm-session status. The wallet keeps one authenticated mediator
+      // session warm and reuses it for every DIDComm op — once it's "live",
+      // a DIDComm login is just a round-trip (no reconnect), so it should be
+      // on par with REST. Poll so the header reflects the current state.
+      function shortDid(did) {
+        // did:webvh:<hash>:host[:path] → host[:path] for readability.
+        const parts = String(did).split(":");
+        return parts.length > 3 ? parts.slice(3).join(":") : did;
+      }
+      async function pollMediatorStatus() {
+        const el = $("mediator-status");
+        if (!window.vtaWallet || !window.vtaWallet.mediatorStatus) {
+          el.textContent = "—";
+          el.className = "";
+          return;
+        }
+        try {
+          const { mediators } = await window.vtaWallet.mediatorStatus();
+          if (!mediators || mediators.length === 0) {
+            el.textContent = "idle (no session yet)";
+            el.className = "";
+            return;
+          }
+          const live = mediators.filter((m) => m.state === "live").length;
+          el.textContent = mediators
+            .map((m) => `${shortDid(m.mediatorDid)} ${m.state}`)
+            .join(" · ");
+          el.className = live > 0 ? "ok" : "no";
+        } catch {
+          el.textContent = "unavailable";
+          el.className = "no";
+        }
+      }
+      setInterval(pollMediatorStatus, 1500);
+      setTimeout(pollMediatorStatus, 400);
+
+      // Prefill the step-up VTA from the wallet's operator-configured defaults
+      // (set in the extension's options page), if the fields are still empty.
+      async function prefillDefaults() {
+        if (!window.vtaWallet || !window.vtaWallet.walletDefaults) return;
+        try {
+          const d = await window.vtaWallet.walletDefaults();
+          if (d.stepUpVtaDid && !$("su-vtaDid").value) $("su-vtaDid").value = d.stepUpVtaDid;
+          if (d.stepUpVtaMediatorDid && !$("su-mediatorDid").value)
+            $("su-mediatorDid").value = d.stepUpVtaMediatorDid;
+        } catch {
+          /* no defaults configured — leave the inputs as-is */
+        }
+      }
+      setTimeout(prefillDefaults, 500);
+
+      function log(panel, msg, cls) {
+        const li = document.createElement("li");
+        li.textContent = msg;
+        if (cls) li.className = cls;
+        $(panel + "-log").appendChild(li);
+      }
+      function resetLog(panel) {
+        $(panel + "-log").innerHTML = "";
+        $(panel + "-jwt").classList.remove("show");
+        $(panel + "-jwt").innerHTML = "";
+      }
+
+      // Decode a compact JWS payload (no verification — display only).
+      function decodeJwt(token) {
+        const p = token.split(".")[1];
+        return JSON.parse(atob(p.replace(/-/g, "+").replace(/_/g, "/")));
+      }
+
+      function renderJwt(panel, token, holderDid) {
+        $("holder").textContent = holderDid;
+        const c = decodeJwt(token);
+        const acr = c.acr ?? "aal1";
+        const amr = Array.isArray(c.amr) ? c.amr.join(", ") : "did";
+        const badge = `<span class="badge ${acr === "aal2" ? "aal2" : "aal1"}">${acr}</span>`;
+        const rows = [
+          ["sub", c.sub],
+          ["role", c.role],
+          ["acr", badge],
+          ["amr", `[${amr}]`],
+          ["session_id", c.session_id],
+          ["exp", new Date((c.exp ?? 0) * 1000).toISOString()],
+        ];
+        const el = $(panel + "-jwt");
+        el.innerHTML =
+          "<table>" +
+          rows.map(([k, v]) => `<tr><td class="k">${k}</td><td>${v ?? "—"}</td></tr>`).join("") +
+          "</table>";
+        el.classList.add("show");
+      }
+
+      async function run(panel, btn, fn, steps, onSuccess) {
+        if (!window.vtaWallet) { resetLog(panel); log(panel, "window.vtaWallet not available — load the extension", "err"); return; }
+        $(btn).disabled = true;
+        resetLog(panel);
+        try {
+          steps.forEach((s) => log(panel, s));
+          log(panel, "(approve the consent popup…)");
+          const t0 = performance.now();
+          const r = await fn();
+          const totalMs = Math.round(performance.now() - t0);
+          log(panel, "session token received ✓", "ok");
+          renderJwt(panel, r.accessToken, r.holderDid);
+          // Per-phase timings (from the wallet) + page-measured total.
+          if (Array.isArray(r.timings) && r.timings.length) {
+            let work = 0;
+            log(panel, "── timings ──");
+            for (const m of r.timings) { work += m.ms; log(panel, `   ${m.label}: ${m.ms} ms`); }
+            log(panel, `   auth work: ${work} ms`, "ok");
+            log(panel, `   total (button→token, incl. consent): ${totalMs} ms`, "ok");
+          } else {
+            log(panel, `total (button→token): ${totalMs} ms`, "ok");
+          }
+          if (onSuccess) onSuccess(r);
+        } catch (e) {
+          log(panel, "FAILED: " + (e?.message ?? e), "err");
+        } finally {
+          $(btn).disabled = false;
+        }
+      }
+
+      // Stash a successful base login so the step-up panel can elevate it.
+      function stashBase(rpDid, baseUrl) {
+        return (r) => {
+          baseSession = { accessToken: r.accessToken, rpDid, baseUrl, holderDid: r.holderDid };
+          $("su-go").disabled = false;
+          $("su-check").disabled = false;
+          $("cf-go").disabled = false;
+        };
+      }
+
+      $("rest-go").addEventListener("click", () => {
+        const rpDid = $("rest-rpDid").value.trim();
+        const baseUrl = $("rest-baseUrl").value.trim();
+        return run("rest", "rest-go",
+          () => window.vtaWallet.login({ rpDid, baseUrl }),
+          ["wallet.login({ rpDid, baseUrl })", "POST /auth/challenge → id_token signed (did:key)"],
+          stashBase(rpDid, baseUrl),
+        );
+      });
+
+      $("dc-go").addEventListener("click", () => {
+        // DIDComm RP base URL is the same admin API host as REST (the RP DID is
+        // the control DID). Reuse the REST base URL for step-up against this RP.
+        const rpDid = $("dc-controlDid").value.trim();
+        const baseUrl = $("rest-baseUrl").value.trim();
+        return run("dc", "dc-go",
+          () => window.vtaWallet.loginDidcomm({
+            controlDid: rpDid,
+            mediatorDid: $("dc-mediatorDid").value.trim(),
+          }),
+          ["wallet.loginDidcomm({ controlDid, mediatorDid })", "authcrypt MSG_AUTHENTICATE → mediator → RP"],
+          stashBase(rpDid, baseUrl),
+        );
+      });
+
+      // ── Step-up · VTA approval ──
+      $("su-go").addEventListener("click", () => {
+        if (!baseSession) { resetLog("su"); log("su", "no base session — log in via REST or DIDComm first", "err"); return; }
+        const { rpDid, baseUrl, accessToken } = baseSession;
+        const vtaDid = $("su-vtaDid").value.trim();
+        const vtaMediatorDid = $("su-mediatorDid").value.trim();
+        if (!vtaDid || !vtaMediatorDid) { resetLog("su"); log("su", "paste your VTA DID + mediator DID first", "err"); return; }
+        return run("su", "su-go",
+          () => window.vtaWallet.stepUpVta({ baseUrl, rpDid, accessToken, vtaDid, vtaMediatorDid }),
+          [
+            "wallet.stepUpVta({ baseUrl, rpDid, accessToken, vtaDid, vtaMediatorDid })",
+            "POST /auth/step-up/vta/start → nonce",
+            "DIDComm approve-request → VTA → approval_token",
+            "POST /auth/step-up/vta/finish → elevated session (aal2)",
+          ],
+          (r) => {
+            // Replace the stashed base session with the elevated one so the
+            // sensitive-op check uses the aal2 token.
+            baseSession = { ...baseSession, accessToken: r.accessToken };
+          },
+        );
+      });
+
+      // ── Call a sensitive op (gated on aal2) ──
+      $("su-check").addEventListener("click", async () => {
+        resetLog("su");
+        if (!baseSession) { log("su", "no base session — log in first", "err"); return; }
+        const { baseUrl, accessToken } = baseSession;
+        log("su", "wallet.apiGet GET /auth/step-up/check (Bearer current token)");
+        try {
+          // Routed through the wallet (host permission) so it isn't CORS-blocked.
+          const { status, body } = await window.vtaWallet.apiGet({
+            baseUrl, path: "/auth/step-up/check", accessToken,
+          });
+          if (status === 403) {
+            log("su", "403 step_up_required — token is only aal1 (" + JSON.stringify(body) + ")", "err");
+          } else if (status >= 200 && status < 300) {
+            log("su", status + " OK — " + JSON.stringify(body), "ok");
+          } else {
+            log("su", status + " — " + JSON.stringify(body), "err");
+          }
+        } catch (e) {
+          log("su", "FAILED: " + (e?.message ?? e), "err");
+        }
+      });
+
+      // ── RP → wallet · inbound confirm ──
+      $("cf-go").addEventListener("click", async () => {
+        $("cf-log").innerHTML = "";
+        if (!baseSession) { log("cf", "log in first (admin)", "err"); return; }
+        const { baseUrl, accessToken, holderDid } = baseSession;
+        const action = $("cf-action").value.trim();
+        log("cf", "wallet.apiPost /confirm/request { holder_did, action }");
+        log("cf", "RP → confirm/1.0 → your wallet — approve the consent popup…");
+        try {
+          // POST through the wallet (host permission) so it isn't CORS-blocked.
+          const { status, body } = await window.vtaWallet.apiPost({
+            baseUrl, path: "/confirm/request", accessToken,
+            body: { holder_did: holderDid, action },
+          });
+          if (status >= 200 && status < 300) {
+            const approved = body && body.approved;
+            log("cf", "RP result: " + JSON.stringify(body), approved ? "ok" : "err");
+            log("cf", approved ? "confirmed ✓ — the wallet signed an approval back" : "denied", approved ? "ok" : "err");
+          } else {
+            log("cf", status + " — " + JSON.stringify(body), "err");
+          }
+        } catch (e) {
+          log("cf", "FAILED: " + (e?.message ?? e), "err");
+        }
+      });
+    </script>
+  </body>
+</html>

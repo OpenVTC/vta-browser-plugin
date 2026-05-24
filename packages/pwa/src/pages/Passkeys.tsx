@@ -47,7 +47,12 @@ export function Passkeys() {
         ...(challenge.timeoutMs !== undefined ? { timeout: challenge.timeoutMs } : {}),
       });
       return client.submitPasskeyEnrollment(
-        enrollmentSubmitFromResult(did, result, passkeyLabel || undefined),
+        enrollmentSubmitFromResult(
+          did,
+          result,
+          challenge.ceremonyId,
+          passkeyLabel || undefined,
+        ),
       );
     },
     onSuccess: () => {

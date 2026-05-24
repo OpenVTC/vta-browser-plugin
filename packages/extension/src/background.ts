@@ -1,12 +1,501 @@
 /// <reference types="chrome" />
 
-// Reserved for future RP interception: SIOPv2 / OpenID4VP handlers,
-// passkey-assertion → DID-authentication translation, etc. The
-// service worker has no responsibilities in the first milestone —
-// enrollment runs entirely in the popup.
+// Service worker. Owns the wallet's holder identity, runs the REST SIOPv2
+// login, and gates every login behind a user-consent prompt. The DIDComm
+// login is delegated to an offscreen document (see `offscreen.ts`) because
+// it needs dynamic `import()` + a DOM, which a service worker lacks.
+//
+// REST flow: content → RUNTIME_LOGIN → consent → loginViaSiop → tokens.
+// DIDComm flow: content → RUNTIME_LOGIN_DIDCOMM → consent → offscreen doc.
+
+import { loginViaSiop } from "@pnm/core";
+import { loadHolder } from "./holder.js";
+import { checkOriginPin, pinOrigin } from "./origin-pin.js";
+import { subscribeToPush } from "./push.js";
+import {
+  OFFSCREEN_DIDCOMM_LOGIN,
+  OFFSCREEN_GET_STATUS,
+  OFFSCREEN_ONBOARD_CONNECT,
+  OFFSCREEN_ONBOARD_PREPARE,
+  OFFSCREEN_SIGN_TRUST_TASK,
+  OFFSCREEN_START_INBOUND,
+  OFFSCREEN_STEP_UP_VTA,
+  OFFSCREEN_TARGET,
+  RUNTIME_API_GET,
+  RUNTIME_API_POST,
+  RUNTIME_CONSENT_RESULT,
+  RUNTIME_INBOUND_CONSENT,
+  RUNTIME_LOGIN,
+  RUNTIME_LOGIN_DIDCOMM,
+  RUNTIME_MEDIATOR_STATUS,
+  RUNTIME_ONBOARD_CONNECT,
+  RUNTIME_ONBOARD_PREPARE,
+  RUNTIME_SIGN_TRUST_TASK,
+  RUNTIME_STEP_UP_VTA,
+  RUNTIME_WALLET_DEFAULTS,
+  type MediatorStatusResult,
+  type OffscreenDidcommLoginRequest,
+  type OffscreenStepUpVtaRequest,
+  type RuntimeApiGetRequest,
+  type RuntimeApiGetResponse,
+  type RuntimeApiPostRequest,
+  type RuntimeConsentResult,
+  type RuntimeInboundConsentRequest,
+  type RuntimeLoginDidcommRequest,
+  type RuntimeLoginRequest,
+  type RuntimeLoginResponse,
+  type RuntimeMediatorStatusResponse,
+  type RuntimeOnboardConnectResponse,
+  type RuntimeOnboardPrepareRequest,
+  type RuntimeOnboardPrepareResponse,
+  type RuntimeSignTrustTaskRequest,
+  type RuntimeSignTrustTaskResponse,
+  type RuntimeStepUpVtaRequest,
+  type RuntimeWalletDefaultsResponse,
+} from "./bridge-protocol.js";
+import { getSettings } from "./config.js";
 
 chrome.runtime.onInstalled.addListener(() => {
   console.info("[pnm] extension installed");
+  void subscribeToPush();
+});
+
+// Web Push probe (Slice 2 de-risk). Registered at top level so it's active
+// when an inbound push wakes the worker. For now it just logs + notifies;
+// the real handler will wake → mediator pickup → consent → respond.
+self.addEventListener("push", (event) => {
+  const pushEvent = event as PushEvent;
+  let body = "";
+  try {
+    body = pushEvent.data ? pushEvent.data.text() : "";
+  } catch {
+    body = "(unreadable payload)";
+  }
+  console.info("[pnm push] push received:", body);
+  const reg = (self as unknown as { registration: ServiceWorkerRegistration }).registration;
+  pushEvent.waitUntil(reg.showNotification("VTA Wallet", { body: body || "Push received" }));
+});
+
+// Ensure a subscription exists whenever the worker spins up (not only on
+// install — MV3 workers are ephemeral).
+void subscribeToPush();
+
+// Bring up the offscreen doc + its persistent inbound mediator session so the
+// wallet can receive RP-initiated confirm requests. Idempotent (both
+// ensureOffscreenDocument and the offscreen's startInbound no-op if already
+// running), so it's safe to call on every worker spin-up.
+async function startInboundListener(): Promise<void> {
+  await ensureOffscreenDocument();
+  await chrome.runtime.sendMessage({ target: OFFSCREEN_TARGET, type: OFFSCREEN_START_INBOUND });
+}
+void startInboundListener();
+
+// ─── Offscreen document lifecycle ───
+// One offscreen document per extension; create it lazily on first DIDComm
+// login and reuse it thereafter.
+let creatingOffscreen: Promise<void> | null = null;
+async function ensureOffscreenDocument(): Promise<void> {
+  if (await chrome.offscreen.hasDocument()) return;
+  if (!creatingOffscreen) {
+    creatingOffscreen = chrome.offscreen
+      .createDocument({
+        url: "offscreen.html",
+        reasons: [chrome.offscreen.Reason.WORKERS],
+        justification:
+          "Run the DIDComm mediator session (WebSocket + did:webvh resolution) for wallet login.",
+      })
+      .finally(() => {
+        creatingOffscreen = null;
+      });
+  }
+  await creatingOffscreen;
+}
+
+// ─── Consent coordination ───
+// A login request opens a consent popup and parks here until the popup
+// reports the user's decision (or is closed, which counts as a denial).
+const pendingConsents = new Map<string, (approved: boolean) => void>();
+
+function requestConsent(args: {
+  origin?: string;
+  rpDid: string;
+  holderDid?: string;
+  /** When set, the prompt frames an RP-initiated action to confirm (inbound)
+   *  rather than a login. */
+  action?: string;
+  /**
+   * M5: when set, the previously-pinned rpDid for this origin
+   * — the consent prompt shows a louder warning because the
+   * site is now asking for a *different* RP identity. The
+   * operator has to explicitly approve the swap.
+   */
+  changedFromRpDid?: string;
+}): Promise<boolean> {
+  const consentId = crypto.randomUUID();
+  const url =
+    chrome.runtime.getURL("confirm.html") +
+    `?cid=${consentId}` +
+    `&rpDid=${encodeURIComponent(args.rpDid)}` +
+    (args.origin ? `&origin=${encodeURIComponent(args.origin)}` : "") +
+    (args.holderDid ? `&holder=${encodeURIComponent(args.holderDid)}` : "") +
+    (args.action ? `&action=${encodeURIComponent(args.action)}` : "") +
+    (args.changedFromRpDid
+      ? `&changedFrom=${encodeURIComponent(args.changedFromRpDid)}`
+      : "");
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const settle = (approved: boolean) => {
+      if (settled) return;
+      settled = true;
+      pendingConsents.delete(consentId);
+      resolve(approved);
+    };
+    pendingConsents.set(consentId, settle);
+
+    chrome.windows.create({ url, type: "popup", width: 400, height: 360 }, (win) => {
+      const winId = win?.id;
+      if (winId === undefined) return;
+      // Closing the window without a decision is a denial.
+      const onClosed = (closedId: number) => {
+        if (closedId === winId) {
+          chrome.windows.onRemoved.removeListener(onClosed);
+          settle(false);
+        }
+      };
+      chrome.windows.onRemoved.addListener(onClosed);
+    });
+  });
+}
+
+async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginResponse> {
+  const { signing } = await loadHolder();
+
+  // M5: pin the rpDid against the requesting origin. First-sight
+  // origins seed the pin on approval; subsequent origins asking
+  // for a *different* rpDid get a louder consent prompt so the
+  // operator can spot a redirect-to-attacker-RP attempt.
+  const pin = req.origin
+    ? await checkOriginPin(req.origin, req.params.rpDid)
+    : { firstSeen: true, rpDidChanged: false, pinnedRpDid: undefined };
+
+  const consent: Parameters<typeof requestConsent>[0] = {
+    origin: req.origin,
+    rpDid: req.params.rpDid,
+    holderDid: signing.did,
+  };
+  if (pin.rpDidChanged && pin.pinnedRpDid) {
+    consent.changedFromRpDid = pin.pinnedRpDid;
+  }
+  const approved = await requestConsent(consent);
+  if (!approved) return { ok: false, error: "login denied by user" };
+
+  if (req.origin) {
+    await pinOrigin(req.origin, req.params.rpDid);
+  }
+
+  const tokens = await loginViaSiop({
+    baseUrl: req.params.baseUrl,
+    rpDid: req.params.rpDid,
+    signing,
+  });
+  return { ok: true, result: { ...tokens, holderDid: signing.did } };
+}
+
+async function handleLoginDidcomm(
+  req: RuntimeLoginDidcommRequest,
+): Promise<RuntimeLoginResponse> {
+  // Load the holder here only to show its DID in the consent prompt; the
+  // actual DIDComm login runs in the offscreen document (same IndexedDB
+  // holder). did:key derivation is window-free, so this is safe in the SW.
+  const { signing } = await loadHolder();
+
+  // M5: origin → controlDid pinning (analogous to the SIOP
+  // login path; the DIDComm rpDid here is the RP's controlDid).
+  const pin = req.origin
+    ? await checkOriginPin(req.origin, req.params.controlDid)
+    : { firstSeen: true, rpDidChanged: false, pinnedRpDid: undefined };
+
+  const consent: Parameters<typeof requestConsent>[0] = {
+    origin: req.origin,
+    rpDid: req.params.controlDid,
+    holderDid: signing.did,
+  };
+  if (pin.rpDidChanged && pin.pinnedRpDid) {
+    consent.changedFromRpDid = pin.pinnedRpDid;
+  }
+  const approved = await requestConsent(consent);
+  if (!approved) return { ok: false, error: "login denied by user" };
+
+  if (req.origin) {
+    await pinOrigin(req.origin, req.params.controlDid);
+  }
+
+  await ensureOffscreenDocument();
+  const offscreenRequest: OffscreenDidcommLoginRequest = {
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_DIDCOMM_LOGIN,
+    params: req.params,
+  };
+  return (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
+}
+
+async function handleStepUpVta(
+  req: RuntimeStepUpVtaRequest,
+): Promise<RuntimeLoginResponse> {
+  // Load the holder here only to show its DID in the consent prompt; the
+  // step-up orchestration (REST + DIDComm) runs in the offscreen document.
+  const { signing } = await loadHolder();
+
+  const approved = await requestConsent({
+    origin: req.origin,
+    rpDid: req.params.rpDid,
+    holderDid: signing.did,
+  });
+  if (!approved) return { ok: false, error: "step-up denied by user" };
+
+  await ensureOffscreenDocument();
+  const offscreenRequest: OffscreenStepUpVtaRequest = {
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_STEP_UP_VTA,
+    params: req.params,
+  };
+  return (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
+}
+
+// An authenticated GET the wallet runs on a page's behalf. The service
+// worker has host permissions, so this isn't subject to the page's
+// cross-origin CORS restriction. Read-only, so no consent prompt.
+async function handleApiGet(req: RuntimeApiGetRequest): Promise<RuntimeApiGetResponse> {
+  const base = req.params.baseUrl.replace(/\/+$/, "");
+  const res = await fetch(base + req.params.path, {
+    headers: { authorization: `Bearer ${req.params.accessToken}` },
+  });
+  const text = await res.text();
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = text;
+  }
+  return { ok: true, result: { status: res.status, body } };
+}
+
+// Query the offscreen doc for its warm mediator-session status (for the
+// demo's connection indicator). Brings the offscreen up if it isn't running
+// so the very first poll reflects real state.
+async function handleMediatorStatus(): Promise<RuntimeMediatorStatusResponse> {
+  await ensureOffscreenDocument();
+  const result = (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_GET_STATUS,
+  })) as MediatorStatusResult;
+  return { ok: true, result };
+}
+
+// Onboarding (popup-driven): both phases run in the offscreen doc (DID
+// resolution + the mediator session need import()/DOM). The background just
+// brings the offscreen up and relays.
+async function handleOnboardPrepare(
+  req: RuntimeOnboardPrepareRequest,
+): Promise<RuntimeOnboardPrepareResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_ONBOARD_PREPARE,
+    vtaDid: req.vtaDid,
+  })) as RuntimeOnboardPrepareResponse;
+}
+
+async function handleOnboardConnect(): Promise<RuntimeOnboardConnectResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_ONBOARD_CONNECT,
+  })) as RuntimeOnboardConnectResponse;
+}
+
+// Sign a Trust-Task envelope with the wallet's holder did:peer #key-2.
+// Forward to the offscreen which loads the holder identity + calls the core
+// `signTrustTask` helper. No additional consent prompt — the user already
+// authorized this site at onboarding/login; per-signature prompts would be
+// crippling for normal RP usage (every ACL operation, etc).
+async function handleSignTrustTask(
+  req: RuntimeSignTrustTaskRequest,
+): Promise<RuntimeSignTrustTaskResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_SIGN_TRUST_TASK,
+    params: req.params,
+  })) as RuntimeSignTrustTaskResponse;
+}
+
+// Operator-configured defaults a page may prefill (e.g. the step-up VTA).
+async function handleWalletDefaults(): Promise<RuntimeWalletDefaultsResponse> {
+  const s = await getSettings();
+  return {
+    ok: true,
+    result: {
+      ...(s.defaultStepUpVtaDid ? { stepUpVtaDid: s.defaultStepUpVtaDid } : {}),
+      ...(s.defaultStepUpVtaMediatorDid
+        ? { stepUpVtaMediatorDid: s.defaultStepUpVtaMediatorDid }
+        : {}),
+    },
+  };
+}
+
+// Authenticated POST proxied through the wallet (host permission → no CORS).
+async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetResponse> {
+  const base = req.params.baseUrl.replace(/\/+$/, "");
+  const res = await fetch(base + req.params.path, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${req.params.accessToken}`,
+    },
+    body: JSON.stringify(req.params.body),
+  });
+  const text = await res.text();
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = text;
+  }
+  return { ok: true, result: { status: res.status, body } };
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Defence-in-depth: only accept messages from this extension's
+  // own scripts (content scripts, offscreen document, popup,
+  // confirm pages). MV3 isolation already prevents external
+  // pages from calling `chrome.runtime.sendMessage(extensionId,
+  // ...)` without a matching `externally_connectable` manifest
+  // entry, but the explicit `sender.id` check is the belt to
+  // the manifest's braces — and it surfaces a useful warn in
+  // logs if a misconfigured external connection ever sneaks in.
+  //
+  // Closes M4 from the May 2026 security review.
+  if (sender.id !== chrome.runtime.id) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[background] rejecting message from foreign sender id=${sender.id} url=${sender.url}`,
+    );
+    sendResponse({ ok: false, error: "foreign sender rejected" });
+    return false;
+  }
+
+  // Messages addressed to the offscreen document are not ours — let its
+  // listener claim the channel and respond.
+  if ((message as { target?: string })?.target === OFFSCREEN_TARGET) return false;
+
+  if ((message as { type?: string })?.type === RUNTIME_API_GET) {
+    handleApiGet(message as RuntimeApiGetRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_API_POST) {
+    handleApiPost(message as RuntimeApiPostRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_MEDIATOR_STATUS) {
+    handleMediatorStatus()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_ONBOARD_PREPARE) {
+    handleOnboardPrepare(message as RuntimeOnboardPrepareRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_ONBOARD_CONNECT) {
+    handleOnboardConnect()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_SIGN_TRUST_TASK) {
+    handleSignTrustTask(message as RuntimeSignTrustTaskRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_WALLET_DEFAULTS) {
+    handleWalletDefaults()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_LOGIN) {
+    handleLogin(message as RuntimeLoginRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_LOGIN_DIDCOMM) {
+    handleLoginDidcomm(message as RuntimeLoginDidcommRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_STEP_UP_VTA) {
+    handleStepUpVta(message as RuntimeStepUpVtaRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  // Offscreen asks us to prompt the user for an inbound RP confirm request.
+  if ((message as { type?: string })?.type === RUNTIME_INBOUND_CONSENT) {
+    const req = message as RuntimeInboundConsentRequest;
+    requestConsent({ rpDid: req.rpDid, action: req.action })
+      .then((approved) => sendResponse({ approved }))
+      .catch(() => sendResponse({ approved: false }));
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_CONSENT_RESULT) {
+    const { consentId, approved } = message as RuntimeConsentResult;
+    pendingConsents.get(consentId)?.(approved);
+    return false;
+  }
+
+  return false;
 });
 
 export {};
