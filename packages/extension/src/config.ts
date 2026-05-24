@@ -25,6 +25,22 @@ export interface WalletSettings {
   defaultStepUpVtaDid?: string;
   /** Optional default VTA mediator DID prefilled into the step-up flow. */
   defaultStepUpVtaMediatorDid?: string;
+  /**
+   * H1 from the May 2026 security review: encrypt the persisted
+   * Ed25519 root secret with a key derived from the operator's
+   * WebAuthn-PRF authenticator. Default `false` so existing
+   * wallets continue to load without surprise — the operator
+   * opts in via the settings page, which then auto-migrates
+   * the existing plaintext record onto the encrypted shape.
+   *
+   * Trade-off: encryption-on means every cold-start (new
+   * browser session, service-worker eviction) prompts the
+   * operator to tap their authenticator; losing the
+   * authenticator without unenrolling first means losing the
+   * wallet. The options page renders both risks explicitly
+   * before flipping the flag.
+   */
+  encryptHolderSecret?: boolean;
 }
 
 const SETTINGS_KEY = "pnm/settings/v1";
@@ -38,6 +54,7 @@ export async function getSettings(): Promise<WalletSettings> {
     ...(s?.defaultStepUpVtaMediatorDid
       ? { defaultStepUpVtaMediatorDid: s.defaultStepUpVtaMediatorDid }
       : {}),
+    ...(s?.encryptHolderSecret ? { encryptHolderSecret: true } : {}),
   };
 }
 

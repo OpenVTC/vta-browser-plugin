@@ -12,6 +12,7 @@ import { loginViaSiop } from "@pnm/core";
 import { loadHolder } from "./holder.js";
 import { checkOriginPin, pinOrigin } from "./origin-pin.js";
 import { subscribeToPush } from "./push.js";
+import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
   OFFSCREEN_GET_STATUS,
@@ -23,8 +24,10 @@ import {
   OFFSCREEN_TARGET,
   RUNTIME_API_GET,
   RUNTIME_API_POST,
+  OFFSCREEN_LOCK_WALLET,
   RUNTIME_CONSENT_RESULT,
   RUNTIME_INBOUND_CONSENT,
+  RUNTIME_LOCK_WALLET,
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
   RUNTIME_MEDIATOR_STATUS,
@@ -442,6 +445,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
     return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_LOCK_WALLET) {
+    // SW-side lock — clears this context's key cache.
+    WebAuthnPrfSecretWrap.lock();
+    // Forward to the offscreen doc (if running) so its cache
+    // is flushed too. The offscreen path is fire-and-forget;
+    // a missing offscreen doc is fine (it'll mint a fresh
+    // wrap context the next time it boots).
+    chrome.runtime
+      .sendMessage({ target: OFFSCREEN_TARGET, type: OFFSCREEN_LOCK_WALLET })
+      .catch(() => {
+        /* no offscreen doc — nothing to flush */
+      });
+    sendResponse({ ok: true });
+    return false;
   }
 
   if ((message as { type?: string })?.type === RUNTIME_WALLET_DEFAULTS) {

@@ -188,3 +188,73 @@ function buildHolder(
 export async function clearHolderIdentity(store: KVStore): Promise<void> {
   await store.delete(STORE_KEY);
 }
+
+export interface RewrapOptions {
+  /**
+   * Wrap that decrypts the currently-persisted secret. Pass the
+   * wrap the wallet was using before the migration (or `undefined`
+   * if it was plaintext).
+   */
+  fromWrap?: SecretWrap;
+  /**
+   * Wrap to apply on the re-persisted record. Pass the wrap the
+   * wallet should use going forward (or `undefined` to switch back
+   * to plaintext).
+   */
+  toWrap?: SecretWrap;
+}
+
+/**
+ * Re-wrap the persisted holder secret in place, preserving the
+ * wallet's DID + verification-method ids + mediator endpoint.
+ *
+ * Used by the extension's settings UI when the operator flips
+ * the `encryptHolderSecret` toggle — the existing wallet keeps
+ * its identity (no re-grant in any RP ACL) but the on-disk
+ * secret transitions between plaintext and wrap-encrypted.
+ *
+ * Returns the rebuilt `HolderIdentityResult` so the caller can
+ * report the (unchanged) DID back to the operator immediately.
+ *
+ * Errors if no persisted record exists — caller should check
+ * `freshlyMinted` semantics first (a fresh-mint wallet has no
+ * pre-existing secret to re-wrap).
+ */
+export async function rewrapHolderSecret(
+  store: KVStore,
+  opts: RewrapOptions,
+): Promise<HolderIdentityResult> {
+  const persisted = await store.get<PersistedHolder>(STORE_KEY);
+  if (!persisted) {
+    throw new Error("no persisted holder identity to re-wrap");
+  }
+
+  // 1. Recover the raw secret using the from-wrap.
+  let edSecret: Uint8Array;
+  if (persisted.wrappedSecret) {
+    edSecret = await unwrapSecret(persisted.wrappedSecret, opts.fromWrap);
+  } else if (persisted.edSecretB64u) {
+    edSecret = base64url.decode(persisted.edSecretB64u);
+  } else {
+    throw new Error("persisted record missing both wrappedSecret and edSecretB64u");
+  }
+
+  // 2. Re-wrap with the to-wrap and write back. Drop the legacy
+  //    plaintext slot on the way out so a partially-migrated
+  //    record can't load through the legacy path on the next
+  //    boot.
+  const wrapped = await wrapSecret(edSecret, opts.toWrap);
+  const next: PersistedHolder = {
+    did: persisted.did,
+    signingKid: persisted.signingKid,
+    keyAgreementKid: persisted.keyAgreementKid,
+    wrappedSecret: wrapped,
+    ...(persisted.mediatorDid ? { mediatorDid: persisted.mediatorDid } : {}),
+  };
+  await store.put(STORE_KEY, next);
+
+  return {
+    ...buildHolder(edSecret, persisted.did, persisted.signingKid, persisted.keyAgreementKid),
+    freshlyMinted: false,
+  };
+}

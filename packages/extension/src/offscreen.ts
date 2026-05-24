@@ -30,9 +30,11 @@ import {
   swapAclRest,
 } from "@pnm/core";
 import { getWalletMediatorDid, loadHolder } from "./holder.js";
+import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
   OFFSCREEN_GET_STATUS,
+  OFFSCREEN_LOCK_WALLET,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_SIGN_TRUST_TASK,
@@ -90,6 +92,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (msg.type === OFFSCREEN_GET_STATUS) {
     sendResponse({ mediators: statusSnapshot() });
     return false; // synchronous response
+  }
+  if (msg.type === OFFSCREEN_LOCK_WALLET) {
+    WebAuthnPrfSecretWrap.lock();
+    return false; // fire-and-forget
   }
   if (msg.type === OFFSCREEN_ONBOARD_PREPARE) {
     doOnboardPrepare((message as OffscreenOnboardPrepareRequest).vtaDid)
