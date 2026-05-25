@@ -16,3 +16,9 @@ coverage/
 target/
 packages/didcomm-wasm/pkg/
 packages/didcomm-wasm/pkg-node/
+
+# Local scratch: holder identity snapshots and ad-hoc test harnesses
+# in packages/core. The .json snapshots contain private key material
+# (jwk.d), so must never be committed.
+packages/core/.*-holder.json
+packages/core/*-test.mjs
