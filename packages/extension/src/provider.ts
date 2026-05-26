@@ -16,6 +16,8 @@ import type {
   SignTrustTaskParams,
   SignTrustTaskResult,
   StepUpVtaParams,
+  VaultListParams,
+  VaultListResultView,
   VaultProxyLoginResultView,
   WalletDefaultsResult,
 } from "./bridge-protocol.js";
@@ -56,6 +58,13 @@ interface VtaWallet {
    *  `nonce` (typically the RP's `/auth/challenge` value) so the
    *  resulting id_token passes the RP's nonce verification. */
   proxyLogin(params: ProxyLoginParams): Promise<VaultProxyLoginResultView>;
+  /** Enumerate vault entries (metadata only, no secret material) via
+   *  vault/list/0.1. Typical use from an RP page: filter by
+   *  `targetDid` and `secretKind: "did-self-issued"` to discover
+   *  proxy-login candidates pinned to the RP. Each returned entry's
+   *  `principalDid` is the DID the entry would act AS when used in a
+   *  proxy-login call. */
+  vaultList(params: VaultListParams): Promise<VaultListResultView>;
 }
 
 declare global {
@@ -94,7 +103,8 @@ function call<T>(
     | "mediatorStatus"
     | "walletDefaults"
     | "signTrustTask"
-    | "proxyLogin",
+    | "proxyLogin"
+    | "vaultList",
   params:
     | LoginParams
     | DidcommLoginParams
@@ -103,6 +113,7 @@ function call<T>(
     | ApiPostParams
     | SignTrustTaskParams
     | ProxyLoginParams
+    | VaultListParams
     | Record<string, never>,
 ): Promise<T> {
   const id = crypto.randomUUID();
@@ -125,5 +136,6 @@ if (!window.vtaWallet) {
     walletDefaults: () => call<WalletDefaultsResult>("walletDefaults", {}),
     signTrustTask: (params) => call<SignTrustTaskResult>("signTrustTask", params),
     proxyLogin: (params) => call<VaultProxyLoginResultView>("proxyLogin", params),
+    vaultList: (params) => call<VaultListResultView>("vaultList", params),
   };
 }

@@ -415,6 +415,15 @@ function VaultPanel() {
                   </>
                 )}
               </div>
+              {e.principalDid && (
+                <div
+                  style={{ fontSize: 10, color: "#666" }}
+                  title="DID the VTA will act AS when you click Use"
+                >
+                  acts as: <code style={mono}>{e.principalDid}</code>
+                  <CopyButton text={e.principalDid} />
+                </div>
+              )}
               {revealed?.entryId === e.id ? (
                 <RevealedSecretView
                   secret={revealed.secret}

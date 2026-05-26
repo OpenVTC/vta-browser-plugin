@@ -69,6 +69,12 @@ export interface VaultEntry {
   updatedBy?: string;
   lastUsedAt?: string;
   version: number;
+  /** Cached DID the entry acts AS for DID-shaped flows. Mirrors the
+   *  `did` field of `did-self-issued` / `didcomm-peer` secrets;
+   *  absent for kinds without a DID concept. Maintainer-derived from
+   *  the secret at every upsert — a producer-supplied value on the
+   *  wire is ignored. */
+  principalDid?: string;
 }
 
 /** Filters accepted by vault/list/0.1. All AND-combined. */
