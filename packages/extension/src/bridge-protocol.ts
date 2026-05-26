@@ -349,6 +349,70 @@ export type RuntimeOnboardConnectResponse =
   | { ok: true; result: OnboardConnectResult }
   | { ok: false; error: string };
 
+// ─── Vault (popup → background → offscreen) ───
+// M1 read-only surface: enumerate the connected VTA's vault entries (metadata
+// only — no secret material). Authenticates via the same /auth/challenge +
+// authcrypt /auth/ flow the onboarding swap uses, then POSTs the canonical
+// vault/list/0.1 Trust Task envelope to the VTA dispatcher.
+
+export const RUNTIME_VAULT_LIST = "vta-wallet/vault-list" as const;
+
+export interface RuntimeVaultListRequest {
+  type: typeof RUNTIME_VAULT_LIST;
+  /** AND-combined filters; omit fields to broaden the result set. */
+  filter?: VaultListFilter;
+}
+
+/** Metadata view of a vault entry. Mirrors `@pnm/core`'s `VaultEntry` type;
+ *  duplicated here to avoid pulling the core package into the bridge protocol
+ *  declarations (it's transport metadata, not behaviour). */
+export interface VaultEntryView {
+  id: string;
+  contextId: string;
+  targets: Array<
+    | { kind: "web-origin"; origin: string }
+    | { kind: "did"; did: string }
+    | { kind: "ios-app"; bundleId: string; teamId?: string }
+    | { kind: "android-app"; packageName: string; sha256CertFingerprints: string[] }
+  >;
+  label: string;
+  secretKind: string;
+  tags?: string[];
+  notes?: string;
+  favicon?: string;
+  expiresAt?: string;
+  breachedAt?: string;
+  passwordChangedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt?: string;
+  version: number;
+}
+
+export interface VaultListFilter {
+  contextId?: string;
+  targetOriginPrefix?: string;
+  targetDid?: string;
+  targetIosBundleId?: string;
+  targetAndroidPackage?: string;
+  secretKind?: string;
+  tag?: string;
+  usedSince?: string;
+  neverUsed?: boolean;
+  expiresBefore?: string;
+  breached?: boolean;
+  pageSize?: number;
+}
+
+export interface VaultListResultView {
+  entries: VaultEntryView[];
+  truncated: boolean;
+}
+
+export type RuntimeVaultListResponse =
+  | { ok: true; result: VaultListResultView }
+  | { ok: false; error: string };
+
 // ─── background ↔ offscreen document ───
 //
 // The DIDComm login runs in an offscreen document, not the service worker:
@@ -380,6 +444,20 @@ export const OFFSCREEN_SIGN_TRUST_TASK = "offscreen/sign-trust-task" as const;
  *  prompt's verification badge). Reply is a [`VerifyRpDidResult`] via
  *  sendResponse. */
 export const OFFSCREEN_VERIFY_DID = "offscreen/verify-did" as const;
+/** background → offscreen: enumerate the connected VTA's vault entries.
+ *  Loads the holder identity in offscreen (has DOM for WebAuthn-PRF unwrap),
+ *  authenticates over REST + DIDComm-authcrypt, posts the canonical
+ *  vault/list/0.1 envelope. Reply is a `RuntimeVaultListResponse`'s payload
+ *  via sendResponse. */
+export const OFFSCREEN_VAULT_LIST = "offscreen/vault-list" as const;
+
+export interface OffscreenVaultListRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_VAULT_LIST;
+  vtaDid: string;
+  restBaseUrl: string;
+  filter?: VaultListFilter;
+}
 
 export interface OffscreenSignTrustTaskRequest {
   target: typeof OFFSCREEN_TARGET;
