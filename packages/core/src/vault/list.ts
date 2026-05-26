@@ -118,7 +118,9 @@ export async function vaultListRest(opts: VaultListRestOptions): Promise<VaultLi
   const f = opts.fetch ?? fetch.bind(globalThis);
   const base = baseUrl.replace(/\/+$/, "");
 
-  // 1. /auth/challenge → { sessionId, data: { challenge } }
+  // 1. /auth/challenge → flat { challenge, sessionId, expiresAt } per
+  //    `vti_common::auth::handlers::challenge::ChallengeResponse`. Fields
+  //    are top-level, NOT nested under a `data` envelope.
   const cRes = await f(`${base}/auth/challenge`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -127,8 +129,8 @@ export async function vaultListRest(opts: VaultListRestOptions): Promise<VaultLi
   if (!cRes.ok) {
     throw new Error(`vta /auth/challenge failed (${cRes.status}): ${await cRes.text()}`);
   }
-  const cBody = (await cRes.json()) as { sessionId?: string; data?: { challenge?: string } };
-  if (!cBody.sessionId || !cBody.data?.challenge) {
+  const cBody = (await cRes.json()) as { sessionId?: string; challenge?: string };
+  if (!cBody.sessionId || !cBody.challenge) {
     throw new Error(`vta /auth/challenge: malformed response: ${JSON.stringify(cBody)}`);
   }
 
@@ -138,13 +140,16 @@ export async function vaultListRest(opts: VaultListRestOptions): Promise<VaultLi
     type: VTA_AUTHENTICATE,
     from: holder.did,
     to: [service.did],
-    body: { challenge: cBody.data.challenge, session_id: cBody.sessionId },
+    body: { challenge: cBody.challenge, session_id: cBody.sessionId },
   };
   const packed = await packAuthcrypt(authMsg, holder, [
     { kid: service.keyAgreementKid, jwk: service.keyAgreementPublicJwk },
   ]);
 
-  // 3. POST the packed JWE to /auth/ → access token.
+  // 3. POST the packed JWE to /auth/ → AuthenticateResponse with
+  //    { session, tokens: { accessToken, ... } } per vta-sdk's
+  //    `protocols::auth::AuthenticateResponse`. Tokens are nested under
+  //    `tokens`, NOT `data`.
   const aRes = await f(`${base}/auth/`, {
     method: "POST",
     headers: { "content-type": "application/didcomm-encrypted+json" },
@@ -153,8 +158,8 @@ export async function vaultListRest(opts: VaultListRestOptions): Promise<VaultLi
   if (!aRes.ok) {
     throw new Error(`vta /auth/ failed (${aRes.status}): ${await aRes.text()}`);
   }
-  const aBody = (await aRes.json()) as { data?: { accessToken?: string } };
-  const accessToken = aBody.data?.accessToken;
+  const aBody = (await aRes.json()) as { tokens?: { accessToken?: string } };
+  const accessToken = aBody.tokens?.accessToken;
   if (!accessToken) {
     throw new Error(`vta /auth/: malformed response: ${JSON.stringify(aBody)}`);
   }
