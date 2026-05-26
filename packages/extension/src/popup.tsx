@@ -6,12 +6,19 @@ import {
   RUNTIME_LOCK_WALLET,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
+  RUNTIME_VAULT_DELETE,
   RUNTIME_VAULT_LIST,
+  RUNTIME_VAULT_RELEASE,
+  RUNTIME_VAULT_UPSERT,
   type OnboardPrepareResult,
   type RuntimeOnboardConnectResponse,
   type RuntimeOnboardPrepareResponse,
+  type RuntimeVaultDeleteResponse,
   type RuntimeVaultListResponse,
+  type RuntimeVaultReleaseResponse,
+  type RuntimeVaultUpsertResponse,
   type VaultEntryView,
+  type VaultSecretView,
 } from "./bridge-protocol.js";
 import { getSettings } from "./config.js";
 
@@ -108,15 +115,47 @@ function ConnectedView() {
   );
 }
 
-// ─── Vault panel (M1) ───
-// Read-only enumeration of the connected VTA's vault entries via
-// `vault/list/0.1`. No edit, no release, no creation — those land in M2+.
-// Validates the wire-shape end-to-end against the VTA's trust-task dispatcher.
+// ─── Vault panel (M1 read + M2A.6 write) ───
+// List, add, delete, reveal entries against the connected VTA via the
+// canonical vault/{list,upsert,delete,release}/0.1 Trust Tasks.
+//
+// Secret material: round-trips as DIDComm authcrypt JWE. The popup
+// receives cleartext only from RUNTIME_VAULT_RELEASE responses and
+// holds it in component state for `ttlSeconds`. After TTL expires the
+// state is wiped — the popup never persists secret bytes (no chrome.storage,
+// no IndexedDB, no service worker; the React component scope IS the lifetime).
 function VaultPanel() {
   const [entries, setEntries] = useState<VaultEntryView[] | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // M2A.6 write surface
+  const [adding, setAdding] = useState(false);
+
+  // Per-row reveal state. Holds the cleartext secret + when it expires
+  // (Date.now() ms). A countdown timer wipes the state at expiry.
+  const [revealed, setRevealed] = useState<{
+    entryId: string;
+    secret: VaultSecretView;
+    expiresAtMs: number;
+  } | null>(null);
+
+  // M2A.7 context filter
+  const [contextFilter, setContextFilter] = useState<"all" | string>("all");
+
+  // TTL countdown timer for revealed secret. Re-runs whenever `revealed`
+  // changes; clears itself on unmount or when revealed is cleared.
+  useEffect(() => {
+    if (!revealed) return;
+    const remaining = revealed.expiresAtMs - Date.now();
+    if (remaining <= 0) {
+      setRevealed(null);
+      return;
+    }
+    const t = setTimeout(() => setRevealed(null), remaining);
+    return () => clearTimeout(t);
+  }, [revealed]);
 
   async function loadVault() {
     setBusy(true);
@@ -136,26 +175,156 @@ function VaultPanel() {
     }
   }
 
+  async function deleteEntry(entry: VaultEntryView) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: RUNTIME_VAULT_DELETE,
+        id: entry.id,
+        expectedVersion: entry.version,
+      })) as RuntimeVaultDeleteResponse;
+      if (!res.ok) throw new Error(res.error);
+      // Reload — cheaper than splicing the array in place and avoids
+      // the (low-probability) "another wallet just modified this" race.
+      await loadVault();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revealEntry(entry: VaultEntryView) {
+    // Hide any previously-revealed secret first.
+    setRevealed(null);
+    setBusy(true);
+    setError(null);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: RUNTIME_VAULT_RELEASE,
+        entryId: entry.id,
+      })) as RuntimeVaultReleaseResponse;
+      if (!res.ok) throw new Error(res.error);
+      setRevealed({
+        entryId: entry.id,
+        secret: res.result.secret,
+        expiresAtMs: Date.now() + res.result.ttlSeconds * 1000,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Visible entries after applying the context filter.
+  const visibleEntries = entries
+    ? contextFilter === "all"
+      ? entries
+      : entries.filter((e) => e.contextId === contextFilter)
+    : null;
+
+  // Distinct contexts found in the loaded entries — drives the filter
+  // dropdown. Empty until entries load.
+  const distinctContexts = entries
+    ? Array.from(new Set(entries.map((e) => e.contextId))).sort()
+    : [];
+
   return (
     <div style={{ marginTop: 12, padding: 8, background: "#fafafa", borderRadius: 6 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <strong style={{ fontSize: 13 }}>Vault</strong>
-        <button onClick={() => void loadVault()} disabled={busy} style={{ fontSize: 11 }}>
-          {busy ? "Loading…" : entries ? "Refresh" : "Load entries"}
-        </button>
+        <div style={{ display: "flex", gap: 6 }}>
+          {entries && entries.length > 0 && (
+            <button
+              onClick={() => setAdding((s) => !s)}
+              disabled={busy}
+              style={{ fontSize: 11 }}
+            >
+              {adding ? "Cancel" : "+ Add"}
+            </button>
+          )}
+          <button onClick={() => void loadVault()} disabled={busy} style={{ fontSize: 11 }}>
+            {busy ? "…" : entries ? "Refresh" : "Load entries"}
+          </button>
+        </div>
       </div>
+
+      {entries && distinctContexts.length > 1 && (
+        <div style={{ marginTop: 6, fontSize: 11 }}>
+          <label style={{ color: "#777" }}>Context: </label>
+          <select
+            value={contextFilter}
+            onChange={(e) => setContextFilter(e.target.value)}
+            style={{ fontSize: 11 }}
+          >
+            <option value="all">All ({entries.length})</option>
+            {distinctContexts.map((ctx) => {
+              const count = entries.filter((e) => e.contextId === ctx).length;
+              return (
+                <option key={ctx} value={ctx}>
+                  {ctx} ({count})
+                </option>
+              );
+            })}
+          </select>
+        </div>
+      )}
+
+      {adding && (
+        <AddEntryForm
+          contexts={distinctContexts}
+          busy={busy}
+          onCancel={() => setAdding(false)}
+          onSubmit={async (form) => {
+            setBusy(true);
+            setError(null);
+            try {
+              const res = (await chrome.runtime.sendMessage({
+                type: RUNTIME_VAULT_UPSERT,
+                contextId: form.contextId,
+                targets: [{ kind: "web-origin" as const, origin: form.origin }],
+                label: form.label,
+                secretKind: "password",
+                secret: {
+                  kind: "password",
+                  username: form.username || undefined,
+                  password: form.password,
+                  ...(form.notes ? { secureNotes: form.notes } : {}),
+                },
+              })) as RuntimeVaultUpsertResponse;
+              if (!res.ok) throw new Error(res.error);
+              setAdding(false);
+              await loadVault();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      )}
+
       {error && (
         <small style={{ color: "#c00", display: "block", marginTop: 6 }}>{error}</small>
       )}
       {entries && entries.length === 0 && (
-        <small style={{ color: "#888", display: "block", marginTop: 6 }}>
-          No vault entries yet. Add one with the VTA&apos;s CLI (M1 is read-only;
-          upsert lands in M2).
-        </small>
+        <div style={{ marginTop: 6 }}>
+          <small style={{ color: "#888", display: "block" }}>
+            No vault entries yet.
+          </small>
+          <button
+            onClick={() => setAdding(true)}
+            style={{ marginTop: 6, fontSize: 11 }}
+          >
+            + Add your first entry
+          </button>
+        </div>
       )}
-      {entries && entries.length > 0 && (
+      {visibleEntries && visibleEntries.length > 0 && (
         <ul style={{ listStyle: "none", padding: 0, margin: "8px 0 0 0" }}>
-          {entries.map((e) => (
+          {visibleEntries.map((e) => (
             <li
               key={e.id}
               style={{
@@ -172,7 +341,7 @@ function VaultPanel() {
                 <span style={mono}>{summariseTargets(e.targets)}</span>
               </div>
               <div style={{ fontSize: 10, color: "#888" }}>
-                ctx: <code style={mono}>{e.contextId}</code>
+                <ContextChip ctx={e.contextId} />
                 {e.lastUsedAt && <> · last used {formatDate(e.lastUsedAt)}</>}
                 {e.breachedAt && (
                   <>
@@ -181,16 +350,292 @@ function VaultPanel() {
                   </>
                 )}
               </div>
+              {revealed?.entryId === e.id ? (
+                <RevealedSecretView
+                  secret={revealed.secret}
+                  expiresAtMs={revealed.expiresAtMs}
+                  onDismiss={() => setRevealed(null)}
+                />
+              ) : (
+                <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                  <button
+                    onClick={() => void revealEntry(e)}
+                    disabled={busy}
+                    style={{ fontSize: 11 }}
+                  >
+                    🔓 Reveal
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (confirm(`Delete "${e.label}"? This cannot be undone.`)) {
+                        void deleteEntry(e);
+                      }
+                    }}
+                    disabled={busy}
+                    style={{ fontSize: 11, color: "#c00" }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              )}
             </li>
           ))}
           {truncated && (
             <li style={{ padding: "6px 0", fontSize: 11, color: "#888" }}>
-              … truncated. M1 returns a single page; pagination lands in M2.
+              … truncated. Pagination lands when the vault grows past ~100 entries.
             </li>
           )}
         </ul>
       )}
     </div>
+  );
+}
+
+// ─── Add-entry form (M2A.6) ───
+// M2A.6 ships Password kind only — the most common case. Other kinds
+// (Passkey, OAuth, BearerToken, Custom) follow when there's a UX
+// pattern for them; for now the canonical schema + the @pnm/core
+// vaultUpsertRest helper accept all eight kinds.
+function AddEntryForm({
+  contexts,
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  contexts: string[];
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (form: {
+    label: string;
+    contextId: string;
+    origin: string;
+    username: string;
+    password: string;
+    notes: string;
+  }) => Promise<void>;
+}): React.JSX.Element {
+  const [label, setLabel] = useState("");
+  const [contextId, setContextId] = useState(contexts[0] ?? "");
+  const [origin, setOrigin] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [notes, setNotes] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+
+  const valid = label.trim() && contextId.trim() && origin.trim() && password.length > 0;
+
+  return (
+    <div
+      style={{
+        marginTop: 8,
+        padding: 8,
+        background: "#fff",
+        border: "1px solid #ddd",
+        borderRadius: 4,
+        display: "grid",
+        gap: 6,
+        fontSize: 11,
+      }}
+    >
+      <strong style={{ fontSize: 12 }}>New password</strong>
+      <label style={{ display: "grid", gap: 2 }}>
+        <span style={{ color: "#666" }}>Label</span>
+        <input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="Work GitHub"
+        />
+      </label>
+      <label style={{ display: "grid", gap: 2 }}>
+        <span style={{ color: "#666" }}>Context</span>
+        {contexts.length > 0 ? (
+          <input
+            value={contextId}
+            onChange={(e) => setContextId(e.target.value)}
+            list="known-contexts"
+            placeholder="ctx_…"
+            style={mono}
+          />
+        ) : (
+          <input
+            value={contextId}
+            onChange={(e) => setContextId(e.target.value)}
+            placeholder="ctx_…"
+            style={mono}
+          />
+        )}
+        <datalist id="known-contexts">
+          {contexts.map((ctx) => (
+            <option key={ctx} value={ctx} />
+          ))}
+        </datalist>
+      </label>
+      <label style={{ display: "grid", gap: 2 }}>
+        <span style={{ color: "#666" }}>Site origin</span>
+        <input
+          value={origin}
+          onChange={(e) => setOrigin(e.target.value)}
+          placeholder="https://github.com"
+          style={mono}
+        />
+      </label>
+      <label style={{ display: "grid", gap: 2 }}>
+        <span style={{ color: "#666" }}>Username</span>
+        <input value={username} onChange={(e) => setUsername(e.target.value)} />
+      </label>
+      <label style={{ display: "grid", gap: 2 }}>
+        <span style={{ color: "#666" }}>Password</span>
+        <div style={{ display: "flex", gap: 4 }}>
+          <input
+            type={showPassword ? "text" : "password"}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            style={{ flex: 1 }}
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword((s) => !s)}
+            style={{ fontSize: 10 }}
+          >
+            {showPassword ? "Hide" : "Show"}
+          </button>
+        </div>
+      </label>
+      <label style={{ display: "grid", gap: 2 }}>
+        <span style={{ color: "#666" }}>Notes (optional)</span>
+        <input value={notes} onChange={(e) => setNotes(e.target.value)} />
+      </label>
+      <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+        <button
+          onClick={() =>
+            void onSubmit({ label, contextId, origin, username, password, notes })
+          }
+          disabled={!valid || busy}
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+        <button onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Revealed-secret view (M2A.6) ───
+// Inline display of the cleartext secret post-release. Includes a
+// countdown showing how many seconds remain until the parent auto-wipes
+// the secret from state.
+function RevealedSecretView({
+  secret,
+  expiresAtMs,
+  onDismiss,
+}: {
+  secret: VaultSecretView;
+  expiresAtMs: number;
+  onDismiss: () => void;
+}): React.JSX.Element {
+  const [secondsLeft, setSecondsLeft] = useState(
+    Math.max(0, Math.round((expiresAtMs - Date.now()) / 1000)),
+  );
+  useEffect(() => {
+    const id = setInterval(() => {
+      const left = Math.max(0, Math.round((expiresAtMs - Date.now()) / 1000));
+      setSecondsLeft(left);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [expiresAtMs]);
+
+  return (
+    <div
+      style={{
+        marginTop: 4,
+        padding: 6,
+        background: "#fff7e6",
+        border: "1px solid #f0d090",
+        borderRadius: 4,
+        display: "grid",
+        gap: 4,
+        fontSize: 11,
+      }}
+    >
+      {secret.kind === "password" && (
+        <>
+          {secret.username && (
+            <div>
+              <span style={{ color: "#666" }}>Username:</span>{" "}
+              <code style={mono}>{secret.username}</code>
+              <CopyButton text={secret.username} />
+            </div>
+          )}
+          {secret.password && (
+            <div>
+              <span style={{ color: "#666" }}>Password:</span>{" "}
+              <code style={mono}>{secret.password}</code>
+              <CopyButton text={secret.password} />
+            </div>
+          )}
+          {secret.secureNotes && (
+            <div>
+              <span style={{ color: "#666" }}>Notes:</span>{" "}
+              <span>{secret.secureNotes}</span>
+            </div>
+          )}
+        </>
+      )}
+      {secret.kind !== "password" && (
+        <div style={{ color: "#666" }}>
+          Cleartext displayed for kind <code>{secret.kind}</code>. M2A.6 renders only
+          password entries; other kinds show below as raw JSON until per-kind UI lands.
+          <pre style={{ ...mono, background: "#f8f8f8", padding: 4, overflow: "auto" }}>
+            {JSON.stringify(secret, null, 2)}
+          </pre>
+        </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "space-between", color: "#888" }}>
+        <span>Auto-clears in {secondsLeft}s</span>
+        <button onClick={onDismiss} style={{ fontSize: 10 }}>
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        void navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      style={{ fontSize: 10, marginLeft: 6 }}
+      title="Copy to clipboard"
+    >
+      {copied ? "✓" : "Copy"}
+    </button>
+  );
+}
+
+function ContextChip({ ctx }: { ctx: string }): React.JSX.Element {
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "0 4px",
+        background: "#eef2ff",
+        color: "#4338ca",
+        borderRadius: 3,
+        fontSize: 10,
+        fontWeight: 600,
+        marginRight: 4,
+      }}
+      title={`Context: ${ctx}`}
+    >
+      {ctx}
+    </span>
   );
 }
 
