@@ -380,21 +380,19 @@ function VaultPanel() {
           busy={busy}
           onCancel={() => setAdding(false)}
           onSubmit={async (form) => {
+            // The form lifts its own kind-specific shape construction
+            // (targets[], secretKind, secret). The parent just hands
+            // it to the bridge — no further per-kind branching here.
             setBusy(true);
             setError(null);
             try {
               const res = (await chrome.runtime.sendMessage({
                 type: RUNTIME_VAULT_UPSERT,
                 contextId: form.contextId,
-                targets: [{ kind: "web-origin" as const, origin: form.origin }],
+                targets: form.targets,
                 label: form.label,
-                secretKind: "password",
-                secret: {
-                  kind: "password",
-                  username: form.username || undefined,
-                  password: form.password,
-                  ...(form.notes ? { secureNotes: form.notes } : {}),
-                },
+                secretKind: form.secretKind,
+                secret: form.secret,
               })) as RuntimeVaultUpsertResponse;
               if (!res.ok) throw new Error(res.error);
               setAdding(false);
@@ -532,6 +530,24 @@ function VaultPanel() {
 // (Passkey, OAuth, BearerToken, Custom) follow when there's a UX
 // pattern for them; for now the canonical schema + the @pnm/core
 // vaultUpsertRest helper accept all eight kinds.
+// ─── Add-entry form (M2A.6 password / M2B.5 password+loginConfig / M2B.4 did-self-issued) ───
+// The form owns the kind-specific shape: it decides which targets[]
+// entry to construct, builds the cleartext secret, and emits a single
+// ready-to-send object to the parent. The parent just hands that off
+// to RUNTIME_VAULT_UPSERT — no per-kind branching in the dispatcher.
+//
+// Currently supports `password` (with optional `loginConfig`) and
+// `did-self-issued`. Passkey / OAuth / DIDComm-peer / SSH / custom
+// follow when there's an end-to-end flow that exercises them.
+
+type AddEntryOutput = {
+  label: string;
+  contextId: string;
+  targets: VaultEntryView["targets"];
+  secretKind: "password" | "did-self-issued";
+  secret: VaultSecretView;
+};
+
 function AddEntryForm({
   contexts,
   busy,
@@ -541,24 +557,82 @@ function AddEntryForm({
   contexts: string[];
   busy: boolean;
   onCancel: () => void;
-  onSubmit: (form: {
-    label: string;
-    contextId: string;
-    origin: string;
-    username: string;
-    password: string;
-    notes: string;
-  }) => Promise<void>;
+  onSubmit: (form: AddEntryOutput) => Promise<void>;
 }): React.JSX.Element {
+  // Shared fields
+  const [kind, setKind] = useState<"password" | "did-self-issued">("password");
   const [label, setLabel] = useState("");
   const [contextId, setContextId] = useState(contexts[0] ?? "");
+  const [notes, setNotes] = useState("");
+
+  // Password-kind fields
   const [origin, setOrigin] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [notes, setNotes] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
-  const valid = label.trim() && contextId.trim() && origin.trim() && password.length > 0;
+  // Optional auto-login config (M2B.5) for password entries
+  const [loginConfigEnabled, setLoginConfigEnabled] = useState(false);
+  const [loginUrl, setLoginUrl] = useState("");
+  const [loginFormat, setLoginFormat] = useState<"json" | "form-urlencoded">("json");
+
+  // did-self-issued fields
+  const [rpDid, setRpDid] = useState("");
+  const [principalDid, setPrincipalDid] = useState("");
+  const [signingKeyId, setSigningKeyId] = useState("");
+
+  const passwordValid =
+    label.trim() &&
+    contextId.trim() &&
+    origin.trim() &&
+    password.length > 0 &&
+    (!loginConfigEnabled || loginUrl.trim().length > 0);
+  const didSelfIssuedValid =
+    label.trim() &&
+    contextId.trim() &&
+    rpDid.trim() &&
+    principalDid.trim() &&
+    signingKeyId.trim();
+  const valid = kind === "password" ? passwordValid : didSelfIssuedValid;
+
+  function buildOutput(): AddEntryOutput {
+    if (kind === "password") {
+      const secret: VaultSecretView = {
+        kind: "password",
+        password,
+        ...(username ? { username } : {}),
+        ...(notes ? { secureNotes: notes } : {}),
+        ...(loginConfigEnabled
+          ? {
+              loginConfig: {
+                loginUrl: loginUrl.trim(),
+                format: loginFormat,
+              },
+            }
+          : {}),
+      };
+      return {
+        label,
+        contextId,
+        targets: [{ kind: "web-origin" as const, origin }],
+        secretKind: "password",
+        secret,
+      };
+    }
+    const secret: VaultSecretView = {
+      kind: "did-self-issued",
+      did: principalDid.trim(),
+      signingKeyId: signingKeyId.trim(),
+      ...(notes ? { secureNotes: notes } : {}),
+    };
+    return {
+      label,
+      contextId,
+      targets: [{ kind: "did" as const, did: rpDid.trim() }],
+      secretKind: "did-self-issued",
+      secret,
+    };
+  }
 
   return (
     <div
@@ -573,13 +647,26 @@ function AddEntryForm({
         fontSize: 11,
       }}
     >
-      <strong style={{ fontSize: 12 }}>New password</strong>
+      <strong style={{ fontSize: 12 }}>
+        {kind === "password" ? "New password entry" : "New did-self-issued entry"}
+      </strong>
+      <label style={{ display: "grid", gap: 2 }}>
+        <span style={{ color: "#666" }}>Secret kind</span>
+        <select
+          value={kind}
+          onChange={(e) => setKind(e.target.value as "password" | "did-self-issued")}
+          style={{ fontSize: 11 }}
+        >
+          <option value="password">password</option>
+          <option value="did-self-issued">did-self-issued</option>
+        </select>
+      </label>
       <label style={{ display: "grid", gap: 2 }}>
         <span style={{ color: "#666" }}>Label</span>
         <input
           value={label}
           onChange={(e) => setLabel(e.target.value)}
-          placeholder="Work GitHub"
+          placeholder={kind === "password" ? "Work GitHub" : "Work persona"}
         />
       </label>
       <label style={{ display: "grid", gap: 2 }}>
@@ -606,46 +693,122 @@ function AddEntryForm({
           ))}
         </datalist>
       </label>
-      <label style={{ display: "grid", gap: 2 }}>
-        <span style={{ color: "#666" }}>Site origin</span>
-        <input
-          value={origin}
-          onChange={(e) => setOrigin(e.target.value)}
-          placeholder="https://github.com"
-          style={mono}
-        />
-      </label>
-      <label style={{ display: "grid", gap: 2 }}>
-        <span style={{ color: "#666" }}>Username</span>
-        <input value={username} onChange={(e) => setUsername(e.target.value)} />
-      </label>
-      <label style={{ display: "grid", gap: 2 }}>
-        <span style={{ color: "#666" }}>Password</span>
-        <div style={{ display: "flex", gap: 4 }}>
-          <input
-            type={showPassword ? "text" : "password"}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          <button
-            type="button"
-            onClick={() => setShowPassword((s) => !s)}
-            style={{ fontSize: 10 }}
+
+      {kind === "password" && (
+        <>
+          <label style={{ display: "grid", gap: 2 }}>
+            <span style={{ color: "#666" }}>Site origin</span>
+            <input
+              value={origin}
+              onChange={(e) => setOrigin(e.target.value)}
+              placeholder="https://github.com"
+              style={mono}
+            />
+          </label>
+          <label style={{ display: "grid", gap: 2 }}>
+            <span style={{ color: "#666" }}>Username</span>
+            <input value={username} onChange={(e) => setUsername(e.target.value)} />
+          </label>
+          <label style={{ display: "grid", gap: 2 }}>
+            <span style={{ color: "#666" }}>Password</span>
+            <div style={{ display: "flex", gap: 4 }}>
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((s) => !s)}
+                style={{ fontSize: 10 }}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
+          </label>
+          <label
+            style={{ display: "flex", gap: 6, alignItems: "center", color: "#444" }}
+            title="When enabled, the VTA POSTs these credentials to loginUrl during vault/proxy-login. Without this, the entry is browser-fill only."
           >
-            {showPassword ? "Hide" : "Show"}
-          </button>
-        </div>
-      </label>
+            <input
+              type="checkbox"
+              checked={loginConfigEnabled}
+              onChange={(e) => setLoginConfigEnabled(e.target.checked)}
+            />
+            Auto-login (proxy-login via VTA)
+          </label>
+          {loginConfigEnabled && (
+            <>
+              <label style={{ display: "grid", gap: 2 }}>
+                <span style={{ color: "#666" }}>Login URL</span>
+                <input
+                  value={loginUrl}
+                  onChange={(e) => setLoginUrl(e.target.value)}
+                  placeholder="http://127.0.0.1:4040/api/login"
+                  style={mono}
+                />
+              </label>
+              <label style={{ display: "grid", gap: 2 }}>
+                <span style={{ color: "#666" }}>Body format</span>
+                <select
+                  value={loginFormat}
+                  onChange={(e) =>
+                    setLoginFormat(e.target.value as "json" | "form-urlencoded")
+                  }
+                  style={{ fontSize: 11 }}
+                >
+                  <option value="json">JSON</option>
+                  <option value="form-urlencoded">form-urlencoded</option>
+                </select>
+              </label>
+            </>
+          )}
+        </>
+      )}
+
+      {kind === "did-self-issued" && (
+        <>
+          <label style={{ display: "grid", gap: 2 }}>
+            <span style={{ color: "#666" }}>Relying party DID (target)</span>
+            <input
+              value={rpDid}
+              onChange={(e) => setRpDid(e.target.value)}
+              placeholder="did:webvh:…"
+              style={mono}
+            />
+          </label>
+          <label style={{ display: "grid", gap: 2 }}>
+            <span style={{ color: "#666" }}>Persona DID (iss / sub)</span>
+            <input
+              value={principalDid}
+              onChange={(e) => setPrincipalDid(e.target.value)}
+              placeholder="did:webvh:…"
+              style={mono}
+            />
+          </label>
+          <label style={{ display: "grid", gap: 2 }}>
+            <span style={{ color: "#666" }}>Signing key id</span>
+            <input
+              value={signingKeyId}
+              onChange={(e) => setSigningKeyId(e.target.value)}
+              placeholder="did:webvh:…#key-0"
+              style={mono}
+            />
+            <small style={{ color: "#888" }}>
+              Must reference a key the VTA's keystore can resolve.
+            </small>
+          </label>
+        </>
+      )}
+
       <label style={{ display: "grid", gap: 2 }}>
         <span style={{ color: "#666" }}>Notes (optional)</span>
         <input value={notes} onChange={(e) => setNotes(e.target.value)} />
       </label>
       <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
         <button
-          onClick={() =>
-            void onSubmit({ label, contextId, origin, username, password, notes })
-          }
+          onClick={() => void onSubmit(buildOutput())}
           disabled={!valid || busy}
         >
           {busy ? "Saving…" : "Save"}
