@@ -32,6 +32,7 @@ import {
   RUNTIME_API_POST,
   RUNTIME_VAULT_DELETE,
   RUNTIME_VAULT_LIST,
+  RUNTIME_VAULT_LIST_PAGE,
   RUNTIME_VAULT_PROXY_LOGIN,
   RUNTIME_VAULT_PROXY_LOGIN_PAGE,
   RUNTIME_VAULT_RELEASE,
@@ -71,6 +72,7 @@ import {
   type RuntimeVaultDeleteResponse,
   type RuntimeVaultListRequest,
   type RuntimeVaultListResponse,
+  type RuntimeVaultListPageRequest,
   type RuntimeVaultProxyLoginPageRequest,
   type RuntimeVaultProxyLoginRequest,
   type RuntimeVaultProxyLoginResponse,
@@ -534,6 +536,30 @@ async function handleVaultProxyLogin(
   })) as RuntimeVaultProxyLoginResponse;
 }
 
+// Page-world variant of vault/list. The RP page calls
+// `window.vtaWallet.vaultList(...)` → content script relays as a
+// `RUNTIME_VAULT_LIST_PAGE` envelope with `{ params, origin }`. We
+// translate the page-side params subset (targetDid /
+// targetOriginPrefix / secretKind) into the popup-style
+// `RUNTIME_VAULT_LIST` filter and reuse the existing offscreen
+// pipeline. Origin is captured but not yet enforced — same trust
+// model as `vtaWallet.login()`; origin-pinned filtering lands with
+// M3 policy.
+async function handleVaultListPage(
+  req: RuntimeVaultListPageRequest,
+): Promise<RuntimeVaultListResponse> {
+  return handleVaultList({
+    type: RUNTIME_VAULT_LIST,
+    filter: {
+      ...(req.params.targetDid !== undefined ? { targetDid: req.params.targetDid } : {}),
+      ...(req.params.targetOriginPrefix !== undefined
+        ? { targetOriginPrefix: req.params.targetOriginPrefix }
+        : {}),
+      ...(req.params.secretKind !== undefined ? { secretKind: req.params.secretKind } : {}),
+    },
+  });
+}
+
 // Page-world variant of vault/proxy-login. The RP page calls
 // `window.vtaWallet.proxyLogin(...)` → content script relays as a
 // `RUNTIME_VAULT_PROXY_LOGIN_PAGE` envelope with `{ params, origin }`.
@@ -707,6 +733,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_VAULT_PROXY_LOGIN_PAGE) {
     handleVaultProxyLoginPage(message as RuntimeVaultProxyLoginPageRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true;
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_VAULT_LIST_PAGE) {
+    handleVaultListPage(message as RuntimeVaultListPageRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

@@ -29,7 +29,8 @@ export type BridgeMethod =
   | "mediatorStatus"
   | "walletDefaults"
   | "signTrustTask"
-  | "proxyLogin";
+  | "proxyLogin"
+  | "vaultList";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
 export interface LoginParams {
@@ -150,7 +151,8 @@ export interface InpageRequest {
     | StepUpVtaParams
     | ApiGetParams
     | ApiPostParams
-    | ProxyLoginParams;
+    | ProxyLoginParams
+    | VaultListParams;
 }
 
 /** content → provider (content world → page world). `result` is untyped
@@ -394,6 +396,10 @@ export interface VaultEntryView {
   updatedAt: string;
   lastUsedAt?: string;
   version: number;
+  /** Cached DID the entry acts AS for DID-shaped flows. Mirrors the
+   *  `did` field of `did-self-issued` / `didcomm-peer` secrets;
+   *  absent for kinds without a DID concept. Maintainer-derived. */
+  principalDid?: string;
 }
 
 export interface VaultListFilter {
@@ -444,6 +450,16 @@ export const RUNTIME_VAULT_PROXY_LOGIN = "vta-wallet/vault-proxy-login" as const
  *  flows (M2B.4). */
 export const RUNTIME_VAULT_PROXY_LOGIN_PAGE =
   "vta-wallet/vault-proxy-login-page" as const;
+/** content-script (relayed from page world) → background: enumerate
+ *  vault entries via `vault/list/0.1`. Same op as the popup's
+ *  `RUNTIME_VAULT_LIST`, but the request arrives wrapped in
+ *  `{ params }` per the page-bridge convention. M2B.4 surfaces this
+ *  to RP pages so they can discover did-self-issued entries pinned to
+ *  their DID before driving a proxy-login. No client-side origin
+ *  pinning is enforced today — same trust model as the existing
+ *  `window.vtaWallet.login()`; origin-pinned filtering lands with M3
+ *  policy. */
+export const RUNTIME_VAULT_LIST_PAGE = "vta-wallet/vault-list-page" as const;
 
 /** Loose secret shape over the bridge — keeps the protocol decoupled
  *  from @pnm/core's narrowed enum. Matches the canonical
@@ -610,6 +626,27 @@ export interface RuntimeVaultProxyLoginPageRequest {
    *  this for future consent-prompt + origin-pinning checks; M2B.4
    *  records it but doesn't gate on it yet (hardening lands in M3
    *  policy alongside the rest of the policy-driven gates). */
+  origin: string;
+}
+
+/** Page-world params for `window.vtaWallet.vaultList(...)`. A subset
+ *  of the popup's `VaultListFilter` — the page typically wants
+ *  entries pinned to a specific DID or origin. */
+export interface VaultListParams {
+  /** Filter to entries with at least one DID target matching. The
+   *  M2B.4 demo's typical usage: a page representing
+   *  `did:webvh:<rp>` asks for entries pinned to it. */
+  targetDid?: string;
+  /** Filter to entries with at least one web-origin target whose URI
+   *  starts with this prefix. */
+  targetOriginPrefix?: string;
+  /** Filter to a specific secret kind (e.g. `"did-self-issued"`). */
+  secretKind?: string;
+}
+
+export interface RuntimeVaultListPageRequest {
+  type: typeof RUNTIME_VAULT_LIST_PAGE;
+  params: VaultListParams;
   origin: string;
 }
 
