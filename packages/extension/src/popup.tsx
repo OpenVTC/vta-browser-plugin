@@ -6,12 +6,15 @@ import {
   RUNTIME_LOCK_WALLET,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
+  RUNTIME_INJECT_COOKIES,
   RUNTIME_VAULT_DELETE,
   RUNTIME_VAULT_LIST,
   RUNTIME_VAULT_PROXY_LOGIN,
   RUNTIME_VAULT_RELEASE,
   RUNTIME_VAULT_UPSERT,
+  type InjectCookiesResultView,
   type OnboardPrepareResult,
+  type RuntimeInjectCookiesResponse,
   type RuntimeOnboardConnectResponse,
   type RuntimeOnboardPrepareResponse,
   type RuntimeVaultDeleteResponse,
@@ -153,6 +156,14 @@ function VaultPanel() {
     entryId: string;
     sessionBlob: SessionBlobView;
     expiresAtMs: number;
+    /** Set when the SessionBlob carried cookies and the wallet
+     *  successfully wrote them into the user's cookie jar via
+     *  chrome.cookies.set. Drives the "Open site" affordance in
+     *  UsedSessionView. */
+    injection?: InjectCookiesResultView;
+    /** Non-fatal warning from the inject step (partial success or
+     *  permission denied for the target origin). */
+    injectionWarning?: string;
   } | null>(null);
 
   // M2A.7 context filter
@@ -271,10 +282,36 @@ function VaultPanel() {
       // with NaN that resolves immediately).
       const parsed = Date.parse(res.result.expiresAt);
       const expiresAtMs = Number.isFinite(parsed) ? parsed : Date.now() + 60_000;
+
+      // If the SessionBlob carries cookies (Password POST driver path,
+      // M2B.5), auto-inject them via chrome.cookies.set. SIOP entries
+      // emit no cookies and just carry the id_token in headers — for
+      // those, this step is a no-op.
+      let injection: InjectCookiesResultView | undefined;
+      let injectionWarning: string | undefined;
+      const cookies = res.result.sessionBlob.cookies ?? [];
+      if (cookies.length > 0 && res.result.sessionBlob.bindOrigin) {
+        const injRes = (await chrome.runtime.sendMessage({
+          type: RUNTIME_INJECT_COOKIES,
+          bindOrigin: res.result.sessionBlob.bindOrigin,
+          cookies,
+        })) as RuntimeInjectCookiesResponse;
+        if (injRes.ok) {
+          injection = injRes.result;
+          if (injection.injected < injection.total) {
+            injectionWarning = `Wrote ${injection.injected} of ${injection.total} cookies; some failed. Check console for details.`;
+          }
+        } else {
+          injectionWarning = `Could not inject cookies: ${injRes.error}`;
+        }
+      }
+
       setUsedSession({
         entryId: entry.id,
         sessionBlob: res.result.sessionBlob,
         expiresAtMs,
+        ...(injection ? { injection } : {}),
+        ...(injectionWarning ? { injectionWarning } : {}),
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -434,16 +471,25 @@ function VaultPanel() {
                 <UsedSessionView
                   sessionBlob={usedSession.sessionBlob}
                   expiresAtMs={usedSession.expiresAtMs}
+                  {...(usedSession.injection ? { injection: usedSession.injection } : {})}
+                  {...(usedSession.injectionWarning
+                    ? { injectionWarning: usedSession.injectionWarning }
+                    : {})}
                   onDismiss={() => setUsedSession(null)}
                 />
               ) : (
                 <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                  {e.secretKind === "did-self-issued" && (
+                  {(e.secretKind === "did-self-issued" ||
+                    e.secretKind === "password") && (
                     <button
                       onClick={() => void useEntry(e)}
                       disabled={busy}
                       style={{ fontSize: 11 }}
-                      title="VTA logs in on your behalf — long-term key never leaves the VTA"
+                      title={
+                        e.secretKind === "did-self-issued"
+                          ? "VTA mints a SIOP id_token on your behalf — long-term key never leaves the VTA"
+                          : "VTA logs in on your behalf and injects the session cookies — the password never reaches this browser"
+                      }
                     >
                       🔑 Use
                     </button>
@@ -702,10 +748,14 @@ function RevealedSecretView({
 function UsedSessionView({
   sessionBlob,
   expiresAtMs,
+  injection,
+  injectionWarning,
   onDismiss,
 }: {
   sessionBlob: SessionBlobView;
   expiresAtMs: number;
+  injection?: InjectCookiesResultView;
+  injectionWarning?: string;
   onDismiss: () => void;
 }): React.JSX.Element {
   const [secondsLeft, setSecondsLeft] = useState(
@@ -724,6 +774,12 @@ function UsedSessionView({
   );
   const headerCount = sessionBlob.headers?.length ?? 0;
   const cookieCount = sessionBlob.cookies?.length ?? 0;
+
+  function openBoundOrigin() {
+    if (sessionBlob.bindOrigin) {
+      void chrome.tabs.create({ url: sessionBlob.bindOrigin });
+    }
+  }
 
   return (
     <div
@@ -768,7 +824,21 @@ function UsedSessionView({
           <CopyButton text={authHeader.value} />
         </div>
       )}
+      {injection && (
+        <div style={{ marginTop: 6, padding: 4, background: "#e6f4ea", borderRadius: 3 }}>
+          🍪 Injected {injection.injected}/{injection.total} cookies into{" "}
+          <code style={mono}>{injection.bindOrigin}</code>
+        </div>
+      )}
+      {injectionWarning && (
+        <div style={{ color: "#8a6300", fontSize: 10 }}>{injectionWarning}</div>
+      )}
       <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+        {sessionBlob.bindOrigin && injection && injection.injected > 0 && (
+          <button onClick={openBoundOrigin} style={{ fontSize: 10 }}>
+            Open site
+          </button>
+        )}
         <button onClick={onDismiss} style={{ fontSize: 10 }}>
           Dismiss
         </button>
