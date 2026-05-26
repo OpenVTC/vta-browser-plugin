@@ -319,6 +319,7 @@ export type RuntimeVerifyRpDidResponse =
 
 export const RUNTIME_ONBOARD_PREPARE = "vta-wallet/onboard-prepare" as const;
 export const RUNTIME_ONBOARD_CONNECT = "vta-wallet/onboard-connect" as const;
+export const RUNTIME_HOLDER_STATE = "vta-wallet/holder-state" as const;
 
 /** popup → background: resolve a VTA DID + mint the ephemeral to be granted. */
 export interface RuntimeOnboardPrepareRequest {
@@ -356,6 +357,25 @@ export interface OnboardConnectResult {
 
 export type RuntimeOnboardConnectResponse =
   | { ok: true; result: OnboardConnectResult }
+  | { ok: false; error: string };
+
+/** popup → background: inspect the wallet's persisted holder state.
+ *
+ *  Used by the popup on mount to decide which view to show — a v3 record
+ *  (pre-M2C identity migration) needs to be flagged so the operator
+ *  re-onboards rather than landing in a half-broken connected view. */
+export interface RuntimeHolderStateRequest {
+  type: typeof RUNTIME_HOLDER_STATE;
+}
+
+/** Mirror of `holderIdentityState` from @pnm/core. */
+export type HolderStateInfo =
+  | { kind: "none" }
+  | { kind: "v3"; did: string }
+  | { kind: "v4"; did: string; vtaDid: string };
+
+export type RuntimeHolderStateResponse =
+  | { ok: true; result: HolderStateInfo }
   | { ok: false; error: string };
 
 // ─── Vault (popup → background → offscreen) ───
@@ -732,8 +752,14 @@ export const OFFSCREEN_START_INBOUND = "offscreen/start-inbound" as const;
 export const OFFSCREEN_GET_STATUS = "offscreen/get-status" as const;
 /** background → offscreen: resolve a VTA + mint the ephemeral to be granted. */
 export const OFFSCREEN_ONBOARD_PREPARE = "offscreen/onboard-prepare" as const;
-/** background → offscreen: connect as the granted ephemeral + swap-acl. */
+/** background → offscreen: connect as the granted ephemeral and run the
+ *  provision-integration round-trip; on success the VTA-minted DID is
+ *  persisted as the wallet's v4 holder identity. */
 export const OFFSCREEN_ONBOARD_CONNECT = "offscreen/onboard-connect" as const;
+/** background → offscreen: inspect the wallet's persisted holder state.
+ *  Returns `{ kind: "none" | "v3" | "v4", ... }`. Used by the popup on
+ *  mount to detect a pre-M2C v3 record and prompt re-onboarding. */
+export const OFFSCREEN_HOLDER_STATE = "offscreen/holder-state" as const;
 /** background → offscreen: sign a Trust-Task envelope with the holder did:peer.
  *  Reply is a [`SignTrustTaskResult`] (or `{error}`) via sendResponse. */
 export const OFFSCREEN_SIGN_TRUST_TASK = "offscreen/sign-trust-task" as const;

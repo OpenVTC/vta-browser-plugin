@@ -16,6 +16,7 @@ import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
   OFFSCREEN_GET_STATUS,
+  OFFSCREEN_HOLDER_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_SIGN_TRUST_TASK,
@@ -45,6 +46,7 @@ import {
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
   RUNTIME_MEDIATOR_STATUS,
+  RUNTIME_HOLDER_STATE,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
   RUNTIME_SIGN_TRUST_TASK,
@@ -63,6 +65,7 @@ import {
   type RuntimeLoginRequest,
   type RuntimeLoginResponse,
   type RuntimeMediatorStatusResponse,
+  type RuntimeHolderStateResponse,
   type RuntimeOnboardConnectResponse,
   type RuntimeOnboardPrepareRequest,
   type RuntimeOnboardPrepareResponse,
@@ -348,6 +351,14 @@ async function handleOnboardConnect(): Promise<RuntimeOnboardConnectResponse> {
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_ONBOARD_CONNECT,
   })) as RuntimeOnboardConnectResponse;
+}
+
+async function handleHolderState(): Promise<RuntimeHolderStateResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_HOLDER_STATE,
+  })) as RuntimeHolderStateResponse;
 }
 
 // Sign a Trust-Task envelope with the wallet's holder did:peer #key-2.
@@ -762,6 +773,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_ONBOARD_CONNECT) {
     handleOnboardConnect()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_HOLDER_STATE) {
+    handleHolderState()
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
