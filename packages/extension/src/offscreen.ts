@@ -26,8 +26,10 @@ import {
   stepUpVtaFinish,
   stepUpVtaStart,
   signTrustTask,
-  swapAclDidcomm,
-  swapAclRest,
+  holderIdentityState,
+  holderInputsFromAdminReply,
+  installVtaMintedHolder,
+  runProvisionIntegration,
   vaultDeleteRest,
   vaultListRest,
   vaultProxyLoginRest,
@@ -35,12 +37,13 @@ import {
   vaultUpsertRest,
   verifyDid,
 } from "@pnm/core";
-import { getWalletMediatorDid, loadHolder } from "./holder.js";
+import { buildHolderSecretWrap, getWalletMediatorDid, loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
   OFFSCREEN_GET_STATUS,
   OFFSCREEN_LOCK_WALLET,
+  OFFSCREEN_HOLDER_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_SIGN_TRUST_TASK,
@@ -126,6 +129,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (msg.type === OFFSCREEN_ONBOARD_CONNECT) {
     doOnboardConnect()
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_HOLDER_STATE) {
+    doHolderState()
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -320,11 +331,23 @@ async function doSignTrustTask(
   return { signedEnvelope, holderDid: signing.did };
 }
 
-// ─── Onboarding: ephemeral did:key → holder did:peer (swap-acl) ───
+// ─── Onboarding: ephemeral did:key → VTA-minted holder did:key ───
 // PREPARE resolves the VTA's transports, mints an ephemeral did:key, and
 // persists it (so it survives the popup round-trip while the operator grants
-// it). CONNECT authenticates as that ephemeral over DIDComm and swaps its ACL
-// entry onto the wallet's holder did:peer, then discards the ephemeral.
+// it).
+//
+// CONNECT authenticates as that ephemeral over DIDComm and runs the
+// `provision-integration` flow: the VTA mints a fresh long-term admin DID
+// + private keys + authorization VC under its own custody, then ships the
+// material HPKE-sealed to the ephemeral did:key. The wallet adopts the
+// VTA-minted DID as its holder identity (v4 persisted shape) and discards
+// the ephemeral.
+//
+// Prior to M2C this path used `acl/swap-key` to rotate the ephemeral's ACL
+// entry onto a wallet-self-derived `did:peer:2`. That made the wallet the
+// minter of its own long-term identity — out of step with the rest of the
+// stack (mediator setup, did-hosting setup, etc.) where every consumer's
+// long-term identity is VTA-minted. M2C aligns the wallet with that model.
 
 const ONBOARD_KEY = "onboard:pending";
 
@@ -367,12 +390,22 @@ async function doOnboardConnect(): Promise<OnboardConnectResult> {
   const store = new IndexedDBKVStore();
   const pending = await store.get<PendingOnboard>(ONBOARD_KEY);
   if (!pending) throw new Error("no pending onboarding — prepare first");
-  if (!pending.mediatorDid && !pending.restBaseUrl) {
-    throw new Error("VTA advertises neither #vta-didcomm nor #vta-rest — cannot connect");
+  if (!pending.mediatorDid) {
+    // provision-integration is DIDComm-only in this port. REST fallback is
+    // doable but doubles the implementation surface for a path the wallet
+    // rarely hits (every VTA we ship today advertises #vta-didcomm). Drop
+    // back to a clear error rather than silently failing later.
+    throw new Error(
+      "VTA does not advertise #vta-didcomm — provision-integration requires DIDComm",
+    );
   }
 
-  // Reconstruct the operator-granted ephemeral as an X25519 DIDComm identity
-  // (the authcrypt sender = the "old" DID being rotated away from).
+  // Reconstruct the operator-granted ephemeral as both an X25519 DIDComm
+  // identity (authcrypt sender) AND an Ed25519 signing identity. The
+  // SIGNING identity is what signs the BootstrapRequest VP; its Ed25519
+  // seed is ALSO the recipient secret the sealed bundle is HPKE-encrypted
+  // to (via Montgomery clamping — same derivation @noble/curves and the
+  // VTA's Rust side both use). One key, three roles.
   const ephSigning = signingIdentityFromSecret(new Uint8Array(pending.ephemeralSecret));
   const ka = didcommKeyAgreementFromSigning(ephSigning);
   const ephemeral = Identity.fromSecretJwk({
@@ -381,44 +414,59 @@ async function doOnboardConnect(): Promise<OnboardConnectResult> {
     jwk: ka.secretJwk,
   });
 
-  // The holder did:peer #key-2 signs the VP-JWT — it's the "new" DID.
-  const { signing } = await loadHolder();
   const service = await resolveKeyAgreement(pending.vtaDid);
 
-  // Prefer DIDComm when advertised (the authcrypt envelope is the caller
-  // authentication — one round-trip, no token). Fall back to REST.
-  let entry;
-  if (pending.mediatorDid) {
-    const conn = await connectMediatorSession({
-      holder: ephemeral,
-      mediatorDid: pending.mediatorDid,
-      vtaDid: pending.vtaDid,
-    });
-    try {
-      const bridge = new MediatorSessionBridge(conn);
-      entry = await swapAclDidcomm({
-        bridge,
-        ephemeral,
-        holderSigning: signing,
-        service,
-        mediator: conn.mediator,
-        vtaDid: pending.vtaDid,
-      });
-    } finally {
-      conn.close();
-    }
-  } else {
-    entry = await swapAclRest({
-      baseUrl: pending.restBaseUrl!,
+  // Round-trip: build VP → authcrypt → forward via mediator → open sealed
+  // reply → extract MinimalAdminReply. The full pipeline lives in
+  // @pnm/core/provision; offscreen.ts just wires the mediator session in.
+  const conn = await connectMediatorSession({
+    holder: ephemeral,
+    mediatorDid: pending.mediatorDid,
+    vtaDid: pending.vtaDid,
+  });
+  let adminReply;
+  try {
+    const bridge = new MediatorSessionBridge(conn);
+    adminReply = await runProvisionIntegration({
+      bridge,
       ephemeral,
-      holderSigning: signing,
+      ephemeralSigning: ephSigning,
       service,
+      mediator: conn.mediator,
       vtaDid: pending.vtaDid,
+      // The VTA-side context every wallet provisions into. Fixed to
+      // `default` for now; future versions may let the operator pick.
+      context: "default",
+      note: "browser-plugin onboarding",
     });
+  } finally {
+    conn.close();
   }
 
+  // Adopt the VTA-minted identity as the wallet's holder. The adopter
+  // decodes the multibase private keys, cross-checks X25519 = Montgomery
+  // (Ed25519 seed), cross-checks the did:key identifier matches the
+  // Ed25519 pubkey, and produces the seed-only persistence shape v4
+  // expects.
+  const holderInputs = holderInputsFromAdminReply(adminReply);
+  const secretWrap = await buildHolderSecretWrap();
+  await installVtaMintedHolder(store, {
+    ...holderInputs,
+    ...(secretWrap ? { secretWrap } : {}),
+  });
+
   await store.delete(ONBOARD_KEY);
-  return { holderDid: entry.did, role: entry.role };
+  // Existing bridge protocol returns { holderDid, role } — preserve the
+  // shape so background.ts / popup.tsx don't need a parallel change.
+  return { holderDid: adminReply.adminDid, role: "admin" };
+}
+
+/** Inspect the persisted holder identity without unwrapping the secret. The
+ *  popup calls this on mount so it can detect a stale v3 record (pre-M2C
+ *  identity migration) and prompt the operator to re-onboard rather than
+ *  landing in a half-broken connected view. */
+async function doHolderState() {
+  return holderIdentityState(new IndexedDBKVStore());
 }
 
 // ─── Warm mediator-session pool ───

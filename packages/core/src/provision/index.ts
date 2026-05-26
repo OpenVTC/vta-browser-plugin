@@ -29,6 +29,10 @@ export {
   type MinimalAdminReply,
   type RunProvisionIntegrationOptions,
 } from "./run.js";
+export {
+  holderInputsFromAdminReply,
+  type HolderInputsFromAdminReply,
+} from "./adopt.js";
 export type {
   AdminRotationPayload,
   ArmoredChunk,

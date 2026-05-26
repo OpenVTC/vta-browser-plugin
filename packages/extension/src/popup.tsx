@@ -3,6 +3,7 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useConnectionStore } from "./store.js";
 import {
+  RUNTIME_HOLDER_STATE,
   RUNTIME_LOCK_WALLET,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
@@ -12,8 +13,10 @@ import {
   RUNTIME_VAULT_PROXY_LOGIN,
   RUNTIME_VAULT_RELEASE,
   RUNTIME_VAULT_UPSERT,
+  type HolderStateInfo,
   type InjectCookiesResultView,
   type OnboardPrepareResult,
+  type RuntimeHolderStateResponse,
   type RuntimeInjectCookiesResponse,
   type RuntimeOnboardConnectResponse,
   type RuntimeOnboardPrepareResponse,
@@ -1211,6 +1214,86 @@ function OnboardView() {
 
 function Popup() {
   const connection = useConnectionStore((s) => s.connection);
+  const clearConnection = useConnectionStore((s) => s.clearConnection);
+  const [holderState, setHolderState] = useState<HolderStateInfo | null>(null);
+
+  // Probe the persisted holder shape on mount. Three possible states:
+  // - kind: "v4" → VTA-minted, normal path.
+  // - kind: "v3" → pre-M2C self-derived did:peer. Wallet operations would
+  //   throw `RequiresReonboardError` at first `loadHolder()` call — show
+  //   a banner and force the user through OnboardView, which writes a
+  //   fresh v4 and clears v3 on its way out.
+  // - kind: "none" → fresh install; OnboardView handles it.
+  useEffect(() => {
+    void (async () => {
+      const res = (await chrome.runtime.sendMessage({
+        type: RUNTIME_HOLDER_STATE,
+      })) as RuntimeHolderStateResponse;
+      if (res.ok) setHolderState(res.result);
+    })();
+  }, []);
+
+  // v3 wallets: show the migration banner + force OnboardView, regardless
+  // of whether a stale `connection` entry exists in the popup store. The
+  // stored connection points at the soon-to-be-abandoned v3 DID; once
+  // onboarding completes, the new connection overwrites the old.
+  if (holderState?.kind === "v3") {
+    return (
+      <div style={box}>
+        <div
+          style={{
+            padding: 12,
+            border: "1px solid #c80",
+            background: "#fff7e6",
+            borderRadius: 6,
+            display: "grid",
+            gap: 6,
+          }}
+        >
+          <strong>Re-onboarding required</strong>
+          <small>
+            This wallet predates the VTA-minted identity migration. Your previous holder
+            DID (<code style={mono}>{holderState.did}</code>) was generated locally by the
+            wallet; this build expects the VTA to mint your long-term identity instead.
+          </small>
+          <small>
+            <strong>What to expect:</strong> connecting to a VTA below will mint a fresh
+            holder DID and replace the old one. Every relying party that recognised the
+            old DID will need to be re-granted with the new one.
+          </small>
+          <button
+            onClick={() => {
+              // Clear any stale connection state so OnboardView starts from
+              // a clean slate. v3 IndexedDB record stays until the operator
+              // completes a successful onboarding (which atomically writes
+              // v4 and deletes v3).
+              clearConnection();
+            }}
+          >
+            Dismiss banner
+          </button>
+        </div>
+        <OnboardView />
+      </div>
+    );
+  }
+
+  // No persisted holder at all but a stale connection in chrome.storage
+  // (e.g. operator cleared extension data on one storage tier but not the
+  // other). The connection points at a holder DID that no longer exists;
+  // any wallet operation would throw NoHolderError. Force OnboardView so
+  // the operator restarts cleanly.
+  if (holderState?.kind === "none" && connection) {
+    return (
+      <div style={box}>
+        <small style={{ color: "#c00" }}>
+          Stale connection cleared — no holder identity is persisted. Onboard fresh.
+        </small>
+        <OnboardView />
+      </div>
+    );
+  }
+
   return connection ? <ConnectedView /> : <OnboardView />;
 }
 
