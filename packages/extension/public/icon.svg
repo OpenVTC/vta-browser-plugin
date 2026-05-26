@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="VTA Wallet">
+  <!--
+    VTA Wallet icon. Visual mark: a stylised "V" monogram for Verifiable
+    Trust Agent, with a small accent dot at the apex suggesting
+    "verified / active". Tuned to read clearly at 16×16 — the strokes
+    are deliberately chunky and use stroke-linejoin=round to avoid
+    pixel-fringe artefacts when the browser downsamples.
+  -->
+  <defs>
+    <linearGradient id="vta-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#1e3a8a"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="24" fill="url(#vta-bg)"/>
+  <path d="M 28 30 L 64 96 L 100 30"
+        fill="none"
+        stroke="#ffffff"
+        stroke-width="14"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+  <circle cx="64" cy="108" r="7" fill="#22d3ee"/>
+</svg>

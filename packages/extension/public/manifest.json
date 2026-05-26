@@ -1,11 +1,22 @@
 {
   "manifest_version": 3,
-  "name": "PNM Wallet",
+  "name": "VTA Wallet",
   "version": "0.1.0",
-  "description": "Bridge between WebAuthn passkeys and VTA-managed DIDs.",
+  "description": "Verifiable Trust Agent wallet — manage logins, credentials, and DIDs via your VTA. Bridges WebAuthn passkeys to VTA-managed identities.",
+  "icons": {
+    "16": "icon.svg",
+    "32": "icon.svg",
+    "48": "icon.svg",
+    "128": "icon.svg"
+  },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "PNM Wallet"
+    "default_title": "VTA Wallet",
+    "default_icon": {
+      "16": "icon.svg",
+      "32": "icon.svg",
+      "48": "icon.svg"
+    }
   },
   "options_ui": {
     "page": "options.html",
