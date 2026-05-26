@@ -28,6 +28,7 @@ import {
   signTrustTask,
   swapAclDidcomm,
   swapAclRest,
+  vaultListRest,
   verifyDid,
 } from "@pnm/core";
 import { getWalletMediatorDid, loadHolder } from "./holder.js";
@@ -42,12 +43,14 @@ import {
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
+  OFFSCREEN_VAULT_LIST,
   OFFSCREEN_VERIFY_DID,
   RUNTIME_INBOUND_CONSENT,
   type OffscreenDidcommLoginRequest,
   type OffscreenOnboardPrepareRequest,
   type OffscreenSignTrustTaskRequest,
   type OffscreenStepUpVtaRequest,
+  type OffscreenVaultListRequest,
   type OffscreenVerifyDidRequest,
   type OnboardConnectResult,
   type OnboardPrepareResult,
@@ -133,8 +136,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       );
     return true; // async sendResponse
   }
+  if (msg.type === OFFSCREEN_VAULT_LIST) {
+    doVaultList(message as OffscreenVaultListRequest)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
   return false;
 });
+
+// Vault — list. Resolves the VTA's keyAgreement, loads the holder identity
+// (the X25519 leg of the did:peer is the authcrypt sender), and runs
+// `vaultListRest` end-to-end against the VTA's REST + trust-task dispatcher.
+async function doVaultList(req: OffscreenVaultListRequest) {
+  const { identity: holder } = await loadHolder();
+  const service = await resolveKeyAgreement(req.vtaDid);
+  // The bridge protocol intentionally types filter loosely (string secretKind)
+  // so it doesn't have to import @pnm/core's narrowed enums. Cast at this
+  // wire boundary — the values that flow through are sanity-checked by the
+  // canonical schema validator on the VTA side anyway.
+  type VaultRestOpts = Parameters<typeof vaultListRest>[0];
+  const opts: VaultRestOpts = req.filter
+    ? {
+        baseUrl: req.restBaseUrl,
+        holder,
+        service,
+        filter: req.filter as NonNullable<VaultRestOpts["filter"]>,
+      }
+    : { baseUrl: req.restBaseUrl, holder, service };
+  const response = await vaultListRest(opts);
+  return {
+    entries: response.entries,
+    truncated: response.truncated,
+  };
+}
 
 // Resolve + verify a DID for the consent prompt's verification badge. The
 // core `verifyDid` never throws — it returns `{ resolved: false, error }` on

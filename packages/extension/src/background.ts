@@ -22,9 +22,11 @@ import {
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
+  OFFSCREEN_VAULT_LIST,
   OFFSCREEN_VERIFY_DID,
   RUNTIME_API_GET,
   RUNTIME_API_POST,
+  RUNTIME_VAULT_LIST,
   OFFSCREEN_LOCK_WALLET,
   RUNTIME_CONSENT_RESULT,
   RUNTIME_INBOUND_CONSENT,
@@ -56,6 +58,8 @@ import {
   type RuntimeSignTrustTaskRequest,
   type RuntimeSignTrustTaskResponse,
   type RuntimeStepUpVtaRequest,
+  type RuntimeVaultListRequest,
+  type RuntimeVaultListResponse,
   type RuntimeVerifyRpDidRequest,
   type RuntimeVerifyRpDidResponse,
   type RuntimeWalletDefaultsResponse,
@@ -370,6 +374,48 @@ async function handleVerifyRpDid(
   return { ok: false, error: reply.error };
 }
 
+// Vault — list (M1). The popup asks for the current VTA's vault entries
+// (metadata view only); we forward to the offscreen doc which loads the
+// holder identity (DOM-bound WebAuthn-PRF unwrap), resolves the VTA's
+// keyAgreement, and runs the auth + trust-task POST round-trip.
+async function handleVaultList(req: RuntimeVaultListRequest): Promise<RuntimeVaultListResponse> {
+  // Resolve the active connection from the popup's zustand store. The
+  // persist middleware stringifies its value, so the chrome.storage.local
+  // entry is a JSON string under `pnm-connection/v2` (matching the
+  // `name:` in store.ts's persist config). Inside: `{ state: { connection
+  // }, version }` — zustand-persist's standard envelope.
+  const stored = await chrome.storage.local.get("pnm-connection/v2");
+  const raw = stored["pnm-connection/v2"];
+  let connection: { vtaDid?: string; restBaseUrl?: string } | undefined;
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as { state?: { connection?: unknown } };
+      connection = parsed.state?.connection as typeof connection;
+    } catch {
+      // fall through to "no active connection" error
+    }
+  }
+  if (!connection?.vtaDid) {
+    return { ok: false, error: "no active VTA connection — connect first" };
+  }
+  if (!connection.restBaseUrl) {
+    return {
+      ok: false,
+      error: "vault/list requires a REST-capable VTA (no #vta-rest service advertised)",
+    };
+  }
+
+  await ensureOffscreenDocument();
+  const reply = (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_VAULT_LIST,
+    vtaDid: connection.vtaDid,
+    restBaseUrl: connection.restBaseUrl,
+    ...(req.filter ? { filter: req.filter } : {}),
+  })) as RuntimeVaultListResponse;
+  return reply;
+}
+
 // Authenticated POST proxied through the wallet (host permission → no CORS).
 async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetResponse> {
   const base = req.params.baseUrl.replace(/\/+$/, "");
@@ -462,6 +508,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_SIGN_TRUST_TASK) {
     handleSignTrustTask(message as RuntimeSignTrustTaskRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_VAULT_LIST) {
+    handleVaultList(message as RuntimeVaultListRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
