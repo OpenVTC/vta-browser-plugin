@@ -165,6 +165,10 @@ export const RUNTIME_SIGN_TRUST_TASK = "vta-wallet/sign-trust-task" as const;
 export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
 /** offscreen → background: an inbound RP confirm request needs user consent. */
 export const RUNTIME_INBOUND_CONSENT = "vta-wallet/inbound-consent" as const;
+/** confirm popup → background → offscreen: resolve + verify an RP DID so the
+ *  consent prompt can render a verification badge. Reply via sendResponse is a
+ *  [`VerifyDidResult`]. */
+export const RUNTIME_VERIFY_RP_DID = "vta-wallet/verify-rp-did" as const;
 
 /** popup → background → offscreen: flush the WebAuthn-PRF
  *  derived key cache. The next holder-load that needs the key
@@ -277,6 +281,27 @@ export interface RuntimeConsentResult {
   approved: boolean;
 }
 
+/** confirm popup → background: resolve + verify an RP DID. */
+export interface RuntimeVerifyRpDidRequest {
+  type: typeof RUNTIME_VERIFY_RP_DID;
+  did: string;
+}
+
+/** Result the popup renders as a verification badge. Mirrors the core
+ *  `VerifyDidResult` shape but inlined here so the bridge protocol does not
+ *  depend on `@pnm/core` types directly. */
+export interface VerifyRpDidResult {
+  did: string;
+  method: "webvh" | "peer" | "key" | "unknown";
+  resolved: boolean;
+  domain?: string;
+  error?: string;
+}
+
+export type RuntimeVerifyRpDidResponse =
+  | { ok: true; result: VerifyRpDidResult }
+  | { ok: false; error: string };
+
 // ─── Onboarding (popup → background → offscreen) ───
 // Connect the wallet to a VTA via the ephemeral-did:key → swap-acl flow:
 // PREPARE resolves the VTA's transports + mints an ephemeral did:key the
@@ -351,11 +376,21 @@ export const OFFSCREEN_ONBOARD_CONNECT = "offscreen/onboard-connect" as const;
 /** background → offscreen: sign a Trust-Task envelope with the holder did:peer.
  *  Reply is a [`SignTrustTaskResult`] (or `{error}`) via sendResponse. */
 export const OFFSCREEN_SIGN_TRUST_TASK = "offscreen/sign-trust-task" as const;
+/** background → offscreen: resolve + verify a DID (used by the consent
+ *  prompt's verification badge). Reply is a [`VerifyRpDidResult`] via
+ *  sendResponse. */
+export const OFFSCREEN_VERIFY_DID = "offscreen/verify-did" as const;
 
 export interface OffscreenSignTrustTaskRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_SIGN_TRUST_TASK;
   params: SignTrustTaskParams;
+}
+
+export interface OffscreenVerifyDidRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_VERIFY_DID;
+  did: string;
 }
 
 export interface OffscreenStartInboundRequest {

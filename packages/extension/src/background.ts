@@ -22,6 +22,7 @@ import {
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
+  OFFSCREEN_VERIFY_DID,
   RUNTIME_API_GET,
   RUNTIME_API_POST,
   OFFSCREEN_LOCK_WALLET,
@@ -35,6 +36,7 @@ import {
   RUNTIME_ONBOARD_PREPARE,
   RUNTIME_SIGN_TRUST_TASK,
   RUNTIME_STEP_UP_VTA,
+  RUNTIME_VERIFY_RP_DID,
   RUNTIME_WALLET_DEFAULTS,
   type MediatorStatusResult,
   type OffscreenDidcommLoginRequest,
@@ -54,7 +56,10 @@ import {
   type RuntimeSignTrustTaskRequest,
   type RuntimeSignTrustTaskResponse,
   type RuntimeStepUpVtaRequest,
+  type RuntimeVerifyRpDidRequest,
+  type RuntimeVerifyRpDidResponse,
   type RuntimeWalletDefaultsResponse,
+  type VerifyRpDidResult,
 } from "./bridge-protocol.js";
 import { getSettings } from "./config.js";
 
@@ -156,7 +161,7 @@ function requestConsent(args: {
     };
     pendingConsents.set(consentId, settle);
 
-    chrome.windows.create({ url, type: "popup", width: 400, height: 360 }, (win) => {
+    chrome.windows.create({ url, type: "popup", width: 480, height: 560 }, (win) => {
       const winId = win?.id;
       if (winId === undefined) return;
       // Closing the window without a decision is a denial.
@@ -348,6 +353,23 @@ async function handleWalletDefaults(): Promise<RuntimeWalletDefaultsResponse> {
   };
 }
 
+// Resolve + verify an RP DID on behalf of the consent prompt. The popup
+// posts this after rendering and updates the verification badge with the
+// result. Routed through the offscreen because did:webvh resolution needs
+// dynamic import + DOM, which a service worker lacks.
+async function handleVerifyRpDid(
+  req: RuntimeVerifyRpDidRequest,
+): Promise<RuntimeVerifyRpDidResponse> {
+  await ensureOffscreenDocument();
+  const reply = (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_VERIFY_DID,
+    did: req.did,
+  })) as { ok: true; result: VerifyRpDidResult } | { ok: false; error: string };
+  if (reply.ok) return { ok: true, result: reply.result };
+  return { ok: false, error: reply.error };
+}
+
 // Authenticated POST proxied through the wallet (host permission → no CORS).
 async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetResponse> {
   const base = req.params.baseUrl.replace(/\/+$/, "");
@@ -483,6 +505,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_LOGIN_DIDCOMM) {
     handleLoginDidcomm(message as RuntimeLoginDidcommRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_VERIFY_RP_DID) {
+    handleVerifyRpDid(message as RuntimeVerifyRpDidRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
