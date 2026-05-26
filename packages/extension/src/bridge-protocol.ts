@@ -478,11 +478,35 @@ export interface VaultSecretView {
   kind: string;
   username?: string;
   password?: string;
+  /** Optional driver config on Password-kind entries — instructs the
+   *  VTA to POST these credentials at a specific URL during
+   *  vault/proxy-login/0.1. Mirrors `vault/_shared/0.1/vault-secret#/$defs/PasswordLoginConfig`.
+   *  When absent, proxy-login returns `not_proxyable` and the
+   *  consumer falls back to vault/release. */
+  loginConfig?: {
+    loginUrl: string;
+    format?: "json" | "form-urlencoded";
+    usernameField?: string;
+    passwordField?: string;
+    totpField?: string;
+    extraFields?: Record<string, string>;
+    successStatus?: number[];
+  };
   credentialId?: string;
   privateKey?: string;
   algorithm?: string;
   rpId?: string;
   userHandle?: string;
+  /** did-self-issued / didcomm-peer: the persona DID the entry will
+   *  act AS during SIOPv2 / DIDComm flows. */
+  did?: string;
+  /** Variant of `did` for `didcomm-peer` entries. */
+  peerDid?: string;
+  /** did-self-issued / didcomm-peer: id of the key the VTA uses to
+   *  sign the resulting id_token / DIDComm message. Must reference a
+   *  key the VTA can resolve via its keystore (typically
+   *  `<did>#key-0`). */
+  signingKeyId?: string;
   provider?: string;
   refreshToken?: string;
   accessToken?: string;

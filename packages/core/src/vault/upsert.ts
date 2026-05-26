@@ -28,13 +28,33 @@ const TASK_VAULT_UPSERT = "https://trusttasks.org/spec/vault/upsert/0.1";
 const TASK_VAULT_UPSERT_RESPONSE = "https://trusttasks.org/spec/vault/upsert/0.1#response";
 const INNER_MSG_TYPE = "https://openvtc.org/vault/upsert/secret-envelope/1.0";
 
+/** Optional driver config on Password-kind entries — instructs the
+ *  VTA to POST these credentials at a specific URL during
+ *  `vault/proxy-login/0.1`. Mirrors
+ *  `vault/_shared/0.1/vault-secret#/$defs/PasswordLoginConfig`. */
+export interface PasswordLoginConfig {
+  loginUrl: string;
+  format?: "json" | "form-urlencoded";
+  usernameField?: string;
+  passwordField?: string;
+  totpField?: string;
+  extraFields?: Record<string, string>;
+  successStatus?: number[];
+}
+
 /** Cleartext shape of the inner DIDComm message body — matches the
  *  canonical `vault/_shared/0.1/vault-secret#/$defs/VaultSecret` tagged
  *  union. M2A ships Password / Passkey / OauthTokens / BearerToken /
- *  Custom; did-self-issued + didcomm-peer + ssh-key follow when the UI
- *  grows fields for them. */
+ *  Custom; M2B.4 adds `did-self-issued`. `didcomm-peer` and `ssh-key`
+ *  follow when the UI grows fields for them. */
 export type VaultSecret =
-  | { kind: "password"; username?: string; password: string; secureNotes?: string }
+  | {
+      kind: "password";
+      username?: string;
+      password: string;
+      loginConfig?: PasswordLoginConfig;
+      secureNotes?: string;
+    }
   | {
       kind: "passkey";
       credentialId: string;
@@ -51,6 +71,16 @@ export type VaultSecret =
       accessToken?: string;
       accessTokenExpiresAt?: string;
       scopes?: string[];
+      secureNotes?: string;
+    }
+  | {
+      kind: "did-self-issued";
+      /** The persona DID the entry acts AS (becomes the SIOP `iss`
+       *  + `sub`). */
+      did: string;
+      /** Key the VTA uses to sign the id_token. References a key the
+       *  VTA's keystore can resolve — typically `<did>#key-0`. */
+      signingKeyId: string;
       secureNotes?: string;
     }
   | {
