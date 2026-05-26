@@ -23,6 +23,14 @@ export interface SignTrustTaskOptions {
   /** Holder signing identity — its DID is what the RP attributes the
    *  request to, and its `kid` becomes the proof's `verificationMethod`. */
   signing: SigningIdentity;
+  /** Proof purpose written into the Data Integrity proof.
+   *
+   *  Defaults to `"assertionMethod"` — the right choice for trust-task
+   *  envelopes vouching for a claim. Set to `"authentication"` when the
+   *  signature *is* the holder proving control of an identity rather than
+   *  attesting to a separate claim — e.g. a VP-framed bootstrap request
+   *  (the provision-integration flow) or a SIOP-shaped self-attestation. */
+  proofPurpose?: "assertionMethod" | "authentication";
 }
 
 /**
@@ -34,13 +42,14 @@ export interface SignTrustTaskOptions {
 export async function signTrustTask({
   envelope,
   signing,
+  proofPurpose = "assertionMethod",
 }: SignTrustTaskOptions): Promise<TrustTaskEnvelope> {
   const proofConfig: Record<string, unknown> = {
     type: "DataIntegrityProof",
     cryptosuite: "eddsa-jcs-2022",
     verificationMethod: signing.kid,
     created: new Date().toISOString(),
-    proofPurpose: "assertionMethod",
+    proofPurpose,
   };
 
   const docCopy: TrustTaskEnvelope = { ...envelope };
