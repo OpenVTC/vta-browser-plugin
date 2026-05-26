@@ -12,9 +12,11 @@ import type {
   LoginParams,
   LoginResult,
   MediatorStatusResult,
+  ProxyLoginParams,
   SignTrustTaskParams,
   SignTrustTaskResult,
   StepUpVtaParams,
+  VaultProxyLoginResultView,
   WalletDefaultsResult,
 } from "./bridge-protocol.js";
 
@@ -47,6 +49,13 @@ interface VtaWallet {
    *  Adds an eddsa-jcs-2022 Data Integrity proof and returns the resulting
    *  envelope. The caller sets `recipient` (audience binding) before calling. */
   signTrustTask(params: SignTrustTaskParams): Promise<SignTrustTaskResult>;
+  /** VTA-proxied login (vault/proxy-login/0.1). The VTA mints a session
+   *  credential (SIOP id_token for did-self-issued entries) on the
+   *  holder's behalf and returns it in a SessionBlob. The long-term
+   *  signing key never leaves the VTA. The caller threads its
+   *  `nonce` (typically the RP's `/auth/challenge` value) so the
+   *  resulting id_token passes the RP's nonce verification. */
+  proxyLogin(params: ProxyLoginParams): Promise<VaultProxyLoginResultView>;
 }
 
 declare global {
@@ -84,7 +93,8 @@ function call<T>(
     | "apiPost"
     | "mediatorStatus"
     | "walletDefaults"
-    | "signTrustTask",
+    | "signTrustTask"
+    | "proxyLogin",
   params:
     | LoginParams
     | DidcommLoginParams
@@ -92,6 +102,7 @@ function call<T>(
     | ApiGetParams
     | ApiPostParams
     | SignTrustTaskParams
+    | ProxyLoginParams
     | Record<string, never>,
 ): Promise<T> {
   const id = crypto.randomUUID();
@@ -113,5 +124,6 @@ if (!window.vtaWallet) {
     mediatorStatus: () => call<MediatorStatusResult>("mediatorStatus", {}),
     walletDefaults: () => call<WalletDefaultsResult>("walletDefaults", {}),
     signTrustTask: (params) => call<SignTrustTaskResult>("signTrustTask", params),
+    proxyLogin: (params) => call<VaultProxyLoginResultView>("proxyLogin", params),
   };
 }

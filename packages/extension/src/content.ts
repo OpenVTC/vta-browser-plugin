@@ -26,6 +26,7 @@ const RUNTIME_API_POST = "vta-wallet/api-post";
 const RUNTIME_MEDIATOR_STATUS = "vta-wallet/mediator-status";
 const RUNTIME_WALLET_DEFAULTS = "vta-wallet/wallet-defaults";
 const RUNTIME_SIGN_TRUST_TASK = "vta-wallet/sign-trust-task";
+const RUNTIME_VAULT_PROXY_LOGIN_PAGE = "vta-wallet/vault-proxy-login-page";
 
 // ─── 1. Inject the provider into the page world. ───
 // The content script runs in an isolated world, so assigning
@@ -64,7 +65,9 @@ window.addEventListener("message", (event: MessageEvent) => {
                     ? RUNTIME_WALLET_DEFAULTS
                     : req.method === "signTrustTask"
                       ? RUNTIME_SIGN_TRUST_TASK
-                      : RUNTIME_LOGIN;
+                      : req.method === "proxyLogin"
+                        ? RUNTIME_VAULT_PROXY_LOGIN_PAGE
+                        : RUNTIME_LOGIN;
       const runtimeResponse = (await chrome.runtime.sendMessage({
         type: runtimeType,
         params: req.params,
