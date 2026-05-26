@@ -28,7 +28,8 @@ export type BridgeMethod =
   | "apiPost"
   | "mediatorStatus"
   | "walletDefaults"
-  | "signTrustTask";
+  | "signTrustTask"
+  | "proxyLogin";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
 export interface LoginParams {
@@ -143,7 +144,13 @@ export interface InpageRequest {
   source: typeof INPAGE_SOURCE;
   id: string;
   method: BridgeMethod;
-  params: LoginParams | DidcommLoginParams | StepUpVtaParams | ApiGetParams | ApiPostParams;
+  params:
+    | LoginParams
+    | DidcommLoginParams
+    | StepUpVtaParams
+    | ApiGetParams
+    | ApiPostParams
+    | ProxyLoginParams;
 }
 
 /** content → provider (content world → page world). `result` is untyped
@@ -428,6 +435,15 @@ export const RUNTIME_VAULT_RELEASE = "vta-wallet/vault-release" as const;
  *  short-lived SessionBlob (cookies / headers); the long-term secret
  *  never leaves the VTA. */
 export const RUNTIME_VAULT_PROXY_LOGIN = "vta-wallet/vault-proxy-login" as const;
+/** content-script (relayed from page world) → background: same op as
+ *  the popup's `RUNTIME_VAULT_PROXY_LOGIN`, but the request arrives
+ *  wrapped in `{ params }` per the page-bridge convention. The
+ *  background unwraps and reuses the popup's offscreen pipeline. The
+ *  page-initiated entry-point exists so an RP page can call
+ *  `window.vtaWallet.proxyLogin(...)` directly for VTA-proxied SIOP
+ *  flows (M2B.4). */
+export const RUNTIME_VAULT_PROXY_LOGIN_PAGE =
+  "vta-wallet/vault-proxy-login-page" as const;
 
 /** Loose secret shape over the bridge — keeps the protocol decoupled
  *  from @pnm/core's narrowed enum. Matches the canonical
@@ -551,6 +567,12 @@ export interface RuntimeVaultProxyLoginRequest {
   /** When the entry has multiple targets, names which one to log in
    *  against. Same loose shape as `VaultEntryView["targets"][number]`. */
   target?: VaultEntryView["targets"][number];
+  /** Caller-supplied nonce — embedded verbatim by the maintainer as the
+   *  SIOP id_token's `nonce` claim. The canonical use is threading the
+   *  RP's `/auth/challenge` so the id_token passes the RP's nonce check.
+   *  Bounded `[1, 512]` chars server-side; longer values fail
+   *  validation. */
+  nonce?: string;
   /** Caller-supplied TTL ceiling in seconds; capped server-side. */
   ttlSecondsHint?: number;
 }
@@ -564,6 +586,32 @@ export interface VaultProxyLoginResultView {
 export type RuntimeVaultProxyLoginResponse =
   | { ok: true; result: VaultProxyLoginResultView }
   | { ok: false; error: string };
+
+/** Params shape the page-world provider posts to the content script
+ *  for `window.vtaWallet.proxyLogin(...)`. Mirrors the popup's
+ *  request body — the content script + background unwrap `params`
+ *  and reuse the same offscreen pipeline. */
+export interface ProxyLoginParams {
+  entryId: string;
+  target?: VaultEntryView["targets"][number];
+  /** Caller-supplied nonce — typically the value the RP returned
+   *  from its `/auth/challenge` endpoint, which the page threads
+   *  through so the resulting SIOP id_token's `nonce` claim matches
+   *  the RP's expected value. */
+  nonce?: string;
+  ttlSecondsHint?: number;
+}
+
+export interface RuntimeVaultProxyLoginPageRequest {
+  type: typeof RUNTIME_VAULT_PROXY_LOGIN_PAGE;
+  params: ProxyLoginParams;
+  /** The origin of the page that initiated the call — captured by the
+   *  content script via `window.location.origin`. The background uses
+   *  this for future consent-prompt + origin-pinning checks; M2B.4
+   *  records it but doesn't gate on it yet (hardening lands in M3
+   *  policy alongside the rest of the policy-driven gates). */
+  origin: string;
+}
 
 // ─── background ↔ offscreen document ───
 //

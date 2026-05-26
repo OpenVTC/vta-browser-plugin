@@ -33,6 +33,7 @@ import {
   RUNTIME_VAULT_DELETE,
   RUNTIME_VAULT_LIST,
   RUNTIME_VAULT_PROXY_LOGIN,
+  RUNTIME_VAULT_PROXY_LOGIN_PAGE,
   RUNTIME_VAULT_RELEASE,
   RUNTIME_VAULT_UPSERT,
   OFFSCREEN_LOCK_WALLET,
@@ -70,6 +71,7 @@ import {
   type RuntimeVaultDeleteResponse,
   type RuntimeVaultListRequest,
   type RuntimeVaultListResponse,
+  type RuntimeVaultProxyLoginPageRequest,
   type RuntimeVaultProxyLoginRequest,
   type RuntimeVaultProxyLoginResponse,
   type RuntimeVaultReleaseRequest,
@@ -532,6 +534,33 @@ async function handleVaultProxyLogin(
   })) as RuntimeVaultProxyLoginResponse;
 }
 
+// Page-world variant of vault/proxy-login. The RP page calls
+// `window.vtaWallet.proxyLogin(...)` → content script relays as a
+// `RUNTIME_VAULT_PROXY_LOGIN_PAGE` envelope with `{ params, origin }`.
+// We unwrap the params and reuse the same offscreen pipeline as the
+// popup-initiated path.
+//
+// Origin gating: M2B.4 records `req.origin` for the upcoming consent
+// prompt + origin-pinning checks but doesn't currently enforce any
+// origin/entry match. That hardening lands alongside M3 policy
+// (Rego-driven proxy-vs-fill decisions). For now the wallet's
+// ProxyLogin capability + the per-entry context-scope check on the
+// VTA side are the trust anchors.
+async function handleVaultProxyLoginPage(
+  req: RuntimeVaultProxyLoginPageRequest,
+): Promise<RuntimeVaultProxyLoginResponse> {
+  const c = await readActiveConnection();
+  if (!c.ok) return { ok: false, error: c.error };
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_VAULT_PROXY_LOGIN,
+    vtaDid: c.conn.vtaDid,
+    restBaseUrl: c.conn.restBaseUrl,
+    body: req.params,
+  })) as RuntimeVaultProxyLoginResponse;
+}
+
 // Authenticated POST proxied through the wallet (host permission → no CORS).
 async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetResponse> {
   const base = req.params.baseUrl.replace(/\/+$/, "");
@@ -669,6 +698,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_VAULT_PROXY_LOGIN) {
     handleVaultProxyLogin(message as RuntimeVaultProxyLoginRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true;
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_VAULT_PROXY_LOGIN_PAGE) {
+    handleVaultProxyLoginPage(message as RuntimeVaultProxyLoginPageRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

@@ -95,6 +95,14 @@ export interface VaultProxyLoginRestOptions extends VtaAuthInputs {
    *  against. The maintainer falls back to the entry's first DID-shaped
    *  or web-origin target if omitted. */
   target?: SiteTarget;
+  /** Caller-supplied nonce, embedded verbatim by the maintainer as the
+   *  SIOP id_token's `nonce` claim. The canonical use is threading the
+   *  RP's `/auth/challenge` value through so the resulting id_token
+   *  passes the RP's exact-match nonce check. Drivers without a nonce
+   *  concept (Password POST, OAuth refresh) ignore. Bounded
+   *  `[1, 512]` chars by the canonical schema; longer values would fail
+   *  server-side validation. */
+  nonce?: string;
   /** Caller-supplied TTL ceiling in seconds; the maintainer caps further.
    *  Honoured up to the server's cap (300 s in M2B.2b). */
   ttlSecondsHint?: number;
@@ -157,6 +165,7 @@ export async function vaultProxyLoginRest(
       payload: {
         entryId: opts.entryId,
         ...(opts.target !== undefined ? { target: opts.target } : {}),
+        ...(opts.nonce !== undefined ? { nonce: opts.nonce } : {}),
         ...(opts.ttlSecondsHint !== undefined
           ? { ttlSecondsHint: opts.ttlSecondsHint }
           : {}),
