@@ -28,6 +28,7 @@ import {
   signTrustTask,
   swapAclDidcomm,
   swapAclRest,
+  verifyDid,
 } from "@pnm/core";
 import { getWalletMediatorDid, loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
@@ -41,15 +42,18 @@ import {
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
+  OFFSCREEN_VERIFY_DID,
   RUNTIME_INBOUND_CONSENT,
   type OffscreenDidcommLoginRequest,
   type OffscreenOnboardPrepareRequest,
   type OffscreenSignTrustTaskRequest,
   type OffscreenStepUpVtaRequest,
+  type OffscreenVerifyDidRequest,
   type OnboardConnectResult,
   type OnboardPrepareResult,
   type RuntimeLoginResponse,
   type SignTrustTaskResult,
+  type VerifyRpDidResult,
 } from "./bridge-protocol.js";
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -121,8 +125,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       );
     return true; // async sendResponse
   }
+  if (msg.type === OFFSCREEN_VERIFY_DID) {
+    doVerifyDid((message as OffscreenVerifyDidRequest).did)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
   return false;
 });
+
+// Resolve + verify a DID for the consent prompt's verification badge. The
+// core `verifyDid` never throws — it returns `{ resolved: false, error }` on
+// failure — so this is a thin pass-through that just normalises the shape
+// across the IPC boundary.
+async function doVerifyDid(did: string): Promise<VerifyRpDidResult> {
+  const v = await verifyDid(did);
+  return {
+    did: v.did,
+    method: v.method,
+    resolved: v.resolved,
+    ...(v.domain ? { domain: v.domain } : {}),
+    ...(v.error ? { error: v.error } : {}),
+  };
+}
 
 // Sign a Trust-Task envelope with the wallet's holder did:peer #key-2. The
 // caller (typically a Relying Party's web UI via window.vtaWallet.signTrustTask)
