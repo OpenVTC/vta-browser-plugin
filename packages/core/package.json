@@ -24,16 +24,22 @@
       "import": "./dist/vta/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -b",
     "lint": "tsc -b --noEmit",
+    "test": "tsc -b && node --test tests/*.mjs",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "@hpke/chacha20poly1305": "^1.8.0",
+    "@hpke/core": "^1.9.0",
     "@noble/curves": "^2.2.0",
     "@openvtc/vti-didcomm-js": "^0.4.1",
-    "@scure/base": "^1.1.9"
+    "@scure/base": "^1.1.9",
+    "cbor-x": "^1.6.4"
   },
   "devDependencies": {
     "typescript": "^5.7.2"
