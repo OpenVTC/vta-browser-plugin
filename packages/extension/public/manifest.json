@@ -47,10 +47,12 @@
       ]
     }
   ],
-  "permissions": ["storage", "offscreen", "notifications"],
+  "permissions": ["storage", "offscreen", "notifications", "cookies", "tabs"],
   "host_permissions": [
     "https://admin.webvh.storm.ws/*",
     "https://webvh.storm.ws/*",
-    "https://glenn.storm.ws/*"
+    "https://glenn.storm.ws/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ]
 }

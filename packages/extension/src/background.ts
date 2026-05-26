@@ -30,6 +30,7 @@ import {
   OFFSCREEN_VERIFY_DID,
   RUNTIME_API_GET,
   RUNTIME_API_POST,
+  RUNTIME_INJECT_COOKIES,
   RUNTIME_VAULT_DELETE,
   RUNTIME_VAULT_LIST,
   RUNTIME_VAULT_LIST_PAGE,
@@ -72,6 +73,8 @@ import {
   type RuntimeVaultDeleteResponse,
   type RuntimeVaultListRequest,
   type RuntimeVaultListResponse,
+  type RuntimeInjectCookiesRequest,
+  type RuntimeInjectCookiesResponse,
   type RuntimeVaultListPageRequest,
   type RuntimeVaultProxyLoginPageRequest,
   type RuntimeVaultProxyLoginRequest,
@@ -587,6 +590,95 @@ async function handleVaultProxyLoginPage(
   })) as RuntimeVaultProxyLoginResponse;
 }
 
+// Inject the cookies from a SessionBlob into the user's browser
+// cookie jar for the bound origin. The host permission for the
+// target origin must be granted in the manifest (or via
+// chrome.permissions.request) — we don't request dynamically here.
+//
+// Per-cookie failures are tolerated: we log a warn and continue. The
+// caller gets back the count of successful writes so the popup can
+// surface a partial-success state.
+async function handleInjectCookies(
+  req: RuntimeInjectCookiesRequest,
+): Promise<RuntimeInjectCookiesResponse> {
+  if (!req.bindOrigin) {
+    return { ok: false, error: "missing bindOrigin — cookies need a host to write under" };
+  }
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(req.bindOrigin);
+  } catch {
+    return { ok: false, error: `bindOrigin is not a URL: ${req.bindOrigin}` };
+  }
+  const cookies = req.cookies ?? [];
+  let injected = 0;
+  for (const c of cookies) {
+    try {
+      // Per the chrome.cookies API:
+      //   - `url` is required and must match the cookie's resulting
+      //     host+scheme. We use the bindOrigin + the cookie's path
+      //     so chrome scopes the write correctly.
+      //   - `domain`: omit for host-only cookies (the third party
+      //     didn't set a Domain attribute), include otherwise. A
+      //     leading dot is canonical for parent-domain cookies.
+      //   - `secure`/`httpOnly`/`sameSite`/`expirationDate`: passed
+      //     through when set. `expirationDate` is a Unix timestamp
+      //     in SECONDS — we parse the cookie's Expires header (RFC
+      //     1123 / 6265) and convert.
+      const url = new URL(c.path ?? "/", baseUrl).toString();
+      type SameSite = "no_restriction" | "lax" | "strict" | "unspecified";
+      const sameSite: SameSite = (() => {
+        switch (c.sameSite) {
+          case "None":
+            return "no_restriction";
+          case "Lax":
+            return "lax";
+          case "Strict":
+            return "strict";
+          default:
+            return "unspecified";
+        }
+      })();
+      const details: chrome.cookies.SetDetails = {
+        url,
+        name: c.name,
+        value: c.value,
+        path: c.path ?? "/",
+        sameSite,
+      };
+      // Only include domain when the cookie wasn't host-only. Chrome
+      // computes the host from `url` when omitted; passing the bound
+      // origin's bare host explicitly would mis-scope cookies the
+      // third party intended to be host-only.
+      if (c.domain && c.domain !== baseUrl.host) {
+        details.domain = c.domain;
+      }
+      if (typeof c.secure === "boolean") details.secure = c.secure;
+      if (typeof c.httpOnly === "boolean") details.httpOnly = c.httpOnly;
+      if (c.expires) {
+        const t = Date.parse(c.expires);
+        if (Number.isFinite(t)) details.expirationDate = Math.floor(t / 1000);
+      }
+      await chrome.cookies.set(details);
+      injected += 1;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[background] cookie.set failed for ${c.name}=${c.value.slice(0, 8)}…:`,
+        e,
+      );
+    }
+  }
+  return {
+    ok: true,
+    result: {
+      injected,
+      total: cookies.length,
+      bindOrigin: baseUrl.origin,
+    },
+  };
+}
+
 // Authenticated POST proxied through the wallet (host permission → no CORS).
 async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetResponse> {
   const base = req.params.baseUrl.replace(/\/+$/, "");
@@ -742,6 +834,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_VAULT_LIST_PAGE) {
     handleVaultListPage(message as RuntimeVaultListPageRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true;
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_INJECT_COOKIES) {
+    handleInjectCookies(message as RuntimeInjectCookiesRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

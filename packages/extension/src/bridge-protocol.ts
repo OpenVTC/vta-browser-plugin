@@ -460,6 +460,13 @@ export const RUNTIME_VAULT_PROXY_LOGIN_PAGE =
  *  `window.vtaWallet.login()`; origin-pinned filtering lands with M3
  *  policy. */
 export const RUNTIME_VAULT_LIST_PAGE = "vta-wallet/vault-list-page" as const;
+/** popup → background: inject the cookies from a SessionBlob into the
+ *  user's browser cookie jar for the bound origin (M2B.5). Used after
+ *  a successful Password POST proxy-login — the wallet has a list of
+ *  cookies the third party set in response to the credentialed POST,
+ *  and they get written into Chrome's cookie store for the bound
+ *  origin so the user can navigate there and be logged in. */
+export const RUNTIME_INJECT_COOKIES = "vta-wallet/inject-cookies" as const;
 
 /** Loose secret shape over the bridge — keeps the protocol decoupled
  *  from @pnm/core's narrowed enum. Matches the canonical
@@ -649,6 +656,35 @@ export interface RuntimeVaultListPageRequest {
   params: VaultListParams;
   origin: string;
 }
+
+export interface RuntimeInjectCookiesRequest {
+  type: typeof RUNTIME_INJECT_COOKIES;
+  /** Bound origin from the SessionBlob — used to derive the URL each
+   *  cookie is written under. Per RFC 6265 §5.3, `chrome.cookies.set`
+   *  requires a URL parameter so it can scope the cookie to a real
+   *  host + scheme; the bound origin gives us both. */
+  bindOrigin: string;
+  /** Cookies harvested from the third-party login response. Shape
+   *  mirrors the SessionBlob's CookieJarEntry view from
+   *  `vault/_shared/0.1/session-blob`. */
+  cookies: SessionBlobView["cookies"];
+}
+
+export interface InjectCookiesResultView {
+  /** Number of cookies actually written to the cookie jar. May be
+   *  less than the input length if some failed (e.g. malformed
+   *  domain). Failures get warn-logged at the background. */
+  injected: number;
+  /** Number of cookies the maintainer asked us to inject. */
+  total: number;
+  /** The URL `chrome.cookies.set` was invoked with — useful for the
+   *  popup's "Open site" link after injection. */
+  bindOrigin: string;
+}
+
+export type RuntimeInjectCookiesResponse =
+  | { ok: true; result: InjectCookiesResultView }
+  | { ok: false; error: string };
 
 // ─── background ↔ offscreen document ───
 //
