@@ -1,0 +1,15 @@
+{
+  "name": "@pnm/demo-rp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Minimal HTTP relying party — single zero-dependency Node service that the VTA's vault/proxy-login Password POST driver can target end-to-end. Provides a login form, an /api/login JSON endpoint that issues a session cookie, and a /me page that the wallet's cookie-injection step makes accessible.",
+  "type": "module",
+  "main": "./server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
