@@ -423,6 +423,11 @@ export type RuntimeVaultListResponse =
 export const RUNTIME_VAULT_UPSERT = "vta-wallet/vault-upsert" as const;
 export const RUNTIME_VAULT_DELETE = "vta-wallet/vault-delete" as const;
 export const RUNTIME_VAULT_RELEASE = "vta-wallet/vault-release" as const;
+/** popup → background: vault/proxy-login/0.1. The VTA logs into the
+ *  entry's bound third party on the holder's behalf and returns a
+ *  short-lived SessionBlob (cookies / headers); the long-term secret
+ *  never leaves the VTA. */
+export const RUNTIME_VAULT_PROXY_LOGIN = "vta-wallet/vault-proxy-login" as const;
 
 /** Loose secret shape over the bridge — keeps the protocol decoupled
  *  from @pnm/core's narrowed enum. Matches the canonical
@@ -515,6 +520,51 @@ export type RuntimeVaultReleaseResponse =
   | { ok: true; result: VaultReleaseResultView }
   | { ok: false; error: string };
 
+/** Loose SessionBlob shape over the bridge — keeps the protocol
+ *  decoupled from @pnm/core's narrowed types. Mirrors the canonical
+ *  `vault/_shared/0.1/session-blob` schema. The offscreen handler
+ *  casts to @pnm/core's `SessionBlob` at the boundary. */
+export interface SessionBlobView {
+  sessionId: string;
+  /** RFC 3339. Popup MUST schedule a wipe at this instant. */
+  expiresAt: string;
+  cookies?: Array<{
+    name: string;
+    value: string;
+    domain: string;
+    path: string;
+    expires?: string;
+    secure?: boolean;
+    httpOnly?: boolean;
+    sameSite?: "Strict" | "Lax" | "None";
+  }>;
+  headers?: Array<{ name: string; value: string }>;
+  localStorage?: Array<{ key: string; value: string }>;
+  sessionStorage?: Array<{ key: string; value: string }>;
+  bindOrigin?: string;
+  refreshHint?: "maintainer-only" | "on-401" | "before-expiry";
+}
+
+export interface RuntimeVaultProxyLoginRequest {
+  type: typeof RUNTIME_VAULT_PROXY_LOGIN;
+  entryId: string;
+  /** When the entry has multiple targets, names which one to log in
+   *  against. Same loose shape as `VaultEntryView["targets"][number]`. */
+  target?: VaultEntryView["targets"][number];
+  /** Caller-supplied TTL ceiling in seconds; capped server-side. */
+  ttlSecondsHint?: number;
+}
+
+export interface VaultProxyLoginResultView {
+  sessionBlob: SessionBlobView;
+  sessionId: string;
+  expiresAt: string;
+}
+
+export type RuntimeVaultProxyLoginResponse =
+  | { ok: true; result: VaultProxyLoginResultView }
+  | { ok: false; error: string };
+
 // ─── background ↔ offscreen document ───
 //
 // The DIDComm login runs in an offscreen document, not the service worker:
@@ -596,6 +646,20 @@ export interface OffscreenVaultReleaseRequest {
   vtaDid: string;
   restBaseUrl: string;
   body: Omit<RuntimeVaultReleaseRequest, "type">;
+}
+
+/** background → offscreen: vault/proxy-login/0.1. Same shape as
+ *  vault/release — offscreen owns the holder's private X25519 so the
+ *  authcrypt unpack happens there; the cleartext SessionBlob flows
+ *  back over the bridge in the response. */
+export const OFFSCREEN_VAULT_PROXY_LOGIN = "offscreen/vault-proxy-login" as const;
+
+export interface OffscreenVaultProxyLoginRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_VAULT_PROXY_LOGIN;
+  vtaDid: string;
+  restBaseUrl: string;
+  body: Omit<RuntimeVaultProxyLoginRequest, "type">;
 }
 
 export interface OffscreenSignTrustTaskRequest {
