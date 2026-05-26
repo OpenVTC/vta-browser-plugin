@@ -1,25 +1,32 @@
 // Onboarding key rotation — the wallet's ephemeral did:key, granted into a
 // VTA's ACL by the operator, is swapped onto the wallet's long-term holder
-// did:peer on first connect via the `swap-acl` Trust-Task.
+// did:peer on first connect via the canonical Trust Task `acl/swap-key/0.1`.
 //
 // Two proofs ride along, exactly as the VTA's swap-acl handler expects:
 //   - the DIDComm authcrypt envelope authenticates the **ephemeral** (the
-//     "old" DID being rotated away from), via its sender key;
-//   - the inner VP-JWT (`issueSwapPresentation`) proves control of the
-//     **holder did:peer** (the "new" DID), signed by its #key-2.
+//     "currentSubject" being rotated away from), via its sender key;
+//   - the inner VP-JWT (`issueSwapPresentation`) — carried as `linkProof` —
+//     proves control of the **holder did:peer** (the "newSubject"),
+//     signed by its #key-2.
 //
 // Mirrors `requestVtaApproval`: build message → authcrypt to the VTA → forward
 // via its mediator → await the reply by `thid`. DIDComm is the first-class
 // path — the authcrypt envelope *is* the caller authentication, so no separate
 // token round-trip is needed.
+//
+// Wire format: the canonical Trust Task URI `acl/swap-key/0.1` per the
+// dtgwg-trust-tasks-tf registry. The VTA also accepts the legacy
+// `firstperson.network/protocols/acl-management/1.0/swap-acl` URI during the
+// deprecation window so older plugins keep working; new plugins SHOULD emit
+// the canonical URI.
 
 import { packAuthcrypt, packAuthcryptJson, wrapForward, type Identity } from "../didcomm/index.js";
 import { issueSwapPresentation, type SigningIdentity } from "../siop/self-issued.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import type { DidcommMessageBridge } from "../vta/transport.js";
 
-const SWAP_ACL = "https://firstperson.network/protocols/acl-management/1.0/swap-acl";
-const SWAP_ACL_RESULT = "https://firstperson.network/protocols/acl-management/1.0/swap-acl-result";
+const ACL_SWAP_KEY = "https://trusttasks.org/spec/acl/swap-key/0.1";
+const ACL_SWAP_KEY_RESPONSE = "https://trusttasks.org/spec/acl/swap-key/0.1#response";
 const VTA_AUTHENTICATE = "https://affinidi.com/atm/1.0/authenticate";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -60,14 +67,18 @@ export async function swapAclDidcomm(opts: SwapAclDidcommOptions): Promise<AclSw
   const { bridge, ephemeral, holderSigning, service, mediator, vtaDid } = opts;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  const presentation = issueSwapPresentation({ holder: holderSigning, audience: vtaDid });
+  const linkProof = issueSwapPresentation({ holder: holderSigning, audience: vtaDid });
   const requestId = globalThis.crypto.randomUUID();
   const message = {
     id: requestId,
-    type: SWAP_ACL,
+    type: ACL_SWAP_KEY,
     from: ephemeral.did,
     to: [service.did],
-    body: { presentation },
+    body: {
+      currentSubject: ephemeral.did,
+      newSubject: holderSigning.did,
+      linkProof,
+    },
   };
 
   const inner = await packAuthcrypt(message, ephemeral, [
@@ -85,15 +96,17 @@ export async function swapAclDidcomm(opts: SwapAclDidcommOptions): Promise<AclSw
   const reply = await bridge.sendAndAwaitReply(outer, requestId, { timeoutMs });
 
   if (reply.thid !== requestId) {
-    throw new Error(`swap-acl: reply thid ${reply.thid ?? "(none)"} != request ${requestId}`);
+    throw new Error(`acl/swap-key: reply thid ${reply.thid ?? "(none)"} != request ${requestId}`);
   }
   if (reply.from !== vtaDid) {
-    throw new Error(`swap-acl: reply from ${reply.from ?? "(none)"} != VTA ${vtaDid}`);
+    throw new Error(`acl/swap-key: reply from ${reply.from ?? "(none)"} != VTA ${vtaDid}`);
   }
-  if (reply.type !== SWAP_ACL_RESULT) {
+  if (reply.type !== ACL_SWAP_KEY_RESPONSE) {
     // Most commonly a problem-report (e.g. the VP failed to verify, or the
     // ephemeral isn't in the ACL yet).
-    throw new Error(`swap-acl: ${reply.type ?? "(no type)"} — ${JSON.stringify(reply.body ?? {})}`);
+    throw new Error(
+      `acl/swap-key: ${reply.type ?? "(no type)"} — ${JSON.stringify(reply.body ?? {})}`,
+    );
   }
 
   return (reply.body ?? {}) as AclSwapResult;
@@ -169,15 +182,20 @@ export async function swapAclRest(opts: SwapAclRestOptions): Promise<AclSwapResu
     throw new Error(`vta /auth/: malformed response: ${JSON.stringify(aBody)}`);
   }
 
-  // 4. POST /acl/swap with Bearer + the holder's VP-JWT → the new ACL entry.
-  const presentation = issueSwapPresentation({ holder: holderSigning, audience: vtaDid });
+  // 4. POST /acl/swap with Bearer + the holder's VP-JWT (as `linkProof`) → the
+  //    new ACL entry. Canonical Trust Task `acl/swap-key/0.1` body shape.
+  const linkProof = issueSwapPresentation({ holder: holderSigning, audience: vtaDid });
   const sRes = await f(`${base}/acl/swap`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify({ presentation }),
+    body: JSON.stringify({
+      currentSubject: ephemeral.did,
+      newSubject: holderSigning.did,
+      linkProof,
+    }),
   });
   if (!sRes.ok) {
     throw new Error(`vta /acl/swap failed (${sRes.status}): ${await sRes.text()}`);
