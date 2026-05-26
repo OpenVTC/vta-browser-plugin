@@ -413,6 +413,108 @@ export type RuntimeVaultListResponse =
   | { ok: true; result: VaultListResultView }
   | { ok: false; error: string };
 
+// ─── Vault write surface (M2A.5) — upsert, delete, release ───
+//
+// Same active-connection lookup as RUNTIME_VAULT_LIST. The popup
+// constructs the request shape; the offscreen handler resolves the VTA's
+// keyAgreement + loads the holder identity (the secret-sealing primitives
+// need the holder's private X25519, which lives only in offscreen).
+
+export const RUNTIME_VAULT_UPSERT = "vta-wallet/vault-upsert" as const;
+export const RUNTIME_VAULT_DELETE = "vta-wallet/vault-delete" as const;
+export const RUNTIME_VAULT_RELEASE = "vta-wallet/vault-release" as const;
+
+/** Loose secret shape over the bridge — keeps the protocol decoupled
+ *  from @pnm/core's narrowed enum. Matches the canonical
+ *  vault/_shared/0.1/vault-secret discriminator (`kind: password |
+ *  passkey | oauth-tokens | bearer-token | custom | ...`); the
+ *  offscreen handler casts to @pnm/core's VaultSecret at the @pnm/core
+ *  boundary. */
+export interface VaultSecretView {
+  kind: string;
+  username?: string;
+  password?: string;
+  credentialId?: string;
+  privateKey?: string;
+  algorithm?: string;
+  rpId?: string;
+  userHandle?: string;
+  provider?: string;
+  refreshToken?: string;
+  accessToken?: string;
+  accessTokenExpiresAt?: string;
+  scopes?: string[];
+  token?: string;
+  headerName?: string;
+  headerPrefix?: string;
+  fields?: Array<{ name: string; value: string; hidden?: boolean; kind?: string }>;
+  secureNotes?: string;
+}
+
+export interface RuntimeVaultUpsertRequest {
+  type: typeof RUNTIME_VAULT_UPSERT;
+  id?: string;
+  expectedVersion?: number;
+  contextId: string;
+  targets: VaultEntryView["targets"];
+  label: string;
+  secretKind: string;
+  tags?: string[];
+  notes?: string;
+  favicon?: string;
+  selectors?: string[];
+  customFieldNames?: string[];
+  expiresAt?: string;
+  secret?: VaultSecretView;
+  clearFields?: Array<
+    "notes" | "favicon" | "expiresAt" | "tags" | "selectors" | "customFieldNames"
+  >;
+}
+
+export interface VaultUpsertResultView {
+  entry: VaultEntryView;
+  created: boolean;
+}
+
+export type RuntimeVaultUpsertResponse =
+  | { ok: true; result: VaultUpsertResultView }
+  | { ok: false; error: string };
+
+export interface RuntimeVaultDeleteRequest {
+  type: typeof RUNTIME_VAULT_DELETE;
+  id: string;
+  expectedVersion?: number;
+  reason?: string;
+}
+
+export interface VaultDeleteResultView {
+  id: string;
+  deletedAt: string;
+  graceUntil: string;
+}
+
+export type RuntimeVaultDeleteResponse =
+  | { ok: true; result: VaultDeleteResultView }
+  | { ok: false; error: string };
+
+export interface RuntimeVaultReleaseRequest {
+  type: typeof RUNTIME_VAULT_RELEASE;
+  entryId: string;
+  ttlSecondsHint?: number;
+}
+
+export interface VaultReleaseResultView {
+  /** Cleartext secret bytes. Caller MUST schedule a wipe at `ttlSeconds`
+   *  after receipt — popup typically uses a setTimeout. */
+  secret: VaultSecretView;
+  secretKind: string;
+  ttlSeconds: number;
+}
+
+export type RuntimeVaultReleaseResponse =
+  | { ok: true; result: VaultReleaseResultView }
+  | { ok: false; error: string };
+
 // ─── background ↔ offscreen document ───
 //
 // The DIDComm login runs in an offscreen document, not the service worker:
@@ -457,6 +559,43 @@ export interface OffscreenVaultListRequest {
   vtaDid: string;
   restBaseUrl: string;
   filter?: VaultListFilter;
+}
+
+/** background → offscreen: vault/upsert/0.1. Holder X25519 lives in
+ *  offscreen, so the authcrypt sealing of the secret happens there. */
+export const OFFSCREEN_VAULT_UPSERT = "offscreen/vault-upsert" as const;
+
+export interface OffscreenVaultUpsertRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_VAULT_UPSERT;
+  vtaDid: string;
+  restBaseUrl: string;
+  /** Same shape as RuntimeVaultUpsertRequest minus the `type` tag. */
+  body: Omit<RuntimeVaultUpsertRequest, "type">;
+}
+
+/** background → offscreen: vault/delete/0.1. */
+export const OFFSCREEN_VAULT_DELETE = "offscreen/vault-delete" as const;
+
+export interface OffscreenVaultDeleteRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_VAULT_DELETE;
+  vtaDid: string;
+  restBaseUrl: string;
+  body: Omit<RuntimeVaultDeleteRequest, "type">;
+}
+
+/** background → offscreen: vault/release/0.1. Offscreen unpacks the
+ *  authcrypt JWE the VTA returns (the holder's private X25519 is the
+ *  only key that can). */
+export const OFFSCREEN_VAULT_RELEASE = "offscreen/vault-release" as const;
+
+export interface OffscreenVaultReleaseRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_VAULT_RELEASE;
+  vtaDid: string;
+  restBaseUrl: string;
+  body: Omit<RuntimeVaultReleaseRequest, "type">;
 }
 
 export interface OffscreenSignTrustTaskRequest {

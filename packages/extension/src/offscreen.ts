@@ -28,7 +28,10 @@ import {
   signTrustTask,
   swapAclDidcomm,
   swapAclRest,
+  vaultDeleteRest,
   vaultListRest,
+  vaultReleaseRest,
+  vaultUpsertRest,
   verifyDid,
 } from "@pnm/core";
 import { getWalletMediatorDid, loadHolder } from "./holder.js";
@@ -43,14 +46,20 @@ import {
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
+  OFFSCREEN_VAULT_DELETE,
   OFFSCREEN_VAULT_LIST,
+  OFFSCREEN_VAULT_RELEASE,
+  OFFSCREEN_VAULT_UPSERT,
   OFFSCREEN_VERIFY_DID,
   RUNTIME_INBOUND_CONSENT,
   type OffscreenDidcommLoginRequest,
   type OffscreenOnboardPrepareRequest,
   type OffscreenSignTrustTaskRequest,
   type OffscreenStepUpVtaRequest,
+  type OffscreenVaultDeleteRequest,
   type OffscreenVaultListRequest,
+  type OffscreenVaultReleaseRequest,
+  type OffscreenVaultUpsertRequest,
   type OffscreenVerifyDidRequest,
   type OnboardConnectResult,
   type OnboardPrepareResult,
@@ -144,6 +153,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       );
     return true; // async sendResponse
   }
+  if (msg.type === OFFSCREEN_VAULT_UPSERT) {
+    doVaultUpsert(message as OffscreenVaultUpsertRequest)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true;
+  }
+  if (msg.type === OFFSCREEN_VAULT_DELETE) {
+    doVaultDelete(message as OffscreenVaultDeleteRequest)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true;
+  }
+  if (msg.type === OFFSCREEN_VAULT_RELEASE) {
+    doVaultRelease(message as OffscreenVaultReleaseRequest)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true;
+  }
   return false;
 });
 
@@ -171,6 +204,52 @@ async function doVaultList(req: OffscreenVaultListRequest) {
     entries: response.entries,
     truncated: response.truncated,
   };
+}
+
+// Vault — upsert. Sealed-secret packing happens inside @pnm/core's
+// vaultUpsertRest (uses the holder's X25519 to authcrypt the VaultSecret
+// JSON to the VTA's keyAgreement key).
+async function doVaultUpsert(req: OffscreenVaultUpsertRequest) {
+  const { identity: holder } = await loadHolder();
+  const service = await resolveKeyAgreement(req.vtaDid);
+  type Opts = Parameters<typeof vaultUpsertRest>[0];
+  // The bridge protocol types secretKind / secret loosely (strings) to
+  // avoid importing @pnm/core's enums into bridge-protocol.ts. Cast at
+  // this boundary — server-side canonical-schema validation is the real
+  // authority anyway.
+  const opts = {
+    baseUrl: req.restBaseUrl,
+    holder,
+    service,
+    ...req.body,
+  } as unknown as Opts;
+  return await vaultUpsertRest(opts);
+}
+
+// Vault — delete. No envelope; just authenticated POST.
+async function doVaultDelete(req: OffscreenVaultDeleteRequest) {
+  const { identity: holder } = await loadHolder();
+  const service = await resolveKeyAgreement(req.vtaDid);
+  return await vaultDeleteRest({
+    baseUrl: req.restBaseUrl,
+    holder,
+    service,
+    ...req.body,
+  });
+}
+
+// Vault — release. Server returns an authcrypt JWE; @pnm/core's
+// vaultReleaseRest unpacks it against the holder's private X25519
+// (which lives here in offscreen) and surfaces the cleartext secret.
+async function doVaultRelease(req: OffscreenVaultReleaseRequest) {
+  const { identity: holder } = await loadHolder();
+  const service = await resolveKeyAgreement(req.vtaDid);
+  return await vaultReleaseRest({
+    baseUrl: req.restBaseUrl,
+    holder,
+    service,
+    ...req.body,
+  });
 }
 
 // Resolve + verify a DID for the consent prompt's verification badge. The
