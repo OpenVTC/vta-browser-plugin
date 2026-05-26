@@ -240,7 +240,13 @@ async function doOnboardPrepare(vtaDid: string): Promise<OnboardPrepareResult> {
   await store.put(ONBOARD_KEY, pending);
   return {
     ephemeralDid: eph.did,
-    command: `pnm acl create --did ${eph.did} --role admin`,
+    // `--expires 1h` so an abandoned onboarding (user prepares but never
+    // connects) doesn't leave a permanent admin grant for the ephemeral
+    // did:key. On successful connect, swap-acl deletes the row regardless
+    // of expiry; if the user takes >1h between Prepare and Connect they
+    // re-run Prepare to mint a fresh ephemeral. The acl_sweeper prunes
+    // the expired row on its background pass.
+    command: `pnm acl create --did ${eph.did} --role admin --expires 1h`,
     ...(services.didcomm ? { mediatorDid: services.didcomm.mediatorDid } : {}),
     ...(services.rest ? { restBaseUrl: services.rest.baseUrl } : {}),
   };
