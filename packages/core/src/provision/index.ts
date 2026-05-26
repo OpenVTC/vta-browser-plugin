@@ -10,6 +10,25 @@ export { decodeArmor, buildChunkAad } from "./armor.js";
 export { crc24, crc24ToBytes } from "./crc24.js";
 export { hpkeOpen, type HpkeOpenInput } from "./hpke.js";
 export { openSealedBundle, openBundle, openAdminRotationBundle, type OpenedBundle } from "./open.js";
+export {
+  buildBootstrapRequest,
+  type BootstrapAsk,
+  type BootstrapRequestVp,
+  type BuildBootstrapRequestOptions,
+  type DidTemplateRef,
+} from "./request.js";
+export {
+  sendProvisionIntegration,
+  type ProvisionIntegrationRequestBody,
+  type ProvisionIntegrationResponseBody,
+  type ProvisionSummary,
+  type SendProvisionIntegrationOptions,
+} from "./send.js";
+export {
+  runProvisionIntegration,
+  type MinimalAdminReply,
+  type RunProvisionIntegrationOptions,
+} from "./run.js";
 export type {
   AdminRotationPayload,
   ArmoredChunk,
