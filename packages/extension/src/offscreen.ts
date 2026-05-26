@@ -30,6 +30,7 @@ import {
   swapAclRest,
   vaultDeleteRest,
   vaultListRest,
+  vaultProxyLoginRest,
   vaultReleaseRest,
   vaultUpsertRest,
   verifyDid,
@@ -48,6 +49,7 @@ import {
   OFFSCREEN_TARGET,
   OFFSCREEN_VAULT_DELETE,
   OFFSCREEN_VAULT_LIST,
+  OFFSCREEN_VAULT_PROXY_LOGIN,
   OFFSCREEN_VAULT_RELEASE,
   OFFSCREEN_VAULT_UPSERT,
   OFFSCREEN_VERIFY_DID,
@@ -58,6 +60,7 @@ import {
   type OffscreenStepUpVtaRequest,
   type OffscreenVaultDeleteRequest,
   type OffscreenVaultListRequest,
+  type OffscreenVaultProxyLoginRequest,
   type OffscreenVaultReleaseRequest,
   type OffscreenVaultUpsertRequest,
   type OffscreenVerifyDidRequest,
@@ -177,6 +180,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       );
     return true;
   }
+  if (msg.type === OFFSCREEN_VAULT_PROXY_LOGIN) {
+    doVaultProxyLogin(message as OffscreenVaultProxyLoginRequest)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true;
+  }
   return false;
 });
 
@@ -250,6 +261,27 @@ async function doVaultRelease(req: OffscreenVaultReleaseRequest) {
     service,
     ...req.body,
   });
+}
+
+// Vault — proxy-login. The VTA performs the login at the bound third
+// party and authcrypts the resulting SessionBlob to the holder's
+// X25519. Offscreen unpacks the JWE (the holder's private key lives
+// here) and returns the cleartext SessionBlob to the popup over the
+// bridge. The bridge protocol types `target` loosely so it doesn't
+// have to import @pnm/core's narrowed SiteTarget enum; cast at this
+// wire boundary — the server-side canonical-schema validation is the
+// real authority.
+async function doVaultProxyLogin(req: OffscreenVaultProxyLoginRequest) {
+  const { identity: holder } = await loadHolder();
+  const service = await resolveKeyAgreement(req.vtaDid);
+  type Opts = Parameters<typeof vaultProxyLoginRest>[0];
+  const opts = {
+    baseUrl: req.restBaseUrl,
+    holder,
+    service,
+    ...req.body,
+  } as unknown as Opts;
+  return await vaultProxyLoginRest(opts);
 }
 
 // Resolve + verify a DID for the consent prompt's verification badge. The

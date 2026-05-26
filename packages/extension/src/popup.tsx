@@ -8,6 +8,7 @@ import {
   RUNTIME_ONBOARD_PREPARE,
   RUNTIME_VAULT_DELETE,
   RUNTIME_VAULT_LIST,
+  RUNTIME_VAULT_PROXY_LOGIN,
   RUNTIME_VAULT_RELEASE,
   RUNTIME_VAULT_UPSERT,
   type OnboardPrepareResult,
@@ -15,8 +16,10 @@ import {
   type RuntimeOnboardPrepareResponse,
   type RuntimeVaultDeleteResponse,
   type RuntimeVaultListResponse,
+  type RuntimeVaultProxyLoginResponse,
   type RuntimeVaultReleaseResponse,
   type RuntimeVaultUpsertResponse,
+  type SessionBlobView,
   type VaultEntryView,
   type VaultSecretView,
 } from "./bridge-protocol.js";
@@ -141,6 +144,17 @@ function VaultPanel() {
     expiresAtMs: number;
   } | null>(null);
 
+  // Per-row proxy-login state (M2B.3). Holds the cleartext SessionBlob
+  // + when it expires (Date.now() ms). Auto-wiped at TTL via the same
+  // countdown pattern as `revealed`. The SessionBlob is small but its
+  // headers carry the SIOP id_token; treating it like a release secret
+  // (in-memory only, wipe at TTL) is the right discipline.
+  const [usedSession, setUsedSession] = useState<{
+    entryId: string;
+    sessionBlob: SessionBlobView;
+    expiresAtMs: number;
+  } | null>(null);
+
   // M2A.7 context filter
   const [contextFilter, setContextFilter] = useState<"all" | string>("all");
 
@@ -156,6 +170,19 @@ function VaultPanel() {
     const t = setTimeout(() => setRevealed(null), remaining);
     return () => clearTimeout(t);
   }, [revealed]);
+
+  // TTL countdown timer for the used session — same shape as the
+  // reveal timer.
+  useEffect(() => {
+    if (!usedSession) return;
+    const remaining = usedSession.expiresAtMs - Date.now();
+    if (remaining <= 0) {
+      setUsedSession(null);
+      return;
+    }
+    const t = setTimeout(() => setUsedSession(null), remaining);
+    return () => clearTimeout(t);
+  }, [usedSession]);
 
   async function loadVault() {
     setBusy(true);
@@ -210,6 +237,44 @@ function VaultPanel() {
         entryId: entry.id,
         secret: res.result.secret,
         expiresAtMs: Date.now() + res.result.ttlSeconds * 1000,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // M2B.3 — proxy-login (the "Use" button). VTA logs in on the
+  // holder's behalf and returns a SessionBlob (cookies / headers /
+  // id_token). The popup holds the SessionBlob in memory only for the
+  // server-declared TTL and shows a redacted preview so the user can
+  // confirm the session was minted; full integration (header injection
+  // via declarativeNetRequest) lands in a follow-up that builds on the
+  // M2B.4 demo.
+  async function useEntry(entry: VaultEntryView) {
+    // Hide any previously-used session or reveal — switching to a new
+    // entry should wipe the prior in-memory material immediately.
+    setUsedSession(null);
+    setRevealed(null);
+    setBusy(true);
+    setError(null);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: RUNTIME_VAULT_PROXY_LOGIN,
+        entryId: entry.id,
+      })) as RuntimeVaultProxyLoginResponse;
+      if (!res.ok) throw new Error(res.error);
+      // Trust the server-declared expiresAt — it's the authoritative
+      // wipe deadline. `Date.parse` returns NaN on malformed strings;
+      // fall back to a defensive 60 s if so (better than a setTimeout
+      // with NaN that resolves immediately).
+      const parsed = Date.parse(res.result.expiresAt);
+      const expiresAtMs = Number.isFinite(parsed) ? parsed : Date.now() + 60_000;
+      setUsedSession({
+        entryId: entry.id,
+        sessionBlob: res.result.sessionBlob,
+        expiresAtMs,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -356,8 +421,24 @@ function VaultPanel() {
                   expiresAtMs={revealed.expiresAtMs}
                   onDismiss={() => setRevealed(null)}
                 />
+              ) : usedSession?.entryId === e.id ? (
+                <UsedSessionView
+                  sessionBlob={usedSession.sessionBlob}
+                  expiresAtMs={usedSession.expiresAtMs}
+                  onDismiss={() => setUsedSession(null)}
+                />
               ) : (
                 <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                  {e.secretKind === "did-self-issued" && (
+                    <button
+                      onClick={() => void useEntry(e)}
+                      disabled={busy}
+                      style={{ fontSize: 11 }}
+                      title="VTA logs in on your behalf — long-term key never leaves the VTA"
+                    >
+                      🔑 Use
+                    </button>
+                  )}
                   <button
                     onClick={() => void revealEntry(e)}
                     disabled={busy}
@@ -600,6 +681,104 @@ function RevealedSecretView({
       </div>
     </div>
   );
+}
+
+// ─── Used-session view (M2B.3) ───
+// Inline display of a `vault/proxy-login/0.1` SessionBlob. Shows the
+// session id, bound origin, refresh hint, countdown to expiry, and a
+// redacted preview of the Authorization header (id_token / bearer)
+// with a copy button so a developer can paste it into a curl / RP test
+// flow. The parent's setTimeout wipes `usedSession` at `expiresAtMs`;
+// this component only renders + counts down — it never persists.
+function UsedSessionView({
+  sessionBlob,
+  expiresAtMs,
+  onDismiss,
+}: {
+  sessionBlob: SessionBlobView;
+  expiresAtMs: number;
+  onDismiss: () => void;
+}): React.JSX.Element {
+  const [secondsLeft, setSecondsLeft] = useState(
+    Math.max(0, Math.round((expiresAtMs - Date.now()) / 1000)),
+  );
+  useEffect(() => {
+    const id = setInterval(() => {
+      const left = Math.max(0, Math.round((expiresAtMs - Date.now()) / 1000));
+      setSecondsLeft(left);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [expiresAtMs]);
+
+  const authHeader = sessionBlob.headers?.find(
+    (h) => h.name.toLowerCase() === "authorization",
+  );
+  const headerCount = sessionBlob.headers?.length ?? 0;
+  const cookieCount = sessionBlob.cookies?.length ?? 0;
+
+  return (
+    <div
+      style={{
+        marginTop: 4,
+        padding: 6,
+        background: "#e8f5e9",
+        border: "1px solid #80c684",
+        borderRadius: 4,
+        display: "grid",
+        gap: 4,
+        fontSize: 11,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <strong style={{ color: "#206c20" }}>✓ Session ready</strong>
+        <span style={{ color: "#666", fontSize: 10 }}>
+          expires in {secondsLeft}s
+        </span>
+      </div>
+      {sessionBlob.bindOrigin && (
+        <div>
+          <span style={{ color: "#666" }}>Bound origin:</span>{" "}
+          <code style={mono}>{sessionBlob.bindOrigin}</code>
+        </div>
+      )}
+      <div>
+        <span style={{ color: "#666" }}>Session id:</span>{" "}
+        <code style={mono}>{sessionBlob.sessionId.slice(0, 12)}…</code>
+      </div>
+      <div style={{ color: "#666", fontSize: 10 }}>
+        {headerCount} header{headerCount === 1 ? "" : "s"} ·{" "}
+        {cookieCount} cookie{cookieCount === 1 ? "" : "s"}
+        {sessionBlob.refreshHint && <> · refresh: {sessionBlob.refreshHint}</>}
+      </div>
+      {authHeader && (
+        <div>
+          <span style={{ color: "#666" }}>{authHeader.name}:</span>{" "}
+          <code style={mono} title="redacted preview — copy below for full value">
+            {redactBearer(authHeader.value)}
+          </code>
+          <CopyButton text={authHeader.value} />
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+        <button onClick={onDismiss} style={{ fontSize: 10 }}>
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Redact the middle of a Bearer-token value so the popup doesn't shoulder-
+// surf the full id_token. Keeps the scheme + the first 8 / last 8
+// characters for at-a-glance "is this the token I expected" comparison.
+function redactBearer(headerValue: string): string {
+  const m = /^(\s*Bearer\s+)(.+)$/i.exec(headerValue);
+  if (!m || !m[1] || !m[2])
+    return headerValue.length > 24 ? `${headerValue.slice(0, 12)}…` : headerValue;
+  const scheme = m[1];
+  const token = m[2];
+  if (token.length <= 20) return `${scheme}${token}`;
+  return `${scheme}${token.slice(0, 8)}…${token.slice(-8)}`;
 }
 
 function CopyButton({ text }: { text: string }): React.JSX.Element {

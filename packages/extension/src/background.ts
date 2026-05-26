@@ -24,6 +24,7 @@ import {
   OFFSCREEN_TARGET,
   OFFSCREEN_VAULT_DELETE,
   OFFSCREEN_VAULT_LIST,
+  OFFSCREEN_VAULT_PROXY_LOGIN,
   OFFSCREEN_VAULT_RELEASE,
   OFFSCREEN_VAULT_UPSERT,
   OFFSCREEN_VERIFY_DID,
@@ -31,6 +32,7 @@ import {
   RUNTIME_API_POST,
   RUNTIME_VAULT_DELETE,
   RUNTIME_VAULT_LIST,
+  RUNTIME_VAULT_PROXY_LOGIN,
   RUNTIME_VAULT_RELEASE,
   RUNTIME_VAULT_UPSERT,
   OFFSCREEN_LOCK_WALLET,
@@ -68,6 +70,8 @@ import {
   type RuntimeVaultDeleteResponse,
   type RuntimeVaultListRequest,
   type RuntimeVaultListResponse,
+  type RuntimeVaultProxyLoginRequest,
+  type RuntimeVaultProxyLoginResponse,
   type RuntimeVaultReleaseRequest,
   type RuntimeVaultReleaseResponse,
   type RuntimeVaultUpsertRequest,
@@ -512,6 +516,22 @@ async function handleVaultRelease(
   })) as RuntimeVaultReleaseResponse;
 }
 
+async function handleVaultProxyLogin(
+  req: RuntimeVaultProxyLoginRequest,
+): Promise<RuntimeVaultProxyLoginResponse> {
+  const c = await readActiveConnection();
+  if (!c.ok) return { ok: false, error: c.error };
+  await ensureOffscreenDocument();
+  const { type: _t, ...body } = req;
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_VAULT_PROXY_LOGIN,
+    vtaDid: c.conn.vtaDid,
+    restBaseUrl: c.conn.restBaseUrl,
+    body,
+  })) as RuntimeVaultProxyLoginResponse;
+}
+
 // Authenticated POST proxied through the wallet (host permission → no CORS).
 async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetResponse> {
   const base = req.params.baseUrl.replace(/\/+$/, "");
@@ -640,6 +660,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_VAULT_RELEASE) {
     handleVaultRelease(message as RuntimeVaultReleaseRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true;
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_VAULT_PROXY_LOGIN) {
+    handleVaultProxyLogin(message as RuntimeVaultProxyLoginRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
