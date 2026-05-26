@@ -3,9 +3,20 @@
   "name": "PNM Wallet",
   "version": "0.1.0",
   "description": "Bridge between WebAuthn passkeys and VTA-managed DIDs.",
+  "icons": {
+    "16": "icon.svg",
+    "32": "icon.svg",
+    "48": "icon.svg",
+    "128": "icon.svg"
+  },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "PNM Wallet"
+    "default_title": "PNM Wallet",
+    "default_icon": {
+      "16": "icon.svg",
+      "32": "icon.svg",
+      "48": "icon.svg"
+    }
   },
   "options_ui": {
     "page": "options.html",
