@@ -184,8 +184,17 @@ export async function vaultProxyLoginRest(
     );
   }
 
+  // The VTA authcrypts the SessionBlob to the holder; the unpacker
+  // needs the VTA's keyAgreement public JWK to verify the sender
+  // binding (the `skid` in the JWE's protected header). Without it,
+  // vti-didcomm-js raises "sender.publicJwk required for authcrypt".
+  // The service endpoint structure carries the resolved VTA pubkey
+  // from the holder's onboarding handshake.
   const unpacked = await unpackMessage(
-    { input: wire.sealedSessionBlob.jwe },
+    {
+      input: wire.sealedSessionBlob.jwe,
+      sender_public_jwk: opts.service.keyAgreementPublicJwk,
+    },
     opts.holder,
   );
   if (unpacked.kind !== "encrypted") {

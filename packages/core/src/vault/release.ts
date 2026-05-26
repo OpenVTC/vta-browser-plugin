@@ -93,7 +93,19 @@ export async function vaultReleaseRest(
     );
   }
 
-  const unpacked = await unpackMessage({ input: wire.sealedSecret.jwe }, opts.holder);
+  // The VTA authcrypts the secret to the holder; the unpacker needs
+  // the VTA's keyAgreement public JWK to verify the sender binding.
+  // Same shape as vault/proxy-login — see that file for the longer
+  // explanation. Latent in this file since M2A.3 (release was never
+  // end-to-end tested with a real VTA before M2B.4 demos exposed
+  // the failure on the parallel proxy-login path).
+  const unpacked = await unpackMessage(
+    {
+      input: wire.sealedSecret.jwe,
+      sender_public_jwk: opts.service.keyAgreementPublicJwk,
+    },
+    opts.holder,
+  );
   if (unpacked.kind !== "encrypted") {
     throw new Error(
       `vault/release: unpacked JWE was not authcrypt-encrypted (kind=${unpacked.kind})`,
