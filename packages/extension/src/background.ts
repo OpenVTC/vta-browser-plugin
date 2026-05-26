@@ -22,11 +22,17 @@ import {
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
+  OFFSCREEN_VAULT_DELETE,
   OFFSCREEN_VAULT_LIST,
+  OFFSCREEN_VAULT_RELEASE,
+  OFFSCREEN_VAULT_UPSERT,
   OFFSCREEN_VERIFY_DID,
   RUNTIME_API_GET,
   RUNTIME_API_POST,
+  RUNTIME_VAULT_DELETE,
   RUNTIME_VAULT_LIST,
+  RUNTIME_VAULT_RELEASE,
+  RUNTIME_VAULT_UPSERT,
   OFFSCREEN_LOCK_WALLET,
   RUNTIME_CONSENT_RESULT,
   RUNTIME_INBOUND_CONSENT,
@@ -58,8 +64,14 @@ import {
   type RuntimeSignTrustTaskRequest,
   type RuntimeSignTrustTaskResponse,
   type RuntimeStepUpVtaRequest,
+  type RuntimeVaultDeleteRequest,
+  type RuntimeVaultDeleteResponse,
   type RuntimeVaultListRequest,
   type RuntimeVaultListResponse,
+  type RuntimeVaultReleaseRequest,
+  type RuntimeVaultReleaseResponse,
+  type RuntimeVaultUpsertRequest,
+  type RuntimeVaultUpsertResponse,
   type RuntimeVerifyRpDidRequest,
   type RuntimeVerifyRpDidResponse,
   type RuntimeWalletDefaultsResponse,
@@ -416,6 +428,90 @@ async function handleVaultList(req: RuntimeVaultListRequest): Promise<RuntimeVau
   return reply;
 }
 
+// Vault — upsert / delete / release (M2A.5). All three share the
+// active-connection lookup from RUNTIME_VAULT_LIST and forward to
+// offscreen so the holder identity + DIDComm packing/unpacking happens
+// where the X25519 private key lives.
+type VaultActive = { vtaDid: string; restBaseUrl: string };
+
+function readActiveConnection(): Promise<
+  | { ok: true; conn: VaultActive }
+  | { ok: false; error: string }
+> {
+  return chrome.storage.local.get("pnm-connection/v2").then((stored) => {
+    const raw = stored["pnm-connection/v2"];
+    let connection: { vtaDid?: string; restBaseUrl?: string } | undefined;
+    if (typeof raw === "string") {
+      try {
+        const parsed = JSON.parse(raw) as { state?: { connection?: unknown } };
+        connection = parsed.state?.connection as typeof connection;
+      } catch {
+        // fall through
+      }
+    }
+    if (!connection?.vtaDid) {
+      return { ok: false, error: "no active VTA connection — connect first" };
+    }
+    if (!connection.restBaseUrl) {
+      return {
+        ok: false,
+        error: "vault tasks require a REST-capable VTA (no #vta-rest service advertised)",
+      };
+    }
+    return { ok: true, conn: { vtaDid: connection.vtaDid, restBaseUrl: connection.restBaseUrl } };
+  });
+}
+
+async function handleVaultUpsert(
+  req: RuntimeVaultUpsertRequest,
+): Promise<RuntimeVaultUpsertResponse> {
+  const c = await readActiveConnection();
+  if (!c.ok) return { ok: false, error: c.error };
+  await ensureOffscreenDocument();
+  // Strip the runtime `type` tag — the OFFSCREEN_* envelope carries the
+  // task type on its own.
+  const { type: _t, ...body } = req;
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_VAULT_UPSERT,
+    vtaDid: c.conn.vtaDid,
+    restBaseUrl: c.conn.restBaseUrl,
+    body,
+  })) as RuntimeVaultUpsertResponse;
+}
+
+async function handleVaultDelete(
+  req: RuntimeVaultDeleteRequest,
+): Promise<RuntimeVaultDeleteResponse> {
+  const c = await readActiveConnection();
+  if (!c.ok) return { ok: false, error: c.error };
+  await ensureOffscreenDocument();
+  const { type: _t, ...body } = req;
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_VAULT_DELETE,
+    vtaDid: c.conn.vtaDid,
+    restBaseUrl: c.conn.restBaseUrl,
+    body,
+  })) as RuntimeVaultDeleteResponse;
+}
+
+async function handleVaultRelease(
+  req: RuntimeVaultReleaseRequest,
+): Promise<RuntimeVaultReleaseResponse> {
+  const c = await readActiveConnection();
+  if (!c.ok) return { ok: false, error: c.error };
+  await ensureOffscreenDocument();
+  const { type: _t, ...body } = req;
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_VAULT_RELEASE,
+    vtaDid: c.conn.vtaDid,
+    restBaseUrl: c.conn.restBaseUrl,
+    body,
+  })) as RuntimeVaultReleaseResponse;
+}
+
 // Authenticated POST proxied through the wallet (host permission → no CORS).
 async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetResponse> {
   const base = req.params.baseUrl.replace(/\/+$/, "");
@@ -522,6 +618,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
     return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_VAULT_UPSERT) {
+    handleVaultUpsert(message as RuntimeVaultUpsertRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true;
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_VAULT_DELETE) {
+    handleVaultDelete(message as RuntimeVaultDeleteRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true;
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_VAULT_RELEASE) {
+    handleVaultRelease(message as RuntimeVaultReleaseRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true;
   }
 
   if ((message as { type?: string })?.type === RUNTIME_LOCK_WALLET) {
