@@ -356,6 +356,74 @@ export async function installVtaMintedHolder(
   };
 }
 
+export interface RewrapHolderV4Options {
+  /** Wrap that DECRYPTS the currently-persisted v4 record. Pass the
+   *  wrap the wallet was using before the migration. Pass `undefined`
+   *  when the existing record uses `PassthroughWrap` (plaintext),
+   *  which is the typical post-onboard state. */
+  fromWrap?: SecretWrap;
+  /** Wrap to apply on the re-persisted record. Pass the wrap the
+   *  wallet should use going forward (e.g. a `WebAuthnPrfSecretWrap`
+   *  in the popup's visible context). Pass `undefined` to switch
+   *  back to plaintext. */
+  toWrap?: SecretWrap;
+}
+
+/** Re-wrap the persisted v4 holder secret in place, preserving the
+ *  wallet's DID + verification-method ids + VTA provenance.
+ *
+ *  The canonical caller is the popup's post-onboard "Encrypt your
+ *  wallet?" prompt: the operator clicks the button, the popup runs
+ *  `navigator.credentials.create` (visible context, fresh user
+ *  gesture), and re-wraps the existing passthrough record under
+ *  the PRF-derived AES-GCM key. The wallet DID stays the same — no
+ *  re-grant in any RP ACL, no re-onboarding.
+ *
+ *  Mirrors the v3 `rewrapHolderSecret` but reads + writes the v4
+ *  record (`STORE_KEY_V4`). Future cleanup could consolidate the
+ *  two into one schema-version-aware function; kept separate for
+ *  now so the v3 path's legacy `edSecretB64u` fallback doesn't
+ *  leak into v4's cleaner shape.
+ *
+ *  Throws if no v4 record exists. The popup should only invoke this
+ *  AFTER `installVtaMintedHolder` has run. */
+export async function rewrapHolderV4Secret(
+  store: KVStore,
+  opts: RewrapHolderV4Options,
+): Promise<HolderIdentityResult> {
+  const persisted = await store.get<PersistedHolderV4>(STORE_KEY_V4);
+  if (!persisted) {
+    throw new Error("no persisted v4 holder identity to re-wrap");
+  }
+
+  // 1. Recover the raw seed using the from-wrap. `unwrapSecret`
+  //    dispatches on the stored record's `algorithm`, so a
+  //    PassthroughWrap record opens regardless of which wrap the
+  //    caller supplies (they're typically passing the new
+  //    encryption-target wrap, not the existing passthrough).
+  const edSecret = await unwrapSecret(persisted.wrappedSecret, opts.fromWrap);
+
+  // 2. Re-wrap with the to-wrap and write back. Same shape as
+  //    `installVtaMintedHolder`'s write path; only `wrappedSecret`
+  //    actually changes.
+  const wrapped = await wrapSecret(edSecret, opts.toWrap);
+  const next: PersistedHolderV4 = {
+    did: persisted.did,
+    signingKid: persisted.signingKid,
+    keyAgreementKid: persisted.keyAgreementKid,
+    wrappedSecret: wrapped,
+    vtaDid: persisted.vtaDid,
+    ...(persisted.vtaUrl ? { vtaUrl: persisted.vtaUrl } : {}),
+    schemaVersion: 4,
+  };
+  await store.put(STORE_KEY_V4, next);
+
+  return {
+    ...buildHolder(edSecret, persisted.did, persisted.signingKid, persisted.keyAgreementKid),
+    freshlyMinted: false,
+  };
+}
+
 /** Inspect the persisted state without throwing. Used by the popup to
  *  decide which onboarding screen to show. */
 export async function holderIdentityState(
