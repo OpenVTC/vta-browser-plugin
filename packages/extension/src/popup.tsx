@@ -36,7 +36,9 @@ import {
   type VaultEntryView,
   type VaultSecretView,
 } from "./bridge-protocol.js";
-import { getSettings } from "./config.js";
+import { IndexedDBKVStore, rewrapHolderV4Secret } from "@pnm/core";
+import { getSettings, setSettings } from "./config.js";
+import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 
 const box: React.CSSProperties = { padding: 12, display: "grid", gap: 8 };
 const mono: React.CSSProperties = {
@@ -1347,6 +1349,28 @@ function OnboardView() {
   // immediately retries Connect with that context.
   const [contextCandidates, setContextCandidates] = useState<string[] | null>(null);
 
+  // Between "onboard succeeded" and "ConnectedView renders" we
+  // optionally show an Encrypt-your-wallet prompt. Offscreen can't
+  // run WebAuthn (it's hidden), so the seed lands plaintext after
+  // onboarding; the popup (visible, has fresh user gesture from the
+  // operator's clicks through the prompt) is the right place to run
+  // the WebAuthn-PRF ceremony and re-wrap the record in place. The
+  // setConnection call is deferred until the operator either
+  // encrypts or skips — that way the Popup wrapper's `connection`
+  // check doesn't transition to ConnectedView prematurely.
+  interface PendingConnect {
+    vtaDid: string;
+    holderDid: string;
+    role: string;
+    restBaseUrl?: string;
+    mediatorDid?: string;
+    connectedAt: number;
+    secretEncrypted: boolean;
+  }
+  const [pendingConnect, setPendingConnect] = useState<PendingConnect | null>(null);
+  const [encryptBusy, setEncryptBusy] = useState(false);
+  const [encryptError, setEncryptError] = useState<string | null>(null);
+
   // The effective context to send on the wire. `undefined` means "let
   // the VTA infer". A trimmed non-empty string overrides.
   const effectiveContext =
@@ -1405,32 +1429,110 @@ function OnboardView() {
         }
         throw new Error(res.error);
       }
-      setConnection({
+      // Stash the connection info but don't commit to ConnectedView
+      // yet. The next screen offers to encrypt the just-installed
+      // holder identity in the popup's visible context — running the
+      // WebAuthn ceremony here works (popup is focused, the operator
+      // is right there) where the same call from offscreen hangs.
+      // If the offscreen path ever DOES return `secretEncrypted: true`
+      // (a future popup-driven install pipeline), the prompt screen
+      // detects that and transitions through automatically.
+      setPrep(null);
+      setPendingConnect({
         vtaDid: vtaDid.trim(),
         holderDid: res.result.holderDid,
         role: res.result.role,
         ...(prep?.restBaseUrl ? { restBaseUrl: prep.restBaseUrl } : {}),
         ...(prep?.mediatorDid ? { mediatorDid: prep.mediatorDid } : {}),
         connectedAt: Date.now(),
+        secretEncrypted: res.result.secretEncrypted,
       });
-      setPrep(null);
-      // Surface the encryption status on the way out. The default is
-      // encrypted; the fallback path (no PRF-capable authenticator,
-      // operator dismissed the prompt) leaves the seed plaintext.
-      // If the operator hits the fallback they likely don't know they
-      // got the weaker storage; show a one-line hint they can ignore
-      // once they've read it.
-      if (!res.result.secretEncrypted) {
-        setStatus(
-          "Onboarded — but wallet identity is stored without encryption " +
-            "(no PRF-capable authenticator). Enable in Settings to re-secure.",
-        );
-      }
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  // Finalize the pending connection: commit to zustand → ConnectedView.
+  function finalizeConnection(pc: PendingConnect) {
+    setConnection({
+      vtaDid: pc.vtaDid,
+      holderDid: pc.holderDid,
+      role: pc.role,
+      ...(pc.restBaseUrl ? { restBaseUrl: pc.restBaseUrl } : {}),
+      ...(pc.mediatorDid ? { mediatorDid: pc.mediatorDid } : {}),
+      connectedAt: pc.connectedAt,
+    });
+    setPendingConnect(null);
+    setEncryptError(null);
+  }
+
+  // Run the WebAuthn-PRF ceremony in the popup's visible context and
+  // re-wrap the just-installed v4 holder secret under the PRF-derived
+  // AES key. The popup is the right context: offscreen is hidden and
+  // hangs WebAuthn; the popup is visible and has a live user gesture
+  // from the button click that triggered this handler.
+  async function encryptAndFinalize(pc: PendingConnect) {
+    setEncryptBusy(true);
+    setEncryptError(null);
+    try {
+      await rewrapHolderV4Secret(new IndexedDBKVStore(), {
+        toWrap: new WebAuthnPrfSecretWrap(chrome.runtime.id),
+      });
+      // Persist the setting so subsequent loadHolder() calls supply
+      // the matching PRF wrap. Without this, the next cold-start
+      // would dispatch on the now-`webauthn-prf-aes-gcm` algorithm
+      // with no caller wrap → throws "no matching SecretWrap".
+      await setSettings({ encryptHolderSecret: true });
+      finalizeConnection({ ...pc, secretEncrypted: true });
+    } catch (e) {
+      setEncryptError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEncryptBusy(false);
+    }
+  }
+
+  if (pendingConnect) {
+    // If offscreen managed to encrypt on its own (future popup-driven
+    // install pipeline), skip the prompt — the work is already done.
+    if (pendingConnect.secretEncrypted) {
+      finalizeConnection(pendingConnect);
+      return null;
+    }
+    return (
+      <div style={box}>
+        <h3 style={{ margin: 0 }}>Wallet onboarded ✓</h3>
+        <small>
+          Your wallet&apos;s long-term identity is now <code style={mono}>{pendingConnect.holderDid}</code>.
+        </small>
+        <small style={{ color: "#666" }}>
+          By default it&apos;s stored on this device <strong>without encryption</strong>. You can
+          encrypt it with your platform authenticator (Touch ID, Windows Hello, hardware key) so
+          an exfiltrated browser profile can&apos;t recover the key.
+        </small>
+        <small style={{ color: "#8a6d3b" }}>
+          Note: losing the authenticator without disabling encryption first means losing the
+          wallet. The seed is bound to that authenticator&apos;s PRF output and isn&apos;t
+          recoverable from the browser alone.
+        </small>
+        <button
+          onClick={() => void encryptAndFinalize(pendingConnect)}
+          disabled={encryptBusy}
+        >
+          {encryptBusy ? "Encrypting…" : "Encrypt with authenticator"}
+        </button>
+        <button onClick={() => finalizeConnection(pendingConnect)} disabled={encryptBusy}>
+          Skip for now
+        </button>
+        {encryptError && (
+          <small style={{ color: "#c00" }}>
+            Couldn&apos;t encrypt: {encryptError}. You can retry, or skip and enable later via
+            Settings.
+          </small>
+        )}
+      </div>
+    );
   }
 
   if (prep && contextCandidates) {
