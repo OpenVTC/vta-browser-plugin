@@ -3,7 +3,7 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { clearHolderIdentity, IndexedDBKVStore, rewrapHolderSecret } from "@pnm/core";
 import { DEFAULT_WALLET_MEDIATOR_DID, getSettings, setSettings } from "./config.js";
-import { loadActiveHolder } from "./holder.js";
+import { readActiveHolderDid } from "./active-vta.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 
 const inputStyle: React.CSSProperties = {
@@ -43,15 +43,12 @@ function Options() {
       setVtaDid(s.defaultStepUpVtaDid ?? "");
       setVtaMediatorDid(s.defaultStepUpVtaMediatorDid ?? "");
       setEncryptOn(Boolean(s.encryptHolderSecret));
-      // Multi-VTA: show the active VTA's holder DID. Silently skip
-      // when no VTA is active (fresh install / post-Disconnect) —
-      // the rest of the options surface stays usable.
-      try {
-        const { signing } = await loadActiveHolder();
-        setHolderDid(signing.did);
-      } catch {
-        setHolderDid("");
-      }
+      // Multi-VTA: show the active VTA's holder DID. Read straight
+      // from the persisted connection — no decryption needed for a
+      // display string, and options runs in a context with no PRF
+      // AES cache, so loading the holder would throw WalletLockedError
+      // on encrypted wallets.
+      setHolderDid((await readActiveHolderDid()) ?? "");
     })();
   }, []);
 
@@ -146,14 +143,9 @@ function Options() {
       });
       setSavedMediatorDid(trimmedMediator);
 
-      // Reflect the (possibly re-minted) holder DID. Silently skip when
-      // no VTA is active.
-      try {
-        const { signing } = await loadActiveHolder();
-        setHolderDid(signing.did);
-      } catch {
-        setHolderDid("");
-      }
+      // Reflect the (possibly re-minted) holder DID — display-only,
+      // read from the persisted connection.
+      setHolderDid((await readActiveHolderDid()) ?? "");
       setStatus(
         trimmedMediator !== savedMediatorDid
           ? "Saved — wallet identity re-minted. Re-grant the new DID in your RP ACLs."

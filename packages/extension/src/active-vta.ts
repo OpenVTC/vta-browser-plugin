@@ -53,3 +53,35 @@ export function parseAllVtaDids(raw: unknown): string[] {
     return [];
   }
 }
+
+/** Read the active VTA's holder DID from the persisted connection
+ *  store — without going through the holder loader. Returns `null`
+ *  when no VTA is active.
+ *
+ *  Critical for the background service worker's consent-prompt path:
+ *  the holder DID is just a display string in the prompt, NOT
+ *  signing material. Background has no access to the offscreen's
+ *  PRF AES cache (separate module scope), so calling `loadHolder`
+ *  from background would throw `WalletLockedError` on an encrypted
+ *  wallet even when the wallet is unlocked in offscreen. Reading
+ *  the DID straight from chrome.storage sidesteps that entirely. */
+export async function readActiveHolderDid(): Promise<string | null> {
+  const stored = await chrome.storage.local.get("pnm-connection/v3");
+  const raw = stored["pnm-connection/v3"];
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      state?: {
+        connections?: {
+          activeVtaDid?: string | null;
+          vtas?: { [vtaDid: string]: { holderDid?: string } };
+        };
+      };
+    };
+    const c = parsed.state?.connections;
+    if (!c?.activeVtaDid) return null;
+    return c.vtas?.[c.activeVtaDid]?.holderDid ?? null;
+  } catch {
+    return null;
+  }
+}

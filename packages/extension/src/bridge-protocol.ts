@@ -1181,6 +1181,23 @@ export interface OffscreenDidcommLoginRequest {
   params: DidcommLoginParams;
 }
 
+/** background → offscreen: run a REST SIOPv2 login. The actual
+ *  `issueIdToken` signing must happen here in offscreen — that's
+ *  where the unwrapped holder secret lives (PRF AES cache is per-
+ *  module-scope). Background's prior approach of loading the
+ *  holder + calling `loginViaSiop` directly hung on encrypted
+ *  wallets because background has no access to the cache. */
+export const OFFSCREEN_REST_LOGIN = "offscreen/rest-login" as const;
+
+export interface OffscreenRestLoginRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_REST_LOGIN;
+  /** Which VTA's holder identity to sign as. Multi-VTA: background
+   *  fills this from the active connection before forwarding. */
+  vtaDid: string;
+  params: LoginParams;
+}
+
 /** background → offscreen: run a VTA-approval step-up. Reply is a
  *  [`RuntimeLoginResponse`] via `sendResponse`. */
 export interface OffscreenStepUpVtaRequest {

@@ -2453,11 +2453,42 @@ function Popup() {
   return <OnboardView />;
 }
 
+function AffinidiFooter(): React.JSX.Element {
+  return (
+    <div
+      style={{
+        textAlign: "center",
+        fontSize: 10,
+        color: "#9ca3af",
+        padding: "8px 0 6px",
+        borderTop: "1px solid #f0f0f0",
+        marginTop: 4,
+        letterSpacing: 0.2,
+      }}
+    >
+      Built by{" "}
+      <a
+        href="https://www.affinidi.com"
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          color: "#6366f1",
+          textDecoration: "none",
+          fontWeight: 500,
+        }}
+      >
+        Affinidi
+      </a>
+    </div>
+  );
+}
+
 const root = document.getElementById("root");
 if (root) {
   createRoot(root).render(
     <StrictMode>
       <Popup />
+      <AffinidiFooter />
     </StrictMode>,
   );
 }
