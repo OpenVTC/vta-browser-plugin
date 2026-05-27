@@ -1133,6 +1133,12 @@ function OnboardView() {
   const [prep, setPrep] = useState<OnboardPrepareResult | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // When the VTA returns `provision/integration:context_required`
+  // (multi-context VTA where inference can't auto-pick), we surface
+  // the candidates as a picker so the operator can choose without
+  // re-typing. The ephemeral grant is still valid — picking one
+  // immediately retries Connect with that context.
+  const [contextCandidates, setContextCandidates] = useState<string[] | null>(null);
 
   // The effective context to send on the wire. `undefined` means "let
   // the VTA infer". A trimmed non-empty string overrides.
@@ -1163,16 +1169,35 @@ function OnboardView() {
     }
   }
 
-  async function connect() {
+  /** Connect with the currently-selected context, or with an explicit
+   *  override (used by the recovery picker — it passes the candidate
+   *  the operator just clicked, bypassing React state's async commit). */
+  async function connect(forceContext?: string) {
     setBusy(true);
     setStatus(null);
+    setContextCandidates(null);
+    const ctx = forceContext ?? effectiveContext;
     try {
       const res = (await chrome.runtime.sendMessage({
         type: RUNTIME_ONBOARD_CONNECT,
-        ...(effectiveContext ? { context: effectiveContext } : {}),
+        ...(ctx ? { context: ctx } : {}),
         ...(allowCreate ? { createIfMissing: true } : {}),
       })) as RuntimeOnboardConnectResponse;
-      if (!res.ok) throw new Error(res.error);
+      if (!res.ok) {
+        // Recoverable: VTA can't auto-pick a context. Surface the
+        // candidates as a picker rather than bouncing the operator
+        // back to a re-prepare cycle. The ephemeral grant is still
+        // valid for its 1h TTL so picking immediately retries.
+        if (
+          res.code === "provision/integration:context_required" &&
+          res.candidates &&
+          res.candidates.length > 0
+        ) {
+          setContextCandidates(res.candidates);
+          return;
+        }
+        throw new Error(res.error);
+      }
       setConnection({
         vtaDid: vtaDid.trim(),
         holderDid: res.result.holderDid,
@@ -1187,6 +1212,37 @@ function OnboardView() {
     } finally {
       setBusy(false);
     }
+  }
+
+  if (prep && contextCandidates) {
+    // VTA returned context_required after the operator clicked Connect.
+    // The ephemeral grant is still valid; the operator just needs to
+    // pick one of these contexts and the wallet retries.
+    return (
+      <div style={box}>
+        <h3 style={{ margin: 0 }}>Pick a context</h3>
+        <small>
+          This VTA has multiple contexts and couldn&apos;t auto-pick where to put your wallet&apos;s
+          admin identity. Choose one:
+        </small>
+        <div style={{ display: "grid", gap: 4 }}>
+          {contextCandidates.map((ctx) => (
+            <button
+              key={ctx}
+              onClick={() => void connect(ctx)}
+              disabled={busy}
+              style={{ textAlign: "left", ...mono }}
+            >
+              {ctx}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => setContextCandidates(null)} disabled={busy}>
+          Cancel
+        </button>
+        {status && <small style={{ color: "#c00" }}>{status}</small>}
+      </div>
+    );
   }
 
   if (prep) {

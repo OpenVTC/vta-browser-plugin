@@ -19,6 +19,8 @@ export {
 } from "./request.js";
 export {
   sendProvisionIntegration,
+  ProvisionProblemReportError,
+  type ProblemReportPayload,
   type ProvisionIntegrationRequestBody,
   type ProvisionIntegrationResponseBody,
   type ProvisionSummary,
