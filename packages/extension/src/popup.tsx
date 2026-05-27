@@ -1,13 +1,14 @@
 /// <reference types="chrome" />
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { useConnectionStore, useLockStateStore } from "./store.js";
+import { useConnectionStore, useLockStateStore, type Connection } from "./store.js";
 import {
   RUNTIME_CREATE_CONTEXT,
   RUNTIME_DERIVE_SIGNING_KEY_ID,
   RUNTIME_HOLDER_STATE,
   RUNTIME_LIST_CONTEXTS,
   RUNTIME_LOCK_WALLET,
+  RUNTIME_REFRESH_VTA_TRANSPORTS,
   RUNTIME_UNLOCK_PRF,
   RUNTIME_WALLET_LOCK_STATE,
   RUNTIME_ONBOARD_CONNECT,
@@ -29,6 +30,7 @@ import {
   type RuntimeListContextsResponse,
   type RuntimeOnboardConnectResponse,
   type RuntimeOnboardPrepareResponse,
+  type RuntimeRefreshVtaTransportsResponse,
   type RuntimeUnlockPrfResponse,
   type RuntimeWalletLockStateResponse,
   type RuntimeVaultDeleteResponse,
@@ -1936,8 +1938,15 @@ function UnlockView(): React.JSX.Element {
 
 function Popup() {
   const connection = useConnectionStore((s) => s.connection);
+  const setConnection = useConnectionStore((s) => s.setConnection);
   const clearConnection = useConnectionStore((s) => s.clearConnection);
   const [holderState, setHolderState] = useState<HolderStateInfo | null>(null);
+  // Set to `true` when the most recent transport probe found the VTA
+  // advertising neither REST nor DIDComm — operator action required.
+  // Distinct from a benign transport flip (e.g. REST disabled, DIDComm
+  // still up) which we just silently reflect in the persisted
+  // connection.
+  const [vtaNoTransports, setVtaNoTransports] = useState(false);
   // Lock state for encrypted-at-rest wallets. Lives in a non-
   // persisted zustand store so ConnectedView's Lock handler can flip
   // it back to `unlocked: false` after running RUNTIME_LOCK_WALLET,
@@ -1985,6 +1994,13 @@ function Popup() {
   // after connection appears lets the migration banner clear AND the
   // plaintext-warning banner correctly reflect whether the just-
   // completed onboard chose to encrypt.
+  //
+  // Also re-resolve the VTA's currently-advertised transports. The
+  // persisted connection caches `restBaseUrl` + `mediatorDid` from
+  // onboard time; a VTA that later disabled one transport via
+  // `pnm services {rest,didcomm} disable` leaves that cached endpoint
+  // pointing at a dead path. Refreshing on connection-change keeps the
+  // cache aligned without forcing the operator to re-onboard.
   useEffect(() => {
     if (!connection) return;
     void (async () => {
@@ -1993,12 +2009,87 @@ function Popup() {
       })) as RuntimeHolderStateResponse;
       if (res.ok) setHolderState(res.result);
       await probeLockState();
+      await refreshVtaTransports(connection);
     })();
-    // probeLockState is stable (closes over setLockState only) and
-    // doesn't need to be in the dependency list; including it would
-    // re-run this effect on every render.
+    // probeLockState + refreshVtaTransports are stable closures over
+    // setLockState / setConnection / setVtaNoTransports; including
+    // them in deps would re-run this effect on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection]);
+
+  // Compare freshly-resolved VTA transports against the persisted
+  // connection. On drift, update the connection so subsequent
+  // background→offscreen calls use the right endpoint. On a zero-
+  // transport response (VTA disabled both REST and DIDComm), surface
+  // a critical banner — the operator's only safe move is to wait for
+  // the VTA to re-enable one, or to revert via the offline `vta`
+  // services CLI.
+  async function refreshVtaTransports(current: Connection): Promise<void> {
+    const res = (await chrome.runtime.sendMessage({
+      type: RUNTIME_REFRESH_VTA_TRANSPORTS,
+      vtaDid: current.vtaDid,
+    })) as RuntimeRefreshVtaTransportsResponse;
+    if (!res.ok) {
+      // Resolution failure (network, DID-doc fetch error). Don't touch
+      // the cached transports — falling back to whatever's persisted
+      // is safer than wiping them on a transient resolver error.
+      console.warn("[pnm] VTA transport refresh failed:", res.error);
+      return;
+    }
+    const fresh = res.result;
+    setVtaNoTransports(!fresh.restBaseUrl && !fresh.mediatorDid);
+
+    // Drift check — only re-set the store when values actually
+    // changed, to avoid spurious re-renders + storage writes.
+    const restChanged = (fresh.restBaseUrl ?? null) !== (current.restBaseUrl ?? null);
+    const medChanged = (fresh.mediatorDid ?? null) !== (current.mediatorDid ?? null);
+    if (!restChanged && !medChanged) return;
+
+    // Rebuild the connection without unset transports — JS spread keeps
+    // the old value if the new field is absent; building fresh lets us
+    // CLEAR a transport the VTA stopped advertising.
+    const updated: Connection = {
+      vtaDid: current.vtaDid,
+      holderDid: current.holderDid,
+      role: current.role,
+      connectedAt: current.connectedAt,
+      ...(fresh.restBaseUrl ? { restBaseUrl: fresh.restBaseUrl } : {}),
+      ...(fresh.mediatorDid ? { mediatorDid: fresh.mediatorDid } : {}),
+    };
+    console.info(
+      "[pnm] VTA transports refreshed:",
+      { rest: !!fresh.restBaseUrl, didcomm: !!fresh.mediatorDid },
+      "(was: rest=" + !!current.restBaseUrl + ", didcomm=" + !!current.mediatorDid + ")",
+    );
+    setConnection(updated);
+  }
+
+  // Banner injected ABOVE whichever connected/locked view renders when
+  // the most recent transport probe found no advertised transports on
+  // the VTA. Without this, the operator sees ConnectedView (looks fine
+  // on the surface) but every op fails with a generic network error.
+  const noTransportsBanner = vtaNoTransports && connection && (
+    <div
+      style={{
+        padding: 10,
+        background: "#fff1f0",
+        border: "2px solid #c81e1e",
+        borderRadius: 6,
+        display: "grid",
+        gap: 6,
+        margin: "8px 12px 0",
+      }}
+    >
+      <strong style={{ color: "#c81e1e", fontSize: 13 }}>
+        ⚠ VTA advertises no transports
+      </strong>
+      <small style={{ color: "#7a1313" }}>
+        <code style={mono}>{connection.vtaDid}</code> currently advertises neither{" "}
+        <code>#vta-rest</code> nor <code>#vta-didcomm</code>. Wallet operations will fail until
+        the VTA re-enables at least one transport (<code>vta services {`{rest,didcomm}`} enable</code>).
+      </small>
+    </div>
+  );
 
   // Stale-connection case has to be checked BEFORE the
   // connection-takes-precedence guard: a connection pointing at a
@@ -2026,7 +2117,12 @@ function Popup() {
   // ceremony in the popup (visible, gesture from button click) +
   // ships the PRF output to offscreen which seeds the cache.
   if (lockState?.encrypted && !lockState.unlocked) {
-    return <UnlockView />;
+    return (
+      <>
+        {noTransportsBanner}
+        <UnlockView />
+      </>
+    );
   }
 
   // If we have a connection AND a real holder, show ConnectedView even
@@ -2036,7 +2132,12 @@ function Popup() {
   // so a set connection means a real v4 holder exists in storage
   // regardless of what the popup's React state remembers.
   if (connection) {
-    return <ConnectedView />;
+    return (
+      <>
+        {noTransportsBanner}
+        <ConnectedView />
+      </>
+    );
   }
 
   // v3 wallets without a connection: show the migration banner so the
