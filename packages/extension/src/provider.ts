@@ -47,9 +47,16 @@ interface VtaWallet {
   mediatorStatus(): Promise<MediatorStatusResult>;
   /** Query operator-configured wallet defaults (e.g. step-up VTA) to prefill. */
   walletDefaults(): Promise<WalletDefaultsResult>;
-  /** Sign a Trust-Task envelope with the wallet's holder did:peer #key-2.
-   *  Adds an eddsa-jcs-2022 Data Integrity proof and returns the resulting
-   *  envelope. The caller sets `recipient` (audience binding) before calling. */
+  /** Sign a Trust-Task envelope. Default signer is the wallet's holder
+   *  did:key — adds an `eddsa-jcs-2022` Data Integrity proof and returns
+   *  the resulting envelope. The caller sets `recipient` (audience
+   *  binding) before calling.
+   *
+   *  To sign as a vault entry's principal DID (after a
+   *  `vault/proxy-login` session where the RP authenticated the session
+   *  as that DID), pass `asDid` and ensure `envelope.issuer === asDid`.
+   *  The wallet routes via `vault/sign-trust-task/0.1` so the long-term
+   *  signing key never leaves the VTA. */
   signTrustTask(params: SignTrustTaskParams): Promise<SignTrustTaskResult>;
   /** VTA-proxied login (vault/proxy-login/0.1). The VTA mints a session
    *  credential (SIOP id_token for did-self-issued entries) on the

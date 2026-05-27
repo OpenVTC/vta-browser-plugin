@@ -113,10 +113,24 @@ export interface WalletDefaultsResult {
 /** Parameters for `window.vtaWallet.signTrustTask(...)`. */
 export interface SignTrustTaskParams {
   /** The unsigned Trust-Task envelope. The wallet adds an `eddsa-jcs-2022`
-   *  Data Integrity proof signed by the holder did:peer #key-2 and returns
-   *  the resulting envelope as `signedEnvelope`. The caller is responsible
-   *  for setting `recipient` (audience binding) before calling. */
+   *  Data Integrity proof and returns the resulting envelope as
+   *  `signedEnvelope`. The caller is responsible for setting `recipient`
+   *  (audience binding) before calling.
+   *
+   *  Default signer is the wallet's holder DID. To sign as a different
+   *  principal — typically after a `vault/proxy-login` session where the
+   *  RP authenticated the session as a vault entry's `principalDid` —
+   *  set `asDid` and ensure `envelope.issuer === asDid`. The wallet
+   *  routes via `vault/sign-trust-task/0.1` so the long-term signing
+   *  key never leaves the VTA, and the proof's `verificationMethod`
+   *  matches the authenticated session DID at the RP. */
   envelope: Record<string, unknown>;
+  /** Optional principal DID to sign as. When set, the wallet looks up
+   *  a vault entry whose `principalDid === asDid` (must be a
+   *  `did-self-issued` or `didcomm-peer` entry) and asks the VTA to
+   *  sign via `vault/sign-trust-task/0.1`. When omitted, the wallet
+   *  signs with the holder DID (the existing default). */
+  asDid?: string;
 }
 
 /** Result of `window.vtaWallet.signTrustTask(...)`. */
@@ -1179,6 +1193,11 @@ export interface OffscreenSignTrustTaskRequest {
    *  signTrustTask` doesn't know about this, so background fills it
    *  in from the active connection before forwarding. */
   vtaDid: string;
+  /** REST base URL of the active VTA — needed when `params.asDid` is
+   *  set so the offscreen can issue `vault/sign-trust-task/0.1` against
+   *  the VTA. Optional in shape because the holder-signing path
+   *  (when `asDid` is absent) doesn't touch the VTA. */
+  restBaseUrl?: string;
   params: SignTrustTaskParams;
 }
 
