@@ -16,7 +16,10 @@ import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
   OFFSCREEN_GET_STATUS,
+  OFFSCREEN_CREATE_CONTEXT,
+  OFFSCREEN_DERIVE_SIGNING_KEY_ID,
   OFFSCREEN_HOLDER_STATE,
+  OFFSCREEN_LIST_CONTEXTS,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_SIGN_TRUST_TASK,
@@ -46,7 +49,10 @@ import {
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
   RUNTIME_MEDIATOR_STATUS,
+  RUNTIME_CREATE_CONTEXT,
+  RUNTIME_DERIVE_SIGNING_KEY_ID,
   RUNTIME_HOLDER_STATE,
+  RUNTIME_LIST_CONTEXTS,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
   RUNTIME_SIGN_TRUST_TASK,
@@ -65,7 +71,12 @@ import {
   type RuntimeLoginRequest,
   type RuntimeLoginResponse,
   type RuntimeMediatorStatusResponse,
+  type RuntimeCreateContextRequest,
+  type RuntimeCreateContextResponse,
+  type RuntimeDeriveSigningKeyIdRequest,
+  type RuntimeDeriveSigningKeyIdResponse,
   type RuntimeHolderStateResponse,
+  type RuntimeListContextsResponse,
   type RuntimeOnboardConnectResponse,
   type RuntimeOnboardConnectRequest,
   type RuntimeOnboardPrepareRequest,
@@ -367,6 +378,50 @@ async function handleHolderState(): Promise<RuntimeHolderStateResponse> {
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_HOLDER_STATE,
   })) as RuntimeHolderStateResponse;
+}
+
+async function handleListContexts(): Promise<RuntimeListContextsResponse> {
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_LIST_CONTEXTS,
+    vtaDid: active.conn.vtaDid,
+    restBaseUrl: active.conn.restBaseUrl,
+  })) as RuntimeListContextsResponse;
+}
+
+async function handleCreateContext(
+  req: RuntimeCreateContextRequest,
+): Promise<RuntimeCreateContextResponse> {
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_CREATE_CONTEXT,
+    vtaDid: active.conn.vtaDid,
+    restBaseUrl: active.conn.restBaseUrl,
+    id: req.id,
+    ...(req.name ? { name: req.name } : {}),
+    ...(req.description ? { description: req.description } : {}),
+  })) as RuntimeCreateContextResponse;
+}
+
+async function handleDeriveSigningKeyId(
+  req: RuntimeDeriveSigningKeyIdRequest,
+): Promise<RuntimeDeriveSigningKeyIdResponse> {
+  // No active-connection check — derivation runs purely on the DID
+  // string + the wallet's DID resolver (network for did:webvh, local
+  // for did:key / did:peer). The popup can call this even before
+  // onboarding completes.
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_DERIVE_SIGNING_KEY_ID,
+    did: req.did,
+  })) as RuntimeDeriveSigningKeyIdResponse;
 }
 
 // Sign a Trust-Task envelope with the wallet's holder did:peer #key-2.
@@ -790,6 +845,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_HOLDER_STATE) {
     handleHolderState()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_LIST_CONTEXTS) {
+    handleListContexts()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_CREATE_CONTEXT) {
+    handleCreateContext(message as RuntimeCreateContextRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_DERIVE_SIGNING_KEY_ID) {
+    handleDeriveSigningKeyId(message as RuntimeDeriveSigningKeyIdRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
