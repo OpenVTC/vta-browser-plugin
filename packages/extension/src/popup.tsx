@@ -1381,6 +1381,14 @@ function Popup() {
   //   a banner and force the user through OnboardView, which writes a
   //   fresh v4 and clears v3 on its way out.
   // - kind: "none" → fresh install; OnboardView handles it.
+  //
+  // The probe runs once on mount. After a successful onboard, the
+  // popup's `holderState` is stale (still says "v3") but the
+  // `connection` zustand slot IS updated — so we treat connection as
+  // the authoritative "you have a holder" signal and override the
+  // stale-v3 banner when it's set. Without this override, the
+  // migration banner sticks after onboarding succeeds and the operator
+  // sees OnboardView underneath, looping if they click Prepare again.
   useEffect(() => {
     void (async () => {
       const res = (await chrome.runtime.sendMessage({
@@ -1390,10 +1398,51 @@ function Popup() {
     })();
   }, []);
 
-  // v3 wallets: show the migration banner + force OnboardView, regardless
-  // of whether a stale `connection` entry exists in the popup store. The
-  // stored connection points at the soon-to-be-abandoned v3 DID; once
-  // onboarding completes, the new connection overwrites the old.
+  // Re-probe holderState whenever connection transitions to set. The
+  // mount-time snapshot was taken before the successful onboard, so
+  // the holderState slot is stale (still "v3"); the connection slot
+  // is fresh ("connected"). Re-reading after connection appears
+  // lets the banner clear correctly without requiring a popup close
+  // + reopen.
+  useEffect(() => {
+    if (!connection) return;
+    void (async () => {
+      const res = (await chrome.runtime.sendMessage({
+        type: RUNTIME_HOLDER_STATE,
+      })) as RuntimeHolderStateResponse;
+      if (res.ok) setHolderState(res.result);
+    })();
+  }, [connection]);
+
+  // Stale-connection case has to be checked BEFORE the
+  // connection-takes-precedence guard: a connection pointing at a
+  // holder that no longer exists in IndexedDB would yield a
+  // ConnectedView that fails on every operation. Surface the broken
+  // state and force re-onboarding instead.
+  if (holderState?.kind === "none" && connection) {
+    return (
+      <div style={box}>
+        <small style={{ color: "#c00" }}>
+          Stale connection cleared — no holder identity is persisted. Onboard fresh.
+        </small>
+        <OnboardView />
+      </div>
+    );
+  }
+
+  // If we have a connection AND a real holder, show ConnectedView even
+  // if the snapshot still says "v3" (the after-onboard stale case).
+  // The connection slot is only set by `setConnection` after
+  // `installVtaMintedHolder` has atomically written v4 + deleted v3,
+  // so a set connection means a real v4 holder exists in storage
+  // regardless of what the popup's React state remembers.
+  if (connection) {
+    return <ConnectedView />;
+  }
+
+  // v3 wallets without a connection: show the migration banner so the
+  // operator re-onboards. `connection` is null here (caught by the
+  // guard above when set), so the migration prompt is correct.
   if (holderState?.kind === "v3") {
     return (
       <div style={box}>
@@ -1435,23 +1484,9 @@ function Popup() {
     );
   }
 
-  // No persisted holder at all but a stale connection in chrome.storage
-  // (e.g. operator cleared extension data on one storage tier but not the
-  // other). The connection points at a holder DID that no longer exists;
-  // any wallet operation would throw NoHolderError. Force OnboardView so
-  // the operator restarts cleanly.
-  if (holderState?.kind === "none" && connection) {
-    return (
-      <div style={box}>
-        <small style={{ color: "#c00" }}>
-          Stale connection cleared — no holder identity is persisted. Onboard fresh.
-        </small>
-        <OnboardView />
-      </div>
-    );
-  }
-
-  return connection ? <ConnectedView /> : <OnboardView />;
+  // Default: no connection, no v3 record → fresh install or post-
+  // migration mid-flow. Show OnboardView.
+  return <OnboardView />;
 }
 
 const root = document.getElementById("root");
