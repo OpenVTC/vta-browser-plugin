@@ -83,9 +83,25 @@ window.addEventListener("message", (event: MessageEvent) => {
   // content script. (The content script re-posts with `window.postMessage`,
   // so `event.source === window` and origin === our own.)
   if (event.source !== window) return;
-  const data = event.data as ContentResponse | undefined;
+  const data = event.data as
+    | ContentResponse
+    | { source: typeof CONTENT_SOURCE; kind: "event"; event: string; detail?: unknown }
+    | undefined;
   if (!data || data.source !== CONTENT_SOURCE) return;
 
+  // Broadcast events (`{ kind: "event", event: "ready" | "unlocked" | … }`)
+  // are re-dispatched on `window` so RPs can listen via
+  // `window.addEventListener("vtawallet:unlocked", …)`. No promise to
+  // resolve — it's a lifecycle signal, not a request/response.
+  if ("kind" in data && data.kind === "event") {
+    window.dispatchEvent(
+      new CustomEvent(`vtawallet:${data.event}`, { detail: data.detail }),
+    );
+    return;
+  }
+
+  // Otherwise it's a request/response — fulfil the pending promise.
+  if (!("id" in data)) return;
   const entry = pending.get(data.id);
   if (!entry) return;
   pending.delete(data.id);
