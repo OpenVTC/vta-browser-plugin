@@ -20,8 +20,10 @@
  * 2. First-enroll UX (passkey ceremony, error handling for
  *    operators with no PRF-capable authenticator).
  * 3. Lock / unlock UX on every cold-cache load (currently
- *    every load → the operator taps; the warm cache via
- *    `chrome.storage.session` is the obvious optimisation).
+ *    every load → the operator taps; a warm cache for the
+ *    derived AES key is the obvious optimisation — currently
+ *    held only in module-scoped memory, gone on every offscreen
+ *    page reload).
  * 4. Migration UX (existing plaintext-stored wallets get an
  *    "encrypt your wallet?" prompt on first load).
  *
@@ -36,17 +38,30 @@
  */
 
 import { base64url } from "@openvtc/vti-didcomm-js";
-import type { SecretWrap, WrappedSecret } from "@pnm/core";
+import { IndexedDBKVStore, type SecretWrap, type WrappedSecret } from "@pnm/core";
 
 const ALGORITHM = "webauthn-prf-aes-gcm";
 const CREDENTIAL_KEY = "pnm/holder-prf/credentialId";
 const SALT_KEY = "pnm/holder-prf/salt";
 
+/** Where the enrolled WebAuthn credential id + PRF salt are
+ *  persisted. **IndexedDB, not `chrome.storage.local`.** The wrap
+ *  is called from the offscreen document during onboarding —
+ *  `chrome.storage` is NOT exposed in offscreen pages (MV3 only
+ *  exposes it to the service worker, popup, and options page). The
+ *  wallet's IndexedDBKVStore IS available in every extension
+ *  context, including offscreen, and is already the persistence
+ *  backend for the holder identity and pending-onboard state. */
+function prfStore(): IndexedDBKVStore {
+  return new IndexedDBKVStore();
+}
+
 /**
  * In-memory cache of the derived AES-GCM key for the lifetime
- * of the service-worker / offscreen instance. Cleared on
- * browser restart (which also clears `chrome.storage.session`
- * if we ever back this with that).
+ * of the offscreen instance. Cleared on browser restart and on
+ * `WebAuthnPrfSecretWrap.lock()`. The persisted credentialId
+ * lives in IndexedDB (see `prfStore`); only this in-memory key
+ * survives between unlock prompts within a session.
  *
  * The `CryptoKey` is non-extractable so even with a heap dump
  * the operator can't recover the raw bytes — only signed
@@ -141,7 +156,7 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
    * when one already exists, to avoid losing the existing
    * wrapped secret). Clears both the in-memory key cache
    * (same as `lock`) and the persisted credentialId + PRF
-   * salt in chrome.storage.local.
+   * salt in IndexedDB.
    *
    * Does NOT call `navigator.credentials.delete` on the
    * authenticator — that API isn't available in MV3 service
@@ -151,7 +166,9 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
    */
   static async unenroll(): Promise<void> {
     cachedKey = null;
-    await chrome.storage.local.remove([CREDENTIAL_KEY, SALT_KEY]);
+    const store = prfStore();
+    await store.delete(CREDENTIAL_KEY);
+    await store.delete(SALT_KEY);
   }
 
   /**
@@ -167,8 +184,9 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
     // would lose the existing wrapped secret. Caller is
     // responsible for not invoking wrap() twice on the same
     // identity; this guard surfaces the misuse loudly.
-    const existing = await chrome.storage.local.get(CREDENTIAL_KEY);
-    if (existing[CREDENTIAL_KEY]) {
+    const store = prfStore();
+    const existingId = await store.get<string>(CREDENTIAL_KEY);
+    if (existingId) {
       throw new Error(
         "webauthn-prf-wrap: credential already enrolled; refusing to mint a new one (would lose existing wrapped secret)",
       );
@@ -215,7 +233,8 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
     }
 
     const credentialId = base64url.encode(new Uint8Array(credential.rawId));
-    await chrome.storage.local.set({ [CREDENTIAL_KEY]: credentialId, [SALT_KEY]: base64url.encode(prfSalt) });
+    await store.put(CREDENTIAL_KEY, credentialId);
+    await store.put(SALT_KEY, base64url.encode(prfSalt));
 
     return { credentialId, prfOutput: new Uint8Array(prfOutput) };
   }
