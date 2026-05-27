@@ -19,10 +19,36 @@ export interface Connection {
   connectedAt: number;
 }
 
+/** Multi-VTA connection state.
+ *
+ *  `vtas` is a dict keyed by `vtaDid` containing every VTA the wallet
+ *  has onboarded at and is still remembered locally. `activeVtaDid`
+ *  points at the entry the popup is currently operating against (or
+ *  `null` when the operator has disconnected — entries are kept in
+ *  `vtas` for quick re-activation, only `forgetVta` actually removes
+ *  them). */
+export interface MultiVtaConnections {
+  activeVtaDid: string | null;
+  vtas: { [vtaDid: string]: Connection };
+}
+
 interface State {
-  connection: Connection | null;
+  connections: MultiVtaConnections;
+  /** Insert/update the entry for `c.vtaDid` AND set it as the active
+   *  VTA. The path the OnboardView's `finalizeConnection` takes after
+   *  a successful onboard. */
   setConnection: (c: Connection) => void;
+  /** Clear `activeVtaDid` without removing the entry from `vtas`. The
+   *  Disconnect button's behaviour — operator can re-activate the
+   *  same VTA from the (future) dropdown without re-onboarding. */
   clearConnection: () => void;
+  /** Remove the entry for `vtaDid` entirely (and clear `activeVtaDid`
+   *  if it was pointing at this one). PR 2 wires this to a "Forget
+   *  VTA" UI; for now it's available for tests + direct callers. */
+  forgetVta: (vtaDid: string) => void;
+  /** Set the active VTA to an existing entry. The (future) dropdown's
+   *  switch-VTA action. */
+  activateVta: (vtaDid: string) => void;
 }
 
 /**
@@ -49,18 +75,80 @@ const chromeStorage = {
 export const useConnectionStore = create<State>()(
   persist(
     (set) => ({
-      connection: null,
-      setConnection: (c) => set({ connection: c }),
-      clearConnection: () => set({ connection: null }),
+      connections: { activeVtaDid: null, vtas: {} },
+      setConnection: (c) =>
+        set((state) => ({
+          connections: {
+            activeVtaDid: c.vtaDid,
+            vtas: { ...state.connections.vtas, [c.vtaDid]: c },
+          },
+        })),
+      clearConnection: () =>
+        set((state) => ({
+          connections: { activeVtaDid: null, vtas: state.connections.vtas },
+        })),
+      forgetVta: (vtaDid) =>
+        set((state) => {
+          const { [vtaDid]: _removed, ...rest } = state.connections.vtas;
+          return {
+            connections: {
+              activeVtaDid:
+                state.connections.activeVtaDid === vtaDid
+                  ? null
+                  : state.connections.activeVtaDid,
+              vtas: rest,
+            },
+          };
+        }),
+      activateVta: (vtaDid) =>
+        set((state) =>
+          state.connections.vtas[vtaDid]
+            ? { connections: { ...state.connections, activeVtaDid: vtaDid } }
+            : state,
+        ),
     }),
     {
-      // v2: previous shape was `{ vtaUrl, did, accessToken }` (the legacy
-      // URL/DID/enrollment-token form). Ignore that data by bumping the key.
-      name: "pnm-connection/v2",
+      // v3: multi-VTA shape `{ activeVtaDid, vtas }`. Migrated from v2's
+      // single-Connection slot by the migrate function below — the user's
+      // one existing connection becomes `vtas[vtaDid]` with `activeVtaDid`
+      // set to it. v2 records that don't carry a `vtaDid` (pre-M2C) are
+      // dropped; the operator re-onboards.
+      name: "pnm-connection/v3",
       storage: createJSONStorage(() => chromeStorage),
+      version: 3,
+      migrate: (persisted: unknown, version: number) => {
+        // v3 → v3: nothing to do (already the right shape).
+        if (version === 3) return persisted as { connections: MultiVtaConnections };
+
+        // v0..v2: persisted as `{ connection: Connection | null }`. Move
+        // the single connection (if any) into `vtas` and set it active.
+        const legacy = persisted as { connection?: Connection } | undefined;
+        const single = legacy?.connection;
+        if (single && typeof single.vtaDid === "string") {
+          return {
+            connections: {
+              activeVtaDid: single.vtaDid,
+              vtas: { [single.vtaDid]: single },
+            },
+          };
+        }
+        return { connections: { activeVtaDid: null, vtas: {} } };
+      },
+      // Only the connections map needs to round-trip — the action
+      // closures (setConnection, etc.) are rebuilt at hydration time.
+      partialize: (state) => ({ connections: state.connections }) as unknown as State,
     },
   ),
 );
+
+/** The active VTA's Connection, or `null` if no VTA is active. */
+export function useActiveConnection(): Connection | null {
+  return useConnectionStore((s) => {
+    const { activeVtaDid, vtas } = s.connections;
+    if (activeVtaDid === null) return null;
+    return vtas[activeVtaDid] ?? null;
+  });
+}
 
 /** Lock state for the wallet's AES-cache (encrypted-at-rest wallets
  *  only). Deliberately NOT persisted: the offscreen cache is in-

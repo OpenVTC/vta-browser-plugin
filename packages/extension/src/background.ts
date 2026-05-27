@@ -9,7 +9,8 @@
 // DIDComm flow: content → RUNTIME_LOGIN_DIDCOMM → consent → offscreen doc.
 
 import { loginViaSiop } from "@pnm/core";
-import { loadHolder } from "./holder.js";
+import { loadActiveHolder } from "./holder.js";
+import { readActiveVtaDid } from "./active-vta.js";
 import { checkOriginPin, pinOrigin } from "./origin-pin.js";
 import { subscribeToPush } from "./push.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
@@ -87,6 +88,7 @@ import {
   type RuntimeRefreshVtaTransportsResponse,
   type RuntimeUnlockPrfRequest,
   type RuntimeUnlockPrfResponse,
+  type RuntimeWalletLockStateRequest,
   type RuntimeWalletLockStateResponse,
   type RuntimeOnboardConnectResponse,
   type RuntimeOnboardConnectRequest,
@@ -146,8 +148,18 @@ void subscribeToPush();
 // ensureOffscreenDocument and the offscreen's startInbound no-op if already
 // running), so it's safe to call on every worker spin-up.
 async function startInboundListener(): Promise<void> {
+  // No-op until at least one VTA has been onboarded — the inbound mediator
+  // session authenticates AS the holder, and there's no holder yet on a
+  // fresh install or after a wipe. The popup re-arms the listener via
+  // a separate call after the first successful onboard.
+  const activeVtaDid = await readActiveVtaDid();
+  if (!activeVtaDid) return;
   await ensureOffscreenDocument();
-  await chrome.runtime.sendMessage({ target: OFFSCREEN_TARGET, type: OFFSCREEN_START_INBOUND });
+  await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_START_INBOUND,
+    vtaDid: activeVtaDid,
+  });
 }
 void startInboundListener();
 
@@ -230,7 +242,7 @@ function requestConsent(args: {
 }
 
 async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginResponse> {
-  const { signing } = await loadHolder();
+  const { signing } = await loadActiveHolder();
 
   // M5: pin the rpDid against the requesting origin. First-sight
   // origins seed the pin on approval; subsequent origins asking
@@ -269,7 +281,7 @@ async function handleLoginDidcomm(
   // Load the holder here only to show its DID in the consent prompt; the
   // actual DIDComm login runs in the offscreen document (same IndexedDB
   // holder). did:key derivation is window-free, so this is safe in the SW.
-  const { signing } = await loadHolder();
+  const { signing } = await loadActiveHolder();
 
   // M5: origin → controlDid pinning (analogous to the SIOP
   // login path; the DIDComm rpDid here is the RP's controlDid).
@@ -293,9 +305,12 @@ async function handleLoginDidcomm(
   }
 
   await ensureOffscreenDocument();
+  const activeVtaDid = await readActiveVtaDid();
+  if (!activeVtaDid) return { ok: false, error: "no active VTA connection — connect first" };
   const offscreenRequest: OffscreenDidcommLoginRequest = {
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_DIDCOMM_LOGIN,
+    vtaDid: activeVtaDid,
     params: req.params,
   };
   return (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
@@ -306,7 +321,7 @@ async function handleStepUpVta(
 ): Promise<RuntimeLoginResponse> {
   // Load the holder here only to show its DID in the consent prompt; the
   // step-up orchestration (REST + DIDComm) runs in the offscreen document.
-  const { signing } = await loadHolder();
+  const { signing } = await loadActiveHolder();
 
   const approved = await requestConsent({
     origin: req.origin,
@@ -402,11 +417,14 @@ async function handleUnlockPrf(
   })) as RuntimeUnlockPrfResponse;
 }
 
-async function handleWalletLockState(): Promise<RuntimeWalletLockStateResponse> {
+async function handleWalletLockState(
+  req: RuntimeWalletLockStateRequest,
+): Promise<RuntimeWalletLockStateResponse> {
   await ensureOffscreenDocument();
   return (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_WALLET_LOCK_STATE,
+    ...(req.vtaDid ? { vtaDid: req.vtaDid } : {}),
   })) as RuntimeWalletLockStateResponse;
 }
 
@@ -474,9 +492,14 @@ async function handleSignTrustTask(
   req: RuntimeSignTrustTaskRequest,
 ): Promise<RuntimeSignTrustTaskResponse> {
   await ensureOffscreenDocument();
+  const activeVtaDid = await readActiveVtaDid();
+  if (!activeVtaDid) {
+    return { ok: false, error: "no active VTA connection — connect first" };
+  }
   return (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_SIGN_TRUST_TASK,
+    vtaDid: activeVtaDid,
     params: req.params,
   })) as RuntimeSignTrustTaskResponse;
 }
@@ -517,38 +540,18 @@ async function handleVerifyRpDid(
 // holder identity (DOM-bound WebAuthn-PRF unwrap), resolves the VTA's
 // keyAgreement, and runs the auth + trust-task POST round-trip.
 async function handleVaultList(req: RuntimeVaultListRequest): Promise<RuntimeVaultListResponse> {
-  // Resolve the active connection from the popup's zustand store. The
-  // persist middleware stringifies its value, so the chrome.storage.local
-  // entry is a JSON string under `pnm-connection/v2` (matching the
-  // `name:` in store.ts's persist config). Inside: `{ state: { connection
-  // }, version }` — zustand-persist's standard envelope.
-  const stored = await chrome.storage.local.get("pnm-connection/v2");
-  const raw = stored["pnm-connection/v2"];
-  let connection: { vtaDid?: string; restBaseUrl?: string } | undefined;
-  if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw) as { state?: { connection?: unknown } };
-      connection = parsed.state?.connection as typeof connection;
-    } catch {
-      // fall through to "no active connection" error
-    }
-  }
-  if (!connection?.vtaDid) {
-    return { ok: false, error: "no active VTA connection — connect first" };
-  }
-  if (!connection.restBaseUrl) {
-    return {
-      ok: false,
-      error: "vault/list requires a REST-capable VTA (no #vta-rest service advertised)",
-    };
-  }
+  // Pull the active VTA's vtaDid + restBaseUrl from the popup's
+  // persisted connection store. The popup writes the v3 multi-VTA
+  // shape; background reads it via `readActiveConnection`.
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
 
   await ensureOffscreenDocument();
   const reply = (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_VAULT_LIST,
-    vtaDid: connection.vtaDid,
-    restBaseUrl: connection.restBaseUrl,
+    vtaDid: active.conn.vtaDid,
+    restBaseUrl: active.conn.restBaseUrl,
     ...(req.filter ? { filter: req.filter } : {}),
   })) as RuntimeVaultListResponse;
   return reply;
@@ -560,32 +563,70 @@ async function handleVaultList(req: RuntimeVaultListRequest): Promise<RuntimeVau
 // where the X25519 private key lives.
 type VaultActive = { vtaDid: string; restBaseUrl: string };
 
-function readActiveConnection(): Promise<
+async function readActiveConnection(): Promise<
   | { ok: true; conn: VaultActive }
   | { ok: false; error: string }
 > {
-  return chrome.storage.local.get("pnm-connection/v2").then((stored) => {
-    const raw = stored["pnm-connection/v2"];
-    let connection: { vtaDid?: string; restBaseUrl?: string } | undefined;
-    if (typeof raw === "string") {
-      try {
-        const parsed = JSON.parse(raw) as { state?: { connection?: unknown } };
-        connection = parsed.state?.connection as typeof connection;
-      } catch {
-        // fall through
+  const connection = await readActiveConnectionRaw();
+  if (!connection) {
+    return { ok: false, error: "no active VTA connection — connect first" };
+  }
+  if (!connection.restBaseUrl) {
+    return {
+      ok: false,
+      error: "vault tasks require a REST-capable VTA (no #vta-rest service advertised)",
+    };
+  }
+  return { ok: true, conn: { vtaDid: connection.vtaDid, restBaseUrl: connection.restBaseUrl } };
+}
+
+/** Read the popup's persisted connection state from chrome.storage and
+ *  return the active VTA's Connection record, or `null` if there's no
+ *  active VTA (fresh install, post-Disconnect, or storage hasn't
+ *  migrated yet). Used by the helpers above + by paths that need the
+ *  vtaDid even when REST isn't advertised (e.g. startInbound's
+ *  DIDComm-only inbox).
+ *
+ *  Reads the v3 multi-VTA shape; v2's single-Connection shape is
+ *  migrated by the popup's zustand-persist `migrate` callback on its
+ *  first run after upgrade, so background doesn't need a separate
+ *  fallback. */
+async function readActiveConnectionRaw(): Promise<
+  { vtaDid: string; restBaseUrl?: string; mediatorDid?: string } | null
+> {
+  const stored = await chrome.storage.local.get("pnm-connection/v3");
+  const raw = stored["pnm-connection/v3"];
+  if (typeof raw !== "string") return null;
+  let parsed:
+    | {
+        state?: {
+          connections?: {
+            activeVtaDid?: string | null;
+            vtas?: {
+              [vtaDid: string]: {
+                vtaDid: string;
+                restBaseUrl?: string;
+                mediatorDid?: string;
+              };
+            };
+          };
+        };
       }
-    }
-    if (!connection?.vtaDid) {
-      return { ok: false, error: "no active VTA connection — connect first" };
-    }
-    if (!connection.restBaseUrl) {
-      return {
-        ok: false,
-        error: "vault tasks require a REST-capable VTA (no #vta-rest service advertised)",
-      };
-    }
-    return { ok: true, conn: { vtaDid: connection.vtaDid, restBaseUrl: connection.restBaseUrl } };
-  });
+    | undefined;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const connections = parsed?.state?.connections;
+  if (!connections?.activeVtaDid) return null;
+  const entry = connections.vtas?.[connections.activeVtaDid];
+  if (!entry?.vtaDid) return null;
+  return {
+    vtaDid: entry.vtaDid,
+    ...(entry.restBaseUrl ? { restBaseUrl: entry.restBaseUrl } : {}),
+    ...(entry.mediatorDid ? { mediatorDid: entry.mediatorDid } : {}),
+  };
 }
 
 async function handleVaultUpsert(
@@ -912,7 +953,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if ((message as { type?: string })?.type === RUNTIME_WALLET_LOCK_STATE) {
-    handleWalletLockState()
+    handleWalletLockState(message as RuntimeWalletLockStateRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

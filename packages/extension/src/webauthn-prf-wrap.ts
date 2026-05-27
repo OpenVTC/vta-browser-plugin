@@ -127,8 +127,14 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
   constructor(private readonly rpId: string) {}
 
   async wrap(secret: Uint8Array): Promise<WrappedSecret | null> {
-    const prfSalt = crypto.getRandomValues(new Uint8Array(32));
-    const credential = await this.enrollOrLoadCredential(prfSalt);
+    // `enrollOrLoadCredential` is now multi-wallet-aware: on first
+    // call it mints a fresh credential + salt and persists both; on
+    // subsequent calls (a second VTA's wallet being onboarded on this
+    // device) it loads the stored credentialId + salt and runs
+    // `.get` to recover the same PRF output. Same credential → same
+    // PRF output → same derived AES key, so every wallet on this
+    // device is encrypted under one key with distinct IVs.
+    const credential = await this.enrollOrLoadCredential();
     if (!credential) return null;
 
     const aesKey = await this.deriveAesKey(credential.prfOutput);
@@ -152,7 +158,7 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
       ivB64u: base64url.encode(iv),
       params: {
         credentialId: credential.credentialId,
-        prfSalt: base64url.encode(prfSalt),
+        prfSalt: base64url.encode(credential.prfSalt),
       },
     };
   }
@@ -275,26 +281,42 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
   }
 
   /**
-   * Run the WebAuthn enrollment ceremony with the PRF
-   * extension. Persists the credentialId so future unwraps
-   * find the same authenticator. Returns `null` if the
-   * operator cancels or the platform doesn't support PRF.
+   * Either mint a fresh PRF credential (first wallet on this device)
+   * OR load the existing one and re-run the PRF assertion to recover
+   * the same PRF output (subsequent wallets — multi-VTA).
+   *
+   * Multi-wallet rationale: every wallet record on this device is
+   * encrypted under the SAME AES key derived from the SAME PRF
+   * credential + salt; only the AES-GCM IVs differ. So the second
+   * (third, fourth, …) call to `wrap()` should not enroll a new
+   * credential — it should reuse the existing one. Replacing the
+   * credential would orphan every previously-wrapped record.
+   *
+   * Returns `null` if the operator cancels either ceremony.
+   * `prfSalt` is the salt persisted alongside the credential — fresh
+   * one on first enroll, stored one on subsequent loads.
    */
-  private async enrollOrLoadCredential(
-    prfSalt: Uint8Array,
-  ): Promise<{ credentialId: string; prfOutput: Uint8Array } | null> {
-    // Check for an existing enrolled credentialId — re-enrolling
-    // would lose the existing wrapped secret. Caller is
-    // responsible for not invoking wrap() twice on the same
-    // identity; this guard surfaces the misuse loudly.
+  private async enrollOrLoadCredential(): Promise<
+    { credentialId: string; prfSalt: Uint8Array; prfOutput: Uint8Array } | null
+  > {
     const store = prfStore();
-    const existingId = await store.get<string>(CREDENTIAL_KEY);
-    if (existingId) {
-      throw new Error(
-        "webauthn-prf-wrap: credential already enrolled; refusing to mint a new one (would lose existing wrapped secret)",
-      );
+    const existingCredentialId = await store.get<string>(CREDENTIAL_KEY);
+    const existingSalt = await store.get<string>(SALT_KEY);
+
+    if (existingCredentialId && existingSalt) {
+      // Reuse the existing credential + its original salt. `unlockAesKey`
+      // already implements the .get ceremony; reuse it to keep one
+      // source of truth for the PRF-assertion code path. We only need
+      // `prfOutput` here, not the derived AES key, so this helper
+      // bypasses `deriveAesKey` (the caller derives it itself).
+      const prfSalt = base64url.decode(existingSalt);
+      const prfOutput = await this.assertPrfOutput(existingCredentialId, prfSalt);
+      if (!prfOutput) return null;
+      return { credentialId: existingCredentialId, prfSalt, prfOutput };
     }
 
+    // First-ever enroll on this device.
+    const prfSalt = crypto.getRandomValues(new Uint8Array(32));
     const challenge = crypto.getRandomValues(new Uint8Array(32));
     const userId = crypto.getRandomValues(new Uint8Array(16));
 
@@ -339,7 +361,44 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
     await store.put(CREDENTIAL_KEY, credentialId);
     await store.put(SALT_KEY, base64url.encode(prfSalt));
 
-    return { credentialId, prfOutput: new Uint8Array(prfOutput) };
+    return { credentialId, prfSalt, prfOutput: new Uint8Array(prfOutput) };
+  }
+
+  /** Run a WebAuthn `.get` assertion against the existing credential
+   *  and return the raw PRF output bytes. Used by the multi-wallet
+   *  "reuse the credential" branch of `enrollOrLoadCredential` — we
+   *  need the prfOutput but NOT to derive the AES key here (the
+   *  caller does that). Returns `null` if the operator cancels. */
+  private async assertPrfOutput(
+    credentialIdB64u: string,
+    prfSalt: Uint8Array,
+  ): Promise<Uint8Array | null> {
+    const challenge = crypto.getRandomValues(new Uint8Array(32));
+    const credentialId = base64url.decode(credentialIdB64u);
+    const assertion = (await navigator.credentials.get({
+      publicKey: {
+        rpId: this.rpId,
+        challenge,
+        allowCredentials: [
+          { type: "public-key", id: credentialId.buffer as ArrayBuffer },
+        ],
+        userVerification: "required",
+        extensions: {
+          prf: { eval: { first: prfSalt } },
+        } as AuthenticationExtensionsClientInputs,
+      },
+    })) as PublicKeyCredential | null;
+    if (!assertion) return null;
+    const extOutputs = assertion.getClientExtensionResults() as {
+      prf?: { results?: { first?: ArrayBuffer } };
+    };
+    const prfOutput = extOutputs.prf?.results?.first;
+    if (!prfOutput) {
+      throw new Error(
+        "webauthn-prf-wrap: assertion returned no PRF output (authenticator may have rotated keys)",
+      );
+    }
+    return new Uint8Array(prfOutput);
   }
 
   /**

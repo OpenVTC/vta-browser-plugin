@@ -1,7 +1,12 @@
 /// <reference types="chrome" />
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { useConnectionStore, useLockStateStore, type Connection } from "./store.js";
+import {
+  useActiveConnection,
+  useConnectionStore,
+  useLockStateStore,
+  type Connection,
+} from "./store.js";
 import {
   RUNTIME_CREATE_CONTEXT,
   RUNTIME_DERIVE_SIGNING_KEY_ID,
@@ -65,12 +70,15 @@ const mono: React.CSSProperties = {
 // Used by both the post-onboard encrypt prompt and the in-session
 // "wallet not encrypted" warning banner — same enrol-rewrap-relay
 // shape from both entry points.
-async function encryptHolderSecretInPopup(): Promise<void> {
+async function encryptHolderSecretInPopup(vtaDid: string): Promise<void> {
   // Step 1: re-wrap the persisted secret behind the PRF AES key. Runs
   // the WebAuthn enrollment ceremony as a side effect. After this, the
   // popup's module-scope `cachedKey` is warm AND the IndexedDB record
-  // is encrypted at rest.
+  // is encrypted at rest. Multi-VTA: `vtaDid` selects which VTA's
+  // record gets the rewrap; every other VTA's record on this device
+  // is untouched.
   await rewrapHolderV4Secret(new IndexedDBKVStore(), {
+    vtaDid,
     toWrap: new WebAuthnPrfSecretWrap(chrome.runtime.id),
   });
   // Step 2: persist the setting so future cold starts dispatch on
@@ -102,7 +110,7 @@ async function encryptHolderSecretInPopup(): Promise<void> {
 // Shown when the wallet has completed the onboarding swap for a VTA.
 // Persisted via zustand so the state survives the popup closing.
 function ConnectedView() {
-  const connection = useConnectionStore((s) => s.connection)!;
+  const connection = useActiveConnection()!;
   const clearConnection = useConnectionStore((s) => s.clearConnection);
   const lockState = useLockStateStore((s) => s.state);
   const setLockState = useLockStateStore((s) => s.setLockState);
@@ -127,7 +135,7 @@ function ConnectedView() {
     setEncryptNowBusy(true);
     setEncryptNowError(null);
     try {
-      await encryptHolderSecretInPopup();
+      await encryptHolderSecretInPopup(connection.vtaDid);
       // Reflect the new state immediately — banner disappears,
       // ConnectedView re-renders with the Lock button visible.
       setEncryptOn(true);
@@ -1618,7 +1626,7 @@ function OnboardView() {
     setEncryptBusy(true);
     setEncryptError(null);
     try {
-      await encryptHolderSecretInPopup();
+      await encryptHolderSecretInPopup(pc.vtaDid);
       finalizeConnection({ ...pc, secretEncrypted: true });
     } catch (e) {
       setEncryptError(e instanceof Error ? e.message : String(e));
@@ -1937,7 +1945,7 @@ function UnlockView(): React.JSX.Element {
 }
 
 function Popup() {
-  const connection = useConnectionStore((s) => s.connection);
+  const connection = useActiveConnection();
   const setConnection = useConnectionStore((s) => s.setConnection);
   const clearConnection = useConnectionStore((s) => s.clearConnection);
   const [holderState, setHolderState] = useState<HolderStateInfo | null>(null);
@@ -1956,8 +1964,14 @@ function Popup() {
   const lockState = useLockStateStore((s) => s.state);
   const setLockState = useLockStateStore((s) => s.setLockState);
   const probeLockState = async () => {
+    // Pass the active vtaDid (when set) so the lock-state response
+    // reflects whether THE active record needs unlocking. Without a
+    // vtaDid, the offscreen returns the aggregate ("any v4 record")
+    // which is fine for the on-mount probe before connection is known
+    // but misleading once we know which VTA we're operating against.
     const res = (await chrome.runtime.sendMessage({
       type: RUNTIME_WALLET_LOCK_STATE,
+      ...(connection ? { vtaDid: connection.vtaDid } : {}),
     })) as RuntimeWalletLockStateResponse;
     if (res.ok) setLockState(res.result);
   };

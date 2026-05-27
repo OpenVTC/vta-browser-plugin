@@ -13,6 +13,11 @@ export interface KVStore {
   get<T = unknown>(key: string): Promise<T | undefined>;
   put(key: string, value: unknown): Promise<void>;
   delete(key: string): Promise<void>;
+  /** Enumerate keys, optionally filtered to those starting with
+   *  `prefix`. Order is unspecified. Used for prefix-scanned
+   *  collections (e.g. multi-VTA holder records under
+   *  `pnm/holder-identity/v4/`). */
+  keys(prefix?: string): Promise<string[]>;
 }
 
 /** Backing for tests. Forgets state on process exit. */
@@ -30,6 +35,14 @@ export class InMemoryKVStore implements KVStore {
 
   async delete(key: string): Promise<void> {
     this.map.delete(key);
+  }
+
+  async keys(prefix?: string): Promise<string[]> {
+    const out: string[] = [];
+    for (const k of this.map.keys()) {
+      if (prefix === undefined || k.startsWith(prefix)) out.push(k);
+    }
+    return out;
   }
 }
 
@@ -77,6 +90,26 @@ export class IndexedDBKVStore implements KVStore {
       tx.objectStore(this.storeName).delete(key);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async keys(prefix?: string): Promise<string[]> {
+    const db = await this.openDb();
+    // Use a key range when a prefix is provided so IndexedDB does the
+    // filtering — avoids walking the entire keyspace for a handful of
+    // matches. The upper bound is `prefix + '￿'` (the highest
+    // BMP code point), giving a half-open range that captures every
+    // string starting with `prefix`.
+    const range =
+      prefix !== undefined
+        ? IDBKeyRange.bound(prefix, prefix + "￿", false, false)
+        : undefined;
+    return new Promise<string[]>((resolve, reject) => {
+      const tx = db.transaction(this.storeName, "readonly");
+      const store = tx.objectStore(this.storeName);
+      const req = range !== undefined ? store.getAllKeys(range) : store.getAllKeys();
+      req.onsuccess = () => resolve((req.result as IDBValidKey[]).map(String));
+      req.onerror = () => reject(req.error);
     });
   }
 

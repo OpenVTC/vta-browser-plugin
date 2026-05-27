@@ -464,6 +464,12 @@ export const RUNTIME_WALLET_LOCK_STATE = "vta-wallet/lock-state" as const;
 
 export interface RuntimeWalletLockStateRequest {
   type: typeof RUNTIME_WALLET_LOCK_STATE;
+  /** Which VTA's record to inspect. Optional — when absent, returns
+   *  the aggregate ("any v4 record exists" mode), used by the popup
+   *  before an active VTA is known. Multi-VTA: pass the active
+   *  vtaDid so the UnlockView correctly fires when THE active
+   *  record is PRF-wrapped. */
+  vtaDid?: string;
 }
 
 export type RuntimeWalletLockStateResponse =
@@ -1088,6 +1094,11 @@ export interface OffscreenVaultProxyLoginRequest {
 export interface OffscreenSignTrustTaskRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_SIGN_TRUST_TASK;
+  /** Which VTA's holder identity to sign with — multi-VTA: every VTA
+   *  has its own holder DID; the RP-driven `window.vtaWallet.
+   *  signTrustTask` doesn't know about this, so background fills it
+   *  in from the active connection before forwarding. */
+  vtaDid: string;
   params: SignTrustTaskParams;
 }
 
@@ -1100,6 +1111,10 @@ export interface OffscreenVerifyDidRequest {
 export interface OffscreenStartInboundRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_START_INBOUND;
+  /** Which VTA's holder authenticates the inbound mediator session.
+   *  Multi-VTA: only the active VTA's holder listens for now; PR2/3
+   *  will broaden this to multi-listener once the dropdown lands. */
+  vtaDid: string;
 }
 
 export interface OffscreenGetStatusRequest {
@@ -1128,6 +1143,11 @@ export interface OffscreenOnboardConnectRequest {
 export interface OffscreenDidcommLoginRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_DIDCOMM_LOGIN;
+  /** Which VTA's holder identity to authenticate as. Multi-VTA: the
+   *  RP-page-facing `window.vtaWallet.loginDidcomm` doesn't know about
+   *  the wallet's onboarded VTAs, so background fills this from the
+   *  active connection before forwarding. */
+  vtaDid: string;
   params: DidcommLoginParams;
 }
 

@@ -3,7 +3,7 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { clearHolderIdentity, IndexedDBKVStore, rewrapHolderSecret } from "@pnm/core";
 import { DEFAULT_WALLET_MEDIATOR_DID, getSettings, setSettings } from "./config.js";
-import { loadHolder } from "./holder.js";
+import { loadActiveHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 
 const inputStyle: React.CSSProperties = {
@@ -43,8 +43,15 @@ function Options() {
       setVtaDid(s.defaultStepUpVtaDid ?? "");
       setVtaMediatorDid(s.defaultStepUpVtaMediatorDid ?? "");
       setEncryptOn(Boolean(s.encryptHolderSecret));
-      const { signing } = await loadHolder();
-      setHolderDid(signing.did);
+      // Multi-VTA: show the active VTA's holder DID. Silently skip
+      // when no VTA is active (fresh install / post-Disconnect) —
+      // the rest of the options surface stays usable.
+      try {
+        const { signing } = await loadActiveHolder();
+        setHolderDid(signing.did);
+      } catch {
+        setHolderDid("");
+      }
     })();
   }, []);
 
@@ -139,9 +146,14 @@ function Options() {
       });
       setSavedMediatorDid(trimmedMediator);
 
-      // Reflect the (possibly re-minted) holder DID.
-      const { signing } = await loadHolder();
-      setHolderDid(signing.did);
+      // Reflect the (possibly re-minted) holder DID. Silently skip when
+      // no VTA is active.
+      try {
+        const { signing } = await loadActiveHolder();
+        setHolderDid(signing.did);
+      } catch {
+        setHolderDid("");
+      }
       setStatus(
         trimmedMediator !== savedMediatorDid
           ? "Saved — wallet identity re-minted. Re-grant the new DID in your RP ACLs."

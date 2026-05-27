@@ -35,7 +35,41 @@ import {
 // authentication key, and the X25519 keyAgreement key is its Montgomery
 // form, re-derived on every load.
 const STORE_KEY = "pnm/holder-identity/v3";
-const STORE_KEY_V4 = "pnm/holder-identity/v4";
+// Legacy single-VTA v4 key. Read-only after multi-VTA landed; records
+// found here are migrated to the per-vta path on first access and the
+// legacy key is deleted. Kept defined (not exported) so the migration
+// helper can read it without re-typing the constant.
+const STORE_KEY_V4_LEGACY = "pnm/holder-identity/v4";
+// Per-VTA v4 key prefix. Each VTA the wallet has been onboarded at
+// has its own record under `{prefix}{vtaDid}`. The trailing `/`
+// disambiguates the prefix-scan from the legacy singleton key so a
+// caller listing records doesn't accidentally pick up the legacy
+// row before its migration ran.
+const STORE_KEY_V4_PREFIX = "pnm/holder-identity/v4/";
+
+function v4Key(vtaDid: string): string {
+  return STORE_KEY_V4_PREFIX + vtaDid;
+}
+
+/**
+ * Migrate the legacy single-VTA v4 record (if present) to its
+ * per-vta key, using the record's own `vtaDid` field as the path
+ * suffix. Idempotent: a second call after migration is a no-op
+ * (legacy key is gone, return value is `null`). Returns the migrated
+ * record so the immediate caller can use it without a second read.
+ *
+ * Called inline from every read path so installs predating multi-VTA
+ * are picked up on whichever read fires first after upgrade.
+ */
+async function migrateLegacyV4Record(store: KVStore): Promise<PersistedHolderV4 | null> {
+  const legacy = await store.get<PersistedHolderV4>(STORE_KEY_V4_LEGACY);
+  if (!legacy) return null;
+  // Write FIRST, delete after — a crash between the two leaves the
+  // legacy row in place; the next read re-runs the migration.
+  await store.put(v4Key(legacy.vtaDid), legacy);
+  await store.delete(STORE_KEY_V4_LEGACY);
+  return legacy;
+}
 
 interface PersistedHolder {
   /** The holder's `did:peer:2`. */
@@ -197,11 +231,17 @@ function buildHolder(
   return { identity, signing };
 }
 
-/** Forget the persisted holder identity. Mostly for tests / hard reset.
- *  Clears BOTH v3 and v4 records so a `clear` always leaves a fresh wallet. */
+/** Forget every persisted holder identity. Mostly for tests / hard
+ *  reset (the options page "wipe wallet" button). Clears the v3 row,
+ *  the legacy single-VTA v4 row, AND every per-vta v4 record. After
+ *  this the wallet looks freshly installed at every VTA. */
 export async function clearHolderIdentity(store: KVStore): Promise<void> {
   await store.delete(STORE_KEY);
-  await store.delete(STORE_KEY_V4);
+  await store.delete(STORE_KEY_V4_LEGACY);
+  const perVtaKeys = await store.keys(STORE_KEY_V4_PREFIX);
+  for (const k of perVtaKeys) {
+    await store.delete(k);
+  }
 }
 
 // ─── v4: VTA-minted did:key ───
@@ -264,25 +304,46 @@ export class RequiresReonboardError extends Error {
 }
 
 export interface LoadHolderStrictOptions {
+  /** Which VTA's holder identity to load. Each VTA the wallet has been
+   *  onboarded at has its own per-VTA holder record (the v4 schema is
+   *  multi-instance — one record per VTA). Pass the VTA DID the
+   *  operation is targeting; the store contains exactly one v4 record
+   *  per `(vtaDid)` pair. */
+  vtaDid: string;
   /** Wrap that decrypts the persisted Ed25519 seed. Same semantics as
    *  `HolderIdentityOptions.secretWrap` — omit for plaintext (tests /
    *  legacy), supply a `WebAuthnPrfSecretWrap` in production. */
   secretWrap?: SecretWrap;
 }
 
-/** Load the wallet's holder identity, strictly preferring v4.
+/** Load the wallet's holder identity for the given VTA, strictly
+ *  preferring v4.
  *
- *  - v4 present → return the VTA-minted holder.
- *  - no v4 but v3 present → throw `RequiresReonboardError` (the operator
- *    needs to re-onboard so the VTA mints a v4 identity).
- *  - neither present → throw `NoHolderError` (fresh install). */
+ *  - v4 record for `vtaDid` present → return the VTA-minted holder.
+ *  - no v4 record for `vtaDid` but a legacy single-VTA v4 record
+ *    exists → migrate it to the per-vta path (transparently) and
+ *    return if its `vtaDid` matches the requested one.
+ *  - no v4 (for `vtaDid` or legacy) but v3 present → throw
+ *    `RequiresReonboardError` (the operator needs to re-onboard so the
+ *    VTA mints a v4 identity).
+ *  - none of the above → throw `NoHolderError` (fresh install). */
 export async function loadHolderStrict(
   store: KVStore,
-  opts?: LoadHolderStrictOptions,
+  opts: LoadHolderStrictOptions,
 ): Promise<HolderIdentityResult> {
-  const v4 = await store.get<PersistedHolderV4>(STORE_KEY_V4);
+  let v4 = await store.get<PersistedHolderV4>(v4Key(opts.vtaDid));
+  if (!v4) {
+    // Inline migration of the legacy single-VTA v4 record. If the
+    // legacy row's vtaDid matches the requested one, use it now;
+    // otherwise fall through (the wallet is onboarded at a different
+    // VTA than the one being asked for).
+    const migrated = await migrateLegacyV4Record(store);
+    if (migrated && migrated.vtaDid === opts.vtaDid) {
+      v4 = migrated;
+    }
+  }
   if (v4) {
-    const edSecret = await unwrapSecret(v4.wrappedSecret, opts?.secretWrap);
+    const edSecret = await unwrapSecret(v4.wrappedSecret, opts.secretWrap);
     return {
       ...buildHolder(edSecret, v4.did, v4.signingKid, v4.keyAgreementKid),
       freshlyMinted: false,
@@ -344,12 +405,16 @@ export async function installVtaMintedHolder(
     ...(opts.vtaUrl ? { vtaUrl: opts.vtaUrl } : {}),
     schemaVersion: 4,
   };
-  await store.put(STORE_KEY_V4, record);
+  await store.put(v4Key(opts.vtaDid), record);
   // Migration: drop the legacy did:peer record so the next strict load
   // doesn't re-prompt the operator to re-onboard. Without this, a wallet
   // that successfully onboarded but kept the v3 row would loop on its
   // first reload.
   await store.delete(STORE_KEY);
+  // Also drop the legacy single-VTA v4 record if present — the per-vta
+  // record is the new source of truth. Idempotent: a no-op if the
+  // legacy row was already migrated or never existed.
+  await store.delete(STORE_KEY_V4_LEGACY);
   return {
     ...buildHolder(opts.edSeed, opts.did, opts.signingKid, opts.keyAgreementKid),
     freshlyMinted: true,
@@ -357,6 +422,9 @@ export async function installVtaMintedHolder(
 }
 
 export interface RewrapHolderV4Options {
+  /** Which VTA's holder record to re-wrap. Multi-VTA: each VTA has
+   *  its own v4 record; the rewrap targets exactly one. */
+  vtaDid: string;
   /** Wrap that DECRYPTS the currently-persisted v4 record. Pass the
    *  wrap the wallet was using before the migration. Pass `undefined`
    *  when the existing record uses `PassthroughWrap` (plaintext),
@@ -391,9 +459,17 @@ export async function rewrapHolderV4Secret(
   store: KVStore,
   opts: RewrapHolderV4Options,
 ): Promise<HolderIdentityResult> {
-  const persisted = await store.get<PersistedHolderV4>(STORE_KEY_V4);
+  let persisted = await store.get<PersistedHolderV4>(v4Key(opts.vtaDid));
   if (!persisted) {
-    throw new Error("no persisted v4 holder identity to re-wrap");
+    // Try migrating a legacy single-VTA row into the per-vta path,
+    // then re-read. Same idempotent helper used by `loadHolderStrict`.
+    const migrated = await migrateLegacyV4Record(store);
+    if (migrated && migrated.vtaDid === opts.vtaDid) {
+      persisted = migrated;
+    }
+  }
+  if (!persisted) {
+    throw new Error(`no persisted v4 holder identity to re-wrap for ${opts.vtaDid}`);
   }
 
   // 1. Recover the raw seed using the from-wrap. `unwrapSecret`
@@ -416,13 +492,18 @@ export async function rewrapHolderV4Secret(
     ...(persisted.vtaUrl ? { vtaUrl: persisted.vtaUrl } : {}),
     schemaVersion: 4,
   };
-  await store.put(STORE_KEY_V4, next);
+  await store.put(v4Key(persisted.vtaDid), next);
 
   return {
     ...buildHolder(edSecret, persisted.did, persisted.signingKid, persisted.keyAgreementKid),
     freshlyMinted: false,
   };
 }
+
+export type HolderIdentityStateResult =
+  | { kind: "none" }
+  | { kind: "v3"; did: string }
+  | { kind: "v4"; did: string; vtaDid: string; wrapAlgorithm: string };
 
 /** Inspect the persisted state without throwing. Used by the popup to
  *  decide which onboarding screen to show.
@@ -431,26 +512,88 @@ export async function rewrapHolderV4Secret(
  *  encrypted at rest. `"passthrough"` means plaintext (the operator
  *  hasn't enabled encryption); anything else (currently only
  *  `"webauthn-prf-aes-gcm"`) means the popup needs to run an
- *  unlock ceremony before offscreen can load the holder identity. */
+ *  unlock ceremony before offscreen can load the holder identity.
+ *
+ *  When `vtaDid` is passed: returns the state for that specific
+ *  VTA's holder record. Used by the popup's active-VTA probe.
+ *  When `vtaDid` is omitted: returns the first v4 record found
+ *  (after migrating any legacy single-VTA row), else falls back to
+ *  v3 / none. Used for the initial fresh-install / migration-banner
+ *  decision before an active VTA has been selected. */
 export async function holderIdentityState(
   store: KVStore,
-): Promise<
-  | { kind: "none" }
-  | { kind: "v3"; did: string }
-  | { kind: "v4"; did: string; vtaDid: string; wrapAlgorithm: string }
-> {
-  const v4 = await store.get<PersistedHolderV4>(STORE_KEY_V4);
-  if (v4) {
-    return {
-      kind: "v4",
-      did: v4.did,
-      vtaDid: v4.vtaDid,
-      wrapAlgorithm: v4.wrappedSecret.algorithm,
-    };
+  vtaDid?: string,
+): Promise<HolderIdentityStateResult> {
+  // Migrate the legacy row if present — it joins the per-vta keyspace
+  // and will be picked up by the lookups below.
+  await migrateLegacyV4Record(store);
+
+  if (vtaDid !== undefined) {
+    const v4 = await store.get<PersistedHolderV4>(v4Key(vtaDid));
+    if (v4) {
+      return {
+        kind: "v4",
+        did: v4.did,
+        vtaDid: v4.vtaDid,
+        wrapAlgorithm: v4.wrappedSecret.algorithm,
+      };
+    }
+  } else {
+    // No specific VTA — scan the per-vta keyspace and return the
+    // first match. The popup uses this for the migration banner
+    // detection (any v4 present at all → skip the v3 banner).
+    const keys = await store.keys(STORE_KEY_V4_PREFIX);
+    if (keys.length > 0) {
+      const first = await store.get<PersistedHolderV4>(keys[0]!);
+      if (first) {
+        return {
+          kind: "v4",
+          did: first.did,
+          vtaDid: first.vtaDid,
+          wrapAlgorithm: first.wrappedSecret.algorithm,
+        };
+      }
+    }
   }
   const v3 = await store.get<PersistedHolder>(STORE_KEY);
   if (v3) return { kind: "v3", did: v3.did };
   return { kind: "none" };
+}
+
+export interface HolderRecordSummary {
+  vtaDid: string;
+  did: string;
+  /** Encryption algorithm of the persisted secret. `"passthrough"` =
+   *  plaintext at rest. */
+  wrapAlgorithm: string;
+}
+
+/** Enumerate every v4 holder record on disk — one per VTA the wallet
+ *  has been onboarded at. Powers the popup's multi-VTA dropdown
+ *  (PR 2). Migrates the legacy single-VTA row inline so a wallet
+ *  upgraded from a single-VTA build surfaces its one wallet here. */
+export async function listHolderRecords(store: KVStore): Promise<HolderRecordSummary[]> {
+  await migrateLegacyV4Record(store);
+  const keys = await store.keys(STORE_KEY_V4_PREFIX);
+  const out: HolderRecordSummary[] = [];
+  for (const k of keys) {
+    const r = await store.get<PersistedHolderV4>(k);
+    if (!r) continue;
+    out.push({
+      vtaDid: r.vtaDid,
+      did: r.did,
+      wrapAlgorithm: r.wrappedSecret.algorithm,
+    });
+  }
+  return out;
+}
+
+/** Delete the v4 holder record for a specific VTA. Companion to
+ *  `installVtaMintedHolder`. Idempotent: a no-op when the record is
+ *  already gone. Other VTAs' records are left alone — call
+ *  `clearHolderIdentity` to wipe every wallet on this device. */
+export async function forgetHolderRecord(store: KVStore, vtaDid: string): Promise<void> {
+  await store.delete(v4Key(vtaDid));
 }
 
 export interface RewrapOptions {
