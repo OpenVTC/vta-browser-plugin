@@ -161,7 +161,59 @@ export type ContentResponse =
   | { source: typeof CONTENT_SOURCE; id: string; ok: true; result: unknown }
   | { source: typeof CONTENT_SOURCE; id: string; ok: false; error: string };
 
+/** Wallet lifecycle event names broadcast from background → content
+ *  script → page-world provider → dispatched as `vtawallet:<kind>`
+ *  window events. RP pages opt in by listening; the wallet doesn't
+ *  require any RP handler to function.
+ *
+ *  - `ready`     — content script just loaded (fresh page, or fresh
+ *                  extension after a reload). RP can retry any
+ *                  wallet calls that failed during the gap.
+ *  - `unlocked`  — the operator just unlocked an encrypted wallet via
+ *                  the popup. Pages that hit `WalletLockedError`
+ *                  earlier can retry.
+ *  - `locked`    — the operator clicked Lock or the wallet auto-
+ *                  locked (browser restart). Pages should clear any
+ *                  cached session expecting the wallet to sign.
+ *  - `connectionchanged` — the active VTA changed (operator
+ *                  switched VTAs, forgot a VTA, or onboarded a new
+ *                  one). RP-pinned login state may now refer to a
+ *                  different holder DID.
+ *  - `disconnected` — the wallet is going away (extension reload /
+ *                  uninstall). Surfaced as a best-effort signal from
+ *                  the content script's `chrome.runtime.connect`
+ *                  port `onDisconnect`. Not always observable. */
+export type WalletEventKind =
+  | "ready"
+  | "unlocked"
+  | "locked"
+  | "connectionchanged"
+  | "disconnected";
+
+/** content → provider broadcast. Re-dispatched by the provider as
+ *  `window.dispatchEvent(new CustomEvent("vtawallet:" + kind, ...))`. */
+export interface ContentBroadcast {
+  source: typeof CONTENT_SOURCE;
+  /** Distinguishes from `ContentResponse` (which has `id`). */
+  kind: "event";
+  event: WalletEventKind;
+  /** Optional event payload — currently unused; reserved for future
+   *  payloads like `{ vtaDid }` on connectionchanged. */
+  detail?: Record<string, unknown>;
+}
+
 // ─── content ↔ background (chrome.runtime messaging) ───
+
+/** background → content broadcast (not a request/response pair). The
+ *  content script forwards to its page-world provider as a
+ *  `ContentBroadcast` window message. */
+export const RUNTIME_BROADCAST_EVENT = "vta-wallet/broadcast-event" as const;
+
+export interface RuntimeBroadcastEvent {
+  type: typeof RUNTIME_BROADCAST_EVENT;
+  event: WalletEventKind;
+  detail?: Record<string, unknown>;
+}
 
 export const RUNTIME_LOGIN = "vta-wallet/login" as const;
 export const RUNTIME_LOGIN_DIDCOMM = "vta-wallet/login-didcomm" as const;

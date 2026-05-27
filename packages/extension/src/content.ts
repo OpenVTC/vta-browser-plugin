@@ -28,6 +28,7 @@ const RUNTIME_WALLET_DEFAULTS = "vta-wallet/wallet-defaults";
 const RUNTIME_SIGN_TRUST_TASK = "vta-wallet/sign-trust-task";
 const RUNTIME_VAULT_PROXY_LOGIN_PAGE = "vta-wallet/vault-proxy-login-page";
 const RUNTIME_VAULT_LIST_PAGE = "vta-wallet/vault-list-page";
+const RUNTIME_BROADCAST_EVENT = "vta-wallet/broadcast-event";
 
 // ─── 1. Inject the provider into the page world. ───
 // The content script runs in an isolated world, so assigning
@@ -91,3 +92,35 @@ window.addEventListener("message", (event: MessageEvent) => {
     window.postMessage(response, window.origin);
   })();
 });
+
+// ─── 3. Forward background broadcasts (wallet lifecycle events) into
+//        the page world. ───
+// Background fires these on unlock / lock / connection change. Pages
+// that listen for the corresponding `vtawallet:<kind>` window event can
+// react — typically retry an operation that failed during the gap. RPs
+// that don't listen aren't affected (the broadcasts are best-effort).
+chrome.runtime.onMessage.addListener((message) => {
+  const m = message as { type?: string; event?: string; detail?: unknown };
+  if (m?.type !== RUNTIME_BROADCAST_EVENT || typeof m.event !== "string") return;
+  window.postMessage(
+    {
+      source: CONTENT_SOURCE,
+      kind: "event",
+      event: m.event,
+      ...(m.detail ? { detail: m.detail } : {}),
+    },
+    window.origin,
+  );
+});
+
+// ─── 4. Emit `ready` on initial content-script load. ───
+// Fires once per fresh content-script instance. On extension reload,
+// the OLD content script in this tab is orphaned (`chrome.runtime`
+// calls all fail with "Extension context invalidated"). The
+// background's onInstalled handler reloads matching tabs to inject a
+// new content script, which fires this event — so a page that
+// listened can clear stale error state from the gap.
+window.postMessage(
+  { source: CONTENT_SOURCE, kind: "event", event: "ready" },
+  window.origin,
+);

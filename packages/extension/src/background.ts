@@ -9,6 +9,7 @@
 // DIDComm flow: content → RUNTIME_LOGIN_DIDCOMM → consent → offscreen doc.
 
 import {
+  parseActiveVtaDid,
   parseAllVtaDids,
   readActiveHolderDid,
   readActiveVtaDid,
@@ -54,6 +55,7 @@ import {
   OFFSCREEN_LOCK_WALLET,
   RUNTIME_CONSENT_RESULT,
   RUNTIME_INBOUND_CONSENT,
+  RUNTIME_BROADCAST_EVENT,
   RUNTIME_LOCK_WALLET,
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
@@ -126,10 +128,76 @@ import {
 } from "./bridge-protocol.js";
 import { getSettings } from "./config.js";
 
-chrome.runtime.onInstalled.addListener(() => {
-  console.info("[pnm] extension installed");
+chrome.runtime.onInstalled.addListener((details) => {
+  console.info("[pnm] extension installed:", details.reason);
   void subscribeToPush();
+  // On update (the dev-iteration case the operator hits constantly:
+  // edit the plugin → "Reload" in chrome://extensions), reload every
+  // tab that the content script matches. Without this, the OLD content
+  // script in those tabs is orphaned — its chrome.runtime.* calls all
+  // fail with "Extension context invalidated" — and the operator has
+  // to manually refresh each RP page. The reload re-injects a fresh
+  // content script that's wired to the new background.
+  //
+  // Gated on `reason === "update"` (a `Reload` from chrome://extensions
+  // surfaces as that). Fresh installs have no relevant tabs open. The
+  // browser-startup case (`reason === "chrome_update"` or absent
+  // onInstalled fire) leaves tabs alone.
+  if (details.reason === "update") {
+    void reloadContentScriptTabs();
+  }
 });
+
+/** Reload every tab whose URL matches the manifest's content_scripts
+ *  pattern. Called from `onInstalled` after an extension update so
+ *  open RP pages pick up a fresh content script wired to the new
+ *  background SW. */
+async function reloadContentScriptTabs(): Promise<void> {
+  const manifest = chrome.runtime.getManifest();
+  const matches =
+    manifest.content_scripts?.flatMap((cs) => cs.matches ?? []) ?? [];
+  if (matches.length === 0) return;
+  const tabs = await chrome.tabs.query({ url: matches });
+  for (const tab of tabs) {
+    if (tab.id === undefined) continue;
+    try {
+      await chrome.tabs.reload(tab.id);
+    } catch (e) {
+      console.warn("[pnm] tab reload failed:", tab.id, e);
+    }
+  }
+}
+
+/** Broadcast a wallet-lifecycle event to every tab whose URL matches
+ *  the content-script pattern. The content scripts forward to their
+ *  page-world provider, which dispatches as a `vtawallet:<kind>`
+ *  window event. Best-effort — `chrome.tabs.sendMessage` to a tab
+ *  with no content-script listener throws and is swallowed. */
+async function broadcastWalletEvent(
+  event: "ready" | "unlocked" | "locked" | "connectionchanged" | "disconnected",
+  detail?: Record<string, unknown>,
+): Promise<void> {
+  const manifest = chrome.runtime.getManifest();
+  const matches =
+    manifest.content_scripts?.flatMap((cs) => cs.matches ?? []) ?? [];
+  if (matches.length === 0) return;
+  const tabs = await chrome.tabs.query({ url: matches });
+  const msg = {
+    type: RUNTIME_BROADCAST_EVENT,
+    event,
+    ...(detail ? { detail } : {}),
+  };
+  for (const tab of tabs) {
+    if (tab.id === undefined) continue;
+    try {
+      await chrome.tabs.sendMessage(tab.id, msg);
+    } catch {
+      // No content-script receiver in this tab — fine. Either the URL
+      // matched but the script hasn't loaded yet, or it was a non-page
+      // tab. Don't log; this is the common case.
+    }
+  }
+}
 
 // Web Push probe (Slice 2 de-risk). Registered at top level so it's active
 // when an inbound push wakes the worker. For now it just logs + notifies;
@@ -163,6 +231,7 @@ void subscribeToPush();
 // previous and current vtaDid lists keeps us from spamming the
 // offscreen on no-op changes (like the active-VTA flip).
 let _lastInboundVtaDids: string[] = [];
+let _lastActiveVtaDid: string | null = null;
 
 async function startInboundListener(): Promise<void> {
   // Multi-VTA: ship the full list of onboarded VTAs. The offscreen
@@ -171,6 +240,10 @@ async function startInboundListener(): Promise<void> {
   // otherwise a no-op.
   const vtaDids = (await readAllVtaDids()).sort();
   _lastInboundVtaDids = vtaDids;
+  // Seed _lastActiveVtaDid too — otherwise the first chrome.storage
+  // onChanged callback would see _lastActiveVtaDid=null and emit a
+  // spurious connectionchanged.
+  _lastActiveVtaDid = await readActiveVtaDid();
   await ensureOffscreenDocument();
   await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
@@ -184,11 +257,27 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   const change = changes["pnm-connection/v3"];
   if (!change) return;
   const next = parseAllVtaDids(change.newValue).sort();
-  const same =
+  const nextActive = parseActiveVtaDid(change.newValue);
+  const sameList =
     next.length === _lastInboundVtaDids.length &&
     next.every((v, i) => v === _lastInboundVtaDids[i]);
-  if (same) return;
+  const sameActive = nextActive === _lastActiveVtaDid;
+
+  // Broadcast on EITHER list change (add/forget VTA) or active-VTA
+  // switch — RP pages that pinned login state to a particular holder
+  // DID need to know when the active changed, even if the set of
+  // onboarded VTAs didn't. Reconcile is only needed on list changes.
+  if (!sameActive) {
+    _lastActiveVtaDid = nextActive;
+    void broadcastWalletEvent("connectionchanged");
+  }
+  if (sameList) return;
   _lastInboundVtaDids = next;
+  if (sameActive) {
+    // List changed but active didn't — still fire connectionchanged
+    // so RPs see e.g. a Forget of a non-active VTA.
+    void broadcastWalletEvent("connectionchanged");
+  }
   void (async () => {
     await ensureOffscreenDocument();
     await chrome.runtime.sendMessage({
@@ -473,7 +562,13 @@ async function handleUnlockPrf(
   // and moves on, leaving the listener missing. Now that the cache is
   // warm we can retry — `startInboundListener` reconciles, opening
   // missing sessions without touching existing ones.
-  if (res.ok) void startInboundListener();
+  if (res.ok) {
+    void startInboundListener();
+    // RP pages that hit `WalletLockedError` on an earlier request can
+    // now retry — broadcast so they know the gap is over without
+    // having to refresh the page.
+    void broadcastWalletEvent("unlocked");
+  }
   return res;
 }
 
@@ -1161,6 +1256,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(() => {
         /* no offscreen doc — nothing to flush */
       });
+    // Tell open RP pages the wallet just went locked — any cached
+    // session expecting the wallet to sign should be cleared.
+    void broadcastWalletEvent("locked");
     sendResponse({ ok: true });
     return false;
   }
