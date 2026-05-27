@@ -67,6 +67,7 @@ import {
   type RuntimeMediatorStatusResponse,
   type RuntimeHolderStateResponse,
   type RuntimeOnboardConnectResponse,
+  type RuntimeOnboardConnectRequest,
   type RuntimeOnboardPrepareRequest,
   type RuntimeOnboardPrepareResponse,
   type RuntimeSignTrustTaskRequest,
@@ -345,11 +346,15 @@ async function handleOnboardPrepare(
   })) as RuntimeOnboardPrepareResponse;
 }
 
-async function handleOnboardConnect(): Promise<RuntimeOnboardConnectResponse> {
+async function handleOnboardConnect(
+  req: RuntimeOnboardConnectRequest,
+): Promise<RuntimeOnboardConnectResponse> {
   await ensureOffscreenDocument();
   return (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_ONBOARD_CONNECT,
+    context: req.context,
+    ...(req.createIfMissing ? { createIfMissing: true } : {}),
   })) as RuntimeOnboardConnectResponse;
 }
 
@@ -772,7 +777,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if ((message as { type?: string })?.type === RUNTIME_ONBOARD_CONNECT) {
-    handleOnboardConnect()
+    handleOnboardConnect(message as RuntimeOnboardConnectRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

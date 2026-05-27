@@ -342,10 +342,19 @@ export type RuntimeOnboardPrepareResponse =
   | { ok: true; result: OnboardPrepareResult }
   | { ok: false; error: string };
 
-/** popup → background: finish onboarding — connect as the granted ephemeral
- *  and swap its ACL entry onto the holder did:peer. */
+/** popup → background: finish onboarding — connect as the granted ephemeral,
+ *  run the provision-integration flow against the chosen `context`, and
+ *  adopt the VTA-minted DID as the wallet's v4 holder identity. */
 export interface RuntimeOnboardConnectRequest {
   type: typeof RUNTIME_ONBOARD_CONNECT;
+  /** Maintainer context to provision into. The wallet used to hardcode
+   *  `"default"`; this lets the popup surface a picker so operators with
+   *  multi-context VTAs can target the right one. */
+  context: string;
+  /** When `true`, the wallet asks the VTA to provision the context
+   *  inline if it doesn't yet exist. Requires the ephemeral's grant to
+   *  carry **super-admin** role; the popup hints this in its UI. */
+  createIfMissing?: boolean;
 }
 
 export interface OnboardConnectResult {
@@ -864,6 +873,10 @@ export interface OffscreenOnboardPrepareRequest {
 export interface OffscreenOnboardConnectRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_ONBOARD_CONNECT;
+  /** Mirrors `RuntimeOnboardConnectRequest.context`. */
+  context: string;
+  /** Mirrors `RuntimeOnboardConnectRequest.createIfMissing`. */
+  createIfMissing?: boolean;
 }
 
 /** background → offscreen: run a DIDComm login. Reply is a

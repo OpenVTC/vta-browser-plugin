@@ -58,6 +58,7 @@ import {
   OFFSCREEN_VERIFY_DID,
   RUNTIME_INBOUND_CONSENT,
   type OffscreenDidcommLoginRequest,
+  type OffscreenOnboardConnectRequest,
   type OffscreenOnboardPrepareRequest,
   type OffscreenSignTrustTaskRequest,
   type OffscreenStepUpVtaRequest,
@@ -128,7 +129,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_ONBOARD_CONNECT) {
-    doOnboardConnect()
+    const req = message as OffscreenOnboardConnectRequest;
+    doOnboardConnect({ context: req.context, createIfMissing: req.createIfMissing ?? false })
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -386,7 +388,18 @@ async function doOnboardPrepare(vtaDid: string): Promise<OnboardPrepareResult> {
   };
 }
 
-async function doOnboardConnect(): Promise<OnboardConnectResult> {
+interface OnboardConnectParams {
+  /** Maintainer context to provision into. Operator-selected via the
+   *  popup's dropdown (or typed for a new context). */
+  context: string;
+  /** When `true`, asks the VTA to provision the context inline if it
+   *  doesn't yet exist. Requires the ephemeral's grant to be
+   *  super-admin; the popup hints this in the UI when the operator
+   *  ticks the corresponding checkbox. */
+  createIfMissing: boolean;
+}
+
+async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardConnectResult> {
   const store = new IndexedDBKVStore();
   const pending = await store.get<PendingOnboard>(ONBOARD_KEY);
   if (!pending) throw new Error("no pending onboarding — prepare first");
@@ -434,9 +447,8 @@ async function doOnboardConnect(): Promise<OnboardConnectResult> {
       service,
       mediator: conn.mediator,
       vtaDid: pending.vtaDid,
-      // The VTA-side context every wallet provisions into. Fixed to
-      // `default` for now; future versions may let the operator pick.
-      context: "default",
+      context: params.context,
+      ...(params.createIfMissing ? { createContext: true } : {}),
       note: "browser-plugin onboarding",
     });
   } finally {
