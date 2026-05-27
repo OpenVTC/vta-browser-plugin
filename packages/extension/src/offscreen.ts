@@ -36,6 +36,7 @@ import {
   runProvisionIntegration,
   vaultDeleteRest,
   vaultListRest,
+  vaultSignTrustTaskRest,
   vtaCreateContext,
   vtaListContexts,
   vaultProxyLoginRest,
@@ -90,6 +91,7 @@ import {
   type OnboardConnectResult,
   type OnboardPrepareResult,
   type RuntimeLoginResponse,
+  type SignTrustTaskParams,
   type SignTrustTaskResult,
   type VerifyRpDidResult,
 } from "./bridge-protocol.js";
@@ -272,7 +274,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (msg.type === OFFSCREEN_SIGN_TRUST_TASK) {
     const req = message as OffscreenSignTrustTaskRequest;
-    doSignTrustTask(req.vtaDid, req.params.envelope)
+    doSignTrustTask(req.vtaDid, req.params, req.restBaseUrl)
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -438,16 +440,88 @@ async function doVerifyDid(did: string): Promise<VerifyRpDidResult> {
   };
 }
 
-// Sign a Trust-Task envelope with the wallet's holder did:peer #key-2. The
-// caller (typically a Relying Party's web UI via window.vtaWallet.signTrustTask)
-// has already populated everything it wants signed — id, type, payload,
-// recipient (audience binding). The wallet adds the eddsa-jcs-2022 Data
-// Integrity proof and returns the envelope. The RP server resolves the
-// did:peer to verify.
+// Sign a Trust-Task envelope. Two paths:
+//
+// 1. **Holder-signed (default).** When `asDid` is absent the envelope
+//    is signed locally by the wallet's holder did:key #key-2 — the
+//    same eddsa-jcs-2022 Data Integrity proof the wallet has emitted
+//    since the beginning. The RP attributes the request to the holder
+//    DID.
+//
+// 2. **Principal-signed via VTA (`asDid` set).** After a
+//    `vault/proxy-login/0.1` session the RP authenticates the session
+//    as the vault entry's `principalDid`, NOT the holder DID. Any
+//    follow-up Trust Task the RP expects to be signed by the same
+//    session identity must carry a proof whose
+//    `verificationMethod = principalDid#<keyId>`. The holder doesn't
+//    hold the principal's signing key (it lives at the VTA), so the
+//    wallet routes via `vault/sign-trust-task/0.1`: the VTA
+//    canonicalises + signs + returns the signed envelope. Same
+//    eddsa-jcs-2022 proof shape, just signed by a different key.
+//
+// Falls back to holder-signing on `asDid` set BUT no matching vault
+// entry — easier on the caller than failing, and the resulting
+// proof's verificationMethod ≠ asDid will surface as a clear RP-side
+// rejection the operator can diagnose.
 async function doSignTrustTask(
   vtaDid: string,
-  envelope: Record<string, unknown>,
+  params: SignTrustTaskParams,
+  restBaseUrl: string | undefined,
 ): Promise<SignTrustTaskResult> {
+  const envelope = params.envelope;
+
+  if (params.asDid && restBaseUrl) {
+    // Principal-signed path: find the matching vault entry, route via VTA.
+    const { identity: holder, signing } = await loadHolder(vtaDid);
+    const service = await resolveKeyAgreement(vtaDid);
+    const listed = await vaultListRest({
+      baseUrl: restBaseUrl,
+      holder,
+      service,
+    });
+    const match = listed.entries.find(
+      (e) =>
+        e.principalDid === params.asDid &&
+        (e.secretKind === "did-self-issued" || e.secretKind === "didcomm-peer"),
+    );
+    if (match) {
+      // Ensure issuer is set on the envelope — the VTA rejects with
+      // envelope_issuer_mismatch if it doesn't already match the
+      // entry's principalDid. We don't silently rewrite either (matches
+      // the VTA's policy); we just check and surface a clearer error
+      // here than the RP-style mismatch reject from the server.
+      const issuer = (envelope as { issuer?: unknown }).issuer;
+      if (typeof issuer === "string" && issuer !== params.asDid) {
+        throw new Error(
+          `signTrustTask: envelope.issuer (${issuer}) does not match asDid (${params.asDid}); set envelope.issuer = asDid before calling`,
+        );
+      }
+      const toSign: Record<string, unknown> = {
+        ...envelope,
+        issuer: params.asDid,
+      };
+      const { signedEnvelope } = await vaultSignTrustTaskRest({
+        baseUrl: restBaseUrl,
+        holder,
+        service,
+        entryId: match.id,
+        unsignedEnvelope: toSign,
+      });
+      return { signedEnvelope, holderDid: params.asDid };
+    }
+    // Fall through to holder-signing with a warning the operator
+    // can spot in the offscreen console.
+    console.warn(
+      `[pnm] signTrustTask: asDid=${params.asDid} requested but no matching vault entry found; falling back to holder-signed proof (the RP will likely reject)`,
+    );
+    const signedEnvelope = await signTrustTask({
+      envelope: { ...envelope },
+      signing,
+    });
+    return { signedEnvelope, holderDid: signing.did };
+  }
+
+  // Holder-signed path: existing default.
   const { signing } = await loadHolder(vtaDid);
   // signTrustTask mutates in place and returns the same reference; clone
   // first so the caller's input is preserved across the IPC boundary

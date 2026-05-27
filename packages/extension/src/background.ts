@@ -658,14 +658,17 @@ async function handleSignTrustTask(
   req: RuntimeSignTrustTaskRequest,
 ): Promise<RuntimeSignTrustTaskResponse> {
   await ensureOffscreenDocument();
-  const activeVtaDid = await readActiveVtaDid();
-  if (!activeVtaDid) {
-    return { ok: false, error: "no active VTA connection — connect first" };
-  }
+  // Always include the active connection's restBaseUrl — the offscreen
+  // only uses it on the `asDid` branch (which needs to call
+  // `vault/sign-trust-task/0.1` against the VTA). On the holder-signed
+  // path the restBaseUrl is harmless overhead.
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
   return (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_SIGN_TRUST_TASK,
-    vtaDid: activeVtaDid,
+    vtaDid: active.conn.vtaDid,
+    restBaseUrl: active.conn.restBaseUrl,
     params: req.params,
   })) as RuntimeSignTrustTaskResponse;
 }
