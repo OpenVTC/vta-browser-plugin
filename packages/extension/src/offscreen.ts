@@ -125,8 +125,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_START_INBOUND) {
-    const req = message as { vtaDid: string };
-    void startInbound(req.vtaDid);
+    const req = message as { vtaDids: string[] };
+    void reconcileInbound(req.vtaDids ?? []);
     return false; // fire-and-forget
   }
   if (msg.type === OFFSCREEN_GET_STATUS) {
@@ -759,6 +759,18 @@ async function doDeriveSigningKeyId(did: string) {
 // (mediator + VTA) are cached in vti-didcomm-js, so even a cold reconnect is
 // cheap on the second hit.
 type MediatorState = "connecting" | "live" | "closed";
+// Pool key is `${mediatorDid}|${vtaDid}` (a composite). The same
+// mediator can host sessions for multiple holder DIDs — one per VTA
+// the wallet has onboarded — so a mediator-only key would collide.
+// The separator `|` is OK because DIDs never contain it.
+const POOL_KEY_SEP = "|";
+function poolKey(mediatorDid: string, vtaDid: string): string {
+  return mediatorDid + POOL_KEY_SEP + vtaDid;
+}
+function parsePoolKey(key: string): { mediatorDid: string; vtaDid: string } {
+  const idx = key.indexOf(POOL_KEY_SEP);
+  return { mediatorDid: key.slice(0, idx), vtaDid: key.slice(idx + 1) };
+}
 const warmPool = new Map<string, Promise<MediatorConnection>>();
 const mediatorState = new Map<string, MediatorState>();
 const INBOUND_RECONNECT_MS = 2_000;
@@ -772,41 +784,46 @@ async function walletMediatorDid(): Promise<string> {
   return _walletMediatorDid;
 }
 
-/** Snapshot of every known mediator's connection state, for the demo UI. */
-function statusSnapshot(): { mediatorDid: string; state: MediatorState }[] {
-  return [...mediatorState.entries()].map(([mediatorDid, state]) => ({ mediatorDid, state }));
+/** Snapshot of every known mediator session's state, for the demo UI.
+ *  Multi-VTA: now one entry per (mediator, vtaDid) pair, not just per
+ *  mediator. The demo UI groups by `mediatorDid` for display. */
+function statusSnapshot(): { mediatorDid: string; vtaDid: string; state: MediatorState }[] {
+  return [...mediatorState.entries()].map(([key, state]) => {
+    const { mediatorDid, vtaDid } = parsePoolKey(key);
+    return { mediatorDid, vtaDid, state };
+  });
 }
 
-/** Get (or lazily open) the warm session for a mediator. Reuses a live
- *  session; transparently reconnects one that has dropped. The session
- *  authenticates AS the holder of `vtaDid` — multi-VTA: separate
- *  sessions per (mediator, vtaDid) pair would be more correct but
- *  currently we run with the active VTA's holder for all sessions
- *  (PR 1 scope). PR 2+ can broaden the key + lifecycle. */
+/** Get (or lazily open) the warm session for a `(mediator, vtaDid)`
+ *  pair. The session authenticates AS the holder of `vtaDid`; multi-VTA
+ *  installs run one session per VTA (each holder DID needs its own
+ *  authenticated channel with the mediator). Reuses a live session;
+ *  transparently reconnects one that has dropped. */
 async function getWarmSession(
   mediatorDid: string,
   vtaDid: string,
 ): Promise<MediatorConnection> {
-  const existing = warmPool.get(mediatorDid);
+  const key = poolKey(mediatorDid, vtaDid);
+  const existing = warmPool.get(key);
   if (existing) {
     const conn = await existing.catch(() => null);
     if (conn && conn.isOpen) return conn;
-    warmPool.delete(mediatorDid); // stale/closed — fall through to reconnect
+    warmPool.delete(key); // stale/closed — fall through to reconnect
   }
 
-  mediatorState.set(mediatorDid, "connecting");
+  mediatorState.set(key, "connecting");
   const pending = createWarmSession(mediatorDid, vtaDid).then(
     (conn) => {
-      mediatorState.set(mediatorDid, "live");
+      mediatorState.set(key, "live");
       return conn;
     },
     (err) => {
-      mediatorState.set(mediatorDid, "closed");
-      warmPool.delete(mediatorDid);
+      mediatorState.set(key, "closed");
+      warmPool.delete(key);
       throw err;
     },
   );
-  warmPool.set(mediatorDid, pending);
+  warmPool.set(key, pending);
   return pending;
 }
 
@@ -816,6 +833,7 @@ async function createWarmSession(
 ): Promise<MediatorConnection> {
   const { identity } = await loadHolder(vtaDid);
   const isInbox = mediatorDid === (await walletMediatorDid());
+  const key = poolKey(mediatorDid, vtaDid);
   const conn = await connectMediatorSession({
     holder: identity,
     mediatorDid,
@@ -824,10 +842,12 @@ async function createWarmSession(
     // each operation resolves its real VTA target separately (cached).
     vtaDid: identity.did,
     onClose: () => {
-      warmPool.delete(mediatorDid);
-      mediatorState.set(mediatorDid, "closed");
-      // Keep the inbound path alive: re-arm the wallet's inbox mediator
-      // under the same VTA's holder that originally opened it.
+      warmPool.delete(key);
+      mediatorState.set(key, "closed");
+      // Keep the inbound path alive: re-arm THIS VTA's inbox session
+      // under the same holder. Multi-VTA: each holder has its own
+      // session, so the re-arm targets the specific (mediator, vtaDid)
+      // that dropped, not the aggregate.
       if (isInbox) setTimeout(() => void startInbound(vtaDid), INBOUND_RECONNECT_MS);
     },
   });
@@ -839,9 +859,15 @@ async function createWarmSession(
   return conn;
 }
 
-/** Ensure the warm session to the wallet's inbox mediator is live so
- *  RP-initiated confirm requests are received. Idempotent. Listens
- *  as the holder of `vtaDid`. */
+/** Ensure the warm session to the wallet's inbox mediator is live for
+ *  a single holder identity (one VTA). Idempotent. Used by the
+ *  re-arm-on-drop path in `createWarmSession.onClose` and by
+ *  `reconcileInbound` for each VTA in the desired set.
+ *
+ *  Failure modes — `loadHolder` throwing `WalletLockedError` when the
+ *  holder is encrypted but the cache is empty (cold-start before
+ *  unlock) — are logged but not propagated. The next unlock + a
+ *  subsequent reconcile will pick up the missed listener. */
 async function startInbound(vtaDid: string): Promise<void> {
   try {
     const mediatorDid = await walletMediatorDid();
@@ -854,6 +880,47 @@ async function startInbound(vtaDid: string): Promise<void> {
     );
   } catch (e) {
     console.error("[pnm inbound] failed to start inbound session:", e);
+  }
+}
+
+/** Multi-VTA inbound reconcile: ensure the wallet has one warm inbox
+ *  session per VTA in `vtaDids`, and close any existing inbound
+ *  sessions whose `vtaDid` is no longer in the desired set. Called on
+ *  service-worker boot AND whenever the operator adds / forgets a VTA
+ *  (chrome.storage watcher in background).
+ *
+ *  Multi-VTA invariant: each holder DID needs its own authenticated
+ *  channel with the mediator (the mediator routes inbound messages by
+ *  the recipient holder's DID, which is bound to the session's
+ *  authenticating identity). One mediator can host many holder
+ *  sessions concurrently. */
+async function reconcileInbound(vtaDids: readonly string[]): Promise<void> {
+  const mediatorDid = await walletMediatorDid();
+  const wanted = new Set(vtaDids);
+
+  // Open missing — concurrent across VTAs, individual failures stay
+  // contained (loadHolder may throw for a locked wallet; the rest
+  // still come up).
+  await Promise.allSettled(vtaDids.map((vtaDid) => startInbound(vtaDid)));
+
+  // Close extras: any pool entry whose mediator matches our inbox AND
+  // whose vtaDid is no longer wanted (operator forgot it). The pool
+  // also holds outbound sessions to OTHER mediators (the VTA's
+  // mediator, not the wallet's) — those are filtered out by the
+  // mediator check.
+  for (const [key, sessionPromise] of warmPool) {
+    const parsed = parsePoolKey(key);
+    if (parsed.mediatorDid !== mediatorDid) continue; // outbound; leave it
+    if (wanted.has(parsed.vtaDid)) continue; // still wanted
+    // No longer wanted. Drop the pool entry first so a race that
+    // calls getWarmSession during close doesn't reuse this conn.
+    warmPool.delete(key);
+    mediatorState.set(key, "closed");
+    void sessionPromise.then(
+      (conn) => conn.close(),
+      () => undefined, // already failed → nothing to close
+    );
+    console.info("[pnm inbound] closed listener for forgotten VTA", parsed.vtaDid);
   }
 }
 

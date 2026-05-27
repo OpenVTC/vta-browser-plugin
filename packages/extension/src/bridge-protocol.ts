@@ -1139,10 +1139,12 @@ export interface OffscreenVerifyDidRequest {
 export interface OffscreenStartInboundRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_START_INBOUND;
-  /** Which VTA's holder authenticates the inbound mediator session.
-   *  Multi-VTA: only the active VTA's holder listens for now; PR2/3
-   *  will broaden this to multi-listener once the dropdown lands. */
-  vtaDid: string;
+  /** Which VTAs' holders should be listening on the wallet's inbox
+   *  mediator. The offscreen reconciles: opens missing inbound
+   *  sessions for VTAs in this list, closes existing sessions for
+   *  VTAs no longer present (operator forgot them). Empty list closes
+   *  all inbound listeners — used on fresh-wipe / no-VTA state. */
+  vtaDids: string[];
 }
 
 export interface OffscreenGetStatusRequest {

@@ -10,7 +10,7 @@
 
 import { loginViaSiop } from "@pnm/core";
 import { loadActiveHolder } from "./holder.js";
-import { readActiveVtaDid } from "./active-vta.js";
+import { parseAllVtaDids, readActiveVtaDid, readAllVtaDids } from "./active-vta.js";
 import { checkOriginPin, pinOrigin } from "./origin-pin.js";
 import { subscribeToPush } from "./push.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
@@ -151,21 +151,49 @@ void subscribeToPush();
 // wallet can receive RP-initiated confirm requests. Idempotent (both
 // ensureOffscreenDocument and the offscreen's startInbound no-op if already
 // running), so it's safe to call on every worker spin-up.
+// Re-reconcile inbound listeners whenever the persisted connection
+// store changes. The operator adding a new VTA, forgetting an
+// existing one, or switching the active doesn't actually trigger the
+// connection map keys to change for the switch case — but
+// chrome.storage.onChanged fires on any value change. Comparing the
+// previous and current vtaDid lists keeps us from spamming the
+// offscreen on no-op changes (like the active-VTA flip).
+let _lastInboundVtaDids: string[] = [];
+
 async function startInboundListener(): Promise<void> {
-  // No-op until at least one VTA has been onboarded — the inbound mediator
-  // session authenticates AS the holder, and there's no holder yet on a
-  // fresh install or after a wipe. The popup re-arms the listener via
-  // a separate call after the first successful onboard.
-  const activeVtaDid = await readActiveVtaDid();
-  if (!activeVtaDid) return;
+  // Multi-VTA: ship the full list of onboarded VTAs. The offscreen
+  // reconciles — one warm inbox session per holder identity. Empty
+  // list closes any stale listeners (post-wipe / no-VTA state) but is
+  // otherwise a no-op.
+  const vtaDids = (await readAllVtaDids()).sort();
+  _lastInboundVtaDids = vtaDids;
   await ensureOffscreenDocument();
   await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_START_INBOUND,
-    vtaDid: activeVtaDid,
+    vtaDids,
   });
 }
 void startInboundListener();
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  const change = changes["pnm-connection/v3"];
+  if (!change) return;
+  const next = parseAllVtaDids(change.newValue).sort();
+  const same =
+    next.length === _lastInboundVtaDids.length &&
+    next.every((v, i) => v === _lastInboundVtaDids[i]);
+  if (same) return;
+  _lastInboundVtaDids = next;
+  void (async () => {
+    await ensureOffscreenDocument();
+    await chrome.runtime.sendMessage({
+      target: OFFSCREEN_TARGET,
+      type: OFFSCREEN_START_INBOUND,
+      vtaDids: next,
+    });
+  })();
+});
 
 // ─── Offscreen document lifecycle ───
 // One offscreen document per extension; create it lazily on first DIDComm
@@ -414,11 +442,19 @@ async function handleUnlockPrf(
   req: RuntimeUnlockPrfRequest,
 ): Promise<RuntimeUnlockPrfResponse> {
   await ensureOffscreenDocument();
-  return (await chrome.runtime.sendMessage({
+  const res = (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_UNLOCK_PRF,
     prfOutputB64u: req.prfOutputB64u,
   })) as RuntimeUnlockPrfResponse;
+  // Re-arm any inbound listeners that failed during the locked-state
+  // startup path. `startInbound`'s loadHolder call throws
+  // WalletLockedError when the cache is empty; the catch just logs
+  // and moves on, leaving the listener missing. Now that the cache is
+  // warm we can retry — `startInboundListener` reconciles, opening
+  // missing sessions without touching existing ones.
+  if (res.ok) void startInboundListener();
+  return res;
 }
 
 async function handleWalletLockState(
