@@ -521,15 +521,43 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
   // expects.
   const holderInputs = holderInputsFromAdminReply(adminReply);
   const secretWrap = await buildHolderSecretWrap();
-  await installVtaMintedHolder(store, {
-    ...holderInputs,
-    ...(secretWrap ? { secretWrap } : {}),
-  });
+  let secretEncrypted = false;
+  if (secretWrap) {
+    try {
+      await installVtaMintedHolder(store, { ...holderInputs, secretWrap });
+      secretEncrypted = true;
+    } catch (e) {
+      // Two ways the PRF wrap can decline: (a) the platform doesn't
+      // expose a PRF-capable authenticator (older browser, no
+      // platform passkey); (b) the operator dismissed the
+      // authenticator prompt. `wrapSecret` surfaces both as
+      // "declined to wrap" — fall back to plaintext storage so
+      // onboarding completes, log + surface a warning so the
+      // operator sees the at-rest weakening they got.
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("declined to wrap")) {
+        console.warn(
+          "doOnboardConnect: PRF wrap declined; falling back to plaintext holder secret",
+        );
+        await installVtaMintedHolder(store, holderInputs);
+        secretEncrypted = false;
+      } else {
+        throw e;
+      }
+    }
+  } else {
+    // Operator explicitly opted out via the settings page.
+    await installVtaMintedHolder(store, holderInputs);
+    secretEncrypted = false;
+  }
 
   await store.delete(ONBOARD_KEY);
-  // Existing bridge protocol returns { holderDid, role } — preserve the
-  // shape so background.ts / popup.tsx don't need a parallel change.
-  return { holderDid: adminReply.adminDid, role: "admin" };
+  // Bridge protocol returns { holderDid, role, secretEncrypted } — the
+  // popup uses `secretEncrypted` to surface "wallet encrypted at rest"
+  // vs "wallet stored without encryption" so the operator knows what
+  // happened at install time (especially the fallback path, which is
+  // a silent at-rest weakening if not surfaced).
+  return { holderDid: adminReply.adminDid, role: "admin", secretEncrypted };
 }
 
 /** Inspect the persisted holder identity without unwrapping the secret. The

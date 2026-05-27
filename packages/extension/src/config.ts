@@ -28,17 +28,30 @@ export interface WalletSettings {
   /**
    * H1 from the May 2026 security review: encrypt the persisted
    * Ed25519 root secret with a key derived from the operator's
-   * WebAuthn-PRF authenticator. Default `false` so existing
-   * wallets continue to load without surprise — the operator
-   * opts in via the settings page, which then auto-migrates
-   * the existing plaintext record onto the encrypted shape.
+   * WebAuthn-PRF authenticator.
+   *
+   * **Default: `true` for new installs.** Onboarding mints a
+   * v4 holder identity with the seed AES-GCM-encrypted under a
+   * PRF-derived key; an exfiltrated IndexedDB row is useless
+   * without the operator's authenticator. On browsers without a
+   * PRF-capable authenticator (older platforms, no enrolled
+   * platform passkey), the onboarding fallback in
+   * `offscreen.ts:doOnboardConnect` catches the wrap-decline
+   * and persists plaintext with a warning surfaced to the
+   * popup — wallet still works, just unencrypted.
+   *
+   * **Existing wallets are unaffected.** Their persisted record
+   * carries its own `algorithm` tag; the read path dispatches on
+   * that, ignoring the caller's wrap preference. A wallet
+   * minted before this default flipped continues to load via
+   * PassthroughWrap exactly as before.
    *
    * Trade-off: encryption-on means every cold-start (new
    * browser session, service-worker eviction) prompts the
    * operator to tap their authenticator; losing the
    * authenticator without unenrolling first means losing the
    * wallet. The options page renders both risks explicitly
-   * before flipping the flag.
+   * before flipping the flag manually.
    */
   encryptHolderSecret?: boolean;
 }
@@ -48,13 +61,22 @@ const SETTINGS_KEY = "pnm/settings/v1";
 /** Read the current settings, falling back to defaults for unset fields. */
 export async function getSettings(): Promise<WalletSettings> {
   const s = await new IndexedDBKVStore().get<Partial<WalletSettings>>(SETTINGS_KEY);
+  // `encryptHolderSecret` defaults to TRUE when unset — a fresh
+  // install gets PRF-encrypted at rest unless the operator
+  // explicitly opts out via the settings page (which persists
+  // `false`). An explicit `false` round-trips as-is; an explicit
+  // `true` round-trips as-is; only the "never set" state flips
+  // to the new default. See the field's docblock for the
+  // back-compat semantics for existing wallets.
+  const encryptHolderSecret =
+    typeof s?.encryptHolderSecret === "boolean" ? s.encryptHolderSecret : true;
   return {
     mediatorDid: s?.mediatorDid || DEFAULT_WALLET_MEDIATOR_DID,
     ...(s?.defaultStepUpVtaDid ? { defaultStepUpVtaDid: s.defaultStepUpVtaDid } : {}),
     ...(s?.defaultStepUpVtaMediatorDid
       ? { defaultStepUpVtaMediatorDid: s.defaultStepUpVtaMediatorDid }
       : {}),
-    ...(s?.encryptHolderSecret ? { encryptHolderSecret: true } : {}),
+    encryptHolderSecret,
   };
 }
 

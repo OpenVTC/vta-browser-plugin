@@ -367,6 +367,14 @@ export interface OnboardConnectResult {
   holderDid: string;
   /** The role the new entry carries (inherited from the ephemeral grant). */
   role: string;
+  /** `true` when the holder Ed25519 seed was persisted under PRF-derived
+   *  AES-GCM (the new default for fresh installs). `false` when the
+   *  wallet fell back to plaintext storage — either because the
+   *  operator opted out via the settings page, or because the PRF
+   *  wrap declined (no platform support / operator dismissed the
+   *  authenticator prompt). The popup surfaces the distinction so an
+   *  unexpected fallback doesn't go unnoticed. */
+  secretEncrypted: boolean;
 }
 
 export type RuntimeOnboardConnectResponse =

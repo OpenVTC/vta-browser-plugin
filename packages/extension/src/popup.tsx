@@ -1414,6 +1414,18 @@ function OnboardView() {
         connectedAt: Date.now(),
       });
       setPrep(null);
+      // Surface the encryption status on the way out. The default is
+      // encrypted; the fallback path (no PRF-capable authenticator,
+      // operator dismissed the prompt) leaves the seed plaintext.
+      // If the operator hits the fallback they likely don't know they
+      // got the weaker storage; show a one-line hint they can ignore
+      // once they've read it.
+      if (!res.result.secretEncrypted) {
+        setStatus(
+          "Onboarded — but wallet identity is stored without encryption " +
+            "(no PRF-capable authenticator). Enable in Settings to re-secure.",
+        );
+      }
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     } finally {
