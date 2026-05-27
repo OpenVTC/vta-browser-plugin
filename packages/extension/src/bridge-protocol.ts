@@ -402,11 +402,64 @@ export interface RuntimeHolderStateRequest {
   type: typeof RUNTIME_HOLDER_STATE;
 }
 
-/** Mirror of `holderIdentityState` from @pnm/core. */
+/** Mirror of `holderIdentityState` from @pnm/core. For v4 records the
+ *  `wrapAlgorithm` field tells the popup whether the holder secret is
+ *  encrypted at rest — `"passthrough"` means plaintext, anything else
+ *  (currently only `"webauthn-prf-aes-gcm"`) means the popup needs to
+ *  run an unlock ceremony before offscreen ops can load the holder. */
 export type HolderStateInfo =
   | { kind: "none" }
   | { kind: "v3"; did: string }
-  | { kind: "v4"; did: string; vtaDid: string };
+  | { kind: "v4"; did: string; vtaDid: string; wrapAlgorithm: string };
+
+/** popup → background: pipe a freshly-derived PRF output to offscreen
+ *  so the AES key lands in offscreen's `cachedKey` slot. After this,
+ *  subsequent `loadHolder` calls in offscreen succeed without
+ *  prompting the operator.
+ *
+ *  Architectural reason: `navigator.credentials.get` requires a
+ *  visible, focused context with a live user gesture. The popup
+ *  has both during the unlock-button click; offscreen is hidden,
+ *  so credentials.get from there hangs forever. The popup runs the
+ *  ceremony locally + relays the result via this bridge message. */
+export const RUNTIME_UNLOCK_PRF = "vta-wallet/unlock-prf" as const;
+
+export interface RuntimeUnlockPrfRequest {
+  type: typeof RUNTIME_UNLOCK_PRF;
+  /** Raw PRF output bytes from the popup's
+   *  `navigator.credentials.get` assertion. Sensitive — they're
+   *  the AES key root for this session. See
+   *  `WebAuthnPrfSecretWrap.seedCachedKeyFromPrfOutput` for the
+   *  trust-boundary analysis. */
+  prfOutput: Uint8Array;
+}
+
+export type RuntimeUnlockPrfResponse =
+  | { ok: true }
+  | { ok: false; error: string };
+
+/** popup → background: query whether the wallet is currently locked.
+ *
+ *  The "locked" state is only meaningful for v4 records wrapped under
+ *  PRF; a passthrough record never needs an unlock. Response shape:
+ *
+ *    `encrypted: false` → wallet is plaintext; no unlock needed
+ *    `encrypted: true, unlocked: false` → operator must run the
+ *       unlock ceremony before ops will work
+ *    `encrypted: true, unlocked: true` → cached key in offscreen,
+ *       ops work
+ *
+ *  The popup uses this on mount to decide whether to render the
+ *  UnlockView. */
+export const RUNTIME_WALLET_LOCK_STATE = "vta-wallet/lock-state" as const;
+
+export interface RuntimeWalletLockStateRequest {
+  type: typeof RUNTIME_WALLET_LOCK_STATE;
+}
+
+export type RuntimeWalletLockStateResponse =
+  | { ok: true; result: { encrypted: boolean; unlocked: boolean } }
+  | { ok: false; error: string };
 
 /** popup → background: list the contexts the wallet's holder has
  *  access to at the connected VTA. Used by the AddEntryForm to
@@ -864,6 +917,20 @@ export const OFFSCREEN_ONBOARD_CONNECT = "offscreen/onboard-connect" as const;
  *  Returns `{ kind: "none" | "v3" | "v4", ... }`. Used by the popup on
  *  mount to detect a pre-M2C v3 record and prompt re-onboarding. */
 export const OFFSCREEN_HOLDER_STATE = "offscreen/holder-state" as const;
+/** background → offscreen: seed the in-memory AES cache from a
+ *  popup-derived PRF output. Body: `{ prfOutput: Uint8Array }`. */
+export const OFFSCREEN_UNLOCK_PRF = "offscreen/unlock-prf" as const;
+
+export interface OffscreenUnlockPrfRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_UNLOCK_PRF;
+  prfOutput: Uint8Array;
+}
+
+/** background → offscreen: query the cached-key + holder shape so
+ *  the popup can decide between OnboardView / UnlockView /
+ *  ConnectedView. */
+export const OFFSCREEN_WALLET_LOCK_STATE = "offscreen/lock-state" as const;
 /** background → offscreen: list contexts visible to the holder. */
 export const OFFSCREEN_LIST_CONTEXTS = "offscreen/list-contexts" as const;
 /** background → offscreen: create a new context (super-admin only). */

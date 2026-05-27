@@ -1,13 +1,15 @@
 /// <reference types="chrome" />
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { useConnectionStore } from "./store.js";
+import { useConnectionStore, useLockStateStore } from "./store.js";
 import {
   RUNTIME_CREATE_CONTEXT,
   RUNTIME_DERIVE_SIGNING_KEY_ID,
   RUNTIME_HOLDER_STATE,
   RUNTIME_LIST_CONTEXTS,
   RUNTIME_LOCK_WALLET,
+  RUNTIME_UNLOCK_PRF,
+  RUNTIME_WALLET_LOCK_STATE,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
   RUNTIME_INJECT_COOKIES,
@@ -27,6 +29,8 @@ import {
   type RuntimeListContextsResponse,
   type RuntimeOnboardConnectResponse,
   type RuntimeOnboardPrepareResponse,
+  type RuntimeUnlockPrfResponse,
+  type RuntimeWalletLockStateResponse,
   type RuntimeVaultDeleteResponse,
   type RuntimeVaultListResponse,
   type RuntimeVaultProxyLoginResponse,
@@ -39,6 +43,7 @@ import {
 import { IndexedDBKVStore, rewrapHolderV4Secret } from "@pnm/core";
 import { getSettings, setSettings } from "./config.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
+import { PrfUnlockError, runPrfUnlockCeremony } from "./webauthn-prf-unlock.js";
 
 const box: React.CSSProperties = { padding: 12, display: "grid", gap: 8 };
 const mono: React.CSSProperties = {
@@ -53,6 +58,7 @@ const mono: React.CSSProperties = {
 function ConnectedView() {
   const connection = useConnectionStore((s) => s.connection)!;
   const clearConnection = useConnectionStore((s) => s.clearConnection);
+  const setLockState = useLockStateStore((s) => s.setLockState);
   const [encryptOn, setEncryptOn] = useState(false);
   const [lockStatus, setLockStatus] = useState<string | null>(null);
   const [lockBusy, setLockBusy] = useState(false);
@@ -70,6 +76,15 @@ function ConnectedView() {
     try {
       const res = await chrome.runtime.sendMessage({ type: RUNTIME_LOCK_WALLET });
       if (!res?.ok) throw new Error(res?.error ?? "lock failed");
+      // Flip the shared lock-state slot to `unlocked: false`. The
+      // Popup wrapper observes this and unmounts us in favour of
+      // UnlockView — without this, ConnectedView would stay
+      // rendered with a now-invalid cached state and the next
+      // wallet operation would hang on an invisible WebAuthn
+      // prompt from offscreen.
+      if (encryptOn) {
+        setLockState({ encrypted: true, unlocked: false });
+      }
       setLockStatus("Locked — next operation re-prompts your authenticator.");
     } catch (e) {
       setLockStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
@@ -1690,10 +1705,83 @@ function OnboardView() {
   );
 }
 
+// ─── Unlock view ───
+// Shown when an encrypted-at-rest wallet's AES cache is empty in
+// offscreen — e.g. after a browser restart, a service-worker eviction,
+// or an operator-initiated Lock. The visible popup is the only context
+// that can run `navigator.credentials.get` (offscreen is hidden and
+// hangs WebAuthn). The popup runs the ceremony, extracts the PRF
+// output, and relays the bytes to offscreen which seeds its cache.
+// After this, every subsequent operation that hits `loadHolder()` in
+// offscreen finds the cached key and completes without prompting.
+function UnlockView(): React.JSX.Element {
+  const setLockState = useLockStateStore((s) => s.setLockState);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function unlock() {
+    setBusy(true);
+    setError(null);
+    try {
+      const { prfOutput } = await runPrfUnlockCeremony(chrome.runtime.id);
+      const res = (await chrome.runtime.sendMessage({
+        type: RUNTIME_UNLOCK_PRF,
+        prfOutput,
+      })) as RuntimeUnlockPrfResponse;
+      if (!res.ok) throw new Error(res.error);
+      setLockState({ encrypted: true, unlocked: true });
+    } catch (e) {
+      // `PrfUnlockError.reason === "cancelled"` is the operator
+      // dismissing the system dialog — surface it kindly (no
+      // scary error, just let them retry). Other reasons (no
+      // enrolment, no PRF output, unexpected) need the full
+      // message.
+      if (e instanceof PrfUnlockError && e.reason === "cancelled") {
+        setError("Cancelled. Tap the button to try again.");
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={box}>
+      <h3 style={{ margin: 0 }}>Unlock wallet</h3>
+      <small>
+        This wallet&apos;s identity is encrypted on this device. Tap your authenticator (Touch ID,
+        Windows Hello, hardware key) to unlock for this session.
+      </small>
+      <small style={{ color: "#666" }}>
+        Once unlocked, wallet operations work normally until you Lock or restart the browser.
+      </small>
+      <button onClick={() => void unlock()} disabled={busy}>
+        {busy ? "Waiting for authenticator…" : "Unlock with authenticator"}
+      </button>
+      {error && <small style={{ color: "#c00" }}>{error}</small>}
+    </div>
+  );
+}
+
 function Popup() {
   const connection = useConnectionStore((s) => s.connection);
   const clearConnection = useConnectionStore((s) => s.clearConnection);
   const [holderState, setHolderState] = useState<HolderStateInfo | null>(null);
+  // Lock state for encrypted-at-rest wallets. Lives in a non-
+  // persisted zustand store so ConnectedView's Lock handler can flip
+  // it back to `unlocked: false` after running RUNTIME_LOCK_WALLET,
+  // forcing Popup to re-render with UnlockView instead of a now-
+  // useless ConnectedView. `encrypted: false` means PRF wrapping
+  // isn't in use → the unlock branch never renders.
+  const lockState = useLockStateStore((s) => s.state);
+  const setLockState = useLockStateStore((s) => s.setLockState);
+  const probeLockState = async () => {
+    const res = (await chrome.runtime.sendMessage({
+      type: RUNTIME_WALLET_LOCK_STATE,
+    })) as RuntimeWalletLockStateResponse;
+    if (res.ok) setLockState(res.result);
+  };
 
   // Probe the persisted holder shape on mount. Three possible states:
   // - kind: "v4" → VTA-minted, normal path.
@@ -1716,6 +1804,7 @@ function Popup() {
         type: RUNTIME_HOLDER_STATE,
       })) as RuntimeHolderStateResponse;
       if (res.ok) setHolderState(res.result);
+      await probeLockState();
     })();
   }, []);
 
@@ -1749,6 +1838,19 @@ function Popup() {
         <OnboardView />
       </div>
     );
+  }
+
+  // Wallet is encrypted at rest AND offscreen doesn't yet have the
+  // AES key cached → render UnlockView before letting the operator
+  // reach ConnectedView. Otherwise the first operation they try
+  // (Load entries, Login, anything that hits `loadHolder()` in
+  // offscreen) would trigger an invisible `navigator.credentials.get`
+  // from the hidden offscreen page and hang forever waiting for a
+  // user gesture that can never arrive. The unlock-relay runs the
+  // ceremony in the popup (visible, gesture from button click) +
+  // ships the PRF output to offscreen which seeds the cache.
+  if (lockState?.encrypted && !lockState.unlocked) {
+    return <UnlockView />;
   }
 
   // If we have a connection AND a real holder, show ConnectedView even

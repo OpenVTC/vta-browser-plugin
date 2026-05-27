@@ -44,6 +44,20 @@ const ALGORITHM = "webauthn-prf-aes-gcm";
 const CREDENTIAL_KEY = "pnm/holder-prf/credentialId";
 const SALT_KEY = "pnm/holder-prf/salt";
 
+/** Thrown by `WebAuthnPrfSecretWrap.unwrap` when the in-memory AES
+ *  cache is empty — the encrypted wallet needs an unlock ceremony
+ *  before this operation can complete. Surfaced through the
+ *  offscreen op handlers so the popup (which IS able to run
+ *  WebAuthn) can render UnlockView; page-triggered ops with the
+ *  popup closed see this and surface "open the wallet popup to
+ *  unlock" to their caller. */
+export class WalletLockedError extends Error {
+  constructor() {
+    super("wallet is locked: unlock via popup before retrying");
+    this.name = "WalletLockedError";
+  }
+}
+
 /** Where the enrolled WebAuthn credential id + PRF salt are
  *  persisted. **IndexedDB, not `chrome.storage.local`.** The wrap
  *  is called from the offscreen document during onboarding —
@@ -126,16 +140,26 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
       throw new Error("webauthn-prf-wrap: missing credentialId or prfSalt in record");
     }
 
-    const aesKey =
-      cachedKey ?? (await this.unlockAesKey(params.credentialId, base64url.decode(params.prfSalt)));
-    if (!aesKey) return null;
-    cachedKey = aesKey;
+    // Cache-only path. If the in-memory AES key isn't populated, throw
+    // a typed `WalletLockedError` rather than running the WebAuthn
+    // ceremony here. The ceremony only works from a visible context —
+    // popup, options page — never from offscreen. Offscreen ops that
+    // hit this branch bubble the error up so the caller (popup or
+    // page) can surface "open the popup to unlock".
+    //
+    // The legacy fallback `cachedKey ?? unlockAesKey(...)` was the
+    // root cause of the hang #28 surfaced and #30 reverted around:
+    // offscreen would call unlockAesKey which calls navigator.
+    // credentials.get from a hidden context, never returning.
+    if (!cachedKey) {
+      throw new WalletLockedError();
+    }
 
     const iv = base64url.decode(wrapped.ivB64u);
     const ciphertext = base64url.decode(wrapped.ciphertextB64u);
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: iv as BufferSource },
-      aesKey,
+      cachedKey,
       ciphertext as BufferSource,
     );
     return new Uint8Array(plaintext);
@@ -145,6 +169,44 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
    *  lock; the next unwrap re-prompts for the authenticator. */
   static lock(): void {
     cachedKey = null;
+  }
+
+  /** True when the AES key is currently held in this context's
+   *  module-scope cache. Used by `RUNTIME_WALLET_LOCK_STATE` so
+   *  the popup can decide whether to render the unlock prompt. */
+  static isUnlocked(): boolean {
+    return cachedKey !== null;
+  }
+
+  /** Seed the module-scope `cachedKey` from raw PRF output bytes —
+   *  the unlock-relay path. The popup runs `navigator.credentials.
+   *  get` (visible context, fresh user gesture), extracts the PRF
+   *  output, and ships the bytes via `RUNTIME_UNLOCK_PRF` to
+   *  offscreen, which calls this to install the derived AES key.
+   *
+   *  After this returns, the in-memory cache is populated and the
+   *  next `WebAuthnPrfSecretWrap.unwrap()` call inside this
+   *  context completes without prompting. Equivalent in effect to
+   *  having just run `unlockAesKey()` here — same HKDF, same AES
+   *  key bytes, same non-extractable handle.
+   *
+   *  The raw `prfOutput` bytes ARE sensitive (they're the
+   *  key-derivation root for this session). They cross the
+   *  chrome.runtime.sendMessage boundary in the bytes form. That
+   *  boundary is in-process within the same extension origin —
+   *  same trust boundary as IndexedDB sharing between popup and
+   *  offscreen. An attacker who can intercept this channel already
+   *  has arbitrary code execution in the extension and doesn't
+   *  need to intercept anything. */
+  static async seedCachedKeyFromPrfOutput(prfOutput: Uint8Array): Promise<void> {
+    // Reuse the existing HKDF derivation by constructing a
+    // throwaway instance — `deriveAesKey` is the canonical place
+    // and doesn't depend on instance state beyond the salt/info
+    // strings (which are constants). Avoids inlining the same
+    // crypto twice; one source of truth for the key-derivation
+    // recipe.
+    const dummy = new WebAuthnPrfSecretWrap("");
+    cachedKey = await dummy.deriveAesKey(prfOutput);
   }
 
   /**

@@ -61,3 +61,21 @@ export const useConnectionStore = create<State>()(
     },
   ),
 );
+
+/** Lock state for the wallet's AES-cache (encrypted-at-rest wallets
+ *  only). Deliberately NOT persisted: the offscreen cache is in-
+ *  memory and clears on browser restart / SW eviction / manual lock,
+ *  so persisting "unlocked" would lie to the popup on re-open.
+ *  Source of truth is offscreen; this slot is the popup's snapshot,
+ *  refreshed via `probeLockState` on mount, after unlock, and after
+ *  the operator clicks Lock in ConnectedView. */
+interface LockState {
+  /** `null` until the first probe completes. */
+  state: { encrypted: boolean; unlocked: boolean } | null;
+  setLockState: (s: { encrypted: boolean; unlocked: boolean }) => void;
+}
+
+export const useLockStateStore = create<LockState>()((set) => ({
+  state: null,
+  setLockState: (s) => set({ state: s }),
+}));

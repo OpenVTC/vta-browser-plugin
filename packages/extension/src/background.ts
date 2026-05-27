@@ -20,6 +20,8 @@ import {
   OFFSCREEN_DERIVE_SIGNING_KEY_ID,
   OFFSCREEN_HOLDER_STATE,
   OFFSCREEN_LIST_CONTEXTS,
+  OFFSCREEN_UNLOCK_PRF,
+  OFFSCREEN_WALLET_LOCK_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_SIGN_TRUST_TASK,
@@ -53,6 +55,8 @@ import {
   RUNTIME_DERIVE_SIGNING_KEY_ID,
   RUNTIME_HOLDER_STATE,
   RUNTIME_LIST_CONTEXTS,
+  RUNTIME_UNLOCK_PRF,
+  RUNTIME_WALLET_LOCK_STATE,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
   RUNTIME_SIGN_TRUST_TASK,
@@ -77,6 +81,9 @@ import {
   type RuntimeDeriveSigningKeyIdResponse,
   type RuntimeHolderStateResponse,
   type RuntimeListContextsResponse,
+  type RuntimeUnlockPrfRequest,
+  type RuntimeUnlockPrfResponse,
+  type RuntimeWalletLockStateResponse,
   type RuntimeOnboardConnectResponse,
   type RuntimeOnboardConnectRequest,
   type RuntimeOnboardPrepareRequest,
@@ -378,6 +385,25 @@ async function handleHolderState(): Promise<RuntimeHolderStateResponse> {
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_HOLDER_STATE,
   })) as RuntimeHolderStateResponse;
+}
+
+async function handleUnlockPrf(
+  req: RuntimeUnlockPrfRequest,
+): Promise<RuntimeUnlockPrfResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_UNLOCK_PRF,
+    prfOutput: req.prfOutput,
+  })) as RuntimeUnlockPrfResponse;
+}
+
+async function handleWalletLockState(): Promise<RuntimeWalletLockStateResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_WALLET_LOCK_STATE,
+  })) as RuntimeWalletLockStateResponse;
 }
 
 async function handleListContexts(): Promise<RuntimeListContextsResponse> {
@@ -845,6 +871,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_HOLDER_STATE) {
     handleHolderState()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_UNLOCK_PRF) {
+    handleUnlockPrf(message as RuntimeUnlockPrfRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_WALLET_LOCK_STATE) {
+    handleWalletLockState()
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
