@@ -5,6 +5,7 @@ import {
   type SecretWrap,
 } from "@pnm/core";
 import { getSettings } from "./config.js";
+import { readActiveVtaDid } from "./active-vta.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 
 /** The wallet's inbox mediator DID — configurable (see `config.ts`), baked
@@ -61,9 +62,23 @@ export async function buildHolderSecretWrap(): Promise<SecretWrap | undefined> {
  *  unwrapped through a `WebAuthnPrfSecretWrap` — the first invocation
  *  per cold-start prompts the operator for their authenticator; subsequent
  *  invocations in the same SW lifetime reuse the in-memory derived key. */
-export async function loadHolder(): Promise<HolderIdentityResult> {
+export async function loadHolder(vtaDid: string): Promise<HolderIdentityResult> {
   const secretWrap = await buildHolderSecretWrap();
   return loadHolderStrict(new IndexedDBKVStore(), {
+    vtaDid,
     ...(secretWrap ? { secretWrap } : {}),
   });
+}
+
+/** Convenience wrapper for RP-driven flows (REST/DIDComm login, step-up,
+ *  sign-trust-task) that don't have a vtaDid in their request shape —
+ *  the RP doesn't know about the wallet's multi-VTA configuration. Pulls
+ *  the active VTA from the persisted connection store and loads its
+ *  holder. Throws when no VTA is active. */
+export async function loadActiveHolder(): Promise<HolderIdentityResult> {
+  const vtaDid = await readActiveVtaDid();
+  if (!vtaDid) {
+    throw new Error("no active VTA connection — connect first");
+  }
+  return loadHolder(vtaDid);
 }

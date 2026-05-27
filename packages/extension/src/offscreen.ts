@@ -123,7 +123,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_START_INBOUND) {
-    void startInbound();
+    const req = message as { vtaDid: string };
+    void startInbound(req.vtaDid);
     return false; // fire-and-forget
   }
   if (msg.type === OFFSCREEN_GET_STATUS) {
@@ -222,7 +223,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_WALLET_LOCK_STATE) {
-    doWalletLockState()
+    const req = message as { vtaDid?: string };
+    doWalletLockState(req.vtaDid)
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -247,7 +249,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_SIGN_TRUST_TASK) {
-    doSignTrustTask((message as OffscreenSignTrustTaskRequest).params.envelope)
+    const req = message as OffscreenSignTrustTaskRequest;
+    doSignTrustTask(req.vtaDid, req.params.envelope)
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -309,7 +312,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // (the X25519 leg of the did:peer is the authcrypt sender), and runs
 // `vaultListRest` end-to-end against the VTA's REST + trust-task dispatcher.
 async function doVaultList(req: OffscreenVaultListRequest) {
-  const { identity: holder } = await loadHolder();
+  const { identity: holder } = await loadHolder(req.vtaDid);
   const service = await resolveKeyAgreement(req.vtaDid);
   // The bridge protocol intentionally types filter loosely (string secretKind)
   // so it doesn't have to import @pnm/core's narrowed enums. Cast at this
@@ -335,7 +338,7 @@ async function doVaultList(req: OffscreenVaultListRequest) {
 // vaultUpsertRest (uses the holder's X25519 to authcrypt the VaultSecret
 // JSON to the VTA's keyAgreement key).
 async function doVaultUpsert(req: OffscreenVaultUpsertRequest) {
-  const { identity: holder } = await loadHolder();
+  const { identity: holder } = await loadHolder(req.vtaDid);
   const service = await resolveKeyAgreement(req.vtaDid);
   type Opts = Parameters<typeof vaultUpsertRest>[0];
   // The bridge protocol types secretKind / secret loosely (strings) to
@@ -353,7 +356,7 @@ async function doVaultUpsert(req: OffscreenVaultUpsertRequest) {
 
 // Vault — delete. No envelope; just authenticated POST.
 async function doVaultDelete(req: OffscreenVaultDeleteRequest) {
-  const { identity: holder } = await loadHolder();
+  const { identity: holder } = await loadHolder(req.vtaDid);
   const service = await resolveKeyAgreement(req.vtaDid);
   return await vaultDeleteRest({
     baseUrl: req.restBaseUrl,
@@ -367,7 +370,7 @@ async function doVaultDelete(req: OffscreenVaultDeleteRequest) {
 // vaultReleaseRest unpacks it against the holder's private X25519
 // (which lives here in offscreen) and surfaces the cleartext secret.
 async function doVaultRelease(req: OffscreenVaultReleaseRequest) {
-  const { identity: holder } = await loadHolder();
+  const { identity: holder } = await loadHolder(req.vtaDid);
   const service = await resolveKeyAgreement(req.vtaDid);
   return await vaultReleaseRest({
     baseUrl: req.restBaseUrl,
@@ -386,7 +389,7 @@ async function doVaultRelease(req: OffscreenVaultReleaseRequest) {
 // wire boundary — the server-side canonical-schema validation is the
 // real authority.
 async function doVaultProxyLogin(req: OffscreenVaultProxyLoginRequest) {
-  const { identity: holder } = await loadHolder();
+  const { identity: holder } = await loadHolder(req.vtaDid);
   const service = await resolveKeyAgreement(req.vtaDid);
   type Opts = Parameters<typeof vaultProxyLoginRest>[0];
   const opts = {
@@ -420,9 +423,10 @@ async function doVerifyDid(did: string): Promise<VerifyRpDidResult> {
 // Integrity proof and returns the envelope. The RP server resolves the
 // did:peer to verify.
 async function doSignTrustTask(
+  vtaDid: string,
   envelope: Record<string, unknown>,
 ): Promise<SignTrustTaskResult> {
-  const { signing } = await loadHolder();
+  const { signing } = await loadHolder(vtaDid);
   // signTrustTask mutates in place and returns the same reference; clone
   // first so the caller's input is preserved across the IPC boundary
   // (chrome.runtime.sendMessage serializes — a defensive copy is cheap and
@@ -628,9 +632,16 @@ async function doUnlockPrf(prfOutput: Uint8Array): Promise<void> {
 /** Tell the popup whether the wallet is currently locked.
  *  See `RuntimeWalletLockStateResponse` for the semantics —
  *  `encrypted: false` short-circuits the unlock prompt entirely
- *  (passthrough wallets don't need one). */
-async function doWalletLockState(): Promise<{ encrypted: boolean; unlocked: boolean }> {
-  const state = await holderIdentityState(new IndexedDBKVStore());
+ *  (passthrough wallets don't need one).
+ *
+ *  Multi-VTA: `vtaDid` selects which VTA's record to inspect. The
+ *  PRF cache itself is module-scoped (one credential covers every
+ *  wallet on this device), so `unlocked` is the same regardless of
+ *  which VTA — only `encrypted` differs per record. */
+async function doWalletLockState(
+  vtaDid?: string,
+): Promise<{ encrypted: boolean; unlocked: boolean }> {
+  const state = await holderIdentityState(new IndexedDBKVStore(), vtaDid);
   if (state.kind !== "v4") {
     // v3 wallets surface via the migration banner; "none" surfaces
     // via OnboardView. Neither needs an unlock; report unencrypted.
@@ -673,7 +684,7 @@ async function doListContexts(req: {
   vtaDid: string;
   restBaseUrl: string;
 }): Promise<{ contexts: Array<{ id: string; name: string }> }> {
-  const { identity: holder } = await loadHolder();
+  const { identity: holder } = await loadHolder(req.vtaDid);
   const service = await resolveKeyAgreement(req.vtaDid);
   const contexts = await vtaListContexts({
     baseUrl: req.restBaseUrl,
@@ -694,7 +705,7 @@ async function doCreateContext(req: {
   name?: string;
   description?: string;
 }): Promise<{ id: string; name: string }> {
-  const { identity: holder } = await loadHolder();
+  const { identity: holder } = await loadHolder(req.vtaDid);
   const service = await resolveKeyAgreement(req.vtaDid);
   const created = await vtaCreateContext({
     baseUrl: req.restBaseUrl,
@@ -746,8 +757,15 @@ function statusSnapshot(): { mediatorDid: string; state: MediatorState }[] {
 }
 
 /** Get (or lazily open) the warm session for a mediator. Reuses a live
- *  session; transparently reconnects one that has dropped. */
-async function getWarmSession(mediatorDid: string): Promise<MediatorConnection> {
+ *  session; transparently reconnects one that has dropped. The session
+ *  authenticates AS the holder of `vtaDid` — multi-VTA: separate
+ *  sessions per (mediator, vtaDid) pair would be more correct but
+ *  currently we run with the active VTA's holder for all sessions
+ *  (PR 1 scope). PR 2+ can broaden the key + lifecycle. */
+async function getWarmSession(
+  mediatorDid: string,
+  vtaDid: string,
+): Promise<MediatorConnection> {
   const existing = warmPool.get(mediatorDid);
   if (existing) {
     const conn = await existing.catch(() => null);
@@ -756,7 +774,7 @@ async function getWarmSession(mediatorDid: string): Promise<MediatorConnection> 
   }
 
   mediatorState.set(mediatorDid, "connecting");
-  const pending = createWarmSession(mediatorDid).then(
+  const pending = createWarmSession(mediatorDid, vtaDid).then(
     (conn) => {
       mediatorState.set(mediatorDid, "live");
       return conn;
@@ -771,8 +789,11 @@ async function getWarmSession(mediatorDid: string): Promise<MediatorConnection> 
   return pending;
 }
 
-async function createWarmSession(mediatorDid: string): Promise<MediatorConnection> {
-  const { identity } = await loadHolder();
+async function createWarmSession(
+  mediatorDid: string,
+  vtaDid: string,
+): Promise<MediatorConnection> {
+  const { identity } = await loadHolder(vtaDid);
   const isInbox = mediatorDid === (await walletMediatorDid());
   const conn = await connectMediatorSession({
     holder: identity,
@@ -784,8 +805,9 @@ async function createWarmSession(mediatorDid: string): Promise<MediatorConnectio
     onClose: () => {
       warmPool.delete(mediatorDid);
       mediatorState.set(mediatorDid, "closed");
-      // Keep the inbound path alive: re-arm the wallet's inbox mediator.
-      if (isInbox) setTimeout(() => void startInbound(), INBOUND_RECONNECT_MS);
+      // Keep the inbound path alive: re-arm the wallet's inbox mediator
+      // under the same VTA's holder that originally opened it.
+      if (isInbox) setTimeout(() => void startInbound(vtaDid), INBOUND_RECONNECT_MS);
     },
   });
   // Attach the inbound confirm handler whenever this is the wallet's inbox
@@ -797,12 +819,18 @@ async function createWarmSession(mediatorDid: string): Promise<MediatorConnectio
 }
 
 /** Ensure the warm session to the wallet's inbox mediator is live so
- *  RP-initiated confirm requests are received. Idempotent. */
-async function startInbound(): Promise<void> {
+ *  RP-initiated confirm requests are received. Idempotent. Listens
+ *  as the holder of `vtaDid`. */
+async function startInbound(vtaDid: string): Promise<void> {
   try {
     const mediatorDid = await walletMediatorDid();
-    await getWarmSession(mediatorDid);
-    console.info("[pnm inbound] listening for confirm requests via", mediatorDid);
+    await getWarmSession(mediatorDid, vtaDid);
+    console.info(
+      "[pnm inbound] listening for confirm requests via",
+      mediatorDid,
+      "as",
+      vtaDid,
+    );
   } catch (e) {
     console.error("[pnm inbound] failed to start inbound session:", e);
   }
@@ -861,12 +889,12 @@ async function doDidcommLogin(
   // Same IndexedDB-backed holder the popup/background use (shared extension
   // origin), so the DID is identical to the REST path.
   const sw = createStopwatch();
-  const { identity, signing } = await loadHolder();
+  const { identity, signing } = await loadHolder(req.vtaDid);
   sw.mark("load holder");
 
   // Reuse the warm session (instant if already live); resolve the VTA target
   // separately (cached). No per-op connect/teardown.
-  const conn = await getWarmSession(req.params.mediatorDid);
+  const conn = await getWarmSession(req.params.mediatorDid, req.vtaDid);
   sw.mark("warm session");
   const service = await resolveKeyAgreement(req.params.controlDid);
   sw.mark("resolve vta");
@@ -897,7 +925,7 @@ async function doStepUpVta(
   // Same IndexedDB-backed holder the popup/background use, so the DID is
   // identical to the base-login path being elevated.
   const sw = createStopwatch();
-  const { identity, signing } = await loadHolder();
+  const { identity, signing } = await loadHolder(req.params.vtaDid);
   sw.mark("load holder");
 
   // 1. RP start (REST) → nonce.
@@ -905,7 +933,7 @@ async function doStepUpVta(
   sw.mark("rp start (nonce)");
 
   // 2. VTA approve (DIDComm) → approval token. Reuse the warm session.
-  const conn = await getWarmSession(req.params.vtaMediatorDid);
+  const conn = await getWarmSession(req.params.vtaMediatorDid, req.params.vtaDid);
   sw.mark("warm session");
   const service = await resolveKeyAgreement(req.params.vtaDid);
   sw.mark("resolve vta");
