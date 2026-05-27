@@ -371,7 +371,19 @@ export interface OnboardConnectResult {
 
 export type RuntimeOnboardConnectResponse =
   | { ok: true; result: OnboardConnectResult }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      /** When the failure was a DIDComm problem-report from the VTA, the
+       *  structured code (e.g. `provision/integration:context_required`).
+       *  The popup branches on this to surface recovery UX — picker
+       *  dialogs, retry hints — rather than just dumping the message. */
+      code?: string;
+      /** Problem-report `args` payload. Task-specific structure. For
+       *  `context_required` this is the candidates list the operator
+       *  picks from. */
+      candidates?: string[];
+    };
 
 /** popup → background: inspect the wallet's persisted holder state.
  *

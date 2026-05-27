@@ -29,6 +29,7 @@ import {
   holderIdentityState,
   holderInputsFromAdminReply,
   installVtaMintedHolder,
+  ProvisionProblemReportError,
   runProvisionIntegration,
   vaultDeleteRest,
   vaultListRest,
@@ -135,9 +136,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       createIfMissing: req.createIfMissing ?? false,
     })
       .then((result) => sendResponse({ ok: true, result }))
-      .catch((e: unknown) =>
-        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
-      );
+      .catch((e: unknown) => {
+        // Preserve the structured problem-report fields when the VTA
+        // replied with one. The popup branches on `code` to surface
+        // recovery UX (e.g. the context_required picker); without
+        // these fields the message string would have to be regex-
+        // parsed, which is fragile.
+        if (e instanceof ProvisionProblemReportError) {
+          sendResponse({
+            ok: false,
+            error: e.message,
+            code: e.report.code,
+            candidates: e.report.args,
+          });
+          return;
+        }
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      });
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_HOLDER_STATE) {

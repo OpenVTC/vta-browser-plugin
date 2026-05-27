@@ -25,8 +25,34 @@ const PROVISION_INTEGRATION =
   "https://firstperson.network/protocols/provision-integration/1.0/provision-integration";
 const PROVISION_INTEGRATION_RESULT =
   "https://firstperson.network/protocols/provision-integration/1.0/provision-integration-result";
+const PROBLEM_REPORT_TYPE = "https://didcomm.org/report-problem/2.0/problem-report";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+
+/** Parsed DIDComm problem-report body. Mirrors the wire shape
+ *  emitted by the VTA's `app_err_to_response`. */
+export interface ProblemReportPayload {
+  code: string;
+  comment: string;
+  /** Structured arguments — task-specific. For
+   *  `provision/integration:context_required` this carries the
+   *  candidates list. */
+  args: string[];
+}
+
+/** Thrown by `sendProvisionIntegration` when the VTA replies with a
+ *  DIDComm problem-report rather than a success result. Carries the
+ *  structured fields so callers can branch on the code (e.g. the
+ *  popup's context-required recovery picker that reads
+ *  `report.args` as the candidates list). */
+export class ProvisionProblemReportError extends Error {
+  readonly report: ProblemReportPayload;
+  constructor(report: ProblemReportPayload) {
+    super(`provision-integration: ${report.code} — ${report.comment}`);
+    this.name = "ProvisionProblemReportError";
+    this.report = report;
+  }
+}
 
 /** Body of the inbound `provision-integration` message. Mirrors
  *  `vta_sdk::provision_integration::http::ProvisionIntegrationRequest`. */
@@ -131,9 +157,23 @@ export async function sendProvisionIntegration(
       `provision-integration: reply from ${reply.from ?? "(none)"} != VTA ${vtaDid}`,
     );
   }
+  if (reply.type === PROBLEM_REPORT_TYPE) {
+    // Throw a typed error so callers can branch on the code without
+    // re-parsing the message string. The canonical case we surface a
+    // UX for is `provision/integration:context_required` — the
+    // wallet's popup catches the typed shape and shows the candidates
+    // (in `report.args`) as a picker so the operator can choose.
+    const body = (reply.body ?? {}) as Partial<ProblemReportPayload>;
+    throw new ProvisionProblemReportError({
+      code: typeof body.code === "string" ? body.code : "(no code)",
+      comment: typeof body.comment === "string" ? body.comment : "",
+      args: Array.isArray(body.args) ? body.args.filter((a) => typeof a === "string") : [],
+    });
+  }
   if (reply.type !== PROVISION_INTEGRATION_RESULT) {
-    // Most commonly a problem-report — the VP failed structural checks, the
-    // template wasn't registered, the relayer wasn't ACL'd, etc.
+    // Unexpected reply type — not a problem-report and not the
+    // expected result. Could happen if a future VTA version
+    // introduces a new reply type the wallet doesn't know about.
     throw new Error(
       `provision-integration: ${reply.type ?? "(no type)"} — ${JSON.stringify(reply.body ?? {})}`,
     );
