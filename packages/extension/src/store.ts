@@ -23,6 +23,13 @@ interface State {
   connection: Connection | null;
   setConnection: (c: Connection) => void;
   clearConnection: () => void;
+  /** Maintainer contexts the operator has used or seen. Populated as
+   *  onboardings succeed; surfaced by the popup's onboarding picker so
+   *  the operator can re-select a context they've used before instead
+   *  of typing it every time. Seeded with `"default"` so a fresh wallet
+   *  has one obvious choice. */
+  knownContexts: string[];
+  rememberContext: (name: string) => void;
 }
 
 /**
@@ -52,6 +59,13 @@ export const useConnectionStore = create<State>()(
       connection: null,
       setConnection: (c) => set({ connection: c }),
       clearConnection: () => set({ connection: null }),
+      knownContexts: ["default"],
+      rememberContext: (name) =>
+        set((s) =>
+          s.knownContexts.includes(name)
+            ? s
+            : { knownContexts: [...s.knownContexts, name] },
+        ),
     }),
     {
       // v2: previous shape was `{ vtaUrl, did, accessToken }` (the legacy

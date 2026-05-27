@@ -45,6 +45,13 @@ export interface RunProvisionIntegrationOptions {
   adminTemplateName?: string;
   /** Free-form note for the VTA's audit log. */
   note?: string;
+  /** When `true`, asks the VTA to provision the target context inline if
+   *  it does not already exist. Requires the relayer (the ephemeral
+   *  did:key after the operator's grant) to hold **super-admin** role at
+   *  the VTA — context-admin grants get rejected with
+   *  `provision/integration:forbidden`. Defaults to `false`; callers
+   *  that target an established context leave this off. */
+  createContext?: boolean;
   /** Send-side timeout. Default 60s (sendProvisionIntegration). */
   timeoutMs?: number;
 }
@@ -109,6 +116,10 @@ export async function runProvisionIntegration(
     body: {
       request: vp,
       context: opts.context,
+      // create_context defaults to false on the wire; only emit when the
+      // caller actually asked for inline create so older VTAs that
+      // pre-date the field don't have to deal with an unexpected key.
+      ...(opts.createContext ? { create_context: true } : {}),
     },
     ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
   });

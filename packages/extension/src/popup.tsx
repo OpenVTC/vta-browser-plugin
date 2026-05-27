@@ -1118,11 +1118,30 @@ function formatDate(iso: string): string {
 // its long-term holder did:peer via `swap-acl`.
 function OnboardView() {
   const setConnection = useConnectionStore((s) => s.setConnection);
+  const knownContexts = useConnectionStore((s) => s.knownContexts);
+  const rememberContext = useConnectionStore((s) => s.rememberContext);
 
   const [vtaDid, setVtaDid] = useState("");
+  // Context picker state. `selection` is what the dropdown shows; the
+  // sentinel `__new__` switches to a text input + create checkbox.
+  const NEW_CONTEXT = "__new__";
+  const [selection, setSelection] = useState<string>(knownContexts[0] ?? "default");
+  const [newContextName, setNewContextName] = useState("");
+  const [createIfMissing, setCreateIfMissing] = useState(false);
   const [prep, setPrep] = useState<OnboardPrepareResult | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // The effective context the wallet provisions into. When the user picks
+  // an existing context, that's the value; when they pick "New context…",
+  // it's whatever they typed (trimmed).
+  const effectiveContext =
+    selection === NEW_CONTEXT ? newContextName.trim() : selection;
+  // Only allow the "create if missing" semantics when the user is creating
+  // a new context — picking an existing one and asking to also create it
+  // doesn't make sense, and would force a super-admin grant the operator
+  // doesn't need.
+  const allowCreate = selection === NEW_CONTEXT && createIfMissing;
 
   async function prepare() {
     setBusy(true);
@@ -1147,8 +1166,13 @@ function OnboardView() {
     try {
       const res = (await chrome.runtime.sendMessage({
         type: RUNTIME_ONBOARD_CONNECT,
+        context: effectiveContext,
+        ...(allowCreate ? { createIfMissing: true } : {}),
       })) as RuntimeOnboardConnectResponse;
       if (!res.ok) throw new Error(res.error);
+      // Persist the context to the dropdown so a return visit doesn't
+      // re-type it. No-op if it was already in the list.
+      rememberContext(effectiveContext);
       setConnection({
         vtaDid: vtaDid.trim(),
         holderDid: res.result.holderDid,
@@ -1166,24 +1190,45 @@ function OnboardView() {
   }
 
   if (prep) {
+    // When the operator has chosen to create the context inline, the
+    // ephemeral grant needs super-admin (not plain admin) — the VTA's
+    // context-create gate refuses everything below. The wallet's
+    // Prepare logic hardcodes `--role admin`; surface a hint so the
+    // operator bumps it themselves when needed.
+    const commandToShow = allowCreate
+      ? prep.command.replace("--role admin", "--role super-admin")
+      : prep.command;
     return (
       <div style={box}>
         <h3 style={{ margin: 0 }}>Grant this wallet</h3>
+        <small>
+          Provisioning into context: <code style={mono}>{effectiveContext || "(unset)"}</code>
+          {allowCreate ? " (will be created inline)" : ""}
+        </small>
         <small>
           Run this once as an existing admin (grants a one-time ephemeral key the wallet rotates
           away on connect):
         </small>
         <code style={{ ...mono, background: "#f3f4f6", padding: 8, borderRadius: 6 }}>
-          {prep.command}
+          {commandToShow}
         </code>
-        <button onClick={() => void navigator.clipboard.writeText(prep.command)}>
+        <button onClick={() => void navigator.clipboard.writeText(commandToShow)}>
           Copy command
         </button>
+        {allowCreate && (
+          <small style={{ color: "#8a6d3b" }}>
+            Note: <code style={mono}>--role super-admin</code> is required because the wallet will
+            ask the VTA to create the context inline.
+          </small>
+        )}
         <small>
           Transport:{" "}
           {prep.mediatorDid ? "DIDComm (authcrypt)" : prep.restBaseUrl ? "REST" : "none"}
         </small>
-        <button onClick={() => void connect()} disabled={busy}>
+        <button
+          onClick={() => void connect()}
+          disabled={busy || effectiveContext.length === 0}
+        >
           {busy ? "Connecting…" : "I've granted it — Connect"}
         </button>
         <button onClick={() => setPrep(null)} disabled={busy}>
@@ -1204,7 +1249,48 @@ function OnboardView() {
         onChange={(e) => setVtaDid(e.target.value)}
         style={mono}
       />
-      <button onClick={() => void prepare()} disabled={!vtaDid.trim() || busy}>
+      <label style={{ fontSize: 12, display: "grid", gap: 4 }}>
+        Context
+        <select
+          value={selection}
+          onChange={(e) => {
+            setSelection(e.target.value);
+            // Clear the create flag when switching back to an existing
+            // context — it's only meaningful for new contexts.
+            if (e.target.value !== NEW_CONTEXT) setCreateIfMissing(false);
+          }}
+          style={mono}
+        >
+          {knownContexts.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+          <option value={NEW_CONTEXT}>+ New context…</option>
+        </select>
+      </label>
+      {selection === NEW_CONTEXT && (
+        <div style={{ display: "grid", gap: 6, paddingLeft: 8, borderLeft: "2px solid #e5e7eb" }}>
+          <input
+            placeholder="ctx_… (e.g. work, alpha)"
+            value={newContextName}
+            onChange={(e) => setNewContextName(e.target.value)}
+            style={mono}
+          />
+          <label style={{ fontSize: 11, display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              type="checkbox"
+              checked={createIfMissing}
+              onChange={(e) => setCreateIfMissing(e.target.checked)}
+            />
+            Create on the VTA if it doesn&apos;t exist (requires super-admin grant)
+          </label>
+        </div>
+      )}
+      <button
+        onClick={() => void prepare()}
+        disabled={!vtaDid.trim() || effectiveContext.length === 0 || busy}
+      >
         {busy ? "Resolving…" : "Prepare"}
       </button>
       {status && <small style={{ color: "#c00" }}>{status}</small>}
