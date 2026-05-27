@@ -130,7 +130,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (msg.type === OFFSCREEN_ONBOARD_CONNECT) {
     const req = message as OffscreenOnboardConnectRequest;
-    doOnboardConnect({ context: req.context, createIfMissing: req.createIfMissing ?? false })
+    doOnboardConnect({
+      ...(req.context ? { context: req.context } : {}),
+      createIfMissing: req.createIfMissing ?? false,
+    })
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -389,13 +392,16 @@ async function doOnboardPrepare(vtaDid: string): Promise<OnboardPrepareResult> {
 }
 
 interface OnboardConnectParams {
-  /** Maintainer context to provision into. Operator-selected via the
-   *  popup's dropdown (or typed for a new context). */
-  context: string;
-  /** When `true`, asks the VTA to provision the context inline if it
-   *  doesn't yet exist. Requires the ephemeral's grant to be
-   *  super-admin; the popup hints this in the UI when the operator
-   *  ticks the corresponding checkbox. */
+  /** Optional maintainer context override. When omitted, the VTA's
+   *  context inference rules pick the target context (single-context
+   *  grant → that context; super-admin + single-context VTA → that
+   *  context). Operators with multi-context VTAs override via the
+   *  popup's "Specify context" toggle. */
+  context?: string;
+  /** When `true`, asks the VTA to provision the override context inline
+   *  if it doesn't yet exist. Only meaningful when `context` is set;
+   *  the wallet does not auto-create against an inferred context.
+   *  Requires the ephemeral's grant to be super-admin. */
   createIfMissing: boolean;
 }
 
@@ -447,7 +453,7 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
       service,
       mediator: conn.mediator,
       vtaDid: pending.vtaDid,
-      context: params.context,
+      ...(params.context ? { context: params.context } : {}),
       ...(params.createIfMissing ? { createContext: true } : {}),
       note: "browser-plugin onboarding",
     });

@@ -32,7 +32,11 @@ const DEFAULT_TIMEOUT_MS = 60_000;
  *  `vta_sdk::provision_integration::http::ProvisionIntegrationRequest`. */
 export interface ProvisionIntegrationRequestBody {
   request: BootstrapRequestVp;
-  context: string;
+  /** Optional per the canonical Trust Task spec. When omitted, the VTA
+   *  infers the target context from the relayer's ACL grant + its own
+   *  contexts state. See vta-sdk's `ProvisionIntegrationRequest::context`
+   *  doc-comment for the full inference rules. */
+  context?: string;
   assertion?: "did-signed" | "pinned-only";
   /** Caller-preferred VC validity in seconds. Capped server-side. */
   vc_validity_seconds?: number;

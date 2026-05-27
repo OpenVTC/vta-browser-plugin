@@ -343,17 +343,22 @@ export type RuntimeOnboardPrepareResponse =
   | { ok: false; error: string };
 
 /** popup → background: finish onboarding — connect as the granted ephemeral,
- *  run the provision-integration flow against the chosen `context`, and
- *  adopt the VTA-minted DID as the wallet's v4 holder identity. */
+ *  run the provision-integration flow, and adopt the VTA-minted DID as the
+ *  wallet's v4 holder identity. */
 export interface RuntimeOnboardConnectRequest {
   type: typeof RUNTIME_ONBOARD_CONNECT;
-  /** Maintainer context to provision into. The wallet used to hardcode
-   *  `"default"`; this lets the popup surface a picker so operators with
-   *  multi-context VTAs can target the right one. */
-  context: string;
-  /** When `true`, the wallet asks the VTA to provision the context
-   *  inline if it doesn't yet exist. Requires the ephemeral's grant to
-   *  carry **super-admin** role; the popup hints this in its UI. */
+  /** Maintainer context override. **Optional** — when omitted (the
+   *  default popup path: "Use VTA-derived context"), the wallet sends
+   *  no `context` field on the wire and the VTA infers the target
+   *  context from the relayer's ACL grant or its own contexts state.
+   *  Operators with multi-context VTAs can override via the popup's
+   *  "Specify context" toggle. */
+  context?: string;
+  /** When `true`, the wallet asks the VTA to provision the override
+   *  context inline if it doesn't yet exist. Only meaningful when
+   *  `context` is also set (auto-create against an inferred default
+   *  doesn't make sense). Requires the ephemeral's grant to carry
+   *  super-admin role; the popup hints this in its UI. */
   createIfMissing?: boolean;
 }
 
@@ -873,8 +878,9 @@ export interface OffscreenOnboardPrepareRequest {
 export interface OffscreenOnboardConnectRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_ONBOARD_CONNECT;
-  /** Mirrors `RuntimeOnboardConnectRequest.context`. */
-  context: string;
+  /** Mirrors `RuntimeOnboardConnectRequest.context` — optional override.
+   *  Omit to let the VTA infer the target context. */
+  context?: string;
   /** Mirrors `RuntimeOnboardConnectRequest.createIfMissing`. */
   createIfMissing?: boolean;
 }
