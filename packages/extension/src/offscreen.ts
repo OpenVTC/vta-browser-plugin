@@ -15,6 +15,7 @@ import {
   Identity,
   IndexedDBKVStore,
   loginViaDidcomm,
+  loginViaSiop,
   markInboundHandled,
   type MediatorConnection,
   MediatorSessionBridge,
@@ -56,6 +57,7 @@ import {
   OFFSCREEN_UNLOCK_PRF,
   OFFSCREEN_FORGET_HOLDER_RECORD,
   OFFSCREEN_REFRESH_VTA_TRANSPORTS,
+  OFFSCREEN_REST_LOGIN,
   OFFSCREEN_WALLET_LOCK_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
@@ -71,6 +73,7 @@ import {
   OFFSCREEN_VERIFY_DID,
   RUNTIME_INBOUND_CONSENT,
   type OffscreenDidcommLoginRequest,
+  type OffscreenRestLoginRequest,
   type OffscreenCreateContextRequest,
   type OffscreenDeriveSigningKeyIdRequest,
   type OffscreenOnboardConnectRequest,
@@ -110,6 +113,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (msg?.target !== OFFSCREEN_TARGET) return false; // not for us
   if (msg.type === OFFSCREEN_DIDCOMM_LOGIN) {
     doDidcommLogin(message as OffscreenDidcommLoginRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_REST_LOGIN) {
+    doRestLogin(message as OffscreenRestLoginRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -953,6 +964,24 @@ async function handleInbound(
   } catch (e) {
     console.error("[pnm inbound] confirm handling failed:", e);
   }
+}
+
+async function doRestLogin(
+  req: OffscreenRestLoginRequest,
+): Promise<RuntimeLoginResponse> {
+  // REST SIOPv2 login moved off the background SW into offscreen so
+  // the holder's signing key is accessible — background's module
+  // scope has no PRF AES cache, so `loadHolder` from there throws
+  // `WalletLockedError` on encrypted wallets. Same flow as before
+  // (challenge → issueIdToken → authenticate), just running in the
+  // context that owns the cache.
+  const { signing } = await loadHolder(req.vtaDid);
+  const tokens = await loginViaSiop({
+    baseUrl: req.params.baseUrl,
+    rpDid: req.params.rpDid,
+    signing,
+  });
+  return { ok: true, result: { ...tokens, holderDid: signing.did } };
 }
 
 async function doDidcommLogin(

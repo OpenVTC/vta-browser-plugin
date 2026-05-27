@@ -5,12 +5,15 @@
 // login is delegated to an offscreen document (see `offscreen.ts`) because
 // it needs dynamic `import()` + a DOM, which a service worker lacks.
 //
-// REST flow: content → RUNTIME_LOGIN → consent → loginViaSiop → tokens.
+// REST flow: content → RUNTIME_LOGIN → consent → offscreen REST login → tokens.
 // DIDComm flow: content → RUNTIME_LOGIN_DIDCOMM → consent → offscreen doc.
 
-import { loginViaSiop } from "@pnm/core";
-import { loadActiveHolder } from "./holder.js";
-import { parseAllVtaDids, readActiveVtaDid, readAllVtaDids } from "./active-vta.js";
+import {
+  parseAllVtaDids,
+  readActiveHolderDid,
+  readActiveVtaDid,
+  readAllVtaDids,
+} from "./active-vta.js";
 import { checkOriginPin, pinOrigin } from "./origin-pin.js";
 import { subscribeToPush } from "./push.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
@@ -24,6 +27,7 @@ import {
   OFFSCREEN_UNLOCK_PRF,
   OFFSCREEN_FORGET_HOLDER_RECORD,
   OFFSCREEN_REFRESH_VTA_TRANSPORTS,
+  OFFSCREEN_REST_LOGIN,
   OFFSCREEN_WALLET_LOCK_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
@@ -274,7 +278,10 @@ function requestConsent(args: {
 }
 
 async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginResponse> {
-  const { signing } = await loadActiveHolder();
+  // Display-only DID lookup — see handleLoginDidcomm for the
+  // background-vs-offscreen scope rationale.
+  const holderDid = await readActiveHolderDid();
+  if (!holderDid) return { ok: false, error: "no active VTA connection — connect first" };
 
   // M5: pin the rpDid against the requesting origin. First-sight
   // origins seed the pin on approval; subsequent origins asking
@@ -287,7 +294,7 @@ async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginRespon
   const consent: Parameters<typeof requestConsent>[0] = {
     origin: req.origin,
     rpDid: req.params.rpDid,
-    holderDid: signing.did,
+    holderDid,
   };
   if (pin.rpDidChanged && pin.pinnedRpDid) {
     consent.changedFromRpDid = pin.pinnedRpDid;
@@ -299,21 +306,33 @@ async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginRespon
     await pinOrigin(req.origin, req.params.rpDid);
   }
 
-  const tokens = await loginViaSiop({
-    baseUrl: req.params.baseUrl,
-    rpDid: req.params.rpDid,
-    signing,
-  });
-  return { ok: true, result: { ...tokens, holderDid: signing.did } };
+  // Forward the actual SIOPv2 round-trip to offscreen — the holder's
+  // signing key only lives unwrapped there (the PRF AES cache is
+  // offscreen-module-scoped). Calling `loginViaSiop` from background
+  // worked on plaintext wallets but threw `WalletLockedError` on
+  // encrypted ones even when offscreen was unlocked.
+  await ensureOffscreenDocument();
+  const activeVtaDid = await readActiveVtaDid();
+  if (!activeVtaDid) return { ok: false, error: "no active VTA connection — connect first" };
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_REST_LOGIN,
+    vtaDid: activeVtaDid,
+    params: req.params,
+  })) as RuntimeLoginResponse;
 }
 
 async function handleLoginDidcomm(
   req: RuntimeLoginDidcommRequest,
 ): Promise<RuntimeLoginResponse> {
-  // Load the holder here only to show its DID in the consent prompt; the
-  // actual DIDComm login runs in the offscreen document (same IndexedDB
-  // holder). did:key derivation is window-free, so this is safe in the SW.
-  const { signing } = await loadActiveHolder();
+  // Read the holder DID directly from the persisted connection — no
+  // decryption needed for a display-only value. Background SW lives
+  // in a separate module scope from offscreen and has no PRF AES
+  // cache, so calling `loadActiveHolder` here would throw
+  // `WalletLockedError` on an encrypted wallet even when offscreen
+  // is unlocked.
+  const holderDid = await readActiveHolderDid();
+  if (!holderDid) return { ok: false, error: "no active VTA connection — connect first" };
 
   // M5: origin → controlDid pinning (analogous to the SIOP
   // login path; the DIDComm rpDid here is the RP's controlDid).
@@ -324,7 +343,7 @@ async function handleLoginDidcomm(
   const consent: Parameters<typeof requestConsent>[0] = {
     origin: req.origin,
     rpDid: req.params.controlDid,
-    holderDid: signing.did,
+    holderDid,
   };
   if (pin.rpDidChanged && pin.pinnedRpDid) {
     consent.changedFromRpDid = pin.pinnedRpDid;
@@ -351,14 +370,15 @@ async function handleLoginDidcomm(
 async function handleStepUpVta(
   req: RuntimeStepUpVtaRequest,
 ): Promise<RuntimeLoginResponse> {
-  // Load the holder here only to show its DID in the consent prompt; the
-  // step-up orchestration (REST + DIDComm) runs in the offscreen document.
-  const { signing } = await loadActiveHolder();
+  // Display-only DID lookup — see handleLoginDidcomm for the
+  // background-vs-offscreen scope rationale.
+  const holderDid = await readActiveHolderDid();
+  if (!holderDid) return { ok: false, error: "no active VTA connection — connect first" };
 
   const approved = await requestConsent({
     origin: req.origin,
     rpDid: req.params.rpDid,
-    holderDid: signing.did,
+    holderDid,
   });
   if (!approved) return { ok: false, error: "step-up denied by user" };
 
