@@ -353,7 +353,10 @@ async function handleOnboardConnect(
   return (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_ONBOARD_CONNECT,
-    context: req.context,
+    // Both `context` and `createIfMissing` are optional — only forward
+    // when the popup actually sent them, so the offscreen handler can
+    // tell "not provided" from "provided as empty string".
+    ...(req.context ? { context: req.context } : {}),
     ...(req.createIfMissing ? { createIfMissing: true } : {}),
   })) as RuntimeOnboardConnectResponse;
 }

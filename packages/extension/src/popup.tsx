@@ -1118,30 +1118,33 @@ function formatDate(iso: string): string {
 // its long-term holder did:peer via `swap-acl`.
 function OnboardView() {
   const setConnection = useConnectionStore((s) => s.setConnection);
-  const knownContexts = useConnectionStore((s) => s.knownContexts);
-  const rememberContext = useConnectionStore((s) => s.rememberContext);
 
   const [vtaDid, setVtaDid] = useState("");
-  // Context picker state. `selection` is what the dropdown shows; the
-  // sentinel `__new__` switches to a text input + create checkbox.
-  const NEW_CONTEXT = "__new__";
-  const [selection, setSelection] = useState<string>(knownContexts[0] ?? "default");
-  const [newContextName, setNewContextName] = useState("");
+  // Context selection. Default is "vta-derived" — the wallet omits
+  // `context` from the wire body and the VTA infers (single-context
+  // grant → that context; super-admin + single-context VTA → that
+  // context). Operators with multi-context VTAs flip to "override"
+  // to specify a context explicitly.
+  const [contextMode, setContextMode] = useState<"vta-derived" | "override">(
+    "vta-derived",
+  );
+  const [contextOverride, setContextOverride] = useState("");
   const [createIfMissing, setCreateIfMissing] = useState(false);
   const [prep, setPrep] = useState<OnboardPrepareResult | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // The effective context the wallet provisions into. When the user picks
-  // an existing context, that's the value; when they pick "New context…",
-  // it's whatever they typed (trimmed).
+  // The effective context to send on the wire. `undefined` means "let
+  // the VTA infer". A trimmed non-empty string overrides.
   const effectiveContext =
-    selection === NEW_CONTEXT ? newContextName.trim() : selection;
-  // Only allow the "create if missing" semantics when the user is creating
-  // a new context — picking an existing one and asking to also create it
-  // doesn't make sense, and would force a super-admin grant the operator
-  // doesn't need.
-  const allowCreate = selection === NEW_CONTEXT && createIfMissing;
+    contextMode === "override" && contextOverride.trim().length > 0
+      ? contextOverride.trim()
+      : undefined;
+  // Create-if-missing only applies when an override context is set.
+  // Picking VTA-derived and asking to also create makes no sense (no
+  // context name to create) and would force a super-admin grant the
+  // operator doesn't need.
+  const allowCreate = contextMode === "override" && createIfMissing;
 
   async function prepare() {
     setBusy(true);
@@ -1166,13 +1169,10 @@ function OnboardView() {
     try {
       const res = (await chrome.runtime.sendMessage({
         type: RUNTIME_ONBOARD_CONNECT,
-        context: effectiveContext,
+        ...(effectiveContext ? { context: effectiveContext } : {}),
         ...(allowCreate ? { createIfMissing: true } : {}),
       })) as RuntimeOnboardConnectResponse;
       if (!res.ok) throw new Error(res.error);
-      // Persist the context to the dropdown so a return visit doesn't
-      // re-type it. No-op if it was already in the list.
-      rememberContext(effectiveContext);
       setConnection({
         vtaDid: vtaDid.trim(),
         holderDid: res.result.holderDid,
@@ -1190,11 +1190,10 @@ function OnboardView() {
   }
 
   if (prep) {
-    // When the operator has chosen to create the context inline, the
-    // ephemeral grant needs super-admin (not plain admin) — the VTA's
-    // context-create gate refuses everything below. The wallet's
-    // Prepare logic hardcodes `--role admin`; surface a hint so the
-    // operator bumps it themselves when needed.
+    // When the operator chose to create the override context inline,
+    // the ephemeral grant needs super-admin (not plain admin) — the
+    // VTA's context-create gate refuses everything below. Rewrite
+    // the printed command so the operator runs the right thing.
     const commandToShow = allowCreate
       ? prep.command.replace("--role admin", "--role super-admin")
       : prep.command;
@@ -1202,8 +1201,15 @@ function OnboardView() {
       <div style={box}>
         <h3 style={{ margin: 0 }}>Grant this wallet</h3>
         <small>
-          Provisioning into context: <code style={mono}>{effectiveContext || "(unset)"}</code>
-          {allowCreate ? " (will be created inline)" : ""}
+          Context:{" "}
+          {effectiveContext ? (
+            <>
+              <code style={mono}>{effectiveContext}</code>
+              {allowCreate ? " (will be created inline)" : " (override)"}
+            </>
+          ) : (
+            <em>VTA-derived</em>
+          )}
         </small>
         <small>
           Run this once as an existing admin (grants a one-time ephemeral key the wallet rotates
@@ -1225,10 +1231,7 @@ function OnboardView() {
           Transport:{" "}
           {prep.mediatorDid ? "DIDComm (authcrypt)" : prep.restBaseUrl ? "REST" : "none"}
         </small>
-        <button
-          onClick={() => void connect()}
-          disabled={busy || effectiveContext.length === 0}
-        >
+        <button onClick={() => void connect()} disabled={busy}>
           {busy ? "Connecting…" : "I've granted it — Connect"}
         </button>
         <button onClick={() => setPrep(null)} disabled={busy}>
@@ -1249,47 +1252,59 @@ function OnboardView() {
         onChange={(e) => setVtaDid(e.target.value)}
         style={mono}
       />
-      <label style={{ fontSize: 12, display: "grid", gap: 4 }}>
-        Context
-        <select
-          value={selection}
-          onChange={(e) => {
-            setSelection(e.target.value);
-            // Clear the create flag when switching back to an existing
-            // context — it's only meaningful for new contexts.
-            if (e.target.value !== NEW_CONTEXT) setCreateIfMissing(false);
-          }}
-          style={mono}
-        >
-          {knownContexts.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-          <option value={NEW_CONTEXT}>+ New context…</option>
-        </select>
-      </label>
-      {selection === NEW_CONTEXT && (
-        <div style={{ display: "grid", gap: 6, paddingLeft: 8, borderLeft: "2px solid #e5e7eb" }}>
+      <fieldset style={{ display: "grid", gap: 4, border: "1px solid #e5e7eb", padding: 8 }}>
+        <legend style={{ fontSize: 11, padding: "0 4px" }}>Context</legend>
+        <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>
           <input
-            placeholder="ctx_… (e.g. work, alpha)"
-            value={newContextName}
-            onChange={(e) => setNewContextName(e.target.value)}
-            style={mono}
+            type="radio"
+            name="ctx-mode"
+            checked={contextMode === "vta-derived"}
+            onChange={() => {
+              setContextMode("vta-derived");
+              setCreateIfMissing(false);
+            }}
           />
-          <label style={{ fontSize: 11, display: "flex", gap: 6, alignItems: "center" }}>
+          Use VTA-derived context <small style={{ color: "#666" }}>(recommended)</small>
+        </label>
+        <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>
+          <input
+            type="radio"
+            name="ctx-mode"
+            checked={contextMode === "override"}
+            onChange={() => setContextMode("override")}
+          />
+          Specify context
+        </label>
+        {contextMode === "override" && (
+          <div
+            style={{ display: "grid", gap: 6, paddingLeft: 22, marginTop: 2 }}
+          >
             <input
-              type="checkbox"
-              checked={createIfMissing}
-              onChange={(e) => setCreateIfMissing(e.target.checked)}
+              placeholder="ctx_… (e.g. work, alpha)"
+              value={contextOverride}
+              onChange={(e) => setContextOverride(e.target.value)}
+              style={mono}
             />
-            Create on the VTA if it doesn&apos;t exist (requires super-admin grant)
-          </label>
-        </div>
-      )}
+            <label style={{ fontSize: 11, display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={createIfMissing}
+                onChange={(e) => setCreateIfMissing(e.target.checked)}
+              />
+              Create on the VTA if it doesn&apos;t exist (requires super-admin grant)
+            </label>
+          </div>
+        )}
+      </fieldset>
       <button
         onClick={() => void prepare()}
-        disabled={!vtaDid.trim() || effectiveContext.length === 0 || busy}
+        disabled={
+          !vtaDid.trim() ||
+          busy ||
+          // When overriding, require a non-empty name. VTA-derived
+          // imposes no extra precondition.
+          (contextMode === "override" && contextOverride.trim().length === 0)
+        }
       >
         {busy ? "Resolving…" : "Prepare"}
       </button>

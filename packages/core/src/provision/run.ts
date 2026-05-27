@@ -37,8 +37,13 @@ export interface RunProvisionIntegrationOptions {
   mediator?: RemoteDidcommEndpoint;
   /** The VTA's DID — passed to send.ts for the reply sender assertion. */
   vtaDid: string;
-  /** The maintainer context to provision the admin DID into (e.g. `default`). */
-  context: string;
+  /** The maintainer context to provision the admin DID into. **Optional**
+   *  per the canonical Trust Task spec — when omitted, the VTA infers
+   *  from the relayer's ACL grant or its own contexts state (single-
+   *  context grant → that context; super-admin + single-context VTA →
+   *  that context; ambiguous → error). Wallet-class callers SHOULD
+   *  omit; integration-class callers SHOULD specify. */
+  context?: string;
   /** Admin template the VTA renders. Default `vta-admin` — the built-in
    *  no-frills `did:key` admin template every VTA ships with. Override if
    *  the operator has uploaded a custom admin template. */
@@ -94,7 +99,10 @@ export async function runProvisionIntegration(
   //    mediator / did-hosting integrations consume.
   const ask: BootstrapAsk = {
     type: "AdminRotation",
-    contextHint: opts.context,
+    // contextHint is just a hint embedded in the VP — only meaningful
+    // when the caller actually knows the context. When omitted, the
+    // VTA's authoritative context resolution runs (inference rules).
+    ...(opts.context ? { contextHint: opts.context } : {}),
     adminTemplate: { name: opts.adminTemplateName ?? "vta-admin", vars: {} },
     ...(opts.note ? { note: opts.note } : {}),
   };
@@ -115,7 +123,12 @@ export async function runProvisionIntegration(
     vtaDid: opts.vtaDid,
     body: {
       request: vp,
-      context: opts.context,
+      // context is optional on the wire. When omitted, the VTA's
+      // inference rules pick the target context (single-context grant
+      // → use it; super-admin + single-context VTA → use it;
+      // ambiguous → e.p.msg.context_required). Wallet-class callers
+      // typically omit; integration-class callers send explicitly.
+      ...(opts.context ? { context: opts.context } : {}),
       // create_context defaults to false on the wire; only emit when the
       // caller actually asked for inline create so older VTAs that
       // pre-date the field don't have to deal with an unexpected key.
