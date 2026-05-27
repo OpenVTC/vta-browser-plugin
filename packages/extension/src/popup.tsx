@@ -3,7 +3,10 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useConnectionStore } from "./store.js";
 import {
+  RUNTIME_CREATE_CONTEXT,
+  RUNTIME_DERIVE_SIGNING_KEY_ID,
   RUNTIME_HOLDER_STATE,
+  RUNTIME_LIST_CONTEXTS,
   RUNTIME_LOCK_WALLET,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
@@ -13,11 +16,15 @@ import {
   RUNTIME_VAULT_PROXY_LOGIN,
   RUNTIME_VAULT_RELEASE,
   RUNTIME_VAULT_UPSERT,
+  type ContextRecordView,
   type HolderStateInfo,
   type InjectCookiesResultView,
   type OnboardPrepareResult,
+  type RuntimeCreateContextResponse,
+  type RuntimeDeriveSigningKeyIdResponse,
   type RuntimeHolderStateResponse,
   type RuntimeInjectCookiesResponse,
+  type RuntimeListContextsResponse,
   type RuntimeOnboardConnectResponse,
   type RuntimeOnboardPrepareResponse,
   type RuntimeVaultDeleteResponse,
@@ -552,11 +559,13 @@ type AddEntryOutput = {
 };
 
 function AddEntryForm({
-  contexts,
+  contexts: _seedContexts,
   busy,
   onCancel,
   onSubmit,
 }: {
+  /** Contexts seen on currently-loaded entries — used only as the
+   *  initial dropdown selection while the fresh VTA-side list loads. */
   contexts: string[];
   busy: boolean;
   onCancel: () => void;
@@ -565,8 +574,44 @@ function AddEntryForm({
   // Shared fields
   const [kind, setKind] = useState<"password" | "did-self-issued">("password");
   const [label, setLabel] = useState("");
-  const [contextId, setContextId] = useState(contexts[0] ?? "");
+  const [contextId, setContextId] = useState(_seedContexts[0] ?? "");
   const [notes, setNotes] = useState("");
+
+  // Context dropdown state — fetched from the VTA on mount. Until the
+  // fetch returns we render with `_seedContexts` (from loaded entries)
+  // so the form is usable instantly even on slow networks.
+  const NEW_CONTEXT = "__new__";
+  const [vtaContexts, setVtaContexts] = useState<ContextRecordView[] | null>(null);
+  const [contextsLoadError, setContextsLoadError] = useState<string | null>(null);
+  const [newContextId, setNewContextId] = useState("");
+  const [newContextName, setNewContextName] = useState("");
+  const [newContextDescription, setNewContextDescription] = useState("");
+  const [creatingContext, setCreatingContext] = useState(false);
+  const [createContextError, setCreateContextError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const res = (await chrome.runtime.sendMessage({
+        type: RUNTIME_LIST_CONTEXTS,
+      })) as RuntimeListContextsResponse;
+      if (res.ok) {
+        setVtaContexts(res.result.contexts);
+        // Seed the dropdown to the first real context if we don't have
+        // a selection yet (or if the prior seed isn't in the real list).
+        if (
+          res.result.contexts.length > 0 &&
+          !res.result.contexts.find((c) => c.id === contextId)
+        ) {
+          setContextId(res.result.contexts[0]!.id);
+        }
+      } else {
+        setContextsLoadError(res.error);
+      }
+    })();
+    // Intentionally empty: fetch once when the form mounts. The
+    // dropdown isn't auto-refreshed on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Password-kind fields
   const [origin, setOrigin] = useState("");
@@ -583,6 +628,43 @@ function AddEntryForm({
   const [rpDid, setRpDid] = useState("");
   const [principalDid, setPrincipalDid] = useState("");
   const [signingKeyId, setSigningKeyId] = useState("");
+  // signingKeyId derivation state: `auto` candidates derived from the
+  // principal DID, the picker selection when multiple match, and a
+  // status string for the operator (resolved / error / multi).
+  const [kidCandidates, setKidCandidates] = useState<string[]>([]);
+  const [kidDeriveError, setKidDeriveError] = useState<string | null>(null);
+  const [kidDeriving, setKidDeriving] = useState(false);
+
+  async function deriveSigningKidFor(did: string) {
+    setKidDeriving(true);
+    setKidDeriveError(null);
+    setKidCandidates([]);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: RUNTIME_DERIVE_SIGNING_KEY_ID,
+        did,
+      })) as RuntimeDeriveSigningKeyIdResponse;
+      if (!res.ok) {
+        setKidDeriveError(res.error);
+        return;
+      }
+      if (res.result.error) {
+        setKidDeriveError(res.result.error);
+        return;
+      }
+      const cands = res.result.candidates;
+      setKidCandidates(cands);
+      if (cands.length === 1) {
+        // Unambiguous — auto-fill. The operator can still edit the
+        // field if they want a different kid.
+        setSigningKeyId(cands[0]!);
+      }
+      // Multiple candidates: leave the field empty, the picker
+      // renders inline so the operator chooses.
+    } finally {
+      setKidDeriving(false);
+    }
+  }
 
   const passwordValid =
     label.trim() &&
@@ -597,6 +679,41 @@ function AddEntryForm({
     principalDid.trim() &&
     signingKeyId.trim();
   const valid = kind === "password" ? passwordValid : didSelfIssuedValid;
+
+  async function createNewContext() {
+    setCreatingContext(true);
+    setCreateContextError(null);
+    try {
+      const id = newContextId.trim();
+      if (!id) {
+        setCreateContextError("context id is required");
+        return;
+      }
+      const res = (await chrome.runtime.sendMessage({
+        type: RUNTIME_CREATE_CONTEXT,
+        id,
+        ...(newContextName.trim() ? { name: newContextName.trim() } : {}),
+        ...(newContextDescription.trim()
+          ? { description: newContextDescription.trim() }
+          : {}),
+      })) as RuntimeCreateContextResponse;
+      if (!res.ok) {
+        setCreateContextError(res.error);
+        return;
+      }
+      // Add the freshly-created context to the dropdown and select it.
+      const created: ContextRecordView = res.result;
+      setVtaContexts((prev) => (prev ? [...prev, created] : [created]));
+      setContextId(created.id);
+      // Clear the inline-create form so a second context-create starts
+      // from a blank state.
+      setNewContextId("");
+      setNewContextName("");
+      setNewContextDescription("");
+    } finally {
+      setCreatingContext(false);
+    }
+  }
 
   function buildOutput(): AddEntryOutput {
     if (kind === "password") {
@@ -674,15 +791,24 @@ function AddEntryForm({
       </label>
       <label style={{ display: "grid", gap: 2 }}>
         <span style={{ color: "#666" }}>Context</span>
-        {contexts.length > 0 ? (
-          <input
-            value={contextId}
+        {vtaContexts ? (
+          <select
+            value={contextId === "" && vtaContexts.length === 0 ? NEW_CONTEXT : contextId}
             onChange={(e) => setContextId(e.target.value)}
-            list="known-contexts"
-            placeholder="ctx_…"
             style={mono}
-          />
+          >
+            {vtaContexts.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.id === c.name ? c.id : `${c.id} — ${c.name}`}
+              </option>
+            ))}
+            <option value={NEW_CONTEXT}>+ New context…</option>
+          </select>
         ) : (
+          // Fallback while the VTA-side list is still loading or
+          // failed to fetch. Free-text input so the operator isn't
+          // blocked on the network; the field accepts any context id
+          // and the upsert will fail clearly if it doesn't exist.
           <input
             value={contextId}
             onChange={(e) => setContextId(e.target.value)}
@@ -690,12 +816,51 @@ function AddEntryForm({
             style={mono}
           />
         )}
-        <datalist id="known-contexts">
-          {contexts.map((ctx) => (
-            <option key={ctx} value={ctx} />
-          ))}
-        </datalist>
+        {contextsLoadError && (
+          <small style={{ color: "#c00" }}>
+            Couldn&apos;t fetch contexts: {contextsLoadError}
+          </small>
+        )}
       </label>
+      {contextId === NEW_CONTEXT && (
+        <div
+          style={{
+            display: "grid",
+            gap: 6,
+            paddingLeft: 8,
+            borderLeft: "2px solid #e5e7eb",
+          }}
+        >
+          <small style={{ color: "#666" }}>
+            Create a new context on the VTA (requires super-admin grant).
+          </small>
+          <input
+            placeholder="id (e.g. work)"
+            value={newContextId}
+            onChange={(e) => setNewContextId(e.target.value)}
+            style={mono}
+          />
+          <input
+            placeholder="name (optional — defaults to id)"
+            value={newContextName}
+            onChange={(e) => setNewContextName(e.target.value)}
+          />
+          <input
+            placeholder="description (optional)"
+            value={newContextDescription}
+            onChange={(e) => setNewContextDescription(e.target.value)}
+          />
+          <button
+            onClick={() => void createNewContext()}
+            disabled={creatingContext || !newContextId.trim()}
+          >
+            {creatingContext ? "Creating…" : "Create context"}
+          </button>
+          {createContextError && (
+            <small style={{ color: "#c00" }}>{createContextError}</small>
+          )}
+        </div>
+      )}
 
       {kind === "password" && (
         <>
@@ -786,20 +951,62 @@ function AddEntryForm({
             <input
               value={principalDid}
               onChange={(e) => setPrincipalDid(e.target.value)}
+              onBlur={() => {
+                const trimmed = principalDid.trim();
+                if (trimmed.length > 0) void deriveSigningKidFor(trimmed);
+              }}
               placeholder="did:webvh:…"
               style={mono}
             />
+            <small style={{ color: "#888" }}>
+              When you tab away, the wallet resolves this DID and tries to auto-fill the signing
+              key id below.
+            </small>
           </label>
           <label style={{ display: "grid", gap: 2 }}>
-            <span style={{ color: "#666" }}>Signing key id</span>
+            <span style={{ color: "#666" }}>
+              Signing key id{" "}
+              <em style={{ color: "#888" }}>(optional — auto-derived from DID)</em>
+            </span>
             <input
               value={signingKeyId}
               onChange={(e) => setSigningKeyId(e.target.value)}
               placeholder="did:webvh:…#key-0"
               style={mono}
             />
+            {kidDeriving && (
+              <small style={{ color: "#888" }}>Resolving DID to derive key id…</small>
+            )}
+            {!kidDeriving && kidCandidates.length === 1 && signingKeyId === kidCandidates[0] && (
+              <small style={{ color: "#3a7" }}>Auto-derived from persona DID.</small>
+            )}
+            {!kidDeriving && kidCandidates.length > 1 && (
+              <div style={{ display: "grid", gap: 4 }}>
+                <small style={{ color: "#8a6d3b" }}>
+                  Persona DID has {kidCandidates.length} authentication keys — pick one:
+                </small>
+                {kidCandidates.map((k) => (
+                  <button
+                    key={k}
+                    onClick={() => setSigningKeyId(k)}
+                    style={{
+                      textAlign: "left",
+                      ...mono,
+                      background: signingKeyId === k ? "#dff0d8" : undefined,
+                    }}
+                  >
+                    {k}
+                  </button>
+                ))}
+              </div>
+            )}
+            {!kidDeriving && kidDeriveError && (
+              <small style={{ color: "#c00" }}>
+                Couldn&apos;t derive from DID: {kidDeriveError}. Enter key id manually.
+              </small>
+            )}
             <small style={{ color: "#888" }}>
-              Must reference a key the VTA's keystore can resolve.
+              Must reference a key the VTA&apos;s keystore can resolve.
             </small>
           </label>
         </>

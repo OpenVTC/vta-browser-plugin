@@ -26,6 +26,7 @@ import {
   stepUpVtaFinish,
   stepUpVtaStart,
   signTrustTask,
+  deriveSigningKeyId,
   holderIdentityState,
   holderInputsFromAdminReply,
   installVtaMintedHolder,
@@ -33,6 +34,8 @@ import {
   runProvisionIntegration,
   vaultDeleteRest,
   vaultListRest,
+  vtaCreateContext,
+  vtaListContexts,
   vaultProxyLoginRest,
   vaultReleaseRest,
   vaultUpsertRest,
@@ -44,7 +47,10 @@ import {
   OFFSCREEN_DIDCOMM_LOGIN,
   OFFSCREEN_GET_STATUS,
   OFFSCREEN_LOCK_WALLET,
+  OFFSCREEN_CREATE_CONTEXT,
+  OFFSCREEN_DERIVE_SIGNING_KEY_ID,
   OFFSCREEN_HOLDER_STATE,
+  OFFSCREEN_LIST_CONTEXTS,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_SIGN_TRUST_TASK,
@@ -59,6 +65,8 @@ import {
   OFFSCREEN_VERIFY_DID,
   RUNTIME_INBOUND_CONSENT,
   type OffscreenDidcommLoginRequest,
+  type OffscreenCreateContextRequest,
+  type OffscreenDeriveSigningKeyIdRequest,
   type OffscreenOnboardConnectRequest,
   type OffscreenOnboardPrepareRequest,
   type OffscreenSignTrustTaskRequest,
@@ -153,6 +161,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
       });
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_LIST_CONTEXTS) {
+    const req = message as { vtaDid: string; restBaseUrl: string };
+    doListContexts(req)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_CREATE_CONTEXT) {
+    const req = message as OffscreenCreateContextRequest & {
+      vtaDid: string;
+      restBaseUrl: string;
+    };
+    doCreateContext(req)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_DERIVE_SIGNING_KEY_ID) {
+    const req = message as OffscreenDeriveSigningKeyIdRequest;
+    doDeriveSigningKeyId(req.did)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_HOLDER_STATE) {
@@ -500,6 +538,58 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
  *  landing in a half-broken connected view. */
 async function doHolderState() {
   return holderIdentityState(new IndexedDBKVStore());
+}
+
+/** List the contexts the wallet's holder has access to at the connected
+ *  VTA. The popup's AddEntryForm calls this on mount so the context
+ *  dropdown shows the real list (not just contexts already seen on
+ *  loaded vault entries). Returns the popup-narrow shape (`id` + `name`)
+ *  so the bridge doesn't have to relay BIP-32 paths and timestamps the
+ *  UI doesn't use. */
+async function doListContexts(req: {
+  vtaDid: string;
+  restBaseUrl: string;
+}): Promise<{ contexts: Array<{ id: string; name: string }> }> {
+  const { identity: holder } = await loadHolder();
+  const service = await resolveKeyAgreement(req.vtaDid);
+  const contexts = await vtaListContexts({
+    baseUrl: req.restBaseUrl,
+    holder,
+    service,
+  });
+  return { contexts: contexts.map((c) => ({ id: c.id, name: c.name })) };
+}
+
+/** Create a new context at the connected VTA. Requires the wallet's
+ *  holder to be a super-admin; context-admins surface as Forbidden
+ *  (the VTA's `SuperAdminAuth` gate rejects). Used by AddEntryForm's
+ *  "+ New context…" inline-create path. */
+async function doCreateContext(req: {
+  vtaDid: string;
+  restBaseUrl: string;
+  id: string;
+  name?: string;
+  description?: string;
+}): Promise<{ id: string; name: string }> {
+  const { identity: holder } = await loadHolder();
+  const service = await resolveKeyAgreement(req.vtaDid);
+  const created = await vtaCreateContext({
+    baseUrl: req.restBaseUrl,
+    holder,
+    service,
+    id: req.id,
+    ...(req.name ? { name: req.name } : {}),
+    ...(req.description ? { description: req.description } : {}),
+  });
+  return { id: created.id, name: created.name };
+}
+
+/** Resolve a DID and return the plausible `signingKeyId` candidates.
+ *  did:key is purely lexical; did:peer / did:webvh / did:web walk the
+ *  network resolver. Never throws — the result carries an `error`
+ *  string on failure so the popup can render it without crashing. */
+async function doDeriveSigningKeyId(did: string) {
+  return deriveSigningKeyId(did);
 }
 
 // ─── Warm mediator-session pool ───

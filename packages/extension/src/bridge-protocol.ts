@@ -400,6 +400,76 @@ export type HolderStateInfo =
   | { kind: "v3"; did: string }
   | { kind: "v4"; did: string; vtaDid: string };
 
+/** popup → background: list the contexts the wallet's holder has
+ *  access to at the connected VTA. Used by the AddEntryForm to
+ *  populate the context dropdown with the real list (not just the
+ *  contexts already seen on loaded vault entries). */
+export const RUNTIME_LIST_CONTEXTS = "vta-wallet/list-contexts" as const;
+
+export interface RuntimeListContextsRequest {
+  type: typeof RUNTIME_LIST_CONTEXTS;
+}
+
+/** One context record as surfaced to the popup. Subset of
+ *  `vta-sdk::protocols::context_management::CreateContextResultBody`
+ *  — the popup only needs `id` + `name` to render the dropdown, so
+ *  the bridge stays minimal. */
+export interface ContextRecordView {
+  id: string;
+  name: string;
+}
+
+export type RuntimeListContextsResponse =
+  | { ok: true; result: { contexts: ContextRecordView[] } }
+  | { ok: false; error: string };
+
+/** popup → background: create a new context at the connected VTA.
+ *  Requires the wallet's holder to be a super-admin; context-admins
+ *  surface as Forbidden. Used by AddEntryForm's "+ New context…"
+ *  inline-create path. */
+export const RUNTIME_CREATE_CONTEXT = "vta-wallet/create-context" as const;
+
+export interface RuntimeCreateContextRequest {
+  type: typeof RUNTIME_CREATE_CONTEXT;
+  /** Context id — the short slug operators reference (e.g. `work`). */
+  id: string;
+  /** Human-readable name. Defaults to `id` if omitted. */
+  name?: string;
+  /** Optional free-form description. */
+  description?: string;
+}
+
+export type RuntimeCreateContextResponse =
+  | { ok: true; result: ContextRecordView }
+  | { ok: false; error: string };
+
+/** popup → background: resolve a DID and surface plausible signing
+ *  verification-method ids. Used by AddEntryForm's `did-self-issued`
+ *  flow to auto-fill `signingKeyId` from `principalDid`.
+ *
+ *  did:key is derived locally (lexical); did:peer / did:webvh / did:web
+ *  resolve through the wallet's DID resolver. Multi-key DIDs return
+ *  every candidate; the popup shows a picker when `candidates.length > 1`. */
+export const RUNTIME_DERIVE_SIGNING_KEY_ID = "vta-wallet/derive-signing-key-id" as const;
+
+export interface RuntimeDeriveSigningKeyIdRequest {
+  type: typeof RUNTIME_DERIVE_SIGNING_KEY_ID;
+  /** Principal DID to resolve. */
+  did: string;
+}
+
+export type RuntimeDeriveSigningKeyIdResponse =
+  | {
+      ok: true;
+      result: {
+        did: string;
+        /** Empty when resolution failed — `error` carries the reason. */
+        candidates: string[];
+        error?: string;
+      };
+    }
+  | { ok: false; error: string };
+
 export type RuntimeHolderStateResponse =
   | { ok: true; result: HolderStateInfo }
   | { ok: false; error: string };
@@ -786,6 +856,27 @@ export const OFFSCREEN_ONBOARD_CONNECT = "offscreen/onboard-connect" as const;
  *  Returns `{ kind: "none" | "v3" | "v4", ... }`. Used by the popup on
  *  mount to detect a pre-M2C v3 record and prompt re-onboarding. */
 export const OFFSCREEN_HOLDER_STATE = "offscreen/holder-state" as const;
+/** background → offscreen: list contexts visible to the holder. */
+export const OFFSCREEN_LIST_CONTEXTS = "offscreen/list-contexts" as const;
+/** background → offscreen: create a new context (super-admin only). */
+export const OFFSCREEN_CREATE_CONTEXT = "offscreen/create-context" as const;
+/** background → offscreen: derive signing-key id candidates from a DID.
+ *  Local for did:key; resolves over the network for did:web/did:webvh. */
+export const OFFSCREEN_DERIVE_SIGNING_KEY_ID = "offscreen/derive-signing-key-id" as const;
+
+export interface OffscreenCreateContextRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_CREATE_CONTEXT;
+  id: string;
+  name?: string;
+  description?: string;
+}
+
+export interface OffscreenDeriveSigningKeyIdRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_DERIVE_SIGNING_KEY_ID;
+  did: string;
+}
 /** background → offscreen: sign a Trust-Task envelope with the holder did:peer.
  *  Reply is a [`SignTrustTaskResult`] (or `{error}`) via sendResponse. */
 export const OFFSCREEN_SIGN_TRUST_TASK = "offscreen/sign-trust-task" as const;
