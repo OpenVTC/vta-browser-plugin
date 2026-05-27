@@ -53,16 +53,66 @@ const mono: React.CSSProperties = {
   wordBreak: "break-all",
 };
 
+// Run the encrypt-at-rest enrollment in this (visible, gestured) popup
+// context AND relay the resulting PRF output to offscreen so its sibling
+// `cachedKey` lands seeded too. Without the relay, the next holder-
+// touching op in offscreen would throw `WalletLockedError` and force a
+// redundant unlock ceremony — popup's cache is warm, offscreen's isn't,
+// they live in separate module scopes.
+//
+// Used by both the post-onboard encrypt prompt and the in-session
+// "wallet not encrypted" warning banner — same enrol-rewrap-relay
+// shape from both entry points.
+async function encryptHolderSecretInPopup(): Promise<void> {
+  // Step 1: re-wrap the persisted secret behind the PRF AES key. Runs
+  // the WebAuthn enrollment ceremony as a side effect. After this, the
+  // popup's module-scope `cachedKey` is warm AND the IndexedDB record
+  // is encrypted at rest.
+  await rewrapHolderV4Secret(new IndexedDBKVStore(), {
+    toWrap: new WebAuthnPrfSecretWrap(chrome.runtime.id),
+  });
+  // Step 2: persist the setting so future cold starts dispatch on
+  // PRF-wrap. Critical that this lands BEFORE the relay — if the relay
+  // fails, the wallet's still in a consistent state (record + flag
+  // both say PRF), and the operator just sees UnlockView on next op.
+  // The original order (relay → setSettings) left a window where a
+  // failed relay would leave the record encrypted but the flag
+  // plaintext, which breaks loadHolder() on cold start.
+  await setSettings({ encryptHolderSecret: true });
+  // Step 3: relay the raw PRF output to offscreen so its `cachedKey`
+  // is seeded alongside the popup's. Drained one-shot from the wrap
+  // module to avoid stale-value reuse on a later call. Failure here is
+  // recoverable — the next offscreen op throws `WalletLockedError`,
+  // popup renders UnlockView, operator runs the read-side ceremony.
+  const prfOutput = WebAuthnPrfSecretWrap.consumeLastEnrolledPrfOutput();
+  if (prfOutput) {
+    const res = (await chrome.runtime.sendMessage({
+      type: RUNTIME_UNLOCK_PRF,
+      prfOutputB64u: base64url.encode(prfOutput),
+    })) as RuntimeUnlockPrfResponse;
+    if (!res.ok) {
+      throw new Error(`offscreen unlock relay failed: ${res.error}`);
+    }
+  }
+}
+
 // ─── Connected state ───
 // Shown when the wallet has completed the onboarding swap for a VTA.
 // Persisted via zustand so the state survives the popup closing.
 function ConnectedView() {
   const connection = useConnectionStore((s) => s.connection)!;
   const clearConnection = useConnectionStore((s) => s.clearConnection);
+  const lockState = useLockStateStore((s) => s.state);
   const setLockState = useLockStateStore((s) => s.setLockState);
   const [encryptOn, setEncryptOn] = useState(false);
   const [lockStatus, setLockStatus] = useState<string | null>(null);
   const [lockBusy, setLockBusy] = useState(false);
+  // In-session encrypt-now flow driven by the plaintext warning banner.
+  // Distinct from the post-onboard prompt's busy/error state — the
+  // banner can fire any time the operator opens the popup on an
+  // unencrypted wallet, including long after onboarding.
+  const [encryptNowBusy, setEncryptNowBusy] = useState(false);
+  const [encryptNowError, setEncryptNowError] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -70,6 +120,22 @@ function ConnectedView() {
       setEncryptOn(Boolean(s.encryptHolderSecret));
     })();
   }, []);
+
+  async function encryptNow(): Promise<void> {
+    setEncryptNowBusy(true);
+    setEncryptNowError(null);
+    try {
+      await encryptHolderSecretInPopup();
+      // Reflect the new state immediately — banner disappears,
+      // ConnectedView re-renders with the Lock button visible.
+      setEncryptOn(true);
+      setLockState({ encrypted: true, unlocked: true });
+    } catch (e) {
+      setEncryptNowError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEncryptNowBusy(false);
+    }
+  }
 
   async function lockWallet(): Promise<void> {
     setLockBusy(true);
@@ -101,8 +167,65 @@ function ConnectedView() {
     .filter(Boolean)
     .join(" + ");
 
+  // The plaintext-warning banner fires whenever the offscreen probe
+  // confirms `encrypted: false` — wallet identity is stored on this
+  // device with no PRF wrap, and an exfiltrated browser profile can
+  // read the long-term key. We only render after `lockState !== null`
+  // to avoid a flash before the probe lands; rendering on `null`
+  // would briefly flag every wallet (including encrypted ones) until
+  // the probe completes.
+  const showPlaintextWarning = lockState !== null && lockState.encrypted === false;
+
   return (
     <div style={box}>
+      {showPlaintextWarning && (
+        <div
+          style={{
+            padding: 10,
+            background: "#fff1f0",
+            border: "2px solid #c81e1e",
+            borderRadius: 6,
+            display: "grid",
+            gap: 6,
+          }}
+        >
+          <strong style={{ color: "#c81e1e", fontSize: 13 }}>
+            ⚠ Wallet is NOT encrypted
+          </strong>
+          <small style={{ color: "#7a1313" }}>
+            Your wallet&apos;s long-term key is stored on this device <strong>without encryption</strong>.
+            Anyone with access to your browser profile (malware, a stolen laptop, a backup leak)
+            can read it. Encrypt now with your platform authenticator (Touch ID, Windows Hello,
+            hardware key).
+          </small>
+          <button
+            onClick={() => void encryptNow()}
+            disabled={encryptNowBusy}
+            style={{
+              background: "#c81e1e",
+              color: "#fff",
+              border: "none",
+              padding: "8px 14px",
+              borderRadius: 4,
+              fontWeight: 600,
+              fontSize: 12,
+              cursor: encryptNowBusy ? "default" : "pointer",
+            }}
+          >
+            {encryptNowBusy ? "Encrypting…" : "🔐 Encrypt now"}
+          </button>
+          {encryptNowError && (
+            <small style={{ color: "#7a1313" }}>
+              Couldn&apos;t encrypt: {encryptNowError}
+            </small>
+          )}
+          <small style={{ color: "#7a1313", fontSize: 10 }}>
+            Heads up: if you lose this authenticator without first disabling encryption, the
+            wallet becomes unrecoverable.
+          </small>
+        </div>
+      )}
+
       <h3 style={{ margin: 0 }}>Connected ✓</h3>
       <div style={{ fontSize: 12, color: "#555" }}>
         Your wallet is authorized at this VTA.
@@ -1493,14 +1616,7 @@ function OnboardView() {
     setEncryptBusy(true);
     setEncryptError(null);
     try {
-      await rewrapHolderV4Secret(new IndexedDBKVStore(), {
-        toWrap: new WebAuthnPrfSecretWrap(chrome.runtime.id),
-      });
-      // Persist the setting so subsequent loadHolder() calls supply
-      // the matching PRF wrap. Without this, the next cold-start
-      // would dispatch on the now-`webauthn-prf-aes-gcm` algorithm
-      // with no caller wrap → throws "no matching SecretWrap".
-      await setSettings({ encryptHolderSecret: true });
+      await encryptHolderSecretInPopup();
       finalizeConnection({ ...pc, secretEncrypted: true });
     } catch (e) {
       setEncryptError(e instanceof Error ? e.message : String(e));
@@ -1523,30 +1639,79 @@ function OnboardView() {
           Your wallet&apos;s long-term identity is now <code style={mono}>{pendingConnect.holderDid}</code>.
         </small>
         <small style={{ color: "#666" }}>
-          By default it&apos;s stored on this device <strong>without encryption</strong>. You can
-          encrypt it with your platform authenticator (Touch ID, Windows Hello, hardware key) so
-          an exfiltrated browser profile can&apos;t recover the key.
+          It&apos;s currently stored on this device <strong>without encryption</strong>. Anyone with
+          access to your browser profile can read the key. Encrypt it with your platform
+          authenticator (Touch ID, Windows Hello, hardware key) so an exfiltrated profile
+          can&apos;t recover it.
         </small>
-        <small style={{ color: "#8a6d3b" }}>
-          Note: losing the authenticator without disabling encryption first means losing the
-          wallet. The seed is bound to that authenticator&apos;s PRF output and isn&apos;t
-          recoverable from the browser alone.
-        </small>
-        <button
-          onClick={() => void encryptAndFinalize(pendingConnect)}
-          disabled={encryptBusy}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "8px 0",
+          }}
         >
-          {encryptBusy ? "Encrypting…" : "Encrypt with authenticator"}
-        </button>
-        <button onClick={() => finalizeConnection(pendingConnect)} disabled={encryptBusy}>
-          Skip for now
-        </button>
+          <button
+            onClick={() => void encryptAndFinalize(pendingConnect)}
+            disabled={encryptBusy}
+            style={{
+              background: "#2563eb",
+              color: "#fff",
+              border: "none",
+              padding: "10px 16px",
+              borderRadius: 6,
+              fontWeight: 600,
+              fontSize: 13,
+              cursor: encryptBusy ? "default" : "pointer",
+              flex: 1,
+            }}
+          >
+            {encryptBusy ? "Encrypting…" : "🔐 Encrypt with authenticator"}
+          </button>
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              color: "#2563eb",
+              background: "#dbeafe",
+              padding: "2px 6px",
+              borderRadius: 3,
+              textTransform: "uppercase",
+              letterSpacing: 0.4,
+            }}
+            title="Recommended for any wallet you'll use for more than testing"
+          >
+            Recommended
+          </span>
+        </div>
+        <small style={{ color: "#8a6d3b" }}>
+          Heads up: if you lose access to this authenticator without first disabling encryption,
+          the wallet becomes unrecoverable — the seed is bound to that authenticator&apos;s PRF
+          output and can&apos;t be retrieved from the browser alone.
+        </small>
         {encryptError && (
           <small style={{ color: "#c00" }}>
-            Couldn&apos;t encrypt: {encryptError}. You can retry, or skip and enable later via
-            Settings.
+            Couldn&apos;t encrypt: {encryptError}. You can retry below, or skip and enable later.
           </small>
         )}
+        <div style={{ textAlign: "center", marginTop: 4 }}>
+          <button
+            onClick={() => finalizeConnection(pendingConnect)}
+            disabled={encryptBusy}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "#888",
+              fontSize: 11,
+              textDecoration: "underline",
+              cursor: encryptBusy ? "default" : "pointer",
+              padding: 0,
+            }}
+          >
+            Skip for now (leave wallet unencrypted)
+          </button>
+        </div>
       </div>
     );
   }
@@ -1813,12 +1978,13 @@ function Popup() {
     })();
   }, []);
 
-  // Re-probe holderState whenever connection transitions to set. The
-  // mount-time snapshot was taken before the successful onboard, so
-  // the holderState slot is stale (still "v3"); the connection slot
-  // is fresh ("connected"). Re-reading after connection appears
-  // lets the banner clear correctly without requiring a popup close
-  // + reopen.
+  // Re-probe holderState + lockState whenever connection transitions
+  // to set. The mount-time snapshot was taken before the successful
+  // onboard, so both slots are stale (holderState still "v3";
+  // lockState still reflects the pre-onboard wallet). Re-reading
+  // after connection appears lets the migration banner clear AND the
+  // plaintext-warning banner correctly reflect whether the just-
+  // completed onboard chose to encrypt.
   useEffect(() => {
     if (!connection) return;
     void (async () => {
@@ -1826,7 +1992,12 @@ function Popup() {
         type: RUNTIME_HOLDER_STATE,
       })) as RuntimeHolderStateResponse;
       if (res.ok) setHolderState(res.result);
+      await probeLockState();
     })();
+    // probeLockState is stable (closes over setLockState only) and
+    // doesn't need to be in the dependency list; including it would
+    // re-run this effect on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection]);
 
   // Stale-connection case has to be checked BEFORE the

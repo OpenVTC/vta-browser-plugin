@@ -83,6 +83,26 @@ function prfStore(): IndexedDBKVStore {
  */
 let cachedKey: CryptoKey | null = null;
 
+/**
+ * Side-channel slot for the raw PRF output from the most recent
+ * `wrap()` enrollment. Drained at-most-once by
+ * `consumeLastEnrolledPrfOutput()`.
+ *
+ * Rationale: `wrap()` runs in the popup (visible context, fresh user
+ * gesture). Its derived AES key lands in this module's `cachedKey` —
+ * but that's the *popup's* module scope; offscreen runs the same code
+ * in a separate document with its own `cachedKey: null`. The next
+ * holder-touching op in offscreen would throw `WalletLockedError`
+ * because offscreen's cache is empty. The popup needs to relay the
+ * raw PRF output to offscreen (via `RUNTIME_UNLOCK_PRF`) so offscreen
+ * can derive the same AES key into its own cache.
+ *
+ * The bytes are sensitive (key-derivation root); the slot is one-shot
+ * (cleared on first read) so a stale value can't leak into a later
+ * caller that doesn't drain.
+ */
+let lastEnrolledPrfOutput: Uint8Array | null = null;
+
 interface PrfParams extends Record<string, string> {
   /** Base64url credentialId of the WebAuthn credential the
    *  wrap enrolled. The unwrap path passes this to
@@ -113,6 +133,9 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
 
     const aesKey = await this.deriveAesKey(credential.prfOutput);
     cachedKey = aesKey;
+    // Surface for the immediate caller to relay to the sibling context
+    // (popup ↔ offscreen). One-shot — drained on read.
+    lastEnrolledPrfOutput = credential.prfOutput;
 
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ciphertext = new Uint8Array(
@@ -169,6 +192,23 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
    *  lock; the next unwrap re-prompts for the authenticator. */
   static lock(): void {
     cachedKey = null;
+    lastEnrolledPrfOutput = null;
+  }
+
+  /** One-shot drain of the raw PRF output captured by the most recent
+   *  `wrap()` enrollment. Returns `null` if nothing's pending (either
+   *  no wrap has run, or the slot has already been read). Clears the
+   *  slot on read.
+   *
+   *  Caller (popup) immediately ships the bytes to offscreen via
+   *  `RUNTIME_UNLOCK_PRF` so offscreen's `cachedKey` is seeded too —
+   *  without that relay the very next holder-touching op in offscreen
+   *  would throw `WalletLockedError` and force the operator to run the
+   *  unlock ceremony a second time. */
+  static consumeLastEnrolledPrfOutput(): Uint8Array | null {
+    const v = lastEnrolledPrfOutput;
+    lastEnrolledPrfOutput = null;
+    return v;
   }
 
   /** True when the AES key is currently held in this context's
@@ -228,6 +268,7 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
    */
   static async unenroll(): Promise<void> {
     cachedKey = null;
+    lastEnrolledPrfOutput = null;
     const store = prfStore();
     await store.delete(CREDENTIAL_KEY);
     await store.delete(SALT_KEY);
