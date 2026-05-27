@@ -51,6 +51,8 @@ import {
   OFFSCREEN_DERIVE_SIGNING_KEY_ID,
   OFFSCREEN_HOLDER_STATE,
   OFFSCREEN_LIST_CONTEXTS,
+  OFFSCREEN_UNLOCK_PRF,
+  OFFSCREEN_WALLET_LOCK_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_SIGN_TRUST_TASK,
@@ -69,6 +71,7 @@ import {
   type OffscreenDeriveSigningKeyIdRequest,
   type OffscreenOnboardConnectRequest,
   type OffscreenOnboardPrepareRequest,
+  type OffscreenUnlockPrfRequest,
   type OffscreenSignTrustTaskRequest,
   type OffscreenStepUpVtaRequest,
   type OffscreenVaultDeleteRequest,
@@ -187,6 +190,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (msg.type === OFFSCREEN_DERIVE_SIGNING_KEY_ID) {
     const req = message as OffscreenDeriveSigningKeyIdRequest;
     doDeriveSigningKeyId(req.did)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_UNLOCK_PRF) {
+    const req = message as OffscreenUnlockPrfRequest;
+    doUnlockPrf(req.prfOutput)
+      .then(() => sendResponse({ ok: true }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_WALLET_LOCK_STATE) {
+    doWalletLockState()
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -566,6 +586,36 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
  *  landing in a half-broken connected view. */
 async function doHolderState() {
   return holderIdentityState(new IndexedDBKVStore());
+}
+
+/** Seed the in-memory AES cache with the popup-derived PRF output.
+ *  After this, `WebAuthnPrfSecretWrap.unwrap()` finds the cached key
+ *  and decrypts without prompting — the offscreen ops that load the
+ *  holder identity (vault list, login, sign trust task, etc.) start
+ *  succeeding. */
+async function doUnlockPrf(prfOutput: Uint8Array): Promise<void> {
+  if (!(prfOutput instanceof Uint8Array) || prfOutput.length === 0) {
+    throw new Error("UNLOCK_PRF: prfOutput missing or not bytes");
+  }
+  await WebAuthnPrfSecretWrap.seedCachedKeyFromPrfOutput(prfOutput);
+}
+
+/** Tell the popup whether the wallet is currently locked.
+ *  See `RuntimeWalletLockStateResponse` for the semantics —
+ *  `encrypted: false` short-circuits the unlock prompt entirely
+ *  (passthrough wallets don't need one). */
+async function doWalletLockState(): Promise<{ encrypted: boolean; unlocked: boolean }> {
+  const state = await holderIdentityState(new IndexedDBKVStore());
+  if (state.kind !== "v4") {
+    // v3 wallets surface via the migration banner; "none" surfaces
+    // via OnboardView. Neither needs an unlock; report unencrypted.
+    return { encrypted: false, unlocked: false };
+  }
+  const encrypted = state.wrapAlgorithm !== "passthrough";
+  // Plaintext wallets are never "locked" — the load path doesn't
+  // need WebAuthn. Report unlocked for consistency.
+  if (!encrypted) return { encrypted: false, unlocked: true };
+  return { encrypted: true, unlocked: WebAuthnPrfSecretWrap.isUnlocked() };
 }
 
 /** List the contexts the wallet's holder has access to at the connected

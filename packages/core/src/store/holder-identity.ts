@@ -425,12 +425,29 @@ export async function rewrapHolderV4Secret(
 }
 
 /** Inspect the persisted state without throwing. Used by the popup to
- *  decide which onboarding screen to show. */
+ *  decide which onboarding screen to show.
+ *
+ *  For v4 records, `wrapAlgorithm` reveals whether the secret is
+ *  encrypted at rest. `"passthrough"` means plaintext (the operator
+ *  hasn't enabled encryption); anything else (currently only
+ *  `"webauthn-prf-aes-gcm"`) means the popup needs to run an
+ *  unlock ceremony before offscreen can load the holder identity. */
 export async function holderIdentityState(
   store: KVStore,
-): Promise<{ kind: "none" } | { kind: "v3"; did: string } | { kind: "v4"; did: string; vtaDid: string }> {
+): Promise<
+  | { kind: "none" }
+  | { kind: "v3"; did: string }
+  | { kind: "v4"; did: string; vtaDid: string; wrapAlgorithm: string }
+> {
   const v4 = await store.get<PersistedHolderV4>(STORE_KEY_V4);
-  if (v4) return { kind: "v4", did: v4.did, vtaDid: v4.vtaDid };
+  if (v4) {
+    return {
+      kind: "v4",
+      did: v4.did,
+      vtaDid: v4.vtaDid,
+      wrapAlgorithm: v4.wrappedSecret.algorithm,
+    };
+  }
   const v3 = await store.get<PersistedHolder>(STORE_KEY);
   if (v3) return { kind: "v3", did: v3.did };
   return { kind: "none" };
