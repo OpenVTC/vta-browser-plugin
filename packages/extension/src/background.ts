@@ -21,6 +21,7 @@ import {
   OFFSCREEN_HOLDER_STATE,
   OFFSCREEN_LIST_CONTEXTS,
   OFFSCREEN_UNLOCK_PRF,
+  OFFSCREEN_REFRESH_VTA_TRANSPORTS,
   OFFSCREEN_WALLET_LOCK_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
@@ -55,6 +56,7 @@ import {
   RUNTIME_DERIVE_SIGNING_KEY_ID,
   RUNTIME_HOLDER_STATE,
   RUNTIME_LIST_CONTEXTS,
+  RUNTIME_REFRESH_VTA_TRANSPORTS,
   RUNTIME_UNLOCK_PRF,
   RUNTIME_WALLET_LOCK_STATE,
   RUNTIME_ONBOARD_CONNECT,
@@ -81,6 +83,8 @@ import {
   type RuntimeDeriveSigningKeyIdResponse,
   type RuntimeHolderStateResponse,
   type RuntimeListContextsResponse,
+  type RuntimeRefreshVtaTransportsRequest,
+  type RuntimeRefreshVtaTransportsResponse,
   type RuntimeUnlockPrfRequest,
   type RuntimeUnlockPrfResponse,
   type RuntimeWalletLockStateResponse,
@@ -404,6 +408,17 @@ async function handleWalletLockState(): Promise<RuntimeWalletLockStateResponse> 
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_WALLET_LOCK_STATE,
   })) as RuntimeWalletLockStateResponse;
+}
+
+async function handleRefreshVtaTransports(
+  req: RuntimeRefreshVtaTransportsRequest,
+): Promise<RuntimeRefreshVtaTransportsResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_REFRESH_VTA_TRANSPORTS,
+    vtaDid: req.vtaDid,
+  })) as RuntimeRefreshVtaTransportsResponse;
 }
 
 async function handleListContexts(): Promise<RuntimeListContextsResponse> {
@@ -880,6 +895,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_UNLOCK_PRF) {
     handleUnlockPrf(message as RuntimeUnlockPrfRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_REFRESH_VTA_TRANSPORTS) {
+    handleRefreshVtaTransports(message as RuntimeRefreshVtaTransportsRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

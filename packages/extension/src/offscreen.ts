@@ -53,6 +53,7 @@ import {
   OFFSCREEN_HOLDER_STATE,
   OFFSCREEN_LIST_CONTEXTS,
   OFFSCREEN_UNLOCK_PRF,
+  OFFSCREEN_REFRESH_VTA_TRANSPORTS,
   OFFSCREEN_WALLET_LOCK_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
@@ -222,6 +223,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (msg.type === OFFSCREEN_WALLET_LOCK_STATE) {
     doWalletLockState()
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_REFRESH_VTA_TRANSPORTS) {
+    const req = message as { vtaDid: string };
+    doRefreshVtaTransports(req.vtaDid)
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -631,6 +641,26 @@ async function doWalletLockState(): Promise<{ encrypted: boolean; unlocked: bool
   // need WebAuthn. Report unlocked for consistency.
   if (!encrypted) return { encrypted: false, unlocked: true };
   return { encrypted: true, unlocked: WebAuthnPrfSecretWrap.isUnlocked() };
+}
+
+/** Re-resolve the VTA's currently-advertised transports by fetching its
+ *  DID document. Onboarding bakes `restBaseUrl` + `mediatorDid` into
+ *  the persisted `connection` slot once at first connect; a VTA that
+ *  later disables a transport leaves the cached value pointing at a
+ *  dead endpoint. The popup calls this on mount + on connection change
+ *  so the cache stays aligned with what the VTA currently advertises.
+ *
+ *  Returns the same shape as `doOnboardPrepare`'s services snapshot —
+ *  `restBaseUrl` and/or `mediatorDid` each present iff the VTA carries
+ *  the matching `#vta-rest` / `#vta-didcomm` service entry. */
+async function doRefreshVtaTransports(
+  vtaDid: string,
+): Promise<{ restBaseUrl?: string; mediatorDid?: string }> {
+  const services = await resolveVtaServices(vtaDid);
+  return {
+    ...(services.rest ? { restBaseUrl: services.rest.baseUrl } : {}),
+    ...(services.didcomm ? { mediatorDid: services.didcomm.mediatorDid } : {}),
+  };
 }
 
 /** List the contexts the wallet's holder has access to at the connected

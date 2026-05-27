@@ -470,6 +470,43 @@ export type RuntimeWalletLockStateResponse =
   | { ok: true; result: { encrypted: boolean; unlocked: boolean } }
   | { ok: false; error: string };
 
+/** popup → background: re-resolve the VTA's currently-advertised
+ *  transports (REST `#vta-rest` + DIDComm `#vta-didcomm`) by re-fetching
+ *  the DID document.
+ *
+ *  Onboarding bakes `restBaseUrl` + `mediatorDid` into the persisted
+ *  `connection` slot once at first connect. A VTA that later disables
+ *  one transport (`pnm services rest disable` / `services didcomm
+ *  disable`) leaves the plugin's cached endpoint stale — subsequent
+ *  ops keep trying the dead path. The popup calls this on mount /
+ *  connection-change so the cached transports stay aligned with what
+ *  the VTA currently advertises.
+ *
+ *  Returns whichever of REST / DIDComm the document carries (possibly
+ *  both, possibly one, possibly neither — in the last case the wallet
+ *  surfaces a clear error rather than silently doing nothing). The
+ *  popup compares against the persisted connection and updates the
+ *  zustand slot when they drift. */
+export const RUNTIME_REFRESH_VTA_TRANSPORTS = "vta-wallet/refresh-vta-transports" as const;
+
+export interface RuntimeRefreshVtaTransportsRequest {
+  type: typeof RUNTIME_REFRESH_VTA_TRANSPORTS;
+  vtaDid: string;
+}
+
+export interface VtaTransportsView {
+  /** REST base URL, present iff the VTA's DID doc carries a
+   *  `#vta-rest` service entry. */
+  restBaseUrl?: string;
+  /** Mediator DID, present iff the VTA's DID doc carries a
+   *  `#vta-didcomm` (or generic `DIDCommMessaging`) service entry. */
+  mediatorDid?: string;
+}
+
+export type RuntimeRefreshVtaTransportsResponse =
+  | { ok: true; result: VtaTransportsView }
+  | { ok: false; error: string };
+
 /** popup → background: list the contexts the wallet's holder has
  *  access to at the connected VTA. Used by the AddEntryForm to
  *  populate the context dropdown with the real list (not just the
@@ -944,6 +981,16 @@ export interface OffscreenUnlockPrfRequest {
  *  the popup can decide between OnboardView / UnlockView /
  *  ConnectedView. */
 export const OFFSCREEN_WALLET_LOCK_STATE = "offscreen/lock-state" as const;
+/** background → offscreen: re-resolve the VTA's DID document and
+ *  return its currently-advertised transports. Mirrors the
+ *  `RUNTIME_REFRESH_VTA_TRANSPORTS` popup-facing message. */
+export const OFFSCREEN_REFRESH_VTA_TRANSPORTS = "offscreen/refresh-vta-transports" as const;
+
+export interface OffscreenRefreshVtaTransportsRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_REFRESH_VTA_TRANSPORTS;
+  vtaDid: string;
+}
 /** background → offscreen: list contexts visible to the holder. */
 export const OFFSCREEN_LIST_CONTEXTS = "offscreen/list-contexts" as const;
 /** background → offscreen: create a new context (super-admin only). */
