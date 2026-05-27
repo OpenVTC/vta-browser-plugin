@@ -27,6 +27,7 @@ import {
   stepUpVtaStart,
   signTrustTask,
   deriveSigningKeyId,
+  forgetHolderRecord,
   holderIdentityState,
   holderInputsFromAdminReply,
   installVtaMintedHolder,
@@ -53,6 +54,7 @@ import {
   OFFSCREEN_HOLDER_STATE,
   OFFSCREEN_LIST_CONTEXTS,
   OFFSCREEN_UNLOCK_PRF,
+  OFFSCREEN_FORGET_HOLDER_RECORD,
   OFFSCREEN_REFRESH_VTA_TRANSPORTS,
   OFFSCREEN_WALLET_LOCK_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
@@ -226,6 +228,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const req = message as { vtaDid?: string };
     doWalletLockState(req.vtaDid)
       .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_FORGET_HOLDER_RECORD) {
+    const req = message as { vtaDid: string };
+    doForgetHolderRecord(req.vtaDid)
+      .then(() => sendResponse({ ok: true }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
@@ -652,6 +663,16 @@ async function doWalletLockState(
   // need WebAuthn. Report unlocked for consistency.
   if (!encrypted) return { encrypted: false, unlocked: true };
   return { encrypted: true, unlocked: WebAuthnPrfSecretWrap.isUnlocked() };
+}
+
+/** Delete the per-VTA holder record from IndexedDB. The connection
+ *  store entry is cleared separately by the popup (zustand local
+ *  state); this only handles the IndexedDB row, which the popup
+ *  can't reach from a visible context. Idempotent — no-op if the
+ *  record was already deleted (the wallet wasn't onboarded at this
+ *  VTA, or a parallel Forget already ran). */
+async function doForgetHolderRecord(vtaDid: string): Promise<void> {
+  await forgetHolderRecord(new IndexedDBKVStore(), vtaDid);
 }
 
 /** Re-resolve the VTA's currently-advertised transports by fetching its

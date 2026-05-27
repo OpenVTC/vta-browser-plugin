@@ -90,12 +90,20 @@ export const useConnectionStore = create<State>()(
       forgetVta: (vtaDid) =>
         set((state) => {
           const { [vtaDid]: _removed, ...rest } = state.connections.vtas;
+          let nextActive: string | null = state.connections.activeVtaDid;
+          if (state.connections.activeVtaDid === vtaDid) {
+            // Auto-promote a remaining VTA to active so the operator
+            // doesn't get dumped into OnboardView when they still have
+            // other onboarded VTAs. The chosen-next isn't deterministic
+            // by design (Object.keys order is insertion-ordered in
+            // modern engines, so this picks "an arbitrary other VTA").
+            // The operator can switch again from the dropdown.
+            const remaining = Object.keys(rest);
+            nextActive = remaining[0] ?? null;
+          }
           return {
             connections: {
-              activeVtaDid:
-                state.connections.activeVtaDid === vtaDid
-                  ? null
-                  : state.connections.activeVtaDid,
+              activeVtaDid: nextActive,
               vtas: rest,
             },
           };

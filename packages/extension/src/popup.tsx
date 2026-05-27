@@ -1,5 +1,5 @@
 /// <reference types="chrome" />
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   useActiveConnection,
@@ -12,6 +12,7 @@ import {
   RUNTIME_DERIVE_SIGNING_KEY_ID,
   RUNTIME_HOLDER_STATE,
   RUNTIME_LIST_CONTEXTS,
+  RUNTIME_FORGET_HOLDER_RECORD,
   RUNTIME_LOCK_WALLET,
   RUNTIME_REFRESH_VTA_TRANSPORTS,
   RUNTIME_UNLOCK_PRF,
@@ -34,6 +35,7 @@ import {
   type RuntimeInjectCookiesResponse,
   type RuntimeListContextsResponse,
   type RuntimeOnboardConnectResponse,
+  type RuntimeForgetHolderRecordResponse,
   type RuntimeOnboardPrepareResponse,
   type RuntimeRefreshVtaTransportsResponse,
   type RuntimeUnlockPrfResponse,
@@ -106,10 +108,199 @@ async function encryptHolderSecretInPopup(vtaDid: string): Promise<void> {
   }
 }
 
+// ─── Multi-VTA switcher ───
+// Renders at the top of ConnectedView. Shows the active VTA and any
+// other VTAs onboarded on this device, with switch + forget actions
+// per entry. Collapsed by default (just shows the active VTA's
+// truncated DID); expands to the full list on click.
+//
+// The forget flow calls the bridge to delete the IndexedDB holder
+// record AND removes the entry from the connection store. The
+// operator still needs to revoke the wallet's ACL entry on the VTA
+// side separately (`pnm acl delete`); we surface that as a hint.
+function VtaSwitcher({
+  onRequestAddVta,
+}: {
+  /** Caller (Popup wrapper) flips into "+ Add VTA" mode so OnboardView
+   *  renders over the top of the current ConnectedView. The wrapper
+   *  resets this when a new VTA becomes active. */
+  onRequestAddVta: () => void;
+}): React.JSX.Element {
+  const activeConnection = useActiveConnection()!;
+  const allVtas = useConnectionStore((s) => s.connections.vtas);
+  const activateVta = useConnectionStore((s) => s.activateVta);
+  const forgetVta = useConnectionStore((s) => s.forgetVta);
+  const [expanded, setExpanded] = useState(false);
+  const [forgetting, setForgetting] = useState<string | null>(null);
+
+  const vtaList = Object.values(allVtas).sort((a, b) =>
+    a.vtaDid.localeCompare(b.vtaDid),
+  );
+
+  async function handleForget(vtaDid: string) {
+    if (
+      !confirm(
+        `Forget VTA ${vtaDid}?\n\n` +
+          `This removes the wallet identity for this VTA from this device. The VTA's ACL ` +
+          `entry for your wallet stays — revoke it separately on the VTA side ` +
+          `(\`pnm acl delete --did <holder>\`) if you don't want the wallet to be able to ` +
+          `re-onboard.\n\nProceed?`,
+      )
+    ) {
+      return;
+    }
+    setForgetting(vtaDid);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: RUNTIME_FORGET_HOLDER_RECORD,
+        vtaDid,
+      })) as RuntimeForgetHolderRecordResponse;
+      if (!res.ok) {
+        alert(`Couldn't delete the wallet identity for ${vtaDid}: ${res.error}`);
+        return;
+      }
+      forgetVta(vtaDid);
+    } finally {
+      setForgetting(null);
+    }
+  }
+
+  if (!expanded) {
+    return (
+      <div
+        style={{
+          padding: "6px 10px",
+          background: "#f8f8f8",
+          border: "1px solid #ddd",
+          borderRadius: 6,
+          fontSize: 11,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 6,
+        }}
+      >
+        <span style={{ color: "#555" }}>
+          VTA: <code style={mono}>{truncateDid(activeConnection.vtaDid)}</code>
+          {vtaList.length > 1 && (
+            <span style={{ color: "#888", marginLeft: 6 }}>
+              ({vtaList.length} configured)
+            </span>
+          )}
+        </span>
+        <button
+          onClick={() => setExpanded(true)}
+          style={{ fontSize: 10, padding: "2px 8px" }}
+          title={
+            vtaList.length > 1
+              ? "Switch between VTAs or add a new one"
+              : "Add another VTA"
+          }
+        >
+          {vtaList.length > 1 ? "Switch / manage" : "+ Add VTA"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        padding: 8,
+        background: "#f8f8f8",
+        border: "1px solid #ddd",
+        borderRadius: 6,
+        display: "grid",
+        gap: 6,
+        fontSize: 11,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <strong style={{ fontSize: 12 }}>VTAs on this device</strong>
+        <button
+          onClick={() => setExpanded(false)}
+          style={{ fontSize: 10, padding: "2px 6px" }}
+        >
+          Collapse
+        </button>
+      </div>
+      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 4 }}>
+        {vtaList.map((c) => {
+          const isActive = c.vtaDid === activeConnection.vtaDid;
+          return (
+            <li
+              key={c.vtaDid}
+              style={{
+                padding: 6,
+                background: isActive ? "#eef5e8" : "#fff",
+                border: `1px solid ${isActive ? "#80c684" : "#e0e0e0"}`,
+                borderRadius: 4,
+                display: "grid",
+                gap: 4,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span
+                  style={{ color: isActive ? "#206c20" : "#666", fontWeight: 600 }}
+                  title={isActive ? "Currently active" : "Click Switch to activate"}
+                >
+                  {isActive ? "●" : "○"}
+                </span>
+                <code style={{ ...mono, flex: 1 }}>{c.vtaDid}</code>
+              </div>
+              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                {!isActive && (
+                  <button
+                    onClick={() => {
+                      activateVta(c.vtaDid);
+                      setExpanded(false);
+                    }}
+                    style={{ fontSize: 10 }}
+                  >
+                    Switch
+                  </button>
+                )}
+                <button
+                  onClick={() => void handleForget(c.vtaDid)}
+                  disabled={forgetting === c.vtaDid}
+                  style={{ fontSize: 10, color: "#c00" }}
+                  title="Delete this wallet identity from this device"
+                >
+                  {forgetting === c.vtaDid ? "Forgetting…" : "Forget"}
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <button
+        onClick={() => {
+          setExpanded(false);
+          onRequestAddVta();
+        }}
+        style={{ fontSize: 11 }}
+      >
+        + Add another VTA
+      </button>
+    </div>
+  );
+}
+
+function truncateDid(did: string): string {
+  if (did.length <= 36) return did;
+  return `${did.slice(0, 20)}…${did.slice(-12)}`;
+}
+
 // ─── Connected state ───
 // Shown when the wallet has completed the onboarding swap for a VTA.
 // Persisted via zustand so the state survives the popup closing.
-function ConnectedView() {
+function ConnectedView({
+  onRequestAddVta,
+}: {
+  /** Forwarded to `VtaSwitcher`'s "+ Add VTA" button. The Popup
+   *  wrapper owns the addingVta flag — passes a setter down. */
+  onRequestAddVta: () => void;
+}) {
   const connection = useActiveConnection()!;
   const clearConnection = useConnectionStore((s) => s.clearConnection);
   const lockState = useLockStateStore((s) => s.state);
@@ -188,6 +379,8 @@ function ConnectedView() {
 
   return (
     <div style={box}>
+      <VtaSwitcher onRequestAddVta={onRequestAddVta} />
+
       {showPlaintextWarning && (
         <div
           style={{
@@ -1474,7 +1667,15 @@ function formatDate(iso: string): string {
 // Enter a VTA DID → wallet resolves transports + mints an ephemeral did:key →
 // operator grants it with one printed command → wallet swaps the grant onto
 // its long-term holder did:peer via `swap-acl`.
-function OnboardView() {
+function OnboardView({
+  onCancel,
+}: {
+  /** When set, OnboardView renders a "← Back" link at the top that
+   *  the operator can click to back out of "+ Add VTA" mode without
+   *  completing onboarding. Omitted on fresh-install OnboardView (no
+   *  existing connection to go back to). */
+  onCancel?: () => void;
+} = {}) {
   const setConnection = useConnectionStore((s) => s.setConnection);
 
   const [vtaDid, setVtaDid] = useState("");
@@ -1812,7 +2013,26 @@ function OnboardView() {
 
   return (
     <div style={box}>
-      <h3 style={{ margin: 0 }}>Connect to a VTA</h3>
+      {onCancel && (
+        <button
+          onClick={onCancel}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "#2563eb",
+            fontSize: 11,
+            cursor: "pointer",
+            padding: 0,
+            textAlign: "left",
+            justifySelf: "start",
+          }}
+        >
+          ← Back to current VTA
+        </button>
+      )}
+      <h3 style={{ margin: 0 }}>
+        {onCancel ? "Add another VTA" : "Connect to a VTA"}
+      </h3>
       <small>Enter the VTA&apos;s DID — the wallet resolves its endpoints for you.</small>
       <input
         placeholder="did:webvh:…"
@@ -1949,6 +2169,12 @@ function Popup() {
   const setConnection = useConnectionStore((s) => s.setConnection);
   const clearConnection = useConnectionStore((s) => s.clearConnection);
   const [holderState, setHolderState] = useState<HolderStateInfo | null>(null);
+  // Set to `true` when the operator clicks "+ Add VTA" inside the
+  // VtaSwitcher. Forces OnboardView to render even though an active
+  // connection exists. Auto-resets when the new VTA becomes active
+  // (see the useEffect below) so the operator lands in ConnectedView
+  // for the freshly-added VTA without an extra click.
+  const [addingVta, setAddingVta] = useState(false);
   // Set to `true` when the most recent transport probe found the VTA
   // advertising neither REST nor DIDComm — operator action required.
   // Distinct from a benign transport flip (e.g. REST disabled, DIDComm
@@ -2105,6 +2331,19 @@ function Popup() {
     </div>
   );
 
+  // Auto-reset `addingVta` when the active VTA changes (or appears
+  // for the first time). The onboarding flow ends by calling
+  // setConnection with the new VTA, which becomes active; that's the
+  // signal that "+ Add VTA" mode is done. Without this, the operator
+  // would stay on OnboardView after the onboard succeeds.
+  const prevActiveDidRef = useRef<string | undefined>(connection?.vtaDid);
+  useEffect(() => {
+    if (connection?.vtaDid && connection.vtaDid !== prevActiveDidRef.current) {
+      setAddingVta(false);
+    }
+    prevActiveDidRef.current = connection?.vtaDid;
+  }, [connection?.vtaDid]);
+
   // Stale-connection case has to be checked BEFORE the
   // connection-takes-precedence guard: a connection pointing at a
   // holder that no longer exists in IndexedDB would yield a
@@ -2119,6 +2358,17 @@ function Popup() {
         <OnboardView />
       </div>
     );
+  }
+
+  // "+ Add VTA" override: the operator chose to onboard a new VTA on
+  // top of an existing one. Show OnboardView regardless of connection
+  // / lock state. Checked BEFORE the lock guard so adding a new VTA
+  // doesn't require unlocking the existing active one — the new
+  // wallet's record can be created fresh; the encrypt step (if
+  // chosen) shares the device's PRF credential, which means the
+  // Touch ID prompt during enrolment ALSO unlocks the cache.
+  if (addingVta) {
+    return <OnboardView onCancel={() => setAddingVta(false)} />;
   }
 
   // Wallet is encrypted at rest AND offscreen doesn't yet have the
@@ -2149,7 +2399,7 @@ function Popup() {
     return (
       <>
         {noTransportsBanner}
-        <ConnectedView />
+        <ConnectedView onRequestAddVta={() => setAddingVta(true)} />
       </>
     );
   }
