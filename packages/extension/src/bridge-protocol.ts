@@ -493,6 +493,24 @@ export type RuntimeWalletLockStateResponse =
  *  surfaces a clear error rather than silently doing nothing). The
  *  popup compares against the persisted connection and updates the
  *  zustand slot when they drift. */
+/** popup → background: delete the holder record for a specific VTA
+ *  from IndexedDB. Companion to the connection store's `forgetVta`
+ *  action: forgetVta removes the entry from the persisted connection
+ *  map, but the v4 holder record (the encrypted Ed25519 seed + DID +
+ *  vtaUrl) lives in IndexedDB, which the popup can't reach from the
+ *  visible context — it's offscreen-owned. This bridge call routes
+ *  the delete through. */
+export const RUNTIME_FORGET_HOLDER_RECORD = "vta-wallet/forget-holder-record" as const;
+
+export interface RuntimeForgetHolderRecordRequest {
+  type: typeof RUNTIME_FORGET_HOLDER_RECORD;
+  vtaDid: string;
+}
+
+export type RuntimeForgetHolderRecordResponse =
+  | { ok: true }
+  | { ok: false; error: string };
+
 export const RUNTIME_REFRESH_VTA_TRANSPORTS = "vta-wallet/refresh-vta-transports" as const;
 
 export interface RuntimeRefreshVtaTransportsRequest {
@@ -981,6 +999,16 @@ export interface OffscreenUnlockPrfRequest {
    *  why this goes over the wire as a string rather than a
    *  `Uint8Array`. */
   prfOutputB64u: string;
+}
+
+/** background → offscreen: delete a per-VTA holder record from
+ *  IndexedDB. Mirrors `RUNTIME_FORGET_HOLDER_RECORD`. */
+export const OFFSCREEN_FORGET_HOLDER_RECORD = "offscreen/forget-holder-record" as const;
+
+export interface OffscreenForgetHolderRecordRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_FORGET_HOLDER_RECORD;
+  vtaDid: string;
 }
 
 /** background → offscreen: query the cached-key + holder shape so

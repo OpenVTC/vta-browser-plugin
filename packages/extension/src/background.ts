@@ -22,6 +22,7 @@ import {
   OFFSCREEN_HOLDER_STATE,
   OFFSCREEN_LIST_CONTEXTS,
   OFFSCREEN_UNLOCK_PRF,
+  OFFSCREEN_FORGET_HOLDER_RECORD,
   OFFSCREEN_REFRESH_VTA_TRANSPORTS,
   OFFSCREEN_WALLET_LOCK_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
@@ -57,6 +58,7 @@ import {
   RUNTIME_DERIVE_SIGNING_KEY_ID,
   RUNTIME_HOLDER_STATE,
   RUNTIME_LIST_CONTEXTS,
+  RUNTIME_FORGET_HOLDER_RECORD,
   RUNTIME_REFRESH_VTA_TRANSPORTS,
   RUNTIME_UNLOCK_PRF,
   RUNTIME_WALLET_LOCK_STATE,
@@ -84,6 +86,8 @@ import {
   type RuntimeDeriveSigningKeyIdResponse,
   type RuntimeHolderStateResponse,
   type RuntimeListContextsResponse,
+  type RuntimeForgetHolderRecordRequest,
+  type RuntimeForgetHolderRecordResponse,
   type RuntimeRefreshVtaTransportsRequest,
   type RuntimeRefreshVtaTransportsResponse,
   type RuntimeUnlockPrfRequest,
@@ -437,6 +441,17 @@ async function handleRefreshVtaTransports(
     type: OFFSCREEN_REFRESH_VTA_TRANSPORTS,
     vtaDid: req.vtaDid,
   })) as RuntimeRefreshVtaTransportsResponse;
+}
+
+async function handleForgetHolderRecord(
+  req: RuntimeForgetHolderRecordRequest,
+): Promise<RuntimeForgetHolderRecordResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_FORGET_HOLDER_RECORD,
+    vtaDid: req.vtaDid,
+  })) as RuntimeForgetHolderRecordResponse;
 }
 
 async function handleListContexts(): Promise<RuntimeListContextsResponse> {
@@ -945,6 +960,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_REFRESH_VTA_TRANSPORTS) {
     handleRefreshVtaTransports(message as RuntimeRefreshVtaTransportsRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_FORGET_HOLDER_RECORD) {
+    handleForgetHolderRecord(message as RuntimeForgetHolderRecordRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
