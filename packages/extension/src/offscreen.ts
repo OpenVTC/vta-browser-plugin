@@ -43,7 +43,7 @@ import {
   verifyDid,
 } from "@pnm/core";
 import { base64url } from "@openvtc/vti-didcomm-js";
-import { buildHolderSecretWrap, getWalletMediatorDid, loadHolder } from "./holder.js";
+import { getWalletMediatorDid, loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
@@ -579,45 +579,29 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
   // (Ed25519 seed), cross-checks the did:key identifier matches the
   // Ed25519 pubkey, and produces the seed-only persistence shape v4
   // expects.
+  //
+  // **Always install plaintext.** Encryption is the popup's job — the
+  // post-onboard prompt runs the WebAuthn ceremony in a visible context
+  // with a fresh user gesture, then re-wraps the record in place via
+  // `rewrapHolderV4Secret`. Trying to encrypt directly from the
+  // offscreen document doesn't work: offscreen is hidden by design, so
+  // `navigator.credentials.{create,get}` either rejects with
+  // NotAllowedError or hangs forever waiting for a user gesture that
+  // can never arrive. The previous logic guarded against this by
+  // catching a "declined to wrap" error from the underlying wrap, but
+  // the multi-VTA wrap reuse (PR 1) changed the failure mode from a
+  // synchronous throw into a hanging `.get` ceremony.
+  //
+  // `secretEncrypted: false` is therefore the unconditional return.
+  // The popup compares against `secretEncrypted` in its
+  // `pendingConnect` handling and unconditionally surfaces the
+  // post-onboard encrypt prompt (PR #32/#35) so the operator can opt
+  // into encryption when they choose.
   const holderInputs = holderInputsFromAdminReply(adminReply);
-  const secretWrap = await buildHolderSecretWrap();
-  let secretEncrypted = false;
-  if (secretWrap) {
-    try {
-      await installVtaMintedHolder(store, { ...holderInputs, secretWrap });
-      secretEncrypted = true;
-    } catch (e) {
-      // Two ways the PRF wrap can decline: (a) the platform doesn't
-      // expose a PRF-capable authenticator (older browser, no
-      // platform passkey); (b) the operator dismissed the
-      // authenticator prompt. `wrapSecret` surfaces both as
-      // "declined to wrap" — fall back to plaintext storage so
-      // onboarding completes, log + surface a warning so the
-      // operator sees the at-rest weakening they got.
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("declined to wrap")) {
-        console.warn(
-          "doOnboardConnect: PRF wrap declined; falling back to plaintext holder secret",
-        );
-        await installVtaMintedHolder(store, holderInputs);
-        secretEncrypted = false;
-      } else {
-        throw e;
-      }
-    }
-  } else {
-    // Operator explicitly opted out via the settings page.
-    await installVtaMintedHolder(store, holderInputs);
-    secretEncrypted = false;
-  }
+  await installVtaMintedHolder(store, holderInputs);
 
   await store.delete(ONBOARD_KEY);
-  // Bridge protocol returns { holderDid, role, secretEncrypted } — the
-  // popup uses `secretEncrypted` to surface "wallet encrypted at rest"
-  // vs "wallet stored without encryption" so the operator knows what
-  // happened at install time (especially the fallback path, which is
-  // a silent at-rest weakening if not surfaced).
-  return { holderDid: adminReply.adminDid, role: "admin", secretEncrypted };
+  return { holderDid: adminReply.adminDid, role: "admin", secretEncrypted: false };
 }
 
 /** Inspect the persisted holder identity without unwrapping the secret. The
