@@ -435,10 +435,16 @@ function ConnectedView({
       </div>
 
       <div style={{ fontSize: 12, color: "#777" }}>VTA</div>
-      <code style={mono}>{connection.vtaDid}</code>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+        <code style={{ ...mono, flex: 1 }}>{connection.vtaDid}</code>
+        <CopyButton text={connection.vtaDid} />
+      </div>
 
       <div style={{ fontSize: 12, color: "#777" }}>Holder (your wallet DID)</div>
-      <code style={mono}>{connection.holderDid}</code>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+        <code style={{ ...mono, flex: 1 }}>{connection.holderDid}</code>
+        <CopyButton text={connection.holderDid} />
+      </div>
 
       <div style={{ fontSize: 12, color: "#777" }}>
         Role: <b>{connection.role}</b> &nbsp;·&nbsp; Transports: <b>{transports || "—"}</b>
