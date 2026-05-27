@@ -157,16 +157,51 @@ export async function openAdminRotationBundle(
 // We assert the field shapes by hand here rather than blanket-cast — a
 // malformed bundle should fail with a clear error, not crash later on a
 // missing field.
+//
+// Byte-field caveat: ciborium serialises `Vec<u8>` and `[u8; N]` through
+// serde's default `serialize_seq` / `serialize_tuple`, which become CBOR
+// **arrays of integers** (major type 4) — NOT CBOR byte strings (major
+// type 2). cbor-x decodes major type 4 to `Array<number>`, not
+// `Uint8Array`. The Rust structs we receive (HpkeSealed, ChunkPlaintext)
+// don't use `#[serde(with = "serde_bytes")]`, so every byte-typed field
+// arrives as a JS number array.
+//
+// `asBytes` is forgiving: it accepts an already-Uint8Array (in case a
+// future Rust change adds `serde_bytes` annotations) AND the canonical
+// number-array shape. That keeps the decoder robust to a wire-shape
+// upgrade without re-shipping the wallet.
+
+/** Coerce a CBOR-decoded byte-typed field to a `Uint8Array`. Handles
+ *  both the canonical ciborium shape (CBOR array of u8 → JS number
+ *  array) and the future byte-string shape (CBOR byte string →
+ *  Uint8Array). Other shapes throw with a clear field-name in the
+ *  message. */
+function asBytes(v: unknown, label: string): Uint8Array {
+  if (v instanceof Uint8Array) return v;
+  if (Array.isArray(v)) {
+    const out = new Uint8Array(v.length);
+    for (let i = 0; i < v.length; i++) {
+      const n = v[i];
+      if (typeof n !== "number" || !Number.isInteger(n) || n < 0 || n > 255) {
+        throw new Error(
+          `${label}: array entry ${i} is not a byte (got ${typeof n} ${String(n)})`,
+        );
+      }
+      out[i] = n;
+    }
+    return out;
+  }
+  throw new Error(
+    `${label}: expected CBOR bytes or array of u8, got ${typeof v}`,
+  );
+}
 
 function decodeHpkeSealed(bytes: Uint8Array): HpkeSealed {
   const v = cbor.decode(bytes) as Record<string, unknown>;
-  const kemEncap = v["kem_encap"];
-  const aeadCiphertext = v["aead_ciphertext"];
-  if (!(kemEncap instanceof Uint8Array)) {
-    throw new Error("HpkeSealed: kem_encap missing or not bytes");
-  }
-  if (!(aeadCiphertext instanceof Uint8Array)) {
-    throw new Error("HpkeSealed: aead_ciphertext missing or not bytes");
+  const kemEncap = asBytes(v["kem_encap"], "HpkeSealed.kem_encap");
+  const aeadCiphertext = asBytes(v["aead_ciphertext"], "HpkeSealed.aead_ciphertext");
+  if (kemEncap.length !== 32) {
+    throw new Error(`HpkeSealed.kem_encap: must be 32 bytes (got ${kemEncap.length})`);
   }
   return { kem_encap: kemEncap, aead_ciphertext: aeadCiphertext };
 }
@@ -174,19 +209,16 @@ function decodeHpkeSealed(bytes: Uint8Array): HpkeSealed {
 function decodeChunkPlaintext(bytes: Uint8Array): ChunkPlaintext {
   const v = cbor.decode(bytes) as Record<string, unknown>;
   const version = v["version"];
-  const bundleId = v["bundle_id"];
   const chunkIndex = v["chunk_index"];
   const totalChunks = v["total_chunks"];
-  const payloadFragment = v["payload_fragment"];
   if (typeof version !== "number") throw new Error("ChunkPlaintext: version missing/wrong");
-  if (!(bundleId instanceof Uint8Array) || bundleId.length !== 16) {
-    throw new Error("ChunkPlaintext: bundle_id must be 16-byte bytes");
-  }
   if (typeof chunkIndex !== "number") throw new Error("ChunkPlaintext: chunk_index missing");
   if (typeof totalChunks !== "number") throw new Error("ChunkPlaintext: total_chunks missing");
-  if (!(payloadFragment instanceof Uint8Array)) {
-    throw new Error("ChunkPlaintext: payload_fragment missing");
+  const bundleId = asBytes(v["bundle_id"], "ChunkPlaintext.bundle_id");
+  if (bundleId.length !== 16) {
+    throw new Error(`ChunkPlaintext.bundle_id: must be 16 bytes (got ${bundleId.length})`);
   }
+  const payloadFragment = asBytes(v["payload_fragment"], "ChunkPlaintext.payload_fragment");
   const out: ChunkPlaintext = {
     version,
     bundle_id: bundleId,
