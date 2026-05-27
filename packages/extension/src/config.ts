@@ -30,28 +30,29 @@ export interface WalletSettings {
    * Ed25519 root secret with a key derived from the operator's
    * WebAuthn-PRF authenticator.
    *
-   * **Default: `true` for new installs.** Onboarding mints a
-   * v4 holder identity with the seed AES-GCM-encrypted under a
-   * PRF-derived key; an exfiltrated IndexedDB row is useless
-   * without the operator's authenticator. On browsers without a
-   * PRF-capable authenticator (older platforms, no enrolled
-   * platform passkey), the onboarding fallback in
-   * `offscreen.ts:doOnboardConnect` catches the wrap-decline
-   * and persists plaintext with a warning surfaced to the
-   * popup — wallet still works, just unencrypted.
+   * **Default: `false`.** The wrap relies on
+   * `navigator.credentials.create` / `.get`, which require a
+   * visible, user-focused context. The current onboarding path
+   * runs in the OFFSCREEN document (so it has IndexedDB +
+   * DIDComm primitives), which is HIDDEN by design. WebAuthn
+   * calls from there either reject with NotAllowedError or hang
+   * indefinitely waiting for a user gesture that can never
+   * arrive. So flipping the default to `true` (briefly tried in
+   * #28) caused onboarding to lock up.
    *
-   * **Existing wallets are unaffected.** Their persisted record
-   * carries its own `algorithm` tag; the read path dispatches on
-   * that, ignoring the caller's wrap preference. A wallet
-   * minted before this default flipped continues to load via
-   * PassthroughWrap exactly as before.
+   * The proper fix is a popup-driven enrol: offscreen completes
+   * provision-integration → relays the seed to the popup over
+   * the bridge → popup (visible) runs the WebAuthn ceremony +
+   * encrypts the seed → returns the wrapped record → offscreen
+   * stores it. That's queued as a follow-up; until it lands,
+   * the operator can still opt in via the Settings page, but
+   * the WebAuthn UI may not render correctly. Treat opt-in as
+   * EXPERIMENTAL until the popup-driven path ships.
    *
-   * Trade-off: encryption-on means every cold-start (new
-   * browser session, service-worker eviction) prompts the
-   * operator to tap their authenticator; losing the
-   * authenticator without unenrolling first means losing the
-   * wallet. The options page renders both risks explicitly
-   * before flipping the flag manually.
+   * **Existing wallets are unaffected** either way — the read
+   * path dispatches on the stored record's `algorithm` tag, so
+   * a wallet minted under any setting keeps loading via the
+   * matching wrap.
    */
   encryptHolderSecret?: boolean;
 }
@@ -61,15 +62,13 @@ const SETTINGS_KEY = "pnm/settings/v1";
 /** Read the current settings, falling back to defaults for unset fields. */
 export async function getSettings(): Promise<WalletSettings> {
   const s = await new IndexedDBKVStore().get<Partial<WalletSettings>>(SETTINGS_KEY);
-  // `encryptHolderSecret` defaults to TRUE when unset — a fresh
-  // install gets PRF-encrypted at rest unless the operator
-  // explicitly opts out via the settings page (which persists
-  // `false`). An explicit `false` round-trips as-is; an explicit
-  // `true` round-trips as-is; only the "never set" state flips
-  // to the new default. See the field's docblock for the
-  // back-compat semantics for existing wallets.
+  // `encryptHolderSecret` defaults to FALSE until the popup-driven
+  // WebAuthn-enrol path lands — see the field's docblock for the
+  // architectural constraint (offscreen + WebAuthn don't mix).
+  // Explicit `true` / `false` round-trip as-is so an operator who
+  // opted in (or out) via the Settings page keeps their choice.
   const encryptHolderSecret =
-    typeof s?.encryptHolderSecret === "boolean" ? s.encryptHolderSecret : true;
+    typeof s?.encryptHolderSecret === "boolean" ? s.encryptHolderSecret : false;
   return {
     mediatorDid: s?.mediatorDid || DEFAULT_WALLET_MEDIATOR_DID,
     ...(s?.defaultStepUpVtaDid ? { defaultStepUpVtaDid: s.defaultStepUpVtaDid } : {}),
