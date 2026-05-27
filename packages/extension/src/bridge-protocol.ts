@@ -426,12 +426,21 @@ export const RUNTIME_UNLOCK_PRF = "vta-wallet/unlock-prf" as const;
 
 export interface RuntimeUnlockPrfRequest {
   type: typeof RUNTIME_UNLOCK_PRF;
-  /** Raw PRF output bytes from the popup's
-   *  `navigator.credentials.get` assertion. Sensitive — they're
-   *  the AES key root for this session. See
+  /** Raw PRF output from the popup's `navigator.credentials.get`
+   *  assertion, encoded as base64url-no-pad.
+   *
+   *  `chrome.runtime.sendMessage` serialises payloads as JSON, which
+   *  turns a `Uint8Array` into `{ "0": n, "1": n, … }` on the
+   *  receiving side — an `instanceof Uint8Array` check fails there.
+   *  Encoding to base64url on the wire dodges the round-trip mangling
+   *  and keeps the payload compact (~44 chars for the typical 32-byte
+   *  PRF output). The offscreen handler decodes back to Uint8Array
+   *  before feeding `WebAuthnPrfSecretWrap.seedCachedKeyFromPrfOutput`.
+   *
+   *  Sensitive — they're the AES key root for this session. See
    *  `WebAuthnPrfSecretWrap.seedCachedKeyFromPrfOutput` for the
    *  trust-boundary analysis. */
-  prfOutput: Uint8Array;
+  prfOutputB64u: string;
 }
 
 export type RuntimeUnlockPrfResponse =
@@ -924,7 +933,11 @@ export const OFFSCREEN_UNLOCK_PRF = "offscreen/unlock-prf" as const;
 export interface OffscreenUnlockPrfRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_UNLOCK_PRF;
-  prfOutput: Uint8Array;
+  /** Mirror of `RuntimeUnlockPrfRequest.prfOutputB64u` — base64url-
+   *  no-pad of the PRF output bytes. See that field's docblock for
+   *  why this goes over the wire as a string rather than a
+   *  `Uint8Array`. */
+  prfOutputB64u: string;
 }
 
 /** background → offscreen: query the cached-key + holder shape so

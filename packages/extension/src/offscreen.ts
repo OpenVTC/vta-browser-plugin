@@ -41,6 +41,7 @@ import {
   vaultUpsertRest,
   verifyDid,
 } from "@pnm/core";
+import { base64url } from "@openvtc/vti-didcomm-js";
 import { buildHolderSecretWrap, getWalletMediatorDid, loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import {
@@ -198,7 +199,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (msg.type === OFFSCREEN_UNLOCK_PRF) {
     const req = message as OffscreenUnlockPrfRequest;
-    doUnlockPrf(req.prfOutput)
+    // `chrome.runtime.sendMessage` JSON-serialises payloads, so the
+    // bridge carries the PRF output as base64url. Decode at the
+    // edge so `doUnlockPrf` sees real Uint8Array bytes (matching
+    // what `seedCachedKeyFromPrfOutput` expects).
+    let prfOutput: Uint8Array;
+    try {
+      if (typeof req.prfOutputB64u !== "string" || req.prfOutputB64u.length === 0) {
+        throw new Error("prfOutputB64u missing or empty");
+      }
+      prfOutput = base64url.decode(req.prfOutputB64u);
+    } catch (e) {
+      sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      return false;
+    }
+    doUnlockPrf(prfOutput)
       .then(() => sendResponse({ ok: true }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

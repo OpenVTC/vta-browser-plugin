@@ -40,6 +40,7 @@ import {
   type VaultEntryView,
   type VaultSecretView,
 } from "./bridge-protocol.js";
+import { base64url } from "@openvtc/vti-didcomm-js";
 import { IndexedDBKVStore, rewrapHolderV4Secret } from "@pnm/core";
 import { getSettings, setSettings } from "./config.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
@@ -1724,9 +1725,13 @@ function UnlockView(): React.JSX.Element {
     setError(null);
     try {
       const { prfOutput } = await runPrfUnlockCeremony(chrome.runtime.id);
+      // Encode for the bridge — chrome.runtime.sendMessage's JSON
+      // serialisation mangles Uint8Array (becomes a plain object on
+      // the receiving side). base64url-no-pad survives the
+      // round-trip; offscreen decodes back at the boundary.
       const res = (await chrome.runtime.sendMessage({
         type: RUNTIME_UNLOCK_PRF,
-        prfOutput,
+        prfOutputB64u: base64url.encode(prfOutput),
       })) as RuntimeUnlockPrfResponse;
       if (!res.ok) throw new Error(res.error);
       setLockState({ encrypted: true, unlocked: true });

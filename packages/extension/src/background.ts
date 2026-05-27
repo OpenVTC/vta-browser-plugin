@@ -394,7 +394,7 @@ async function handleUnlockPrf(
   return (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_UNLOCK_PRF,
-    prfOutput: req.prfOutput,
+    prfOutputB64u: req.prfOutputB64u,
   })) as RuntimeUnlockPrfResponse;
 }
 
