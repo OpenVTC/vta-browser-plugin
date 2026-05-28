@@ -1,8 +1,17 @@
 {
   "name": "@openvtc/pnm-core",
-  "private": true,
   "version": "0.1.0",
-  "description": "Shared core: WebAuthn ceremony helpers, COSE→Multikey conversion, DID verificationMethod builder, VTA REST client.",
+  "description": "Browser-side bridge between WebAuthn passkeys and VTA-managed DIDs. Wire types, WebAuthn ceremony helpers, COSE→Multikey conversion, DID verificationMethod builder, REST + DIDComm transports, mediator client, SIOP / RP-login / provision-integration flows.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OpenVTC/vta-browser-plugin.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/OpenVTC/vta-browser-plugin/tree/main/packages/core",
+  "bugs": {
+    "url": "https://github.com/OpenVTC/vta-browser-plugin/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
