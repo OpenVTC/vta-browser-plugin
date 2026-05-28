@@ -36,7 +36,7 @@ export interface DidcommReply {
  * Seam for the DIDComm transport's send/receive plumbing. Lets us
  * separate "build the right DIDComm message bytes" from "actually
  * push them through a mediator". The first concern lives in
- * `@pnm/core`; the second is the bridge implementation.
+ * `@openvtc/pnm-core`; the second is the bridge implementation.
  *
  * Implementations transmit packed JWE bytes to the configured
  * mediator and surface the **decrypted** reply. `sendAndAwaitReply`

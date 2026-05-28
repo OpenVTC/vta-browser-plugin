@@ -1,6 +1,6 @@
 // DIDComm v2 facade over `@openvtc/vti-didcomm-js`.
 //
-// This module is the single seam between `@pnm/core` and the
+// This module is the single seam between `@openvtc/pnm-core` and the
 // underlying DIDComm implementation. It used to wrap a WASM crate;
 // it now wraps the pure-JS `@openvtc/vti-didcomm-js` library. The
 // public surface (Identity, pack*/unpack*, wrapForward, the type

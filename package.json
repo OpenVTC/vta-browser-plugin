@@ -12,9 +12,9 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "dev:pwa": "npm run dev --workspace @pnm/pwa",
-    "dev:extension": "npm run dev --workspace @pnm/extension",
-    "dev:demo-rp": "npm run start --workspace @pnm/demo-rp",
+    "dev:pwa": "npm run dev --workspace @openvtc/pnm-pwa",
+    "dev:extension": "npm run dev --workspace @openvtc/pnm-extension",
+    "dev:demo-rp": "npm run start --workspace @openvtc/pnm-demo-rp",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present"
   },

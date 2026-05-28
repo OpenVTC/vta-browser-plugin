@@ -364,7 +364,7 @@ export interface RuntimeVerifyRpDidRequest {
 
 /** Result the popup renders as a verification badge. Mirrors the core
  *  `VerifyDidResult` shape but inlined here so the bridge protocol does not
- *  depend on `@pnm/core` types directly. */
+ *  depend on `@openvtc/pnm-core` types directly. */
 export interface VerifyRpDidResult {
   did: string;
   method: "webvh" | "peer" | "key" | "unknown";
@@ -468,7 +468,7 @@ export interface RuntimeHolderStateRequest {
   type: typeof RUNTIME_HOLDER_STATE;
 }
 
-/** Mirror of `holderIdentityState` from @pnm/core. For v4 records the
+/** Mirror of `holderIdentityState` from @openvtc/pnm-core. For v4 records the
  *  `wrapAlgorithm` field tells the popup whether the holder secret is
  *  encrypted at rest — `"passthrough"` means plaintext, anything else
  *  (currently only `"webauthn-prf-aes-gcm"`) means the popup needs to
@@ -685,7 +685,7 @@ export interface RuntimeVaultListRequest {
   filter?: VaultListFilter;
 }
 
-/** Metadata view of a vault entry. Mirrors `@pnm/core`'s `VaultEntry` type;
+/** Metadata view of a vault entry. Mirrors `@openvtc/pnm-core`'s `VaultEntry` type;
  *  duplicated here to avoid pulling the core package into the bridge protocol
  *  declarations (it's transport metadata, not behaviour). */
 export interface VaultEntryView {
@@ -782,10 +782,10 @@ export const RUNTIME_VAULT_LIST_PAGE = "vta-wallet/vault-list-page" as const;
 export const RUNTIME_INJECT_COOKIES = "vta-wallet/inject-cookies" as const;
 
 /** Loose secret shape over the bridge — keeps the protocol decoupled
- *  from @pnm/core's narrowed enum. Matches the canonical
+ *  from @openvtc/pnm-core's narrowed enum. Matches the canonical
  *  vault/_shared/0.1/vault-secret discriminator (`kind: password |
  *  passkey | oauth-tokens | bearer-token | custom | ...`); the
- *  offscreen handler casts to @pnm/core's VaultSecret at the @pnm/core
+ *  offscreen handler casts to @openvtc/pnm-core's VaultSecret at the @openvtc/pnm-core
  *  boundary. */
 export interface VaultSecretView {
   kind: string;
@@ -897,9 +897,9 @@ export type RuntimeVaultReleaseResponse =
   | { ok: false; error: string };
 
 /** Loose SessionBlob shape over the bridge — keeps the protocol
- *  decoupled from @pnm/core's narrowed types. Mirrors the canonical
+ *  decoupled from @openvtc/pnm-core's narrowed types. Mirrors the canonical
  *  `vault/_shared/0.1/session-blob` schema. The offscreen handler
- *  casts to @pnm/core's `SessionBlob` at the boundary. */
+ *  casts to @openvtc/pnm-core's `SessionBlob` at the boundary. */
 export interface SessionBlobView {
   sessionId: string;
   /** RFC 3339. Popup MUST schedule a wipe at this instant. */

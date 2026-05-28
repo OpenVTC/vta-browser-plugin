@@ -43,7 +43,7 @@ import {
   vaultReleaseRest,
   vaultUpsertRest,
   verifyDid,
-} from "@pnm/core";
+} from "@openvtc/pnm-core";
 import { base64url } from "@openvtc/vti-didcomm-js";
 import { getWalletMediatorDid, loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
@@ -339,7 +339,7 @@ async function doVaultList(req: OffscreenVaultListRequest) {
   const { identity: holder } = await loadHolder(req.vtaDid);
   const service = await resolveKeyAgreement(req.vtaDid);
   // The bridge protocol intentionally types filter loosely (string secretKind)
-  // so it doesn't have to import @pnm/core's narrowed enums. Cast at this
+  // so it doesn't have to import @openvtc/pnm-core's narrowed enums. Cast at this
   // wire boundary — the values that flow through are sanity-checked by the
   // canonical schema validator on the VTA side anyway.
   type VaultRestOpts = Parameters<typeof vaultListRest>[0];
@@ -358,7 +358,7 @@ async function doVaultList(req: OffscreenVaultListRequest) {
   };
 }
 
-// Vault — upsert. Sealed-secret packing happens inside @pnm/core's
+// Vault — upsert. Sealed-secret packing happens inside @openvtc/pnm-core's
 // vaultUpsertRest (uses the holder's X25519 to authcrypt the VaultSecret
 // JSON to the VTA's keyAgreement key).
 async function doVaultUpsert(req: OffscreenVaultUpsertRequest) {
@@ -366,7 +366,7 @@ async function doVaultUpsert(req: OffscreenVaultUpsertRequest) {
   const service = await resolveKeyAgreement(req.vtaDid);
   type Opts = Parameters<typeof vaultUpsertRest>[0];
   // The bridge protocol types secretKind / secret loosely (strings) to
-  // avoid importing @pnm/core's enums into bridge-protocol.ts. Cast at
+  // avoid importing @openvtc/pnm-core's enums into bridge-protocol.ts. Cast at
   // this boundary — server-side canonical-schema validation is the real
   // authority anyway.
   const opts = {
@@ -390,7 +390,7 @@ async function doVaultDelete(req: OffscreenVaultDeleteRequest) {
   });
 }
 
-// Vault — release. Server returns an authcrypt JWE; @pnm/core's
+// Vault — release. Server returns an authcrypt JWE; @openvtc/pnm-core's
 // vaultReleaseRest unpacks it against the holder's private X25519
 // (which lives here in offscreen) and surfaces the cleartext secret.
 async function doVaultRelease(req: OffscreenVaultReleaseRequest) {
@@ -409,7 +409,7 @@ async function doVaultRelease(req: OffscreenVaultReleaseRequest) {
 // X25519. Offscreen unpacks the JWE (the holder's private key lives
 // here) and returns the cleartext SessionBlob to the popup over the
 // bridge. The bridge protocol types `target` loosely so it doesn't
-// have to import @pnm/core's narrowed SiteTarget enum; cast at this
+// have to import @openvtc/pnm-core's narrowed SiteTarget enum; cast at this
 // wire boundary — the server-side canonical-schema validation is the
 // real authority.
 async function doVaultProxyLogin(req: OffscreenVaultProxyLoginRequest) {
@@ -635,7 +635,7 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
 
   // Round-trip: build VP → authcrypt → forward via mediator → open sealed
   // reply → extract MinimalAdminReply. The full pipeline lives in
-  // @pnm/core/provision; offscreen.ts just wires the mediator session in.
+  // @openvtc/pnm-core/provision; offscreen.ts just wires the mediator session in.
   const conn = await connectMediatorSession({
     holder: ephemeral,
     mediatorDid: pending.mediatorDid,

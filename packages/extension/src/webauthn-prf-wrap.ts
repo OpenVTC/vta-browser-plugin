@@ -3,7 +3,7 @@
 /**
  * WebAuthn-PRF holder-secret wrap.
  *
- * Implements [`@pnm/core::SecretWrap`] using the WebAuthn
+ * Implements [`@openvtc/pnm-core::SecretWrap`] using the WebAuthn
  * `prf` extension. Tap the operator's biometric (Touch ID,
  * Windows Hello) or external authenticator on first
  * persistence; derive an AES-GCM key from the PRF output;
@@ -38,7 +38,7 @@
  */
 
 import { base64url } from "@openvtc/vti-didcomm-js";
-import { IndexedDBKVStore, type SecretWrap, type WrappedSecret } from "@pnm/core";
+import { IndexedDBKVStore, type SecretWrap, type WrappedSecret } from "@openvtc/pnm-core";
 
 const ALGORITHM = "webauthn-prf-aes-gcm";
 const CREDENTIAL_KEY = "pnm/holder-prf/credentialId";

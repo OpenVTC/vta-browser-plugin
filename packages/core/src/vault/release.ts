@@ -135,5 +135,5 @@ export async function vaultReleaseRest(
 
 // `Identity` is re-imported here so consumers of `vault/release` don't need
 // to import it from `didcomm/index` separately — keeps the public surface
-// flat (`import { vaultReleaseRest, type Identity } from "@pnm/core"`).
+// flat (`import { vaultReleaseRest, type Identity } from "@openvtc/pnm-core"`).
 export type { Identity };

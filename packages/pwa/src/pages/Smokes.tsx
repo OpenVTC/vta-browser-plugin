@@ -7,7 +7,7 @@ import {
   smokeMediatorEnrollment,
   smokeMediatorNotifications,
   smokeWalletBoot,
-} from "@pnm/core";
+} from "@openvtc/pnm-core";
 
 interface SmokeResult {
   name: string;

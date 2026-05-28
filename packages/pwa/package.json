@@ -1,5 +1,5 @@
 {
-  "name": "@pnm/pwa",
+  "name": "@openvtc/pnm-pwa",
   "private": true,
   "version": "0.1.0",
   "description": "PWA shell for pnm-browser-plugin — operator-facing wallet UI.",
@@ -11,7 +11,7 @@
     "lint": "tsc -b --noEmit"
   },
   "dependencies": {
-    "@pnm/core": "0.1.0",
+    "@openvtc/pnm-core": "0.1.0",
     "@tanstack/react-query": "^5.62.0",
     "lucide-react": "^0.469.0",
     "react": "^19.0.0",

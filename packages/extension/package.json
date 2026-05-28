@@ -1,8 +1,8 @@
 {
-  "name": "@pnm/extension",
+  "name": "@openvtc/pnm-extension",
   "private": true,
   "version": "0.1.0",
-  "description": "Manifest v3 browser extension shell sharing @pnm/core.",
+  "description": "Manifest v3 browser extension shell sharing @openvtc/pnm-core.",
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --mode development",
@@ -11,7 +11,7 @@
     "render:icons": "scripts/render-icons.sh"
   },
   "dependencies": {
-    "@pnm/core": "0.1.0",
+    "@openvtc/pnm-core": "0.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zustand": "^5.0.0"
