@@ -25,7 +25,7 @@ anchor.
 ```
 ┌──────────────┐  WebAuthn        ┌────────────────┐
 │   Browser    │ ───────────────▶ │  Authenticator │ (Touch ID,
-│ (PWA @openvtc/pnm- ext)  │ ◀─────────────── │   @openvtc/pnm- Passkey    │  Windows Hello,
+│ (PWA / ext)  │ ◀─────────────── │   / Passkey    │  Windows Hello,
 └──────┬───────┘   pubkey + sig   └────────────────┘  YubiKey, …)
        │
        │ enroll(passkey_pubkey)        verify(assertion)
@@ -42,11 +42,11 @@ anchor.
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  PWA (Vite + React 19)            MV3 Extension (Vite + React)  │
-│  packages@openvtc/pnm-pwa                     packages@openvtc/pnm-extension            │
+│  packages/pwa                     packages/extension            │
 └────────────────────────────┬────────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────────────────┐
-│  @pnm@openvtc/pnm-core                                                      │
+│  @openvtc/pnm-core                                                      │
 │                                                                 │
 │  WalletSession ─────────────────────────────────────┐           │
 │     │                                               │           │
@@ -54,13 +54,13 @@ anchor.
 │     │     ├─ IndexedDBKVStore         (browser)     │           │
 │     │     └─ InMemoryKVStore          (tests)       │           │
 │     │                                               │           │
-│     ├─ MediatorClient (coordinate-mediation@openvtc/pnm-2.0)    │           │
+│     ├─ MediatorClient (coordinate-mediation/2.0)    │           │
 │     │     ├─ requestMediation                       │           │
 │     │     ├─ updateKeylist                          │           │
 │     │     ├─ setLiveDelivery                        │           │
 │     │     └─ acknowledgeMessages                    │           │
 │     │                                               │           │
-│     └─ DidcommVtaTransport (passkey-management@openvtc/pnm-1.0) │           │
+│     └─ DidcommVtaTransport (passkey-management/1.0) │           │
 │            (implements VtaTransport)                │           │
 │                                                     │           │
 │  VtaClient  (REST, implements VtaTransport) ───────┘           │
@@ -71,45 +71,44 @@ anchor.
 │     │     └─ Pickup3Dispatcher  │   (live-mode unwrap)          │
 │     └─ InMemoryDidcommBridge    │   (test simulator)            │
 │                                 │                               │
-│  webauthn@openvtc/pnm-  did@openvtc/pnm-  vta@openvtc/pnm-  store@openvtc/pnm-  didcomm@openvtc/pnm-                        │
+│  webauthn/  did/  vta/  store/  didcomm/                        │
 └────────────────────────────┬────────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────────────────┐
-│  @pnm@openvtc/pnm-didcomm-wasm                                              │
-│     wasm-bindgen wrapper over affinidi-messaging-didcomm 0.13   │
+│  @openvtc/vti-didcomm-js  (npm dependency)                      │
+│     WebCrypto-backed DIDComm v2 primitives                      │
 │     Identity { generate, fromSecretJwk, publicJwk, secretJwk }  │
-│     packAuthcrypt @openvtc/pnm- packAnoncrypt @openvtc/pnm- wrapForward @openvtc/pnm- unpack        │
-│     packAnoncryptJson @openvtc/pnm- packAuthcryptJson (preserves extras)    │
+│     packAuthcrypt / packAnoncrypt / wrapForward / unpack        │
+│     packAnoncryptJson / packAuthcryptJson (preserves extras)    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 Every layer has matching ownership:
 
-- **WASM crate** owns crypto: HPKE-style authcrypt (ECDH-1PU +
-  A256CBC-HS512), anoncrypt (ECDH-ES + A256CBC-HS512), Ed25519
-  signatures, Routing 2.0 forward envelopes. Byte-compatible with
-  the Rust VTA because both link the same `affinidi-messaging-didcomm`
-  crate version.
-- **@pnm@openvtc/pnm-core** owns the wire protocols + transport abstraction.
+- **`@openvtc/vti-didcomm-js`** owns crypto: HPKE-style authcrypt
+  (ECDH-1PU + A256CBC-HS512), anoncrypt (ECDH-ES + A256CBC-HS512),
+  Ed25519 signatures, Routing 2.0 forward envelopes. Pulled in as
+  an npm dependency — no Rust toolchain required to build this
+  workspace.
+- **@openvtc/pnm-core** owns the wire protocols + transport abstraction.
   REST (`VtaClient`) and DIDComm (`DidcommVtaTransport`) implement
   the same `VtaTransport` interface; pick at boot.
-- **Bridge implementations** own network I@openvtc/pnm-O. `WebSocketDidcommBridge`
+- **Bridge implementations** own network I/O. `WebSocketDidcommBridge`
   is the production bridge (mediator over WSS, Pickup 3.0 live mode
   via `Pickup3Dispatcher`, concurrent thid demuxing).
   `InMemoryDidcommBridge` simulates both mediator and VTA for tests.
 - **`WalletSession`** is the only thing the UI talks to. One call —
-  `bootstrap()` — does identity load@openvtc/pnm-mint, mediator enrollment (if
+  `bootstrap()` — does identity load/mint, mediator enrollment (if
   needed), and constructs a ready `VtaTransport`.
-- **PWA @openvtc/pnm- extension** are thin shells over `@pnm@openvtc/pnm-core`.
+- **PWA / extension** are thin shells over `@openvtc/pnm-core`.
 
 ## Form factors
 
 | Package | Role |
 |---|---|
-| `@pnm@openvtc/pnm-core` | Wire types, WebAuthn ceremony helpers, COSE→Multikey conversion, DID `verificationMethod` builder, REST + DIDComm transports, mediator client, bridges, wallet orchestration. |
-| `@pnm@openvtc/pnm-didcomm-wasm` | wasm-bindgen wrapper over `affinidi-messaging-didcomm` (Rust crate, same version `vta-service` pins). Byte-compatible with the VTA. Vendored locally; expected to migrate to an upstream npm package when `affinidi-tdk-rs` ships its own WASM build. |
-| `@pnm@openvtc/pnm-pwa` | Installable web app (Vite + React 19). Operator-facing wallet for connecting to a VTA and managing passkeys. Has a `@openvtc/pnm-smokes` diagnostic page that runs all eight smokes in-browser. |
-| `@pnm@openvtc/pnm-extension` | Manifest v3 browser extension. Same flows, plus future ability to intercept RP login pages and inject SIOPv2@openvtc/pnm-OpenID4VP responses. |
+| `@openvtc/pnm-core` | Wire types, WebAuthn ceremony helpers, COSE→Multikey conversion, DID `verificationMethod` builder, REST + DIDComm transports, mediator client, bridges, wallet orchestration. |
+| `@openvtc/pnm-pwa` | Installable web app (Vite + React 19). Operator-facing wallet for connecting to a VTA and managing passkeys. Has a `/smokes` diagnostic page that runs the in-browser smoke suite. |
+| `@openvtc/pnm-extension` | Manifest v3 browser extension. Same flows, plus future ability to intercept RP login pages and inject SIOPv2/OpenID4VP responses. |
 
 ## First milestone — enroll a passkey as a DID `verificationMethod`
 
@@ -120,11 +119,11 @@ Every layer has matching ownership:
 2. App triggers `navigator.credentials.create(...)`. The authenticator
    produces a credential whose public key is COSE-encoded.
 3. App parses the COSE_Key, converts it to **W3C Multikey** form
-   (multicodec `0x1200` for P-256 @openvtc/pnm- ES256, `0xed01` for Ed25519,
+   (multicodec `0x1200` for P-256 / ES256, `0xed01` for Ed25519,
    multibase-base58btc with the `z` prefix).
 4. App POSTs `{ credential_id, multikey_pubkey, attestation_object }`
-   to the VTA (`POST @openvtc/pnm-did@openvtc/pnm-verification-methods@openvtc/pnm-passkey` — new endpoint,
-   see [docs@openvtc/pnm-passkey-did-binding.md](docs@openvtc/pnm-passkey-did-binding.md) for the
+   to the VTA (`POST /did/verification-methods/passkey` — new endpoint,
+   see [docs/passkey-did-binding.md](docs/passkey-did-binding.md) for the
    contract).
 5. VTA appends a WebVH LogEntry adding the VM with `id =
    <did>#passkey-<sha256(credential_id)>` and purpose
@@ -142,7 +141,7 @@ its DIDComm mediator, the wallet stack handles it transparently:
 const session = new WalletSession({
   store: new IndexedDBKVStore(),
   mediator: {
-    websocketUrl: "wss:@openvtc/pnm-@openvtc/pnm-mediator.example.com@openvtc/pnm-ws",
+    websocketUrl: "wss://mediator.example.com/ws",
     did: "did:key:zMediator…",
     keyAgreementKid: "did:key:zMediator…#key-agreement-1",
     keyAgreementPublicJwk: { kty: "OKP", crv: "X25519", x: "…" },
@@ -154,22 +153,22 @@ const session = new WalletSession({
   },
 });
 
-await session.bootstrap();          @openvtc/pnm-@openvtc/pnm- mint or load holder, enroll w@openvtc/pnm- mediator
-await session.setLiveDelivery(true);@openvtc/pnm-@openvtc/pnm- pickup@openvtc/pnm-3.0 live-mode push
+await session.bootstrap();          // mint or load holder, enroll w/ mediator
+await session.setLiveDelivery(true);// pickup/3.0 live-mode push
 const challenge = await session
   .transport()
-  .requestEnrollmentChallenge(holder.did);  @openvtc/pnm-@openvtc/pnm- passkey-management@openvtc/pnm-1.0
+  .requestEnrollmentChallenge(holder.did);  // passkey-management/1.0
 ```
 
 On first run: mints a did:key holder identity, registers with the
-mediator (coordinate-mediation@openvtc/pnm-2.0), persists state.
+mediator (coordinate-mediation/2.0), persists state.
 
 On subsequent runs: loads the holder identity, detects the existing
 mediator relationship, skips re-enrollment.
 
 All messages travel as:
-- inner: `authcrypt(holder → VTA, passkey-management@openvtc/pnm-1.0@openvtc/pnm-...)`
-- wrapped: `routing@openvtc/pnm-2.0@openvtc/pnm-forward` envelope addressed to the VTA
+- inner: `authcrypt(holder → VTA, passkey-management/1.0/...)`
+- wrapped: `routing/2.0/forward` envelope addressed to the VTA
 - outer: `anoncrypt(forward → mediator)`
 
 The mediator delivers the inner JWE to the VTA. Replies travel back
@@ -178,86 +177,119 @@ and demuxed by `thid` to the waiting Promise.
 
 ## End-to-end validation
 
-Eight smokes cover every link. Run from a browser at `@openvtc/pnm-smokes` or
-invoke directly via `@pnm@openvtc/pnm-core`:
+Six smokes cover the main DIDComm + wallet links. Run from a browser
+at `/smokes` or invoke directly via `@openvtc/pnm-core`:
 
 | Smoke | What it proves |
 |---|---|
-| `smokeAuthcryptRoundtrip` | WASM authcrypt + unpack round-trips intact |
+| `smokeAuthcryptRoundtrip` | authcrypt + unpack round-trips intact |
 | `smokeBuildDidcommEnrollChallenge` | Full forward+anoncrypt envelope assembly |
 | `smokeDidcommVtaTransportRoundtrip` | DIDComm enrollment exchange via in-memory bridge |
-| `smokeWsBridgeDemux` | Two concurrent requests resolved by `thid` despite reverse-order delivery |
 | `smokeMediatorEnrollment` | mediate-request → grant → keylist-update |
-| `smokePickupDispatch` | pickup@openvtc/pnm-3.0@openvtc/pnm-delivery unwrap returns inner JWEs |
 | `smokeMediatorNotifications` | live-delivery-change + messages-received notifications |
 | `smokeWalletBoot` | Full WalletSession bootstrap on first run + resume on second run |
-
-All validated end-to-end via `wasm-pack build --target nodejs` +
-direct Node execution of the compiled @pnm@openvtc/pnm-core output.
 
 ## Status
 
 Scaffold + core enrollment ceremony + REST client + complete DIDComm
-v2 stack (authcrypt, anoncrypt, forward, coordinate-mediation@openvtc/pnm-2.0,
-pickup@openvtc/pnm-3.0 live mode) + WalletSession orchestrator.
+v2 stack (authcrypt, anoncrypt, forward, coordinate-mediation/2.0,
+pickup/3.0 live mode) + WalletSession orchestrator.
 
 The VTA-side endpoint is documented in
-[docs@openvtc/pnm-passkey-did-binding.md](docs@openvtc/pnm-passkey-did-binding.md) but not
+[docs/passkey-did-binding.md](docs/passkey-did-binding.md) but not
 yet implemented in `vta-service`; the browser code targets the
 documented contract and can be exercised against a mock today.
 
 ## Layout
 
 ```
-pnm-browser-plugin@openvtc/pnm-
+pnm-browser-plugin/
 ├── package.json          (npm workspaces root)
 ├── tsconfig.base.json    (shared compiler options)
 ├── tsconfig.json         (solution-style references)
-├── docs@openvtc/pnm-
+├── docs/
 │   └── passkey-did-binding.md
-└── packages@openvtc/pnm-
-    ├── core@openvtc/pnm-             @pnm@openvtc/pnm-core
-    │   └── src@openvtc/pnm-
-    │       ├── webauthn@openvtc/pnm-      passkey ceremony helpers, COSE→Multikey
-    │       ├── did@openvtc/pnm-           verificationMethod builder
-    │       ├── didcomm@openvtc/pnm-       TS wrappers around the WASM crypto
-    │       ├── store@openvtc/pnm-         KVStore + holder identity persistence
-    │       └── vta@openvtc/pnm-           transports, bridges, MediatorClient,
+└── packages/
+    ├── core/             @openvtc/pnm-core
+    │   └── src/
+    │       ├── webauthn/      passkey ceremony helpers, COSE→Multikey
+    │       ├── did/           verificationMethod builder
+    │       ├── didcomm/       TS facade over @openvtc/vti-didcomm-js
+    │       ├── store/         KVStore + holder identity persistence
+    │       └── vta/           transports, bridges, MediatorClient,
     │                          WalletSession, smokes
-    ├── didcomm-wasm@openvtc/pnm-     @pnm@openvtc/pnm-didcomm-wasm (wasm-pack crate)
-    ├── pwa@openvtc/pnm-              @pnm@openvtc/pnm-pwa (Vite + React 19)
-    └── extension@openvtc/pnm-        @pnm@openvtc/pnm-extension (Manifest v3)
+    ├── pwa/              @openvtc/pnm-pwa (Vite + React 19)
+    └── extension/        @openvtc/pnm-extension (Manifest v3)
 ```
 
 ## Development
 
-Prereqs: Node 20+, the Rust toolchain (1.94+), and
-[`wasm-pack`](https:@openvtc/pnm-@openvtc/pnm-rustwasm.github.io@openvtc/pnm-wasm-pack@openvtc/pnm-installer@openvtc/pnm-). The
-WASM crate is rebuilt as part of `npm run build`, so the Rust
-toolchain is needed for the full build but not for editing
-TypeScript-only packages.
+Prereqs: Node 20+. No Rust toolchain needed — DIDComm crypto comes
+from the `@openvtc/vti-didcomm-js` npm package.
 
 ```bash
 npm install
-npm run build              # builds @pnm@openvtc/pnm-didcomm-wasm (wasm-pack)
-                           # then tsc -b + vite build across TS workspaces
-npm run dev:pwa            # http:@openvtc/pnm-@openvtc/pnm-localhost:5173
-npm run dev:extension      # load packages@openvtc/pnm-extension@openvtc/pnm-dist as unpacked
+npm run build              # tsc -b + vite build across TS workspaces
+npm run dev:pwa            # http://localhost:5173
+npm run dev:extension      # vite watch into packages/extension/dist
 ```
 
-After editing `packages@openvtc/pnm-didcomm-wasm@openvtc/pnm-src@openvtc/pnm-lib.rs` or bumping the
-`affinidi-messaging-didcomm` dependency, run
-`npm run build --workspace @pnm@openvtc/pnm-didcomm-wasm` to regenerate the
-WASM bundle.
+### Installing the extension into your browser
+
+After `npm run build` (or while `npm run dev:extension` is running),
+`packages/extension/dist/` contains a complete unpacked Manifest v3
+extension. Side-load it like this:
+
+**Chrome / Edge / Brave / Arc**
+
+1. Open `chrome://extensions` (or `edge://extensions`,
+   `brave://extensions`, `arc://extensions`).
+2. Toggle **Developer mode** on (top-right).
+3. Click **Load unpacked** and select
+   `packages/extension/dist/` from this checkout.
+4. Pin **VTA Wallet** to the toolbar (Chrome's puzzle-piece icon →
+   pin) so it's one click away.
+5. **Open the Options page and set your mediator DID before doing
+   anything else.** Right-click the toolbar icon → **Options** (or
+   click the gear in the popup) and paste the DID of the mediator
+   you intend to use. The wallet ships with a placeholder default
+   pointing at a demo mediator — leaving it in place will work, but
+   the mediator DID gets baked into your holder `did:peer` the
+   first time you onboard a VTA, and changing it later re-mints a
+   brand-new wallet identity that must be re-granted in every
+   relying party's ACL. Set it once, up front.
+6. Onboard your first VTA from the popup. Optionally fill in the
+   **Default step-up VTA DID / mediator DID** fields in Options so
+   subsequent step-up flows are pre-populated.
+
+**Firefox**
+
+Not supported out of the box: Firefox's MV3 service-worker support
+diverges from Chromium and the manifest would need adjusting. Not in
+scope today.
+
+**Reloading after a rebuild**
+
+`npm run dev:extension` rebuilds into `dist/` on change, but Chrome
+does not auto-pick up the new bundle for a side-loaded extension.
+After each rebuild, click the reload icon on the **VTA Wallet** card
+in `chrome://extensions`.
+
+**Debugging**
+
+`chrome://extensions` → **VTA Wallet** → **service worker** opens
+DevTools for the background script. The popup, options page, and
+offscreen document each have their own DevTools — right-click →
+Inspect on the popup, or use the **Inspect views** links on the
+extension card.
 
 ### Validating in a browser
 
 ```bash
 npm run dev:pwa
-# open http:@openvtc/pnm-@openvtc/pnm-localhost:5173@openvtc/pnm-smokes → click "Run all"
+# open http://localhost:5173/smokes → click "Run all"
 ```
 
-All eight smokes should pass. The WASM module loads ~190 KB
-gzipped, and the diagnostics page exercises every layer of the
-stack including the WebSocket bridge's thid demuxer and the full
-WalletSession boot.
+All smokes should pass. The diagnostics page exercises every layer
+of the stack including the WebSocket bridge's thid demuxer and the
+full WalletSession boot.
