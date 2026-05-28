@@ -10,7 +10,7 @@ import {
   smokeMediatorEnrollment,
   smokeMediatorNotifications,
   smokeWalletBoot,
-} from "@pnm/core";
+} from "@openvtc/pnm-core";
 import { App } from "./App.js";
 import "./styles.css";
 

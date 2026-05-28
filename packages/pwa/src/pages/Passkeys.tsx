@@ -7,7 +7,7 @@ import {
   VtaClient,
   VtaClientError,
   type PasskeyVerificationMethod,
-} from "@pnm/core";
+} from "@openvtc/pnm-core";
 import { useConnectionStore } from "../store.js";
 
 function useVtaClient() {

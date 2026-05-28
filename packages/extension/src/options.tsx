@@ -1,7 +1,7 @@
 /// <reference types="chrome" />
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { clearHolderIdentity, IndexedDBKVStore, rewrapHolderSecret } from "@pnm/core";
+import { clearHolderIdentity, IndexedDBKVStore, rewrapHolderSecret } from "@openvtc/pnm-core";
 import { DEFAULT_WALLET_MEDIATOR_DID, getSettings, setSettings } from "./config.js";
 import { readActiveHolderDid } from "./active-vta.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";

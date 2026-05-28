@@ -3,7 +3,7 @@ import {
   loadHolderStrict,
   type HolderIdentityResult,
   type SecretWrap,
-} from "@pnm/core";
+} from "@openvtc/pnm-core";
 import { getSettings } from "./config.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 

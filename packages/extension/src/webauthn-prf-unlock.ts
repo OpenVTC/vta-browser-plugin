@@ -23,7 +23,7 @@
  */
 
 import { base64url } from "@openvtc/vti-didcomm-js";
-import { IndexedDBKVStore } from "@pnm/core";
+import { IndexedDBKVStore } from "@openvtc/pnm-core";
 
 // Same keys WebAuthnPrfSecretWrap writes when it enrolls. Kept in
 // sync by convention; both files need to agree on the slot.

@@ -50,7 +50,7 @@ import {
   type VaultSecretView,
 } from "./bridge-protocol.js";
 import { base64url } from "@openvtc/vti-didcomm-js";
-import { IndexedDBKVStore, rewrapHolderV4Secret } from "@pnm/core";
+import { IndexedDBKVStore, rewrapHolderV4Secret } from "@openvtc/pnm-core";
 import { getSettings, setSettings } from "./config.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import { PrfUnlockError, runPrfUnlockCeremony } from "./webauthn-prf-unlock.js";
@@ -888,7 +888,7 @@ function VaultPanel() {
 // ─── Add-entry form (M2A.6) ───
 // M2A.6 ships Password kind only — the most common case. Other kinds
 // (Passkey, OAuth, BearerToken, Custom) follow when there's a UX
-// pattern for them; for now the canonical schema + the @pnm/core
+// pattern for them; for now the canonical schema + the @openvtc/pnm-core
 // vaultUpsertRest helper accept all eight kinds.
 // ─── Add-entry form (M2A.6 password / M2B.5 password+loginConfig / M2B.4 did-self-issued) ───
 // The form owns the kind-specific shape: it decides which targets[]

@@ -22,7 +22,7 @@
 // M2B.3 implements the response side; the actual injection of cookies /
 // headers into the page lives in the extension (declarativeNetRequest
 // for headers, chrome.cookies.set for cookies) — those bindings live in
-// the extension layer because @pnm/core is browser-agnostic.
+// the extension layer because @openvtc/pnm-core is browser-agnostic.
 
 import { unpackMessage, type Identity } from "../didcomm/index.js";
 
@@ -131,7 +131,7 @@ export interface VaultProxyLoginResponse {
  *      countdown pattern in `vault/release` is the reference).
  *   2. Refuse to inject the session into any origin other than
  *      `sessionBlob.bindOrigin` (the holder's content script / DNR
- *      rules enforce this — @pnm/core is browser-agnostic and only
+ *      rules enforce this — @openvtc/pnm-core is browser-agnostic and only
  *      surfaces the constraint).
  */
 export async function vaultProxyLoginRest(

@@ -11,7 +11,7 @@
 // is responsible for warning + forcing a re-mint when it changes; reading the
 // config here never re-mints on its own.
 
-import { IndexedDBKVStore } from "@pnm/core";
+import { IndexedDBKVStore } from "@openvtc/pnm-core";
 
 /** The mediator the wallet uses for inbound + DIDComm login when unconfigured.
  *  The did-hosting demo mediator. A real deployment configures its own. */

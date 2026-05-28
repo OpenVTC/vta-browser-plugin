@@ -1,5 +1,5 @@
 {
-  "name": "@pnm/core",
+  "name": "@openvtc/pnm-core",
   "private": true,
   "version": "0.1.0",
   "description": "Shared core: WebAuthn ceremony helpers, COSE→Multikey conversion, DID verificationMethod builder, VTA REST client.",
