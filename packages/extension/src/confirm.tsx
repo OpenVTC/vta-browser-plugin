@@ -33,8 +33,8 @@ const action = params.get("action");
 // whether to approve it.
 const changedFromRpDid = params.get("changedFrom");
 
-function decide(approved: boolean): void {
-  chrome.runtime.sendMessage({ type: RUNTIME_CONSENT_RESULT, consentId, approved });
+function decide(approved: boolean, remember = false): void {
+  chrome.runtime.sendMessage({ type: RUNTIME_CONSENT_RESULT, consentId, approved, remember });
   window.close();
 }
 
@@ -300,6 +300,7 @@ function VerificationDetails({
 
 function Confirm() {
   const [verification, setVerification] = useState<VerificationState>({ kind: "pending" });
+  const [remember, setRemember] = useState(false);
   const originHost = originHostname(origin);
 
   useEffect(() => {
@@ -441,6 +442,32 @@ function Confirm() {
         </div>
       )}
 
+      {/* Remember-this-site opt-in. Off by default — ticking it trusts this
+          origin so its future login / vaultList / proxyLogin calls skip this
+          prompt until revoked (options → Connected sites). Only meaningful
+          when we know the origin. */}
+      {originHost && (
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            margin: "0 0 12px",
+            fontSize: 12,
+            color: colours.textMuted,
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={remember}
+            onChange={(e) => setRemember(e.currentTarget.checked)}
+          />
+          Remember <strong style={{ fontFamily: colours.mono }}>{originHost}</strong> — don't ask
+          again for this site
+        </label>
+      )}
+
       {/* Buttons. Deny gets the autoFocus — safest default for a security prompt
           (Enter = Deny). */}
       <div style={{ display: "flex", gap: 8 }}>
@@ -462,7 +489,7 @@ function Confirm() {
           Deny
         </button>
         <button
-          onClick={() => decide(true)}
+          onClick={() => decide(true, remember)}
           style={{
             flex: 1,
             padding: "10px 0",

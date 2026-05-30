@@ -354,6 +354,9 @@ export interface RuntimeConsentResult {
   /** Correlates with the pending consent the background is awaiting. */
   consentId: string;
   approved: boolean;
+  /** When approved with the "Remember this site" box ticked, the background
+   *  persists a trust record so this origin's future calls skip the popup. */
+  remember?: boolean;
 }
 
 /** confirm popup → background: resolve + verify an RP DID. */
