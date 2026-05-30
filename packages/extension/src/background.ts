@@ -16,6 +16,7 @@ import {
   readAllVtaDids,
 } from "./active-vta.js";
 import { checkOriginPin, pinOrigin } from "./origin-pin.js";
+import { isOriginTrusted, trustOrigin } from "./trusted-sites.js";
 import { subscribeToPush } from "./push.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import {
@@ -312,7 +313,7 @@ async function ensureOffscreenDocument(): Promise<void> {
 // ─── Consent coordination ───
 // A login request opens a consent popup and parks here until the popup
 // reports the user's decision (or is closed, which counts as a denial).
-const pendingConsents = new Map<string, (approved: boolean) => void>();
+const pendingConsents = new Map<string, (approved: boolean, remember: boolean) => void>();
 
 function requestConsent(args: {
   origin?: string;
@@ -331,7 +332,7 @@ function requestConsent(args: {
    * operator has to explicitly approve the swap.
    */
   changedFromRpDid?: string;
-}): Promise<boolean> {
+}): Promise<{ approved: boolean; remember: boolean }> {
   const consentId = crypto.randomUUID();
   const url =
     chrome.runtime.getURL("confirm.html") +
@@ -344,13 +345,13 @@ function requestConsent(args: {
       ? `&changedFrom=${encodeURIComponent(args.changedFromRpDid)}`
       : "");
 
-  return new Promise<boolean>((resolve) => {
+  return new Promise<{ approved: boolean; remember: boolean }>((resolve) => {
     let settled = false;
-    const settle = (approved: boolean) => {
+    const settle = (approved: boolean, remember: boolean) => {
       if (settled) return;
       settled = true;
       pendingConsents.delete(consentId);
-      resolve(approved);
+      resolve({ approved, remember });
     };
     pendingConsents.set(consentId, settle);
 
@@ -361,12 +362,38 @@ function requestConsent(args: {
       const onClosed = (closedId: number) => {
         if (closedId === winId) {
           chrome.windows.onRemoved.removeListener(onClosed);
-          settle(false);
+          settle(false, false);
         }
       };
       chrome.windows.onRemoved.addListener(onClosed);
     });
   });
+}
+
+/**
+ * Consent with per-origin trust short-circuit. Trusted origins (the user
+ * ticked "Remember this site") skip the popup entirely; otherwise the popup
+ * is shown and, if approved with "remember", the origin is persisted as
+ * trusted. Returns the plain boolean the callers expect.
+ */
+async function gatedConsent(args: {
+  origin?: string;
+  rpDid?: string;
+  holderDid?: string;
+  action?: string;
+  changedFromRpDid?: string;
+}): Promise<boolean> {
+  // A pinned-RP *change* must always re-prompt, even for a trusted site —
+  // it's exactly the redirect-to-attacker-RP case the louder warning exists
+  // for, so trust doesn't get to silence it.
+  if (args.origin && !args.changedFromRpDid && (await isOriginTrusted(args.origin))) {
+    return true;
+  }
+  const { approved, remember } = await requestConsent(args);
+  if (approved && remember && args.origin) {
+    await trustOrigin(args.origin, args.rpDid);
+  }
+  return approved;
 }
 
 async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginResponse> {
@@ -391,7 +418,7 @@ async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginRespon
   if (pin.rpDidChanged && pin.pinnedRpDid) {
     consent.changedFromRpDid = pin.pinnedRpDid;
   }
-  const approved = await requestConsent(consent);
+  const approved = await gatedConsent(consent);
   if (!approved) return { ok: false, error: "login denied by user" };
 
   if (req.origin) {
@@ -440,7 +467,7 @@ async function handleLoginDidcomm(
   if (pin.rpDidChanged && pin.pinnedRpDid) {
     consent.changedFromRpDid = pin.pinnedRpDid;
   }
-  const approved = await requestConsent(consent);
+  const approved = await gatedConsent(consent);
   if (!approved) return { ok: false, error: "login denied by user" };
 
   if (req.origin) {
@@ -467,7 +494,7 @@ async function handleStepUpVta(
   const holderDid = await readActiveHolderDid();
   if (!holderDid) return { ok: false, error: "no active VTA connection — connect first" };
 
-  const approved = await requestConsent({
+  const approved = await gatedConsent({
     origin: req.origin,
     rpDid: req.params.rpDid,
     holderDid,
@@ -880,7 +907,7 @@ async function handleVaultProxyLogin(
 async function handleVaultListPage(
   req: RuntimeVaultListPageRequest,
 ): Promise<RuntimeVaultListResponse> {
-  const approved = await requestConsent({
+  const approved = await gatedConsent({
     origin: req.origin,
     action: "See your wallet's vault entries",
     ...(req.params.targetDid ? { rpDid: req.params.targetDid } : {}),
@@ -919,7 +946,7 @@ async function handleVaultProxyLoginPage(
   // so require explicit consent naming the requesting origin + target RP.
   const target = req.params.target as { kind?: string; did?: string } | undefined;
   const targetDid = target?.kind === "did" ? target.did : undefined;
-  const approved = await requestConsent({
+  const approved = await gatedConsent({
     origin: req.origin,
     action: "Sign in via your VTA (proxied SIOP)",
     ...(targetDid ? { rpDid: targetDid } : {}),
@@ -1344,8 +1371,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if ((message as { type?: string })?.type === RUNTIME_CONSENT_RESULT) {
-    const { consentId, approved } = message as RuntimeConsentResult;
-    pendingConsents.get(consentId)?.(approved);
+    const { consentId, approved, remember } = message as RuntimeConsentResult;
+    pendingConsents.get(consentId)?.(approved, !!remember);
     return false;
   }
 

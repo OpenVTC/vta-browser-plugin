@@ -5,6 +5,7 @@ import { clearHolderIdentity, IndexedDBKVStore, rewrapHolderSecret } from "@open
 import { DEFAULT_WALLET_MEDIATOR_DID, getSettings, setSettings } from "./config.js";
 import { readActiveHolderDid } from "./active-vta.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
+import { listTrustedSites, untrustOrigin, type TrustedSiteRecord } from "./trusted-sites.js";
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
@@ -34,6 +35,16 @@ function Options() {
   const [encryptBusy, setEncryptBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [trustedSites, setTrustedSites] = useState<TrustedSiteRecord[]>([]);
+
+  useEffect(() => {
+    void listTrustedSites().then(setTrustedSites);
+  }, []);
+
+  async function revokeSite(origin: string): Promise<void> {
+    await untrustOrigin(origin);
+    setTrustedSites(await listTrustedSites());
+  }
 
   useEffect(() => {
     void (async () => {
@@ -226,6 +237,63 @@ function Options() {
           authenticator without disabling first means losing the wallet — no
           recovery path. {encryptOn ? "Toggle off to revert." : ""}
         </div>
+      </div>
+
+      <div
+        style={{
+          marginTop: 22,
+          padding: 14,
+          border: "1px solid #2a2f3a",
+          borderRadius: 8,
+          background: "#15181f",
+        }}
+      >
+        <div style={{ fontSize: 14, color: "#e6e8ee", marginBottom: 4 }}>Connected sites</div>
+        <div style={{ fontSize: 12, color: "#9aa3b2", lineHeight: 1.5, marginBottom: 10 }}>
+          Sites you ticked “Remember this site” for. A connected site can log in and read your
+          vault entries without a prompt. Revoke any you no longer trust — the next request from
+          that site will prompt again.
+        </div>
+        {trustedSites.length === 0 ? (
+          <div style={{ fontSize: 12, color: "#6b7280" }}>No connected sites.</div>
+        ) : (
+          <div style={{ display: "grid", gap: 6 }}>
+            {trustedSites.map((s) => (
+              <div
+                key={s.origin}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  padding: "8px 10px",
+                  border: "1px solid #2a2f3a",
+                  borderRadius: 6,
+                  background: "#11141a",
+                }}
+              >
+                <code style={{ wordBreak: "break-all", color: "#e6e8ee", fontSize: 12 }}>
+                  {s.origin}
+                </code>
+                <button
+                  onClick={() => void revokeSite(s.origin)}
+                  style={{
+                    flex: "none",
+                    padding: "5px 10px",
+                    background: "transparent",
+                    color: "#e0524a",
+                    border: "1px solid #5a2a27",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    fontSize: 12,
+                  }}
+                >
+                  Revoke
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <button
