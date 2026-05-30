@@ -46,19 +46,6 @@ function originHostname(o: string): string | undefined {
   }
 }
 
-type OriginMatch = "match" | "subdomain" | "mismatch" | "not-applicable";
-
-function compareOriginToDomain(
-  originHost: string | undefined,
-  domain: string | undefined,
-): OriginMatch {
-  if (!domain) return "not-applicable";
-  if (!originHost) return "mismatch";
-  if (originHost === domain) return "match";
-  if (originHost.endsWith(`.${domain}`)) return "subdomain";
-  return "mismatch";
-}
-
 // ─── Visual primitives ───
 // Co-located rather than spun out into separate files because the confirm
 // popup is a single screen and the styles are only used here.
@@ -209,13 +196,16 @@ const linkButtonStyle: React.CSSProperties = {
 };
 
 // ─── Verification badge ───
-// Renders the "is this RP DID resolvable + consistent with the page origin"
-// status. State machine: pending → ok/warn/error.
+// Renders whether the relying-party DID *resolves* (and, for did:webvh, that
+// its log chain + proofs verify). We intentionally do NOT compare the DID's
+// hosting domain against the page origin — a DID's host is unrelated to where
+// the RP is served, so that check produced false "origin mismatch" warnings
+// and proved nothing. A genuine resolution failure surfaces as the error
+// state below.
 
 type VerificationState =
   | { kind: "pending" }
-  | { kind: "ok"; result: VerifyRpDidResult; originMatch: OriginMatch }
-  | { kind: "warn"; result: VerifyRpDidResult; originMatch: OriginMatch }
+  | { kind: "ok"; result: VerifyRpDidResult }
   | { kind: "error"; message: string };
 
 function VerificationBadge({ state }: { state: VerificationState }) {
@@ -225,23 +215,10 @@ function VerificationBadge({ state }: { state: VerificationState }) {
   if (state.kind === "error") {
     return <Badge tone="danger">Verification failed</Badge>;
   }
-  if (state.kind === "warn") {
-    return <Badge tone="warn">Resolved · origin mismatch</Badge>;
-  }
-  // ok
-  if (state.originMatch === "not-applicable") {
-    return <Badge tone="ok">Resolved ✓</Badge>;
-  }
-  return <Badge tone="ok">Resolved · origin matches ✓</Badge>;
+  return <Badge tone="ok">Resolved ✓</Badge>;
 }
 
-function VerificationDetails({
-  state,
-  originHost,
-}: {
-  state: VerificationState;
-  originHost: string | undefined;
-}) {
+function VerificationDetails({ state }: { state: VerificationState }) {
   if (state.kind === "pending") {
     return (
       <p style={{ margin: 0, fontSize: 11.5, color: colours.textMuted }}>
@@ -256,7 +233,7 @@ function VerificationDetails({
       </p>
     );
   }
-  const { result, originMatch } = state;
+  const { result } = state;
   const lines: React.ReactNode[] = [];
   lines.push(
     <span key="method" style={{ color: colours.textMuted }}>
@@ -269,25 +246,6 @@ function VerificationDetails({
     lines.push(
       <span key="domain" style={{ color: colours.textMuted }}>
         Domain: <strong style={{ color: colours.text, fontFamily: colours.mono }}>{result.domain}</strong>
-      </span>,
-    );
-  }
-  if (originMatch === "mismatch") {
-    lines.push(
-      <span key="origin" style={{ color: colours.warn }}>
-        ⚠ Page origin <strong style={{ fontFamily: colours.mono }}>{originHost ?? "(unknown)"}</strong> does not match the DID's domain.
-      </span>,
-    );
-  } else if (originMatch === "subdomain") {
-    lines.push(
-      <span key="origin" style={{ color: colours.textMuted }}>
-        Page origin is a subdomain of the DID's domain.
-      </span>,
-    );
-  } else if (originMatch === "match") {
-    lines.push(
-      <span key="origin" style={{ color: colours.textMuted }}>
-        Page origin matches the DID's domain exactly.
       </span>,
     );
   }
@@ -315,7 +273,6 @@ function Confirm() {
           setVerification({ kind: "error", message: reply.error });
           return;
         }
-        const match = compareOriginToDomain(originHost, reply.result.domain);
         if (!reply.result.resolved) {
           setVerification({
             kind: "error",
@@ -323,11 +280,7 @@ function Confirm() {
           });
           return;
         }
-        if (match === "mismatch") {
-          setVerification({ kind: "warn", result: reply.result, originMatch: match });
-          return;
-        }
-        setVerification({ kind: "ok", result: reply.result, originMatch: match });
+        setVerification({ kind: "ok", result: reply.result });
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -339,7 +292,9 @@ function Confirm() {
     return () => {
       cancelled = true;
     };
-  }, [originHost]);
+    // `rpDid` is a module-level constant (parsed from the URL once), so the
+    // resolve runs once on mount.
+  }, []);
 
   const isAction = !!action;
   const title = isAction ? "Confirmation request" : "Sign-in request";
@@ -423,7 +378,7 @@ function Confirm() {
             value={rpDid}
             rightSlot={<VerificationBadge state={verification} />}
           />
-          <VerificationDetails state={verification} originHost={originHost} />
+          <VerificationDetails state={verification} />
         </div>
       )}
 
