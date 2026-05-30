@@ -28,11 +28,7 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://admin.webvh.storm.ws/*",
-        "http://localhost/*",
-        "http://127.0.0.1/*"
-      ],
+      "matches": ["<all_urls>"],
       "js": ["content.js"],
       "run_at": "document_start"
     }
@@ -40,19 +36,9 @@
   "web_accessible_resources": [
     {
       "resources": ["provider.js"],
-      "matches": [
-        "https://admin.webvh.storm.ws/*",
-        "http://localhost/*",
-        "http://127.0.0.1/*"
-      ]
+      "matches": ["<all_urls>"]
     }
   ],
   "permissions": ["storage", "offscreen", "notifications", "cookies", "tabs"],
-  "host_permissions": [
-    "https://admin.webvh.storm.ws/*",
-    "https://webvh.storm.ws/*",
-    "https://glenn.storm.ws/*",
-    "http://127.0.0.1/*",
-    "http://localhost/*"
-  ]
+  "host_permissions": ["<all_urls>"]
 }

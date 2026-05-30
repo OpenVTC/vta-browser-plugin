@@ -21,7 +21,9 @@ import {
 const params = new URLSearchParams(window.location.search);
 const consentId = params.get("cid") ?? "";
 const origin = params.get("origin") ?? "";
-const rpDid = params.get("rpDid") ?? "(unknown RP)";
+// May be absent for page-initiated actions (e.g. `vaultList()`) that have
+// no specific relying party — the RP card + resolution are then omitted.
+const rpDid = params.get("rpDid");
 const holderDid = params.get("holder");
 // When present, this prompt is an RP-initiated action to confirm (inbound),
 // not an outbound login.
@@ -301,6 +303,8 @@ function Confirm() {
   const originHost = originHostname(origin);
 
   useEffect(() => {
+    // No relying party to resolve (e.g. a `vaultList()` consent) — skip.
+    if (!rpDid) return;
     let cancelled = false;
     chrome.runtime
       .sendMessage({ type: RUNTIME_VERIFY_RP_DID, did: rpDid })
@@ -340,7 +344,12 @@ function Confirm() {
   const title = isAction ? "Confirmation request" : "Sign-in request";
   const subtitle = isAction ? (
     <>
-      A relying party is asking you to confirm: <strong>{action}</strong>
+      {originHost ? (
+        <strong style={{ fontFamily: colours.mono }}>{originHost}</strong>
+      ) : (
+        "An unknown page"
+      )}{" "}
+      is asking you to confirm: <strong>{action}</strong>
     </>
   ) : originHost ? (
     <>
@@ -397,23 +406,25 @@ function Confirm() {
         </div>
       )}
 
-      {/* RP card */}
-      <div
-        style={{
-          background: colours.card,
-          border: `1px solid ${colours.border}`,
-          borderRadius: 10,
-          padding: 14,
-          marginBottom: 12,
-        }}
-      >
-        <DidField
-          label="Relying party"
-          value={rpDid}
-          rightSlot={<VerificationBadge state={verification} />}
-        />
-        <VerificationDetails state={verification} originHost={originHost} />
-      </div>
+      {/* RP card — omitted for actions with no specific relying party. */}
+      {rpDid && (
+        <div
+          style={{
+            background: colours.card,
+            border: `1px solid ${colours.border}`,
+            borderRadius: 10,
+            padding: 14,
+            marginBottom: 12,
+          }}
+        >
+          <DidField
+            label="Relying party"
+            value={rpDid}
+            rightSlot={<VerificationBadge state={verification} />}
+          />
+          <VerificationDetails state={verification} originHost={originHost} />
+        </div>
+      )}
 
       {/* Holder card */}
       {holderDid && (

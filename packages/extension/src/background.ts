@@ -316,7 +316,10 @@ const pendingConsents = new Map<string, (approved: boolean) => void>();
 
 function requestConsent(args: {
   origin?: string;
-  rpDid: string;
+  /** Optional — login / step-up always set it, but page-initiated actions
+   *  such as `vaultList()` may have no specific RP to show. When absent the
+   *  popup omits the relying-party card and shows only the origin + action. */
+  rpDid?: string;
   holderDid?: string;
   /** When set, the prompt frames an RP-initiated action to confirm (inbound)
    *  rather than a login. */
@@ -333,7 +336,7 @@ function requestConsent(args: {
   const url =
     chrome.runtime.getURL("confirm.html") +
     `?cid=${consentId}` +
-    `&rpDid=${encodeURIComponent(args.rpDid)}` +
+    (args.rpDid ? `&rpDid=${encodeURIComponent(args.rpDid)}` : "") +
     (args.origin ? `&origin=${encodeURIComponent(args.origin)}` : "") +
     (args.holderDid ? `&holder=${encodeURIComponent(args.holderDid)}` : "") +
     (args.action ? `&action=${encodeURIComponent(args.action)}` : "") +
@@ -870,12 +873,20 @@ async function handleVaultProxyLogin(
 // translate the page-side params subset (targetDid /
 // targetOriginPrefix / secretKind) into the popup-style
 // `RUNTIME_VAULT_LIST` filter and reuse the existing offscreen
-// pipeline. Origin is captured but not yet enforced — same trust
-// model as `vtaWallet.login()`; origin-pinned filtering lands with
-// M3 policy.
+// pipeline. Because the provider is injected into every page
+// (`<all_urls>`), enumerating vault entries is gated behind an explicit
+// user-consent prompt that names the requesting origin — otherwise any
+// site could silently read the user's vault contents.
 async function handleVaultListPage(
   req: RuntimeVaultListPageRequest,
 ): Promise<RuntimeVaultListResponse> {
+  const approved = await requestConsent({
+    origin: req.origin,
+    action: "See your wallet's vault entries",
+    ...(req.params.targetDid ? { rpDid: req.params.targetDid } : {}),
+  });
+  if (!approved) return { ok: false, error: "vault list denied by user" };
+
   return handleVaultList({
     type: RUNTIME_VAULT_LIST,
     filter: {
@@ -903,6 +914,18 @@ async function handleVaultListPage(
 async function handleVaultProxyLoginPage(
   req: RuntimeVaultProxyLoginPageRequest,
 ): Promise<RuntimeVaultProxyLoginResponse> {
+  // `<all_urls>` injection means any page can invoke this. Minting a SIOP
+  // id_token and signing in on the user's behalf is a privileged action,
+  // so require explicit consent naming the requesting origin + target RP.
+  const target = req.params.target as { kind?: string; did?: string } | undefined;
+  const targetDid = target?.kind === "did" ? target.did : undefined;
+  const approved = await requestConsent({
+    origin: req.origin,
+    action: "Sign in via your VTA (proxied SIOP)",
+    ...(targetDid ? { rpDid: targetDid } : {}),
+  });
+  if (!approved) return { ok: false, error: "proxy-login denied by user" };
+
   const c = await readActiveConnection();
   if (!c.ok) return { ok: false, error: c.error };
   await ensureOffscreenDocument();
