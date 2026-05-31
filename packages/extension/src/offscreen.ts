@@ -96,6 +96,41 @@ import {
   type VerifyRpDidResult,
 } from "./bridge-protocol.js";
 
+// Request durable IndexedDB on offscreen-document load. The wallet's
+// irreplaceable key material (the v4 holder records) lives in
+// IndexedDB here, while the non-secret `connection` metadata lives in
+// `chrome.storage.local` (popup zustand store). Those two stores have
+// different eviction semantics: `chrome.storage.local` is not cleared
+// by the browser's "Cookies and other site data" wipe or by storage
+// pressure, but best-effort IndexedDB IS. That asymmetry is what
+// produces the "Stale connection cleared — no holder identity is
+// persisted" state — the connection survives while the holder keys are
+// silently evicted, leaving no recovery path but re-onboarding.
+//
+// `navigator.storage.persist()` marks this origin's storage durable so
+// the browser stops evicting it under pressure. It's idempotent and
+// cheap, but we gate on `persisted()` first so a granted box doesn't
+// re-request on every offscreen spin-up. Never let this throw — a
+// failed/absent StorageManager must not break offscreen startup; the
+// wallet still works, it's just back to best-effort durability.
+void (async function ensurePersistentStorage(): Promise<void> {
+  try {
+    if (!navigator.storage?.persist) {
+      console.warn("[pnm] StorageManager.persist unavailable — IndexedDB remains best-effort");
+      return;
+    }
+    if (await navigator.storage.persisted()) return; // already durable
+    const granted = await navigator.storage.persist();
+    console.info(
+      granted
+        ? "[pnm] persistent storage granted — IndexedDB holder records are now eviction-protected"
+        : "[pnm] persistent storage request denied — IndexedDB holder records remain best-effort",
+    );
+  } catch (e: unknown) {
+    console.warn("[pnm] persistent storage request failed:", e instanceof Error ? e.message : e);
+  }
+})();
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Defence-in-depth sender check — same rationale as the
   // background listener (M4 from the May 2026 security review).
