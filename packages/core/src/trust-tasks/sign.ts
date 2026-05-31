@@ -31,7 +31,26 @@ export interface SignTrustTaskOptions {
    *  attesting to a separate claim — e.g. a VP-framed bootstrap request
    *  (the provision-integration flow) or a SIOP-shaped self-attestation. */
   proofPurpose?: "assertionMethod" | "authentication";
+  /** Milliseconds to back-date the proof's `created` timestamp, absorbing
+   *  clock skew between this wallet and the verifier.
+   *
+   *  VC Data-Integrity verifiers (the Rust `eddsa-jcs-2022` spec-conformance
+   *  check on the VTA included) reject any proof whose `created` is in the
+   *  verifier's future, with **no** skew tolerance. If the wallet's clock
+   *  runs even slightly ahead of the verifier, an honest `created = now`
+   *  fails with "Created date is in the future". Back-dating by a small
+   *  margin keeps `created <= verifier_now` across normal NTP skew.
+   *
+   *  Default 60_000 (60s). The timestamp is still UTC (`toISOString()`);
+   *  this only shifts it earlier. Gross skew (clock minutes/hours off) is
+   *  an environment problem a margin can't fix — keep the host on NTP. */
+  clockSkewMs?: number;
 }
+
+/** Default back-date applied to a DI proof's `created`. Comfortably inside
+ *  the ±5min skew window the VTA already allows on `validUntil`, so it can't
+ *  push `created` outside any window the verifier accepts. */
+const DEFAULT_CLOCK_SKEW_MS = 60_000;
 
 /**
  * Attach an `eddsa-jcs-2022` Data Integrity proof to a Trust-Task envelope
@@ -43,12 +62,16 @@ export async function signTrustTask({
   envelope,
   signing,
   proofPurpose = "assertionMethod",
+  clockSkewMs = DEFAULT_CLOCK_SKEW_MS,
 }: SignTrustTaskOptions): Promise<TrustTaskEnvelope> {
   const proofConfig: Record<string, unknown> = {
     type: "DataIntegrityProof",
     cryptosuite: "eddsa-jcs-2022",
     verificationMethod: signing.kid,
-    created: new Date().toISOString(),
+    // UTC, back-dated by `clockSkewMs` so a wallet clock running slightly
+    // ahead of the verifier doesn't trip the "Created date is in the
+    // future" spec-conformance rejection. See `clockSkewMs` docs above.
+    created: new Date(Date.now() - clockSkewMs).toISOString(),
     proofPurpose,
   };
 
