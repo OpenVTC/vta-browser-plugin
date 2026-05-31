@@ -1,7 +1,7 @@
 {
   "name": "pnm-browser-plugin",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Browser-side bridge between WebAuthn passkeys and VTA-managed DIDs. Ships as a PWA and as an MV3 browser extension on a shared TypeScript core.",
   "type": "module",
   "workspaces": [

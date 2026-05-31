@@ -1,6 +1,6 @@
 {
   "name": "@openvtc/pnm-core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Browser-side bridge between WebAuthn passkeys and VTA-managed DIDs. Wire types, WebAuthn ceremony helpers, COSE→Multikey conversion, DID verificationMethod builder, REST + DIDComm transports, mediator client, SIOP / RP-login / provision-integration flows.",
   "license": "Apache-2.0",
   "repository": {
@@ -46,7 +46,7 @@
     "@hpke/chacha20poly1305": "^1.8.0",
     "@hpke/core": "^1.9.0",
     "@noble/curves": "^2.2.0",
-    "@openvtc/vti-didcomm-js": "^0.4.1",
+    "@openvtc/vti-didcomm-js": "^0.4.2",
     "@scure/base": "^1.1.9",
     "cbor-x": "^1.6.4"
   },
