@@ -176,3 +176,25 @@ test("buildBootstrapRequest: validity window matches default", async () => {
   assert.ok(validUntil >= before + 14 * 60_000);
   assert.ok(validUntil <= after + 16 * 60_000);
 });
+
+test("buildBootstrapRequest: proof.created is UTC and back-dated (never in the verifier's future)", async () => {
+  // Guards the clock-skew fix: a wallet clock running slightly ahead of the
+  // VTA must not produce a `created` the VC-DI spec-conformance check rejects
+  // as "Created date is in the future". We back-date by ~60s.
+  const before = Date.now();
+  const { vp } = await buildBootstrapRequest({
+    ephemeral: generateSigningIdentity(),
+    ask: { type: "AdminRotation", adminTemplate: { name: "vta-admin" } },
+  });
+  const created = vp.proof.created;
+
+  // UTC, ISO-8601, `Z`-suffixed (toISOString contract).
+  assert.match(created, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/);
+
+  const createdMs = Date.parse(created);
+  // Strictly in the past relative to when we called: a same-instant clock
+  // (let alone one behind ours) sees `created` <= its now.
+  assert.ok(createdMs < before, `created (${created}) must be back-dated below call time`);
+  // …but only modestly (the margin), not wildly historical.
+  assert.ok(before - createdMs <= 5 * 60_000, "back-date stays within a sane skew window");
+});

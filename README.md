@@ -175,6 +175,33 @@ The mediator delivers the inner JWE to the VTA. Replies travel back
 via the wallet's mediator inbox, decrypted by `Pickup3Dispatcher`,
 and demuxed by `thid` to the waiting Promise.
 
+### Mediator CORS (browser requirement)
+
+The wallet runs **in the browser**, so the mediator's WebSocket
+(`wss://…/ws`) and REST (`/inbound`, `/authenticate`, …) endpoints must
+allow the **origin the wallet page is served from** — either by echoing
+that exact origin in `Access-Control-Allow-Origin`, or with `*`. This is
+a mediator-side configuration; the wallet cannot work around it.
+
+Symptom of a missing/incorrect CORS allow-list: the REST auth handshake
+succeeds (or appears to), but opening the live-delivery socket fails with
+
+```
+mediator-transport: WebSocket failed to open (close code 1006)
+```
+
+A browser rejects a cross-origin WebSocket upgrade *before* the socket
+opens, which surfaces as an abnormal **1006** close with no HTTP status —
+indistinguishable, from the client side, from a refused upgrade or a
+proxy that strips the `Upgrade` header. If REST auth works from the same
+page but the WS gives 1006, **check the mediator's CORS allow-list for
+your wallet origin first.**
+
+For a self-hosted `affinidi-messaging-mediator`, set the allowed origins
+in its config (e.g. `cors_allow_origin`) to include your wallet's origin
+(`http://localhost:5173` in dev, your extension/PWA origin in prod), or
+`*` for a permissive dev setup. Restart the mediator after changing it.
+
 ## End-to-end validation
 
 Six smokes cover the main DIDComm + wallet links. Run from a browser
