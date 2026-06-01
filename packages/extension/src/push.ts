@@ -12,18 +12,11 @@
 // handler body with: wake → connect to mediator → pick up + decrypt the
 // DIDComm confirm-request → consent prompt → signed response.
 
+import { base64urlToBytes } from "@openvtc/pnm-core";
+
 // VAPID application-server public key (the matching private key signs pushes).
 const VAPID_PUBLIC_KEY =
   "BOp_ZH4GUVZ1aPNmBJl9rpQWTJyNQWLGAclN3d2VYJKxhyzYqYoKbOwwU98C9jaa1IiTjz-IasJFV74Yop0qUOQ";
-
-function base64urlToBytes(s: string): Uint8Array {
-  const pad = "=".repeat((4 - (s.length % 4)) % 4);
-  const b64 = (s + pad).replace(/-/g, "+").replace(/_/g, "/");
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
 
 /** Subscribe the service worker to Web Push (idempotent) and log the
  *  subscription JSON so a sender can target it. */
