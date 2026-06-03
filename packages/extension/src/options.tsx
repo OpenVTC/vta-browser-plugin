@@ -27,6 +27,8 @@ function Options() {
   const [mediatorDid, setMediatorDid] = useState("");
   const [vtaDid, setVtaDid] = useState("");
   const [vtaMediatorDid, setVtaMediatorDid] = useState("");
+  const [pushGatewayUrl, setPushGatewayUrl] = useState("");
+  const [pushGatewayVapidPublicKey, setPushGatewayVapidPublicKey] = useState("");
   const [holderDid, setHolderDid] = useState("");
   // H1: encryption state. Tracked separately from `WalletSettings` because
   // the actual setting flips only after the migration succeeds (auto-migrate
@@ -53,6 +55,8 @@ function Options() {
       setMediatorDid(s.mediatorDid);
       setVtaDid(s.defaultStepUpVtaDid ?? "");
       setVtaMediatorDid(s.defaultStepUpVtaMediatorDid ?? "");
+      setPushGatewayUrl(s.pushGatewayUrl ?? "");
+      setPushGatewayVapidPublicKey(s.pushGatewayVapidPublicKey ?? "");
       setEncryptOn(Boolean(s.encryptHolderSecret));
       // Multi-VTA: show the active VTA's holder DID. Read straight
       // from the persisted connection — no decryption needed for a
@@ -151,6 +155,10 @@ function Options() {
         mediatorDid: trimmedMediator,
         ...(vtaDid.trim() ? { defaultStepUpVtaDid: vtaDid.trim() } : {}),
         ...(vtaMediatorDid.trim() ? { defaultStepUpVtaMediatorDid: vtaMediatorDid.trim() } : {}),
+        ...(pushGatewayUrl.trim() ? { pushGatewayUrl: pushGatewayUrl.trim() } : {}),
+        ...(pushGatewayVapidPublicKey.trim()
+          ? { pushGatewayVapidPublicKey: pushGatewayVapidPublicKey.trim() }
+          : {}),
       });
       setSavedMediatorDid(trimmedMediator);
 
@@ -201,6 +209,27 @@ function Options() {
         placeholder="did:webvh:…"
         onChange={(e) => setVtaMediatorDid(e.target.value)}
       />
+
+      <label style={labelStyle}>Push gateway URL (optional — Web Push test)</label>
+      <input
+        style={inputStyle}
+        value={pushGatewayUrl}
+        placeholder="https://gateway.example"
+        onChange={(e) => setPushGatewayUrl(e.target.value)}
+      />
+
+      <label style={labelStyle}>Push gateway VAPID public key (optional)</label>
+      <input
+        style={inputStyle}
+        value={pushGatewayVapidPublicKey}
+        placeholder="base64url P-256 public key"
+        onChange={(e) => setPushGatewayVapidPublicKey(e.target.value)}
+      />
+      <small style={{ color: "#9aa3b2", marginTop: 4 }}>
+        Set both to enable Web Push wake-up: the wallet subscribes with this VAPID key, registers
+        with the gateway (<code>push/register</code>), and conveys the handle to the active VTA
+        (<code>device/set-wake</code>). Leave blank to keep push off.
+      </small>
 
       <div
         style={{

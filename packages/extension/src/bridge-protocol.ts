@@ -1115,6 +1115,32 @@ export interface OffscreenDeriveSigningKeyIdRequest {
   type: typeof OFFSCREEN_DERIVE_SIGNING_KEY_ID;
   did: string;
 }
+/** background → offscreen: convey a push WakeHandle to the active VTA via
+ *  `device/set-wake/0.1`. The handle was obtained from the gateway by the
+ *  service worker (`push/register`); set-wake needs the holder identity +
+ *  authcrypt, which only exist in offscreen. Reply is an
+ *  `OffscreenSetWakeResponse` via sendResponse. */
+export const OFFSCREEN_SET_WAKE = "offscreen/set-wake" as const;
+
+export interface OffscreenSetWakeRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_SET_WAKE;
+  vtaDid: string;
+  restBaseUrl: string;
+  /** The opaque gateway-issued handle to convey. Omit to clear the channel. */
+  wakeHandle?: { gateway: string; handle: string };
+  /** Advisory platform hint (device/list visibility only). */
+  pushPlatform?: "apns" | "fcm" | "webpush";
+  /** Advisory trigger DIDs (e.g. the device's mediator); the VTA owns the policy. */
+  suggestedTriggers?: string[];
+}
+
+export interface OffscreenSetWakeResponse {
+  ok: boolean;
+  error?: string;
+  result?: { pushCapable: boolean; triggerPolicy?: { allowedTriggers: string[] } };
+}
+
 /** background → offscreen: sign a Trust-Task envelope with the holder did:peer.
  *  Reply is a [`SignTrustTaskResult`] (or `{error}`) via sendResponse. */
 export const OFFSCREEN_SIGN_TRUST_TASK = "offscreen/sign-trust-task" as const;
