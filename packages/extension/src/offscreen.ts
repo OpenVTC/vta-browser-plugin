@@ -23,6 +23,7 @@ import {
   requestVtaApproval,
   resolveKeyAgreement,
   resolveVtaServices,
+  setDeviceWake,
   signingIdentityFromSecret,
   stepUpVtaFinish,
   stepUpVtaStart,
@@ -59,6 +60,7 @@ import {
   OFFSCREEN_FORGET_HOLDER_RECORD,
   OFFSCREEN_REFRESH_VTA_TRANSPORTS,
   OFFSCREEN_REST_LOGIN,
+  OFFSCREEN_SET_WAKE,
   OFFSCREEN_WALLET_LOCK_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
@@ -80,6 +82,7 @@ import {
   type OffscreenOnboardConnectRequest,
   type OffscreenOnboardPrepareRequest,
   type OffscreenUnlockPrfRequest,
+  type OffscreenSetWakeRequest,
   type OffscreenSignTrustTaskRequest,
   type OffscreenStepUpVtaRequest,
   type OffscreenVaultDeleteRequest,
@@ -222,6 +225,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (msg.type === OFFSCREEN_LIST_CONTEXTS) {
     const req = message as { vtaDid: string; restBaseUrl: string };
     doListContexts(req)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_SET_WAKE) {
+    const req = message as OffscreenSetWakeRequest;
+    doSetWake(req)
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -797,6 +809,27 @@ async function doRefreshVtaTransports(
     ...(services.rest ? { restBaseUrl: services.rest.baseUrl } : {}),
     ...(services.didcomm ? { mediatorDid: services.didcomm.mediatorDid } : {}),
   };
+}
+
+/** Convey a push WakeHandle to the connected VTA via `device/set-wake/0.1`.
+ *  The service worker obtained the handle from the gateway (`push/register`);
+ *  this step tells the VTA which gateway+handle to provision so the VTA (or
+ *  its mediator) can trigger contentless wakes. Runs in offscreen because
+ *  set-wake authcrypts to the VTA — the holder identity only unwraps here. */
+async function doSetWake(req: OffscreenSetWakeRequest): Promise<{
+  pushCapable: boolean;
+  triggerPolicy?: { allowedTriggers: string[] };
+}> {
+  const { identity: holder } = await loadHolder(req.vtaDid);
+  const service = await resolveKeyAgreement(req.vtaDid);
+  return setDeviceWake({
+    baseUrl: req.restBaseUrl,
+    holder,
+    service,
+    ...(req.wakeHandle ? { wakeHandle: req.wakeHandle } : {}),
+    ...(req.pushPlatform ? { pushPlatform: req.pushPlatform } : {}),
+    ...(req.suggestedTriggers ? { suggestedTriggers: req.suggestedTriggers } : {}),
+  });
 }
 
 /** List the contexts the wallet's holder has access to at the connected

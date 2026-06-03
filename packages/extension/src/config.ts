@@ -55,6 +55,22 @@ export interface WalletSettings {
    * matching wrap.
    */
   encryptHolderSecret?: boolean;
+
+  /**
+   * Push wake-up (binding https://trusttasks.org/binding/push/0.1) — TEST
+   * wiring. When both are set, the service worker subscribes to Web Push with
+   * the gateway's VAPID public key, registers the subscription with the gateway
+   * (`push/register`), and the wallet conveys the resulting handle to the
+   * active VTA (`device/set-wake`).
+   *
+   * Both unset by default — push is opt-in until a gateway is deployed. Drop
+   * the gateway's URL + its VAPID *public* key in via the Settings page.
+   */
+  /** Push gateway base URL (HTTPS transport — `POST {url}/trust-tasks`). */
+  pushGatewayUrl?: string;
+  /** The gateway's VAPID *public* key (base64url, uncompressed P-256 point) —
+   *  the `applicationServerKey` subscribers register. */
+  pushGatewayVapidPublicKey?: string;
 }
 
 const SETTINGS_KEY = "pnm/settings/v1";
@@ -76,6 +92,10 @@ export async function getSettings(): Promise<WalletSettings> {
       ? { defaultStepUpVtaMediatorDid: s.defaultStepUpVtaMediatorDid }
       : {}),
     encryptHolderSecret,
+    ...(s?.pushGatewayUrl ? { pushGatewayUrl: s.pushGatewayUrl } : {}),
+    ...(s?.pushGatewayVapidPublicKey
+      ? { pushGatewayVapidPublicKey: s.pushGatewayVapidPublicKey }
+      : {}),
   };
 }
 

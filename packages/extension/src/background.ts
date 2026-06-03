@@ -17,6 +17,7 @@ import {
 } from "./active-vta.js";
 import { checkOriginPin, pinOrigin } from "./origin-pin.js";
 import { isOriginTrusted, trustOrigin } from "./trusted-sites.js";
+import { registerPushChannel } from "@openvtc/pnm-core";
 import { subscribeToPush } from "./push.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import {
@@ -30,6 +31,7 @@ import {
   OFFSCREEN_FORGET_HOLDER_RECORD,
   OFFSCREEN_REFRESH_VTA_TRANSPORTS,
   OFFSCREEN_REST_LOGIN,
+  OFFSCREEN_SET_WAKE,
   OFFSCREEN_WALLET_LOCK_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
@@ -77,6 +79,7 @@ import {
   RUNTIME_WALLET_DEFAULTS,
   type MediatorStatusResult,
   type OffscreenDidcommLoginRequest,
+  type OffscreenSetWakeResponse,
   type OffscreenStepUpVtaRequest,
   type RuntimeApiGetRequest,
   type RuntimeApiGetResponse,
@@ -131,7 +134,7 @@ import { getSettings } from "./config.js";
 
 chrome.runtime.onInstalled.addListener((details) => {
   console.info("[pnm] extension installed:", details.reason);
-  void subscribeToPush();
+  void ensurePushWake();
   // On update (the dev-iteration case the operator hits constantly:
   // edit the plugin → "Reload" in chrome://extensions), reload every
   // tab that the content script matches. Without this, the OLD content
@@ -217,8 +220,87 @@ self.addEventListener("push", (event) => {
 });
 
 // Ensure a subscription exists whenever the worker spins up (not only on
-// install — MV3 workers are ephemeral).
-void subscribeToPush();
+// install — MV3 workers are ephemeral), and — when a push gateway is
+// configured — register it + convey the wake handle to the active VTA.
+void ensurePushWake();
+
+/**
+ * Web Push wake-up wiring (binding https://trusttasks.org/binding/push/0.1).
+ *
+ *   1. Subscribe to Web Push (gateway VAPID key when configured).
+ *   2. `push/register` the subscription with the gateway → opaque WakeHandle
+ *      (plain unauthenticated fetch — `register` is open; the handle is useless
+ *      until provisioned). Runs SW-side: no DIDComm needed.
+ *   3. `device/set-wake` conveys the handle to the active VTA, relayed to the
+ *      offscreen doc (set-wake authcrypts to the VTA; the holder identity only
+ *      unwraps there).
+ *
+ * Best-effort and idempotent: no gateway configured → just subscribe; no active
+ * VTA → register is skipped (logged). The contentless wake then lands in the
+ * `push` handler above.
+ */
+async function ensurePushWake(): Promise<void> {
+  const sub = await subscribeToPush();
+  if (!sub) return;
+
+  const { pushGatewayUrl } = await getSettings();
+  if (!pushGatewayUrl) return; // push is opt-in until a gateway is configured
+
+  const active = await readActiveConnection();
+  if (!active.ok) {
+    console.info(`[pnm push] subscribed; skipping gateway register — ${active.error}`);
+    return;
+  }
+
+  const json = sub.toJSON();
+  const p256dh = json.keys?.p256dh;
+  const auth = json.keys?.auth;
+  if (!json.endpoint || !p256dh || !auth) {
+    console.warn("[pnm push] subscription is missing Web Push keys; cannot register");
+    return;
+  }
+
+  try {
+    const handle = await registerPushChannel({
+      gatewayUrl: pushGatewayUrl,
+      registration: {
+        platform: "webpush",
+        endpoint: json.endpoint,
+        keys: { p256dh, auth },
+      },
+      controllerVtaDid: active.conn.vtaDid,
+    });
+    console.info("[pnm push] registered with gateway; handle:", JSON.stringify(handle));
+
+    // Convey the handle to the VTA. Relayed to offscreen — set-wake authcrypts
+    // to the VTA and the holder identity only unwraps there. Suggest the
+    // device's mediator as a trigger (the VTA owns the final allowlist).
+    const raw = await readActiveConnectionRaw();
+    await ensureOffscreenDocument();
+    const resp = (await chrome.runtime.sendMessage({
+      target: OFFSCREEN_TARGET,
+      type: OFFSCREEN_SET_WAKE,
+      vtaDid: active.conn.vtaDid,
+      restBaseUrl: active.conn.restBaseUrl,
+      wakeHandle: handle,
+      pushPlatform: "webpush",
+      ...(raw?.mediatorDid ? { suggestedTriggers: [raw.mediatorDid] } : {}),
+    })) as OffscreenSetWakeResponse;
+
+    if (resp?.ok) {
+      console.info(
+        "[pnm push] device/set-wake ok — pushCapable:",
+        resp.result?.pushCapable,
+        "triggers:",
+        resp.result?.triggerPolicy?.allowedTriggers ?? [],
+      );
+    } else {
+      console.warn("[pnm push] device/set-wake failed:", resp?.error);
+    }
+  } catch (e) {
+    console.warn("[pnm push] gateway register / set-wake failed:", e);
+  }
+}
 
 // Bring up the offscreen doc + its persistent inbound mediator session so the
 // wallet can receive RP-initiated confirm requests. Idempotent (both

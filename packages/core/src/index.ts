@@ -9,5 +9,6 @@ export * from "./onboarding/index.js";
 export * from "./store/index.js";
 export * from "./trust-tasks/index.js";
 export * from "./vault/index.js";
+export * from "./device/index.js";
 export * from "./provision/index.js";
 export * from "./util/timing.js";
