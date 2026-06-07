@@ -38,12 +38,16 @@ const PASSKEY_VMS = "https://trusttasks.org/spec/vta/passkey-vms";
 
 /** Trust-task operation type URIs — the value of a request envelope's
  *  `type` field (NOT the DIDComm message type, which is always
- *  {@link TRUST_TASK_ENVELOPE_TYPE}). */
+ *  {@link TRUST_TASK_ENVELOPE_TYPE}).
+ *
+ *  Version `0.1` — the published spec version (was the pre-spec `/1.0`).
+ *  Payloads are field-identical to the old `/1.0`; the VTA dual-accepts
+ *  both (vta-sdk ≥ 0.10.0) and `/1.0` is deprecated there. */
 export const PasskeyVmTask = {
-  enrollChallenge: `${PASSKEY_VMS}/enroll-challenge/1.0`,
-  enrollSubmit: `${PASSKEY_VMS}/enroll-submit/1.0`,
-  list: `${PASSKEY_VMS}/list/1.0`,
-  revoke: `${PASSKEY_VMS}/revoke/1.0`,
+  enrollChallenge: `${PASSKEY_VMS}/enroll-challenge/0.1`,
+  enrollSubmit: `${PASSKEY_VMS}/enroll-submit/0.1`,
+  list: `${PASSKEY_VMS}/list/0.1`,
+  revoke: `${PASSKEY_VMS}/revoke/0.1`,
 } as const;
 
 export type PasskeyVmTaskType =
