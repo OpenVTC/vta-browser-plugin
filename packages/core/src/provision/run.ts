@@ -98,7 +98,7 @@ export async function runProvisionIntegration(
   //    integration DID minted (TemplateBootstrap), which is what
   //    mediator / did-hosting integrations consume.
   const ask: BootstrapAsk = {
-    type: "AdminRotation",
+    type: "adminRotation",
     // contextHint is just a hint embedded in the VP — only meaningful
     // when the caller actually knows the context. When omitted, the
     // VTA's authoritative context resolution runs (inference rules).

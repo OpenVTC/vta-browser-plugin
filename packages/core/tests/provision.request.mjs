@@ -98,7 +98,7 @@ test("buildBootstrapRequest: produces VP with expected fields", async () => {
   const { vp, nonce } = await buildBootstrapRequest({
     ephemeral: eph,
     ask: {
-      type: "AdminRotation",
+      type: "adminRotation",
       contextHint: "default",
       adminTemplate: { name: "vta-admin", vars: {} },
     },
@@ -116,7 +116,7 @@ test("buildBootstrapRequest: produces VP with expected fields", async () => {
   assert.equal(nonce.length, 16);
   assert.ok(vp.validUntil);
   assert.equal(vp.label, "smoke-test");
-  assert.equal(vp.ask.type, "AdminRotation");
+  assert.equal(vp.ask.type, "adminRotation");
 
   // Proof must be DataIntegrityProof / eddsa-jcs-2022 / authentication.
   const proof = vp.proof;
@@ -132,7 +132,7 @@ test("buildBootstrapRequest: proof verifies under the holder's pubkey", async ()
   const { vp } = await buildBootstrapRequest({
     ephemeral: eph,
     ask: {
-      type: "AdminRotation",
+      type: "adminRotation",
       adminTemplate: { name: "vta-admin" },
     },
   });
@@ -166,7 +166,7 @@ test("buildBootstrapRequest: validity window matches default", async () => {
   const before = Date.now();
   const { vp } = await buildBootstrapRequest({
     ephemeral: eph,
-    ask: { type: "AdminRotation", adminTemplate: { name: "vta-admin" } },
+    ask: { type: "adminRotation", adminTemplate: { name: "vta-admin" } },
   });
   const after = Date.now();
 
@@ -184,7 +184,7 @@ test("buildBootstrapRequest: proof.created is UTC and back-dated (never in the v
   const before = Date.now();
   const { vp } = await buildBootstrapRequest({
     ephemeral: generateSigningIdentity(),
-    ask: { type: "AdminRotation", adminTemplate: { name: "vta-admin" } },
+    ask: { type: "adminRotation", adminTemplate: { name: "vta-admin" } },
   });
   const created = vp.proof.created;
 
