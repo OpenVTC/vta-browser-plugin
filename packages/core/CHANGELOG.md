@@ -19,6 +19,10 @@ For history before this file, see `git log` on `packages/core`.
   `ask.type` discriminator is now the 0.2 camelCase form (`adminRotation`). The
   `trust-task-error` parser now reads the canonical `message` field (was a
   non-existent `comment`) and accepts both `trust-task-error/0.1` and `/0.2`.
+- `vta/passkey-vms/{enroll-challenge,enroll-submit,list,revoke}` moved from the
+  pre-spec `/1.0` to the now-published `/0.1` once the VTA added `/0.1`
+  dual-accept (#309, vta-sdk ≥ 0.10.0). Payloads are field-identical; this is a
+  version-string bump.
 - Bumped `@scure/base` `^1.1.9` → `^2.2.0` (API-compatible).
 
 ### BREAKING
