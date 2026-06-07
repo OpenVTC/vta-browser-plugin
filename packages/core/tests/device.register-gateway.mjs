@@ -26,7 +26,7 @@ test("registerPushChannel posts a push/register doc and returns the handle", asy
     return {
       ok: true,
       json: async () => ({
-        type: "https://trusttasks.org/spec/push/register/0.1#response",
+        type: "https://trusttasks.org/spec/push/register/0.2#response",
         payload: { wakeHandle: { gateway: "https://gw.example", handle: "z6MkHandle" } },
       }),
     };
@@ -49,7 +49,7 @@ test("registerPushChannel posts a push/register doc and returns the handle", asy
   assert.equal(captured.init.headers.authorization, undefined);
 
   const doc = JSON.parse(captured.init.body);
-  assert.equal(doc.type, "https://trusttasks.org/spec/push/register/0.1");
+  assert.equal(doc.type, "https://trusttasks.org/spec/push/register/0.2");
   assert.deepEqual(doc.payload.registration, REGISTRATION);
   assert.equal(doc.payload.controllerVtaDid, "did:webvh:example:vta");
   assert.ok(typeof doc.id === "string" && doc.id.length > 0);

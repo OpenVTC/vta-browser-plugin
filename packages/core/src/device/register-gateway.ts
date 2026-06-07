@@ -15,9 +15,12 @@
 import type { WakeHandle } from "./set-wake.js";
 import { isTrustTaskErrorType } from "../vta/protocol.js";
 
-const TASK_PUSH_REGISTER = "https://trusttasks.org/spec/push/register/0.1";
+// push/register/0.2 — the payload is field-identical to 0.1 (no enum values),
+// so this is a pure version-string bump. The gateway accepts both 0.1 and 0.2
+// and mirrors the request version into the `#response`.
+const TASK_PUSH_REGISTER = "https://trusttasks.org/spec/push/register/0.2";
 const TASK_PUSH_REGISTER_RESPONSE =
-  "https://trusttasks.org/spec/push/register/0.1#response";
+  "https://trusttasks.org/spec/push/register/0.2#response";
 
 /** A device's platform push channel — tagged union over `platform`. Only the
  *  Web Push variant is wired today (self-hostable, no Apple/Google account). */
