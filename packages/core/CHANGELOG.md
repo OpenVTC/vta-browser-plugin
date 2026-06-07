@@ -14,8 +14,9 @@ For history before this file, see `git log` on `packages/core`.
   `vault/{list,upsert,release,proxy-login,sign-trust-task}` now target the
   `/0.2` Trust-Task URIs. `push/register` moved to `/0.2` once the gateway
   added 0.2 acceptance (vti-push-gateway#7). `provision/integration` moved off the legacy
-  `firstperson.network` type to the canonical
-  `https://trusttasks.org/spec/provision/integration/0.1`. The
+  `firstperson.network` type to `https://trusttasks.org/spec/provision/integration/0.2`
+  once the VTA added 0.2 dual-accept (#306); the signed BootstrapRequest VP's
+  `ask.type` discriminator is now the 0.2 camelCase form (`adminRotation`). The
   `trust-task-error` parser now reads the canonical `message` field (was a
   non-existent `comment`) and accepts both `trust-task-error/0.1` and `/0.2`.
 - Bumped `@scure/base` `^1.1.9` → `^2.2.0` (API-compatible).

@@ -28,22 +28,27 @@ export interface DidTemplateRef {
 
 /** What the holder is asking the VTA to do. Tagged on `type`.
  *
- *  `TemplateBootstrap` is for full integration bootstrap (mediator,
- *  did-hosting host, etc.). `AdminRotation` is what the wallet uses — it
+ *  `templateBootstrap` is for full integration bootstrap (mediator,
+ *  did-hosting host, etc.). `adminRotation` is what the wallet uses — it
  *  asks the VTA to mint a fresh long-term admin DID + keys without
  *  rendering any integration template. The browser plugin has no
- *  integration-side identity to advertise, so AdminRotation is the right
- *  ask for M2C. */
+ *  integration-side identity to advertise, so adminRotation is the right
+ *  ask for M2C.
+ *
+ *  Tag casing is the `provision/integration/0.2` lowerCamelCase form. The
+ *  tag is signed inside the VP, and the VTA verifies the proof over the
+ *  received bytes (it accepts the 0.1 `AdminRotation`/`TemplateBootstrap`
+ *  casing via serde aliases, but 0.2 clients sign the camelCase form). */
 export type BootstrapAsk =
   | {
-      type: "TemplateBootstrap";
+      type: "templateBootstrap";
       contextHint?: string;
       template: DidTemplateRef;
       adminTemplate?: DidTemplateRef;
       note?: string;
     }
   | {
-      type: "AdminRotation";
+      type: "adminRotation";
       contextHint?: string;
       adminTemplate: DidTemplateRef;
       note?: string;
