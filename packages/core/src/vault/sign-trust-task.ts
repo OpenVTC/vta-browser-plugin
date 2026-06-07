@@ -1,6 +1,6 @@
 // Vault — sign-trust-task.
 //
-// Posts a `https://trusttasks.org/spec/vault/sign-trust-task/0.1`
+// Posts a `https://trusttasks.org/spec/vault/sign-trust-task/0.2`
 // envelope. The VTA attaches an eddsa-jcs-2022 Data Integrity proof
 // to the supplied envelope, signing as the principal DID of a
 // `did-self-issued` or `didcomm-peer` vault entry. The long-term
@@ -21,9 +21,9 @@
 import { postTrustTask, type VtaAuthInputs, getVtaBearer } from "./transport.js";
 import type { TrustTaskEnvelope } from "../trust-tasks/sign.js";
 
-const TASK_VAULT_SIGN_TRUST_TASK = "https://trusttasks.org/spec/vault/sign-trust-task/0.1";
+const TASK_VAULT_SIGN_TRUST_TASK = "https://trusttasks.org/spec/vault/sign-trust-task/0.2";
 const TASK_VAULT_SIGN_TRUST_TASK_RESPONSE =
-  "https://trusttasks.org/spec/vault/sign-trust-task/0.1#response";
+  "https://trusttasks.org/spec/vault/sign-trust-task/0.2#response";
 
 export interface VaultSignTrustTaskRestOptions extends VtaAuthInputs {
   /** Identifier of the vault entry whose principal will sign. MUST
@@ -76,7 +76,7 @@ export async function vaultSignTrustTaskRest(
       recipient: opts.service.did,
     },
     expectedResponseType: TASK_VAULT_SIGN_TRUST_TASK_RESPONSE,
-    operationLabel: "vault/sign-trust-task/0.1",
+    operationLabel: "vault/sign-trust-task/0.2",
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 

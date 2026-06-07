@@ -1,6 +1,6 @@
 // Vault — upsert (M2A.5).
 //
-// Posts a `https://trusttasks.org/spec/vault/upsert/0.1` envelope to the
+// Posts a `https://trusttasks.org/spec/vault/upsert/0.2` envelope to the
 // VTA's trust-task dispatcher. The cleartext secret is wrapped in a
 // DIDComm authcrypt envelope (the `didcomm-authcrypt` variant of the
 // canonical SealedEnvelope schema), so the long-term credential rides
@@ -24,8 +24,8 @@ import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import type { SecretKind, SiteTarget, VaultEntry } from "./list.js";
 import { getVtaBearer, postTrustTask, type VtaAuthInputs } from "./transport.js";
 
-const TASK_VAULT_UPSERT = "https://trusttasks.org/spec/vault/upsert/0.1";
-const TASK_VAULT_UPSERT_RESPONSE = "https://trusttasks.org/spec/vault/upsert/0.1#response";
+const TASK_VAULT_UPSERT = "https://trusttasks.org/spec/vault/upsert/0.2";
+const TASK_VAULT_UPSERT_RESPONSE = "https://trusttasks.org/spec/vault/upsert/0.2#response";
 const INNER_MSG_TYPE = "https://openvtc.org/vault/upsert/secret-envelope/1.0";
 
 /** Optional driver config on Password-kind entries — instructs the
@@ -65,7 +65,7 @@ export type VaultSecret =
       secureNotes?: string;
     }
   | {
-      kind: "oauth-tokens";
+      kind: "oauthTokens";
       provider: string;
       refreshToken: string;
       accessToken?: string;
@@ -74,7 +74,7 @@ export type VaultSecret =
       secureNotes?: string;
     }
   | {
-      kind: "did-self-issued";
+      kind: "didSelfIssued";
       /** The persona DID the entry acts AS (becomes the SIOP `iss`
        *  + `sub`). */
       did: string;
@@ -84,7 +84,7 @@ export type VaultSecret =
       secureNotes?: string;
     }
   | {
-      kind: "bearer-token";
+      kind: "bearerToken";
       token: string;
       headerName?: string;
       headerPrefix?: string;
@@ -183,7 +183,7 @@ export async function vaultUpsertRest(
       recipient: opts.service.did,
     },
     expectedResponseType: TASK_VAULT_UPSERT_RESPONSE,
-    operationLabel: "vault/upsert/0.1",
+    operationLabel: "vault/upsert/0.2",
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 }

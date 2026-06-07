@@ -529,7 +529,7 @@ async function doSignTrustTask(
     const match = listed.entries.find(
       (e) =>
         e.principalDid === params.asDid &&
-        (e.secretKind === "did-self-issued" || e.secretKind === "didcomm-peer"),
+        (e.secretKind === "didSelfIssued" || e.secretKind === "didcommPeer"),
     );
     if (match) {
       // Ensure issuer is set on the envelope — the VTA rejects with

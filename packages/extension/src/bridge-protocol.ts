@@ -695,10 +695,10 @@ export interface VaultEntryView {
   id: string;
   contextId: string;
   targets: Array<
-    | { kind: "web-origin"; origin: string }
+    | { kind: "webOrigin"; origin: string }
     | { kind: "did"; did: string }
-    | { kind: "ios-app"; bundleId: string; teamId?: string }
-    | { kind: "android-app"; packageName: string; sha256CertFingerprints: string[] }
+    | { kind: "iosApp"; bundleId: string; teamId?: string }
+    | { kind: "androidApp"; packageName: string; sha256CertFingerprints: string[] }
   >;
   label: string;
   secretKind: string;
@@ -987,7 +987,7 @@ export interface VaultListParams {
   /** Filter to entries with at least one web-origin target whose URI
    *  starts with this prefix. */
   targetOriginPrefix?: string;
-  /** Filter to a specific secret kind (e.g. `"did-self-issued"`). */
+  /** Filter to a specific secret kind (e.g. `"didSelfIssued"`). */
   secretKind?: string;
 }
 

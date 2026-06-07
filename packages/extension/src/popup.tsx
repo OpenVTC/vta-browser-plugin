@@ -837,14 +837,14 @@ function VaultPanel() {
                 />
               ) : (
                 <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                  {(e.secretKind === "did-self-issued" ||
+                  {(e.secretKind === "didSelfIssued" ||
                     e.secretKind === "password") && (
                     <button
                       onClick={() => void useEntry(e)}
                       disabled={busy}
                       style={{ fontSize: 11 }}
                       title={
-                        e.secretKind === "did-self-issued"
+                        e.secretKind === "didSelfIssued"
                           ? "VTA mints a SIOP id_token on your behalf — long-term key never leaves the VTA"
                           : "VTA logs in on your behalf and injects the session cookies — the password never reaches this browser"
                       }
@@ -904,7 +904,7 @@ type AddEntryOutput = {
   label: string;
   contextId: string;
   targets: VaultEntryView["targets"];
-  secretKind: "password" | "did-self-issued";
+  secretKind: "password" | "didSelfIssued";
   secret: VaultSecretView;
 };
 
@@ -922,7 +922,7 @@ function AddEntryForm({
   onSubmit: (form: AddEntryOutput) => Promise<void>;
 }): React.JSX.Element {
   // Shared fields
-  const [kind, setKind] = useState<"password" | "did-self-issued">("password");
+  const [kind, setKind] = useState<"password" | "didSelfIssued">("password");
   const [label, setLabel] = useState("");
   const [contextId, setContextId] = useState(_seedContexts[0] ?? "");
   const [notes, setNotes] = useState("");
@@ -1084,13 +1084,13 @@ function AddEntryForm({
       return {
         label,
         contextId,
-        targets: [{ kind: "web-origin" as const, origin }],
+        targets: [{ kind: "webOrigin" as const, origin }],
         secretKind: "password",
         secret,
       };
     }
     const secret: VaultSecretView = {
-      kind: "did-self-issued",
+      kind: "didSelfIssued",
       did: principalDid.trim(),
       signingKeyId: signingKeyId.trim(),
       ...(notes ? { secureNotes: notes } : {}),
@@ -1099,7 +1099,7 @@ function AddEntryForm({
       label,
       contextId,
       targets: [{ kind: "did" as const, did: rpDid.trim() }],
-      secretKind: "did-self-issued",
+      secretKind: "didSelfIssued",
       secret,
     };
   }
@@ -1124,11 +1124,11 @@ function AddEntryForm({
         <span style={{ color: "#666" }}>Secret kind</span>
         <select
           value={kind}
-          onChange={(e) => setKind(e.target.value as "password" | "did-self-issued")}
+          onChange={(e) => setKind(e.target.value as "password" | "didSelfIssued")}
           style={{ fontSize: 11 }}
         >
           <option value="password">password</option>
-          <option value="did-self-issued">did-self-issued</option>
+          <option value="didSelfIssued">did-self-issued</option>
         </select>
       </label>
       <label style={{ display: "grid", gap: 2 }}>
@@ -1285,7 +1285,7 @@ function AddEntryForm({
         </>
       )}
 
-      {kind === "did-self-issued" && (
+      {kind === "didSelfIssued" && (
         <>
           <label style={{ display: "grid", gap: 2 }}>
             <span style={{ color: "#666" }}>Relying party DID (target)</span>
@@ -1626,7 +1626,7 @@ function SecretKindBadge({ kind }: { kind: string }): React.JSX.Element {
       ? "#4a6"
       : kind === "passkey"
         ? "#46a"
-        : kind === "oauth-tokens"
+        : kind === "oauthTokens"
           ? "#a64"
           : "#777";
   return (
@@ -1652,13 +1652,13 @@ function summariseTargets(targets: VaultEntryView["targets"]): string {
   if (!first) return "—";
   const rest = targets.length > 1 ? ` (+${targets.length - 1})` : "";
   switch (first.kind) {
-    case "web-origin":
+    case "webOrigin":
       return first.origin + rest;
     case "did":
       return first.did + rest;
-    case "ios-app":
+    case "iosApp":
       return `ios:${first.bundleId}${rest}`;
-    case "android-app":
+    case "androidApp":
       return `android:${first.packageName}${rest}`;
   }
 }

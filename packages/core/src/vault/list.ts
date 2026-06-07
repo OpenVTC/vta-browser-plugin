@@ -1,6 +1,6 @@
 // Vault — list (M1).
 //
-// Posts a `https://trusttasks.org/spec/vault/list/0.1` envelope to the VTA's
+// Posts a `https://trusttasks.org/spec/vault/list/0.2` envelope to the VTA's
 // trust-task dispatcher (`POST /api/trust-tasks`) and returns the metadata
 // view of stored credentials. Read-only — secret material never crosses the
 // wire (it's only released by `vault/release/0.1`, which lands in M2).
@@ -19,27 +19,27 @@
 import { packAuthcrypt, type Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 
-const TASK_VAULT_LIST_0_1 = "https://trusttasks.org/spec/vault/list/0.1";
-const TASK_VAULT_LIST_0_1_RESPONSE = "https://trusttasks.org/spec/vault/list/0.1#response";
+const TASK_VAULT_LIST_0_2 = "https://trusttasks.org/spec/vault/list/0.2";
+const TASK_VAULT_LIST_0_2_RESPONSE = "https://trusttasks.org/spec/vault/list/0.2#response";
 const VTA_AUTHENTICATE = "https://affinidi.com/atm/1.0/authenticate";
 
 /** Discriminator that mirrors the canonical SecretKind enum. */
 export type SecretKind =
   | "password"
   | "passkey"
-  | "oauth-tokens"
-  | "did-self-issued"
-  | "didcomm-peer"
-  | "bearer-token"
-  | "ssh-key"
+  | "oauthTokens"
+  | "didSelfIssued"
+  | "didcommPeer"
+  | "bearerToken"
+  | "sshKey"
   | "custom";
 
 /** Tagged union — see `vault/_shared/0.1/vault-entry.schema.json` $defs/SiteTarget. */
 export type SiteTarget =
-  | { kind: "web-origin"; origin: string }
+  | { kind: "webOrigin"; origin: string }
   | { kind: "did"; did: string }
-  | { kind: "ios-app"; bundleId: string; teamId?: string }
-  | { kind: "android-app"; packageName: string; sha256CertFingerprints: string[] };
+  | { kind: "iosApp"; bundleId: string; teamId?: string }
+  | { kind: "androidApp"; packageName: string; sha256CertFingerprints: string[] };
 
 /** Metadata view of a single vault entry. No secret bytes. */
 export interface VaultEntry {
@@ -77,7 +77,7 @@ export interface VaultEntry {
   principalDid?: string;
 }
 
-/** Filters accepted by vault/list/0.1. All AND-combined. */
+/** Filters accepted by vault/list/0.2. All AND-combined. */
 export interface VaultListFilter {
   contextId?: string;
   targetOriginPrefix?: string;
@@ -116,7 +116,7 @@ export interface VaultListRestOptions {
 
 /**
  * Authenticate to the VTA over REST + DIDComm-authcrypt, then post the
- * canonical vault/list/0.1 Trust Task envelope and return the parsed
+ * canonical vault/list/0.2 Trust Task envelope and return the parsed
  * entries. Single round-trip's worth of auth — no token cache in M1.
  */
 export async function vaultListRest(opts: VaultListRestOptions): Promise<VaultListResponse> {
@@ -170,10 +170,10 @@ export async function vaultListRest(opts: VaultListRestOptions): Promise<VaultLi
     throw new Error(`vta /auth/: malformed response: ${JSON.stringify(aBody)}`);
   }
 
-  // 4. POST /api/trust-tasks with the vault/list/0.1 envelope.
+  // 4. POST /api/trust-tasks with the vault/list/0.2 envelope.
   const envelope = {
     id: globalThis.crypto.randomUUID(),
-    type: TASK_VAULT_LIST_0_1,
+    type: TASK_VAULT_LIST_0_2,
     issuer: holder.did,
     recipient: service.did,
     issuedAt: new Date().toISOString(),
@@ -202,7 +202,7 @@ export async function vaultListRest(opts: VaultListRestOptions): Promise<VaultLi
     };
   };
 
-  if (tBody.type !== TASK_VAULT_LIST_0_1_RESPONSE) {
+  if (tBody.type !== TASK_VAULT_LIST_0_2_RESPONSE) {
     throw new Error(
       `vault/list: unexpected response type ${tBody.type ?? "(none)"} — ${JSON.stringify(tBody)}`,
     );
