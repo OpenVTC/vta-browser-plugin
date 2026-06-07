@@ -18,9 +18,21 @@ export const TRUST_TASK_ENVELOPE_TYPE =
   "https://trusttasks.org/binding/didcomm/0.1/envelope";
 
 /** Framework error-document `type` — a `TrustTask` whose payload is a
- *  {@link TrustTaskErrorPayload}. */
+ *  {@link TrustTaskErrorPayload}. The 0.1 form; a 0.2-capable peer emits
+ *  {@link TRUST_TASK_ERROR_TYPE_0_2}. Use {@link isTrustTaskErrorType} to
+ *  match either on the wire. */
 export const TRUST_TASK_ERROR_TYPE =
   "https://trusttasks.org/spec/trust-task-error/0.1";
+
+/** 0.2 framework error-document `type`. Same payload shape as 0.1 except the
+ *  `code` enum is lowerCamelCase (`permissionDenied` vs `permission_denied`). */
+export const TRUST_TASK_ERROR_TYPE_0_2 =
+  "https://trusttasks.org/spec/trust-task-error/0.2";
+
+/** True for either the 0.1 or 0.2 framework error-document `type`. */
+export function isTrustTaskErrorType(type: string | undefined): boolean {
+  return type === TRUST_TASK_ERROR_TYPE || type === TRUST_TASK_ERROR_TYPE_0_2;
+}
 
 const PASSKEY_VMS = "https://trusttasks.org/spec/vta/passkey-vms";
 
@@ -52,9 +64,11 @@ export interface TrustTask<P> {
   payload: P;
 }
 
-/** Payload of a `trust-task-error/0.1` document. `code` is a snake_case
- *  framework status (`permission_denied`, `malformed_request`,
- *  `task_failed`, `unsupported_type`, `internal_error`, …). */
+/** Payload of a `trust-task-error/{0.1,0.2}` document. `code` is a framework
+ *  status — snake_case in 0.1 (`permission_denied`, `malformed_request`,
+ *  `task_failed`, `unsupported_type`, `internal_error`, …) and lowerCamelCase
+ *  in 0.2 (`permissionDenied`, …). Treat it as an opaque string; do not
+ *  branch on a specific casing. */
 export interface TrustTaskErrorPayload {
   code: string;
   message?: string;

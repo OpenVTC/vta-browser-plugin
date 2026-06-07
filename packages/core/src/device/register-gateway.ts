@@ -13,6 +13,7 @@
 // `device/set-wake`.
 
 import type { WakeHandle } from "./set-wake.js";
+import { isTrustTaskErrorType } from "../vta/protocol.js";
 
 const TASK_PUSH_REGISTER = "https://trusttasks.org/spec/push/register/0.1";
 const TASK_PUSH_REGISTER_RESPONSE =
@@ -78,9 +79,9 @@ export async function registerPushChannel(
     }
     return handle;
   }
-  if (out.type === "https://trusttasks.org/spec/trust-task-error/0.1") {
-    const err = out.payload as { code?: string; comment?: string };
-    throw new Error(`${err?.code ?? "unknown"}: ${err?.comment ?? "(no comment)"}`);
+  if (isTrustTaskErrorType(out.type)) {
+    const err = out.payload as { code?: string; message?: string };
+    throw new Error(`${err?.code ?? "unknown"}: ${err?.message ?? "(no message)"}`);
   }
   throw new Error(`push/register: unexpected response type ${out.type ?? "(none)"}`);
 }

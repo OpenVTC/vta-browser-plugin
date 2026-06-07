@@ -1,6 +1,6 @@
 // Vault — proxy-login (M2B.3).
 //
-// Posts a `https://trusttasks.org/spec/vault/proxy-login/0.1` envelope.
+// Posts a `https://trusttasks.org/spec/vault/proxy-login/0.2` envelope.
 // The VTA performs the login at the bound third-party site on the
 // holder's behalf, returns a `SessionBlob` (cookies + headers needed to
 // operate the resulting session) inside a `didcomm-authcrypt` JWE, and
@@ -29,9 +29,9 @@ import { unpackMessage, type Identity } from "../didcomm/index.js";
 import type { SiteTarget } from "./list.js";
 import { getVtaBearer, postTrustTask, type VtaAuthInputs } from "./transport.js";
 
-const TASK_VAULT_PROXY_LOGIN = "https://trusttasks.org/spec/vault/proxy-login/0.1";
+const TASK_VAULT_PROXY_LOGIN = "https://trusttasks.org/spec/vault/proxy-login/0.2";
 const TASK_VAULT_PROXY_LOGIN_RESPONSE =
-  "https://trusttasks.org/spec/vault/proxy-login/0.1#response";
+  "https://trusttasks.org/spec/vault/proxy-login/0.2#response";
 
 /** Refresh hint the maintainer attaches to the SessionBlob — the holder
  *  uses this to decide whether to background-refresh, refresh on 401, or
@@ -70,7 +70,7 @@ export interface SessionStorageItem {
   value: string;
 }
 
-/** The cleartext payload of a successful `vault/proxy-login/0.1`
+/** The cleartext payload of a successful `vault/proxy-login/0.2`
  *  response. Mirrors `vault/_shared/0.1/session-blob`. */
 export interface SessionBlob {
   /** Maintainer-assigned opaque id. Echoed at the response root for
@@ -174,7 +174,7 @@ export async function vaultProxyLoginRest(
       recipient: opts.service.did,
     },
     expectedResponseType: TASK_VAULT_PROXY_LOGIN_RESPONSE,
-    operationLabel: "vault/proxy-login/0.1",
+    operationLabel: "vault/proxy-login/0.2",
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 

@@ -5,7 +5,8 @@
 // `{gateway}/trust-tasks`, so it's fully testable with a stub fetch (no DIDComm,
 // no holder identity). Covers: (1) a well-formed Web Push registration produces
 // the right wire doc and unwraps the WakeHandle from the `#response`; (2) a
-// `trust-task-error/0.1` envelope surfaces `code: comment`.
+// `trust-task-error` envelope surfaces `code: message` (the canonical
+// framework field — the gateway emits it via trust-tasks-rs `reject_with`).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -59,7 +60,7 @@ test("registerPushChannel surfaces a trust-task-error envelope", async () => {
     ok: true,
     json: async () => ({
       type: "https://trusttasks.org/spec/trust-task-error/0.1",
-      payload: { code: "push/register:bad_token", comment: "unsupported platform" },
+      payload: { code: "push/register:bad_token", message: "unsupported platform" },
     }),
   });
 

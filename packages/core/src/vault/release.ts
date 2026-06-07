@@ -1,6 +1,6 @@
 // Vault — release (M2A.5).
 //
-// Posts a `https://trusttasks.org/spec/vault/release/0.1` envelope and
+// Posts a `https://trusttasks.org/spec/vault/release/0.2` envelope and
 // unpacks the maintainer's authcrypt-sealed response into the cleartext
 // `VaultSecret`. The secret bytes only ever live in the holder's local
 // memory for the duration of the `ttlSeconds` the maintainer caps; the
@@ -14,8 +14,8 @@ import type { SecretKind } from "./list.js";
 import { getVtaBearer, postTrustTask, type VtaAuthInputs } from "./transport.js";
 import type { VaultSecret } from "./upsert.js";
 
-const TASK_VAULT_RELEASE = "https://trusttasks.org/spec/vault/release/0.1";
-const TASK_VAULT_RELEASE_RESPONSE = "https://trusttasks.org/spec/vault/release/0.1#response";
+const TASK_VAULT_RELEASE = "https://trusttasks.org/spec/vault/release/0.2";
+const TASK_VAULT_RELEASE_RESPONSE = "https://trusttasks.org/spec/vault/release/0.2#response";
 
 export interface VaultReleaseRestOptions extends VtaAuthInputs {
   entryId: string;
@@ -83,7 +83,7 @@ export async function vaultReleaseRest(
       recipient: opts.service.did,
     },
     expectedResponseType: TASK_VAULT_RELEASE_RESPONSE,
-    operationLabel: "vault/release/0.1",
+    operationLabel: "vault/release/0.2",
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 

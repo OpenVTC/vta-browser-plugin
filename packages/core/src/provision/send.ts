@@ -4,16 +4,19 @@
 // authcrypt-forward-outer + send-and-await-reply shape. The only thing
 // that differs is the message type URI and the body wire shape.
 //
-// Wire URIs (pre-spec-migration — see trust-tasks #51 for the canonical
-// Trust Task URI that the VTA will accept once implementation lands):
-//   request:  https://firstperson.network/protocols/provision-integration/1.0/provision-integration
-//   reply:    https://firstperson.network/protocols/provision-integration/1.0/provision-integration-result
+// Wire URIs — the canonical Trust Task spec URIs. The VTA dual-registers
+// these alongside the legacy firstperson.network types and routes both to the
+// same handler (`result_uri_for` echoes the canonical `#response` for a
+// canonical request), so this is a drop-in URI migration off the legacy FPN
+// type the VTA plans to retire:
+//   request:  https://trusttasks.org/spec/provision/integration/0.1
+//   reply:    https://trusttasks.org/spec/provision/integration/0.1#response
 //
-// Body field naming on the wire matches the existing Rust types in
-// `vta-sdk::provision_integration::http` — `snake_case` for now. The
-// canonical Trust Task spec uses `camelCase`; that migration is a
-// separate downstream change that will keep both shapes accepted during
-// the deprecation window.
+// Body field naming on the wire stays `snake_case`: the VTA's canonical and
+// legacy paths share one handler that deserializes the same
+// `ProvisionIntegrationRequest` (snake_case) struct. (The published 0.1
+// payload schema documents camelCase, but the VTA accepts snake_case on this
+// DIDComm binding; revisit if the VTA tightens to camelCase or a 0.2 lands.)
 
 import { packAuthcrypt, packAuthcryptJson, wrapForward, type Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
@@ -22,9 +25,9 @@ import type { DidcommMessageBridge } from "../vta/transport.js";
 import type { BootstrapRequestVp } from "./request.js";
 
 const PROVISION_INTEGRATION =
-  "https://firstperson.network/protocols/provision-integration/1.0/provision-integration";
+  "https://trusttasks.org/spec/provision/integration/0.1";
 const PROVISION_INTEGRATION_RESULT =
-  "https://firstperson.network/protocols/provision-integration/1.0/provision-integration-result";
+  "https://trusttasks.org/spec/provision/integration/0.1#response";
 const PROBLEM_REPORT_TYPE = "https://didcomm.org/report-problem/2.0/problem-report";
 
 const DEFAULT_TIMEOUT_MS = 60_000;

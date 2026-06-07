@@ -67,7 +67,7 @@ interface VtaWallet {
   proxyLogin(params: ProxyLoginParams): Promise<VaultProxyLoginResultView>;
   /** Enumerate vault entries (metadata only, no secret material) via
    *  vault/list/0.1. Typical use from an RP page: filter by
-   *  `targetDid` and `secretKind: "did-self-issued"` to discover
+   *  `targetDid` and `secretKind: "didSelfIssued"` to discover
    *  proxy-login candidates pinned to the RP. Each returned entry's
    *  `principalDid` is the DID the entry would act AS when used in a
    *  proxy-login call. */

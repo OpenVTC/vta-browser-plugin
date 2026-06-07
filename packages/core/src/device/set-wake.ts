@@ -6,17 +6,19 @@
 // the handle. Present `wakeHandle` sets/replaces the wake channel; absent
 // clears it (the device becomes non-wakeable).
 //
-// Posts a `https://trusttasks.org/spec/device/set-wake/0.1` envelope to the
+// Posts a `https://trusttasks.org/spec/device/set-wake/0.2` envelope to the
 // VTA's trust-task dispatcher (`POST /api/trust-tasks`) using the same
-// authcrypt → bearer primitive as the vault/* ops (`getVtaBearer`).
+// authcrypt → bearer primitive as the vault/* ops (`getVtaBearer`). The 0.2
+// payload is field- and value-identical to 0.1 (no enum fields), so this is a
+// pure minor-version bump; the VTA dual-accepts it via its 0.2 edge transform.
 
 import type { Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { getVtaBearer, postTrustTask } from "../vault/transport.js";
 
-const TASK_DEVICE_SET_WAKE = "https://trusttasks.org/spec/device/set-wake/0.1";
+const TASK_DEVICE_SET_WAKE = "https://trusttasks.org/spec/device/set-wake/0.2";
 const TASK_DEVICE_SET_WAKE_RESPONSE =
-  "https://trusttasks.org/spec/device/set-wake/0.1#response";
+  "https://trusttasks.org/spec/device/set-wake/0.2#response";
 
 /** The opaque gateway-issued handle — gateway address + handle, no token. */
 export interface WakeHandle {
@@ -85,7 +87,7 @@ export async function setDeviceWake(
       recipient: opts.service.did,
     },
     expectedResponseType: TASK_DEVICE_SET_WAKE_RESPONSE,
-    operationLabel: "device/set-wake/0.1",
+    operationLabel: "device/set-wake/0.2",
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 }

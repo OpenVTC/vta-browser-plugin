@@ -9,7 +9,7 @@ import { VtaClientError, type VtaErrorCode } from "./errors.js";
 import {
   PasskeyVmTask,
   TRUST_TASK_ENVELOPE_TYPE,
-  TRUST_TASK_ERROR_TYPE,
+  isTrustTaskErrorType,
   type EnrollChallengePayload,
   type EnrollSubmitPayload,
   type ListPayload,
@@ -147,7 +147,7 @@ export class DidcommVtaTransport implements VtaTransport {
     }
 
     const doc = (msg.body ?? {}) as TrustTask<unknown>;
-    if (doc.type === TRUST_TASK_ERROR_TYPE) {
+    if (isTrustTaskErrorType(doc.type)) {
       const err = (doc.payload ?? {}) as TrustTaskErrorPayload;
       throw new VtaClientError(
         coerceTrustTaskCode(err.code),

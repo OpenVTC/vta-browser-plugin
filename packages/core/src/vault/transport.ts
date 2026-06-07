@@ -17,6 +17,7 @@
 
 import { packAuthcrypt, type Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import { isTrustTaskErrorType } from "../vta/protocol.js";
 
 const VTA_AUTHENTICATE = "https://affinidi.com/atm/1.0/authenticate";
 
@@ -153,17 +154,20 @@ export async function postTrustTask<R>(opts: PostTrustTaskOpts<R>): Promise<R> {
     return doc.payload as R;
   }
 
-  // Trust Task error envelope: type = trust-task-error/0.1 with
-  // payload.code = "<slug>:<error>" and payload.comment = explanation.
-  if (doc.type === "https://trusttasks.org/spec/trust-task-error/0.1") {
+  // Trust Task error envelope: type = trust-task-error/{0.1,0.2} with
+  // payload.code = "<slug>:<error>" and payload.message = explanation.
+  // (The framework field is `message`; older code read a non-existent
+  // `comment` and silently dropped all error detail.) Accept both the 0.1
+  // and 0.2 error documents — a 0.2-capable VTA emits trust-task-error/0.2.
+  if (isTrustTaskErrorType(doc.type)) {
     const errPayload = doc.payload as {
       code?: string;
-      comment?: string;
+      message?: string;
       details?: unknown;
     };
     const code = errPayload?.code ?? "unknown";
-    const comment = errPayload?.comment ?? "(no comment)";
-    throw new Error(`${code}: ${comment}`);
+    const message = errPayload?.message ?? "(no message)";
+    throw new Error(`${code}: ${message}`);
   }
 
   throw new Error(
