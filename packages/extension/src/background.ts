@@ -244,9 +244,28 @@ async function handlePushWake(body: string): Promise<void> {
   await notify;
 }
 
-// Ensure a subscription exists whenever the worker spins up (not only on
-// install — MV3 workers are ephemeral), and — when a push gateway is
-// configured — register it + convey the wake handle to the active VTA.
+// Subscribe once the worker is *active*. On a cold start (install/update) the
+// top-level call below runs before activation, when `pushManager.subscribe`
+// throws "no active Service Worker"; the `activate` event is the first point the
+// worker is active, so re-run there. (`clients.claim()` lets this worker control
+// already-open pages immediately, so a freshly-installed SW doesn't sit idle.)
+self.addEventListener("activate", (event) => {
+  const e = event as ExtendableEvent;
+  e.waitUntil(
+    (async () => {
+      try {
+        await (self as unknown as { clients: Clients }).clients.claim();
+      } catch {
+        // best-effort
+      }
+      await ensurePushWake();
+    })(),
+  );
+});
+
+// Also attempt on every warm spin-up (MV3 workers are ephemeral; a wake/event
+// re-evaluates this script with the worker already active, so no `activate`
+// fires). `subscribeToPush` no-ops when the worker isn't active yet.
 void ensurePushWake();
 
 /**

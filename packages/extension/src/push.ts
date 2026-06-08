@@ -34,6 +34,16 @@ export async function subscribeToPush(): Promise<PushSubscription | null> {
     const vapidKey = pushGatewayVapidPublicKey || FALLBACK_VAPID_PUBLIC_KEY;
 
     const reg = (self as unknown as { registration: ServiceWorkerRegistration }).registration;
+
+    // `pushManager.subscribe` requires an *active* service worker. On a cold
+    // start (install/update/first eval) the worker isn't active yet, so calling
+    // it here throws `AbortError: … no active Service Worker`. Defer to the
+    // `activate` event, which re-runs this once the worker is active.
+    if (!reg.active) {
+      console.info("[pnm push] service worker not active yet — deferring subscribe to activate");
+      return null;
+    }
+
     let sub = await reg.pushManager.getSubscription();
 
     // If an existing subscription was minted under a different application
