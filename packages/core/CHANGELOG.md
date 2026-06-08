@@ -8,6 +8,8 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-08
+
 ### Changed
 
 - **Trust-Tasks 0.2 migration** (#59): `device/set-wake` and
