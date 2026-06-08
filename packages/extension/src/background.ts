@@ -203,9 +203,10 @@ async function broadcastWalletEvent(
   }
 }
 
-// Web Push probe (Slice 2 de-risk). Registered at top level so it's active
-// when an inbound push wakes the worker. For now it just logs + notifies;
-// the real handler will wake → mediator pickup → consent → respond.
+// Web Push wake-up (binding https://trusttasks.org/binding/push/0.1).
+// Registered at top level so it's active when an inbound push wakes the worker.
+// A contentless wake is a doorbell: its job is to spin the offscreen doc back up
+// and drain the mediator, not to carry content (see `handlePushWake`).
 self.addEventListener("push", (event) => {
   const pushEvent = event as PushEvent;
   let body = "";
@@ -215,9 +216,33 @@ self.addEventListener("push", (event) => {
     body = "(unreadable payload)";
   }
   console.info("[pnm push] push received:", body);
-  const reg = (self as unknown as { registration: ServiceWorkerRegistration }).registration;
-  pushEvent.waitUntil(reg.showNotification("VTA Wallet", { body: body || "Push received" }));
+  pushEvent.waitUntil(handlePushWake(body));
 });
+
+/** Handle a contentless wake (binding §2). The push payload is an *untrusted
+ *  hint* — the authoritative messages come only from authenticated mediator
+ *  pickup — so we don't act on `body`; we just use the wake to re-establish the
+ *  inbound mediator sessions for every onboarded VTA. On (re)connect those
+ *  sessions drain queued DIDComm Trust Tasks (e.g. an RP confirm-request) and
+ *  the existing inbound handler runs the consent → signed-response flow.
+ *
+ *  This runs inside the push event's `waitUntil` so the service worker stays
+ *  alive until the drain is kicked — unlike the fire-and-forget
+ *  `startInboundListener()` on plain spin-up, which the browser may terminate
+ *  before it completes. `userVisibleOnly: true` requires we show a notification
+ *  per push; the wording is generic (no task content from the push). */
+async function handlePushWake(body: string): Promise<void> {
+  const reg = (self as unknown as { registration: ServiceWorkerRegistration }).registration;
+  const notify = reg.showNotification("VTA Wallet", {
+    body: body || "Checking for pending requests…",
+  });
+  try {
+    await startInboundListener();
+  } catch (e) {
+    console.warn("[pnm push] wake-drain failed:", e);
+  }
+  await notify;
+}
 
 // Ensure a subscription exists whenever the worker spins up (not only on
 // install — MV3 workers are ephemeral), and — when a push gateway is
