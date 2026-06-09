@@ -27,7 +27,7 @@ import type { DidcommMessageBridge } from "../vta/transport.js";
 
 const ACL_SWAP_KEY = "https://trusttasks.org/spec/acl/swap-key/0.1";
 const ACL_SWAP_KEY_RESPONSE = "https://trusttasks.org/spec/acl/swap-key/0.1#response";
-const VTA_AUTHENTICATE = "https://affinidi.com/atm/1.0/authenticate";
+const VTA_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** The ACL entry created for the new DID (the swap-acl result body). */
@@ -156,7 +156,7 @@ export async function swapAclRest(opts: SwapAclRestOptions): Promise<AclSwapResu
     throw new Error(`vta /auth/challenge: malformed response: ${JSON.stringify(cBody)}`);
   }
 
-  // 2. Authcrypt an `atm/1.0/authenticate` message to the VTA (direct, no
+  // 2. Authcrypt an `auth/authenticate/0.1` message to the VTA (direct, no
   //    forward — there's no mediator on this transport).
   const authMsg = {
     id: globalThis.crypto.randomUUID(),

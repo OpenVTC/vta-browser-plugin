@@ -8,6 +8,18 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **VTA DIDComm auth → canonical Trust-Task type.** The authcrypt-auth
+  primitive behind `vault/list`, `vault` transport, `contexts`, and
+  onboarding `swap` posted the legacy `affinidi.com/atm/1.0/authenticate`
+  message type to the VTA's `/auth/`. The VTA dropped that alias (it accepts
+  only `auth/authenticate/0.1` now), so those calls would fail with
+  `unexpected message type`. Switched the `VTA_AUTHENTICATE` constant in all
+  four call sites to the canonical
+  `https://trusttasks.org/spec/auth/authenticate/0.1` (the authcrypt body is
+  unchanged). The SIOP REST login path was already canonical.
+
 ## [0.2.0] - 2026-06-08
 
 ### Changed
