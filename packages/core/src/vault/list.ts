@@ -5,7 +5,7 @@
 // view of stored credentials. Read-only — secret material never crosses the
 // wire (it's only released by `vault/release/0.1`, which lands in M2).
 //
-// Authentication: the wallet authcrypts a `atm/1.0/authenticate` DIDComm
+// Authentication: the wallet authcrypts a `auth/authenticate/0.1` DIDComm
 // message to the VTA's keyAgreement key (same primitive `swapAclRest` uses)
 // to obtain a short-lived bearer token, then attaches the token to the
 // trust-tasks POST. No token caching in M1 — every list call does a fresh
@@ -21,7 +21,7 @@ import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 
 const TASK_VAULT_LIST_0_2 = "https://trusttasks.org/spec/vault/list/0.2";
 const TASK_VAULT_LIST_0_2_RESPONSE = "https://trusttasks.org/spec/vault/list/0.2#response";
-const VTA_AUTHENTICATE = "https://affinidi.com/atm/1.0/authenticate";
+const VTA_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
 
 /** Discriminator that mirrors the canonical SecretKind enum. */
 export type SecretKind =
@@ -140,7 +140,7 @@ export async function vaultListRest(opts: VaultListRestOptions): Promise<VaultLi
     throw new Error(`vta /auth/challenge: malformed response: ${JSON.stringify(cBody)}`);
   }
 
-  // 2. Authcrypt an `atm/1.0/authenticate` message to the VTA.
+  // 2. Authcrypt an `auth/authenticate/0.1` message to the VTA.
   const authMsg = {
     id: globalThis.crypto.randomUUID(),
     type: VTA_AUTHENTICATE,

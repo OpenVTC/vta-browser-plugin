@@ -6,7 +6,7 @@
 // picks "+ New context…" in the picker.
 //
 // Authentication: same primitive every authenticated REST call uses —
-// authcrypted `atm/1.0/authenticate` to the VTA's keyAgreement key,
+// authcrypted `auth/authenticate/0.1` to the VTA's keyAgreement key,
 // followed by a bearer-token-authed JSON request. The auth round-trip
 // is identical to `vault/list/0.1` (no token cache).
 //
@@ -17,7 +17,7 @@ import { packAuthcrypt } from "../didcomm/index.js";
 import type { Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";
 
-const VTA_AUTHENTICATE = "https://affinidi.com/atm/1.0/authenticate";
+const VTA_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
 
 /** One context record as returned by `GET /contexts` and `POST /contexts`.
  *  Field naming mirrors the VTA's `CreateContextResultBody` exactly. */

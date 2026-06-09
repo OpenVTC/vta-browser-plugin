@@ -19,7 +19,7 @@ import { packAuthcrypt, type Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { isTrustTaskErrorType } from "../vta/protocol.js";
 
-const VTA_AUTHENTICATE = "https://affinidi.com/atm/1.0/authenticate";
+const VTA_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
 
 export interface VtaAuthInputs {
   /** VTA REST base URL — from the connection state's `restBaseUrl`. */
@@ -56,7 +56,7 @@ export async function getVtaBearer(opts: VtaAuthInputs): Promise<string> {
     throw new Error(`vta /auth/challenge: malformed response: ${JSON.stringify(cBody)}`);
   }
 
-  // 2. Authcrypt an `atm/1.0/authenticate` message to the VTA.
+  // 2. Authcrypt an `auth/authenticate/0.1` message to the VTA.
   const authMsg = {
     id: globalThis.crypto.randomUUID(),
     type: VTA_AUTHENTICATE,
