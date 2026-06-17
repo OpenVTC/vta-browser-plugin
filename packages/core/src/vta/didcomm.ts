@@ -209,17 +209,23 @@ export class DidcommVtaTransport implements VtaTransport {
 /** Map a framework Trust-Task status `code` to a typed `VtaErrorCode`
  *  so the CLI/UI layer can give targeted guidance. */
 function coerceTrustTaskCode(code: string | undefined): VtaErrorCode {
-  switch (code) {
-    case "permission_denied":
+  // Normalize across framework versions and namespacing: 0.1 codes are
+  // snake_case (`permission_denied`), 0.2 lowerCamelCase
+  // (`permissionDenied`), and extended task codes are namespaced
+  // `<slug>:<local>` (e.g. `vta/passkey-vms:unknownCeremony`). Reduce to
+  // the local part and fold snake→camel so one switch covers all forms.
+  const local = (code ?? "").split(":").pop() ?? "";
+  const norm = local.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase());
+  switch (norm) {
+    case "permissionDenied":
       return "e.p.msg.forbidden";
-    case "internal_error":
+    case "internalError":
     case "unavailable":
       return "e.p.msg.internal";
-    case "malformed_request":
-    case "unsupported_type":
-    case "task_failed":
-      return "e.p.msg.bad_request";
     default:
+      // malformedRequest, unsupportedType, unsupportedVersion, proofRequired,
+      // proofInvalid, wrongRecipient, identityMismatch, taskFailed, expired,
+      // and all task-specific extended codes.
       return "e.p.msg.bad_request";
   }
 }
