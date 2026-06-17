@@ -10,16 +10,36 @@
 //   - `postTrustTask` — POSTs an authenticated Trust Task envelope to
 //     /api/trust-tasks and validates the response shape.
 //
-// Token caching is NOT done here. Each vault op currently does a fresh
-// auth round-trip — adding session-token caching is a separate concern
-// that lands when sync/event/0.1 (M5) needs a long-lived authenticated
-// connection anyway.
+// Bearer caching: the VTA's access token has a ~15-minute TTL, so we
+// reuse it across vault ops within a conservative window. Without this,
+// a single user action that chains ops (e.g. a SIOP sign-in that lists
+// entries THEN signs a trust-task) fires one /auth/challenge + /auth/
+// round-trip per op — and those back-to-back unauth requests from one IP
+// trip the VTA's per-IP rate limit (HTTP 429 "Too Many Requests"). The
+// cache is keyed by (baseUrl, holder DID) so distinct identities and
+// VTAs never share a token; call `invalidateVtaBearer` after a 401 to
+// force re-auth.
 
 import { packAuthcrypt, type Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { isTrustTaskErrorType } from "../vta/protocol.js";
 
 const VTA_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
+
+/** Reuse window — kept well under the server's ~15-minute token TTL so a
+ *  cached token can't be served past expiry (clock-skew safety margin). */
+const BEARER_TTL_MS = 10 * 60_000;
+const bearerCache = new Map<string, { token: string; expiresAt: number }>();
+
+function bearerCacheKey(baseUrl: string, holderDid: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}|${holderDid}`;
+}
+
+/** Drop any cached bearer for this (baseUrl, holder). Call after the VTA
+ *  rejects a token with 401 so the next op re-authenticates. */
+export function invalidateVtaBearer(baseUrl: string, holderDid: string): void {
+  bearerCache.delete(bearerCacheKey(baseUrl, holderDid));
+}
 
 export interface VtaAuthInputs {
   /** VTA REST base URL — from the connection state's `restBaseUrl`. */
@@ -33,14 +53,20 @@ export interface VtaAuthInputs {
 }
 
 /**
- * Run /auth/challenge → authcrypt /auth/ → bearer token. The token's
- * 15-minute TTL is more than enough for a single trust-task POST; we
- * don't cache because the next vault op happens whenever the user
- * clicks something and would likely fall outside the cache window.
+ * Run /auth/challenge → authcrypt /auth/ → bearer token, returning a
+ * cached token when one is still within its reuse window. Caching keeps a
+ * multi-op user action (sign-in = list + sign, etc.) to a single /auth/
+ * round-trip so it doesn't trip the VTA's per-IP unauth rate limit.
  */
 export async function getVtaBearer(opts: VtaAuthInputs): Promise<string> {
   const f = opts.fetch ?? fetch.bind(globalThis);
   const base = opts.baseUrl.replace(/\/+$/, "");
+
+  const cacheKey = bearerCacheKey(base, opts.holder.did);
+  const cached = bearerCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.token;
+  }
 
   // 1. /auth/challenge → flat { challenge, sessionId, expiresAt }.
   const cRes = await f(`${base}/auth/challenge`, {
@@ -85,6 +111,7 @@ export async function getVtaBearer(opts: VtaAuthInputs): Promise<string> {
   if (!accessToken) {
     throw new Error(`vta /auth/: malformed response: ${JSON.stringify(aBody)}`);
   }
+  bearerCache.set(cacheKey, { token: accessToken, expiresAt: Date.now() + BEARER_TTL_MS });
   return accessToken;
 }
 

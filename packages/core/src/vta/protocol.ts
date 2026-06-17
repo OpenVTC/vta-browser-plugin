@@ -76,7 +76,15 @@ export interface TrustTask<P> {
 export interface TrustTaskErrorPayload {
   code: string;
   message?: string;
-  retryable?: boolean;
+  /** REQUIRED by the framework error schema (`required: ["code",
+   *  "retryable"]`). Whether retrying the same request may succeed. */
+  retryable: boolean;
+  /** RFC 3339 instant before which a retry SHOULD NOT be attempted. */
+  retryAfter?: string;
+  /** Task-specific structured context (e.g. `{ reason:
+   *  "cleartext_schema_invalid" }` on a `vault/upsert:sealed_secret_invalid`
+   *  reject). Shape is defined per Trust-Task spec. */
+  details?: unknown;
 }
 
 // ---------------------------------------------------------------------------
