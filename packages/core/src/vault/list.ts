@@ -16,12 +16,13 @@
 // `VaultRead` capability — Admin / Initiator / Application / Reader pass;
 // Monitor is denied.
 
-import { packAuthcrypt, type Identity } from "../didcomm/index.js";
+import { type Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+
+import { getVtaBearer } from "./transport.js";
 
 const TASK_VAULT_LIST_0_2 = "https://trusttasks.org/spec/vault/list/0.2";
 const TASK_VAULT_LIST_0_2_RESPONSE = "https://trusttasks.org/spec/vault/list/0.2#response";
-const VTA_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
 
 /** Discriminator that mirrors the canonical SecretKind enum. */
 export type SecretKind =
@@ -124,53 +125,18 @@ export async function vaultListRest(opts: VaultListRestOptions): Promise<VaultLi
   const f = opts.fetch ?? fetch.bind(globalThis);
   const base = baseUrl.replace(/\/+$/, "");
 
-  // 1. /auth/challenge → flat { challenge, sessionId, expiresAt } per
-  //    `vti_common::auth::handlers::challenge::ChallengeResponse`. Fields
-  //    are top-level, NOT nested under a `data` envelope.
-  const cRes = await f(`${base}/auth/challenge`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ did: holder.did }),
+  // 1. Authenticate via the shared, cached bearer helper (same
+  //    /auth/challenge → authcrypt /auth/ → token primitive). Caching
+  //    means a sign-in that lists then signs reuses one token rather than
+  //    re-authing per op (which trips the VTA's per-IP unauth rate limit).
+  const accessToken = await getVtaBearer({
+    baseUrl,
+    holder,
+    service,
+    ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
-  if (!cRes.ok) {
-    throw new Error(`vta /auth/challenge failed (${cRes.status}): ${await cRes.text()}`);
-  }
-  const cBody = (await cRes.json()) as { sessionId?: string; challenge?: string };
-  if (!cBody.sessionId || !cBody.challenge) {
-    throw new Error(`vta /auth/challenge: malformed response: ${JSON.stringify(cBody)}`);
-  }
 
-  // 2. Authcrypt an `auth/authenticate/0.1` message to the VTA.
-  const authMsg = {
-    id: globalThis.crypto.randomUUID(),
-    type: VTA_AUTHENTICATE,
-    from: holder.did,
-    to: [service.did],
-    body: { challenge: cBody.challenge, session_id: cBody.sessionId },
-  };
-  const packed = await packAuthcrypt(authMsg, holder, [
-    { kid: service.keyAgreementKid, jwk: service.keyAgreementPublicJwk },
-  ]);
-
-  // 3. POST the packed JWE to /auth/ → AuthenticateResponse with
-  //    { session, tokens: { accessToken, ... } } per vta-sdk's
-  //    `protocols::auth::AuthenticateResponse`. Tokens are nested under
-  //    `tokens`, NOT `data`.
-  const aRes = await f(`${base}/auth/`, {
-    method: "POST",
-    headers: { "content-type": "application/didcomm-encrypted+json" },
-    body: packed,
-  });
-  if (!aRes.ok) {
-    throw new Error(`vta /auth/ failed (${aRes.status}): ${await aRes.text()}`);
-  }
-  const aBody = (await aRes.json()) as { tokens?: { accessToken?: string } };
-  const accessToken = aBody.tokens?.accessToken;
-  if (!accessToken) {
-    throw new Error(`vta /auth/: malformed response: ${JSON.stringify(aBody)}`);
-  }
-
-  // 4. POST /api/trust-tasks with the vault/list/0.2 envelope.
+  // 2. POST /api/trust-tasks with the vault/list/0.2 envelope.
   const envelope = {
     id: globalThis.crypto.randomUUID(),
     type: TASK_VAULT_LIST_0_2,
