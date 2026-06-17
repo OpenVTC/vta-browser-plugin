@@ -9,6 +9,11 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    // es2022 (native top-level await) — required since esbuild 0.28 refuses
+    // to down-level some destructuring emitted by vite-plugin-top-level-await
+    // to vite's default low targets (chrome87/es2020). Safe for an MV3
+    // extension, whose runtime is a current Chromium.
+    target: "es2022",
     rollupOptions: {
       input: {
         popup: resolve(__dirname, "popup.html"),

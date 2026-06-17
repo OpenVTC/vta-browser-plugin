@@ -14,6 +14,9 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: false,
+    // es2022 — see vite.config.ts: esbuild 0.28 won't down-level the
+    // top-level-await plugin's destructuring to vite's default targets.
+    target: "es2022",
     rollupOptions: {
       input: { background: resolve(__dirname, "src/background.ts") },
       output: {

@@ -24,5 +24,9 @@ export default defineConfig({
       },
     }),
   ],
+  // es2022 — see packages/extension/vite.config.ts: esbuild 0.28 won't
+  // down-level the top-level-await plugin's destructuring to vite's default
+  // low targets (chrome87/es2020).
+  build: { target: "es2022" },
   server: { port: 5173 },
 });
