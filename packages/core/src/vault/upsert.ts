@@ -22,7 +22,7 @@ import { packAuthcrypt, type Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 
 import type { SecretKind, SiteTarget, VaultEntry } from "./list.js";
-import { getVtaBearer, postTrustTask, type VtaAuthInputs } from "./transport.js";
+import { getVtaBearer, makeReauth, postTrustTask, type VtaAuthInputs } from "./transport.js";
 
 const TASK_VAULT_UPSERT = "https://trusttasks.org/spec/vault/upsert/0.2";
 const TASK_VAULT_UPSERT_RESPONSE = "https://trusttasks.org/spec/vault/upsert/0.2#response";
@@ -136,12 +136,13 @@ export interface VaultUpsertResponse {
 export async function vaultUpsertRest(
   opts: VaultUpsertRestOptions,
 ): Promise<VaultUpsertResponse> {
-  const bearer = await getVtaBearer({
+  const auth: VtaAuthInputs = {
     baseUrl: opts.baseUrl,
     holder: opts.holder,
     service: opts.service,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  });
+  };
+  const bearer = await getVtaBearer(auth);
 
   // Build the sealedSecret envelope — only built when `secret` is
   // supplied. Update paths that keep the existing secret pass no
@@ -184,6 +185,7 @@ export async function vaultUpsertRest(
     },
     expectedResponseType: TASK_VAULT_UPSERT_RESPONSE,
     operationLabel: "vault/upsert/0.2",
+    reauth: makeReauth(auth),
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 }

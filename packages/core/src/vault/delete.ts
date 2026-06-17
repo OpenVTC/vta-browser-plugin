@@ -5,7 +5,7 @@
 // only id + optimistic-concurrency token, all visible to anyone with the
 // bearer.
 
-import { getVtaBearer, postTrustTask, type VtaAuthInputs } from "./transport.js";
+import { getVtaBearer, makeReauth, postTrustTask, type VtaAuthInputs } from "./transport.js";
 
 const TASK_VAULT_DELETE = "https://trusttasks.org/spec/vault/delete/0.1";
 const TASK_VAULT_DELETE_RESPONSE = "https://trusttasks.org/spec/vault/delete/0.1#response";
@@ -31,12 +31,13 @@ export interface VaultDeleteResponse {
 export async function vaultDeleteRest(
   opts: VaultDeleteRestOptions,
 ): Promise<VaultDeleteResponse> {
-  const bearer = await getVtaBearer({
+  const auth: VtaAuthInputs = {
     baseUrl: opts.baseUrl,
     holder: opts.holder,
     service: opts.service,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  });
+  };
+  const bearer = await getVtaBearer(auth);
 
   return postTrustTask<VaultDeleteResponse>({
     baseUrl: opts.baseUrl,
@@ -53,6 +54,7 @@ export async function vaultDeleteRest(
     },
     expectedResponseType: TASK_VAULT_DELETE_RESPONSE,
     operationLabel: "vault/delete/0.1",
+    reauth: makeReauth(auth),
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 }

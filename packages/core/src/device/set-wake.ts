@@ -14,7 +14,7 @@
 
 import type { Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
-import { getVtaBearer, postTrustTask } from "../vault/transport.js";
+import { getVtaBearer, makeReauth, postTrustTask, type VtaAuthInputs } from "../vault/transport.js";
 
 const TASK_DEVICE_SET_WAKE = "https://trusttasks.org/spec/device/set-wake/0.2";
 const TASK_DEVICE_SET_WAKE_RESPONSE =
@@ -64,12 +64,13 @@ export interface DeviceSetWakeOptions {
 export async function setDeviceWake(
   opts: DeviceSetWakeOptions,
 ): Promise<DeviceSetWakeResponse> {
-  const bearer = await getVtaBearer({
+  const auth: VtaAuthInputs = {
     baseUrl: opts.baseUrl,
     holder: opts.holder,
     service: opts.service,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  });
+  };
+  const bearer = await getVtaBearer(auth);
 
   const payload = {
     ...(opts.wakeHandle ? { wakeHandle: opts.wakeHandle } : {}),
@@ -88,6 +89,7 @@ export async function setDeviceWake(
     },
     expectedResponseType: TASK_DEVICE_SET_WAKE_RESPONSE,
     operationLabel: "device/set-wake/0.2",
+    reauth: makeReauth(auth),
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 }

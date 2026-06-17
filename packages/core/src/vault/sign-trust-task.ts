@@ -18,7 +18,7 @@
 // long-term secret material. The proof itself is the only sensitive
 // output, and it's deliberately public.
 
-import { postTrustTask, type VtaAuthInputs, getVtaBearer } from "./transport.js";
+import { postTrustTask, type VtaAuthInputs, getVtaBearer, makeReauth } from "./transport.js";
 import type { TrustTaskEnvelope } from "../trust-tasks/sign.js";
 
 const TASK_VAULT_SIGN_TRUST_TASK = "https://trusttasks.org/spec/vault/sign-trust-task/0.2";
@@ -52,12 +52,13 @@ export interface VaultSignTrustTaskResponse {
 export async function vaultSignTrustTaskRest(
   opts: VaultSignTrustTaskRestOptions,
 ): Promise<VaultSignTrustTaskResponse> {
-  const bearer = await getVtaBearer({
+  const auth: VtaAuthInputs = {
     baseUrl: opts.baseUrl,
     holder: opts.holder,
     service: opts.service,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  });
+  };
+  const bearer = await getVtaBearer(auth);
 
   interface WireResponse {
     signedEnvelope: TrustTaskEnvelope;
@@ -77,6 +78,7 @@ export async function vaultSignTrustTaskRest(
     },
     expectedResponseType: TASK_VAULT_SIGN_TRUST_TASK_RESPONSE,
     operationLabel: "vault/sign-trust-task/0.2",
+    reauth: makeReauth(auth),
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 
