@@ -19,7 +19,7 @@
 import { type Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 
-import { getVtaBearer } from "./transport.js";
+import { getVtaBearer, makeReauth, type VtaAuthInputs } from "./transport.js";
 
 const TASK_VAULT_LIST_0_2 = "https://trusttasks.org/spec/vault/list/0.2";
 const TASK_VAULT_LIST_0_2_RESPONSE = "https://trusttasks.org/spec/vault/list/0.2#response";
@@ -129,12 +129,13 @@ export async function vaultListRest(opts: VaultListRestOptions): Promise<VaultLi
   //    /auth/challenge → authcrypt /auth/ → token primitive). Caching
   //    means a sign-in that lists then signs reuses one token rather than
   //    re-authing per op (which trips the VTA's per-IP unauth rate limit).
-  const accessToken = await getVtaBearer({
+  const auth: VtaAuthInputs = {
     baseUrl,
     holder,
     service,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  });
+  };
+  const accessToken = await getVtaBearer(auth);
 
   // 2. POST /api/trust-tasks with the vault/list/0.2 envelope.
   const envelope = {
@@ -145,14 +146,22 @@ export async function vaultListRest(opts: VaultListRestOptions): Promise<VaultLi
     issuedAt: new Date().toISOString(),
     payload: filter ?? {},
   };
-  const tRes = await f(`${base}/api/trust-tasks`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(envelope),
-  });
+  const reqBody = JSON.stringify(envelope);
+  const doPost = (bearer: string) =>
+    f(`${base}/api/trust-tasks`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${bearer}`,
+      },
+      body: reqBody,
+    });
+
+  // On 401, the cached token outlived its session — re-auth once and retry.
+  let tRes = await doPost(accessToken);
+  if (tRes.status === 401) {
+    tRes = await doPost(await makeReauth(auth)());
+  }
   if (!tRes.ok) {
     throw new Error(
       `vta /api/trust-tasks vault/list failed (${tRes.status}): ${await tRes.text()}`,

@@ -11,7 +11,7 @@
 import { unpackMessage, type Identity } from "../didcomm/index.js";
 
 import type { SecretKind } from "./list.js";
-import { getVtaBearer, postTrustTask, type VtaAuthInputs } from "./transport.js";
+import { getVtaBearer, makeReauth, postTrustTask, type VtaAuthInputs } from "./transport.js";
 import type { VaultSecret } from "./upsert.js";
 
 const TASK_VAULT_RELEASE = "https://trusttasks.org/spec/vault/release/0.2";
@@ -48,12 +48,13 @@ export interface VaultReleaseResponse {
 export async function vaultReleaseRest(
   opts: VaultReleaseRestOptions,
 ): Promise<VaultReleaseResponse> {
-  const bearer = await getVtaBearer({
+  const auth: VtaAuthInputs = {
     baseUrl: opts.baseUrl,
     holder: opts.holder,
     service: opts.service,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  });
+  };
+  const bearer = await getVtaBearer(auth);
 
   // Server returns { sealedSecret: SealedEnvelope, secretKind, ttlSeconds }.
   // We accept only the authcrypt variant — every other variant is a future /
@@ -86,6 +87,7 @@ export async function vaultReleaseRest(
     },
     expectedResponseType: TASK_VAULT_RELEASE_RESPONSE,
     operationLabel: "vault/release/0.2",
+    reauth: makeReauth(auth),
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 

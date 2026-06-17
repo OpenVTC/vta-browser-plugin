@@ -27,7 +27,7 @@
 import { unpackMessage, type Identity } from "../didcomm/index.js";
 
 import type { SiteTarget } from "./list.js";
-import { getVtaBearer, postTrustTask, type VtaAuthInputs } from "./transport.js";
+import { getVtaBearer, makeReauth, postTrustTask, type VtaAuthInputs } from "./transport.js";
 
 const TASK_VAULT_PROXY_LOGIN = "https://trusttasks.org/spec/vault/proxy-login/0.2";
 const TASK_VAULT_PROXY_LOGIN_RESPONSE =
@@ -137,12 +137,13 @@ export interface VaultProxyLoginResponse {
 export async function vaultProxyLoginRest(
   opts: VaultProxyLoginRestOptions,
 ): Promise<VaultProxyLoginResponse> {
-  const bearer = await getVtaBearer({
+  const auth: VtaAuthInputs = {
     baseUrl: opts.baseUrl,
     holder: opts.holder,
     service: opts.service,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  });
+  };
+  const bearer = await getVtaBearer(auth);
 
   // Server returns { sealedSessionBlob: SealedEnvelope, sessionId, expiresAt }.
   // We accept only the authcrypt variant — every other variant is a future /
@@ -177,6 +178,7 @@ export async function vaultProxyLoginRest(
     },
     expectedResponseType: TASK_VAULT_PROXY_LOGIN_RESPONSE,
     operationLabel: "vault/proxy-login/0.2",
+    reauth: makeReauth(auth),
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 

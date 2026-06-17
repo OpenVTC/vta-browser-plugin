@@ -41,6 +41,17 @@ export function invalidateVtaBearer(baseUrl: string, holderDid: string): void {
   bearerCache.delete(bearerCacheKey(baseUrl, holderDid));
 }
 
+/** Build a `reauth` callback for {@link postTrustTask}: drop the cached
+ *  bearer and mint a fresh one. Pass it so a 401 (a cached token that
+ *  outlived its server-side session — restart/eviction) self-heals with a
+ *  single retry instead of surfacing as an auth failure. */
+export function makeReauth(opts: VtaAuthInputs): () => Promise<string> {
+  return () => {
+    invalidateVtaBearer(opts.baseUrl, opts.holder.did);
+    return getVtaBearer(opts);
+  };
+}
+
 export interface VtaAuthInputs {
   /** VTA REST base URL — from the connection state's `restBaseUrl`. */
   baseUrl: string;
@@ -135,6 +146,10 @@ export interface PostTrustTaskOpts<R> {
   fetch?: typeof fetch;
   /** Internal: used to enrich error messages. */
   operationLabel?: string;
+  /** Called once on a 401 to obtain a fresh bearer; the request is then
+   *  retried with it. Lets a stale cached token (server restart / session
+   *  eviction) self-heal. Build one with {@link makeReauth}. */
+  reauth?: () => Promise<string>;
 }
 
 /**
@@ -161,14 +176,24 @@ export async function postTrustTask<R>(opts: PostTrustTaskOpts<R>): Promise<R> {
     payload: opts.envelope.payload,
   };
 
-  const res = await f(`${base}/api/trust-tasks`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${opts.bearer}`,
-    },
-    body: JSON.stringify(fullEnvelope),
-  });
+  const body = JSON.stringify(fullEnvelope);
+  const doPost = (bearer: string) =>
+    f(`${base}/api/trust-tasks`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${bearer}`,
+      },
+      body,
+    });
+
+  let res = await doPost(opts.bearer);
+  // A cached bearer can outlive its server-side session (VTA restart or
+  // session eviction). On 401, re-authenticate once and retry so the user
+  // doesn't see a spurious auth failure mid-flow.
+  if (res.status === 401 && opts.reauth) {
+    res = await doPost(await opts.reauth());
+  }
   if (!res.ok) {
     throw new Error(`${op}: /api/trust-tasks failed (${res.status}): ${await res.text()}`);
   }
