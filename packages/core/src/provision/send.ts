@@ -82,19 +82,21 @@ export interface ProvisionIntegrationResponseBody {
   summary: ProvisionSummary;
 }
 
+/** lowerCamelCase per `provision/integration/0.2` (the VTA emits camelCase
+ *  on 0.2 endpoints — see verifiable-trust-infrastructure #520). */
 export interface ProvisionSummary {
-  client_did: string;
-  admin_did?: string;
-  admin_rolled_over?: boolean;
-  integration_did?: string;
-  template_name?: string;
-  template_kind?: string;
-  admin_template_name?: string | null;
-  bundle_id_hex: string;
-  secret_count: number;
-  output_count: number;
-  webvh_server_id?: string | null;
-  context_created?: boolean;
+  clientDid: string;
+  adminDid?: string;
+  adminRolledOver?: boolean;
+  integrationDid?: string;
+  templateName?: string;
+  templateKind?: string;
+  adminTemplateName?: string | null;
+  bundleIdHex: string;
+  secretCount: number;
+  outputCount: number;
+  webvhServerId?: string | null;
+  contextCreated?: boolean;
 }
 
 export interface SendProvisionIntegrationOptions {

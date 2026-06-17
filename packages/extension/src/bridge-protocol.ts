@@ -801,7 +801,7 @@ export interface VaultSecretView {
    *  consumer falls back to vault/release. */
   loginConfig?: {
     loginUrl: string;
-    format?: "json" | "form-urlencoded";
+    format?: "json" | "formUrlencoded";
     usernameField?: string;
     passwordField?: string;
     totpField?: string;
@@ -921,7 +921,7 @@ export interface SessionBlobView {
   localStorage?: Array<{ key: string; value: string }>;
   sessionStorage?: Array<{ key: string; value: string }>;
   bindOrigin?: string;
-  refreshHint?: "maintainer-only" | "on-401" | "before-expiry";
+  refreshHint?: "maintainerOnly" | "on401" | "beforeExpiry";
 }
 
 export interface RuntimeVaultProxyLoginRequest {

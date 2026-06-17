@@ -972,7 +972,7 @@ function AddEntryForm({
   // Optional auto-login config (M2B.5) for password entries
   const [loginConfigEnabled, setLoginConfigEnabled] = useState(false);
   const [loginUrl, setLoginUrl] = useState("");
-  const [loginFormat, setLoginFormat] = useState<"json" | "form-urlencoded">("json");
+  const [loginFormat, setLoginFormat] = useState<"json" | "formUrlencoded">("json");
 
   // did-self-issued fields
   const [rpDid, setRpDid] = useState("");
@@ -1272,12 +1272,12 @@ function AddEntryForm({
                 <select
                   value={loginFormat}
                   onChange={(e) =>
-                    setLoginFormat(e.target.value as "json" | "form-urlencoded")
+                    setLoginFormat(e.target.value as "json" | "formUrlencoded")
                   }
                   style={{ fontSize: 11 }}
                 >
                   <option value="json">JSON</option>
-                  <option value="form-urlencoded">form-urlencoded</option>
+                  <option value="formUrlencoded">form-urlencoded</option>
                 </select>
               </label>
             </>

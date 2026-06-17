@@ -15,7 +15,7 @@
 //  3. Bearer-auth via `getVtaBearer` (REST + DIDComm-authcrypt /auth/
 //     round-trip).
 //  4. POST the upsert envelope with `sealedSecret: { envelope:
-//     "didcomm-authcrypt", jwe }`.
+//     "didcommAuthcrypt", jwe }`.
 //  5. Return the maintainer's response (metadata view + `created` flag).
 
 import { packAuthcrypt, type Identity } from "../didcomm/index.js";
@@ -34,7 +34,7 @@ const INNER_MSG_TYPE = "https://openvtc.org/vault/upsert/secret-envelope/1.0";
  *  `vault/_shared/0.1/vault-secret#/$defs/PasswordLoginConfig`. */
 export interface PasswordLoginConfig {
   loginUrl: string;
-  format?: "json" | "form-urlencoded";
+  format?: "json" | "formUrlencoded";
   usernameField?: string;
   passwordField?: string;
   totpField?: string;
@@ -146,14 +146,14 @@ export async function vaultUpsertRest(
   // Build the sealedSecret envelope — only built when `secret` is
   // supplied. Update paths that keep the existing secret pass no
   // sealedSecret at all.
-  let sealedSecret: { envelope: "didcomm-authcrypt"; jwe: string } | undefined;
+  let sealedSecret: { envelope: "didcommAuthcrypt"; jwe: string } | undefined;
   if (opts.secret) {
     const jwe = await packSecretAsAuthcrypt({
       secret: opts.secret,
       holder: opts.holder,
       service: opts.service,
     });
-    sealedSecret = { envelope: "didcomm-authcrypt", jwe };
+    sealedSecret = { envelope: "didcommAuthcrypt", jwe };
   }
 
   const payload = {

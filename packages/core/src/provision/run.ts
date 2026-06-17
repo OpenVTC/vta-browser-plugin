@@ -138,15 +138,15 @@ export async function runProvisionIntegration(
   });
 
   // 3. Cross-check the bundle id BEFORE opening. The maintainer echoes
-  //    the VP nonce as `summary.bundle_id_hex` (lowercase hex of the 16
+  //    the VP nonce as `summary.bundleIdHex` (lowercase hex of the 16
   //    nonce bytes); a mismatch means the bundle is for a different
   //    request, which is a serious wire-shape failure. The HPKE open
   //    would also fail (the AAD binds the bundle id), but catching it
   //    here gives a cleaner error.
   const expectedHex = toLowerHex(nonce);
-  if (reply.summary.bundle_id_hex !== expectedHex) {
+  if (reply.summary.bundleIdHex !== expectedHex) {
     throw new Error(
-      `provision-integration: bundle_id_hex mismatch — expected ${expectedHex}, got ${reply.summary.bundle_id_hex}`,
+      `provision-integration: bundleIdHex mismatch — expected ${expectedHex}, got ${reply.summary.bundleIdHex}`,
     );
   }
 
@@ -169,12 +169,12 @@ export async function runProvisionIntegration(
     );
   }
   // Defence-in-depth: the open-time digest check is the maintainer's
-  // contract, but verifying summary.admin_did matches what we extract
+  // contract, but verifying summary.adminDid matches what we extract
   // catches the case where a malicious / buggy maintainer ships a
   // summary that doesn't agree with the sealed bundle.
-  if (reply.summary.admin_did && reply.summary.admin_did !== admin.did) {
+  if (reply.summary.adminDid && reply.summary.adminDid !== admin.did) {
     throw new Error(
-      `provision-integration: summary.admin_did (${reply.summary.admin_did}) ` +
+      `provision-integration: summary.adminDid (${reply.summary.adminDid}) ` +
         `disagrees with sealed admin.did (${admin.did})`,
     );
   }

@@ -36,8 +36,8 @@ const TASK_VAULT_PROXY_LOGIN_RESPONSE =
 /** Refresh hint the maintainer attaches to the SessionBlob — the holder
  *  uses this to decide whether to background-refresh, refresh on 401, or
  *  wait for the maintainer to drive renewal. Mirrors
- *  `vault/_shared/0.1/session-blob#/$defs/RefreshHint`. */
-export type SessionRefreshHint = "maintainer-only" | "on-401" | "before-expiry";
+ *  `vault/_shared/0.2/session-blob#/$defs/RefreshHint` (lowerCamelCase). */
+export type SessionRefreshHint = "maintainerOnly" | "on401" | "beforeExpiry";
 
 /** A single cookie returned in a SessionBlob. Mirrors
  *  `vault/_shared/0.1/session-blob#/$defs/CookieJarEntry`. */
@@ -145,14 +145,16 @@ export async function vaultProxyLoginRest(
   });
 
   // Server returns { sealedSessionBlob: SealedEnvelope, sessionId, expiresAt }.
-  // We accept only the `didcomm-authcrypt` variant — every other variant
-  // is a future / unsupported envelope kind and we reject with a clear
-  // error rather than silently failing in the JWE unpack.
+  // We accept only the authcrypt variant — every other variant is a future /
+  // unsupported envelope kind and we reject with a clear error rather than
+  // silently failing in the JWE unpack. The 0.2 wire tag is lowerCamelCase
+  // (`didcommAuthcrypt`); the legacy kebab form is tolerated for resilience
+  // against VTA deployment skew.
   interface WireResponse {
     sealedSessionBlob:
-      | { envelope: "didcomm-authcrypt"; jwe: string }
-      | { envelope: "hpke-armored" }
-      | { envelope: "tsp-message" };
+      | { envelope: "didcommAuthcrypt" | "didcomm-authcrypt"; jwe: string }
+      | { envelope: "hpkeArmored" }
+      | { envelope: "tspMessage" };
     sessionId: string;
     expiresAt: string;
   }
@@ -178,9 +180,12 @@ export async function vaultProxyLoginRest(
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 
-  if (wire.sealedSessionBlob.envelope !== "didcomm-authcrypt") {
+  if (
+    wire.sealedSessionBlob.envelope !== "didcommAuthcrypt" &&
+    wire.sealedSessionBlob.envelope !== "didcomm-authcrypt"
+  ) {
     throw new Error(
-      `vault/proxy-login: unsupported envelope ${wire.sealedSessionBlob.envelope} — this wallet only understands didcomm-authcrypt`,
+      `vault/proxy-login: unsupported envelope ${wire.sealedSessionBlob.envelope} — this wallet only understands didcommAuthcrypt`,
     );
   }
 

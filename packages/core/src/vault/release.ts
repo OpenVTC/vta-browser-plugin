@@ -56,14 +56,16 @@ export async function vaultReleaseRest(
   });
 
   // Server returns { sealedSecret: SealedEnvelope, secretKind, ttlSeconds }.
-  // We accept only the `didcomm-authcrypt` variant — every other variant
-  // is a future / unsupported envelope kind and we reject loudly so the
-  // user sees an actionable error rather than a silent "decrypt failed".
+  // We accept only the authcrypt variant — every other variant is a future /
+  // unsupported envelope kind and we reject loudly so the user sees an
+  // actionable error rather than a silent "decrypt failed". The 0.2 wire tag
+  // is lowerCamelCase (`didcommAuthcrypt`); we also tolerate the legacy
+  // kebab form for resilience against VTA deployment skew.
   interface WireResponse {
     sealedSecret:
-      | { envelope: "didcomm-authcrypt"; jwe: string }
-      | { envelope: "hpke-armored" }
-      | { envelope: "tsp-message" };
+      | { envelope: "didcommAuthcrypt" | "didcomm-authcrypt"; jwe: string }
+      | { envelope: "hpkeArmored" }
+      | { envelope: "tspMessage" };
     secretKind: SecretKind;
     ttlSeconds: number;
   }
@@ -87,9 +89,12 @@ export async function vaultReleaseRest(
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 
-  if (wire.sealedSecret.envelope !== "didcomm-authcrypt") {
+  if (
+    wire.sealedSecret.envelope !== "didcommAuthcrypt" &&
+    wire.sealedSecret.envelope !== "didcomm-authcrypt"
+  ) {
     throw new Error(
-      `vault/release: unsupported envelope ${wire.sealedSecret.envelope} — this wallet only understands didcomm-authcrypt`,
+      `vault/release: unsupported envelope ${wire.sealedSecret.envelope} — this wallet only understands didcommAuthcrypt`,
     );
   }
 
