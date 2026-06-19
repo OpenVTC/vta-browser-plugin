@@ -10,8 +10,24 @@
         font-family: ui-sans-serif, system-ui, sans-serif;
       }
       body {
-        width: 360px;
+        /* Chrome caps extension popups at ~800px wide; go near that so
+           long DIDs and the action buttons aren't clipped. */
+        width: 760px;
         min-height: 240px;
+      }
+      /* Keep form fields inside their container: a <select> sizes to its
+         widest option (long DIDs) and an <input> to its value, either of
+         which would otherwise force horizontal overflow and clip the
+         popup. Cap to 100% and let selects ellipsize the shown value. */
+      input,
+      select,
+      textarea {
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+      select {
+        width: 100%;
+        text-overflow: ellipsis;
       }
     </style>
   </head>

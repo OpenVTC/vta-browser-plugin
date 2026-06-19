@@ -40,6 +40,7 @@ import {
   vaultSignTrustTaskRest,
   vtaCreateContext,
   vtaListContexts,
+  vtaListDids,
   vaultProxyLoginRest,
   vaultReleaseRest,
   vaultUpsertRest,
@@ -56,6 +57,7 @@ import {
   OFFSCREEN_DERIVE_SIGNING_KEY_ID,
   OFFSCREEN_HOLDER_STATE,
   OFFSCREEN_LIST_CONTEXTS,
+  OFFSCREEN_LIST_DIDS,
   OFFSCREEN_UNLOCK_PRF,
   OFFSCREEN_FORGET_HOLDER_RECORD,
   OFFSCREEN_REFRESH_VTA_TRANSPORTS,
@@ -225,6 +227,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (msg.type === OFFSCREEN_LIST_CONTEXTS) {
     const req = message as { vtaDid: string; restBaseUrl: string };
     doListContexts(req)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_LIST_DIDS) {
+    const req = message as { vtaDid: string; restBaseUrl: string; contextId?: string };
+    doListDids(req)
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -850,6 +861,28 @@ async function doListContexts(req: {
     service,
   });
   return { contexts: contexts.map((c) => ({ id: c.id, name: c.name })) };
+}
+
+/** List the webvh DIDs the VTA hosts, optionally scoped to one context.
+ *  The popup's AddEntryForm calls this with the selected context to
+ *  populate the Persona-DID dropdown for a did-self-issued entry — these
+ *  are the DIDs the VTA can mint a SIOP id_token AS. Returns the
+ *  popup-narrow shape (`did` + `contextId`); the wire record carries
+ *  more (server_id, scid, …) the UI doesn't use. */
+async function doListDids(req: {
+  vtaDid: string;
+  restBaseUrl: string;
+  contextId?: string;
+}): Promise<{ dids: Array<{ did: string; contextId: string }> }> {
+  const { identity: holder } = await loadHolder(req.vtaDid);
+  const service = await resolveKeyAgreement(req.vtaDid);
+  const dids = await vtaListDids({
+    baseUrl: req.restBaseUrl,
+    holder,
+    service,
+    ...(req.contextId ? { contextId: req.contextId } : {}),
+  });
+  return { dids: dids.map((d) => ({ did: d.did, contextId: d.context_id })) };
 }
 
 /** Create a new context at the connected VTA. Requires the wallet's

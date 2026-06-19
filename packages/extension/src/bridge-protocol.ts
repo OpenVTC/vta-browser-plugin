@@ -643,6 +643,30 @@ export type RuntimeCreateContextResponse =
   | { ok: true; result: ContextRecordView }
   | { ok: false; error: string };
 
+/** popup → background: list the webvh DIDs the connected VTA hosts in a
+ *  context. Used by AddEntryForm's `did-self-issued` flow to populate the
+ *  Persona-DID dropdown — these are the personas the VTA can mint a SIOP
+ *  id_token AS (it holds their signing keys). */
+export const RUNTIME_LIST_DIDS = "vta-wallet/list-dids" as const;
+
+export interface RuntimeListDidsRequest {
+  type: typeof RUNTIME_LIST_DIDS;
+  /** Restrict to one context. Omit for every DID the holder can see. */
+  contextId?: string;
+}
+
+/** One hosted DID as surfaced to the popup. Subset of
+ *  `vta-sdk::webvh::WebvhDidRecord` — the dropdown only needs the DID
+ *  and its context. */
+export interface DidRecordView {
+  did: string;
+  contextId: string;
+}
+
+export type RuntimeListDidsResponse =
+  | { ok: true; result: { dids: DidRecordView[] } }
+  | { ok: false; error: string };
+
 /** popup → background: resolve a DID and surface plausible signing
  *  verification-method ids. Used by AddEntryForm's `did-self-issued`
  *  flow to auto-fill `signingKeyId` from `principalDid`.
@@ -1096,6 +1120,9 @@ export interface OffscreenRefreshVtaTransportsRequest {
 }
 /** background → offscreen: list contexts visible to the holder. */
 export const OFFSCREEN_LIST_CONTEXTS = "offscreen/list-contexts" as const;
+/** background → offscreen: list the VTA's hosted webvh DIDs, optionally
+ *  scoped to one context. Backs the Persona-DID dropdown. */
+export const OFFSCREEN_LIST_DIDS = "offscreen/list-dids" as const;
 /** background → offscreen: create a new context (super-admin only). */
 export const OFFSCREEN_CREATE_CONTEXT = "offscreen/create-context" as const;
 /** background → offscreen: derive signing-key id candidates from a DID.

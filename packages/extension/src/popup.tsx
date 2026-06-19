@@ -12,6 +12,7 @@ import {
   RUNTIME_DERIVE_SIGNING_KEY_ID,
   RUNTIME_HOLDER_STATE,
   RUNTIME_LIST_CONTEXTS,
+  RUNTIME_LIST_DIDS,
   RUNTIME_FORGET_HOLDER_RECORD,
   RUNTIME_LOCK_WALLET,
   RUNTIME_REFRESH_VTA_TRANSPORTS,
@@ -26,6 +27,7 @@ import {
   RUNTIME_VAULT_RELEASE,
   RUNTIME_VAULT_UPSERT,
   type ContextRecordView,
+  type DidRecordView,
   type HolderStateInfo,
   type InjectCookiesResultView,
   type OnboardPrepareResult,
@@ -34,6 +36,7 @@ import {
   type RuntimeHolderStateResponse,
   type RuntimeInjectCookiesResponse,
   type RuntimeListContextsResponse,
+  type RuntimeListDidsResponse,
   type RuntimeOnboardConnectResponse,
   type RuntimeForgetHolderRecordResponse,
   type RuntimeOnboardPrepareResponse,
@@ -60,6 +63,11 @@ const mono: React.CSSProperties = {
   fontFamily: "ui-monospace, monospace",
   fontSize: 11,
   wordBreak: "break-all",
+  // A flex child defaults to `min-width: auto`, so a long unbroken DID
+  // refuses to shrink and pushes siblings (the copy button) off-screen.
+  // `minWidth: 0` lets it shrink so `break-all` can wrap it instead.
+  minWidth: 0,
+  maxWidth: "100%",
 };
 
 // Run the encrypt-at-rest enrollment in this (visible, gestured) popup
@@ -978,6 +986,12 @@ function AddEntryForm({
   const [rpDid, setRpDid] = useState("");
   const [principalDid, setPrincipalDid] = useState("");
   const [signingKeyId, setSigningKeyId] = useState("");
+  // Persona-DID dropdown: the VTA's hosted DIDs in the selected context,
+  // fetched per-context. These are the personas the entry can act AS —
+  // the VTA can mint a SIOP id_token as any of them.
+  const [personaDids, setPersonaDids] = useState<DidRecordView[] | null>(null);
+  const [personaDidsLoading, setPersonaDidsLoading] = useState(false);
+  const [personaDidsError, setPersonaDidsError] = useState<string | null>(null);
   // signingKeyId derivation state: `auto` candidates derived from the
   // principal DID, the picker selection when multiple match, and a
   // status string for the operator (resolved / error / multi).
@@ -1015,6 +1029,56 @@ function AddEntryForm({
       setKidDeriving(false);
     }
   }
+
+  // Load the VTA's hosted DIDs for the selected context whenever the
+  // did-self-issued form is active and the context changes. These
+  // populate the Persona-DID dropdown — the personas the entry can act
+  // AS (the VTA holds their signing keys, so it can mint a SIOP id_token
+  // as any of them). Reset the persona + derived key on every context
+  // switch so a stale pick can't leak across contexts.
+  useEffect(() => {
+    if (kind !== "didSelfIssued") return;
+    setPersonaDids(null);
+    setPrincipalDid("");
+    setSigningKeyId("");
+    setKidCandidates([]);
+    setKidDeriveError(null);
+    if (!contextId || contextId === NEW_CONTEXT) {
+      setPersonaDidsError(null);
+      return;
+    }
+    let cancelled = false;
+    setPersonaDidsLoading(true);
+    setPersonaDidsError(null);
+    void (async () => {
+      try {
+        const res = (await chrome.runtime.sendMessage({
+          type: RUNTIME_LIST_DIDS,
+          contextId,
+        })) as RuntimeListDidsResponse;
+        if (cancelled) return;
+        if (!res.ok) {
+          setPersonaDidsError(res.error);
+          return;
+        }
+        setPersonaDids(res.result.dids);
+        // Unambiguous single DID — auto-select and derive its key.
+        if (res.result.dids.length === 1) {
+          const only = res.result.dids[0]!.did;
+          setPrincipalDid(only);
+          void deriveSigningKidFor(only);
+        }
+      } finally {
+        if (!cancelled) setPersonaDidsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // deriveSigningKidFor is a stable hoisted declaration; pin to the
+    // inputs that actually change to avoid a re-fetch loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, contextId]);
 
   const passwordValid =
     label.trim() &&
@@ -1298,19 +1362,40 @@ function AddEntryForm({
           </label>
           <label style={{ display: "grid", gap: 2 }}>
             <span style={{ color: "#666" }}>Persona DID (iss / sub)</span>
-            <input
-              value={principalDid}
-              onChange={(e) => setPrincipalDid(e.target.value)}
-              onBlur={() => {
-                const trimmed = principalDid.trim();
-                if (trimmed.length > 0) void deriveSigningKidFor(trimmed);
-              }}
-              placeholder="did:webvh:…"
-              style={mono}
-            />
+            {personaDidsLoading ? (
+              <small style={{ color: "#888" }}>Loading DIDs for “{contextId}”…</small>
+            ) : personaDidsError ? (
+              <small style={{ color: "#c00" }}>Couldn&apos;t list DIDs: {personaDidsError}</small>
+            ) : personaDids && personaDids.length > 0 ? (
+              <select
+                value={principalDid}
+                onChange={(e) => {
+                  const did = e.target.value;
+                  setPrincipalDid(did);
+                  // Reset derived key state, then re-derive for the pick.
+                  setSigningKeyId("");
+                  setKidCandidates([]);
+                  setKidDeriveError(null);
+                  if (did) void deriveSigningKidFor(did);
+                }}
+                style={mono}
+              >
+                <option value="">— select a DID —</option>
+                {personaDids.map((d) => (
+                  <option key={d.did} value={d.did}>
+                    {d.did}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <small style={{ color: "#c00" }}>
+                {contextId === NEW_CONTEXT
+                  ? "Pick a context above to see its DIDs."
+                  : `Context “${contextId}” has no DIDs — mint one on the VTA first.`}
+              </small>
+            )}
             <small style={{ color: "#888" }}>
-              When you tab away, the wallet resolves this DID and tries to auto-fill the signing
-              key id below.
+              The entry signs id_tokens as this persona; the VTA holds its signing key.
             </small>
           </label>
           <label style={{ display: "grid", gap: 2 }}>
