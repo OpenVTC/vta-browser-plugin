@@ -27,6 +27,7 @@ import {
   OFFSCREEN_DERIVE_SIGNING_KEY_ID,
   OFFSCREEN_HOLDER_STATE,
   OFFSCREEN_LIST_CONTEXTS,
+  OFFSCREEN_LIST_DIDS,
   OFFSCREEN_UNLOCK_PRF,
   OFFSCREEN_FORGET_HOLDER_RECORD,
   OFFSCREEN_REFRESH_VTA_TRANSPORTS,
@@ -67,6 +68,7 @@ import {
   RUNTIME_DERIVE_SIGNING_KEY_ID,
   RUNTIME_HOLDER_STATE,
   RUNTIME_LIST_CONTEXTS,
+  RUNTIME_LIST_DIDS,
   RUNTIME_FORGET_HOLDER_RECORD,
   RUNTIME_REFRESH_VTA_TRANSPORTS,
   RUNTIME_UNLOCK_PRF,
@@ -96,6 +98,8 @@ import {
   type RuntimeDeriveSigningKeyIdResponse,
   type RuntimeHolderStateResponse,
   type RuntimeListContextsResponse,
+  type RuntimeListDidsRequest,
+  type RuntimeListDidsResponse,
   type RuntimeForgetHolderRecordRequest,
   type RuntimeForgetHolderRecordResponse,
   type RuntimeRefreshVtaTransportsRequest,
@@ -773,6 +777,19 @@ async function handleListContexts(): Promise<RuntimeListContextsResponse> {
   })) as RuntimeListContextsResponse;
 }
 
+async function handleListDids(req: RuntimeListDidsRequest): Promise<RuntimeListDidsResponse> {
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_LIST_DIDS,
+    vtaDid: active.conn.vtaDid,
+    restBaseUrl: active.conn.restBaseUrl,
+    ...(req.contextId ? { contextId: req.contextId } : {}),
+  })) as RuntimeListDidsResponse;
+}
+
 async function handleCreateContext(
   req: RuntimeCreateContextRequest,
 ): Promise<RuntimeCreateContextResponse> {
@@ -1317,6 +1334,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_LIST_CONTEXTS) {
     handleListContexts()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_LIST_DIDS) {
+    handleListDids(message as RuntimeListDidsRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
