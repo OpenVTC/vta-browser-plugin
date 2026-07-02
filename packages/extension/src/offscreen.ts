@@ -23,7 +23,7 @@ import {
   requestVtaApproval,
   resolveKeyAgreement,
   resolveVtaServices,
-  setDeviceWake,
+  setDeviceWakeRest,
   signingIdentityFromSecret,
   stepUpVtaFinish,
   stepUpVtaStart,
@@ -40,7 +40,7 @@ import {
   vaultSignTrustTaskRest,
   vtaCreateContext,
   vtaListContexts,
-  vtaListDids,
+  vtaListDidsRest,
   vaultProxyLoginRest,
   vaultReleaseRest,
   vaultUpsertRest,
@@ -833,7 +833,7 @@ async function doSetWake(req: OffscreenSetWakeRequest): Promise<{
 }> {
   const { identity: holder } = await loadHolder(req.vtaDid);
   const service = await resolveKeyAgreement(req.vtaDid);
-  return setDeviceWake({
+  return setDeviceWakeRest({
     baseUrl: req.restBaseUrl,
     holder,
     service,
@@ -876,7 +876,7 @@ async function doListDids(req: {
 }): Promise<{ dids: Array<{ did: string; contextId: string }> }> {
   const { identity: holder } = await loadHolder(req.vtaDid);
   const service = await resolveKeyAgreement(req.vtaDid);
-  const dids = await vtaListDids({
+  const dids = await vtaListDidsRest({
     baseUrl: req.restBaseUrl,
     holder,
     service,

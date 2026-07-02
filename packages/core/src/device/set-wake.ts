@@ -13,8 +13,11 @@
 // pure minor-version bump; the VTA dual-accepts it via its 0.2 edge transform.
 
 import type { Identity } from "../didcomm/index.js";
+import type { TrustTaskChannel } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
-import { getVtaBearer, makeReauth, postTrustTask, type VtaAuthInputs } from "../vault/transport.js";
+import { RestChannel } from "../vta/rest-channel.js";
+import { buildTrustTask } from "../vta/trust-task.js";
+import type { VtaAuthInputs } from "../vault/transport.js";
 
 const TASK_DEVICE_SET_WAKE = "https://trusttasks.org/spec/device/set-wake/0.2";
 const TASK_DEVICE_SET_WAKE_RESPONSE =
@@ -40,12 +43,10 @@ export interface DeviceSetWakeResponse {
   triggerPolicy?: WakeTriggerPolicy;
 }
 
-export interface DeviceSetWakeOptions {
-  /** VTA REST base URL. */
-  baseUrl: string;
-  /** The wallet's holder DIDComm identity (authcrypt sender). */
+export interface DeviceSetWakeParams {
+  /** The wallet's holder DIDComm identity (envelope `issuer`). */
   holder: Identity;
-  /** The VTA's keyAgreement endpoint (from `resolveKeyAgreement`). */
+  /** The VTA's keyAgreement endpoint (envelope `recipient`). */
   service: RemoteDidcommEndpoint;
   /** The handle to set. Omit to CLEAR the wake channel. */
   wakeHandle?: WakeHandle;
@@ -54,42 +55,37 @@ export interface DeviceSetWakeOptions {
   /** Advisory trigger DIDs (e.g. the device's mediator). The VTA owns the
    *  allowlist and MAY ignore these. */
   suggestedTriggers?: string[];
-  fetch?: typeof fetch;
 }
+
+/** @deprecated REST-transport options. Kept for existing call sites; prefer
+ *  {@link setDeviceWake} with a channel from a `VtaSession`. */
+export interface DeviceSetWakeOptions extends DeviceSetWakeParams, VtaAuthInputs {}
 
 /**
  * Convey (or clear) the device's wake handle at the connected VTA. Idempotent;
  * re-issue on token rotation. Returns the VTA's effective trigger policy.
  */
 export async function setDeviceWake(
-  opts: DeviceSetWakeOptions,
+  channel: TrustTaskChannel,
+  params: DeviceSetWakeParams,
 ): Promise<DeviceSetWakeResponse> {
-  const auth: VtaAuthInputs = {
-    baseUrl: opts.baseUrl,
-    holder: opts.holder,
-    service: opts.service,
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  };
-  const bearer = await getVtaBearer(auth);
-
-  const payload = {
-    ...(opts.wakeHandle ? { wakeHandle: opts.wakeHandle } : {}),
-    ...(opts.pushPlatform ? { pushPlatform: opts.pushPlatform } : {}),
-    ...(opts.suggestedTriggers ? { suggestedTriggers: opts.suggestedTriggers } : {}),
-  };
-
-  return postTrustTask<DeviceSetWakeResponse>({
-    baseUrl: opts.baseUrl,
-    bearer,
-    envelope: {
-      type: TASK_DEVICE_SET_WAKE,
-      payload,
-      issuer: opts.holder.did,
-      recipient: opts.service.did,
+  const envelope = buildTrustTask(
+    TASK_DEVICE_SET_WAKE,
+    {
+      ...(params.wakeHandle ? { wakeHandle: params.wakeHandle } : {}),
+      ...(params.pushPlatform ? { pushPlatform: params.pushPlatform } : {}),
+      ...(params.suggestedTriggers ? { suggestedTriggers: params.suggestedTriggers } : {}),
     },
+    { issuer: params.holder.did, recipient: params.service.did },
+  );
+  return channel.send<DeviceSetWakeResponse>(envelope, {
     expectedResponseType: TASK_DEVICE_SET_WAKE_RESPONSE,
     operationLabel: "device/set-wake/0.2",
-    reauth: makeReauth(auth),
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
+}
+
+/** @deprecated Use {@link setDeviceWake} with a channel from a `VtaSession`.
+ *  Set-wake over REST — builds a one-shot {@link RestChannel}. */
+export function setDeviceWakeRest(opts: DeviceSetWakeOptions): Promise<DeviceSetWakeResponse> {
+  return setDeviceWake(new RestChannel(opts), opts);
 }

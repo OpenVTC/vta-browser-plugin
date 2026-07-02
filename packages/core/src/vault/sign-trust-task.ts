@@ -18,14 +18,23 @@
 // long-term secret material. The proof itself is the only sensitive
 // output, and it's deliberately public.
 
-import { postTrustTask, type VtaAuthInputs, getVtaBearer, makeReauth } from "./transport.js";
+import type { Identity } from "../didcomm/index.js";
+import type { TrustTaskChannel } from "../vta/channel.js";
+import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import { RestChannel } from "../vta/rest-channel.js";
+import { buildTrustTask } from "../vta/trust-task.js";
+import type { VtaAuthInputs } from "./transport.js";
 import type { TrustTaskEnvelope } from "../trust-tasks/sign.js";
 
 const TASK_VAULT_SIGN_TRUST_TASK = "https://trusttasks.org/spec/vault/sign-trust-task/0.2";
 const TASK_VAULT_SIGN_TRUST_TASK_RESPONSE =
   "https://trusttasks.org/spec/vault/sign-trust-task/0.2#response";
 
-export interface VaultSignTrustTaskRestOptions extends VtaAuthInputs {
+export interface VaultSignTrustTaskOptions {
+  /** Issuer of the request (envelope `issuer`). */
+  holder: Identity;
+  /** The VTA — audience-binds the request (envelope `recipient`). */
+  service: RemoteDidcommEndpoint;
   /** Identifier of the vault entry whose principal will sign. MUST
    *  point at a `did-self-issued` or `didcomm-peer` entry — other
    *  kinds reject with `vault/sign-trust-task:not_signable`. */
@@ -35,6 +44,12 @@ export interface VaultSignTrustTaskRestOptions extends VtaAuthInputs {
    *  silently rewrite issuer (`envelope_issuer_mismatch`). */
   unsignedEnvelope: TrustTaskEnvelope;
 }
+
+/** @deprecated REST-transport options. Kept for existing call sites; prefer
+ *  {@link vaultSignTrustTask} with a channel from a `VtaSession`. */
+export interface VaultSignTrustTaskRestOptions
+  extends VaultSignTrustTaskOptions,
+    VtaAuthInputs {}
 
 export interface VaultSignTrustTaskResponse {
   /** The supplied envelope with a `proof` field attached.
@@ -49,38 +64,26 @@ export interface VaultSignTrustTaskResponse {
  * vault entry. The returned `signedEnvelope` is byte-identical to
  * the input except for the attached `proof` field.
  */
-export async function vaultSignTrustTaskRest(
-  opts: VaultSignTrustTaskRestOptions,
+export async function vaultSignTrustTask(
+  channel: TrustTaskChannel,
+  opts: VaultSignTrustTaskOptions,
 ): Promise<VaultSignTrustTaskResponse> {
-  const auth: VtaAuthInputs = {
-    baseUrl: opts.baseUrl,
-    holder: opts.holder,
-    service: opts.service,
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  };
-  const bearer = await getVtaBearer(auth);
-
-  interface WireResponse {
-    signedEnvelope: TrustTaskEnvelope;
-  }
-
-  const wire = await postTrustTask<WireResponse>({
-    baseUrl: opts.baseUrl,
-    bearer,
-    envelope: {
-      type: TASK_VAULT_SIGN_TRUST_TASK,
-      payload: {
-        entryId: opts.entryId,
-        unsignedEnvelope: opts.unsignedEnvelope,
-      },
-      issuer: opts.holder.did,
-      recipient: opts.service.did,
-    },
+  const envelope = buildTrustTask(
+    TASK_VAULT_SIGN_TRUST_TASK,
+    { entryId: opts.entryId, unsignedEnvelope: opts.unsignedEnvelope },
+    { issuer: opts.holder.did, recipient: opts.service.did },
+  );
+  const wire = await channel.send<{ signedEnvelope: TrustTaskEnvelope }>(envelope, {
     expectedResponseType: TASK_VAULT_SIGN_TRUST_TASK_RESPONSE,
     operationLabel: "vault/sign-trust-task/0.2",
-    reauth: makeReauth(auth),
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
-
   return { signedEnvelope: wire.signedEnvelope };
+}
+
+/** @deprecated Use {@link vaultSignTrustTask} with a channel from a
+ *  `VtaSession`. Sign over REST — builds a one-shot {@link RestChannel}. */
+export function vaultSignTrustTaskRest(
+  opts: VaultSignTrustTaskRestOptions,
+): Promise<VaultSignTrustTaskResponse> {
+  return vaultSignTrustTask(new RestChannel(opts), opts);
 }

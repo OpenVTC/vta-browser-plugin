@@ -17,9 +17,12 @@
 // Monitor is denied.
 
 import { type Identity } from "../didcomm/index.js";
+import type { TrustTaskChannel } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import { RestChannel } from "../vta/rest-channel.js";
+import { buildTrustTask } from "../vta/trust-task.js";
 
-import { getVtaBearer, makeReauth, type VtaAuthInputs } from "./transport.js";
+import type { VtaAuthInputs } from "./transport.js";
 
 const TASK_VAULT_LIST_0_2 = "https://trusttasks.org/spec/vault/list/0.2";
 const TASK_VAULT_LIST_0_2_RESPONSE = "https://trusttasks.org/spec/vault/list/0.2#response";
@@ -102,91 +105,52 @@ export interface VaultListResponse {
   redactedFields?: string[];
 }
 
-export interface VaultListRestOptions {
-  /** VTA REST base URL — from the connection state's `restBaseUrl`. */
-  baseUrl: string;
-  /** Authcrypt sender (the holder's DIDComm identity post-onboarding swap). */
+export interface VaultListParams {
+  /** Authcrypt sender / envelope `issuer` (the holder's DIDComm identity). */
   holder: Identity;
-  /** VTA's keyAgreement endpoint (resolved via `resolveKeyAgreement`). */
+  /** VTA's keyAgreement endpoint — envelope `recipient`. */
   service: RemoteDidcommEndpoint;
   /** Filters (omit for "all entries the caller can read"). */
   filter?: VaultListFilter;
-  /** fetch impl (defaults to global). */
-  fetch?: typeof fetch;
 }
 
+/** @deprecated REST-transport options. Kept for existing call sites; prefer
+ *  {@link vaultList} with a channel from a `VtaSession`. */
+export interface VaultListRestOptions extends VaultListParams, VtaAuthInputs {}
+
 /**
- * Authenticate to the VTA over REST + DIDComm-authcrypt, then post the
- * canonical vault/list/0.2 Trust Task envelope and return the parsed
- * entries. Single round-trip's worth of auth — no token cache in M1.
+ * Post the canonical vault/list/0.2 Trust Task over the given channel and
+ * return the parsed metadata entries. Read-only — no secret material crosses
+ * the wire.
  */
-export async function vaultListRest(opts: VaultListRestOptions): Promise<VaultListResponse> {
-  const { baseUrl, holder, service, filter } = opts;
-  const f = opts.fetch ?? fetch.bind(globalThis);
-  const base = baseUrl.replace(/\/+$/, "");
+export async function vaultList(
+  channel: TrustTaskChannel,
+  params: VaultListParams,
+): Promise<VaultListResponse> {
+  const envelope = buildTrustTask(TASK_VAULT_LIST_0_2, params.filter ?? {}, {
+    issuer: params.holder.did,
+    recipient: params.service.did,
+  });
+  const payload = await channel.send<{
+    entries?: VaultEntry[];
+    truncated?: boolean;
+    cursor?: string;
+    redactedFields?: string[];
+  }>(envelope, {
+    expectedResponseType: TASK_VAULT_LIST_0_2_RESPONSE,
+    operationLabel: "vault/list/0.2",
+  });
 
-  // 1. Authenticate via the shared, cached bearer helper (same
-  //    /auth/challenge → authcrypt /auth/ → token primitive). Caching
-  //    means a sign-in that lists then signs reuses one token rather than
-  //    re-authing per op (which trips the VTA's per-IP unauth rate limit).
-  const auth: VtaAuthInputs = {
-    baseUrl,
-    holder,
-    service,
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  };
-  const accessToken = await getVtaBearer(auth);
-
-  // 2. POST /api/trust-tasks with the vault/list/0.2 envelope.
-  const envelope = {
-    id: globalThis.crypto.randomUUID(),
-    type: TASK_VAULT_LIST_0_2,
-    issuer: holder.did,
-    recipient: service.did,
-    issuedAt: new Date().toISOString(),
-    payload: filter ?? {},
-  };
-  const reqBody = JSON.stringify(envelope);
-  const doPost = (bearer: string) =>
-    f(`${base}/api/trust-tasks`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${bearer}`,
-      },
-      body: reqBody,
-    });
-
-  // On 401, the cached token outlived its session — re-auth once and retry.
-  let tRes = await doPost(accessToken);
-  if (tRes.status === 401) {
-    tRes = await doPost(await makeReauth(auth)());
-  }
-  if (!tRes.ok) {
-    throw new Error(
-      `vta /api/trust-tasks vault/list failed (${tRes.status}): ${await tRes.text()}`,
-    );
-  }
-  const tBody = (await tRes.json()) as {
-    type?: string;
-    payload?: {
-      entries?: VaultEntry[];
-      truncated?: boolean;
-      cursor?: string;
-      redactedFields?: string[];
-    };
-  };
-
-  if (tBody.type !== TASK_VAULT_LIST_0_2_RESPONSE) {
-    throw new Error(
-      `vault/list: unexpected response type ${tBody.type ?? "(none)"} — ${JSON.stringify(tBody)}`,
-    );
-  }
-  const entries = tBody.payload?.entries ?? [];
   return {
-    entries,
-    truncated: tBody.payload?.truncated ?? false,
-    ...(tBody.payload?.cursor ? { cursor: tBody.payload.cursor } : {}),
-    ...(tBody.payload?.redactedFields ? { redactedFields: tBody.payload.redactedFields } : {}),
+    entries: payload.entries ?? [],
+    truncated: payload.truncated ?? false,
+    ...(payload.cursor ? { cursor: payload.cursor } : {}),
+    ...(payload.redactedFields ? { redactedFields: payload.redactedFields } : {}),
   };
+}
+
+/** @deprecated Use {@link vaultList} with a channel from a `VtaSession`.
+ *  List over REST — builds a one-shot {@link RestChannel}. */
+export function vaultListRest(opts: VaultListRestOptions): Promise<VaultListResponse> {
+  return vaultList(new RestChannel(opts), opts);
 }

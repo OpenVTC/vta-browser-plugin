@@ -15,9 +15,12 @@
 // reuse the shared vault transport helpers.
 
 import type { Identity } from "../didcomm/index.js";
-import { getVtaBearer, makeReauth, postTrustTask, type VtaAuthInputs } from "../vault/transport.js";
+import type { VtaAuthInputs } from "../vault/transport.js";
 
+import type { TrustTaskChannel } from "./channel.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";
+import { RestChannel } from "./rest-channel.js";
+import { buildTrustTask } from "./trust-task.js";
 
 const TASK_WEBVH_DIDS_LIST_1_0 = "https://trusttasks.org/spec/vta/webvh/dids/list/1.0";
 const TASK_WEBVH_DIDS_LIST_1_0_RESPONSE = `${TASK_WEBVH_DIDS_LIST_1_0}#response`;
@@ -43,49 +46,42 @@ interface ListDidsResultBody {
   dids?: WebvhDidRecord[];
 }
 
-export interface VtaListDidsOptions {
-  /** VTA REST base URL — from the connection state's `restBaseUrl`. */
-  baseUrl: string;
+export interface VtaListDidsParams {
   /** Authcrypt sender (the holder's DIDComm identity post-onboarding swap). */
   holder: Identity;
   /** VTA's keyAgreement endpoint (resolved via `resolveKeyAgreement`). */
   service: RemoteDidcommEndpoint;
   /** Restrict to one context. Omit for every DID the caller can see. */
   contextId?: string;
-  /** fetch impl (defaults to global). */
-  fetch?: typeof fetch;
 }
+
+/** @deprecated REST-transport options. Kept for existing call sites; prefer
+ *  {@link vtaListDids} with a channel from a `VtaSession`. */
+export interface VtaListDidsOptions extends VtaListDidsParams, VtaAuthInputs {}
 
 /** List the webvh DIDs the VTA hosts, optionally scoped to one context.
  *
  *  These are the personas a `did-self-issued` vault entry can act AS:
  *  the VTA holds their signing keys, so it can mint a SIOP id_token as
- *  any of them. Same cached-bearer auth + dispatch primitive as
- *  `vaultListRest` (challenge → authcrypt → bearer → POST), including
- *  the one-shot 401 re-auth retry. */
-export async function vtaListDids(opts: VtaListDidsOptions): Promise<WebvhDidRecord[]> {
-  const auth: VtaAuthInputs = {
-    baseUrl: opts.baseUrl,
-    holder: opts.holder,
-    service: opts.service,
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  };
-  const bearer = await getVtaBearer(auth);
-
-  const result = await postTrustTask<ListDidsResultBody>({
-    baseUrl: opts.baseUrl,
-    bearer,
-    envelope: {
-      type: TASK_WEBVH_DIDS_LIST_1_0,
-      issuer: opts.holder.did,
-      recipient: opts.service.did,
-      payload: opts.contextId ? { context_id: opts.contextId } : {},
-    },
+ *  any of them. */
+export async function vtaListDids(
+  channel: TrustTaskChannel,
+  params: VtaListDidsParams,
+): Promise<WebvhDidRecord[]> {
+  const envelope = buildTrustTask(
+    TASK_WEBVH_DIDS_LIST_1_0,
+    params.contextId ? { context_id: params.contextId } : {},
+    { issuer: params.holder.did, recipient: params.service.did },
+  );
+  const result = await channel.send<ListDidsResultBody>(envelope, {
     expectedResponseType: TASK_WEBVH_DIDS_LIST_1_0_RESPONSE,
     operationLabel: "webvh/dids/list",
-    reauth: makeReauth(auth),
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
-
   return result.dids ?? [];
+}
+
+/** @deprecated Use {@link vtaListDids} with a channel from a `VtaSession`.
+ *  List over REST — builds a one-shot {@link RestChannel}. */
+export function vtaListDidsRest(opts: VtaListDidsOptions): Promise<WebvhDidRecord[]> {
+  return vtaListDids(new RestChannel(opts), opts);
 }
