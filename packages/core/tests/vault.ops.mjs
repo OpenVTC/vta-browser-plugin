@@ -7,6 +7,8 @@ import {
   vaultSignTrustTask,
   vtaListDids,
   setDeviceWake,
+  contextsList,
+  contextsCreate,
   VtaSession,
 } from "../dist/index.js";
 
@@ -76,6 +78,25 @@ test("vtaListDids scopes by context and unwraps dids[]", async () => {
   assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/vta/webvh/dids/list/1.0");
   assert.deepEqual(ch.sent[0].envelope.payload, { context_id: "work" });
   assert.deepEqual(res, [{ did: "did:webvh:a", context_id: "work" }]);
+});
+
+test("contextsList sends contexts/list/1.0 with empty payload and unwraps contexts[]", async () => {
+  const ch = captureChannel({ contexts: [{ id: "work", name: "Work" }] });
+  const res = await contextsList(ch, { holder, service });
+  const { envelope, opts } = ch.sent[0];
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/contexts/list/1.0");
+  assert.deepEqual(envelope.payload, {});
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vta/contexts/list/1.0#response");
+  assert.deepEqual(res, [{ id: "work", name: "Work" }]);
+});
+
+test("contextsCreate defaults name to id and forwards description/parent", async () => {
+  const record = { id: "team", name: "Team", did: null, description: "d", base_path: "/team", created_at: "t", updated_at: "t" };
+  const ch = captureChannel(record);
+  const res = await contextsCreate(ch, { holder, service, id: "team", description: "d", parent: "org" });
+  assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/vta/contexts/create/1.0");
+  assert.deepEqual(ch.sent[0].envelope.payload, { id: "team", name: "team", description: "d", parent: "org" });
+  assert.deepEqual(res, record);
 });
 
 test("ops accept a VtaSession (not just a raw channel) and route through it", async () => {

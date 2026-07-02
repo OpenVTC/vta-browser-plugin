@@ -44,8 +44,8 @@ import {
   vaultRelease,
   vaultSignTrustTask,
   vaultUpsert,
-  vtaCreateContext,
-  vtaListContexts,
+  contextsCreate,
+  contextsList,
   vtaListDids,
   VtaSession,
   verifyDid,
@@ -396,40 +396,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ─── Transport-agnostic VTA session (DIDComm-preferred, REST fallback) ───
 //
-// Vault / device / dids trust-task ops run over whatever transport the VTA
-// advertises, priority DIDComm > REST (TSP later). This is what makes a
-// DIDComm-only VTA usable for the vault flows — no #vta-rest required.
+// Vault / device / dids / contexts trust-task ops run over whatever transport
+// the VTA advertises, priority DIDComm > REST (TSP later). This is what makes a
+// DIDComm-only VTA usable for these flows — no #vta-rest required.
 //
-// The mediator WebSocket is cached per VTA so the popup's repeated ops reuse
-// one live session rather than re-authenticating to the mediator on every
-// call (the DIDComm analogue of the REST bearer cache). A failed connect is
-// evicted so the next call retries; a socket that drops mid-session surfaces
-// as an op error the user retries — reconnect-on-drop is a follow-up.
-
-interface CachedMediator {
-  conn: MediatorConnection;
-  bridge: MediatorSessionBridge;
-}
-const mediatorSessions = new Map<string, Promise<CachedMediator>>();
-
-async function mediatorSessionFor(
-  vtaDid: string,
-  holder: Identity,
-  mediatorDid: string,
-): Promise<CachedMediator> {
-  let pending = mediatorSessions.get(vtaDid);
-  if (!pending) {
-    pending = (async (): Promise<CachedMediator> => {
-      const conn = await connectMediatorSession({ holder, mediatorDid, vtaDid });
-      return { conn, bridge: new MediatorSessionBridge(conn) };
-    })();
-    mediatorSessions.set(vtaDid, pending);
-    pending.catch(() => {
-      if (mediatorSessions.get(vtaDid) === pending) mediatorSessions.delete(vtaDid);
-    });
-  }
-  return pending;
-}
+// The DIDComm channel rides the warm mediator-session pool (`getWarmSession`,
+// below) — the same authenticated, live-delivery session the DIDComm login /
+// step-up / confirm paths reuse, with transparent reconnect. So the popup's
+// repeated ops don't re-authenticate to the mediator per call.
 
 interface VtaSessionHandle {
   session: VtaSession;
@@ -452,11 +426,8 @@ async function getVtaSession(
 
   const channels: TrustTaskChannel[] = [];
   if (services.didcomm) {
-    const { conn, bridge } = await mediatorSessionFor(
-      vtaDid,
-      holder,
-      services.didcomm.mediatorDid,
-    );
+    const conn = await getWarmSession(services.didcomm.mediatorDid, vtaDid);
+    const bridge = new MediatorSessionBridge(conn);
     channels.push(
       new DidcommVtaTransport({ bridge, holder, vta: conn.vta, mediator: conn.mediator }),
     );
@@ -905,13 +876,8 @@ async function doListContexts(req: {
   vtaDid: string;
   restBaseUrl: string;
 }): Promise<{ contexts: Array<{ id: string; name: string }> }> {
-  const { identity: holder } = await loadHolder(req.vtaDid);
-  const service = await resolveKeyAgreement(req.vtaDid);
-  const contexts = await vtaListContexts({
-    baseUrl: req.restBaseUrl,
-    holder,
-    service,
-  });
+  const { session, holder, service } = await getVtaSession(req.vtaDid, req.restBaseUrl);
+  const contexts = await contextsList(session, { holder, service });
   return { contexts: contexts.map((c) => ({ id: c.id, name: c.name })) };
 }
 
@@ -946,10 +912,8 @@ async function doCreateContext(req: {
   name?: string;
   description?: string;
 }): Promise<{ id: string; name: string }> {
-  const { identity: holder } = await loadHolder(req.vtaDid);
-  const service = await resolveKeyAgreement(req.vtaDid);
-  const created = await vtaCreateContext({
-    baseUrl: req.restBaseUrl,
+  const { session, holder, service } = await getVtaSession(req.vtaDid, req.restBaseUrl);
+  const created = await contextsCreate(session, {
     holder,
     service,
     id: req.id,
