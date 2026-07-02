@@ -5,18 +5,17 @@ import {
   wrapForward,
   type PublicJwk,
 } from "../didcomm/index.js";
-import { VtaClientError, type VtaErrorCode } from "./errors.js";
+import { VtaClientError } from "./errors.js";
 import {
   PasskeyVmTask,
   TRUST_TASK_ENVELOPE_TYPE,
-  isTrustTaskErrorType,
   type EnrollChallengePayload,
   type EnrollSubmitPayload,
   type ListPayload,
   type RevokePayload,
   type TrustTask,
-  type TrustTaskErrorPayload,
 } from "./protocol.js";
+import { buildTrustTask, parseTrustTaskReply } from "./trust-task.js";
 import type { DidcommMessageBridge, VtaTransport } from "./transport.js";
 import type {
   EnrollmentChallengeResponse,
@@ -43,10 +42,6 @@ export interface DidcommVtaTransportOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-
-function newMessageId(): string {
-  return globalThis.crypto.randomUUID();
-}
 
 /**
  * VTA transport over DIDComm v2. Authcrypts every request from the
@@ -146,16 +141,11 @@ export class DidcommVtaTransport implements VtaTransport {
       );
     }
 
+    // The binding envelope has already vouched for the message, so accept any
+    // non-error response type (no expectedResponseType). A trust-task-error
+    // document throws a normalized VtaClientError.
     const doc = (msg.body ?? {}) as TrustTask<unknown>;
-    if (isTrustTaskErrorType(doc.type)) {
-      const err = (doc.payload ?? {}) as TrustTaskErrorPayload;
-      throw new VtaClientError(
-        coerceTrustTaskCode(err.code),
-        err.message ?? err.code ?? "trust-task error",
-        { details: err },
-      );
-    }
-    return (doc.payload ?? {}) as Res;
+    return parseTrustTaskReply<Res>(doc);
   }
 
   /**
@@ -168,14 +158,10 @@ export class DidcommVtaTransport implements VtaTransport {
     taskUri: string,
     payload: Req,
   ): Promise<{ outer: string; inner: string; requestId: string }> {
-    const requestId = newMessageId();
-    const envelope: TrustTask<Req> = {
-      id: requestId,
-      type: taskUri,
+    const envelope = buildTrustTask<Req>(taskUri, payload, {
       issuer: this.holder.did,
-      issuedAt: new Date().toISOString(),
-      payload,
-    };
+    });
+    const requestId = envelope.id;
     const message = {
       id: requestId,
       type: TRUST_TASK_ENVELOPE_TYPE,
@@ -203,29 +189,5 @@ export class DidcommVtaTransport implements VtaTransport {
       },
     ]);
     return { outer, inner, requestId };
-  }
-}
-
-/** Map a framework Trust-Task status `code` to a typed `VtaErrorCode`
- *  so the CLI/UI layer can give targeted guidance. */
-function coerceTrustTaskCode(code: string | undefined): VtaErrorCode {
-  // Normalize across framework versions and namespacing: 0.1 codes are
-  // snake_case (`permission_denied`), 0.2 lowerCamelCase
-  // (`permissionDenied`), and extended task codes are namespaced
-  // `<slug>:<local>` (e.g. `vta/passkey-vms:unknownCeremony`). Reduce to
-  // the local part and fold snake→camel so one switch covers all forms.
-  const local = (code ?? "").split(":").pop() ?? "";
-  const norm = local.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase());
-  switch (norm) {
-    case "permissionDenied":
-      return "e.p.msg.forbidden";
-    case "internalError":
-    case "unavailable":
-      return "e.p.msg.internal";
-    default:
-      // malformedRequest, unsupportedType, unsupportedVersion, proofRequired,
-      // proofInvalid, wrongRecipient, identityMismatch, taskFailed, expired,
-      // and all task-specific extended codes.
-      return "e.p.msg.bad_request";
   }
 }

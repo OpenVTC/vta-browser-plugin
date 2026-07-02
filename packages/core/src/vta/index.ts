@@ -1,5 +1,6 @@
 export * from "./bridge-memory.js";
 export * from "./bridge-mediator-session.js";
+export * from "./channel.js";
 export * from "./client.js";
 export * from "./contexts.js";
 export * from "./didcomm.js";
@@ -11,5 +12,6 @@ export * from "./pickup.js";
 export * from "./protocol.js";
 export * from "./smoke.js";
 export * from "./transport.js";
+export * from "./trust-task.js";
 export * from "./types.js";
 export * from "./wallet-session.js";
