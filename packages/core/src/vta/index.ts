@@ -11,6 +11,7 @@ export * from "./mediator-client.js";
 export * from "./pickup.js";
 export * from "./protocol.js";
 export * from "./rest-channel.js";
+export * from "./session.js";
 export * from "./smoke.js";
 export * from "./transport.js";
 export * from "./trust-task.js";
