@@ -13,7 +13,7 @@
 // pure minor-version bump; the VTA dual-accepts it via its 0.2 edge transform.
 
 import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskChannel } from "../vta/channel.js";
+import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { RestChannel } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
@@ -66,7 +66,7 @@ export interface DeviceSetWakeOptions extends DeviceSetWakeParams, VtaAuthInputs
  * re-issue on token rotation. Returns the VTA's effective trigger policy.
  */
 export async function setDeviceWake(
-  channel: TrustTaskChannel,
+  channel: TrustTaskSender,
   params: DeviceSetWakeParams,
 ): Promise<DeviceSetWakeResponse> {
   const envelope = buildTrustTask(

@@ -19,7 +19,7 @@
 // output, and it's deliberately public.
 
 import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskChannel } from "../vta/channel.js";
+import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { RestChannel } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
@@ -65,7 +65,7 @@ export interface VaultSignTrustTaskResponse {
  * the input except for the attached `proof` field.
  */
 export async function vaultSignTrustTask(
-  channel: TrustTaskChannel,
+  channel: TrustTaskSender,
   opts: VaultSignTrustTaskOptions,
 ): Promise<VaultSignTrustTaskResponse> {
   const envelope = buildTrustTask(

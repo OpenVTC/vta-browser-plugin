@@ -7,6 +7,7 @@ import {
   vaultSignTrustTask,
   vtaListDids,
   setDeviceWake,
+  VtaSession,
 } from "../dist/index.js";
 
 /** A TrustTaskChannel that records the envelope + opts and returns a canned
@@ -75,6 +76,16 @@ test("vtaListDids scopes by context and unwraps dids[]", async () => {
   assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/vta/webvh/dids/list/1.0");
   assert.deepEqual(ch.sent[0].envelope.payload, { context_id: "work" });
   assert.deepEqual(res, [{ did: "did:webvh:a", context_id: "work" }]);
+});
+
+test("ops accept a VtaSession (not just a raw channel) and route through it", async () => {
+  // The whole point of TrustTaskSender: hand an op a multi-channel session and
+  // it works. Here the primary (didcomm) channel routes the vault/list.
+  const didcomm = captureChannel({ entries: [{ id: "via-session" }] });
+  const session = new VtaSession([didcomm]);
+  const res = await vaultList(session, { holder, service });
+  assert.equal(didcomm.sent[0].envelope.type, "https://trusttasks.org/spec/vault/list/0.2");
+  assert.deepEqual(res.entries, [{ id: "via-session" }]);
 });
 
 test("setDeviceWake sets the handle; omitting it clears", async () => {

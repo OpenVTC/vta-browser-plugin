@@ -15,6 +15,16 @@ import type { TrustTask } from "./protocol.js";
 
 export type TrustTaskChannelKind = "tsp" | "didcomm" | "rest";
 
+/**
+ * The minimal "carry a Trust-Task and return its response" capability. Both a
+ * single {@link TrustTaskChannel} and a multi-channel `VtaSession` satisfy it,
+ * so domain ops depend on this and don't care whether they're handed one
+ * transport or a fallback chain.
+ */
+export interface TrustTaskSender {
+  send<Res>(envelope: TrustTask<unknown>, opts?: SendOpts): Promise<Res>;
+}
+
 export interface SendOpts {
   /** Expected response document `type` (the `<request>#response` URI). When
    *  set, a reply whose `type` is neither this nor a trust-task-error is a
@@ -31,7 +41,7 @@ export interface SendOpts {
  * request is always a canonical {@link TrustTask} envelope; the channel
  * returns the decoded response payload, or throws a `VtaClientError`.
  */
-export interface TrustTaskChannel {
+export interface TrustTaskChannel extends TrustTaskSender {
   /** Which transport this is — for selection, logging, and diagnostics. */
   readonly kind: TrustTaskChannelKind;
 

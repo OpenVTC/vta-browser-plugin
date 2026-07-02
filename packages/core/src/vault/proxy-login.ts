@@ -25,7 +25,7 @@
 // the extension layer because @openvtc/pnm-core is browser-agnostic.
 
 import { unpackMessage, type Identity } from "../didcomm/index.js";
-import type { TrustTaskChannel } from "../vta/channel.js";
+import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { RestChannel } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
@@ -148,7 +148,7 @@ export interface VaultProxyLoginResponse {
  *      surfaces the constraint).
  */
 export async function vaultProxyLogin(
-  channel: TrustTaskChannel,
+  channel: TrustTaskSender,
   opts: VaultProxyLoginParams,
 ): Promise<VaultProxyLoginResponse> {
   // Server returns { sealedSessionBlob: SealedEnvelope, sessionId, expiresAt }.

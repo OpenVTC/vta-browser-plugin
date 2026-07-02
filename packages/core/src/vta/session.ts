@@ -14,7 +14,12 @@
 // and the VTA advertises per-task capability, `supports` does the selection up
 // front and this stays a no-surprise single hop in the common case.
 
-import type { SendOpts, TrustTaskChannel, TrustTaskChannelKind } from "./channel.js";
+import type {
+  SendOpts,
+  TrustTaskChannel,
+  TrustTaskChannelKind,
+  TrustTaskSender,
+} from "./channel.js";
 import { VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
 
@@ -36,7 +41,7 @@ export function orderChannelsByPriority(channels: TrustTaskChannel[]): TrustTask
  * VTA (a live DIDComm channel, a REST channel, later a TSP channel) — the
  * session orders them and hides the choice.
  */
-export class VtaSession {
+export class VtaSession implements TrustTaskSender {
   private readonly channels: TrustTaskChannel[];
 
   constructor(channels: TrustTaskChannel[]) {

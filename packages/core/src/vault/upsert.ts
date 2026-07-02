@@ -19,7 +19,7 @@
 //  5. Return the maintainer's response (metadata view + `created` flag).
 
 import { packAuthcrypt, type Identity } from "../didcomm/index.js";
-import type { TrustTaskChannel } from "../vta/channel.js";
+import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { RestChannel } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
@@ -146,7 +146,7 @@ export interface VaultUpsertResponse {
  * against `secretKind`, and persists.
  */
 export async function vaultUpsert(
-  channel: TrustTaskChannel,
+  channel: TrustTaskSender,
   opts: VaultUpsertParams,
 ): Promise<VaultUpsertResponse> {
   // Build the sealedSecret envelope — only built when `secret` is

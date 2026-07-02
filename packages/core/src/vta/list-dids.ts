@@ -17,7 +17,7 @@
 import type { Identity } from "../didcomm/index.js";
 import type { VtaAuthInputs } from "../vault/transport.js";
 
-import type { TrustTaskChannel } from "./channel.js";
+import type { TrustTaskSender } from "./channel.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";
 import { RestChannel } from "./rest-channel.js";
 import { buildTrustTask } from "./trust-task.js";
@@ -65,7 +65,7 @@ export interface VtaListDidsOptions extends VtaListDidsParams, VtaAuthInputs {}
  *  the VTA holds their signing keys, so it can mint a SIOP id_token as
  *  any of them. */
 export async function vtaListDids(
-  channel: TrustTaskChannel,
+  channel: TrustTaskSender,
   params: VtaListDidsParams,
 ): Promise<WebvhDidRecord[]> {
   const envelope = buildTrustTask(

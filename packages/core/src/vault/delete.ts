@@ -1,12 +1,12 @@
 // Vault — delete (M2A.5).
 //
 // Sends a `https://trusttasks.org/spec/vault/delete/0.1` Trust Task over a
-// TrustTaskChannel. No envelope / sealing — delete carries only id +
+// TrustTaskSender (channel or session). No envelope / sealing — delete carries only id +
 // optimistic-concurrency token, all visible to anyone the transport
 // authenticates.
 
 import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskChannel } from "../vta/channel.js";
+import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { RestChannel } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
@@ -43,7 +43,7 @@ export interface VaultDeleteResponse {
 
 /** Delete a vault entry over the given channel. */
 export async function vaultDelete(
-  channel: TrustTaskChannel,
+  channel: TrustTaskSender,
   opts: VaultDeleteOptions,
 ): Promise<VaultDeleteResponse> {
   const envelope = buildTrustTask(

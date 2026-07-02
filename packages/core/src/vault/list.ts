@@ -17,7 +17,7 @@
 // Monitor is denied.
 
 import { type Identity } from "../didcomm/index.js";
-import type { TrustTaskChannel } from "../vta/channel.js";
+import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { RestChannel } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
@@ -124,7 +124,7 @@ export interface VaultListRestOptions extends VaultListParams, VtaAuthInputs {}
  * the wire.
  */
 export async function vaultList(
-  channel: TrustTaskChannel,
+  channel: TrustTaskSender,
   params: VaultListParams,
 ): Promise<VaultListResponse> {
   const envelope = buildTrustTask(TASK_VAULT_LIST_0_2, params.filter ?? {}, {
