@@ -15,5 +15,6 @@ export * from "./session.js";
 export * from "./smoke.js";
 export * from "./transport.js";
 export * from "./trust-task.js";
+export * from "./tsp-channel.js";
 export * from "./types.js";
 export * from "./wallet-session.js";
