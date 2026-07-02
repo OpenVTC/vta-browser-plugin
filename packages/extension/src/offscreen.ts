@@ -10,6 +10,7 @@ import {
   buildConfirmResponse,
   connectMediatorSession,
   createStopwatch,
+  DidcommVtaTransport,
   didcommKeyAgreementFromSigning,
   generateSigningIdentity,
   Identity,
@@ -23,7 +24,8 @@ import {
   requestVtaApproval,
   resolveKeyAgreement,
   resolveVtaServices,
-  setDeviceWakeRest,
+  RestChannel,
+  setDeviceWake,
   signingIdentityFromSecret,
   stepUpVtaFinish,
   stepUpVtaStart,
@@ -35,15 +37,17 @@ import {
   installVtaMintedHolder,
   ProvisionProblemReportError,
   runProvisionIntegration,
-  vaultDeleteRest,
-  vaultListRest,
-  vaultSignTrustTaskRest,
+  type TrustTaskChannel,
+  vaultDelete,
+  vaultList,
+  vaultProxyLogin,
+  vaultRelease,
+  vaultSignTrustTask,
+  vaultUpsert,
   vtaCreateContext,
   vtaListContexts,
-  vtaListDidsRest,
-  vaultProxyLoginRest,
-  vaultReleaseRest,
-  vaultUpsertRest,
+  vtaListDids,
+  VtaSession,
   verifyDid,
 } from "@openvtc/pnm-core";
 import { base64url } from "@openvtc/vti-didcomm-js";
@@ -390,26 +394,100 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-// Vault — list. Resolves the VTA's keyAgreement, loads the holder identity
-// (the X25519 leg of the did:peer is the authcrypt sender), and runs
-// `vaultListRest` end-to-end against the VTA's REST + trust-task dispatcher.
+// ─── Transport-agnostic VTA session (DIDComm-preferred, REST fallback) ───
+//
+// Vault / device / dids trust-task ops run over whatever transport the VTA
+// advertises, priority DIDComm > REST (TSP later). This is what makes a
+// DIDComm-only VTA usable for the vault flows — no #vta-rest required.
+//
+// The mediator WebSocket is cached per VTA so the popup's repeated ops reuse
+// one live session rather than re-authenticating to the mediator on every
+// call (the DIDComm analogue of the REST bearer cache). A failed connect is
+// evicted so the next call retries; a socket that drops mid-session surfaces
+// as an op error the user retries — reconnect-on-drop is a follow-up.
+
+interface CachedMediator {
+  conn: MediatorConnection;
+  bridge: MediatorSessionBridge;
+}
+const mediatorSessions = new Map<string, Promise<CachedMediator>>();
+
+async function mediatorSessionFor(
+  vtaDid: string,
+  holder: Identity,
+  mediatorDid: string,
+): Promise<CachedMediator> {
+  let pending = mediatorSessions.get(vtaDid);
+  if (!pending) {
+    pending = (async (): Promise<CachedMediator> => {
+      const conn = await connectMediatorSession({ holder, mediatorDid, vtaDid });
+      return { conn, bridge: new MediatorSessionBridge(conn) };
+    })();
+    mediatorSessions.set(vtaDid, pending);
+    pending.catch(() => {
+      if (mediatorSessions.get(vtaDid) === pending) mediatorSessions.delete(vtaDid);
+    });
+  }
+  return pending;
+}
+
+interface VtaSessionHandle {
+  session: VtaSession;
+  holder: Identity;
+  service: Awaited<ReturnType<typeof resolveKeyAgreement>>;
+}
+
+// Build a VtaSession for `vtaDid` honouring the advertised transports
+// (DIDComm > REST). `restBaseUrl` (from the popup's connection state) is used
+// when present; otherwise we fall back to the VTA's advertised #vta-rest. A
+// DIDComm-only VTA yields a DIDComm-only session; a REST-only VTA yields the
+// same REST path as before. A VTA advertising both now PREFERS DIDComm.
+async function getVtaSession(
+  vtaDid: string,
+  restBaseUrl?: string,
+): Promise<VtaSessionHandle> {
+  const { identity: holder } = await loadHolder(vtaDid);
+  const service = await resolveKeyAgreement(vtaDid);
+  const services = await resolveVtaServices(vtaDid);
+
+  const channels: TrustTaskChannel[] = [];
+  if (services.didcomm) {
+    const { conn, bridge } = await mediatorSessionFor(
+      vtaDid,
+      holder,
+      services.didcomm.mediatorDid,
+    );
+    channels.push(
+      new DidcommVtaTransport({ bridge, holder, vta: conn.vta, mediator: conn.mediator }),
+    );
+  }
+  const rest = restBaseUrl || services.rest?.baseUrl;
+  if (rest) {
+    channels.push(new RestChannel({ baseUrl: rest, holder, service }));
+  }
+  if (channels.length === 0) {
+    throw new Error(
+      `${vtaDid} advertises no usable transport (#vta-didcomm or #vta-rest)`,
+    );
+  }
+  return { session: new VtaSession(channels), holder, service };
+}
+
+// Vault — list. Runs vault/list/0.2 over the VTA's preferred transport
+// (DIDComm > REST). The holder's X25519 is the authcrypt sender / envelope
+// issuer.
 async function doVaultList(req: OffscreenVaultListRequest) {
-  const { identity: holder } = await loadHolder(req.vtaDid);
-  const service = await resolveKeyAgreement(req.vtaDid);
+  const { session, holder, service } = await getVtaSession(req.vtaDid, req.restBaseUrl);
   // The bridge protocol intentionally types filter loosely (string secretKind)
   // so it doesn't have to import @openvtc/pnm-core's narrowed enums. Cast at this
   // wire boundary — the values that flow through are sanity-checked by the
   // canonical schema validator on the VTA side anyway.
-  type VaultRestOpts = Parameters<typeof vaultListRest>[0];
-  const opts: VaultRestOpts = req.filter
-    ? {
-        baseUrl: req.restBaseUrl,
-        holder,
-        service,
-        filter: req.filter as NonNullable<VaultRestOpts["filter"]>,
-      }
-    : { baseUrl: req.restBaseUrl, holder, service };
-  const response = await vaultListRest(opts);
+  type ListParams = Parameters<typeof vaultList>[1];
+  const response = await vaultList(session, {
+    holder,
+    service,
+    ...(req.filter ? { filter: req.filter as NonNullable<ListParams["filter"]> } : {}),
+  });
   return {
     entries: response.entries,
     truncated: response.truncated,
@@ -417,49 +495,32 @@ async function doVaultList(req: OffscreenVaultListRequest) {
 }
 
 // Vault — upsert. Sealed-secret packing happens inside @openvtc/pnm-core's
-// vaultUpsertRest (uses the holder's X25519 to authcrypt the VaultSecret
-// JSON to the VTA's keyAgreement key).
+// vaultUpsert (uses the holder's X25519 to authcrypt the VaultSecret JSON to
+// the VTA's keyAgreement key) — independent of which transport carries the
+// (also-encrypted, on DIDComm) request envelope.
 async function doVaultUpsert(req: OffscreenVaultUpsertRequest) {
-  const { identity: holder } = await loadHolder(req.vtaDid);
-  const service = await resolveKeyAgreement(req.vtaDid);
-  type Opts = Parameters<typeof vaultUpsertRest>[0];
+  const { session, holder, service } = await getVtaSession(req.vtaDid, req.restBaseUrl);
+  type Params = Parameters<typeof vaultUpsert>[1];
   // The bridge protocol types secretKind / secret loosely (strings) to
   // avoid importing @openvtc/pnm-core's enums into bridge-protocol.ts. Cast at
   // this boundary — server-side canonical-schema validation is the real
   // authority anyway.
-  const opts = {
-    baseUrl: req.restBaseUrl,
-    holder,
-    service,
-    ...req.body,
-  } as unknown as Opts;
-  return await vaultUpsertRest(opts);
+  const params = { holder, service, ...req.body } as unknown as Params;
+  return await vaultUpsert(session, params);
 }
 
-// Vault — delete. No envelope; just authenticated POST.
+// Vault — delete. No envelope; just an authenticated request.
 async function doVaultDelete(req: OffscreenVaultDeleteRequest) {
-  const { identity: holder } = await loadHolder(req.vtaDid);
-  const service = await resolveKeyAgreement(req.vtaDid);
-  return await vaultDeleteRest({
-    baseUrl: req.restBaseUrl,
-    holder,
-    service,
-    ...req.body,
-  });
+  const { session, holder, service } = await getVtaSession(req.vtaDid, req.restBaseUrl);
+  return await vaultDelete(session, { holder, service, ...req.body });
 }
 
 // Vault — release. Server returns an authcrypt JWE; @openvtc/pnm-core's
-// vaultReleaseRest unpacks it against the holder's private X25519
-// (which lives here in offscreen) and surfaces the cleartext secret.
+// vaultRelease unpacks it against the holder's private X25519 (which lives
+// here in offscreen) and surfaces the cleartext secret.
 async function doVaultRelease(req: OffscreenVaultReleaseRequest) {
-  const { identity: holder } = await loadHolder(req.vtaDid);
-  const service = await resolveKeyAgreement(req.vtaDid);
-  return await vaultReleaseRest({
-    baseUrl: req.restBaseUrl,
-    holder,
-    service,
-    ...req.body,
-  });
+  const { session, holder, service } = await getVtaSession(req.vtaDid, req.restBaseUrl);
+  return await vaultRelease(session, { holder, service, ...req.body });
 }
 
 // Vault — proxy-login. The VTA performs the login at the bound third
@@ -471,16 +532,10 @@ async function doVaultRelease(req: OffscreenVaultReleaseRequest) {
 // wire boundary — the server-side canonical-schema validation is the
 // real authority.
 async function doVaultProxyLogin(req: OffscreenVaultProxyLoginRequest) {
-  const { identity: holder } = await loadHolder(req.vtaDid);
-  const service = await resolveKeyAgreement(req.vtaDid);
-  type Opts = Parameters<typeof vaultProxyLoginRest>[0];
-  const opts = {
-    baseUrl: req.restBaseUrl,
-    holder,
-    service,
-    ...req.body,
-  } as unknown as Opts;
-  return await vaultProxyLoginRest(opts);
+  const { session, holder, service } = await getVtaSession(req.vtaDid, req.restBaseUrl);
+  type Params = Parameters<typeof vaultProxyLogin>[1];
+  const params = { holder, service, ...req.body } as unknown as Params;
+  return await vaultProxyLogin(session, params);
 }
 
 // Resolve + verify a DID for the consent prompt's verification badge. The
@@ -529,11 +584,10 @@ async function doSignTrustTask(
   const envelope = params.envelope;
 
   if (params.asDid && restBaseUrl) {
-    // Principal-signed path: find the matching vault entry, route via VTA.
-    const { identity: holder, signing } = await loadHolder(vtaDid);
-    const service = await resolveKeyAgreement(vtaDid);
-    const listed = await vaultListRest({
-      baseUrl: restBaseUrl,
+    // Principal-signed path: find the matching vault entry, route via VTA
+    // (over the VTA's preferred transport).
+    const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+    const listed = await vaultList(session, {
       holder,
       service,
     });
@@ -558,8 +612,7 @@ async function doSignTrustTask(
         ...envelope,
         issuer: params.asDid,
       };
-      const { signedEnvelope } = await vaultSignTrustTaskRest({
-        baseUrl: restBaseUrl,
+      const { signedEnvelope } = await vaultSignTrustTask(session, {
         holder,
         service,
         entryId: match.id,
@@ -572,6 +625,7 @@ async function doSignTrustTask(
     console.warn(
       `[pnm] signTrustTask: asDid=${params.asDid} requested but no matching vault entry found; falling back to holder-signed proof (the RP will likely reject)`,
     );
+    const { signing } = await loadHolder(vtaDid);
     const signedEnvelope = await signTrustTask({
       envelope: { ...envelope },
       signing,
@@ -831,10 +885,8 @@ async function doSetWake(req: OffscreenSetWakeRequest): Promise<{
   pushCapable: boolean;
   triggerPolicy?: { allowedTriggers: string[] };
 }> {
-  const { identity: holder } = await loadHolder(req.vtaDid);
-  const service = await resolveKeyAgreement(req.vtaDid);
-  return setDeviceWakeRest({
-    baseUrl: req.restBaseUrl,
+  const { session, holder, service } = await getVtaSession(req.vtaDid, req.restBaseUrl);
+  return setDeviceWake(session, {
     holder,
     service,
     ...(req.wakeHandle ? { wakeHandle: req.wakeHandle } : {}),
@@ -874,10 +926,8 @@ async function doListDids(req: {
   restBaseUrl: string;
   contextId?: string;
 }): Promise<{ dids: Array<{ did: string; contextId: string }> }> {
-  const { identity: holder } = await loadHolder(req.vtaDid);
-  const service = await resolveKeyAgreement(req.vtaDid);
-  const dids = await vtaListDidsRest({
-    baseUrl: req.restBaseUrl,
+  const { session, holder, service } = await getVtaSession(req.vtaDid, req.restBaseUrl);
+  const dids = await vtaListDids(session, {
     holder,
     service,
     ...(req.contextId ? { contextId: req.contextId } : {}),
