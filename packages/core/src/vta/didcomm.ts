@@ -131,10 +131,15 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
         `reply type ${msg.type ?? "(none)"} != Trust-Task binding envelope`,
       );
     }
-    if (msg.thid !== requestId) {
+    // Correlate the same way the bridge does: `thid ?? id`. A reply with no
+    // `thid` threads under its own `id` (some VTAs/mediators omit `thid` and
+    // echo the request id as the reply id), so checking `thid` alone is stricter
+    // than the bridge's own correlation and would reject a reply it accepted.
+    const replyThreadId = msg.thid ?? msg.id;
+    if (replyThreadId !== requestId) {
       throw new VtaClientError(
         "e.client.parse",
-        `reply thid ${msg.thid ?? "(none)"} != request id ${requestId}`,
+        `reply thread id ${replyThreadId ?? "(none)"} (thid/id) != request id ${requestId}`,
       );
     }
     if (msg.from !== this.vta.did) {

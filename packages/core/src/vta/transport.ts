@@ -27,6 +27,11 @@ export interface VtaTransport {
  */
 export interface DidcommReply {
   type?: string;
+  /** Reply's own message id. The bridge correlates a reply to its request by
+   *  `thid ?? id` (a reply with no `thid` threads under its own `id`), so
+   *  callers must validate correlation the same way — some VTAs/mediators omit
+   *  `thid` and echo the request id as the reply `id`. */
+  id?: string;
   thid?: string;
   from?: string;
   body?: unknown;
