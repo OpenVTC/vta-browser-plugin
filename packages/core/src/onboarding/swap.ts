@@ -1,36 +1,33 @@
 // Onboarding key rotation — the wallet's ephemeral did:key, granted into a
 // VTA's ACL by the operator, is swapped onto the wallet's long-term holder
-// did:peer on first connect via the canonical Trust Task `acl/swap-key/0.1`.
+// did:peer via the canonical Trust Task `acl/swap-key/0.1`.
 //
-// Two proofs ride along, exactly as the VTA's swap-acl handler expects:
-//   - the DIDComm authcrypt envelope authenticates the **ephemeral** (the
-//     "currentSubject" being rotated away from), via its sender key;
-//   - the inner VP-JWT (`issueSwapPresentation`) — carried as `linkProof` —
-//     proves control of the **holder did:peer** (the "newSubject"),
-//     signed by its #key-2.
+// Two proofs ride along, exactly as the VTA's swap-key handler expects:
+//   - the transport authenticates the **ephemeral** (the `currentSubject` being
+//     rotated away from) — DIDComm authcrypt sender / REST bearer session;
+//   - the inner VP-JWT (`issueSwapPresentation`), carried as `linkProof`,
+//     proves control of the **holder did:peer** (the `newSubject`).
 //
-// Mirrors `requestVtaApproval`: build message → authcrypt to the VTA → forward
-// via its mediator → await the reply by `thid`. DIDComm is the first-class
-// path — the authcrypt envelope *is* the caller authentication, so no separate
-// token round-trip is needed.
+// Transport-agnostic: `swapAcl` sends the `acl/swap-key/0.1` Trust Task over any
+// TrustTaskSender whose identity is the ephemeral. The VTA routes it through the
+// shared dispatcher (`handle_swap_key`) over REST / DIDComm / TSP identically.
 //
-// Wire format: the canonical Trust Task URI `acl/swap-key/0.1` per the
-// dtgwg-trust-tasks-tf registry. The VTA also accepts the legacy
-// `firstperson.network/protocols/acl-management/1.0/swap-acl` URI during the
-// deprecation window so older plugins keep working; new plugins SHOULD emit
-// the canonical URI.
+// NOTE: currently unused — onboarding adopts a VTA-minted holder via
+// `runProvisionIntegration` (M2C) rather than self-minting + swapping. Kept
+// consistent with the channel pattern for when a swap-based flow is needed.
 
-import { packAuthcrypt, packAuthcryptJson, wrapForward, type Identity } from "../didcomm/index.js";
+import type { Identity } from "../didcomm/index.js";
 import { issueSwapPresentation, type SigningIdentity } from "../siop/self-issued.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TrustTaskSender } from "../vta/channel.js";
+import { DidcommVtaTransport, type RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import { RestChannel } from "../vta/rest-channel.js";
 import type { DidcommMessageBridge } from "../vta/transport.js";
+import { buildTrustTask } from "../vta/trust-task.js";
 
 const ACL_SWAP_KEY = "https://trusttasks.org/spec/acl/swap-key/0.1";
 const ACL_SWAP_KEY_RESPONSE = "https://trusttasks.org/spec/acl/swap-key/0.1#response";
-const VTA_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
-const DEFAULT_TIMEOUT_MS = 30_000;
 
-/** The ACL entry created for the new DID (the swap-acl result body). */
+/** The ACL entry created for the new DID (the swap-key result body). */
 export interface AclSwapResult {
   did: string;
   role: string;
@@ -39,6 +36,46 @@ export interface AclSwapResult {
   created_at: number;
   created_by: string;
   expires_at?: number | null;
+}
+
+export interface SwapAclParams {
+  /** The OLD DID (operator-granted ephemeral). Its DID is `currentSubject` and
+   *  the envelope `issuer`; the sender MUST authenticate as it. */
+  ephemeralDid: string;
+  /** Signs the `linkProof` VP-JWT; its DID is the NEW DID (holder did:peer) =
+   *  `newSubject`. */
+  holderSigning: SigningIdentity;
+  /** The VTA — the presentation `aud` and the envelope `recipient`. */
+  vtaDid: string;
+}
+
+/**
+ * Rotate the caller's ACL entry from the ephemeral DID onto the holder did:peer
+ * by sending the `acl/swap-key/0.1` Trust Task over `sender`. The sender's
+ * identity MUST be the ephemeral (so the transport authenticates it as
+ * `currentSubject`); the `linkProof` VP proves control of `newSubject`.
+ */
+export async function swapAcl(
+  sender: TrustTaskSender,
+  params: SwapAclParams,
+): Promise<AclSwapResult> {
+  const linkProof = issueSwapPresentation({
+    holder: params.holderSigning,
+    audience: params.vtaDid,
+  });
+  const envelope = buildTrustTask(
+    ACL_SWAP_KEY,
+    {
+      currentSubject: params.ephemeralDid,
+      newSubject: params.holderSigning.did,
+      linkProof,
+    },
+    { issuer: params.ephemeralDid, recipient: params.vtaDid },
+  );
+  return sender.send<AclSwapResult>(envelope, {
+    expectedResponseType: ACL_SWAP_KEY_RESPONSE,
+    operationLabel: "acl/swap-key/0.1",
+  });
 }
 
 export interface SwapAclDidcommOptions {
@@ -58,58 +95,22 @@ export interface SwapAclDidcommOptions {
   timeoutMs?: number;
 }
 
-/**
- * Rotate the caller's ACL entry from the ephemeral DID onto the holder
- * did:peer over DIDComm. Returns the new ACL entry. Throws if the VTA replies
- * with anything other than a swap-acl-result (e.g. a problem-report).
- */
-export async function swapAclDidcomm(opts: SwapAclDidcommOptions): Promise<AclSwapResult> {
-  const { bridge, ephemeral, holderSigning, service, mediator, vtaDid } = opts;
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-
-  const linkProof = issueSwapPresentation({ holder: holderSigning, audience: vtaDid });
-  const requestId = globalThis.crypto.randomUUID();
-  const message = {
-    id: requestId,
-    type: ACL_SWAP_KEY,
-    from: ephemeral.did,
-    to: [service.did],
-    body: {
-      currentSubject: ephemeral.did,
-      newSubject: holderSigning.did,
-      linkProof,
-    },
-  };
-
-  const inner = await packAuthcrypt(message, ephemeral, [
-    { kid: service.keyAgreementKid, jwk: service.keyAgreementPublicJwk },
-  ]);
-
-  let outer = inner;
-  if (mediator) {
-    const forwardJson = wrapForward(service.did, ephemeral.did, mediator.did, inner);
-    outer = await packAuthcryptJson(forwardJson, ephemeral, [
-      { kid: mediator.keyAgreementKid, jwk: mediator.keyAgreementPublicJwk },
-    ]);
-  }
-
-  const reply = await bridge.sendAndAwaitReply(outer, requestId, { timeoutMs });
-
-  if (reply.thid !== requestId) {
-    throw new Error(`acl/swap-key: reply thid ${reply.thid ?? "(none)"} != request ${requestId}`);
-  }
-  if (reply.from !== vtaDid) {
-    throw new Error(`acl/swap-key: reply from ${reply.from ?? "(none)"} != VTA ${vtaDid}`);
-  }
-  if (reply.type !== ACL_SWAP_KEY_RESPONSE) {
-    // Most commonly a problem-report (e.g. the VP failed to verify, or the
-    // ephemeral isn't in the ACL yet).
-    throw new Error(
-      `acl/swap-key: ${reply.type ?? "(no type)"} — ${JSON.stringify(reply.body ?? {})}`,
-    );
-  }
-
-  return (reply.body ?? {}) as AclSwapResult;
+/** @deprecated Use {@link swapAcl} with a channel/session whose identity is the
+ *  ephemeral. Swap over DIDComm — builds a {@link DidcommVtaTransport} as the
+ *  ephemeral and dispatches `acl/swap-key/0.1` through the binding envelope. */
+export function swapAclDidcomm(opts: SwapAclDidcommOptions): Promise<AclSwapResult> {
+  const channel = new DidcommVtaTransport({
+    bridge: opts.bridge,
+    holder: opts.ephemeral,
+    vta: opts.service,
+    ...(opts.mediator ? { mediator: opts.mediator } : {}),
+    ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+  });
+  return swapAcl(channel, {
+    ephemeralDid: opts.ephemeral.did,
+    holderSigning: opts.holderSigning,
+    vtaDid: opts.vtaDid,
+  });
 }
 
 export interface SwapAclRestOptions {
@@ -127,82 +128,20 @@ export interface SwapAclRestOptions {
   fetch?: typeof fetch;
 }
 
-/**
- * REST-only swap: when a VTA advertises `#vta-rest` but no `#vta-didcomm`, the
- * wallet still uses DIDComm authcrypt to authenticate (the VTA's `/auth/`
- * unpacks a DIDComm message), then POSTs the swap over HTTP. Same proofs as
- * the DIDComm path — the authcrypted authenticate message proves control of
- * the ephemeral, the VP-JWT proves control of the holder did:peer — only the
- * transport differs (direct HTTP, no mediator).
- */
-export async function swapAclRest(opts: SwapAclRestOptions): Promise<AclSwapResult> {
-  const { baseUrl, ephemeral, holderSigning, service, vtaDid } = opts;
-  const f = opts.fetch ?? fetch.bind(globalThis);
-  const base = baseUrl.replace(/\/+$/, "");
-
-  // 1. /auth/challenge → flat { challenge, sessionId, expiresAt } per
-  //    `vti_common::auth::handlers::challenge::ChallengeResponse`. Fields
-  //    are top-level, NOT nested under `data`.
-  const cRes = await f(`${base}/auth/challenge`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ did: ephemeral.did }),
+/** @deprecated Use {@link swapAcl} with a channel/session whose identity is the
+ *  ephemeral. Swap over REST — builds a {@link RestChannel} as the ephemeral and
+ *  dispatches `acl/swap-key/0.1` over `/api/trust-tasks` (NOT the bespoke
+ *  `/acl/swap` route, which is being retired now the dispatcher handles it). */
+export function swapAclRest(opts: SwapAclRestOptions): Promise<AclSwapResult> {
+  const channel = new RestChannel({
+    baseUrl: opts.baseUrl,
+    holder: opts.ephemeral,
+    service: opts.service,
+    ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
-  if (!cRes.ok) {
-    throw new Error(`vta /auth/challenge failed (${cRes.status}): ${await cRes.text()}`);
-  }
-  const cBody = (await cRes.json()) as { sessionId?: string; challenge?: string };
-  if (!cBody.sessionId || !cBody.challenge) {
-    throw new Error(`vta /auth/challenge: malformed response: ${JSON.stringify(cBody)}`);
-  }
-
-  // 2. Authcrypt an `auth/authenticate/0.1` message to the VTA (direct, no
-  //    forward — there's no mediator on this transport).
-  const authMsg = {
-    id: globalThis.crypto.randomUUID(),
-    type: VTA_AUTHENTICATE,
-    from: ephemeral.did,
-    to: [service.did],
-    body: { challenge: cBody.challenge, session_id: cBody.sessionId },
-  };
-  const packed = await packAuthcrypt(authMsg, ephemeral, [
-    { kid: service.keyAgreementKid, jwk: service.keyAgreementPublicJwk },
-  ]);
-
-  // 3. POST the packed JWE to `/auth/` → AuthenticateResponse with
-  //    { session, tokens: { accessToken, ... } } per vta-sdk's
-  //    `protocols::auth::AuthenticateResponse`.
-  const aRes = await f(`${base}/auth/`, {
-    method: "POST",
-    headers: { "content-type": "application/didcomm-encrypted+json" },
-    body: packed,
+  return swapAcl(channel, {
+    ephemeralDid: opts.ephemeral.did,
+    holderSigning: opts.holderSigning,
+    vtaDid: opts.vtaDid,
   });
-  if (!aRes.ok) {
-    throw new Error(`vta /auth/ failed (${aRes.status}): ${await aRes.text()}`);
-  }
-  const aBody = (await aRes.json()) as { tokens?: { accessToken?: string } };
-  const accessToken = aBody.tokens?.accessToken;
-  if (!accessToken) {
-    throw new Error(`vta /auth/: malformed response: ${JSON.stringify(aBody)}`);
-  }
-
-  // 4. POST /acl/swap with Bearer + the holder's VP-JWT (as `linkProof`) → the
-  //    new ACL entry. Canonical Trust Task `acl/swap-key/0.1` body shape.
-  const linkProof = issueSwapPresentation({ holder: holderSigning, audience: vtaDid });
-  const sRes = await f(`${base}/acl/swap`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({
-      currentSubject: ephemeral.did,
-      newSubject: holderSigning.did,
-      linkProof,
-    }),
-  });
-  if (!sRes.ok) {
-    throw new Error(`vta /acl/swap failed (${sRes.status}): ${await sRes.text()}`);
-  }
-  return (await sRes.json()) as AclSwapResult;
 }

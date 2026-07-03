@@ -9,6 +9,8 @@ import {
   setDeviceWake,
   contextsList,
   contextsCreate,
+  swapAcl,
+  generateSigningIdentity,
   VtaSession,
 } from "../dist/index.js";
 
@@ -97,6 +99,34 @@ test("contextsCreate defaults name to id and forwards description/parent", async
   assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/vta/contexts/create/1.0");
   assert.deepEqual(ch.sent[0].envelope.payload, { id: "team", name: "team", description: "d", parent: "org" });
   assert.deepEqual(res, record);
+});
+
+test("swapAcl sends acl/swap-key with currentSubject/newSubject/linkProof (ephemeral issuer)", async () => {
+  const holderSigning = generateSigningIdentity();
+  const ch = captureChannel({
+    did: holderSigning.did,
+    role: "admin",
+    allowed_contexts: [],
+    created_at: 1,
+    created_by: "did:web:vta.example",
+  });
+  const res = await swapAcl(ch, {
+    ephemeralDid: "did:key:zEphemeral",
+    holderSigning,
+    vtaDid: "did:web:vta.example",
+  });
+  const { envelope, opts } = ch.sent[0];
+  assert.equal(envelope.type, "https://trusttasks.org/spec/acl/swap-key/0.1");
+  assert.equal(envelope.issuer, "did:key:zEphemeral"); // authenticated as the ephemeral
+  assert.equal(envelope.recipient, "did:web:vta.example");
+  assert.equal(envelope.payload.currentSubject, "did:key:zEphemeral");
+  assert.equal(envelope.payload.newSubject, holderSigning.did);
+  assert.ok(
+    typeof envelope.payload.linkProof === "string" && envelope.payload.linkProof.length > 0,
+    "linkProof VP-JWT is present",
+  );
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/acl/swap-key/0.1#response");
+  assert.equal(res.did, holderSigning.did);
 });
 
 test("ops accept a VtaSession (not just a raw channel) and route through it", async () => {
