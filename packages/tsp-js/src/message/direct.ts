@@ -13,8 +13,8 @@
 //
 // HPKE binding: the `-E` envelope frame is the HPKE `info`; AEAD AAD is empty.
 //
-// v1 scope: Direct messages only (what TSP trust-tasks use). Nested/Routed
-// (relay routing) and Control (relationship FSM) are follow-ups.
+// Supports Direct (trust-tasks) + Nested / Routed (mediator relay). Control
+// (relationship FSM) is a follow-up.
 
 import { sha256 } from "@noble/hashes/sha2.js";
 
@@ -28,6 +28,12 @@ const TAG_LEN = 16;
 const SIG_LEN = 64;
 const SIG_QUADLETS = Math.ceil(SIG_LEN / 3); // 22
 const EMPTY = new Uint8Array(0);
+
+const utf8 = new TextEncoder();
+const fromUtf8 = new TextDecoder("utf-8", { fatal: true });
+
+/** TSP message kind, recovered from the encrypted payload frame's marker. */
+export type MessageType = "direct" | "nested" | "routed";
 
 /** Raw key material for a TSP identity (all 32-byte). */
 export interface PackKeys {
@@ -56,12 +62,17 @@ export interface PackedMessage {
 }
 
 export interface UnpackedMessage {
-  /** The decrypted message body. */
+  /** The decrypted message body. For Direct/Nested it's the message/inner; for
+   *  Routed it's the opaque inner message (the route is in `hops`). */
   payload: Uint8Array;
   /** Sender VID (from the cleartext envelope). */
   sender: string;
   /** Receiver VID (from the cleartext envelope). */
   receiver: string;
+  /** The message kind recovered from the payload frame. */
+  messageType: MessageType;
+  /** Remaining route for a Routed message (empty for Direct/Nested). */
+  hops: string[];
   /** SHA-256 of the decrypted payload frame — the TSP thread digest. */
   threadDigest: Uint8Array;
 }
@@ -79,10 +90,27 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
-/** Build the CESR payload frame that gets encrypted: `-Z<count> XSCS <B> body`. */
-function encodeDirectPayloadFrame(body: Uint8Array): Uint8Array {
+interface DecodedFrame {
+  kind: MessageType;
+  hops: string[];
+  body: Uint8Array;
+}
+
+/** Build the CESR payload frame that gets encrypted:
+ *   Direct → `-Z XSCS <B> body`
+ *   Nested → `-Z XHOP -J0 <B> body`
+ *   Routed → `-Z XHOP -J<n> (B hop)* <B> body`  */
+function encodePayloadFrame(body: Uint8Array, kind: MessageType, hops: string[]): Uint8Array {
   const frameBody: number[] = [];
-  for (const b of wire.XSCS) frameBody.push(b);
+  if (kind === "direct") {
+    for (const b of wire.XSCS) frameBody.push(b);
+  } else {
+    for (const b of wire.XHOP) frameBody.push(b);
+    wire.encodeHops(
+      hops.map((h) => utf8.encode(h)),
+      frameBody,
+    );
+  }
   wire.encodeVariableData(wire.TSP_PLAINTEXT, body, frameBody);
 
   const out: number[] = [];
@@ -91,8 +119,8 @@ function encodeDirectPayloadFrame(body: Uint8Array): Uint8Array {
   return new Uint8Array(out);
 }
 
-/** Decode a Direct payload frame, returning the plaintext body. */
-function decodeDirectPayloadFrame(frame: Uint8Array): Uint8Array {
+/** Decode a payload frame into its kind, remaining route, and body. */
+function decodePayloadFrame(frame: Uint8Array): DecodedFrame {
   const cur: wire.Cursor = { pos: 0 };
   if (wire.decodeCount(wire.TSP_PAYLOAD, frame, cur) === undefined) {
     throw new Error("tsp: missing -Z payload frame");
@@ -102,13 +130,27 @@ function decodeDirectPayloadFrame(frame: Uint8Array): Uint8Array {
   wire.decodeVariableData(wire.TSP_VID, frame, cur);
 
   const marker = frame.slice(cur.pos, cur.pos + 3);
-  if (!bytesEqual(marker, wire.XSCS)) {
-    throw new Error("tsp: unsupported payload marker (v1 supports Direct only)");
+  if (bytesEqual(marker, wire.XSCS)) {
+    cur.pos += 3;
+    const body = wire.decodeVariableData(wire.TSP_PLAINTEXT, frame, cur);
+    if (body === undefined) throw new Error("tsp: missing payload plaintext");
+    return { kind: "direct", hops: [], body };
   }
-  cur.pos += 3;
-  const body = wire.decodeVariableData(wire.TSP_PLAINTEXT, frame, cur);
-  if (body === undefined) throw new Error("tsp: missing payload plaintext");
-  return body;
+  if (bytesEqual(marker, wire.XHOP)) {
+    cur.pos += 3;
+    const hopBytes = wire.decodeHops(frame, cur);
+    if (hopBytes === undefined) throw new Error("tsp: malformed hop list");
+    let hops: string[];
+    try {
+      hops = hopBytes.map((h) => fromUtf8.decode(h));
+    } catch {
+      throw new Error("tsp: hop VID not UTF-8");
+    }
+    const body = wire.decodeVariableData(wire.TSP_PLAINTEXT, frame, cur);
+    if (body === undefined) throw new Error("tsp: missing payload plaintext");
+    return { kind: hops.length === 0 ? "nested" : "routed", hops, body };
+  }
+  throw new Error("tsp: unsupported payload type marker");
 }
 
 /** Encode the signature frame: `-C<n> -K<n> <fixed B> sig(64)`. */
@@ -141,9 +183,25 @@ export async function pack(
   receiverVid: string,
   keys: PackKeys,
 ): Promise<PackedMessage> {
+  return packWithHops(body, "direct", [], senderVid, receiverVid, keys);
+}
+
+/**
+ * Like {@link pack} but for any message kind, carrying a routing `hops` list in
+ * the payload frame (used by `pack_routed` for Routed; `hops` must be empty for
+ * Direct/Nested).
+ */
+export async function packWithHops(
+  body: Uint8Array,
+  kind: MessageType,
+  hops: string[],
+  senderVid: string,
+  receiverVid: string,
+  keys: PackKeys,
+): Promise<PackedMessage> {
   const envelopeBytes = encodeEnvelope(senderVid, receiverVid);
 
-  const payloadFrame = encodeDirectPayloadFrame(body);
+  const payloadFrame = encodePayloadFrame(body, kind, hops);
   const threadDigest = sha256(payloadFrame);
 
   const sealed = await hpke.seal(
@@ -209,12 +267,14 @@ export async function unpack(
     envelopeBytes,
   );
   const threadDigest = sha256(payloadFrame);
-  const body = decodeDirectPayloadFrame(payloadFrame);
+  const frame = decodePayloadFrame(payloadFrame);
 
   return {
-    payload: body,
+    payload: frame.body,
     sender: envelope.sender,
     receiver: envelope.receiver,
+    messageType: frame.kind,
+    hops: frame.hops,
     threadDigest,
   };
 }

@@ -21,10 +21,19 @@ export {
 } from "./message/envelope.js";
 export {
   pack,
+  packWithHops,
   unpack,
   sha256,
+  type MessageType,
   type PackKeys,
   type UnpackKeys,
   type PackedMessage,
   type UnpackedMessage,
 } from "./message/direct.js";
+export {
+  packRouted,
+  packNested,
+  nextHop,
+  MAX_HOPS,
+  type RouteStep,
+} from "./message/routed.js";
