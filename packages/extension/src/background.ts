@@ -903,6 +903,9 @@ async function handleVaultList(req: RuntimeVaultListRequest): Promise<RuntimeVau
 // active-connection lookup from RUNTIME_VAULT_LIST and forward to
 // offscreen so the holder identity + DIDComm packing/unpacking happens
 // where the X25519 private key lives.
+// `restBaseUrl` is `""` for a DIDComm-only VTA (no #vta-rest advertised). The
+// offscreen `getVtaSession` treats an empty base URL as "no REST" and resolves
+// the transport (DIDComm) from the VTA's advertised services.
 type VaultActive = { vtaDid: string; restBaseUrl: string };
 
 async function readActiveConnection(): Promise<
@@ -913,13 +916,16 @@ async function readActiveConnection(): Promise<
   if (!connection) {
     return { ok: false, error: "no active VTA connection — connect first" };
   }
-  if (!connection.restBaseUrl) {
+  // A usable transport is REST *or* DIDComm — vault/context/dids tasks run over
+  // whichever the VTA advertises, and the offscreen VtaSession prefers DIDComm.
+  // (Previously this required #vta-rest, which wrongly blocked DIDComm-only VTAs.)
+  if (!connection.restBaseUrl && !connection.mediatorDid) {
     return {
       ok: false,
-      error: "vault tasks require a REST-capable VTA (no #vta-rest service advertised)",
+      error: "active VTA advertises no usable transport (#vta-rest or #vta-didcomm)",
     };
   }
-  return { ok: true, conn: { vtaDid: connection.vtaDid, restBaseUrl: connection.restBaseUrl } };
+  return { ok: true, conn: { vtaDid: connection.vtaDid, restBaseUrl: connection.restBaseUrl ?? "" } };
 }
 
 /** Read the popup's persisted connection state from chrome.storage and
