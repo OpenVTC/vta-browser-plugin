@@ -19,10 +19,13 @@
 //  5. Return the maintainer's response (metadata view + `created` flag).
 
 import { packAuthcrypt, type Identity } from "../didcomm/index.js";
+import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import { RestChannel } from "../vta/rest-channel.js";
+import { buildTrustTask } from "../vta/trust-task.js";
 
 import type { SecretKind, SiteTarget, VaultEntry } from "./list.js";
-import { getVtaBearer, makeReauth, postTrustTask, type VtaAuthInputs } from "./transport.js";
+import type { VtaAuthInputs } from "./transport.js";
 
 const TASK_VAULT_UPSERT = "https://trusttasks.org/spec/vault/upsert/0.2";
 const TASK_VAULT_UPSERT_RESPONSE = "https://trusttasks.org/spec/vault/upsert/0.2#response";
@@ -96,7 +99,12 @@ export type VaultSecret =
       secureNotes?: string;
     };
 
-export interface VaultUpsertRestOptions extends VtaAuthInputs {
+export interface VaultUpsertParams {
+  /** Sealing sender + envelope `issuer` (the holder's DIDComm identity). */
+  holder: Identity;
+  /** VTA keyAgreement endpoint — the sealed-secret recipient + envelope
+   *  `recipient`. */
+  service: RemoteDidcommEndpoint;
   /** Omit to create with a maintainer-assigned ULID; supply to update or
    *  upsert-with-id. */
   id?: string;
@@ -122,6 +130,10 @@ export interface VaultUpsertRestOptions extends VtaAuthInputs {
   >;
 }
 
+/** @deprecated REST-transport options. Kept for existing call sites; prefer
+ *  {@link vaultUpsert} with a channel from a `VtaSession`. */
+export interface VaultUpsertRestOptions extends VaultUpsertParams, VtaAuthInputs {}
+
 export interface VaultUpsertResponse {
   entry: VaultEntry;
   created: boolean;
@@ -133,20 +145,15 @@ export interface VaultUpsertResponse {
  * key. The maintainer unseals server-side, validates the variant
  * against `secretKind`, and persists.
  */
-export async function vaultUpsertRest(
-  opts: VaultUpsertRestOptions,
+export async function vaultUpsert(
+  channel: TrustTaskSender,
+  opts: VaultUpsertParams,
 ): Promise<VaultUpsertResponse> {
-  const auth: VtaAuthInputs = {
-    baseUrl: opts.baseUrl,
-    holder: opts.holder,
-    service: opts.service,
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  };
-  const bearer = await getVtaBearer(auth);
-
   // Build the sealedSecret envelope — only built when `secret` is
   // supplied. Update paths that keep the existing secret pass no
-  // sealedSecret at all.
+  // sealedSecret at all. Sealing is transport-independent: the secret is
+  // end-to-end to the maintainer regardless of which channel carries the
+  // (also-encrypted, on DIDComm/TSP) request envelope.
   let sealedSecret: { envelope: "didcommAuthcrypt"; jwe: string } | undefined;
   if (opts.secret) {
     const jwe = await packSecretAsAuthcrypt({
@@ -174,20 +181,20 @@ export async function vaultUpsertRest(
     ...(opts.clearFields ? { clearFields: opts.clearFields } : {}),
   };
 
-  return postTrustTask<VaultUpsertResponse>({
-    baseUrl: opts.baseUrl,
-    bearer,
-    envelope: {
-      type: TASK_VAULT_UPSERT,
-      payload,
-      issuer: opts.holder.did,
-      recipient: opts.service.did,
-    },
+  const envelope = buildTrustTask(TASK_VAULT_UPSERT, payload, {
+    issuer: opts.holder.did,
+    recipient: opts.service.did,
+  });
+  return channel.send<VaultUpsertResponse>(envelope, {
     expectedResponseType: TASK_VAULT_UPSERT_RESPONSE,
     operationLabel: "vault/upsert/0.2",
-    reauth: makeReauth(auth),
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
+}
+
+/** @deprecated Use {@link vaultUpsert} with a channel from a `VtaSession`.
+ *  Upsert over REST — builds a one-shot {@link RestChannel}. */
+export function vaultUpsertRest(opts: VaultUpsertRestOptions): Promise<VaultUpsertResponse> {
+  return vaultUpsert(new RestChannel(opts), opts);
 }
 
 async function packSecretAsAuthcrypt(opts: {

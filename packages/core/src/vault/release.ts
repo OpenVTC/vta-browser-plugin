@@ -9,20 +9,33 @@
 // "reveal" state).
 
 import { unpackMessage, type Identity } from "../didcomm/index.js";
+import type { TrustTaskSender } from "../vta/channel.js";
+import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import { RestChannel } from "../vta/rest-channel.js";
+import { buildTrustTask } from "../vta/trust-task.js";
 
 import type { SecretKind } from "./list.js";
-import { getVtaBearer, makeReauth, postTrustTask, type VtaAuthInputs } from "./transport.js";
+import type { VtaAuthInputs } from "./transport.js";
 import type { VaultSecret } from "./upsert.js";
 
 const TASK_VAULT_RELEASE = "https://trusttasks.org/spec/vault/release/0.2";
 const TASK_VAULT_RELEASE_RESPONSE = "https://trusttasks.org/spec/vault/release/0.2#response";
 
-export interface VaultReleaseRestOptions extends VtaAuthInputs {
+export interface VaultReleaseParams {
+  /** Envelope `issuer` + the keyAgreement recipient the maintainer seals to. */
+  holder: Identity;
+  /** VTA keyAgreement endpoint — envelope `recipient` + sender-binding for
+   *  unpacking the sealed reply. */
+  service: RemoteDidcommEndpoint;
   entryId: string;
   /** Caller's preferred cache TTL in seconds. The maintainer caps
    *  server-side (M2A.3 ceiling is 60 s); honoured up to the cap. */
   ttlSecondsHint?: number;
 }
+
+/** @deprecated REST-transport options. Kept for existing call sites; prefer
+ *  {@link vaultRelease} with a channel from a `VtaSession`. */
+export interface VaultReleaseRestOptions extends VaultReleaseParams, VtaAuthInputs {}
 
 export interface VaultReleaseResponse {
   /** Unpacked secret material. Caller MUST wipe / zero this reference
@@ -45,17 +58,10 @@ export interface VaultReleaseResponse {
  * the cleartext beyond that window (no disk, no logs, no syncing
  * storage).
  */
-export async function vaultReleaseRest(
-  opts: VaultReleaseRestOptions,
+export async function vaultRelease(
+  channel: TrustTaskSender,
+  opts: VaultReleaseParams,
 ): Promise<VaultReleaseResponse> {
-  const auth: VtaAuthInputs = {
-    baseUrl: opts.baseUrl,
-    holder: opts.holder,
-    service: opts.service,
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  };
-  const bearer = await getVtaBearer(auth);
-
   // Server returns { sealedSecret: SealedEnvelope, secretKind, ttlSeconds }.
   // We accept only the authcrypt variant — every other variant is a future /
   // unsupported envelope kind and we reject loudly so the user sees an
@@ -71,24 +77,17 @@ export async function vaultReleaseRest(
     ttlSeconds: number;
   }
 
-  const wire = await postTrustTask<WireResponse>({
-    baseUrl: opts.baseUrl,
-    bearer,
-    envelope: {
-      type: TASK_VAULT_RELEASE,
-      payload: {
-        entryId: opts.entryId,
-        ...(opts.ttlSecondsHint !== undefined
-          ? { ttlSecondsHint: opts.ttlSecondsHint }
-          : {}),
-      },
-      issuer: opts.holder.did,
-      recipient: opts.service.did,
+  const envelope = buildTrustTask(
+    TASK_VAULT_RELEASE,
+    {
+      entryId: opts.entryId,
+      ...(opts.ttlSecondsHint !== undefined ? { ttlSecondsHint: opts.ttlSecondsHint } : {}),
     },
+    { issuer: opts.holder.did, recipient: opts.service.did },
+  );
+  const wire = await channel.send<WireResponse>(envelope, {
     expectedResponseType: TASK_VAULT_RELEASE_RESPONSE,
     operationLabel: "vault/release/0.2",
-    reauth: makeReauth(auth),
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 
   if (
@@ -138,6 +137,12 @@ export async function vaultReleaseRest(
     secretKind: wire.secretKind,
     ttlSeconds: wire.ttlSeconds,
   };
+}
+
+/** @deprecated Use {@link vaultRelease} with a channel from a `VtaSession`.
+ *  Release over REST — builds a one-shot {@link RestChannel}. */
+export function vaultReleaseRest(opts: VaultReleaseRestOptions): Promise<VaultReleaseResponse> {
+  return vaultRelease(new RestChannel(opts), opts);
 }
 
 // `Identity` is re-imported here so consumers of `vault/release` don't need

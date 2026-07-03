@@ -1,0 +1,28 @@
+{
+  "name": "@openvtc/vti-tsp-js",
+  "version": "0.1.0",
+  "description": "WebCrypto/hpke-js TSP (Trust Spanning Protocol) primitives — byte-compatible with affinidi-tsp. HPKE-Auth seal/open + binary CESR framing.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "dependencies": {
+    "@hpke/core": "^1.9.0",
+    "@hpke/chacha20poly1305": "^1.8.0",
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^2.0.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "lint": "tsc -b --noEmit",
+    "test": "tsc -b && node --test tests/*.mjs",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "license": "Apache-2.0"
+}

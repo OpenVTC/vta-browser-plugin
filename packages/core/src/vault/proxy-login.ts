@@ -25,9 +25,13 @@
 // the extension layer because @openvtc/pnm-core is browser-agnostic.
 
 import { unpackMessage, type Identity } from "../didcomm/index.js";
+import type { TrustTaskSender } from "../vta/channel.js";
+import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import { RestChannel } from "../vta/rest-channel.js";
+import { buildTrustTask } from "../vta/trust-task.js";
 
 import type { SiteTarget } from "./list.js";
-import { getVtaBearer, makeReauth, postTrustTask, type VtaAuthInputs } from "./transport.js";
+import type { VtaAuthInputs } from "./transport.js";
 
 const TASK_VAULT_PROXY_LOGIN = "https://trusttasks.org/spec/vault/proxy-login/0.2";
 const TASK_VAULT_PROXY_LOGIN_RESPONSE =
@@ -89,7 +93,12 @@ export interface SessionBlob {
   refreshHint?: SessionRefreshHint;
 }
 
-export interface VaultProxyLoginRestOptions extends VtaAuthInputs {
+export interface VaultProxyLoginParams {
+  /** Envelope `issuer` + the keyAgreement recipient the maintainer seals to. */
+  holder: Identity;
+  /** VTA keyAgreement endpoint — envelope `recipient` + sender-binding for
+   *  unpacking the sealed SessionBlob. */
+  service: RemoteDidcommEndpoint;
   entryId: string;
   /** When the entry has multiple targets, names which one to log in
    *  against. The maintainer falls back to the entry's first DID-shaped
@@ -107,6 +116,10 @@ export interface VaultProxyLoginRestOptions extends VtaAuthInputs {
    *  Honoured up to the server's cap (300 s in M2B.2b). */
   ttlSecondsHint?: number;
 }
+
+/** @deprecated REST-transport options. Kept for existing call sites; prefer
+ *  {@link vaultProxyLogin} with a channel from a `VtaSession`. */
+export interface VaultProxyLoginRestOptions extends VaultProxyLoginParams, VtaAuthInputs {}
 
 export interface VaultProxyLoginResponse {
   /** Cleartext session material. The caller MUST schedule a wipe at
@@ -134,17 +147,10 @@ export interface VaultProxyLoginResponse {
  *      rules enforce this — @openvtc/pnm-core is browser-agnostic and only
  *      surfaces the constraint).
  */
-export async function vaultProxyLoginRest(
-  opts: VaultProxyLoginRestOptions,
+export async function vaultProxyLogin(
+  channel: TrustTaskSender,
+  opts: VaultProxyLoginParams,
 ): Promise<VaultProxyLoginResponse> {
-  const auth: VtaAuthInputs = {
-    baseUrl: opts.baseUrl,
-    holder: opts.holder,
-    service: opts.service,
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
-  };
-  const bearer = await getVtaBearer(auth);
-
   // Server returns { sealedSessionBlob: SealedEnvelope, sessionId, expiresAt }.
   // We accept only the authcrypt variant — every other variant is a future /
   // unsupported envelope kind and we reject with a clear error rather than
@@ -160,26 +166,19 @@ export async function vaultProxyLoginRest(
     expiresAt: string;
   }
 
-  const wire = await postTrustTask<WireResponse>({
-    baseUrl: opts.baseUrl,
-    bearer,
-    envelope: {
-      type: TASK_VAULT_PROXY_LOGIN,
-      payload: {
-        entryId: opts.entryId,
-        ...(opts.target !== undefined ? { target: opts.target } : {}),
-        ...(opts.nonce !== undefined ? { nonce: opts.nonce } : {}),
-        ...(opts.ttlSecondsHint !== undefined
-          ? { ttlSecondsHint: opts.ttlSecondsHint }
-          : {}),
-      },
-      issuer: opts.holder.did,
-      recipient: opts.service.did,
+  const envelope = buildTrustTask(
+    TASK_VAULT_PROXY_LOGIN,
+    {
+      entryId: opts.entryId,
+      ...(opts.target !== undefined ? { target: opts.target } : {}),
+      ...(opts.nonce !== undefined ? { nonce: opts.nonce } : {}),
+      ...(opts.ttlSecondsHint !== undefined ? { ttlSecondsHint: opts.ttlSecondsHint } : {}),
     },
+    { issuer: opts.holder.did, recipient: opts.service.did },
+  );
+  const wire = await channel.send<WireResponse>(envelope, {
     expectedResponseType: TASK_VAULT_PROXY_LOGIN_RESPONSE,
     operationLabel: "vault/proxy-login/0.2",
-    reauth: makeReauth(auth),
-    ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 
   if (
@@ -233,6 +232,14 @@ export async function vaultProxyLoginRest(
     sessionId: wire.sessionId,
     expiresAt: wire.expiresAt,
   };
+}
+
+/** @deprecated Use {@link vaultProxyLogin} with a channel from a `VtaSession`.
+ *  Proxy-login over REST — builds a one-shot {@link RestChannel}. */
+export function vaultProxyLoginRest(
+  opts: VaultProxyLoginRestOptions,
+): Promise<VaultProxyLoginResponse> {
+  return vaultProxyLogin(new RestChannel(opts), opts);
 }
 
 export type { Identity };

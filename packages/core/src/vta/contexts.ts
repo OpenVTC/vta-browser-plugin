@@ -1,181 +1,127 @@
-// REST client for the VTA's contexts API.
+// Contexts — list + create, as dispatcher trust-tasks.
 //
-// Used by the popup's AddEntryForm to fetch the operator's accessible
-// contexts (instead of guessing from the contexts already on loaded
-// vault entries) and to create a new context inline when the operator
-// picks "+ New context…" in the picker.
+// The popup's AddEntryForm fetches the operator's accessible contexts (to
+// populate the context picker) and can create a new context inline. Both run
+// as canonical trust-tasks over a TrustTaskChannel/VtaSession, so they work on
+// a DIDComm-only VTA as well as REST.
 //
-// Authentication: same primitive every authenticated REST call uses —
-// authcrypted `auth/authenticate/0.1` to the VTA's keyAgreement key,
-// followed by a bearer-token-authed JSON request. The auth round-trip
-// is identical to `vault/list/0.1` (no token cache).
+//   list   → https://trusttasks.org/spec/vta/contexts/list/1.0    (payload {})
+//   create → https://trusttasks.org/spec/vta/contexts/create/1.0  (super-admin)
 //
-// Mirrors `vta-sdk::protocols::context_management::{list, create}`
-// wire shapes — snake_case fields, no `data` envelope.
+// Wire shapes mirror `vta-sdk::protocols::context_management::{list,create}`:
+// snake_case fields, `CreateContextResultBody` as the record. The VTA also
+// exposes a bespoke `GET/POST /contexts` REST route (now deprecated) — the
+// trust-task dispatcher form is the canonical one.
 
-import { packAuthcrypt } from "../didcomm/index.js";
 import type { Identity } from "../didcomm/index.js";
+import type { TrustTaskSender } from "./channel.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";
+import { RestChannel } from "./rest-channel.js";
+import { buildTrustTask } from "./trust-task.js";
+import type { VtaAuthInputs } from "../vault/transport.js";
 
-const VTA_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
+const TASK_CONTEXTS_LIST = "https://trusttasks.org/spec/vta/contexts/list/1.0";
+const TASK_CONTEXTS_LIST_RESPONSE = `${TASK_CONTEXTS_LIST}#response`;
+const TASK_CONTEXTS_CREATE = "https://trusttasks.org/spec/vta/contexts/create/1.0";
+const TASK_CONTEXTS_CREATE_RESPONSE = `${TASK_CONTEXTS_CREATE}#response`;
 
-/** One context record as returned by `GET /contexts` and `POST /contexts`.
- *  Field naming mirrors the VTA's `CreateContextResultBody` exactly. */
+/** One context record — mirrors `CreateContextResultBody` (the shape returned
+ *  by both list and create). snake_case on the wire. */
 export interface ContextRecord {
   id: string;
   name: string;
   did: string | null;
   description: string | null;
+  /** Parent context id, or absent for a top-level context. */
+  parent?: string;
   base_path: string;
   created_at: string;
   updated_at: string;
 }
 
-/** Wire shape of `GET /contexts`. */
-interface ListContextsBody {
-  contexts: ContextRecord[];
-}
-
-export interface VtaListContextsOptions {
-  /** VTA REST base URL (from `#vta-rest`, e.g. `http://localhost:8100`). */
-  baseUrl: string;
-  /** The wallet's holder identity — its DID must be in the VTA's ACL
-   *  with any role (`/contexts` is `AuthClaims`-gated, not admin-only).
-   *  The DID is also the authcrypt sender. */
+export interface ContextsListParams {
+  /** Envelope `issuer` — the holder's DIDComm identity. Its DID must be in
+   *  the VTA's ACL with any role (`contexts/list` is auth-gated, not
+   *  admin-only; the VTA filters by `has_context_access`). */
   holder: Identity;
-  /** The VTA's DID + keyAgreement key (inner authcrypt recipient). */
+  /** The VTA — envelope `recipient`. */
   service: RemoteDidcommEndpoint;
-  /** fetch impl override (defaults to global). */
-  fetch?: typeof fetch;
 }
 
-/** List the contexts the holder has access to.
+/** List the contexts the holder can access.
  *
- *  Super-admins see every context; context-admins see only the contexts
- *  they're scoped into. Per-context Reader/Application/Initiator roles
- *  also see their own contexts (the `/contexts` route is gated by any
- *  authenticated user; the operation filters by `has_context_access`).
- *
- *  Same auth shape as `vaultListRest` — challenge → authcrypt → bearer.
- *  No token caching: each call does a fresh round-trip. Acceptable for
- *  the AddEntryForm's on-mount fetch; can grow a cache layer later. */
-export async function vtaListContexts(
-  opts: VtaListContextsOptions,
+ *  Super-admins see every context; scoped admins / per-context roles see only
+ *  their own. Runs over whatever transport the sender carries. */
+export async function contextsList(
+  sender: TrustTaskSender,
+  params: ContextsListParams,
 ): Promise<ContextRecord[]> {
-  const { baseUrl, holder, service } = opts;
-  const f = opts.fetch ?? fetch.bind(globalThis);
-  const base = baseUrl.replace(/\/+$/, "");
-
-  const accessToken = await authenticate(base, holder, service, f);
-
-  const res = await f(`${base}/contexts`, {
-    method: "GET",
-    headers: { authorization: `Bearer ${accessToken}` },
+  const envelope = buildTrustTask(
+    TASK_CONTEXTS_LIST,
+    {},
+    { issuer: params.holder.did, recipient: params.service.did },
+  );
+  const payload = await sender.send<{ contexts?: ContextRecord[] }>(envelope, {
+    expectedResponseType: TASK_CONTEXTS_LIST_RESPONSE,
+    operationLabel: "contexts/list/1.0",
   });
-  if (!res.ok) {
-    throw new Error(`vta /contexts failed (${res.status}): ${await res.text()}`);
-  }
-  const body = (await res.json()) as ListContextsBody;
-  return body.contexts ?? [];
+  return payload.contexts ?? [];
 }
 
-export interface VtaCreateContextOptions extends VtaListContextsOptions {
-  /** Context id — the operator-chosen short name (e.g. `work`,
-   *  `openvtc-glenn`). Must be unique on the VTA; conflict surfaces as
-   *  HTTP 409 / Conflict. */
+export interface ContextsCreateParams {
+  holder: Identity;
+  service: RemoteDidcommEndpoint;
+  /** Leaf segment when `parent` is set (full path = `<parent>/<id>`), else a
+   *  top-level id. Must be unique; a conflict rejects. */
   id: string;
-  /** Human-readable name; the VTA records this verbatim for audit /
-   *  display. Defaults to `id` if omitted. */
+  /** Human-readable name; defaults to `id`. */
   name?: string;
   /** Optional free-form description. */
   description?: string;
+  /** Parent context path to nest under; omit for a top-level context. */
+  parent?: string;
 }
 
-/** Create a new context on the VTA.
- *
- *  Auth: **super-admin only** (`/contexts` POST is gated by
- *  `SuperAdminAuth` server-side). The wallet's holder must be a global
- *  admin (Admin role with empty `allowed_contexts`); context-admins
- *  surface as `Forbidden` and the popup should refuse to enter this
- *  path for them.
- *
- *  Returns the freshly-created context record (the VTA echoes back
- *  `base_path`, `created_at`, etc.) so the caller can use the new id
- *  immediately without a second list call. */
-export async function vtaCreateContext(
-  opts: VtaCreateContextOptions,
+/** Create a new context. **Super-admin only** (the VTA gates
+ *  `contexts/create` on the admin role + a finer parent check). Returns the
+ *  freshly-created record. */
+export async function contextsCreate(
+  sender: TrustTaskSender,
+  params: ContextsCreateParams,
 ): Promise<ContextRecord> {
-  const { baseUrl, holder, service, id, name, description } = opts;
-  const f = opts.fetch ?? fetch.bind(globalThis);
-  const base = baseUrl.replace(/\/+$/, "");
-
-  const accessToken = await authenticate(base, holder, service, f);
-
-  const reqBody: { id: string; name: string; description?: string } = {
-    id,
-    name: name ?? id,
-    ...(description ? { description } : {}),
-  };
-  const res = await f(`${base}/contexts`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${accessToken}`,
+  const envelope = buildTrustTask(
+    TASK_CONTEXTS_CREATE,
+    {
+      id: params.id,
+      name: params.name ?? params.id,
+      ...(params.description ? { description: params.description } : {}),
+      ...(params.parent ? { parent: params.parent } : {}),
     },
-    body: JSON.stringify(reqBody),
+    { issuer: params.holder.did, recipient: params.service.did },
+  );
+  return sender.send<ContextRecord>(envelope, {
+    expectedResponseType: TASK_CONTEXTS_CREATE_RESPONSE,
+    operationLabel: "contexts/create/1.0",
   });
-  if (!res.ok) {
-    throw new Error(`vta /contexts create failed (${res.status}): ${await res.text()}`);
-  }
-  return (await res.json()) as ContextRecord;
 }
 
-/** Run the wallet's standard challenge + authcrypt + token round-trip
- *  and return the access token. Same primitive every authenticated
- *  REST call here uses; not exported because callers should pick a
- *  domain-specific helper that runs this internally. */
-async function authenticate(
-  base: string,
-  holder: Identity,
-  service: RemoteDidcommEndpoint,
-  f: typeof fetch,
-): Promise<string> {
-  const cRes = await f(`${base}/auth/challenge`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ did: holder.did }),
-  });
-  if (!cRes.ok) {
-    throw new Error(`vta /auth/challenge failed (${cRes.status}): ${await cRes.text()}`);
-  }
-  const cBody = (await cRes.json()) as { sessionId?: string; challenge?: string };
-  if (!cBody.sessionId || !cBody.challenge) {
-    throw new Error(`vta /auth/challenge: malformed response: ${JSON.stringify(cBody)}`);
-  }
+/** @deprecated REST-transport options. Kept for existing call sites; prefer
+ *  {@link contextsList} with a channel from a `VtaSession`. */
+export interface VtaListContextsOptions extends ContextsListParams, VtaAuthInputs {}
 
-  const authMsg = {
-    id: globalThis.crypto.randomUUID(),
-    type: VTA_AUTHENTICATE,
-    from: holder.did,
-    to: [service.did],
-    body: { challenge: cBody.challenge, session_id: cBody.sessionId },
-  };
-  const packed = await packAuthcrypt(authMsg, holder, [
-    { kid: service.keyAgreementKid, jwk: service.keyAgreementPublicJwk },
-  ]);
+/** @deprecated Use {@link contextsList} with a channel from a `VtaSession`.
+ *  List over REST — builds a one-shot {@link RestChannel} (dispatches
+ *  `contexts/list/1.0` over `/api/trust-tasks`, NOT the bespoke `/contexts`). */
+export function vtaListContexts(opts: VtaListContextsOptions): Promise<ContextRecord[]> {
+  return contextsList(new RestChannel(opts), opts);
+}
 
-  const aRes = await f(`${base}/auth/`, {
-    method: "POST",
-    headers: { "content-type": "application/didcomm-encrypted+json" },
-    body: packed,
-  });
-  if (!aRes.ok) {
-    throw new Error(`vta /auth/ failed (${aRes.status}): ${await aRes.text()}`);
-  }
-  const aBody = (await aRes.json()) as { tokens?: { accessToken?: string } };
-  const accessToken = aBody.tokens?.accessToken;
-  if (!accessToken) {
-    throw new Error(`vta /auth/: malformed response: ${JSON.stringify(aBody)}`);
-  }
-  return accessToken;
+/** @deprecated REST-transport options. Kept for existing call sites; prefer
+ *  {@link contextsCreate} with a channel from a `VtaSession`. */
+export interface VtaCreateContextOptions extends ContextsCreateParams, VtaAuthInputs {}
+
+/** @deprecated Use {@link contextsCreate} with a channel from a `VtaSession`.
+ *  Create over REST — builds a one-shot {@link RestChannel}. */
+export function vtaCreateContext(opts: VtaCreateContextOptions): Promise<ContextRecord> {
+  return contextsCreate(new RestChannel(opts), opts);
 }
