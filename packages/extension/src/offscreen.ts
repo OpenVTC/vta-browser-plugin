@@ -428,8 +428,13 @@ async function getVtaSession(
   if (services.didcomm) {
     const conn = await getWarmSession(services.didcomm.mediatorDid, vtaDid);
     const bridge = new MediatorSessionBridge(conn);
+    // Encrypt/route to the REAL VTA (`service`), NOT `conn.vta`: the warm
+    // session seeds `conn.vta` with the holder's own DID as a harmless
+    // placeholder (it's a shared session with no fixed peer), so each op must
+    // supply its own VTA target. Using `conn.vta` here would authcrypt+forward
+    // the request back to the holder.
     channels.push(
-      new DidcommVtaTransport({ bridge, holder, vta: conn.vta, mediator: conn.mediator }),
+      new DidcommVtaTransport({ bridge, holder, vta: service, mediator: conn.mediator }),
     );
   }
   const rest = restBaseUrl || services.rest?.baseUrl;
