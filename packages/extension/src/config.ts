@@ -71,6 +71,20 @@ export interface WalletSettings {
   /** The gateway's VAPID *public* key (base64url, uncompressed P-256 point) —
    *  the `applicationServerKey` subscribers register. */
   pushGatewayVapidPublicKey?: string;
+
+  /**
+   * Prefer TSP as the top-priority transport when a VTA advertises it
+   * (`TSPTransport` service). **Default: `true`.**
+   *
+   * TSP rides the same warm mediator socket as DIDComm (the mediator
+   * multiplexes both), so there is no extra socket. The offscreen routes over
+   * TSP first, falling back to DIDComm on a *connect* failure (nothing reached
+   * the VTA, so the fallback is safe). A TSP *reply* timeout is a hard failure
+   * by design — a possibly-applied mutation must not be retried on another
+   * transport. Set to `false` to pin a VTA to DIDComm/REST (e.g. if a
+   * particular mediator's TSP delivery misbehaves).
+   */
+  preferTsp?: boolean;
 }
 
 const SETTINGS_KEY = "pnm/settings/v1";
@@ -92,6 +106,7 @@ export async function getSettings(): Promise<WalletSettings> {
       ? { defaultStepUpVtaMediatorDid: s.defaultStepUpVtaMediatorDid }
       : {}),
     encryptHolderSecret,
+    preferTsp: typeof s?.preferTsp === "boolean" ? s.preferTsp : true,
     ...(s?.pushGatewayUrl ? { pushGatewayUrl: s.pushGatewayUrl } : {}),
     ...(s?.pushGatewayVapidPublicKey
       ? { pushGatewayVapidPublicKey: s.pushGatewayVapidPublicKey }

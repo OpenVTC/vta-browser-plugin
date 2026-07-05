@@ -24,7 +24,11 @@ import {
   requestVtaApproval,
   resolveKeyAgreement,
   resolveVtaServices,
+  resolveVtaTspEndpoint,
   RestChannel,
+  TspChannel,
+  MediatorSessionTspTransport,
+  tspHolderIdentityFromSecret,
   setDeviceWake,
   signingIdentityFromSecret,
   stepUpVtaFinish,
@@ -51,6 +55,7 @@ import {
   verifyDid,
 } from "@openvtc/pnm-core";
 import { base64url } from "@openvtc/vti-didcomm-js";
+import { getSettings } from "./config.js";
 import { getWalletMediatorDid, loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import {
@@ -412,19 +417,50 @@ interface VtaSessionHandle {
 }
 
 // Build a VtaSession for `vtaDid` honouring the advertised transports
-// (DIDComm > REST). `restBaseUrl` (from the popup's connection state) is used
-// when present; otherwise we fall back to the VTA's advertised #vta-rest. A
-// DIDComm-only VTA yields a DIDComm-only session; a REST-only VTA yields the
-// same REST path as before. A VTA advertising both now PREFERS DIDComm.
+// (TSP > DIDComm > REST). `restBaseUrl` (from the popup's connection state) is
+// used when present; otherwise we fall back to the VTA's advertised #vta-rest.
+// A VTA that advertises only one transport yields a single-channel session; a
+// VTA advertising several prefers TSP, then DIDComm, then REST, with safe
+// fallback to the next when a higher-priority channel can't carry the task.
 async function getVtaSession(
   vtaDid: string,
   restBaseUrl?: string,
 ): Promise<VtaSessionHandle> {
-  const { identity: holder } = await loadHolder(vtaDid);
+  const { identity: holder, signing } = await loadHolder(vtaDid);
   const service = await resolveKeyAgreement(vtaDid);
   const services = await resolveVtaServices(vtaDid);
 
   const channels: TrustTaskChannel[] = [];
+  // TSP is the highest-priority transport. It rides the SAME warm mediator
+  // socket as DIDComm (the mediator multiplexes both — binary 0xF8 → TSP, text
+  // → DIDComm), so there is no second socket to conflict with the wallet's
+  // DIDComm inbox. The Trust-Task envelope is sealed end-to-end to the VTA and
+  // sent as a binary frame; the reply arrives back on the same session.
+  //
+  // Gated behind the `preferTsp` setting (default ON). A TSP reply timeout is a
+  // hard failure (a mutation may already have applied) rather than a fall-back,
+  // so an operator can turn TSP off to pin a VTA to DIDComm/REST if a given
+  // mediator's TSP delivery misbehaves.
+  const { preferTsp } = await getSettings();
+  if (preferTsp && services.tsp) {
+    try {
+      const vtaTsp = await resolveVtaTspEndpoint(vtaDid);
+      // Same mediator as DIDComm in practice; getWarmSession is pooled by
+      // (mediator, vtaDid) so this shares the one socket.
+      const conn = await getWarmSession(services.tsp.mediatorDid, vtaDid);
+      channels.push(
+        new TspChannel({
+          transport: new MediatorSessionTspTransport({ connection: conn }),
+          holder: tspHolderIdentityFromSecret(holder.did, signing.privateKey),
+          vta: vtaTsp,
+        }),
+      );
+    } catch (err) {
+      // Resolution failure (e.g. the VTA advertises #tsp but its keys don't
+      // resolve) shouldn't kill the session — DIDComm/REST still work.
+      console.warn("[pnm tsp] skipping TSP channel:", (err as Error).message);
+    }
+  }
   if (services.didcomm) {
     const conn = await getWarmSession(services.didcomm.mediatorDid, vtaDid);
     const bridge = new MediatorSessionBridge(conn);
@@ -844,11 +880,12 @@ async function doForgetHolderRecord(vtaDid: string): Promise<void> {
  *  the matching `#vta-rest` / `#vta-didcomm` service entry. */
 async function doRefreshVtaTransports(
   vtaDid: string,
-): Promise<{ restBaseUrl?: string; mediatorDid?: string }> {
+): Promise<{ restBaseUrl?: string; mediatorDid?: string; tspMediatorDid?: string }> {
   const services = await resolveVtaServices(vtaDid);
   return {
     ...(services.rest ? { restBaseUrl: services.rest.baseUrl } : {}),
     ...(services.didcomm ? { mediatorDid: services.didcomm.mediatorDid } : {}),
+    ...(services.tsp ? { tspMediatorDid: services.tsp.mediatorDid } : {}),
   };
 }
 

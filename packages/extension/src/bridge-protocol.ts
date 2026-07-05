@@ -594,6 +594,9 @@ export interface VtaTransportsView {
   /** Mediator DID, present iff the VTA's DID doc carries a
    *  `#vta-didcomm` (or generic `DIDCommMessaging`) service entry. */
   mediatorDid?: string;
+  /** Mediator DID, present iff the VTA's DID doc carries a `#tsp`
+   *  (`TSPTransport`) service entry. */
+  tspMediatorDid?: string;
 }
 
 export type RuntimeRefreshVtaTransportsResponse =

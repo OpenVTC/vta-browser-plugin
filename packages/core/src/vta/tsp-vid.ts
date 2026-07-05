@@ -12,7 +12,7 @@
 
 import { base58 } from "@scure/base";
 
-import { resolveKeyAgreement } from "../didcomm/index.js";
+import { resolveDidDocument, resolveKeyAgreement } from "../didcomm/index.js";
 import { base64urlToBytes } from "../webauthn/base64url.js";
 import { VtaClientError } from "./errors.js";
 import type { TspRemoteEndpoint } from "./tsp-channel.js";
@@ -165,4 +165,14 @@ export async function resolveTspEndpoint(
   const ka = await resolveKeyAgreement(did);
   const doc = await resolveDidDocument(did);
   return tspEndpointFromResolved(did, ka.keyAgreementPublicJwk, doc);
+}
+
+/**
+ * Resolve a VTA's DID into its {@link TspRemoteEndpoint} using the plugin's
+ * built-in DID resolver. The zero-dependency convenience form of
+ * {@link resolveTspEndpoint} — callers that don't need to inject a resolver
+ * (i.e. everything outside tests) use this.
+ */
+export function resolveVtaTspEndpoint(vtaDid: string): Promise<TspRemoteEndpoint> {
+  return resolveTspEndpoint(vtaDid, resolveDidDocument);
 }

@@ -18,6 +18,7 @@
 // simulator in tests).
 
 import { pack, unpack } from "@openvtc/vti-tsp-js";
+import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 
 import type { SendOpts, TrustTaskChannel } from "./channel.js";
 import { VtaClientError } from "./errors.js";
@@ -37,6 +38,28 @@ export interface TspHolderIdentity {
   encryptionPrivateKey: Uint8Array;
   /** X25519 public key — the VTA verifies our sender-auth against this. */
   encryptionPublicKey: Uint8Array;
+}
+
+/**
+ * Derive the holder's {@link TspHolderIdentity} from its Ed25519 root secret —
+ * the single key material `loadHolder` unwraps. The X25519 encryption keys are
+ * the Montgomery form of the Ed25519 secret, exactly as the holder's
+ * `did:peer:2` keyAgreement key is minted (see `store/holder-identity.ts`
+ * `buildHolder`), so the VTA verifies our TSP sender-auth against the same key
+ * it resolves from our DID.
+ *
+ * @param did The holder's VID (its `did:peer`).
+ * @param edSecret The raw 32-byte Ed25519 private key (`SigningIdentity.privateKey`).
+ */
+export function tspHolderIdentityFromSecret(did: string, edSecret: Uint8Array): TspHolderIdentity {
+  const encryptionPrivateKey = ed25519.utils.toMontgomerySecret(edSecret);
+  const encryptionPublicKey = x25519.getPublicKey(encryptionPrivateKey);
+  return {
+    vid: did,
+    signingPrivateKey: edSecret,
+    encryptionPrivateKey,
+    encryptionPublicKey,
+  };
 }
 
 /** The VTA's TSP endpoint — its VID plus the public keys to seal to / verify. */

@@ -369,7 +369,10 @@ function ConnectedView({
     }
   }
 
+  // Advertised transports in priority order (TSP > DIDComm > REST) — the same
+  // order the offscreen VtaSession prefers.
   const transports = [
+    connection.tspMediatorDid ? "TSP" : null,
     connection.mediatorDid ? "DIDComm" : null,
     connection.restBaseUrl ? "REST" : null,
   ]
@@ -2374,7 +2377,8 @@ function Popup() {
     // changed, to avoid spurious re-renders + storage writes.
     const restChanged = (fresh.restBaseUrl ?? null) !== (current.restBaseUrl ?? null);
     const medChanged = (fresh.mediatorDid ?? null) !== (current.mediatorDid ?? null);
-    if (!restChanged && !medChanged) return;
+    const tspChanged = (fresh.tspMediatorDid ?? null) !== (current.tspMediatorDid ?? null);
+    if (!restChanged && !medChanged && !tspChanged) return;
 
     // Rebuild the connection without unset transports — JS spread keeps
     // the old value if the new field is absent; building fresh lets us
@@ -2386,11 +2390,12 @@ function Popup() {
       connectedAt: current.connectedAt,
       ...(fresh.restBaseUrl ? { restBaseUrl: fresh.restBaseUrl } : {}),
       ...(fresh.mediatorDid ? { mediatorDid: fresh.mediatorDid } : {}),
+      ...(fresh.tspMediatorDid ? { tspMediatorDid: fresh.tspMediatorDid } : {}),
     };
     console.info(
       "[pnm] VTA transports refreshed:",
-      { rest: !!fresh.restBaseUrl, didcomm: !!fresh.mediatorDid },
-      "(was: rest=" + !!current.restBaseUrl + ", didcomm=" + !!current.mediatorDid + ")",
+      { tsp: !!fresh.tspMediatorDid, rest: !!fresh.restBaseUrl, didcomm: !!fresh.mediatorDid },
+      "(was: tsp=" + !!current.tspMediatorDid + ", rest=" + !!current.restBaseUrl + ", didcomm=" + !!current.mediatorDid + ")",
     );
     setConnection(updated);
   }
