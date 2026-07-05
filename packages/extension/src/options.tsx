@@ -35,6 +35,7 @@ function Options() {
   // is one toggle = one tap = persisted state).
   const [encryptOn, setEncryptOn] = useState(false);
   const [encryptBusy, setEncryptBusy] = useState(false);
+  const [preferTspOn, setPreferTspOn] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [trustedSites, setTrustedSites] = useState<TrustedSiteRecord[]>([]);
@@ -58,6 +59,7 @@ function Options() {
       setPushGatewayUrl(s.pushGatewayUrl ?? "");
       setPushGatewayVapidPublicKey(s.pushGatewayVapidPublicKey ?? "");
       setEncryptOn(Boolean(s.encryptHolderSecret));
+      setPreferTspOn(Boolean(s.preferTsp));
       // Multi-VTA: show the active VTA's holder DID. Read straight
       // from the persisted connection — no decryption needed for a
       // display string, and options runs in a context with no PRF
@@ -265,6 +267,39 @@ function Options() {
           authenticator on each cold start (new browser session). Losing the
           authenticator without disabling first means losing the wallet — no
           recovery path. {encryptOn ? "Toggle off to revert." : ""}
+        </div>
+      </div>
+
+      <div
+        style={{
+          marginTop: 22,
+          padding: 14,
+          border: "1px solid #2a2f3a",
+          borderRadius: 8,
+          background: "#15181f",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <input
+            id="preferTsp"
+            type="checkbox"
+            checked={preferTspOn}
+            onChange={(e) => {
+              const on = e.target.checked;
+              setPreferTspOn(on);
+              void setSettings({ preferTsp: on });
+            }}
+            style={{ transform: "scale(1.2)" }}
+          />
+          <label htmlFor="preferTsp" style={{ fontSize: 14, color: "#e6e8ee" }}>
+            Prefer TSP transport
+          </label>
+        </div>
+        <div style={{ marginTop: 10, fontSize: 12, color: "#9aa3b2", lineHeight: 1.5 }}>
+          When a VTA advertises a <code>TSPTransport</code> service, route trust tasks over TSP
+          first (TSP &gt; DIDComm &gt; REST). TSP shares the same mediator socket as DIDComm and
+          falls back to DIDComm if it can&apos;t connect. <strong>On by default.</strong> Turn off
+          to pin a VTA to DIDComm/REST if a particular mediator&apos;s TSP delivery misbehaves.
         </div>
       </div>
 

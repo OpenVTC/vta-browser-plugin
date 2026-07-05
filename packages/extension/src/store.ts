@@ -15,6 +15,10 @@ export interface Connection {
   restBaseUrl?: string;
   /** Mediator DID from `#vta-didcomm`, if advertised at onboarding time. */
   mediatorDid?: string;
+  /** Mediator DID from the `#tsp` (`TSPTransport`) service, if advertised.
+   *  Backfilled by the transport refresh, so existing connections gain it
+   *  without re-onboarding. */
+  tspMediatorDid?: string;
   /** When the connection was established (ms epoch). */
   connectedAt: number;
 }

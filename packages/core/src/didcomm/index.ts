@@ -416,6 +416,18 @@ export interface VtaServices {
   rest?: { baseUrl: string };
   /** Mediator DID from the `#vta-didcomm` service (`type: "DIDCommMessaging"`). */
   didcomm?: { mediatorDid: string };
+  /** Mediator DID from the `#tsp` service (`type: "TSPTransport"`) — the
+   *  mediator the VTA is a local TSP account on. Highest-priority transport. */
+  tsp?: { mediatorDid: string };
+}
+
+/** Pull a mediator DID from a service endpoint, tolerating the
+ *  `[{ uri }]` / `{ uri }` / bare-string encodings. */
+function mediatorDidFromEndpoint(ep: unknown): string | undefined {
+  if (Array.isArray(ep)) return (ep[0] as { uri?: string } | undefined)?.uri;
+  if (ep && typeof ep === "object") return (ep as { uri?: string }).uri;
+  if (typeof ep === "string") return ep;
+  return undefined;
 }
 
 /**
@@ -425,6 +437,19 @@ export interface VtaServices {
  * `#vta-rest` / `#vta-didcomm` the document carries (possibly both, possibly
  * one).
  */
+/** Resolve a DID to its raw DID document (the `didDocument` field of the
+ *  resolution result). Used by TSP VID resolution to read the peer's
+ *  verification methods. Throws if the DID does not resolve. */
+export async function resolveDidDocument(did: string): Promise<Record<string, unknown>> {
+  const resolution = (await vtiResolve(did, {})) as unknown as {
+    didDocument?: Record<string, unknown>;
+  };
+  if (!resolution.didDocument) {
+    throw new Error(`could not resolve DID document for ${did}`);
+  }
+  return resolution.didDocument;
+}
+
 export async function resolveVtaServices(did: string): Promise<VtaServices> {
   const resolution = (await vtiResolve(did, {})) as {
     didDocument?: { service?: Array<{ id?: string; type?: string; serviceEndpoint?: unknown }> };
@@ -445,15 +470,18 @@ export async function resolveVtaServices(did: string): Promise<VtaServices> {
     if (fragment === "vta-didcomm" || svc.type === "DIDCommMessaging") {
       // `#vta-didcomm` serviceEndpoint is `[{ uri: <mediator-did>, ... }]`;
       // tolerate the object and bare-string encodings too.
-      const ep = svc.serviceEndpoint;
-      let mediatorDid: string | undefined;
-      if (Array.isArray(ep)) mediatorDid = (ep[0] as { uri?: string } | undefined)?.uri;
-      else if (ep && typeof ep === "object") mediatorDid = (ep as { uri?: string }).uri;
-      else if (typeof ep === "string") mediatorDid = ep;
+      const mediatorDid = mediatorDidFromEndpoint(svc.serviceEndpoint);
       // Prefer the VTA-specific fragment over a generic DIDCommMessaging entry.
       if (mediatorDid && (fragment === "vta-didcomm" || !out.didcomm)) {
         out.didcomm = { mediatorDid };
       }
+    }
+
+    // TSP is matched on `type` alone — the `#key-id` fragment is fungible. The
+    // endpoint is the mediator DID the VTA is a local TSP account on.
+    if (svc.type === "TSPTransport") {
+      const mediatorDid = mediatorDidFromEndpoint(svc.serviceEndpoint);
+      if (mediatorDid && !out.tsp) out.tsp = { mediatorDid };
     }
   }
   return out;
@@ -504,6 +532,16 @@ export type WebSocketCtor = new (
 export interface MediatorConnection {
   send(jwe: string): void;
   waitFor(thid: string, timeoutMs: number): Promise<Record<string, unknown>>;
+  /** Send a raw TSP message (qb2 bytes) over the SAME socket as DIDComm. The
+   *  mediator sniffs the 0xF8 magic and routes it to its TSP handler — so TSP
+   *  and DIDComm share one socket per holder DID (no second socket, so no
+   *  one-socket-per-DID conflict; the reply arrives back on this socket). */
+  sendBinary(bytes: Uint8Array): void;
+  /** Await the next inbound TSP frame. FIFO — TSP carries no thread id, and a
+   *  VtaSession drives one request at a time. Call this to register the waiter,
+   *  then `sendBinary` (both synchronous, so no frame can arrive between them).
+   *  Rejects on timeout. Frames arriving with no waiter are discarded. */
+  awaitTspFrame(timeoutMs: number): Promise<Uint8Array>;
   close(): void;
   /** True while the underlying WebSocket is open (live delivery active). A
    *  warm-session holder checks this before reusing a cached connection. */
@@ -573,6 +611,23 @@ export async function connectMediatorSession(
     [opts.vtaDid, { publicJwk: vta.keyAgreementPublicJwk }],
   ]);
 
+  // FIFO queue of TSP-reply waiters. A TSP frame the mediator multiplexes onto
+  // this socket resolves the oldest waiter; frames with no waiter (flush-on-
+  // connect stragglers) are discarded. TspChannel validates sender/envelope, so
+  // a mis-delivered frame fails the op rather than being silently accepted.
+  const tspWaiters: Array<{
+    resolve: (b: Uint8Array) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }> = [];
+  const rejectTspWaiters = (err: Error) => {
+    while (tspWaiters.length) {
+      const w = tspWaiters.shift()!;
+      clearTimeout(w.timer);
+      w.reject(err);
+    }
+  };
+
   const session = new VtiMediatorSession({
     mediator: auth.mediator,
     mediatorJwt: auth.accessToken,
@@ -587,6 +642,13 @@ export async function connectMediatorSession(
       const r = await vtiResolveKeyAgreement(did);
       return { publicJwk: x25519PublicJwk(r.x25519Pub) };
     },
+    onTspFrame: (bytes: Uint8Array) => {
+      const w = tspWaiters.shift();
+      if (w) {
+        clearTimeout(w.timer);
+        w.resolve(bytes);
+      } // else: straggler with no outstanding request — discard.
+    },
     ...(opts.onClose ? { onClose: opts.onClose } : {}),
     ...(opts.webSocketImpl ? { WebSocketImpl: opts.webSocketImpl } : {}),
   });
@@ -597,7 +659,21 @@ export async function connectMediatorSession(
     send: (jwe: string) => session.send(jwe),
     waitFor: (thid: string, timeoutMs: number) =>
       session.waitFor(thid, timeoutMs) as Promise<Record<string, unknown>>,
-    close: () => session.close(),
+    sendBinary: (bytes: Uint8Array) => session.sendBinary(bytes),
+    awaitTspFrame: (timeoutMs: number) =>
+      new Promise<Uint8Array>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          const i = tspWaiters.indexOf(waiter);
+          if (i >= 0) tspWaiters.splice(i, 1);
+          reject(new Error("timed out awaiting reply frame"));
+        }, timeoutMs);
+        const waiter = { resolve, reject, timer };
+        tspWaiters.push(waiter);
+      }),
+    close: () => {
+      rejectTspWaiters(new Error("mediator session closed"));
+      session.close();
+    },
     get isOpen() {
       return liveSession.isOpen;
     },
