@@ -11,7 +11,7 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": ["dist", "README.md"],
   "dependencies": {
     "@hpke/core": "^1.9.0",
     "@hpke/chacha20poly1305": "^1.8.0",
@@ -22,7 +22,17 @@
     "build": "tsc -b",
     "lint": "tsc -b --noEmit",
     "test": "tsc -b && node --test tests/*.mjs",
-    "clean": "rm -rf dist *.tsbuildinfo"
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "prepack": "npm run build"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OpenVTC/vta-browser-plugin.git",
+    "directory": "packages/tsp-js"
+  },
+  "homepage": "https://github.com/OpenVTC/vta-browser-plugin/tree/main/packages/tsp-js#readme",
   "license": "Apache-2.0"
 }
