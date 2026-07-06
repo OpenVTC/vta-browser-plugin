@@ -21,7 +21,7 @@ import {
   type MediatorConnection,
   MediatorSessionBridge,
   parseConfirmRequest,
-  requestVtaApproval,
+  buildStepUpApproval,
   resolveKeyAgreement,
   resolveVtaServices,
   resolveVtaTspEndpoint,
@@ -1057,7 +1057,7 @@ async function createWarmSession(
   mediatorDid: string,
   vtaDid: string,
 ): Promise<MediatorConnection> {
-  const { identity } = await loadHolder(vtaDid);
+  const { identity, signing } = await loadHolder(vtaDid);
   const isInbox = mediatorDid === (await walletMediatorDid());
   const key = poolKey(mediatorDid, vtaDid);
   const conn = await connectMediatorSession({
@@ -1080,7 +1080,7 @@ async function createWarmSession(
   // Attach the inbound confirm handler whenever this is the wallet's inbox
   // mediator — regardless of which operation first opened the session.
   if (isInbox) {
-    conn.onInbound((message) => void handleInbound(conn, identity, message));
+    conn.onInbound((message) => void handleInbound(conn, identity, signing, message));
   }
   return conn;
 }
@@ -1153,10 +1153,11 @@ async function reconcileInbound(vtaDids: readonly string[]): Promise<void> {
 async function handleInbound(
   conn: MediatorConnection,
   identity: Parameters<typeof buildConfirmResponse>[0]["holder"],
+  signing: Parameters<typeof buildConfirmResponse>[0]["signing"],
   message: Record<string, unknown>,
 ): Promise<void> {
   const parsed = parseConfirmRequest(message);
-  if (!parsed) return; // not a confirm/1.0 — ignore other traffic
+  if (!parsed) return; // not a confirm/request/0.1 — ignore other traffic
 
   // De-dup: the mediator replays un-acked messages on every reconnect, and
   // the MV3 worker respawns the offscreen session often. Skip a confirm we've
@@ -1173,20 +1174,22 @@ async function handleInbound(
   }
   try {
     // Ask the background to prompt the user (consent UI is a background API).
+    // The spec `reason` maps to the generic consent-prompt `action` label.
     const consent = (await chrome.runtime.sendMessage({
       type: RUNTIME_INBOUND_CONSENT,
       rpDid: parsed.rpDid,
-      action: parsed.request.action,
-      ...(parsed.request.rpName ? { rpName: parsed.request.rpName } : {}),
+      action: parsed.request.reason,
     })) as { approved?: boolean } | undefined;
     const approved = consent?.approved === true;
 
     const rp = await resolveKeyAgreement(parsed.rpDid);
     const outer = await buildConfirmResponse({
       holder: identity,
+      signing,
       rp,
       mediator: conn.mediator,
       approved,
+      subject: parsed.request.subject,
       challenge: parsed.request.challenge,
       thid: parsed.thid,
     });
@@ -1257,34 +1260,28 @@ async function doStepUpVta(
   // Same IndexedDB-backed holder the popup/background use, so the DID is
   // identical to the base-login path being elevated.
   const sw = createStopwatch();
-  const { identity, signing } = await loadHolder(req.params.vtaDid);
+  const { signing } = await loadHolder(req.params.vtaDid);
   sw.mark("load holder");
 
-  // 1. RP start (REST) → nonce.
-  const nonce = await stepUpVtaStart(req.params.baseUrl, req.params.accessToken);
-  sw.mark("rp start (nonce)");
+  // 1. RP start (REST) → approve-request {subject, sessionId, challenge}.
+  const request = await stepUpVtaStart(req.params.baseUrl, req.params.accessToken);
+  sw.mark("rp start (challenge)");
 
-  // 2. VTA approve (DIDComm) → approval token. Reuse the warm session.
-  const conn = await getWarmSession(req.params.vtaMediatorDid, req.params.vtaDid);
-  sw.mark("warm session");
-  const service = await resolveKeyAgreement(req.params.vtaDid);
-  sw.mark("resolve vta");
-  const bridge = new MediatorSessionBridge(conn);
-  const approvalToken = await requestVtaApproval({
-    bridge,
-    holder: identity,
-    service,
-    mediator: conn.mediator,
+  // 2. Wallet signs the approve-response/0.2 locally (holder-self-signs — no
+  //    VTA round-trip). The DI proof over the subject key is the elevation gate.
+  const approval = await buildStepUpApproval({
+    signing,
     rpDid: req.params.rpDid,
-    nonce,
+    request,
+    approved: true,
   });
-  sw.mark("vta approve");
+  sw.mark("sign approval");
 
   // 3. RP finish (REST) → elevated session tokens.
   const tokens = await stepUpVtaFinish(
     req.params.baseUrl,
     req.params.accessToken,
-    approvalToken,
+    approval,
   );
   sw.mark("rp finish (elevate)");
   return {
