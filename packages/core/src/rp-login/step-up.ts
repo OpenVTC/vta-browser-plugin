@@ -1,113 +1,110 @@
-// VTA-approval step-up for a did-hosting Relying Party.
+// VTA-approval step-up for a did-hosting Relying Party — holder-self-signs.
 //
-// Elevates an existing `aal1` session to `aal2`: the RP issues a nonce, the
-// holder's VTA signs an approval over DIDComm, and the RP exchanges that
-// approval for a fresh, higher-assurance session token. The DIDComm leg
-// mirrors `loginViaDidcomm` exactly (build message → authcrypt to the VTA →
-// forward via its mediator → await reply by `thid`), but with the
-// step-up approve-request/response message types.
+// Elevates an existing `aal1` session to `aal2`. The RP issues a challenge
+// bound to the caller's session; the holder signs a spec
+// `auth/step-up/approve-response/0.2` Trust-Task document (a W3C Data Integrity
+// proof over the session-subject `did:key`); the RP verifies that proof and
+// mints a higher-assurance session token. The wallet — not the VTA — signs the
+// approval, so no DIDComm round-trip and no trusted third party are involved;
+// the proof is the holder re-proving control of the session subject over a
+// fresh challenge.
 //
 // Three steps:
-//   1. RP start  (REST)    → nonce
-//   2. VTA approve (DIDComm) → approval_token (compact JWS)
-//   3. RP finish (REST)    → elevated session tokens
+//   1. RP start  (REST) → approve-request payload {subject, sessionId, challenge}
+//   2. Wallet    (local) → signed approve-response/0.2 document
+//   3. RP finish (REST) → elevated session tokens
 //
 // Server contract (step 1 + 3 REST responses are **snake_case**, unlike the
 // camelCase login responses).
 
-import { packAuthcrypt, packAuthcryptJson, wrapForward, type Identity } from "../didcomm/index.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
-import type { DidcommMessageBridge } from "../vta/transport.js";
+import { signTrustTask } from "../trust-tasks/sign.js";
+import type { SigningIdentity } from "../siop/self-issued.js";
+import type { TrustTask } from "../vta/protocol.js";
 
-// Canonical step-up approval specs from trusttasks-tf. The proof on
+// Canonical step-up approval spec from trusttasks-tf. The proof on the
 // approve-response is what the RP verifies to elevate the session's acr.
-const MSG_APPROVE_REQUEST = "https://trusttasks.org/spec/auth/step-up/approve-request/0.1";
-const MSG_APPROVE_RESPONSE = "https://trusttasks.org/spec/auth/step-up/approve-response/0.1";
+const MSG_APPROVE_RESPONSE = "https://trusttasks.org/spec/auth/step-up/approve-response/0.2";
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+/** The RP's `approve-request/0.2` payload, returned by {@link stepUpVtaStart}. */
+export interface StepUpApproveRequest {
+  /** The VID whose session is being elevated — the wallet must speak for it. */
+  subject: string;
+  /** The session the RP wants elevated. Echoed into the response. */
+  sessionId: string;
+  /** RP-issued nonce the approve-response signs over. */
+  challenge: string;
+  /** Human-readable reason to surface for consent. */
+  reason?: string;
+}
 
-export interface RequestVtaApprovalOptions {
-  /** Mediator-backed bridge that ships the JWE and surfaces the decrypted,
-   *  sender-authenticated reply (keyed by `thid`). */
-  bridge: DidcommMessageBridge;
-  /** The wallet's holder identity (authcrypt sender). */
-  holder: Identity;
-  /** The VTA's DID + keyAgreement key (authcrypt recipient). */
-  service: RemoteDidcommEndpoint;
-  /** The VTA's mediator. When set, the message is wrapped in a
-   *  routing/2.0/forward and authcrypted to the mediator. */
-  mediator?: RemoteDidcommEndpoint;
-  /** The RP's DID — bound into the approval the VTA signs. */
+/** Payload of the `approve-response/0.2` the wallet signs. */
+export interface StepUpApproveResponsePayload {
+  subject: string;
+  sessionId: string;
+  challenge: string;
+  decision: "approved" | "denied";
+  deniedReason?: string;
+}
+
+export interface BuildStepUpApprovalArgs {
+  /** The wallet's Ed25519 signing identity — its `did` is the response
+   *  `subject`/`issuer` and its `kid` the proof's `verificationMethod`. It
+   *  MUST be the DID the RP session authenticated as. */
+  signing: SigningIdentity;
+  /** The RP's DID — bound in-band as `recipient` so the signed proof commits
+   *  to this audience (SPEC §4.8.2). */
   rpDid: string;
-  /** The nonce from the RP's step-up start call. */
-  nonce: string;
-  /** Reply timeout (default 30s). */
-  timeoutMs?: number;
+  /** The approve-request the RP returned from {@link stepUpVtaStart}. */
+  request: StepUpApproveRequest;
+  /** The user's decision. */
+  approved: boolean;
+  /** Human-readable rationale, attached when the user denies. */
+  deniedReason?: string;
 }
 
 /**
- * Ask the holder's VTA to approve a step-up over DIDComm and return the
- * compact-JWS approval token. Throws if the VTA replies with anything
- * other than an approve-response (e.g. a problem-report).
+ * Build and sign the `auth/step-up/approve-response/0.2` Trust-Task document.
+ * The DI proof (`eddsa-jcs-2022`, `proofPurpose: assertionMethod`) over the
+ * subject key is what the RP verifies to elevate the session.
  */
-export async function requestVtaApproval(opts: RequestVtaApprovalOptions): Promise<string> {
-  const { bridge, holder, service, mediator, rpDid, nonce } = opts;
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-
-  const requestId = globalThis.crypto.randomUUID();
-  const message = {
-    id: requestId,
-    type: MSG_APPROVE_REQUEST,
-    from: holder.did,
-    to: [service.did],
-    body: { rp_did: rpDid, nonce },
+export async function buildStepUpApproval(
+  args: BuildStepUpApprovalArgs,
+): Promise<TrustTask<StepUpApproveResponsePayload> & { proof?: unknown }> {
+  const decision: "approved" | "denied" = args.approved ? "approved" : "denied";
+  const payload: StepUpApproveResponsePayload = {
+    subject: args.request.subject,
+    sessionId: args.request.sessionId,
+    challenge: args.request.challenge,
+    decision,
+    ...(decision === "denied" && args.deniedReason ? { deniedReason: args.deniedReason } : {}),
   };
 
-  const inner = await packAuthcrypt(message, holder, [
-    { kid: service.keyAgreementKid, jwk: service.keyAgreementPublicJwk },
-  ]);
+  const document: TrustTask<StepUpApproveResponsePayload> & { proof?: unknown } = {
+    id: globalThis.crypto.randomUUID(),
+    type: MSG_APPROVE_RESPONSE,
+    issuer: args.signing.did,
+    recipient: args.rpDid,
+    payload,
+  };
 
-  let outer = inner;
-  if (mediator) {
-    const forwardJson = wrapForward(service.did, holder.did, mediator.did, inner);
-    outer = await packAuthcryptJson(forwardJson, holder, [
-      { kid: mediator.keyAgreementKid, jwk: mediator.keyAgreementPublicJwk },
-    ]);
-  }
-
-  const reply = await bridge.sendAndAwaitReply(outer, requestId, { timeoutMs });
-
-  if (reply.thid !== requestId) {
-    throw new Error(`vta step-up: reply thid ${reply.thid ?? "(none)"} != request ${requestId}`);
-  }
-  if (reply.from !== service.did) {
-    throw new Error(`vta step-up: reply from ${reply.from ?? "(none)"} != VTA ${service.did}`);
-  }
-  if (reply.type !== MSG_APPROVE_RESPONSE) {
-    // Most commonly a problem-report (e.g. VTA declined the step-up).
-    throw new Error(
-      `vta step-up: ${reply.type ?? "(no type)"} — ${JSON.stringify(reply.body ?? {})}`,
-    );
-  }
-
-  const body = (reply.body ?? {}) as { approval_token?: string };
-  if (!body.approval_token) {
-    throw new Error(
-      `vta step-up: malformed approve-response body: ${JSON.stringify(body)}`,
-    );
-  }
-  return body.approval_token;
+  await signTrustTask({
+    envelope: document as unknown as Record<string, unknown> & { proof?: unknown },
+    signing: args.signing,
+    proofPurpose: "assertionMethod",
+  });
+  return document;
 }
 
 /**
  * Step 1 — RP start. Authenticated with the existing `aal1` access token,
- * returns the nonce the VTA must sign over.
+ * returns the `approve-request` fields the wallet echoes into the signed
+ * approve-response.
  */
 export async function stepUpVtaStart(
   baseUrl: string,
   accessToken: string,
   fetchFn?: typeof fetch,
-): Promise<string> {
+): Promise<StepUpApproveRequest> {
   const f = fetchFn ?? fetch.bind(globalThis);
   const base = baseUrl.replace(/\/+$/, "");
   const res = await f(`${base}/auth/step-up/vta/start`, {
@@ -121,11 +118,16 @@ export async function stepUpVtaStart(
   if (!res.ok) {
     throw new Error(`vta step-up start: failed (${res.status}): ${await res.text()}`);
   }
-  const json = (await res.json()) as { nonce?: string };
-  if (!json.nonce) {
+  const json = (await res.json()) as Partial<StepUpApproveRequest>;
+  if (!json.subject || !json.sessionId || !json.challenge) {
     throw new Error(`vta step-up start: malformed response: ${JSON.stringify(json)}`);
   }
-  return json.nonce;
+  return {
+    subject: json.subject,
+    sessionId: json.sessionId,
+    challenge: json.challenge,
+    ...(json.reason ? { reason: json.reason } : {}),
+  };
 }
 
 export interface StepUpVtaFinishResult {
@@ -135,13 +137,13 @@ export interface StepUpVtaFinishResult {
 }
 
 /**
- * Step 3 — RP finish. Submits the VTA's approval token and returns the
- * elevated session tokens. Response body is **snake_case**.
+ * Step 3 — RP finish. Submits the signed `approve-response/0.2` document and
+ * returns the elevated session tokens. Response body is **snake_case**.
  */
 export async function stepUpVtaFinish(
   baseUrl: string,
   accessToken: string,
-  approvalToken: string,
+  approval: TrustTask<StepUpApproveResponsePayload> & { proof?: unknown },
   fetchFn?: typeof fetch,
 ): Promise<StepUpVtaFinishResult> {
   const f = fetchFn ?? fetch.bind(globalThis);
@@ -152,7 +154,7 @@ export async function stepUpVtaFinish(
       "content-type": "application/json",
       authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify({ approval_token: approvalToken }),
+    body: JSON.stringify(approval),
   });
   if (!res.ok) {
     throw new Error(`vta step-up finish: failed (${res.status}): ${await res.text()}`);
