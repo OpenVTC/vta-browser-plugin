@@ -23,6 +23,9 @@ import {
   parseConfirmRequest,
   buildStepUpApproval,
   resolveKeyAgreement,
+  parseTaskConsentRequest,
+  buildTaskConsentDecision,
+  type ParsedTaskConsentRequest,
   resolveVtaServices,
   resolveVtaTspEndpoint,
   RestChannel,
@@ -86,6 +89,7 @@ import {
   OFFSCREEN_VAULT_UPSERT,
   OFFSCREEN_VERIFY_DID,
   RUNTIME_INBOUND_CONSENT,
+  RUNTIME_TASK_CONSENT,
   type OffscreenDidcommLoginRequest,
   type OffscreenRestLoginRequest,
   type OffscreenCreateContextRequest,
@@ -1080,7 +1084,9 @@ async function createWarmSession(
   // Attach the inbound confirm handler whenever this is the wallet's inbox
   // mediator — regardless of which operation first opened the session.
   if (isInbox) {
-    conn.onInbound((message) => void handleInbound(conn, identity, signing, message));
+    conn.onInbound(
+      (message) => void handleInbound(conn, identity, signing, vtaDid, message),
+    );
   }
   return conn;
 }
@@ -1154,8 +1160,37 @@ async function handleInbound(
   conn: MediatorConnection,
   identity: Parameters<typeof buildConfirmResponse>[0]["holder"],
   signing: Parameters<typeof buildConfirmResponse>[0]["signing"],
+  vtaDid: string,
   message: Record<string, unknown>,
 ): Promise<void> {
+  // Task-execution consent, first — it is the one inbound the *VTA itself*
+  // sends, and it is the one whose content a human will act on.
+  //
+  // `parseTaskConsentRequest` verifies the Data-Integrity proof and that the
+  // signer is this device's own VTA *before* returning anything. Nothing is
+  // shown to a user on the strength of the transport alone: a mediator delivers
+  // what it is given, and the effects a person reads are the basis of an
+  // authorization, so they must be attributable to the executor that authored
+  // them.
+  const consent = await parseTaskConsentRequest(message, {
+    expectedVtaDid: vtaDid,
+    holderDid: signing.did,
+  });
+  if (consent.ok) {
+    await handleTaskConsent(conn, identity, signing, vtaDid, consent.parsed, message);
+    return;
+  }
+  if (consent.reason !== "not-a-task-consent-request") {
+    // It *claimed* to be a task-consent request and failed a check. Log it and
+    // drop it — emphatically do not fall through to a prompt.
+    console.warn(
+      "[pnm inbound] refusing task-consent request:",
+      consent.reason,
+      consent.detail ?? "",
+    );
+    return;
+  }
+
   const parsed = parseConfirmRequest(message);
   if (!parsed) return; // not a confirm/request/0.1 — ignore other traffic
 
@@ -1197,6 +1232,65 @@ async function handleInbound(
     console.info("[pnm inbound] confirm responded:", approved ? "approved" : "denied");
   } catch (e) {
     console.error("[pnm inbound] confirm handling failed:", e);
+  }
+}
+
+/**
+ * A verified `task-consent/request` from this device's VTA: ask the human, sign
+ * their answer, send it back.
+ */
+async function handleTaskConsent(
+  conn: MediatorConnection,
+  identity: Parameters<typeof buildTaskConsentDecision>[0]["holder"],
+  signing: Parameters<typeof buildTaskConsentDecision>[0]["signing"],
+  vtaDid: string,
+  parsed: ParsedTaskConsentRequest,
+  message: Record<string, unknown>,
+): Promise<void> {
+  // De-dup before prompting: the mediator replays un-acked messages on every
+  // reconnect and the MV3 worker respawns often, so without this a single
+  // pending consent would pop a fresh prompt each time — training the user to
+  // dismiss it, which is precisely how consent surfaces are defeated.
+  const messageId = typeof message.id === "string" ? message.id : undefined;
+  if (messageId) {
+    const isNew = await markInboundHandled(new IndexedDBKVStore(), messageId);
+    if (!isNew) {
+      console.info("[pnm inbound] skipping replayed task-consent:", messageId);
+      return;
+    }
+  }
+
+  try {
+    const result = (await chrome.runtime.sendMessage({
+      type: RUNTIME_TASK_CONSENT,
+      request: parsed.request,
+    })) as { approved?: boolean } | undefined;
+
+    // Anything other than an explicit approval is a denial. A closed window, a
+    // dropped message, a background worker that died mid-prompt — none of them
+    // are assent, and the wire form is an enum so that none of them can be
+    // mistaken for it.
+    const decision = result?.approved === true ? "approve" : "deny";
+
+    const vta = await resolveKeyAgreement(vtaDid);
+    const outer = await buildTaskConsentDecision({
+      holder: identity,
+      signing,
+      vta,
+      mediator: conn.mediator,
+      decision,
+      // Echoed verbatim from the request we verified. Never recomputed here:
+      // this device does not hold the payload, and a digest it derived from
+      // anything handed to it would bind the approval to that, not to what the
+      // VTA is about to run.
+      challenge: parsed.request.challenge,
+      payloadDigest: parsed.request.payloadDigest,
+      thid: parsed.thid,
+    });
+    conn.send(outer);
+    console.info("[pnm inbound] task-consent decision sent:", decision);
+  } catch (e) {
+    console.error("[pnm inbound] task-consent handling failed:", e);
   }
 }
 

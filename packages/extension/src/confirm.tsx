@@ -20,6 +20,9 @@ import {
 
 const params = new URLSearchParams(window.location.search);
 const consentId = params.get("cid") ?? "";
+// `kind=task` selects the task-execution consent surface, which renders
+// VTA-authored effects rather than an RP-authored reason.
+const isTaskConsent = params.get("kind") === "task";
 const origin = params.get("origin") ?? "";
 // May be absent for page-initiated actions (e.g. `vaultList()`) that have
 // no specific relying party — the RP card + resolution are then omitted.
@@ -470,11 +473,224 @@ function Confirm() {
   );
 }
 
+// ─── Task-execution consent ───
+//
+// A different surface from the login/confirm prompt above, and deliberately so.
+//
+// Everything rendered here is authored by the user's **own VTA** and arrives
+// under its signature — verified in the offscreen before this window is opened.
+// Nothing a relying party wrote reaches this screen. That is the whole point:
+// the requester is the least-trusted component in the system, and if it could
+// write the words a human reads, it would be authoring the basis of a decision
+// that authorizes it.
+//
+// There is also no "remember this site". A task-consent approval authorizes one
+// payload, once. There is nothing to remember, and a checkbox that implied
+// otherwise would be the single most dangerous control in this extension.
+
+interface TaskConsentRequest {
+  challenge: string;
+  taskType: string;
+  payloadDigest: string;
+  sideEffects: "none" | "mutating" | "destructive";
+  exposure: { discloses: string; actsAsSubject: boolean };
+  effects: { kind: string; summary: string }[];
+  requester: string;
+  approverSet: string;
+  minApprovals: number;
+  excludeRequester: boolean;
+  expiresAt: string;
+  subject?: string;
+  origin?: string;
+  statePin?: { resource: string; version: string };
+  consequences?: string[];
+}
+
+/** The prefix the user matches across two screens for a destructive task. */
+const DIGEST_PREFIX_LEN = 6;
+
+function taskLabel(typeUri: string): string {
+  // `https://trusttasks.org/spec/webvh/dids/update/1.0` → `webvh/dids/update`
+  const m = /\/spec\/(.+)\/[\d.]+$/.exec(typeUri);
+  return m?.[1] ?? typeUri;
+}
+
+function TaskConsent() {
+  const [request, setRequest] = useState<TaskConsentRequest | null>(null);
+  const [typed, setTyped] = useState("");
+
+  useEffect(() => {
+    void chrome.storage.session
+      .get(`task-consent:${consentId}`)
+      .then((v: Record<string, unknown>) => {
+        setRequest((v[`task-consent:${consentId}`] as TaskConsentRequest) ?? null);
+      });
+  }, []);
+
+  if (!request) {
+    return <div style={{ padding: 20, fontSize: 13 }}>Loading request…</div>;
+  }
+
+  const destructive = request.sideEffects === "destructive";
+  const prefix = request.payloadDigest.slice(0, DIGEST_PREFIX_LEN);
+
+  // What the VTA said this will do. `effects` when it dry-ran the handler; the
+  // specification's static text when it could not; and — when it has neither —
+  // an explicit statement that nobody can say.
+  //
+  // "No effects" and "effects unknown" would render identically if we let them,
+  // and the difference is the entire decision: one means the task is inert, the
+  // other means this agent cannot tell you what it does. Presenting the second
+  // as the first would show the most dangerous case as the most reassuring one.
+  const effectLines =
+    request.effects.length > 0
+      ? request.effects.map((e) => e.summary)
+      : (request.consequences ?? []);
+  const determined = effectLines.length > 0;
+
+  // For a destructive task the user must MATCH the digest, not tap "approve".
+  // Checks that assume an honest device catch a hostile page; only a comparison
+  // the human performs across two independent screens catches a hostile device,
+  // because only that moves the check somewhere the device cannot reach. A tap
+  // is a reflex; a comparison is an act of attention.
+  const mayApprove = !destructive || typed.trim().toLowerCase() === prefix.toLowerCase();
+
+  return (
+    <div style={{ padding: 20, display: "grid", gap: 14, fontSize: 13 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 0.6,
+            textTransform: "uppercase",
+            padding: "3px 7px",
+            borderRadius: 4,
+            color: "#fff",
+            background: destructive
+              ? "#b3261e"
+              : request.sideEffects === "mutating"
+                ? "#8a5a00"
+                : "#3a6b35",
+          }}
+        >
+          {request.sideEffects}
+        </span>
+        <strong style={{ fontSize: 14 }}>Approve this action?</strong>
+      </div>
+
+      <div style={{ color: "#555", lineHeight: 1.45 }}>
+        Your agent is asking permission to run{" "}
+        <code style={{ fontSize: 12 }}>{taskLabel(request.taskType)}</code>
+        {request.subject ? (
+          <>
+            {" "}
+            on <code style={{ fontSize: 12 }}>{request.subject}</code>
+          </>
+        ) : null}
+        .
+      </div>
+
+      {/* What will actually happen. Authored by the VTA, rendered verbatim. */}
+      <div
+        style={{
+          border: `1px solid ${determined ? "#ddd" : "#b3261e"}`,
+          borderRadius: 6,
+          padding: 12,
+          background: determined ? "#fafafa" : "#fff4f3",
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 12 }}>
+          {determined ? "This will:" : "⚠ Consequences unknown"}
+        </div>
+        {determined ? (
+          <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 6 }}>
+            {effectLines.map((line, i) => (
+              <li key={i} style={{ lineHeight: 1.4 }}>
+                {line}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div style={{ lineHeight: 1.45 }}>
+            Your agent could not determine what this task will do. Approving it means
+            approving an effect nobody has described to you.
+          </div>
+        )}
+      </div>
+
+      {request.origin ? (
+        <div style={{ fontSize: 12, color: "#555" }}>
+          Requested by <strong>{originHostname(request.origin) ?? request.origin}</strong>
+        </div>
+      ) : null}
+
+      {request.statePin ? (
+        <div style={{ fontSize: 11, color: "#777" }}>
+          Computed against version <code>{request.statePin.version}</code>. If it changes
+          before you approve, your agent will ask again.
+        </div>
+      ) : null}
+
+      {/* The digest. Shown for every task; matched for destructive ones. */}
+      <div style={{ fontSize: 11, color: "#777" }}>
+        Request code{" "}
+        <code style={{ fontSize: 13, letterSpacing: 1.5, color: "#222" }}>{prefix}</code>
+      </div>
+
+      {destructive ? (
+        <div style={{ display: "grid", gap: 6 }}>
+          <label style={{ fontSize: 12, fontWeight: 600 }}>
+            This cannot be undone. Type the request code shown where you started this
+            action:
+          </label>
+          <input
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={"·".repeat(DIGEST_PREFIX_LEN)}
+            style={{
+              padding: "8px 10px",
+              fontSize: 15,
+              letterSpacing: 2,
+              fontFamily: "monospace",
+              border: "1px solid #ccc",
+              borderRadius: 5,
+            }}
+          />
+        </div>
+      ) : null}
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+        {/* Deny is focused: the safe answer should be the one you get by
+            reflex, and closing this window is a denial too. */}
+        <button
+          autoFocus
+          onClick={() => decide(false)}
+          style={{ padding: "8px 16px", fontSize: 13 }}
+        >
+          Deny
+        </button>
+        <button
+          disabled={!mayApprove}
+          onClick={() => decide(true)}
+          style={{
+            padding: "8px 16px",
+            fontSize: 13,
+            fontWeight: 600,
+            opacity: mayApprove ? 1 : 0.45,
+            cursor: mayApprove ? "pointer" : "not-allowed",
+          }}
+        >
+          Approve
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const root = document.getElementById("root");
 if (root) {
   createRoot(root).render(
-    <StrictMode>
-      <Confirm />
-    </StrictMode>,
+    <StrictMode>{isTaskConsent ? <TaskConsent /> : <Confirm />}</StrictMode>,
   );
 }
