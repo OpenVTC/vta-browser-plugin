@@ -43,6 +43,21 @@ function injectProvider(): void {
 }
 injectProvider();
 
+// Page-facing provider method → runtime message type. Exhaustive by design: see
+// the note at the call site about why an unknown method must not fall through.
+const RUNTIME_TYPE_BY_METHOD: Record<string, string | undefined> = {
+  login: RUNTIME_LOGIN,
+  loginDidcomm: RUNTIME_LOGIN_DIDCOMM,
+  stepUpVta: RUNTIME_STEP_UP_VTA,
+  apiGet: RUNTIME_API_GET,
+  apiPost: RUNTIME_API_POST,
+  mediatorStatus: RUNTIME_MEDIATOR_STATUS,
+  walletDefaults: RUNTIME_WALLET_DEFAULTS,
+  signTrustTask: RUNTIME_SIGN_TRUST_TASK,
+  proxyLogin: RUNTIME_VAULT_PROXY_LOGIN_PAGE,
+  vaultList: RUNTIME_VAULT_LIST_PAGE,
+};
+
 // ─── 2. Relay provider → background → provider. ───
 window.addEventListener("message", (event: MessageEvent) => {
   if (event.source !== window) return;
@@ -52,29 +67,24 @@ window.addEventListener("message", (event: MessageEvent) => {
   void (async () => {
     let response: ContentResponse;
     try {
-      const runtimeType =
-        req.method === "loginDidcomm"
-          ? RUNTIME_LOGIN_DIDCOMM
-          : req.method === "stepUpVta"
-            ? RUNTIME_STEP_UP_VTA
-            : req.method === "apiGet"
-              ? RUNTIME_API_GET
-              : req.method === "apiPost"
-                ? RUNTIME_API_POST
-                : req.method === "mediatorStatus"
-                  ? RUNTIME_MEDIATOR_STATUS
-                  : req.method === "walletDefaults"
-                    ? RUNTIME_WALLET_DEFAULTS
-                    : req.method === "signTrustTask"
-                      ? RUNTIME_SIGN_TRUST_TASK
-                      : req.method === "proxyLogin"
-                        ? RUNTIME_VAULT_PROXY_LOGIN_PAGE
-                        : req.method === "vaultList"
-                          ? RUNTIME_VAULT_LIST_PAGE
-                          : RUNTIME_LOGIN;
+      // An explicit table, and an *unknown method is an error*.
+      //
+      // This used to be a ternary chain whose final arm was `RUNTIME_LOGIN`, so
+      // any method name it did not recognise — a typo, a future method this
+      // build predates, anything a page cared to invent — silently became a
+      // login request. Failing closed on an unrecognised name costs nothing and
+      // removes a whole class of surprise.
+      const runtimeType = RUNTIME_TYPE_BY_METHOD[req.method];
+      if (!runtimeType) {
+        throw new Error(`unsupported method: ${String(req.method)}`);
+      }
       const runtimeResponse = (await chrome.runtime.sendMessage({
         type: runtimeType,
         params: req.params,
+        // The background overwrites this with the browser-attested
+        // `sender.origin`. It is sent only as a diagnostic; nothing downstream
+        // trusts it, and nothing here can make it trustworthy — a compromised
+        // renderer is precisely what a content script is meant to survive.
         origin: window.location.origin,
       })) as RuntimeLoginResponse;
 
