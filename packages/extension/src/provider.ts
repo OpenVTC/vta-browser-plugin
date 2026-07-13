@@ -4,6 +4,7 @@
 // `window.postMessage` using the bridge protocol.
 
 import type {
+  RequestTaskParams,
   ApiGetParams,
   ApiGetResult,
   ApiPostParams,
@@ -29,6 +30,21 @@ const INPAGE_SOURCE = "vta-wallet/inpage";
 const CONTENT_SOURCE = "vta-wallet/content";
 
 interface VtaWallet {
+  /**
+   * Propose a Trust Task for the user's agent to execute.
+   *
+   * The generic relay, and the successor to the per-action methods below. The
+   * page supplies a type URI and a payload — **and nothing else**. The device
+   * mints the envelope inside its own trust boundary and stamps the origin the
+   * browser attested; the wallet never counter-signs a document the page wrote.
+   *
+   * Resolves with whatever the agent replied, **including a refusal**. A task the
+   * agent's policy gates on human approval comes back as a `requireConsent`
+   * rejection carrying the digest this page should display, so the user can match
+   * it against the code on their approving device. That is a result to render,
+   * not an error to swallow.
+   */
+  requestTask(params: RequestTaskParams): Promise<Record<string, unknown>>;
   /** Request a REST SIOPv2 login. Resolves with the RP-issued session
    *  tokens, or rejects if the user denies or the login fails. */
   login(params: LoginParams): Promise<LoginResult>;
@@ -127,7 +143,8 @@ function call<T>(
     | "walletDefaults"
     | "signTrustTask"
     | "proxyLogin"
-    | "vaultList",
+    | "vaultList"
+    | "requestTask",
   params:
     | LoginParams
     | DidcommLoginParams
@@ -137,6 +154,7 @@ function call<T>(
     | SignTrustTaskParams
     | ProxyLoginParams
     | VaultListParams
+    | RequestTaskParams
     | Record<string, never>,
 ): Promise<T> {
   const id = crypto.randomUUID();
@@ -160,5 +178,6 @@ if (!window.vtaWallet) {
     signTrustTask: (params) => call<SignTrustTaskResult>("signTrustTask", params),
     proxyLogin: (params) => call<VaultProxyLoginResultView>("proxyLogin", params),
     vaultList: (params) => call<VaultListResultView>("vaultList", params),
+    requestTask: (params) => call<Record<string, unknown>>("requestTask", params),
   };
 }
