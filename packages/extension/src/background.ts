@@ -17,7 +17,11 @@ import {
 } from "./active-vta.js";
 import { checkOriginPin, pinOrigin } from "./origin-pin.js";
 import { isOriginTrusted, trustOrigin } from "./trusted-sites.js";
-import { attestedOrigin, registerPushChannel } from "@openvtc/pnm-core";
+import {
+  attestedOrigin,
+  registerPushChannel,
+  type TaskConsentRequestPayload,
+} from "@openvtc/pnm-core";
 import { subscribeToPush } from "./push.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import {
@@ -76,6 +80,7 @@ import {
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
   RUNTIME_SIGN_TRUST_TASK,
+  RUNTIME_TASK_CONSENT,
   RUNTIME_STEP_UP_VTA,
   RUNTIME_VERIFY_RP_DID,
   RUNTIME_WALLET_DEFAULTS,
@@ -497,6 +502,64 @@ function requestConsent(args: {
       };
       chrome.windows.onRemoved.addListener(onClosed);
     });
+  });
+}
+
+// ── Task-execution consent ───────────────────────────────────────────────────
+
+/** Session-scoped store for the request the consent sheet is about to render.
+ *  Too large for a query string (the effects list is the whole point), and it
+ *  must not outlive the browser session. */
+const TASK_CONSENT_PREFIX = "task-consent:";
+
+/**
+ * Raise the task-consent sheet for a request the offscreen has already
+ * **verified** came from this device's own VTA.
+ *
+ * Deliberately NOT routed through `gatedConsent`. That function short-circuits
+ * on origin trust, and origin trust is the wrong question here twice over: the
+ * asker is the user's VTA rather than a site, and the approval authorizes one
+ * specific payload rather than a standing relationship. A "remember this site"
+ * tick made against a `vaultList()` prompt must never silently approve a DID
+ * deactivation — **origin trust is not capability trust.**
+ */
+async function requestTaskConsent(
+  request: TaskConsentRequestPayload,
+): Promise<{ approved: boolean }> {
+  const consentId = crypto.randomUUID();
+  await chrome.storage.session.set({ [`${TASK_CONSENT_PREFIX}${consentId}`]: request });
+
+  const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=task`;
+  return new Promise<{ approved: boolean }>((resolve) => {
+    let settled = false;
+    const settle = (approved: boolean) => {
+      if (settled) return;
+      settled = true;
+      pendingConsents.delete(consentId);
+      void chrome.storage.session.remove(`${TASK_CONSENT_PREFIX}${consentId}`);
+      resolve({ approved });
+    };
+    pendingConsents.set(consentId, (approved: boolean) => settle(approved));
+
+    // A destructive task asks the user to match a digest, which needs room.
+    const destructive = request.sideEffects === "destructive";
+    chrome.windows.create(
+      { url, type: "popup", width: 480, height: destructive ? 680 : 620 },
+      (win) => {
+        const winId = win?.id;
+        if (winId === undefined) return;
+        // Closing the window without deciding is a denial. Never assent: silence
+        // is not agreement, and a task-consent prompt that timed out into an
+        // approval would be the single worst bug in this system.
+        const onClosed = (closedId: number) => {
+          if (closedId === winId) {
+            chrome.windows.onRemoved.removeListener(onClosed);
+            settle(false);
+          }
+        };
+        chrome.windows.onRemoved.addListener(onClosed);
+      },
+    );
   });
 }
 
@@ -1450,6 +1513,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_TASK_CONSENT) {
+    requestTaskConsent((message as { request: TaskConsentRequestPayload }).request)
+      .then(sendResponse)
+      .catch(() => sendResponse({ approved: false }));
     return true; // async sendResponse
   }
 

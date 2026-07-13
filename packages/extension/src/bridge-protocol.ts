@@ -240,6 +240,12 @@ export const RUNTIME_SIGN_TRUST_TASK = "vta-wallet/sign-trust-task" as const;
 export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
 /** offscreen → background: an inbound RP confirm request needs user consent. */
 export const RUNTIME_INBOUND_CONSENT = "vta-wallet/inbound-consent" as const;
+/** offscreen → background: an inbound, VTA-signed `task-consent/request` needs a
+ *  human. Distinct from {@link RUNTIME_INBOUND_CONSENT} because the surface is
+ *  different in kind: it renders executor-authored effects, it is never
+ *  short-circuited by origin trust (the VTA is asking, not a site), and its
+ *  approval is single-use so there is nothing to remember. */
+export const RUNTIME_TASK_CONSENT = "vta-wallet/task-consent" as const;
 /** confirm popup → background → offscreen: resolve + verify an RP DID so the
  *  consent prompt can render a verification badge. Reply via sendResponse is a
  *  [`VerifyDidResult`]. */
