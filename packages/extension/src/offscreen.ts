@@ -24,6 +24,7 @@ import {
   buildStepUpApproval,
   resolveKeyAgreement,
   parseTaskConsentRequest,
+  requestTask,
   buildTaskConsentDecision,
   type ParsedTaskConsentRequest,
   resolveVtaServices,
@@ -83,6 +84,7 @@ import {
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_TARGET,
   OFFSCREEN_VAULT_DELETE,
+  OFFSCREEN_REQUEST_TASK,
   OFFSCREEN_VAULT_LIST,
   OFFSCREEN_VAULT_PROXY_LOGIN,
   OFFSCREEN_VAULT_RELEASE,
@@ -101,6 +103,7 @@ import {
   type OffscreenSignTrustTaskRequest,
   type OffscreenStepUpVtaRequest,
   type OffscreenVaultDeleteRequest,
+  type OffscreenRequestTaskRequest,
   type OffscreenVaultListRequest,
   type OffscreenVaultProxyLoginRequest,
   type OffscreenVaultReleaseRequest,
@@ -360,6 +363,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       );
     return true; // async sendResponse
   }
+  if (msg.type === OFFSCREEN_REQUEST_TASK) {
+    doRequestTask(message as OffscreenRequestTaskRequest)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
   if (msg.type === OFFSCREEN_VAULT_LIST) {
     doVaultList(message as OffscreenVaultListRequest)
       .then((result) => sendResponse({ ok: true, result }))
@@ -492,6 +503,30 @@ async function getVtaSession(
 // Vault — list. Runs vault/list/0.2 over the VTA's preferred transport
 // (DIDComm > REST). The holder's X25519 is the authcrypt sender / envelope
 // issuer.
+/**
+ * Relay a page-proposed task to the VTA.
+ *
+ * The page's `type` and `payload` go in; the envelope is minted here — issuer,
+ * recipient, id, timestamp — and the browser-attested origin is stamped inside
+ * the payload, so it is covered by the digest the approver will be shown.
+ *
+ * The VTA's reply is returned **whatever it says**. A `requireConsent` rejection
+ * is a result, not a failure: it carries the VTA-signed consent requests an
+ * approver must render and the digest the page must display for the cross-device
+ * match. Collapsing it into a thrown error would throw away the informed-consent
+ * flow at the last hop, which is the one place nobody would look for it.
+ */
+async function doRequestTask(req: OffscreenRequestTaskRequest) {
+  const { session, holder } = await getVtaSession(req.vtaDid, req.restBaseUrl);
+  return requestTask<Record<string, unknown>>(session, {
+    type: req.params.type,
+    payload: req.params.payload,
+    holderDid: holder.did,
+    vtaDid: req.vtaDid,
+    origin: req.origin,
+  });
+}
+
 async function doVaultList(req: OffscreenVaultListRequest) {
   const { session, holder, service } = await getVtaSession(req.vtaDid, req.restBaseUrl);
   // The bridge protocol intentionally types filter loosely (string secretKind)

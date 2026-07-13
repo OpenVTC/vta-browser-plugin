@@ -79,6 +79,7 @@ import {
   RUNTIME_WALLET_LOCK_STATE,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
+  RUNTIME_REQUEST_TASK,
   RUNTIME_SIGN_TRUST_TASK,
   RUNTIME_TASK_CONSENT,
   RUNTIME_STEP_UP_VTA,
@@ -117,6 +118,9 @@ import {
   type RuntimeOnboardConnectRequest,
   type RuntimeOnboardPrepareRequest,
   type RuntimeOnboardPrepareResponse,
+  OFFSCREEN_REQUEST_TASK,
+  type RuntimeRequestTaskRequest,
+  type RuntimeRequestTaskResponse,
   type RuntimeSignTrustTaskRequest,
   type RuntimeSignTrustTaskResponse,
   type RuntimeStepUpVtaRequest,
@@ -885,6 +889,59 @@ async function handleDeriveSigningKeyId(
   })) as RuntimeDeriveSigningKeyIdResponse;
 }
 
+/**
+ * The generic page → VTA task relay.
+ *
+ * The page proposes a type URI and a payload. That is all it proposes: the
+ * envelope is minted in the offscreen, inside the device's trust boundary, and
+ * stamped with the browser-attested origin. The wallet never counter-signs a
+ * document the page wrote.
+ *
+ * ## Why this prompts every time, and offers no "remember"
+ *
+ * `gatedConsent` would be the obvious choice, and it is the wrong one. It
+ * short-circuits on origin trust — and origin trust is not capability trust.
+ *
+ * Under a per-method surface, a "remember this site" tick meant "this site may
+ * call `vaultList()` and `proxyLogin()`", because those were the only things it
+ * could call. Under a *generic* relay it would mean "this site may ask my agent
+ * to do anything at all", and a tick made once on a `vaultList()` prompt would
+ * silently authorize a DID deactivation a year later. The set of things the
+ * grant covers grew, without the user ever being asked about the new members.
+ *
+ * The VTA's policy engine is the real authority here, and when its `requireConsent`
+ * fires, the approver gets a properly informed prompt showing what the task will
+ * actually do. But `config.policy.enforcement` is **opt-in and defaults to off** —
+ * so on a default deployment this prompt is the only thing standing between an
+ * arbitrary page and an arbitrary task. It does not get to be skippable.
+ *
+ * The right long-term answer is scoped grants — `(origin, subject, typeGlob,
+ * expiry)`, rememberable only for tasks the VTA classifies `sideEffects: none`.
+ * Until those exist, ask.
+ */
+async function handleRequestTask(
+  req: RuntimeRequestTaskRequest,
+): Promise<RuntimeRequestTaskResponse> {
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
+
+  const approved = await requestConsent({
+    origin: req.origin,
+    action: `Ask your agent to run ${req.params.type}`,
+  });
+  if (!approved.approved) return { ok: false, error: "user denied the request" };
+
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_REQUEST_TASK,
+    vtaDid: active.conn.vtaDid,
+    restBaseUrl: active.conn.restBaseUrl,
+    origin: req.origin,
+    params: req.params,
+  })) as RuntimeRequestTaskResponse;
+}
+
 // Sign a Trust-Task envelope with the wallet's holder did:peer #key-2.
 // Forward to the offscreen which loads the holder identity + calls the core
 // `signTrustTask` helper.
@@ -1520,6 +1577,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     requestTaskConsent((message as { request: TaskConsentRequestPayload }).request)
       .then(sendResponse)
       .catch(() => sendResponse({ approved: false }));
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_REQUEST_TASK) {
+    handleRequestTask(message as RuntimeRequestTaskRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
     return true; // async sendResponse
   }
 

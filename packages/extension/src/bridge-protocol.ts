@@ -30,7 +30,8 @@ export type BridgeMethod =
   | "walletDefaults"
   | "signTrustTask"
   | "proxyLogin"
-  | "vaultList";
+  | "vaultList"
+  | "requestTask";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
 export interface LoginParams {
@@ -237,6 +238,12 @@ export const RUNTIME_API_POST = "vta-wallet/api-post" as const;
 export const RUNTIME_MEDIATOR_STATUS = "vta-wallet/mediator-status" as const;
 export const RUNTIME_WALLET_DEFAULTS = "vta-wallet/wallet-defaults" as const;
 export const RUNTIME_SIGN_TRUST_TASK = "vta-wallet/sign-trust-task" as const;
+/** page → background: propose a Trust Task for the VTA to execute.
+ *
+ *  The generic relay. Unlike {@link RUNTIME_SIGN_TRUST_TASK}, the page supplies
+ *  only a type URI and a payload — the device mints the envelope and stamps the
+ *  attested origin, so the wallet never attests to a document the page wrote. */
+export const RUNTIME_REQUEST_TASK = "vta-wallet/request-task" as const;
 export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
 /** offscreen → background: an inbound RP confirm request needs user consent. */
 export const RUNTIME_INBOUND_CONSENT = "vta-wallet/inbound-consent" as const;
@@ -1190,6 +1197,7 @@ export const OFFSCREEN_VERIFY_DID = "offscreen/verify-did" as const;
  *  vault/list/0.1 envelope. Reply is a `RuntimeVaultListResponse`'s payload
  *  via sendResponse. */
 export const OFFSCREEN_VAULT_LIST = "offscreen/vault-list" as const;
+export const OFFSCREEN_REQUEST_TASK = "offscreen/request-task" as const;
 
 export interface OffscreenVaultListRequest {
   target: typeof OFFSCREEN_TARGET;
@@ -1340,4 +1348,41 @@ export interface OffscreenStepUpVtaRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_STEP_UP_VTA;
   params: StepUpVtaParams;
+}
+
+
+/** What a page may propose. Two members, and no more: the RP proposes; it never
+ *  authorizes, and it never supplies anything that carries authority. */
+export interface RequestTaskParams {
+  /** Type URI of the task. */
+  type: string;
+  /** Proposed payload. The VTA validates it against the task's closed schema. */
+  payload: Record<string, unknown>;
+}
+
+/** Whatever the VTA replied — including a rejection.
+ *
+ *  A `requireConsent` reject is not an error: it carries the VTA-signed consent
+ *  requests an approver must see, and the digest the page must display for the
+ *  cross-device match. Surfacing it as a thrown error would discard the informed-
+ *  consent flow at the last hop, so it is returned as a result. */
+export type RequestTaskResult = Record<string, unknown>;
+
+export interface RuntimeRequestTaskRequest {
+  type: typeof RUNTIME_REQUEST_TASK;
+  params: RequestTaskParams;
+  origin: string;
+}
+
+export type RuntimeRequestTaskResponse =
+  | { ok: true; result: RequestTaskResult }
+  | { ok: false; error: string };
+
+export interface OffscreenRequestTaskRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_REQUEST_TASK;
+  vtaDid: string;
+  restBaseUrl: string;
+  origin: string;
+  params: RequestTaskParams;
 }
