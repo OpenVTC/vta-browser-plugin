@@ -17,7 +17,7 @@ import {
 } from "./active-vta.js";
 import { checkOriginPin, pinOrigin } from "./origin-pin.js";
 import { isOriginTrusted, trustOrigin } from "./trusted-sites.js";
-import { registerPushChannel } from "@openvtc/pnm-core";
+import { attestedOrigin, registerPushChannel } from "@openvtc/pnm-core";
 import { subscribeToPush } from "./push.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import {
@@ -824,12 +824,35 @@ async function handleDeriveSigningKeyId(
 
 // Sign a Trust-Task envelope with the wallet's holder did:peer #key-2.
 // Forward to the offscreen which loads the holder identity + calls the core
-// `signTrustTask` helper. No additional consent prompt — the user already
-// authorized this site at onboarding/login; per-signature prompts would be
-// crippling for normal RP usage (every ACL operation, etc).
+// `signTrustTask` helper.
+//
+// This is the most powerful method on the page-facing surface: it signs an
+// *arbitrary* envelope with the holder key. It used to prompt for nothing and
+// ignore the origin it was handed, on the reasoning that per-signature prompts
+// would be crippling for normal RP usage (every ACL operation, etc.).
+//
+// The ergonomic point stands, but "don't prompt a site the user has connected"
+// is not the same as "don't prompt anyone" — and as written, *any* page could
+// ask for a signature over anything, which under a generic task relay is a
+// straight bypass of the VTA's policy engine: why go through a gate that can
+// require consent when you can ask the wallet to sign whatever you like?
+//
+// So: gate on the origin, which is now the browser-attested one. A site the user
+// has already connected short-circuits inside `gatedConsent` and sees no prompt,
+// preserving the ergonomics. Any other origin is asked, and is told which task
+// type it is being asked to sign.
 async function handleSignTrustTask(
   req: RuntimeSignTrustTaskRequest,
 ): Promise<RuntimeSignTrustTaskResponse> {
+  const typeUri = (req.params.envelope as { type?: unknown } | undefined)?.type;
+  const label = typeof typeUri === "string" ? typeUri : "an unidentified Trust Task";
+  const approved = await gatedConsent({
+    origin: req.origin,
+    ...(req.params.asDid ? { holderDid: req.params.asDid } : {}),
+    action: `Sign ${label}`,
+  });
+  if (!approved) return { ok: false, error: "user denied signing" };
+
   await ensureOffscreenDocument();
   // Always include the active connection's restBaseUrl — the offscreen
   // only uses it on the `asDid` branch (which needs to call
@@ -1224,6 +1247,30 @@ async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetR
   return { ok: true, result: { status: res.status, body } };
 }
 
+
+// ── Origin provenance helpers ────────────────────────────────────────────────
+
+/**
+ * Message types a *web page* can originate, via the content-script relay.
+ *
+ * For these — and only these — the origin is a security decision, so it must be
+ * the browser's, not the body's. Extension-internal traffic (popup, options,
+ * confirm window, offscreen) carries no page origin and is not listed.
+ */
+const PAGE_FACING_TYPES: ReadonlySet<string> = new Set([
+  RUNTIME_LOGIN,
+  RUNTIME_LOGIN_DIDCOMM,
+  RUNTIME_STEP_UP_VTA,
+  RUNTIME_API_GET,
+  RUNTIME_API_POST,
+  RUNTIME_MEDIATOR_STATUS,
+  RUNTIME_WALLET_DEFAULTS,
+  RUNTIME_SIGN_TRUST_TASK,
+  RUNTIME_VAULT_PROXY_LOGIN_PAGE,
+  RUNTIME_VAULT_LIST_PAGE,
+]);
+
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Defence-in-depth: only accept messages from this extension's
   // own scripts (content scripts, offscreen document, popup,
@@ -1247,6 +1294,38 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Messages addressed to the offscreen document are not ours — let its
   // listener claim the channel and respond.
   if ((message as { target?: string })?.target === OFFSCREEN_TARGET) return false;
+
+  // ── Origin provenance ──────────────────────────────────────────────────
+  //
+  // Every origin decision below — `isOriginTrusted`, `trustOrigin`,
+  // `checkOriginPin`, `pinOrigin`, and what the consent prompt displays — used
+  // to read `req.origin`, a field the *content script placed in the message
+  // body*. The `sender.id` check above proves the message came from this
+  // extension; it says nothing about which page it came from. Every content
+  // script (the manifest injects into `<all_urls>`), the popup, the options
+  // page, the confirm window and the offscreen document all pass it.
+  //
+  // So the body's `origin` was a claim, and `isOriginTrusted` honoured claims:
+  // asserting `origin: "https://bank.example"` was enough to be handed a silent
+  // bypass for a site the user had previously ticked "remember" on.
+  //
+  // `sender.origin` is supplied by the browser and cannot be forged by page
+  // content. Take it, and overwrite whatever the body claimed — a page-facing
+  // message with no tab behind it is an extension context impersonating a page
+  // relay, and there is no legitimate caller for that.
+  const msgType = (message as { type?: string })?.type;
+  if (msgType && PAGE_FACING_TYPES.has(msgType)) {
+    const attested = attestedOrigin(sender);
+    if (!attested) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[background] rejecting page-facing ${msgType} with no browser-attested origin`,
+      );
+      sendResponse({ ok: false, error: "no attested origin" });
+      return false;
+    }
+    (message as { origin?: string }).origin = attested;
+  }
 
   if ((message as { type?: string })?.type === RUNTIME_API_GET) {
     handleApiGet(message as RuntimeApiGetRequest)
