@@ -23,6 +23,8 @@ const consentId = params.get("cid") ?? "";
 // `kind=task` selects the task-execution consent surface, which renders
 // VTA-authored effects rather than an RP-authored reason.
 const isTaskConsent = params.get("kind") === "task";
+// A per-action prompt has nothing to remember; the caller says so explicitly.
+const noRemember = params.get("noRemember") === "1";
 const origin = params.get("origin") ?? "";
 // May be absent for page-initiated actions (e.g. `vaultList()`) that have
 // no specific relying party — the RP card + resolution are then omitted.
@@ -404,7 +406,7 @@ function Confirm() {
           origin so its future login / vaultList / proxyLogin calls skip this
           prompt until revoked (options → Connected sites). Only meaningful
           when we know the origin. */}
-      {originHost && (
+      {originHost && !noRemember && (
         <label
           style={{
             display: "flex",

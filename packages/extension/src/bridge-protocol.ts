@@ -244,6 +244,7 @@ export const RUNTIME_SIGN_TRUST_TASK = "vta-wallet/sign-trust-task" as const;
  *  only a type URI and a payload — the device mints the envelope and stamps the
  *  attested origin, so the wallet never attests to a document the page wrote. */
 export const RUNTIME_REQUEST_TASK = "vta-wallet/request-task" as const;
+
 export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
 /** offscreen → background: an inbound RP confirm request needs user consent. */
 export const RUNTIME_INBOUND_CONSENT = "vta-wallet/inbound-consent" as const;
@@ -1386,3 +1387,34 @@ export interface OffscreenRequestTaskRequest {
   origin: string;
   params: RequestTaskParams;
 }
+
+/**
+ * Every runtime message type a *web page* can originate through the content
+ * script — the exact set whose origin must be the browser's, not the message
+ * body's (see `attestedOrigin`).
+ *
+ * This is the source of truth. `background.ts` builds its `PAGE_FACING_TYPES`
+ * from this array, so a new page-facing method added here is origin-checked
+ * automatically. The failure this prevents is the one that shipped: `requestTask`
+ * was added and *not* added to the origin set, so the one method whose origin
+ * ends up inside a signed consent digest was reading it from the page.
+ *
+ * The content script's own dispatch table (`content.ts`) cannot import this — it
+ * bundles as a classic script — so it duplicates the method list by hand. Keep
+ * the two in step; the `page_facing_types_cover_the_content_dispatch_table`
+ * assertion in `background.ts` fails if a type here has no home.
+ */
+export const PAGE_FACING_RUNTIME_TYPES = [
+  RUNTIME_LOGIN,
+  RUNTIME_LOGIN_DIDCOMM,
+  RUNTIME_STEP_UP_VTA,
+  RUNTIME_API_GET,
+  RUNTIME_API_POST,
+  RUNTIME_MEDIATOR_STATUS,
+  RUNTIME_WALLET_DEFAULTS,
+  RUNTIME_SIGN_TRUST_TASK,
+  RUNTIME_VAULT_PROXY_LOGIN_PAGE,
+  RUNTIME_VAULT_LIST_PAGE,
+  RUNTIME_REQUEST_TASK,
+] as const;
+

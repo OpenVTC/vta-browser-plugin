@@ -79,6 +79,7 @@ import {
   RUNTIME_WALLET_LOCK_STATE,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
+  PAGE_FACING_RUNTIME_TYPES,
   RUNTIME_REQUEST_TASK,
   RUNTIME_SIGN_TRUST_TASK,
   RUNTIME_TASK_CONSENT,
@@ -456,6 +457,12 @@ const pendingConsents = new Map<string, (approved: boolean, remember: boolean) =
 
 function requestConsent(args: {
   origin?: string;
+  /** Suppress the "remember this site" checkbox.
+   *
+   *  Set it whenever a grant would be meaningless or dangerous — a per-action
+   *  authorization (`requestTask`, `signTrustTask`) has nothing to remember, and
+   *  a checkbox that silently discards its own tick is a checkbox that lies. */
+  noRemember?: boolean;
   /** Optional — login / step-up always set it, but page-initiated actions
    *  such as `vaultList()` may have no specific RP to show. When absent the
    *  popup omits the relying-party card and shows only the origin + action. */
@@ -480,6 +487,7 @@ function requestConsent(args: {
     (args.origin ? `&origin=${encodeURIComponent(args.origin)}` : "") +
     (args.holderDid ? `&holder=${encodeURIComponent(args.holderDid)}` : "") +
     (args.action ? `&action=${encodeURIComponent(args.action)}` : "") +
+    (args.noRemember ? `&noRemember=1` : "") +
     (args.changedFromRpDid
       ? `&changedFrom=${encodeURIComponent(args.changedFromRpDid)}`
       : "");
@@ -928,6 +936,7 @@ async function handleRequestTask(
   const approved = await requestConsent({
     origin: req.origin,
     action: `Ask your agent to run ${req.params.type}`,
+    noRemember: true,
   });
   if (!approved.approved) return { ok: false, error: "user denied the request" };
 
@@ -966,12 +975,24 @@ async function handleSignTrustTask(
 ): Promise<RuntimeSignTrustTaskResponse> {
   const typeUri = (req.params.envelope as { type?: unknown } | undefined)?.type;
   const label = typeof typeUri === "string" ? typeUri : "an unidentified Trust Task";
-  const approved = await gatedConsent({
+  // `requestConsent`, NOT `gatedConsent`.
+  //
+  // `gatedConsent` short-circuits for a remembered origin and prompts for
+  // nothing — which is fine for a login, whose "remember this site" grant means
+  // "let this site log me in". It is not fine here. This method signs an
+  // *arbitrary* envelope with the holder key, so a remember-grant that silenced
+  // it would mean "let this site sign anything, forever" — a tick made once on a
+  // login prompt authorizing a DID deactivation a year later.
+  //
+  // Origin trust is not capability trust. There is no envelope worth signing
+  // unprompted, so this always asks, and offers no "remember".
+  const approved = await requestConsent({
     origin: req.origin,
     ...(req.params.asDid ? { holderDid: req.params.asDid } : {}),
     action: `Sign ${label}`,
+    noRemember: true,
   });
-  if (!approved) return { ok: false, error: "user denied signing" };
+  if (!approved.approved) return { ok: false, error: "user denied signing" };
 
   await ensureOffscreenDocument();
   // Always include the active connection's restBaseUrl — the offscreen
@@ -1377,18 +1398,7 @@ async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetR
  * the browser's, not the body's. Extension-internal traffic (popup, options,
  * confirm window, offscreen) carries no page origin and is not listed.
  */
-const PAGE_FACING_TYPES: ReadonlySet<string> = new Set([
-  RUNTIME_LOGIN,
-  RUNTIME_LOGIN_DIDCOMM,
-  RUNTIME_STEP_UP_VTA,
-  RUNTIME_API_GET,
-  RUNTIME_API_POST,
-  RUNTIME_MEDIATOR_STATUS,
-  RUNTIME_WALLET_DEFAULTS,
-  RUNTIME_SIGN_TRUST_TASK,
-  RUNTIME_VAULT_PROXY_LOGIN_PAGE,
-  RUNTIME_VAULT_LIST_PAGE,
-]);
+const PAGE_FACING_TYPES: ReadonlySet<string> = new Set(PAGE_FACING_RUNTIME_TYPES);
 
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
