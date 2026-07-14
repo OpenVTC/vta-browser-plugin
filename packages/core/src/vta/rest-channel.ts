@@ -15,6 +15,7 @@ import type { SendOpts, TrustTaskChannel } from "./channel.js";
 import { errorFromResponse, VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
 import { parseTrustTaskReply } from "./trust-task.js";
+import { isTrustTaskErrorType } from "./protocol.js";
 import { getVtaBearer, makeReauth, type VtaAuthInputs } from "../vault/transport.js";
 
 export interface RestChannelOptions extends VtaAuthInputs {
@@ -76,15 +77,26 @@ export class RestChannel implements TrustTaskChannel {
       res = await post(await makeReauth(this.auth)());
     }
 
-    if (!res.ok) throw await errorFromResponse(res);
-
-    let doc: { type?: string; payload?: unknown };
+    // A rejected Trust Task comes back at a non-2xx status with a
+    // `trust-task-error` document as its body. Handing that to
+    // `errorFromResponse` — which expects a different shape entirely — throws
+    // the document away, and with it the `details` a caller needs: the payload
+    // digest a user must match, the challenge, the signed consent requests an
+    // approver has to render.
+    //
+    // A refusal is not a transport failure. Parse the body first, and only fall
+    // back to the generic HTTP error when it is not a Trust Task at all.
+    let doc: { type?: string; payload?: unknown } | undefined;
     try {
       doc = (await res.json()) as { type?: string; payload?: unknown };
     } catch (err) {
+      if (!res.ok) throw await errorFromResponse(res);
       throw new VtaClientError("e.client.parse", (err as Error).message, {
         status: res.status,
       });
+    }
+    if (!res.ok && !isTrustTaskErrorType(doc?.type)) {
+      throw await errorFromResponse(res);
     }
 
     return parseTrustTaskReply<Res>(doc, {
