@@ -7,6 +7,7 @@
 //      post the response back into the page.
 
 import type {
+  BridgeMethod,
   ContentResponse,
   InpageRequest,
   RuntimeLoginResponse,
@@ -46,7 +47,11 @@ injectProvider();
 
 // Page-facing provider method → runtime message type. Exhaustive by design: see
 // the note at the call site about why an unknown method must not fall through.
-const RUNTIME_TYPE_BY_METHOD: Record<string, string | undefined> = {
+// Typed by `BridgeMethod`, not `string`: adding a page-facing provider method
+// to the union without giving it a runtime type here is a compile error. The
+// method is thereby forced to exist, and — via `PAGE_FACING_RUNTIME_TYPES`,
+// which the same union is checked against — forced to be origin-checked.
+const RUNTIME_TYPE_BY_METHOD: Record<BridgeMethod, string> = {
   login: RUNTIME_LOGIN,
   loginDidcomm: RUNTIME_LOGIN_DIDCOMM,
   stepUpVta: RUNTIME_STEP_UP_VTA,
