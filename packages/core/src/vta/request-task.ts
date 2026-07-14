@@ -32,6 +32,7 @@
 // nothing.
 
 import { buildTrustTask } from "./trust-task.js";
+import { VtaClientError } from "./errors.js";
 import type { VtaSession } from "./session.js";
 
 /**
@@ -66,19 +67,52 @@ export interface RequestTaskArgs {
   origin?: string;
 }
 
+/** The extended error code the executor rejects with when a human must approve. */
+export const CONSENT_REQUIRED_CODE = "auth:consent_required";
+
+/** The VTA needs a human to approve this task before it will run it. */
+export interface ConsentRequired {
+  kind: "consentRequired";
+  /** The salted digest of the exact payload awaiting approval. A prefix of this
+   *  is what the user matches against the code on their approving device. */
+  payloadDigest: string;
+  challenge: string;
+  approverSet: string;
+  minApprovals: number;
+  /** The executor-signed `task-consent/request` documents. Each is addressed to
+   *  one approver and carries the effects that approver must be shown. */
+  consentRequests: unknown[];
+}
+
+export interface TaskAccepted<Res> {
+  kind: "accepted";
+  result: Res;
+}
+
+export type RequestTaskOutcome<Res> = TaskAccepted<Res> | ConsentRequired;
+
 /**
- * Relay one proposed task to the VTA and return whatever it says.
+ * Relay one proposed task to the VTA.
  *
- * Including a rejection. A `requireConsent` reject is not an error to be
- * swallowed — it carries the signed consent requests the approver must see, and
- * the digest the requesting surface must display for the cross-device match. A
- * relay that turned it into `throw new Error("denied")` would discard the
- * entire informed-consent flow at the last hop.
+ * **A `requireConsent` refusal is returned, not thrown.**
+ *
+ * It arrives as a rejected Trust Task, so every layer beneath this one treats it
+ * as an error — and the natural thing to do with an error is to let it
+ * propagate. That would be a catastrophe of the quiet kind: the refusal carries
+ * the executor-signed consent requests an approver must render and the digest
+ * the requesting surface must display for the cross-device match. Let it
+ * propagate and the caller shows the user "Error: consent_required", strands
+ * them at exactly the moment they were supposed to act, and the entire
+ * informed-consent flow is discarded at the last hop — the one place nobody
+ * would think to look for it.
+ *
+ * The union return type is deliberate. A caller cannot reach the result without
+ * saying what it does about a refusal.
  */
 export async function requestTask<Res>(
   session: VtaSession,
   args: RequestTaskArgs,
-): Promise<Res> {
+): Promise<RequestTaskOutcome<Res>> {
   const payload: Record<string, unknown> = { ...args.payload };
 
   if (args.origin) {
@@ -94,5 +128,44 @@ export async function requestTask<Res>(
     recipient: args.vtaDid,
   });
 
-  return session.send<Res>(envelope);
+  try {
+    return { kind: "accepted", result: await session.send<Res>(envelope) };
+  } catch (e) {
+    const consent = consentRequiredFrom(e);
+    if (consent) return consent;
+    throw e;
+  }
+}
+
+/**
+ * Recognise a consent refusal inside a thrown client error.
+ *
+ * The executor rejects with a `trust-task-error` document whose `code` is the
+ * extended `auth:consent_required`; the transport wraps that document as the
+ * error's `details`. Note it is the **code**, not a `reason` member — a detail
+ * worth stating because getting it wrong fails silently: the refusal simply
+ * looks like an ordinary error and the flow dies without a sound.
+ */
+function consentRequiredFrom(e: unknown): ConsentRequired | null {
+  if (!(e instanceof VtaClientError)) return null;
+
+  const errorPayload = e.details as
+    | { code?: unknown; details?: Record<string, unknown> }
+    | undefined;
+  if (errorPayload?.code !== CONSENT_REQUIRED_CODE) return null;
+
+  const d = errorPayload.details ?? {};
+  const payloadDigest = typeof d.payloadDigest === "string" ? d.payloadDigest : "";
+  // Without a digest there is nothing for a human to match, so there is nothing
+  // we can usefully hand back. Let it surface as the error it then is.
+  if (!payloadDigest) return null;
+
+  return {
+    kind: "consentRequired",
+    payloadDigest,
+    challenge: typeof d.challenge === "string" ? d.challenge : "",
+    approverSet: typeof d.approverSet === "string" ? d.approverSet : "",
+    minApprovals: typeof d.minApprovals === "number" ? d.minApprovals : 1,
+    consentRequests: Array.isArray(d.consentRequests) ? d.consentRequests : [],
+  };
 }
