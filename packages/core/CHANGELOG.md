@@ -20,6 +20,17 @@ For history before this file, see `git log` on `packages/core`.
   `https://trusttasks.org/spec/auth/authenticate/0.1` (the authcrypt body is
   unchanged). The SIOP REST login path was already canonical.
 
+- **Consent-gated tasks now open the approval flow instead of dying silently.**
+  `consentRequiredFrom` (behind `requestTask`) matched `auth:consent_required`
+  against the trust-task-error's top-level `code`, but the VTA emits the
+  standard `taskFailed` code and carries the reason in the error *details*. The
+  check never matched, so every consent-gated task surfaced as a generic error
+  and the cross-device approval UI never opened. Now keys on the machine-readable
+  `details.reason`, with a fallback to the presence of the executor-signed
+  `details.consentRequests` so it works regardless of whether the VTA in front
+  of it emits the explicit reason yet. The prior tests encoded the wrong wire
+  shape as correct and were rewritten against the real one.
+
 ## [0.2.0] - 2026-06-08
 
 ### Changed
