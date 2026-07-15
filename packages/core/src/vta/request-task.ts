@@ -67,7 +67,17 @@ export interface RequestTaskArgs {
   origin?: string;
 }
 
-/** The extended error code the executor rejects with when a human must approve. */
+/**
+ * The machine-readable reason the executor gives when a human must approve.
+ *
+ * IMPORTANT: this is the value the VTA carries in the trust-task-error
+ * *details* (`details.reason`), NOT the top-level error `code`. The VTA emits
+ * the standard Trust Task error code `taskFailed` for this rejection (see the
+ * `trust-tasks-rs` `ErrorPayload`/`RejectReason::TaskFailed` mapping); the
+ * consent-specific reason and payload ride in `details`. Matching this token
+ * against the top-level `code` — which an earlier version did — never matches,
+ * and the consent flow dies silently.
+ */
 export const CONSENT_REQUIRED_CODE = "auth:consent_required";
 
 /** The VTA needs a human to approve this task before it will run it. */
@@ -140,11 +150,18 @@ export async function requestTask<Res>(
 /**
  * Recognise a consent refusal inside a thrown client error.
  *
- * The executor rejects with a `trust-task-error` document whose `code` is the
- * extended `auth:consent_required`; the transport wraps that document as the
- * error's `details`. Note it is the **code**, not a `reason` member — a detail
- * worth stating because getting it wrong fails silently: the refusal simply
- * looks like an ordinary error and the flow dies without a sound.
+ * The executor rejects with a `trust-task-error` document whose top-level
+ * `code` is the standard `taskFailed` — the consent-specific signal lives in
+ * the error *details*: a machine-readable `reason` of `auth:consent_required`
+ * plus the salted `payloadDigest`, `challenge`, and the executor-signed
+ * `consentRequests`. We key on `details.reason`, falling back to the presence
+ * of `consentRequests` so this works whether or not the VTA in front of us has
+ * started emitting the explicit `reason` yet.
+ *
+ * Getting this wrong fails silently: the refusal looks like an ordinary error
+ * and the informed-consent flow dies without a sound — which is exactly what
+ * happened while this matched `auth:consent_required` against the top-level
+ * `code` the VTA never sets.
  */
 function consentRequiredFrom(e: unknown): ConsentRequired | null {
   if (!(e instanceof VtaClientError)) return null;
@@ -152,9 +169,13 @@ function consentRequiredFrom(e: unknown): ConsentRequired | null {
   const errorPayload = e.details as
     | { code?: unknown; details?: Record<string, unknown> }
     | undefined;
-  if (errorPayload?.code !== CONSENT_REQUIRED_CODE) return null;
+  const d = errorPayload?.details ?? {};
 
-  const d = errorPayload.details ?? {};
+  const reason = typeof d.reason === "string" ? d.reason : undefined;
+  const isConsentRequired =
+    reason === CONSENT_REQUIRED_CODE || Array.isArray(d.consentRequests);
+  if (!isConsentRequired) return null;
+
   const payloadDigest = typeof d.payloadDigest === "string" ? d.payloadDigest : "";
   // Without a digest there is nothing for a human to match, so there is nothing
   // we can usefully hand back. Let it surface as the error it then is.

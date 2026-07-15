@@ -53,11 +53,16 @@ function rejecting(errorPayload) {
   return new VtaSession([channel]);
 }
 
+// The REAL wire shape the VTA emits for a consent-gated task: the standard
+// Trust Task error code `taskFailed` (see trust-tasks-rs `RejectReason::TaskFailed`
+// -> `ErrorPayload`), with the machine-readable reason and payload in `details`.
+// The reason is NOT the top-level code, and it is NOT only in `message`.
 const CONSENT_REJECT = {
-  code: "auth:consent_required",
-  retryable: true,
-  message: "human approval required",
+  code: "taskFailed",
+  retryable: false,
+  message: "task failed: auth:consent_required",
   details: {
+    reason: "auth:consent_required",
     payloadDigest: "3b0c7f1d9e2a5648c1f30b7ae4d2986153ca0f7b8d41e6295af03c8bd71e4a62",
     challenge: "9c1f4b7a2e6d80f35a4c9b1e7d2f6083",
     approverSet: "operators",
@@ -181,14 +186,46 @@ test("a consent refusal SURVIVES the transport's throw and comes back as a resul
   assert.equal(res.consentRequests.length, 1, "the approver's signed request must survive");
 });
 
-test("the refusal is recognised by its CODE, not by a `reason` member", async () => {
-  // Getting this wrong fails silently: the refusal just looks like an ordinary
-  // error and the flow dies without a sound. An earlier version read `reason`,
-  // which does not exist on the wire.
-  const wrongShape = { ...CONSENT_REJECT, code: "taskFailed", reason: "auth:consent_required" };
-  await assert.rejects(
-    () => requestTask(rejecting(wrongShape), base),
-    "an error that is not a consent refusal must still throw",
+test("consent is recognised by the machine-readable reason in the error details, not the top-level code", async () => {
+  // The regression this replaces. The VTA emits the STANDARD `taskFailed` code
+  // (per the Trust Task error spec) and carries `auth:consent_required` as a
+  // structured `reason` inside `details`. An earlier version matched that token
+  // against the top-level `code`, which the VTA never sets — so every
+  // consent-gated task surfaced as a generic error and the approval UI never
+  // opened. `CONSENT_REJECT` is now that real shape; it must be recognised.
+  const res = await requestTask(rejecting(CONSENT_REJECT), base);
+  assert.equal(res.kind, "consentRequired");
+  assert.equal(res.consentRequests.length, 1);
+});
+
+test("consent is recognised before the VTA emits an explicit reason — by the signed consentRequests", async () => {
+  // Rollout-order safety: a VTA build that has not yet added `details.reason`
+  // still delivers the executor-signed `consentRequests`. Their presence is the
+  // structural fallback that keeps the flow working during a staged rollout.
+  const noReason = {
+    code: "taskFailed",
+    retryable: false,
+    message: "task failed: auth:consent_required",
+    details: {
+      payloadDigest: "3b0c7f1d9e2a5648c1f30b7ae4d2986153ca0f7b8d41e6295af03c8bd71e4a62",
+      challenge: "9c1f4b7a2e6d80f35a4c9b1e7d2f6083",
+      approverSet: "operators",
+      minApprovals: 1,
+      consentRequests: [{ type: "…/task-consent/request/0.1", proof: {} }],
+    },
+  };
+  const res = await requestTask(rejecting(noReason), base);
+  assert.equal(res.kind, "consentRequired");
+});
+
+test("an ordinary taskFailed with no consent details still throws", async () => {
+  // `taskFailed` is a generic failure code; without a consent reason OR signed
+  // consentRequests it is not a consent refusal and must surface as the error.
+  await assert.rejects(() =>
+    requestTask(
+      rejecting({ code: "taskFailed", retryable: false, message: "task failed: something else", details: {} }),
+      base,
+    ),
   );
 });
 
