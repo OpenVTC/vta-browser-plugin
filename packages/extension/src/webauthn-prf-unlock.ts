@@ -67,16 +67,59 @@ export async function runPrfUnlockCeremony(rpId: string): Promise<PrfUnlockMater
       "Wallet isn't enrolled for encryption. Re-onboard and choose 'Encrypt with authenticator', or open Settings.",
     );
   }
+  // A random challenge: the worker unlock only needs a fresh gesture, not a
+  // binding to any particular payload.
+  return prfCeremony(rpId, credentialIdB64u, saltB64u, crypto.getRandomValues(new Uint8Array(32)));
+}
+
+/**
+ * The **approver** unlock ceremony, bound to a specific decision.
+ *
+ * Identical to [`runPrfUnlockCeremony`] except the WebAuthn `challenge` is the
+ * task's `payloadDigest`, so the authenticator assertion is cryptographically
+ * tied to *this* change — a fresh biometric per approval, provably for the
+ * change the human is looking at, not a replayable session unlock. The returned
+ * PRF output unwraps the approver key (via `ApproverPrfSecretWrap`) for one
+ * signature; it is never cached.
+ *
+ * `payloadDigest` is the hex/base64 digest string from the consent request; it
+ * is hashed to 32 bytes for the challenge so any digest length is accepted.
+ */
+export async function runApproverUnlockCeremony(
+  rpId: string,
+  payloadDigest: string,
+): Promise<PrfUnlockMaterial> {
+  const store = new IndexedDBKVStore();
+  const credentialIdB64u = await store.get<string>(CREDENTIAL_KEY);
+  const saltB64u = await store.get<string>(SALT_KEY);
+  if (!credentialIdB64u || !saltB64u) {
+    throw new PrfUnlockError(
+      "no-enrolment",
+      "Approver isn't enrolled for biometric approval. Create the approver identity in Settings first.",
+    );
+  }
+  const challenge = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payloadDigest)),
+  );
+  return prfCeremony(rpId, credentialIdB64u, saltB64u, challenge);
+}
+
+/** Shared WebAuthn-PRF assertion: challenge in, PRF output out. */
+async function prfCeremony(
+  rpId: string,
+  credentialIdB64u: string,
+  saltB64u: string,
+  challenge: Uint8Array,
+): Promise<PrfUnlockMaterial> {
   const credentialId = base64url.decode(credentialIdB64u);
   const prfSalt = base64url.decode(saltB64u);
-  const challenge = crypto.getRandomValues(new Uint8Array(32));
 
   let assertion: PublicKeyCredential | null = null;
   try {
     assertion = (await navigator.credentials.get({
       publicKey: {
         rpId,
-        challenge,
+        challenge: challenge as BufferSource,
         allowCredentials: [
           { type: "public-key", id: credentialId.buffer as ArrayBuffer },
         ],
