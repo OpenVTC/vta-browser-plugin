@@ -951,15 +951,28 @@ async function handleDeriveSigningKeyId(
  * expiry)`, rememberable only for tasks the VTA classifies `sideEffects: none`.
  * Until those exist, ask.
  */
+/** `https://trusttasks.org/spec/webvh/dids/update/1.0` → `webvh/dids/update`.
+ *  A readable short label for prompt copy; falls back to the full URI. */
+function taskLabel(typeUri: string): string {
+  const m = /\/spec\/(.+)\/[\d.]+$/.exec(typeUri);
+  return m?.[1] ?? typeUri;
+}
+
 async function handleRequestTask(
   req: RuntimeRequestTaskRequest,
 ): Promise<RuntimeRequestTaskResponse> {
   const active = await readActiveConnection();
   if (!active.ok) return { ok: false, error: active.error };
 
+  // Worker-mode gate: the user consents to their agent *sending this request to
+  // the VTA*, not to the change itself — that is the approver's job, on a
+  // visibly different surface. The copy says "send … to your VTA" so it can't be
+  // mistaken for the approval step, and the WORKER banner on the confirm popup
+  // reinforces it. Kept un-skippable on purpose: with policy enforcement off this
+  // is the only thing between an arbitrary page and an arbitrary task.
   const approved = await requestConsent({
     origin: req.origin,
-    action: `Ask your agent to run ${req.params.type}`,
+    action: `send a "${taskLabel(req.params.type)}" request to your VTA`,
     noRemember: true,
   });
   if (!approved.approved) return { ok: false, error: "user denied the request" };

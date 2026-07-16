@@ -8,6 +8,7 @@ import {
   type RuntimeVerifyRpDidResponse,
   type VerifyRpDidResult,
 } from "./bridge-protocol.js";
+import { effectDiffView, ABSENT_VALUE, type ConsentEffect } from "@openvtc/pnm-core";
 
 // Consent prompt shown in a popup window before the wallet logs into an RP.
 // The background opens it with the request details as query params and
@@ -72,6 +73,81 @@ const colours = {
   dangerBg: "#fdecea",
   mono: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
 };
+
+// ─── Mode identity ───
+// Two surfaces, two roles, and it must be impossible to confuse them. The WORKER
+// surface is your agent asking to *send a request*; the APPROVER surface is *you*
+// authorizing a privileged change. They get deliberately different colour, icon,
+// and a full-width banner — because approving in the wrong mental model is
+// exactly the mistake this ceremony exists to prevent, the more so once the
+// approver's key sits behind a biometric and one gesture commits the change.
+
+type Mode = "worker" | "approver";
+
+const modeTheme: Record<
+  Mode,
+  {
+    label: string;
+    tagline: string;
+    icon: string;
+    bannerBg: string;
+    bannerFg: string;
+    accent: string;
+    accentHover: string;
+    pageTint: string;
+  }
+> = {
+  worker: {
+    label: "WORKER",
+    tagline: "Your agent is sending a request on your behalf",
+    icon: "🤖",
+    bannerBg: "#0e2a4d",
+    bannerFg: "#dbe9ff",
+    accent: colours.primary,
+    accentHover: colours.primaryHover,
+    pageTint: "#f5f8fd",
+  },
+  approver: {
+    label: "APPROVER",
+    tagline: "You are authorizing a change — read it before you approve",
+    icon: "🛡️",
+    bannerBg: "#4a1410",
+    bannerFg: "#ffe1d9",
+    accent: colours.danger,
+    accentHover: "#8f1e17",
+    pageTint: "#fdf6f4",
+  },
+};
+
+/** A full-width, unmistakable banner naming the mode the human is acting in.
+ *  `pad` matches the host surface's padding so the banner bleeds edge-to-edge. */
+function ModeBanner({ mode, pad }: { mode: Mode; pad: number }) {
+  const t = modeTheme[mode];
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        background: t.bannerBg,
+        color: t.bannerFg,
+        padding: "11px 16px",
+        margin: `-${pad}px -${pad}px 16px`,
+        borderBottom: `3px solid ${t.accent}`,
+      }}
+    >
+      <span style={{ fontSize: 20, lineHeight: 1 }} aria-hidden>
+        {t.icon}
+      </span>
+      <div style={{ display: "grid", gap: 1 }}>
+        <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: 1.2 }}>
+          {t.label} MODE
+        </span>
+        <span style={{ fontSize: 11, opacity: 0.85 }}>{t.tagline}</span>
+      </div>
+    </div>
+  );
+}
 
 function Badge({
   tone,
@@ -321,7 +397,15 @@ function Confirm() {
   );
 
   return (
-    <div style={{ padding: 16, color: colours.text }}>
+    <div
+      style={{
+        padding: 16,
+        color: colours.text,
+        background: modeTheme.worker.pageTint,
+        minHeight: "100vh",
+      }}
+    >
+      <ModeBanner mode="worker" pad={16} />
       {/* Header */}
       <div
         style={{
@@ -496,7 +580,11 @@ interface TaskConsentRequest {
   payloadDigest: string;
   sideEffects: "none" | "mutating" | "destructive";
   exposure: { discloses: string; actsAsSubject: boolean };
-  effects: { kind: string; summary: string }[];
+  // The full effect shape the VTA sends — `summary` is the guaranteed line, and
+  // `path`/`before`/`after` carry the actual change. Rendering the diff (not just
+  // the summary) is what makes this "what you see is what you sign": the approval
+  // authorizes the change on screen, so the change must be on screen.
+  effects: ConsentEffect[];
   requester: string;
   approverSet: string;
   minApprovals: number;
@@ -515,6 +603,73 @@ function taskLabel(typeUri: string): string {
   // `https://trusttasks.org/spec/webvh/dids/update/1.0` → `webvh/dids/update`
   const m = /\/spec\/(.+)\/[\d.]+$/.exec(typeUri);
   return m?.[1] ?? typeUri;
+}
+
+/**
+ * The structured before→after change for one effect, shown beneath its summary.
+ * The summary says *what* in prose; this shows the actual values so the human
+ * consents to the real change, not a description of it. An absent side renders
+ * as `∅`, so an addition (∅ → value) and a removal (value → ∅) never look like a
+ * plain modification. Nothing renders for a summary-only effect.
+ */
+function EffectDiff({ effect }: { effect: ConsentEffect }) {
+  const view = effectDiffView(effect);
+  if (!view) return null;
+  const hasValues = view.before !== undefined || view.after !== undefined;
+  return (
+    <div style={{ marginTop: 5, display: "grid", gap: 3 }}>
+      {view.path ? (
+        <div
+          style={{
+            fontFamily: colours.mono,
+            fontSize: 10.5,
+            color: colours.textSubtle,
+            letterSpacing: 0.2,
+            wordBreak: "break-all",
+          }}
+        >
+          {view.path}
+        </div>
+      ) : null}
+      {hasValues ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            flexWrap: "wrap",
+            fontFamily: colours.mono,
+            fontSize: 11,
+          }}
+        >
+          <span
+            style={{
+              padding: "1px 6px",
+              borderRadius: 4,
+              background: colours.dangerBg,
+              color: colours.danger,
+              textDecoration: view.before === undefined ? "none" : "line-through",
+              wordBreak: "break-all",
+            }}
+          >
+            {view.before ?? ABSENT_VALUE}
+          </span>
+          <span style={{ color: colours.textSubtle }}>→</span>
+          <span
+            style={{
+              padding: "1px 6px",
+              borderRadius: 4,
+              background: colours.okBg,
+              color: colours.ok,
+              wordBreak: "break-all",
+            }}
+          >
+            {view.after ?? ABSENT_VALUE}
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function TaskConsent() {
@@ -544,11 +699,9 @@ function TaskConsent() {
   // and the difference is the entire decision: one means the task is inert, the
   // other means this agent cannot tell you what it does. Presenting the second
   // as the first would show the most dangerous case as the most reassuring one.
-  const effectLines =
-    request.effects.length > 0
-      ? request.effects.map((e) => e.summary)
-      : (request.consequences ?? []);
-  const determined = effectLines.length > 0;
+  const hasEffects = request.effects.length > 0;
+  const consequenceLines = request.consequences ?? [];
+  const determined = hasEffects || consequenceLines.length > 0;
 
   // For a destructive task the user must MATCH the digest, not tap "approve".
   // Checks that assume an honest device catch a hostile page; only a comparison
@@ -558,7 +711,17 @@ function TaskConsent() {
   const mayApprove = !destructive || typed.trim().toLowerCase() === prefix.toLowerCase();
 
   return (
-    <div style={{ padding: 20, display: "grid", gap: 14, fontSize: 13 }}>
+    <div
+      style={{
+        padding: 20,
+        background: modeTheme.approver.pageTint,
+        minHeight: "100vh",
+        color: colours.text,
+        fontSize: 13,
+      }}
+    >
+      <ModeBanner mode="approver" pad={20} />
+      <div style={{ display: "grid", gap: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span
           style={{
@@ -606,13 +769,24 @@ function TaskConsent() {
           {determined ? "This will:" : "⚠ Consequences unknown"}
         </div>
         {determined ? (
-          <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 6 }}>
-            {effectLines.map((line, i) => (
-              <li key={i} style={{ lineHeight: 1.4 }}>
-                {line}
-              </li>
-            ))}
-          </ul>
+          hasEffects ? (
+            <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 10 }}>
+              {request.effects.map((e, i) => (
+                <li key={i} style={{ lineHeight: 1.4 }}>
+                  {e.summary}
+                  <EffectDiff effect={e} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 6 }}>
+              {consequenceLines.map((line, i) => (
+                <li key={i} style={{ lineHeight: 1.4 }}>
+                  {line}
+                </li>
+              ))}
+            </ul>
+          )
         ) : (
           <div style={{ lineHeight: 1.45 }}>
             Your agent could not determine what this task will do. Approving it means
@@ -676,15 +850,20 @@ function TaskConsent() {
           disabled={!mayApprove}
           onClick={() => decide(true)}
           style={{
-            padding: "8px 16px",
+            padding: "8px 18px",
             fontSize: 13,
-            fontWeight: 600,
+            fontWeight: 700,
+            border: "none",
+            borderRadius: 8,
+            color: "#fff",
+            background: modeTheme.approver.accent,
             opacity: mayApprove ? 1 : 0.45,
             cursor: mayApprove ? "pointer" : "not-allowed",
           }}
         >
           Approve
         </button>
+      </div>
       </div>
     </div>
   );
