@@ -1,10 +1,18 @@
 /// <reference types="chrome" />
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { clearHolderIdentity, IndexedDBKVStore, rewrapHolderSecret } from "@openvtc/pnm-core";
+import {
+  ApproverPrfSecretWrap,
+  approverDid,
+  clearHolderIdentity,
+  IndexedDBKVStore,
+  mintApproverIdentity,
+  rewrapHolderSecret,
+} from "@openvtc/pnm-core";
 import { DEFAULT_WALLET_MEDIATOR_DID, getSettings, setSettings } from "./config.js";
-import { readActiveHolderDid } from "./active-vta.js";
+import { readActiveHolderDid, readActiveVtaDid } from "./active-vta.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
+import { runPrfUnlockCeremony } from "./webauthn-prf-unlock.js";
 import { listTrustedSites, untrustOrigin, type TrustedSiteRecord } from "./trusted-sites.js";
 
 const inputStyle: React.CSSProperties = {
@@ -36,6 +44,10 @@ function Options() {
   const [encryptOn, setEncryptOn] = useState(false);
   const [encryptBusy, setEncryptBusy] = useState(false);
   const [preferTspOn, setPreferTspOn] = useState(false);
+  // The co-located approver identity for the active VTA (Phase 2): its DID once
+  // minted, so the operator can register it in the VTA's approver_set + ACL.
+  const [approverDidValue, setApproverDidValue] = useState<string | null>(null);
+  const [approverBusy, setApproverBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [trustedSites, setTrustedSites] = useState<TrustedSiteRecord[]>([]);
@@ -66,8 +78,52 @@ function Options() {
       // AES cache, so loading the holder would throw WalletLockedError
       // on encrypted wallets.
       setHolderDid((await readActiveHolderDid()) ?? "");
+      // Show the active VTA's approver DID if one has been minted (no key
+      // material is touched — just the stored DID).
+      const activeVta = await readActiveVtaDid();
+      if (activeVta) {
+        setApproverDidValue(await approverDid(new IndexedDBKVStore(), activeVta));
+      }
     })();
   }, []);
+
+  /**
+   * Mint the co-located approver identity for the active VTA.
+   *
+   * Runs the WebAuthn PRF ceremony (so the approver seed is sealed behind the
+   * same authenticator that encrypts the wallet, under its own key domain), then
+   * mints a fresh did:key and stores it PRF-wrapped. The resulting DID is shown
+   * so the operator can register it in the VTA's approver_set + ACL — the
+   * approver only *confers* authority once the VTA knows it as a context admin.
+   */
+  async function createApprover(): Promise<void> {
+    setApproverBusy(true);
+    setStatus(null);
+    try {
+      const activeVta = await readActiveVtaDid();
+      if (!activeVta) {
+        setStatus("No active VTA — connect to a VTA first, then create the approver.");
+        return;
+      }
+      // Reuse the wallet's enrolled authenticator to get a PRF output. A random
+      // challenge is fine here: minting only needs the PRF bytes to derive the
+      // approver KEK; the per-approval gesture (bound to the payload) happens at
+      // decision time.
+      const { prfOutput } = await runPrfUnlockCeremony(chrome.runtime.id);
+      const store = new IndexedDBKVStore();
+      const minted = await mintApproverIdentity(store, {
+        vtaDid: activeVta,
+        secretWrap: new ApproverPrfSecretWrap(prfOutput),
+      });
+      setApproverDidValue(minted.did);
+      setStatus("Approver identity created. Register its DID in the VTA's approver set + ACL.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setStatus(`Error: ${msg}`);
+    } finally {
+      setApproverBusy(false);
+    }
+  }
 
   const mediatorChanged = mediatorDid.trim() !== savedMediatorDid;
 
@@ -268,6 +324,98 @@ function Options() {
           authenticator without disabling first means losing the wallet — no
           recovery path. {encryptOn ? "Toggle off to revert." : ""}
         </div>
+      </div>
+
+      <div
+        style={{
+          marginTop: 16,
+          padding: 14,
+          border: "1px solid #48291f",
+          borderRadius: 8,
+          background: "#1a1210",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span aria-hidden style={{ fontSize: 16 }}>
+            🛡️
+          </span>
+          <strong style={{ fontSize: 14, color: "#ffd9cf" }}>
+            Approver identity (biometric approval)
+          </strong>
+        </div>
+        <div style={{ marginTop: 10, fontSize: 12, color: "#c9a99f", lineHeight: 1.5 }}>
+          A second, distinct identity this browser uses to <em>approve</em> tasks —
+          separate from the working identity that <em>requests</em> them. Its
+          signing key is released only by your authenticator, per approval. Create
+          it here, then register the DID below in the VTA&apos;s
+          {" "}<code>approver_set</code> and ACL (as a context admin) so its
+          approvals confer authority.
+        </div>
+
+        {approverDidValue ? (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 11, color: "#9aa3b2", marginBottom: 4 }}>
+              Approver DID (active VTA)
+            </div>
+            <code
+              style={{
+                display: "block",
+                wordBreak: "break-all",
+                color: "#ffe1d9",
+                background: "#241512",
+                border: "1px solid #48291f",
+                borderRadius: 6,
+                padding: "8px 10px",
+                fontSize: 12,
+              }}
+            >
+              {approverDidValue}
+            </code>
+            <button
+              type="button"
+              onClick={() => void navigator.clipboard.writeText(approverDidValue)}
+              style={{
+                marginTop: 8,
+                padding: "6px 12px",
+                background: "none",
+                color: "#e0876f",
+                border: "1px solid #48291f",
+                borderRadius: 6,
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              Copy DID
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void createApprover()}
+            disabled={approverBusy || !encryptOn}
+            style={{
+              marginTop: 12,
+              padding: "9px 16px",
+              background: encryptOn ? "#b0442d" : "#3a2a25",
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              cursor: approverBusy || !encryptOn ? "not-allowed" : "pointer",
+              fontSize: 13,
+              fontWeight: 700,
+              opacity: approverBusy ? 0.6 : 1,
+            }}
+          >
+            {approverBusy ? "Creating…" : "Create approver identity"}
+          </button>
+        )}
+        {!encryptOn && !approverDidValue && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "#e0a64a" }}>
+            Enable “Encrypt wallet at rest” above first — it enrolls the
+            authenticator the approver key reuses.
+          </div>
+        )}
       </div>
 
       <div
