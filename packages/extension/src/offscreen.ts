@@ -1038,7 +1038,20 @@ function parsePoolKey(key: string): { mediatorDid: string; vtaDid: string } {
 }
 const warmPool = new Map<string, Promise<MediatorConnection>>();
 const mediatorState = new Map<string, MediatorState>();
-const INBOUND_RECONNECT_MS = 2_000;
+// Inbound reconnect backoff. A dropped (or failed-to-open) inbox session must
+// keep retrying — a mediator outage longer than one retry used to leave the
+// listener dead, silently missing every consent request until the worker
+// happened to reboot (R1.5). Start at 2s, double on each failure up to 60s;
+// reset to the base on a successful (re)connect.
+const INBOUND_RECONNECT_BASE_MS = 2_000;
+const INBOUND_RECONNECT_MAX_MS = 60_000;
+// Per-VTA backoff state + the pending retry timer, so retries for one holder
+// don't stack and a persistently-down mediator keeps getting retried with a
+// growing delay rather than dying after the first failed attempt.
+const inboundBackoff = new Map<
+  string,
+  { delayMs: number; timer: ReturnType<typeof setTimeout> | undefined }
+>();
 
 // The wallet's inbox mediator DID is configurable; cache it once so the
 // per-session "is this our inbox mediator?" check stays synchronous in the
@@ -1110,10 +1123,12 @@ async function createWarmSession(
       warmPool.delete(key);
       mediatorState.set(key, "closed");
       // Keep the inbound path alive: re-arm THIS VTA's inbox session
-      // under the same holder. Multi-VTA: each holder has its own
-      // session, so the re-arm targets the specific (mediator, vtaDid)
-      // that dropped, not the aggregate.
-      if (isInbox) setTimeout(() => void startInbound(vtaDid), INBOUND_RECONNECT_MS);
+      // under the same holder, with backoff that survives a prolonged
+      // outage. Multi-VTA: each holder has its own session, so the re-arm
+      // targets the specific (mediator, vtaDid) that dropped, not the
+      // aggregate. `onClose` fires only on an UNEXPECTED drop (not our own
+      // `close()`), so a deliberately-forgotten VTA isn't re-armed here.
+      if (isInbox) scheduleInboundReconnect(vtaDid);
     },
   });
   // Attach the inbound confirm handler whenever this is the wallet's inbox
@@ -1135,7 +1150,7 @@ async function createWarmSession(
  *  holder is encrypted but the cache is empty (cold-start before
  *  unlock) — are logged but not propagated. The next unlock + a
  *  subsequent reconcile will pick up the missed listener. */
-async function startInbound(vtaDid: string): Promise<void> {
+async function startInbound(vtaDid: string): Promise<boolean> {
   try {
     const mediatorDid = await walletMediatorDid();
     await getWarmSession(mediatorDid, vtaDid);
@@ -1145,9 +1160,49 @@ async function startInbound(vtaDid: string): Promise<void> {
       "as",
       vtaDid,
     );
+    return true;
   } catch (e) {
     console.error("[pnm inbound] failed to start inbound session:", e);
+    return false;
   }
+}
+
+/** Schedule (or leave pending) an inbound reconnect for `vtaDid` with
+ *  exponential backoff. Idempotent per VTA: if a retry is already queued it's
+ *  left as-is, so a burst of `onClose`/reconcile calls can't stack timers. Each
+ *  attempt that fails to bring the session up doubles the delay (capped at
+ *  `INBOUND_RECONNECT_MAX_MS`) and reschedules; a success clears the state via
+ *  `clearInboundBackoff`. This is the piece that keeps a listener recovering
+ *  across a mediator outage of any length (R1.5). */
+function scheduleInboundReconnect(vtaDid: string): void {
+  const state = inboundBackoff.get(vtaDid) ?? {
+    delayMs: INBOUND_RECONNECT_BASE_MS,
+    timer: undefined,
+  };
+  if (state.timer) return; // a retry is already queued for this VTA
+  state.timer = setTimeout(() => {
+    state.timer = undefined;
+    void startInbound(vtaDid).then((ok) => {
+      if (ok) {
+        clearInboundBackoff(vtaDid);
+        return;
+      }
+      // Don't resurrect a backoff that was cancelled while this attempt was
+      // in flight (e.g. the VTA was forgotten by a concurrent reconcile).
+      if (inboundBackoff.get(vtaDid) !== state) return;
+      state.delayMs = Math.min(state.delayMs * 2, INBOUND_RECONNECT_MAX_MS);
+      scheduleInboundReconnect(vtaDid);
+    });
+  }, state.delayMs);
+  inboundBackoff.set(vtaDid, state);
+}
+
+/** Cancel any pending inbound reconnect for `vtaDid` and reset its backoff.
+ *  Called on a successful (re)connect and when a VTA is forgotten. */
+function clearInboundBackoff(vtaDid: string): void {
+  const state = inboundBackoff.get(vtaDid);
+  if (state?.timer) clearTimeout(state.timer);
+  inboundBackoff.delete(vtaDid);
 }
 
 /** Multi-VTA inbound reconcile: ensure the wallet has one warm inbox
@@ -1167,8 +1222,16 @@ async function reconcileInbound(vtaDids: readonly string[]): Promise<void> {
 
   // Open missing — concurrent across VTAs, individual failures stay
   // contained (loadHolder may throw for a locked wallet; the rest
-  // still come up).
-  await Promise.allSettled(vtaDids.map((vtaDid) => startInbound(vtaDid)));
+  // still come up). A VTA that fails to come up (e.g. mediator still
+  // down, or wallet locked) is put on the backoff retry loop rather than
+  // left dead; one that comes up clears any prior backoff. `startInbound`
+  // never throws, so `Promise.all` is safe here.
+  await Promise.all(
+    vtaDids.map(async (vtaDid) => {
+      if (await startInbound(vtaDid)) clearInboundBackoff(vtaDid);
+      else scheduleInboundReconnect(vtaDid);
+    }),
+  );
 
   // Close extras: any pool entry whose mediator matches our inbox AND
   // whose vtaDid is no longer wanted (operator forgot it). The pool
@@ -1179,8 +1242,12 @@ async function reconcileInbound(vtaDids: readonly string[]): Promise<void> {
     const parsed = parsePoolKey(key);
     if (parsed.mediatorDid !== mediatorDid) continue; // outbound; leave it
     if (wanted.has(parsed.vtaDid)) continue; // still wanted
-    // No longer wanted. Drop the pool entry first so a race that
-    // calls getWarmSession during close doesn't reuse this conn.
+    // No longer wanted. Cancel any pending reconnect for this holder
+    // first, so a backoff timer that fired between drop and reconcile
+    // can't resurrect a forgotten VTA's listener. Then drop the pool
+    // entry so a race that calls getWarmSession during close doesn't
+    // reuse this conn.
+    clearInboundBackoff(parsed.vtaDid);
     warmPool.delete(key);
     mediatorState.set(key, "closed");
     void sessionPromise.then(
