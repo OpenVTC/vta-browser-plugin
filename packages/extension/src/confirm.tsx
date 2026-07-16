@@ -9,6 +9,7 @@ import {
   type VerifyRpDidResult,
 } from "./bridge-protocol.js";
 import { effectDiffView, ABSENT_VALUE, type ConsentEffect } from "@openvtc/pnm-core";
+import { runApproverUnlockCeremony } from "./webauthn-prf-unlock.js";
 
 // Consent prompt shown in a popup window before the wallet logs into an RP.
 // The background opens it with the request details as query params and
@@ -24,6 +25,9 @@ const consentId = params.get("cid") ?? "";
 // `kind=task` selects the task-execution consent surface, which renders
 // VTA-authored effects rather than an RP-authored reason.
 const isTaskConsent = params.get("kind") === "task";
+// The biometric-gated approver surface: Approve must run a fresh WebAuthn
+// gesture bound to this decision's payloadDigest before it signs.
+const isApproverConsent = params.get("approver") === "1";
 // A per-action prompt has nothing to remember; the caller says so explicitly.
 const noRemember = params.get("noRemember") === "1";
 const origin = params.get("origin") ?? "";
@@ -675,6 +679,8 @@ function EffectDiff({ effect }: { effect: ConsentEffect }) {
 function TaskConsent() {
   const [request, setRequest] = useState<TaskConsentRequest | null>(null);
   const [typed, setTyped] = useState("");
+  const [bioBusy, setBioBusy] = useState(false);
+  const [bioError, setBioError] = useState<string | null>(null);
 
   useEffect(() => {
     void chrome.storage.session
@@ -709,6 +715,28 @@ function TaskConsent() {
   // because only that moves the check somewhere the device cannot reach. A tap
   // is a reflex; a comparison is an act of attention.
   const mayApprove = !destructive || typed.trim().toLowerCase() === prefix.toLowerCase();
+
+  // Approve. On the approver surface, the signature is gated behind a fresh
+  // WebAuthn gesture whose challenge is THIS payloadDigest — the biometric that
+  // authorizes exactly this change. Only a successful gesture returns approval;
+  // a cancel keeps the window open so a mis-tap isn't an accidental sign-off.
+  const digest = request.payloadDigest;
+  async function approve(): Promise<void> {
+    if (!isApproverConsent) {
+      decide(true);
+      return;
+    }
+    setBioBusy(true);
+    setBioError(null);
+    try {
+      await runApproverUnlockCeremony(chrome.runtime.id, digest);
+      decide(true);
+    } catch (e) {
+      setBioError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBioBusy(false);
+    }
+  }
 
   return (
     <div
@@ -836,6 +864,12 @@ function TaskConsent() {
         </div>
       ) : null}
 
+      {bioError ? (
+        <div style={{ color: colours.danger, fontSize: 12, lineHeight: 1.4 }}>
+          Not signed: {bioError}
+        </div>
+      ) : null}
+
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
         {/* Deny is focused: the safe answer should be the one you get by
             reflex, and closing this window is a denial too. */}
@@ -847,8 +881,8 @@ function TaskConsent() {
           Deny
         </button>
         <button
-          disabled={!mayApprove}
-          onClick={() => decide(true)}
+          disabled={!mayApprove || bioBusy}
+          onClick={() => void approve()}
           style={{
             padding: "8px 18px",
             fontSize: 13,
@@ -857,11 +891,15 @@ function TaskConsent() {
             borderRadius: 8,
             color: "#fff",
             background: modeTheme.approver.accent,
-            opacity: mayApprove ? 1 : 0.45,
-            cursor: mayApprove ? "pointer" : "not-allowed",
+            opacity: mayApprove && !bioBusy ? 1 : 0.45,
+            cursor: mayApprove && !bioBusy ? "pointer" : "not-allowed",
           }}
         >
-          Approve
+          {bioBusy
+            ? "Waiting for authenticator…"
+            : isApproverConsent
+              ? "Approve with biometric"
+              : "Approve"}
         </button>
       </div>
       </div>

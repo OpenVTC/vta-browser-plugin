@@ -33,6 +33,7 @@ import {
   OFFSCREEN_LIST_CONTEXTS,
   OFFSCREEN_LIST_DIDS,
   OFFSCREEN_UNLOCK_PRF,
+  OFFSCREEN_UNLOCK_APPROVER,
   OFFSCREEN_FORGET_HOLDER_RECORD,
   OFFSCREEN_REFRESH_VTA_TRANSPORTS,
   OFFSCREEN_REST_LOGIN,
@@ -76,6 +77,9 @@ import {
   RUNTIME_FORGET_HOLDER_RECORD,
   RUNTIME_REFRESH_VTA_TRANSPORTS,
   RUNTIME_UNLOCK_PRF,
+  RUNTIME_UNLOCK_APPROVER,
+  type RuntimeUnlockApproverRequest,
+  type RuntimeUnlockApproverResponse,
   RUNTIME_WALLET_LOCK_STATE,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
@@ -537,11 +541,16 @@ const TASK_CONSENT_PREFIX = "task-consent:";
  */
 async function requestTaskConsent(
   request: TaskConsentRequestPayload,
+  approver = false,
 ): Promise<{ approved: boolean }> {
   const consentId = crypto.randomUUID();
   await chrome.storage.session.set({ [`${TASK_CONSENT_PREFIX}${consentId}`]: request });
 
-  const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=task`;
+  // `approver=1` tells the popup this is the biometric-gated approver surface:
+  // Approve must run a fresh, payload-bound WebAuthn gesture before it returns.
+  const url =
+    `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=task` +
+    (approver ? "&approver=1" : "");
   return new Promise<{ approved: boolean }>((resolve) => {
     let settled = false;
     const settle = (approved: boolean) => {
@@ -829,6 +838,18 @@ async function handleUnlockPrf(
     void broadcastWalletEvent("unlocked");
   }
   return res;
+}
+
+async function handleUnlockApprover(
+  req: RuntimeUnlockApproverRequest,
+): Promise<RuntimeUnlockApproverResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_UNLOCK_APPROVER,
+    prfOutputB64u: req.prfOutputB64u,
+    vtaDid: req.vtaDid,
+  })) as RuntimeUnlockApproverResponse;
 }
 
 async function handleWalletLockState(
@@ -1557,6 +1578,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
 
+  if ((message as { type?: string })?.type === RUNTIME_UNLOCK_APPROVER) {
+    handleUnlockApprover(message as RuntimeUnlockApproverRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
   if ((message as { type?: string })?.type === RUNTIME_REFRESH_VTA_TRANSPORTS) {
     handleRefreshVtaTransports(message as RuntimeRefreshVtaTransportsRequest)
       .then(sendResponse)
@@ -1621,7 +1651,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if ((message as { type?: string })?.type === RUNTIME_TASK_CONSENT) {
-    requestTaskConsent((message as { request: TaskConsentRequestPayload }).request)
+    const m = message as { request: TaskConsentRequestPayload; approver?: boolean };
+    requestTaskConsent(m.request, m.approver === true)
       .then(sendResponse)
       .catch(() => sendResponse({ approved: false }));
     return true; // async sendResponse

@@ -530,6 +530,26 @@ export type RuntimeUnlockPrfResponse =
   | { ok: true }
   | { ok: false; error: string };
 
+/** popup → background: unlock the **approver** identity for a VTA and bring up
+ *  its inbox session. Same popup-runs-WebAuthn / offscreen-holds-the-key split
+ *  as `RUNTIME_UNLOCK_PRF`, but for the approver key (its own KEK domain) and
+ *  scoped to one VTA. After this, the approver receives `task-consent/request`s
+ *  addressed to its DID and can sign decisions. */
+export const RUNTIME_UNLOCK_APPROVER = "vta-wallet/unlock-approver" as const;
+
+export interface RuntimeUnlockApproverRequest {
+  type: typeof RUNTIME_UNLOCK_APPROVER;
+  /** base64url PRF output from the popup's assertion (see `prfOutputB64u`
+   *  on `RuntimeUnlockPrfRequest` for the encoding/trust rationale). */
+  prfOutputB64u: string;
+  /** The VTA whose approver identity to unlock. */
+  vtaDid: string;
+}
+
+export type RuntimeUnlockApproverResponse =
+  | { ok: true; approverDid: string }
+  | { ok: false; error: string };
+
 /** popup → background: query whether the wallet is currently locked.
  *
  *  The "locked" state is only meaningful for v4 records wrapped under
@@ -1109,6 +1129,18 @@ export interface OffscreenUnlockPrfRequest {
    *  why this goes over the wire as a string rather than a
    *  `Uint8Array`. */
   prfOutputB64u: string;
+}
+
+/** background → offscreen: unlock the approver identity for `vtaDid` from a
+ *  popup-derived PRF output and start its inbox session. */
+export const OFFSCREEN_UNLOCK_APPROVER = "offscreen/unlock-approver" as const;
+
+export interface OffscreenUnlockApproverRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_UNLOCK_APPROVER;
+  /** base64url-no-pad of the PRF output bytes (see `OffscreenUnlockPrfRequest`). */
+  prfOutputB64u: string;
+  vtaDid: string;
 }
 
 /** background → offscreen: delete a per-VTA holder record from

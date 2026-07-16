@@ -26,6 +26,9 @@ import {
   parseTaskConsentRequest,
   requestTask,
   buildTaskConsentDecision,
+  loadApproverIdentity,
+  ApproverPrfSecretWrap,
+  type ApproverIdentityResult,
   type ParsedTaskConsentRequest,
   resolveVtaServices,
   resolveVtaTspEndpoint,
@@ -72,6 +75,8 @@ import {
   OFFSCREEN_LIST_CONTEXTS,
   OFFSCREEN_LIST_DIDS,
   OFFSCREEN_UNLOCK_PRF,
+  OFFSCREEN_UNLOCK_APPROVER,
+  type OffscreenUnlockApproverRequest,
   OFFSCREEN_FORGET_HOLDER_RECORD,
   OFFSCREEN_REFRESH_VTA_TRANSPORTS,
   OFFSCREEN_REST_LOGIN,
@@ -204,6 +209,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (msg.type === OFFSCREEN_LOCK_WALLET) {
     WebAuthnPrfSecretWrap.lock();
+    lockApprovers();
     return false; // fire-and-forget
   }
   if (msg.type === OFFSCREEN_ONBOARD_PREPARE) {
@@ -306,6 +312,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     doUnlockPrf(prfOutput)
       .then(() => sendResponse({ ok: true }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_UNLOCK_APPROVER) {
+    const req = message as OffscreenUnlockApproverRequest;
+    let prfOutput: Uint8Array;
+    try {
+      if (typeof req.prfOutputB64u !== "string" || req.prfOutputB64u.length === 0) {
+        throw new Error("prfOutputB64u missing or empty");
+      }
+      if (typeof req.vtaDid !== "string" || !req.vtaDid) {
+        throw new Error("vtaDid missing");
+      }
+      prfOutput = base64url.decode(req.prfOutputB64u);
+    } catch (e) {
+      sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      return false;
+    }
+    doUnlockApprover(prfOutput, req.vtaDid)
+      .then((r) => sendResponse({ ok: true, approverDid: r.approverDid }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
@@ -1141,6 +1169,98 @@ async function createWarmSession(
   return conn;
 }
 
+// ─── Approver identity (Phase 2): a second, biometric-gated inbox ───
+//
+// The approver is a DID distinct from the worker, and the mediator routes
+// inbound by the authenticating DID — so the approver must maintain its OWN
+// authenticated session to receive `task-consent/request`s addressed to it.
+// Establishing that session needs the approver signing key, so it is unlocked
+// once per session by a biometric (`doUnlockApprover`), held in memory (never
+// persisted), and used to (a) authenticate the inbox and (b) sign decisions.
+// Each approval additionally requires a fresh, payload-bound biometric in the
+// popup before the decision is signed.
+//
+// Kept as a PARALLEL pool keyed distinctly from the worker's, so it can never
+// disturb the working worker inbound path.
+const approverIdentities = new Map<string, ApproverIdentityResult>();
+const approverPool = new Map<string, Promise<MediatorConnection>>();
+
+function approverPoolKey(mediatorDid: string, vtaDid: string): string {
+  return `approver:${poolKey(mediatorDid, vtaDid)}`;
+}
+
+/** Unlock the approver for `vtaDid` from a popup-derived PRF output, hold its
+ *  identity in memory for the session, and bring up its inbox. */
+async function doUnlockApprover(
+  prfOutput: Uint8Array,
+  vtaDid: string,
+): Promise<{ approverDid: string }> {
+  const approver = await loadApproverIdentity(new IndexedDBKVStore(), {
+    vtaDid,
+    secretWrap: new ApproverPrfSecretWrap(prfOutput),
+  });
+  if (!approver) {
+    throw new Error(`no approver identity minted for ${vtaDid}`);
+  }
+  approverIdentities.set(vtaDid, approver);
+  await getApproverWarmSession(vtaDid);
+  return { approverDid: approver.did };
+}
+
+async function getApproverWarmSession(vtaDid: string): Promise<MediatorConnection> {
+  const mediatorDid = await walletMediatorDid();
+  const key = approverPoolKey(mediatorDid, vtaDid);
+  const existing = approverPool.get(key);
+  if (existing) {
+    const conn = await existing.catch(() => null);
+    if (conn && conn.isOpen) return conn;
+    approverPool.delete(key);
+  }
+  const pending = createApproverWarmSession(vtaDid).catch((err: unknown) => {
+    approverPool.delete(key);
+    throw err;
+  });
+  approverPool.set(key, pending);
+  return pending;
+}
+
+async function createApproverWarmSession(vtaDid: string): Promise<MediatorConnection> {
+  const approver = approverIdentities.get(vtaDid);
+  if (!approver) throw new Error(`approver for ${vtaDid} is locked`);
+  const mediatorDid = await walletMediatorDid();
+  const key = approverPoolKey(mediatorDid, vtaDid);
+  const conn = await connectMediatorSession({
+    holder: approver.identity,
+    mediatorDid,
+    vtaDid: approver.identity.did,
+    onClose: () => {
+      approverPool.delete(key);
+      // Re-arm only while the approver is still unlocked — a deliberate lock
+      // clears the held identity and must not resurrect the session.
+      if (approverIdentities.has(vtaDid)) {
+        setTimeout(() => void getApproverWarmSession(vtaDid).catch(() => undefined), 2000);
+      }
+    },
+  });
+  // Inbound on the approver session is handled as the approver (its identity +
+  // signing), with `isApprover` so the popup demands the per-decision biometric.
+  conn.onInbound(
+    (message) =>
+      void handleInbound(conn, approver.identity, approver.signing, vtaDid, message, true),
+  );
+  console.info("[pnm approver] inbox listening as", approver.did);
+  return conn;
+}
+
+/** Drop every held approver identity + close its sessions (operator lock). */
+function lockApprovers(): void {
+  approverIdentities.clear();
+  for (const [key, pending] of approverPool) {
+    void pending.then((c) => c.close?.()).catch(() => undefined);
+    approverPool.delete(key);
+  }
+}
+
 /** Ensure the warm session to the wallet's inbox mediator is live for
  *  a single holder identity (one VTA). Idempotent. Used by the
  *  re-arm-on-drop path in `createWarmSession.onClose` and by
@@ -1264,6 +1384,9 @@ async function handleInbound(
   signing: Parameters<typeof buildConfirmResponse>[0]["signing"],
   vtaDid: string,
   message: Record<string, unknown>,
+  // True when this is the approver's own inbox session: the decision is signed
+  // as the approver, and the popup demands a per-decision biometric.
+  isApprover = false,
 ): Promise<void> {
   // Task-execution consent, first — it is the one inbound the *VTA itself*
   // sends, and it is the one whose content a human will act on.
@@ -1279,7 +1402,7 @@ async function handleInbound(
     holderDid: signing.did,
   });
   if (consent.ok) {
-    await handleTaskConsent(conn, identity, signing, vtaDid, consent.parsed, message);
+    await handleTaskConsent(conn, identity, signing, vtaDid, consent.parsed, message, isApprover);
     return;
   }
   if (consent.reason !== "not-a-task-consent-request") {
@@ -1348,6 +1471,7 @@ async function handleTaskConsent(
   vtaDid: string,
   parsed: ParsedTaskConsentRequest,
   message: Record<string, unknown>,
+  isApprover = false,
 ): Promise<void> {
   // De-dup before prompting: the mediator replays un-acked messages on every
   // reconnect and the MV3 worker respawns often, so without this a single
@@ -1366,6 +1490,9 @@ async function handleTaskConsent(
     const result = (await chrome.runtime.sendMessage({
       type: RUNTIME_TASK_CONSENT,
       request: parsed.request,
+      // Approver session → the popup requires a per-decision biometric bound to
+      // this payloadDigest before it returns an approval.
+      approver: isApprover,
     })) as { approved?: boolean } | undefined;
 
     // Anything other than an explicit approval is a denial. A closed window, a
