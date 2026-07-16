@@ -715,12 +715,36 @@ async function handleStepUpVta(
   return (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
 }
 
+// Page-facing authenticated fetches must never hang the requesting page against
+// a blackholed / wedged VTA: bound every one with an abort timeout (R1.2). A
+// stalled VTA then surfaces as a clean `{ ok: false, error }` (via the message
+// dispatcher's `.catch`) instead of an `await` that never resolves — which also
+// pins the MV3 worker awake and stacks further requests behind it.
+const PROXY_FETCH_TIMEOUT_MS = 20_000;
+
+async function proxyFetch(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: AbortSignal.timeout(PROXY_FETCH_TIMEOUT_MS),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "TimeoutError") {
+      throw new Error(
+        `request to ${url} timed out after ${PROXY_FETCH_TIMEOUT_MS / 1000}s ` +
+          `(VTA unreachable or not responding)`,
+      );
+    }
+    throw e;
+  }
+}
+
 // An authenticated GET the wallet runs on a page's behalf. The service
 // worker has host permissions, so this isn't subject to the page's
 // cross-origin CORS restriction. Read-only, so no consent prompt.
 async function handleApiGet(req: RuntimeApiGetRequest): Promise<RuntimeApiGetResponse> {
   const base = req.params.baseUrl.replace(/\/+$/, "");
-  const res = await fetch(base + req.params.path, {
+  const res = await proxyFetch(base + req.params.path, {
     headers: { authorization: `Bearer ${req.params.accessToken}` },
   });
   const text = await res.text();
@@ -1370,7 +1394,7 @@ async function handleInjectCookies(
 // Authenticated POST proxied through the wallet (host permission → no CORS).
 async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetResponse> {
   const base = req.params.baseUrl.replace(/\/+$/, "");
-  const res = await fetch(base + req.params.path, {
+  const res = await proxyFetch(base + req.params.path, {
     method: "POST",
     headers: {
       "content-type": "application/json",
