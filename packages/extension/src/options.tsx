@@ -10,9 +10,14 @@ import {
   rewrapHolderSecret,
 } from "@openvtc/pnm-core";
 import { DEFAULT_WALLET_MEDIATOR_DID, getSettings, setSettings } from "./config.js";
+import { base64url } from "@openvtc/vti-didcomm-js";
 import { readActiveHolderDid, readActiveVtaDid } from "./active-vta.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import { runPrfUnlockCeremony } from "./webauthn-prf-unlock.js";
+import {
+  RUNTIME_UNLOCK_APPROVER,
+  type RuntimeUnlockApproverResponse,
+} from "./bridge-protocol.js";
 import { listTrustedSites, untrustOrigin, type TrustedSiteRecord } from "./trusted-sites.js";
 
 const inputStyle: React.CSSProperties = {
@@ -117,6 +122,41 @@ function Options() {
       });
       setApproverDidValue(minted.did);
       setStatus("Approver identity created. Register its DID in the VTA's approver set + ACL.");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setStatus(`Error: ${msg}`);
+    } finally {
+      setApproverBusy(false);
+    }
+  }
+
+  /**
+   * Unlock the approver and bring up its inbox session, so it can receive
+   * task-consent requests addressed to it. One biometric establishes the
+   * session; each individual approval still requires its own gesture. Uses a
+   * random-challenge unlock (the per-decision, digest-bound gesture happens in
+   * the approval popup).
+   */
+  async function startApproving(): Promise<void> {
+    setApproverBusy(true);
+    setStatus(null);
+    try {
+      const activeVta = await readActiveVtaDid();
+      if (!activeVta) {
+        setStatus("No active VTA — connect first.");
+        return;
+      }
+      const { prfOutput } = await runPrfUnlockCeremony(chrome.runtime.id);
+      const res = (await chrome.runtime.sendMessage({
+        type: RUNTIME_UNLOCK_APPROVER,
+        prfOutputB64u: base64url.encode(prfOutput),
+        vtaDid: activeVta,
+      })) as RuntimeUnlockApproverResponse;
+      if (res.ok) {
+        setStatus("Approver unlocked — its inbox is now listening for approvals.");
+      } else {
+        setStatus(`Error: ${res.error}`);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setStatus(`Error: ${msg}`);
@@ -371,23 +411,42 @@ function Options() {
             >
               {approverDidValue}
             </code>
-            <button
-              type="button"
-              onClick={() => void navigator.clipboard.writeText(approverDidValue)}
-              style={{
-                marginTop: 8,
-                padding: "6px 12px",
-                background: "none",
-                color: "#e0876f",
-                border: "1px solid #48291f",
-                borderRadius: 6,
-                cursor: "pointer",
-                fontSize: 12,
-                fontWeight: 600,
-              }}
-            >
-              Copy DID
-            </button>
+            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => void navigator.clipboard.writeText(approverDidValue)}
+                style={{
+                  padding: "6px 12px",
+                  background: "none",
+                  color: "#e0876f",
+                  border: "1px solid #48291f",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                Copy DID
+              </button>
+              <button
+                type="button"
+                onClick={() => void startApproving()}
+                disabled={approverBusy}
+                style={{
+                  padding: "6px 14px",
+                  background: "#b0442d",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 6,
+                  cursor: approverBusy ? "not-allowed" : "pointer",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  opacity: approverBusy ? 0.6 : 1,
+                }}
+              >
+                {approverBusy ? "Working…" : "Start approving (unlock)"}
+              </button>
+            </div>
           </div>
         ) : (
           <button
