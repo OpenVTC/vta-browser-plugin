@@ -199,8 +199,9 @@ export async function generateOrLoadHolderIdentity(
 }
 
 /** Reconstruct the signing + DIDComm identities from the Ed25519 root secret
- *  and the (persisted/minted) did:peer + its VM ids. */
-function buildHolder(
+ *  and the (persisted/minted) did:peer + its VM ids. Exported so the approver
+ *  identity (a second, co-located did:key) reconstructs the same way. */
+export function buildHolder(
   edSecret: Uint8Array,
   did: string,
   signingKid: string,
