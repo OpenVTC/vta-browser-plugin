@@ -27,6 +27,8 @@ import {
   requestTask,
   buildTaskConsentDecision,
   loadApproverIdentity,
+  approverDid,
+  TRUST_TASK_ENVELOPE_TYPE,
   ApproverPrfSecretWrap,
   type ApproverIdentityResult,
   type ParsedTaskConsentRequest,
@@ -457,6 +459,11 @@ interface VtaSessionHandle {
   session: VtaSession;
   holder: Identity;
   service: Awaited<ReturnType<typeof resolveKeyAgreement>>;
+  /** The warm DIDComm session to the VTA's mediator, when the VTA advertises
+   *  DIDComm. The same-browser consent relay reuses it to forward a signed
+   *  `task-consent/decision` — the worker's own enrolled channel, so no separate
+   *  approver mediator session is needed. Absent for REST-only VTAs. */
+  didcommConn?: MediatorConnection;
 }
 
 // Build a VtaSession for `vtaDid` honouring the advertised transports
@@ -504,8 +511,10 @@ async function getVtaSession(
       console.warn("[pnm tsp] skipping TSP channel:", (err as Error).message);
     }
   }
+  let didcommConn: MediatorConnection | undefined;
   if (services.didcomm) {
     const conn = await getWarmSession(services.didcomm.mediatorDid, vtaDid);
+    didcommConn = conn;
     const bridge = new MediatorSessionBridge(conn);
     // Encrypt/route to the REAL VTA (`service`), NOT `conn.vta`: the warm
     // session seeds `conn.vta` with the holder's own DID as a harmless
@@ -525,7 +534,12 @@ async function getVtaSession(
       `${vtaDid} advertises no usable transport (#vta-didcomm or #vta-rest)`,
     );
   }
-  return { session: new VtaSession(channels), holder, service };
+  return {
+    session: new VtaSession(channels),
+    holder,
+    service,
+    ...(didcommConn ? { didcommConn } : {}),
+  };
 }
 
 // Vault — list. Runs vault/list/0.2 over the VTA's preferred transport
@@ -545,14 +559,139 @@ async function getVtaSession(
  * flow at the last hop, which is the one place nobody would look for it.
  */
 async function doRequestTask(req: OffscreenRequestTaskRequest) {
-  const { session, holder } = await getVtaSession(req.vtaDid, req.restBaseUrl);
-  return requestTask<Record<string, unknown>>(session, {
+  const { session, holder, service, didcommConn } = await getVtaSession(
+    req.vtaDid,
+    req.restBaseUrl,
+  );
+  const outcome = await requestTask<Record<string, unknown>>(session, {
     type: req.params.type,
     payload: req.params.payload,
     holderDid: holder.did,
     vtaDid: req.vtaDid,
     origin: req.origin,
   });
+  // Same-browser approver: if this VTA has a local approver identity, surface
+  // the ceremony right here on the rejection and relay the signed decision over
+  // the worker's own session — no pre-armed approver mediator inbox required.
+  //
+  // Fire it concurrently rather than awaiting: the caller (the requesting page)
+  // gets the ConsentRequired outcome promptly — it renders the match code and
+  // the re-submit that consumes the grant — while the approver ceremony pops
+  // alongside it. A relay failure must never change what the caller sees, so it
+  // is best-effort and its errors are swallowed.
+  if (outcome.kind === "consentRequired" && didcommConn) {
+    void maybeRelayConsentLocally(req.vtaDid, holder, service, didcommConn, outcome).catch(
+      (e) => console.error("[pnm consent relay] failed:", e),
+    );
+  }
+  return outcome;
+}
+
+// Digests currently being prompted, so a request that arrives both by local
+// relay and (if the operator also armed it) the approver mediator inbox does
+// not open two popups for the same change.
+const activeConsentDigests = new Set<string>();
+
+/**
+ * Hand a `requireConsent` rejection to a co-located approver identity.
+ *
+ * The worker's rejection already carries the VTA-signed `consentRequests`, so
+ * the whole ceremony can happen in this browser: verify the request came from
+ * this VTA, open the biometric-gated approver popup, and — on approval — sign a
+ * `task-consent/decision` with the approver key the per-decision biometric just
+ * released, then forward it over the worker's session. The VTA takes the
+ * approver's authority from the decision's Data-Integrity proof, not from the
+ * channel that carried it, so transporting on the worker's enrolled session is
+ * sound (see `task_consent.rs`, which ignores the transport identity).
+ */
+async function maybeRelayConsentLocally(
+  vtaDid: string,
+  holder: Identity,
+  vta: Awaited<ReturnType<typeof resolveKeyAgreement>>,
+  conn: MediatorConnection,
+  outcome: Extract<
+    Awaited<ReturnType<typeof requestTask<Record<string, unknown>>>>,
+    { kind: "consentRequired" }
+  >,
+): Promise<void> {
+  const store = new IndexedDBKVStore();
+  const myApproverDid = await approverDid(store, vtaDid);
+  if (!myApproverDid) return; // No local approver — this is the separate-device flow.
+
+  // The VTA mints one signed request per approver, addressed by `recipient`.
+  // Take the one addressed to us; anything else is for another device.
+  const raw = outcome.consentRequests.find(
+    (r) => (r as { recipient?: unknown } | null)?.recipient === myApproverDid,
+  );
+  if (!raw) return;
+
+  if (activeConsentDigests.has(outcome.payloadDigest)) return;
+
+  // Verify it is genuinely from this VTA before showing a human anything — the
+  // same gate the mediator-push path applies in `parseTaskConsentRequest`.
+  const parsed = await parseTaskConsentRequest(
+    {
+      type: TRUST_TASK_ENVELOPE_TYPE,
+      body: raw,
+      id: (raw as { id?: unknown }).id,
+    } as Record<string, unknown>,
+    { expectedVtaDid: vtaDid, holderDid: myApproverDid },
+  );
+  if (!parsed.ok) {
+    console.warn(
+      "[pnm consent relay] consent request did not verify:",
+      parsed.reason,
+      parsed.detail ?? "",
+    );
+    return;
+  }
+
+  activeConsentDigests.add(outcome.payloadDigest);
+  try {
+    const result = (await chrome.runtime.sendMessage({
+      type: RUNTIME_TASK_CONSENT,
+      request: parsed.parsed.request,
+      approver: true,
+    })) as { approved?: boolean; prfOutputB64u?: string } | undefined;
+
+    if (result?.approved !== true) {
+      console.info("[pnm consent relay] approver declined; pending will lapse on its TTL");
+      return;
+    }
+    if (!result.prfOutputB64u) {
+      // An approval with no PRF output can't be signed. The popup always returns
+      // it on approve, so this only happens if the message was malformed.
+      console.warn("[pnm consent relay] approval carried no PRF output; not signing");
+      return;
+    }
+
+    // The per-decision biometric released the approver key for exactly this
+    // signature; load its signing identity and immediately let it fall out of
+    // scope — never held, never pooled.
+    const approver = await loadApproverIdentity(store, {
+      vtaDid,
+      secretWrap: new ApproverPrfSecretWrap(base64url.decode(result.prfOutputB64u)),
+    });
+    if (!approver) {
+      console.warn("[pnm consent relay] approver identity vanished before signing");
+      return;
+    }
+
+    const outer = await buildTaskConsentDecision({
+      holder, // worker identity — the enrolled channel to the mediator
+      signing: approver.signing, // approver — the authority the VTA reads from the proof
+      vta,
+      mediator: conn.mediator,
+      decision: "approve",
+      challenge: parsed.parsed.request.challenge,
+      payloadDigest: parsed.parsed.request.payloadDigest,
+      thid: parsed.parsed.thid,
+    });
+    conn.send(outer);
+    console.info("[pnm consent relay] decision relayed over the worker session");
+  } finally {
+    activeConsentDigests.delete(outcome.payloadDigest);
+  }
 }
 
 async function doVaultList(req: OffscreenVaultListRequest) {
@@ -1486,6 +1625,14 @@ async function handleTaskConsent(
     }
   }
 
+  // Cross-path de-dup: if the same change also reached the co-located approver
+  // by local relay, one popup is enough — the other path is already prompting.
+  if (activeConsentDigests.has(parsed.request.payloadDigest)) {
+    console.info("[pnm inbound] task-consent already prompting for this digest; skipping");
+    return;
+  }
+  activeConsentDigests.add(parsed.request.payloadDigest);
+
   try {
     const result = (await chrome.runtime.sendMessage({
       type: RUNTIME_TASK_CONSENT,
@@ -1520,6 +1667,8 @@ async function handleTaskConsent(
     console.info("[pnm inbound] task-consent decision sent:", decision);
   } catch (e) {
     console.error("[pnm inbound] task-consent handling failed:", e);
+  } finally {
+    activeConsentDigests.delete(parsed.request.payloadDigest);
   }
 }
 

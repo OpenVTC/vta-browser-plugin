@@ -457,7 +457,10 @@ async function ensureOffscreenDocument(): Promise<void> {
 // ─── Consent coordination ───
 // A login request opens a consent popup and parks here until the popup
 // reports the user's decision (or is closed, which counts as a denial).
-const pendingConsents = new Map<string, (approved: boolean, remember: boolean) => void>();
+const pendingConsents = new Map<
+  string,
+  (approved: boolean, remember: boolean, prfOutputB64u?: string) => void
+>();
 
 function requestConsent(args: {
   origin?: string;
@@ -542,7 +545,7 @@ const TASK_CONSENT_PREFIX = "task-consent:";
 async function requestTaskConsent(
   request: TaskConsentRequestPayload,
   approver = false,
-): Promise<{ approved: boolean }> {
+): Promise<{ approved: boolean; prfOutputB64u?: string }> {
   const consentId = crypto.randomUUID();
   await chrome.storage.session.set({ [`${TASK_CONSENT_PREFIX}${consentId}`]: request });
 
@@ -551,16 +554,18 @@ async function requestTaskConsent(
   const url =
     `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=task` +
     (approver ? "&approver=1" : "");
-  return new Promise<{ approved: boolean }>((resolve) => {
+  return new Promise<{ approved: boolean; prfOutputB64u?: string }>((resolve) => {
     let settled = false;
-    const settle = (approved: boolean) => {
+    const settle = (approved: boolean, prfOutputB64u?: string) => {
       if (settled) return;
       settled = true;
       pendingConsents.delete(consentId);
       void chrome.storage.session.remove(`${TASK_CONSENT_PREFIX}${consentId}`);
-      resolve({ approved });
+      resolve({ approved, ...(prfOutputB64u ? { prfOutputB64u } : {}) });
     };
-    pendingConsents.set(consentId, (approved: boolean) => settle(approved));
+    pendingConsents.set(consentId, (approved: boolean, _remember: boolean, prfOutputB64u?: string) =>
+      settle(approved, prfOutputB64u),
+    );
 
     // A destructive task asks the user to match a digest, which needs room.
     const destructive = request.sideEffects === "destructive";
@@ -1822,8 +1827,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if ((message as { type?: string })?.type === RUNTIME_CONSENT_RESULT) {
-    const { consentId, approved, remember } = message as RuntimeConsentResult;
-    pendingConsents.get(consentId)?.(approved, !!remember);
+    const { consentId, approved, remember, prfOutputB64u } = message as RuntimeConsentResult;
+    pendingConsents.get(consentId)?.(approved, !!remember, prfOutputB64u);
     return false;
   }
 

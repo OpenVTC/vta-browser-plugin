@@ -371,6 +371,11 @@ export interface RuntimeConsentResult {
   /** When approved with the "Remember this site" box ticked, the background
    *  persists a trust record so this origin's future calls skip the popup. */
   remember?: boolean;
+  /** Approver surface only: the base64url PRF output from the per-decision
+   *  biometric. It unwraps the approver key for exactly one signature, so the
+   *  same-browser relay can sign the decision without a pre-unlocked session.
+   *  Never sent for a denial, and never cached. */
+  prfOutputB64u?: string;
 }
 
 /** confirm popup → background: resolve + verify an RP DID. */

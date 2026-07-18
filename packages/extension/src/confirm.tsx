@@ -9,6 +9,7 @@ import {
   type VerifyRpDidResult,
 } from "./bridge-protocol.js";
 import { effectDiffView, ABSENT_VALUE, type ConsentEffect } from "@openvtc/pnm-core";
+import { base64url } from "@openvtc/vti-didcomm-js";
 import { runApproverUnlockCeremony } from "./webauthn-prf-unlock.js";
 
 // Consent prompt shown in a popup window before the wallet logs into an RP.
@@ -43,8 +44,14 @@ const action = params.get("action");
 // whether to approve it.
 const changedFromRpDid = params.get("changedFrom");
 
-function decide(approved: boolean, remember = false): void {
-  chrome.runtime.sendMessage({ type: RUNTIME_CONSENT_RESULT, consentId, approved, remember });
+function decide(approved: boolean, remember = false, prfOutputB64u?: string): void {
+  chrome.runtime.sendMessage({
+    type: RUNTIME_CONSENT_RESULT,
+    consentId,
+    approved,
+    remember,
+    ...(prfOutputB64u ? { prfOutputB64u } : {}),
+  });
   window.close();
 }
 
@@ -729,8 +736,11 @@ function TaskConsent() {
     setBioBusy(true);
     setBioError(null);
     try {
-      await runApproverUnlockCeremony(chrome.runtime.id, digest);
-      decide(true);
+      // The per-decision PRF output unwraps the approver key for exactly this
+      // signature. Hand it back so the same-browser relay can sign the decision
+      // without a pre-unlocked approver session; it is never cached.
+      const { prfOutput } = await runApproverUnlockCeremony(chrome.runtime.id, digest);
+      decide(true, false, base64url.encode(prfOutput));
     } catch (e) {
       setBioError(e instanceof Error ? e.message : String(e));
     } finally {
