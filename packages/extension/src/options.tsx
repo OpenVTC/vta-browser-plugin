@@ -391,6 +391,25 @@ function Options() {
           {" "}<code>approver_set</code> and ACL (as a context admin) so its
           approvals confer authority.
         </div>
+        {approverDidValue ? (
+          <div
+            style={{
+              marginTop: 10,
+              fontSize: 12,
+              color: "#9fd0b0",
+              lineHeight: 1.5,
+              background: "#12210f",
+              border: "1px solid #26421f",
+              borderRadius: 6,
+              padding: "8px 10px",
+            }}
+          >
+            Ready. When a task in this browser needs approval, the biometric
+            prompt appears automatically — no unlock to remember. &ldquo;Start
+            approving&rdquo; below is only needed to receive requests for a task
+            proposed on a <em>different</em> device.
+          </div>
+        ) : null}
 
         {approverDidValue ? (
           <div style={{ marginTop: 12 }}>
