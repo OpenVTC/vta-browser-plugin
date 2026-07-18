@@ -44,6 +44,35 @@ export const TASK_CONSENT_REQUEST_TYPE =
   "https://trusttasks.org/spec/task-consent/request/0.1";
 export const TASK_CONSENT_DECISION_TYPE =
   "https://trusttasks.org/spec/task-consent/decision/0.1";
+/** VTA → requester: an approval landed and a grant is ready — re-submit now. */
+export const TASK_CONSENT_GRANTED_TYPE =
+  "https://trusttasks.org/spec/task-consent/granted/0.1";
+
+/**
+ * Parse a VTA→requester `task-consent/granted` notice.
+ *
+ * The VTA sends it as a plaintext DIDComm message whose `type` is the granted
+ * type and whose `body` carries the salted `payloadDigest` the requester already
+ * holds. It is a **non-load-bearing nudge**: it only tells the requester to
+ * re-submit now instead of polling, and the single-use grant check on that
+ * re-submit is the real gate — so this needs no Data-Integrity proof. We still
+ * accept it only from this device's enrolled VTA (the authcrypt sender), and the
+ * page re-checks the digest against its outstanding approval before acting.
+ */
+export function parseTaskConsentGranted(
+  message: Record<string, unknown>,
+  expectedVtaDid: string,
+): { payloadDigest: string } | null {
+  if (message.type !== TASK_CONSENT_GRANTED_TYPE) return null;
+  const from = typeof message.from === "string" ? message.from : null;
+  // If the transport surfaced a sender, it must be our VTA; a missing sender
+  // is tolerated (the page-side digest match is the ultimate guard).
+  if (from && from !== expectedVtaDid) return null;
+  const body = (message.body ?? {}) as { payloadDigest?: unknown };
+  return typeof body.payloadDigest === "string"
+    ? { payloadDigest: body.payloadDigest }
+    : null;
+}
 
 /** SPEC §7.3 item 13 — the integrity effect of executing the task. */
 export type SideEffectLevel = "none" | "mutating" | "destructive";

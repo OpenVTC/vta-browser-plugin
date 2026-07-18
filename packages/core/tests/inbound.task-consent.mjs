@@ -4,10 +4,12 @@ import assert from "node:assert/strict";
 import { generateSigningIdentity } from "../dist/siop/self-issued.js";
 import {
   parseTaskConsentRequest,
+  parseTaskConsentGranted,
   describeEffects,
   buildTaskConsentDecisionDocument,
   TASK_CONSENT_REQUEST_TYPE,
   TASK_CONSENT_DECISION_TYPE,
+  TASK_CONSENT_GRANTED_TYPE,
 } from "../dist/inbound/task-consent.js";
 import { signTrustTask } from "../dist/trust-tasks/sign.js";
 import { TRUST_TASK_ENVELOPE_TYPE } from "../dist/vta/protocol.js";
@@ -212,4 +214,35 @@ test("a denial is an explicit decision, not an absent one", async () => {
   // The wire form is an enum precisely so a missing or falsy value can never read
   // as assent: silence, timeouts and dismissals are denials.
   assert.equal(doc.payload.decision, "deny");
+});
+
+// ── task-consent/granted (the pub/sub nudge) ──────────────────────────────
+
+test("parseTaskConsentGranted accepts a granted notice from our VTA", () => {
+  const msg = {
+    type: TASK_CONSENT_GRANTED_TYPE,
+    from: VTA.did,
+    body: { status: "granted", payloadDigest: "abc123", taskType: "t" },
+  };
+  assert.deepEqual(parseTaskConsentGranted(msg, VTA.did), { payloadDigest: "abc123" });
+});
+
+test("parseTaskConsentGranted ignores a non-granted message type", () => {
+  const msg = { type: "other", from: VTA.did, body: { payloadDigest: "x" } };
+  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
+});
+
+test("parseTaskConsentGranted rejects a sender that is not our VTA", () => {
+  const msg = { type: TASK_CONSENT_GRANTED_TYPE, from: IMPOSTOR.did, body: { payloadDigest: "x" } };
+  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
+});
+
+test("parseTaskConsentGranted tolerates a missing sender (page re-checks the digest)", () => {
+  const msg = { type: TASK_CONSENT_GRANTED_TYPE, body: { payloadDigest: "x" } };
+  assert.deepEqual(parseTaskConsentGranted(msg, VTA.did), { payloadDigest: "x" });
+});
+
+test("parseTaskConsentGranted requires a string payloadDigest", () => {
+  const msg = { type: TASK_CONSENT_GRANTED_TYPE, from: VTA.did, body: {} };
+  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
 });

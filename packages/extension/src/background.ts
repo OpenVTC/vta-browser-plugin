@@ -69,6 +69,8 @@ import {
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
   RUNTIME_MEDIATOR_STATUS,
+  RUNTIME_EMIT_WALLET_EVENT,
+  type WalletEventKind,
   RUNTIME_CREATE_CONTEXT,
   RUNTIME_DERIVE_SIGNING_KEY_ID,
   RUNTIME_HOLDER_STATE,
@@ -196,7 +198,7 @@ async function reloadContentScriptTabs(): Promise<void> {
  *  window event. Best-effort — `chrome.tabs.sendMessage` to a tab
  *  with no content-script listener throws and is swallowed. */
 async function broadcastWalletEvent(
-  event: "ready" | "unlocked" | "locked" | "connectionchanged" | "disconnected",
+  event: WalletEventKind,
   detail?: Record<string, unknown>,
 ): Promise<void> {
   const manifest = chrome.runtime.getManifest();
@@ -1545,6 +1547,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
     return true; // async sendResponse
+  }
+
+  // The offscreen inbound listener can't reach `chrome.tabs`, so it asks us to
+  // broadcast a wallet event to pages (e.g. `consentgranted`). Fire-and-forget.
+  if ((message as { type?: string })?.type === RUNTIME_EMIT_WALLET_EVENT) {
+    const m = message as { event: WalletEventKind; detail?: Record<string, unknown> };
+    void broadcastWalletEvent(m.event, m.detail);
+    return false;
   }
 
   if ((message as { type?: string })?.type === RUNTIME_ONBOARD_PREPARE) {

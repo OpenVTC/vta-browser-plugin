@@ -24,6 +24,7 @@ import {
   buildStepUpApproval,
   resolveKeyAgreement,
   parseTaskConsentRequest,
+  parseTaskConsentGranted,
   requestTask,
   buildTaskConsentDecision,
   loadApproverIdentity,
@@ -99,6 +100,7 @@ import {
   OFFSCREEN_VERIFY_DID,
   RUNTIME_INBOUND_CONSENT,
   RUNTIME_TASK_CONSENT,
+  RUNTIME_EMIT_WALLET_EVENT,
   type OffscreenDidcommLoginRequest,
   type OffscreenRestLoginRequest,
   type OffscreenCreateContextRequest,
@@ -1527,6 +1529,21 @@ async function handleInbound(
   // as the approver, and the popup demands a per-decision biometric.
   isApprover = false,
 ): Promise<void> {
+  // A grant is ready: the VTA tells the requester an approval landed, so the
+  // page can re-submit the instant it happens rather than poll. Non-load-bearing
+  // — accepted only from our enrolled VTA, carries no secret, and the page
+  // re-checks the digest against its outstanding approval before acting — so we
+  // just relay it to the background, which broadcasts it as a page event.
+  const granted = parseTaskConsentGranted(message, vtaDid);
+  if (granted) {
+    void chrome.runtime.sendMessage({
+      type: RUNTIME_EMIT_WALLET_EVENT,
+      event: "consentgranted",
+      detail: { payloadDigest: granted.payloadDigest },
+    });
+    return;
+  }
+
   // Task-execution consent, first — it is the one inbound the *VTA itself*
   // sends, and it is the one whose content a human will act on.
   //
