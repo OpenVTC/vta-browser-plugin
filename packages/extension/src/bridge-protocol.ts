@@ -203,7 +203,10 @@ export type WalletEventKind =
   | "unlocked"
   | "locked"
   | "connectionchanged"
-  | "disconnected";
+  | "disconnected"
+  /** A task the page proposed has been approved and a grant is ready — the page
+   *  can re-submit at once instead of polling. `detail: { payloadDigest }`. */
+  | "consentgranted";
 
 /** content → provider broadcast. Re-dispatched by the provider as
  *  `window.dispatchEvent(new CustomEvent("vtawallet:" + kind, ...))`. */
@@ -226,6 +229,18 @@ export const RUNTIME_BROADCAST_EVENT = "vta-wallet/broadcast-event" as const;
 
 export interface RuntimeBroadcastEvent {
   type: typeof RUNTIME_BROADCAST_EVENT;
+  event: WalletEventKind;
+  detail?: Record<string, unknown>;
+}
+
+/** offscreen → background: ask the background to broadcast a wallet event to
+ *  pages. The inbound mediator listener lives in the offscreen document, which
+ *  has no `chrome.tabs` access, so it delegates the page broadcast to the
+ *  background (which owns [`broadcastWalletEvent`]). */
+export const RUNTIME_EMIT_WALLET_EVENT = "vta-wallet/emit-wallet-event" as const;
+
+export interface RuntimeEmitWalletEvent {
+  type: typeof RUNTIME_EMIT_WALLET_EVENT;
   event: WalletEventKind;
   detail?: Record<string, unknown>;
 }
