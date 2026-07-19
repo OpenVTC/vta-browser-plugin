@@ -69,6 +69,33 @@ function coerceCode(raw: string | undefined, status: number): VtaErrorCode {
   return "e.p.msg.bad_request";
 }
 
+/**
+ * Build the typed error from an ALREADY-PARSED body.
+ *
+ * This exists because a `Response` body can only be read once. A caller that
+ * has already parsed the body — as `RestChannel` must, to tell a Trust-Task
+ * refusal from a transport failure — cannot hand the same `Response` to
+ * {@link errorFromResponse}: the second read throws, the `catch` below
+ * swallows it, and `body.error.code` silently comes back `undefined`. The
+ * server's machine-readable code is then discarded and the error degrades to a
+ * status-only guess, which is the exact failure R3.7 forbids.
+ *
+ * So: parse once, pass the parsed body here.
+ */
+export function errorFromBody(
+  body: unknown,
+  status: number,
+  statusText = "",
+): VtaClientError {
+  const parsed = body as ServerErrorBody | undefined;
+  const code = coerceCode(parsed?.error?.code, status);
+  const message = parsed?.error?.message ?? `${status} ${statusText}`.trim();
+  const opts: { status: number; details?: unknown; suggestion?: string } = { status };
+  if (parsed?.error?.details !== undefined) opts.details = parsed.error.details;
+  if (parsed?.error?.suggestion !== undefined) opts.suggestion = parsed.error.suggestion;
+  return new VtaClientError(code, message, opts);
+}
+
 export async function errorFromResponse(res: Response): Promise<VtaClientError> {
   let body: ServerErrorBody | undefined;
   try {

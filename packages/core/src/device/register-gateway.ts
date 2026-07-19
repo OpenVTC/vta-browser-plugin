@@ -69,23 +69,37 @@ export async function registerPushChannel(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(doc),
   });
-  if (!res.ok) {
+  // Parse the body BEFORE deciding on status (R3.7). `/trust-tasks` is the
+  // dispatcher endpoint, so a refusal — including a consent requirement —
+  // arrives as a `trust-task-error` document at a non-2xx status. Throwing on
+  // `!res.ok` first made the `isTrustTaskErrorType` branch below unreachable
+  // for every rejected task and flattened the machine-readable code into an
+  // opaque string that callers could only match on.
+  let out: { type?: string; payload?: unknown } | undefined;
+  let raw: string | undefined;
+  try {
+    raw = await res.text();
+    out = JSON.parse(raw) as { type?: string; payload?: unknown };
+  } catch {
+    // Not JSON — there is no code to recover, so the status is all we have.
     throw new Error(
-      `push/register: ${base}/trust-tasks failed (${res.status}): ${await res.text()}`,
+      `push/register: ${base}/trust-tasks failed (${res.status}): ${raw ?? "(no body)"}`,
     );
   }
 
-  const out = (await res.json()) as { type?: string; payload?: unknown };
-  if (out.type === TASK_PUSH_REGISTER_RESPONSE) {
+  if (isTrustTaskErrorType(out?.type)) {
+    const err = out?.payload as { code?: string; message?: string };
+    throw new Error(`${err?.code ?? "unknown"}: ${err?.message ?? "(no message)"}`);
+  }
+  if (!res.ok) {
+    throw new Error(`push/register: ${base}/trust-tasks failed (${res.status}): ${raw}`);
+  }
+  if (out?.type === TASK_PUSH_REGISTER_RESPONSE) {
     const handle = (out.payload as { wakeHandle?: WakeHandle })?.wakeHandle;
     if (!handle?.gateway || !handle?.handle) {
       throw new Error(`push/register: malformed response payload: ${JSON.stringify(out)}`);
     }
     return handle;
   }
-  if (isTrustTaskErrorType(out.type)) {
-    const err = out.payload as { code?: string; message?: string };
-    throw new Error(`${err?.code ?? "unknown"}: ${err?.message ?? "(no message)"}`);
-  }
-  throw new Error(`push/register: unexpected response type ${out.type ?? "(none)"}`);
+  throw new Error(`push/register: unexpected response type ${out?.type ?? "(none)"}`);
 }

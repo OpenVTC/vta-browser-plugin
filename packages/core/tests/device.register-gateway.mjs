@@ -19,17 +19,26 @@ const REGISTRATION = {
   keys: { p256dh: "p256dh-key", auth: "auth-secret" },
 };
 
+/** A real `Response`, not an ad-hoc `{ ok, json }` literal. A hand-rolled stub
+ *  only implements whatever the code happened to call when it was written, so
+ *  it silently stops representing a Response the moment the code reads the body
+ *  a different way — which is how these tests failed against a change that is
+ *  correct for every real Response. */
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 test("registerPushChannel posts a push/register doc and returns the handle", async () => {
   let captured;
   const fetchStub = async (url, init) => {
     captured = { url, init };
-    return {
-      ok: true,
-      json: async () => ({
-        type: "https://trusttasks.org/spec/push/register/0.2#response",
-        payload: { wakeHandle: { gateway: "https://gw.example", handle: "z6MkHandle" } },
-      }),
-    };
+    return jsonResponse({
+      type: "https://trusttasks.org/spec/push/register/0.2#response",
+      payload: { wakeHandle: { gateway: "https://gw.example", handle: "z6MkHandle" } },
+    });
   };
 
   const handle = await registerPushChannel({
@@ -56,13 +65,11 @@ test("registerPushChannel posts a push/register doc and returns the handle", asy
 });
 
 test("registerPushChannel surfaces a trust-task-error envelope", async () => {
-  const fetchStub = async () => ({
-    ok: true,
-    json: async () => ({
+  const fetchStub = async () =>
+    jsonResponse({
       type: "https://trusttasks.org/spec/trust-task-error/0.1",
       payload: { code: "push/register:bad_token", message: "unsupported platform" },
-    }),
-  });
+    });
 
   await assert.rejects(
     () =>
@@ -73,5 +80,48 @@ test("registerPushChannel surfaces a trust-task-error envelope", async () => {
         fetch: fetchStub,
       }),
     /push\/register:bad_token: unsupported platform/,
+  );
+});
+
+// ── R3.7: parse the body before throwing on status ───────────────────────────
+
+test("a refusal at a non-2xx status still surfaces its machine-readable code", async () => {
+  // The bug this replaces: `/trust-tasks` is the dispatcher, so a rejected task
+  // arrives as a trust-task-error document at a NON-2xx status. Throwing on
+  // `!res.ok` first made the error branch unreachable for every rejected task,
+  // flattening the code into an opaque `failed (403): {...}` string.
+  const fetchStub = async () =>
+    jsonResponse(
+      {
+        type: "https://trusttasks.org/spec/trust-task-error/0.1",
+        payload: { code: "auth:consent_required", message: "operator approval needed" },
+      },
+      403,
+    );
+
+  await assert.rejects(
+    () =>
+      registerPushChannel({
+        gatewayUrl: "https://gw.example",
+        registration: REGISTRATION,
+        controllerVtaDid: "did:webvh:example:vta",
+        fetch: fetchStub,
+      }),
+    /auth:consent_required: operator approval needed/,
+  );
+});
+
+test("a non-2xx that is NOT a trust-task document still reports status and body", async () => {
+  const fetchStub = async () => new Response("upstream exploded", { status: 502 });
+
+  await assert.rejects(
+    () =>
+      registerPushChannel({
+        gatewayUrl: "https://gw.example",
+        registration: REGISTRATION,
+        controllerVtaDid: "did:webvh:example:vta",
+        fetch: fetchStub,
+      }),
+    /failed \(502\): upstream exploded/,
   );
 });

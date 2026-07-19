@@ -12,7 +12,7 @@
 // and never leaks into a domain op.
 
 import type { SendOpts, TrustTaskChannel } from "./channel.js";
-import { errorFromResponse, VtaClientError } from "./errors.js";
+import { errorFromBody, VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
 import { parseTrustTaskReply } from "./trust-task.js";
 import { isTrustTaskErrorType } from "./protocol.js";
@@ -84,33 +84,62 @@ export class RestChannel implements TrustTaskChannel {
       res = await post(await makeReauth(this.auth)());
     }
 
-    // A rejected Trust Task comes back at a non-2xx status with a
-    // `trust-task-error` document as its body. Handing that to
-    // `errorFromResponse` — which expects a different shape entirely — throws
-    // the document away, and with it the `details` a caller needs: the payload
-    // digest a user must match, the challenge, the signed consent requests an
-    // approver has to render.
-    //
-    // A refusal is not a transport failure. Parse the body first, and only fall
-    // back to the generic HTTP error when it is not a Trust Task at all.
-    let doc: { type?: string; payload?: unknown } | undefined;
-    try {
-      doc = (await res.json()) as { type?: string; payload?: unknown };
-    } catch (err) {
-      if (!res.ok) throw await errorFromResponse(res);
-      throw new VtaClientError("e.client.parse", (err as Error).message, {
-        status: res.status,
-      });
-    }
-    if (!res.ok && !isTrustTaskErrorType(doc?.type)) {
-      throw await errorFromResponse(res);
-    }
-
-    return parseTrustTaskReply<Res>(doc, {
+    return decodeTrustTaskHttpReply<Res>(res, {
       ...(opts.expectedResponseType !== undefined
         ? { expectedResponseType: opts.expectedResponseType }
         : {}),
       operationLabel: label,
     });
   }
+}
+
+/**
+ * Decode an HTTP Trust-Task reply: read the body once, map failures to typed
+ * errors, and hand a well-formed document to {@link parseTrustTaskReply}.
+ *
+ * Exported (rather than inlined in `send`) so this is reachable from a test
+ * without standing up the whole bearer handshake. The decision it encodes is
+ * security-relevant — whether a refusal keeps its `details` — and logic that
+ * can only be exercised through a DIDComm authcrypt round-trip is logic that
+ * in practice never gets exercised at all.
+ *
+ * Two rules, both R3.7:
+ *
+ *  1. A rejected Trust Task comes back at a NON-2xx status with a
+ *     `trust-task-error` document as its body. Throwing on status first would
+ *     discard the document, and with it the `details` a caller needs: the
+ *     payload digest a user must match, the challenge, the signed consent
+ *     requests an approver has to render. A refusal is not a transport
+ *     failure. Parse first; fall back to the generic HTTP error only when the
+ *     body is not a Trust Task at all.
+ *  2. Read the body ONCE. `res.json()` consumes the stream, so every path here
+ *     works from the parsed `doc`. Handing `res` to `errorFromResponse` after
+ *     parsing would re-read a spent body, lose the server's code to that
+ *     function's internal `catch`, and degrade to a status-only guess.
+ */
+export async function decodeTrustTaskHttpReply<Res>(
+  res: Response,
+  opts: { expectedResponseType?: string; operationLabel?: string } = {},
+): Promise<Res> {
+  let doc: { type?: string; payload?: unknown } | undefined;
+  try {
+    doc = (await res.json()) as { type?: string; payload?: unknown };
+  } catch (err) {
+    // Not JSON, so there is no code to recover — build from the status alone
+    // rather than from a stream we cannot read again.
+    if (!res.ok) throw errorFromBody(undefined, res.status, res.statusText);
+    throw new VtaClientError("e.client.parse", (err as Error).message, {
+      status: res.status,
+    });
+  }
+  if (!res.ok && !isTrustTaskErrorType(doc?.type)) {
+    throw errorFromBody(doc, res.status, res.statusText);
+  }
+
+  return parseTrustTaskReply<Res>(doc, {
+    ...(opts.expectedResponseType !== undefined
+      ? { expectedResponseType: opts.expectedResponseType }
+      : {}),
+    ...(opts.operationLabel !== undefined ? { operationLabel: opts.operationLabel } : {}),
+  });
 }
