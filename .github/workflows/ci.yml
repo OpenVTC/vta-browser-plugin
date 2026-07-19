@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A superseded run on the same PR tells you nothing worth waiting for.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # package.json declares engines.node >=20, so prove it on the floor as
+        # well as on current LTS rather than only on whatever the dev has.
+        node: ["20", "22"]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      # Deliberately runs from a cold checkout with no build state. Every
+      # workspace typechecks against its dependencies' emitted `dist`, so a
+      # missing build step surfaces here as "cannot find module" in source that
+      # is perfectly correct. `tsc -b` walks the project references and builds
+      # them in order; this job is what keeps that wiring honest.
+      - name: Lint (typecheck, builds project references)
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      # The MV3 service worker may not call dynamic `import()` (HTML spec; see
+      # w3c/ServiceWorker#1356), so background.js must stay a single
+      # self-contained bundle. Rollup silently emits extra chunks if the
+      # `codeSplitting: false` output option is lost in a future upgrade, and
+      # the failure would land at runtime in users' browsers rather than here.
+      - name: Assert MV3 worker is a single self-contained bundle
+        run: |
+          bundle=packages/extension/dist/background.js
+          test -f "$bundle" || { echo "::error::$bundle was not emitted"; exit 1; }
+          if grep -qE '\bimport\s*\(' "$bundle"; then
+            echo "::error::$bundle contains a dynamic import(); MV3 service workers cannot load it"
+            exit 1
+          fi
+          echo "OK: $bundle is a single bundle with no dynamic import()"

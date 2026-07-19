@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "./packages/tsp-js" },
     { "path": "./packages/core" },
     { "path": "./packages/pwa" },
     { "path": "./packages/extension" }
