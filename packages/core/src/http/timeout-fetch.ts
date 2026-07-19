@@ -41,8 +41,9 @@ export function withFetchTimeout(
     const caller = init?.signal;
     let signal: AbortSignal = timeout;
     if (caller) {
-      // `AbortSignal.any` is Node >=20.3 / Chrome >=116. Both are inside this
-      // package's supported range, but fall back rather than throw: losing the
+      // `AbortSignal.any` needs Chrome >=116; Node is never the constraint
+      // now that the floor is 24. The guard is for the browser runtime this
+      // actually ships into. Fall back rather than throw: losing the
       // combination is recoverable, losing the timeout is the bug we are here
       // to fix, so the timeout is what survives.
       signal =
