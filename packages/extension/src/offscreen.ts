@@ -24,6 +24,9 @@ import {
   buildStepUpApproval,
   resolveKeyAgreement,
   parseTaskConsentRequest,
+  putPendingInbound,
+  listPendingInbound,
+  removePendingInbound,
   ReconnectScheduler,
   parseTaskConsentGranted,
   requestTask,
@@ -1304,9 +1307,9 @@ async function createWarmSession(
   // Attach the inbound confirm handler whenever this is the wallet's inbox
   // mediator — regardless of which operation first opened the session.
   if (isInbox) {
-    conn.onInbound(
-      (message) => void handleInbound(conn, identity, signing, vtaDid, message),
-    );
+    // Return the promise: the transport awaits it and acks only once the
+    // message is durably recorded (R1.6).
+    conn.onInbound((message) => onInboundMessage(conn, identity, signing, vtaDid, message));
   }
   return conn;
 }
@@ -1405,9 +1408,8 @@ async function createApproverWarmSession(vtaDid: string): Promise<MediatorConnec
   });
   // Inbound on the approver session is handled as the approver (its identity +
   // signing), with `isApprover` so the popup demands the per-decision biometric.
-  conn.onInbound(
-    (message) =>
-      void handleInbound(conn, approver.identity, approver.signing, vtaDid, message, true),
+  conn.onInbound((message) =>
+    onInboundMessage(conn, approver.identity, approver.signing, vtaDid, message, true),
   );
   console.info("[pnm approver] inbox listening as", approver.did);
   return conn;
@@ -1537,6 +1539,11 @@ async function reconcileInbound(vtaDids: readonly string[]): Promise<void> {
     }),
   );
 
+  // Re-drive anything interrupted before it concluded. Done after the
+  // sessions are up, because finishing an interaction means sending a signed
+  // decision back over one.
+  void drainPendingInbound(vtaDids);
+
   // Close extras: any pool entry whose mediator matches our inbox AND
   // whose vtaDid is no longer wanted (operator forgot it). The pool
   // also holds outbound sessions to OTHER mediators (the VTA's
@@ -1562,7 +1569,161 @@ async function reconcileInbound(vtaDids: readonly string[]): Promise<void> {
   }
 }
 
+/**
+ * Re-drive inbound messages that were persisted but never concluded.
+ *
+ * These are the R1.6 recovery cases: the message was durably recorded (so the
+ * ack was safe to send), a prompt may well have been raised, and then the
+ * offscreen document or worker went away before the user answered. The
+ * mediator has long since dropped its copy, so this store is the only route
+ * back to that consent request.
+ *
+ * Skips silently — leaving the record in place — for anything it cannot
+ * currently act on: a VTA the operator has since forgotten, or an approver
+ * inbox that is locked. A locked approver is not a failure, it is a user who
+ * has not unlocked yet, and the record will be drained after they do.
+ */
+async function drainPendingInbound(vtaDids: readonly string[]): Promise<void> {
+  const store = new IndexedDBKVStore();
+  const pending = await listPendingInbound(store).catch((err: unknown) => {
+    console.warn("[pnm inbound] could not read pending inbound", err);
+    return [];
+  });
+  if (pending.length === 0) return;
+
+  const wanted = new Set(vtaDids);
+  for (const entry of pending) {
+    if (!wanted.has(entry.vtaDid)) continue; // VTA no longer configured
+    try {
+      if (entry.isApprover) {
+        const approver = approverIdentities.get(entry.vtaDid);
+        if (!approver) continue; // locked — retry after the next unlock
+        const conn = await getApproverWarmSession(entry.vtaDid);
+        console.info("[pnm inbound] re-driving interrupted approver message", entry.id);
+        await handleInbound(
+          conn,
+          approver.identity,
+          approver.signing,
+          entry.vtaDid,
+          entry.message,
+          true,
+          true,
+        );
+      } else {
+        const mediatorDid = await walletMediatorDid();
+        const conn = await getWarmSession(mediatorDid, entry.vtaDid);
+        const { identity, signing } = await loadHolder(entry.vtaDid);
+        console.info("[pnm inbound] re-driving interrupted message", entry.id);
+        await handleInbound(
+          conn,
+          identity,
+          signing,
+          entry.vtaDid,
+          entry.message,
+          false,
+          true,
+        );
+      }
+    } catch (err) {
+      // Leave the record: better a retry next boot than a dropped consent.
+      console.warn("[pnm inbound] could not re-drive pending message", entry.id, err);
+    }
+  }
+}
+
+/**
+ * The `onInbound` handler proper: durably record the message, then let the
+ * interaction run on its own.
+ *
+ * The transport (vti-didcomm-js >=0.6.2) delivers first and acks once this
+ * promise settles, and the ack is what makes the mediator delete its queued
+ * copy. So the awaited part is the PERSIST and nothing else (R1.6).
+ *
+ * What must NOT be awaited here is `handleInbound`, which blocks on a human
+ * decision. Holding the ack for the length of a consent prompt would leave the
+ * message un-acked for minutes and the mediator redelivering it throughout.
+ * Persist (fast, durable) → resolve → ack; prompt (slow) → afterwards.
+ *
+ * On a failed persist we still dispatch — the message is in memory and the
+ * user may be able to act on it now — and then rethrow.
+ *
+ * Be clear about what the rethrow buys today: **nothing.** vti-didcomm-js
+ * 0.6.2 wraps the listener in a bare `catch {}` inside `_deliver` and acks
+ * regardless, so a rejection here is swallowed and the message is lost anyway.
+ * It is rethrown because that is the correct signal — a consumer that could
+ * not make the message durable has not taken delivery of it — and because a
+ * library that later honours it would suppress the ack and let the mediator
+ * redeliver, which `dedup.ts` already makes safe. Until then this window is a
+ * known, narrow gap: see `inbound.ack-ordering.mjs`, which pins the current
+ * behaviour so a fix upstream shows up as a failing test rather than a
+ * silent change.
+ */
+async function onInboundMessage(
+  conn: MediatorConnection,
+  identity: Parameters<typeof buildConfirmResponse>[0]["holder"],
+  signing: Parameters<typeof buildConfirmResponse>[0]["signing"],
+  vtaDid: string,
+  message: Record<string, unknown>,
+  isApprover = false,
+): Promise<void> {
+  const id = typeof message.id === "string" ? message.id : undefined;
+  let persistError: unknown;
+  if (id) {
+    try {
+      await putPendingInbound(new IndexedDBKVStore(), {
+        id,
+        message,
+        vtaDid,
+        isApprover,
+      });
+    } catch (err) {
+      persistError = err;
+      console.error(
+        "[pnm inbound] FAILED to durably record inbound message — it cannot be " +
+          "recovered if this document is torn down before the user decides",
+        id,
+        err,
+      );
+    }
+  }
+  // Deliberately not awaited — see above.
+  void handleInbound(conn, identity, signing, vtaDid, message, isApprover);
+  if (persistError) throw persistError;
+}
+
+/**
+ * Run an inbound message to conclusion, then release its pending record.
+ *
+ * The record is dropped in a `finally` — i.e. when the interaction genuinely
+ * ends, whether that is a decision sent, a refusal, or an unrecognised message
+ * ignored. It is emphatically NOT dropped when the prompt merely opens: the
+ * window this store covers is exactly the one where a prompt is open and the
+ * worker dies before the user answers.
+ */
 async function handleInbound(
+  conn: MediatorConnection,
+  identity: Parameters<typeof buildConfirmResponse>[0]["holder"],
+  signing: Parameters<typeof buildConfirmResponse>[0]["signing"],
+  vtaDid: string,
+  message: Record<string, unknown>,
+  isApprover = false,
+  fromDrain = false,
+): Promise<void> {
+  try {
+    await dispatchInbound(conn, identity, signing, vtaDid, message, isApprover, fromDrain);
+  } finally {
+    const id = typeof message.id === "string" ? message.id : undefined;
+    if (id) {
+      await removePendingInbound(new IndexedDBKVStore(), id).catch((err: unknown) => {
+        // A failed cleanup is not worth failing the interaction over; the
+        // record is bounded and the worst case is one redundant re-drive.
+        console.warn("[pnm inbound] could not clear pending record", id, err);
+      });
+    }
+  }
+}
+
+async function dispatchInbound(
   conn: MediatorConnection,
   identity: Parameters<typeof buildConfirmResponse>[0]["holder"],
   signing: Parameters<typeof buildConfirmResponse>[0]["signing"],
@@ -1571,6 +1732,11 @@ async function handleInbound(
   // True when this is the approver's own inbox session: the decision is signed
   // as the approver, and the popup demands a per-decision biometric.
   isApprover = false,
+  // Set on the startup drain: this message was already persisted (and possibly
+  // already prompted for) before the worker died. The dedup check must be
+  // bypassed, or recovery would skip precisely the interrupted interaction it
+  // exists to finish.
+  fromDrain = false,
 ): Promise<void> {
   // A grant is ready: the VTA tells the requester an approval landed, so the
   // page can re-submit the instant it happens rather than poll. Non-load-bearing
@@ -1623,8 +1789,14 @@ async function handleInbound(
   // already handled so a replay doesn't pop a second consent prompt. Marked
   // before prompting so a replay during the consent window is also skipped.
   // Persisted (survives respawns — exactly when replays arrive).
+  //
+  // The drain path bypasses this. A drained message is one we persisted and
+  // very likely already prompted for — so its id IS in the handled set — but
+  // the user never got to answer before the worker died. Treating that as a
+  // duplicate would discard exactly the interrupted interaction the pending
+  // store exists to finish.
   const messageId = typeof message.id === "string" ? message.id : undefined;
-  if (messageId) {
+  if (messageId && !fromDrain) {
     const isNew = await markInboundHandled(new IndexedDBKVStore(), messageId);
     if (!isNew) {
       console.info("[pnm inbound] skipping replayed confirm:", messageId);

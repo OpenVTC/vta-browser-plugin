@@ -548,8 +548,23 @@ export interface MediatorConnection {
   readonly isOpen: boolean;
   /** Register a handler for unsolicited inbound messages (those no `waitFor`
    *  claims) — e.g. an RP-initiated `confirm` request. The handler should
-   *  filter by message `type`. Replaces any previously-registered handler. */
-  onInbound(handler: (message: Record<string, unknown>, thid: string) => void): void;
+   *  filter by message `type`. Replaces any previously-registered handler.
+   *
+   *  **Return a promise to hold the mediator's ack** (vti-didcomm-js >=0.6.2):
+   *  the transport delivers first and acks only once the returned promise
+   *  settles, and the ack is what makes the mediator delete its queued copy.
+   *  So a handler that must not lose the message resolves only after it has
+   *  durably stored it — while the mediator's copy still exists (R1.6).
+   *
+   *  Resolve as soon as the message is SAFE, not when the work is finished.
+   *  Awaiting a human decision here would hold the ack for minutes and the
+   *  mediator would redeliver throughout.
+   *
+   *  Delivery is at-least-once: the same message can arrive again after a
+   *  reconnect, so handlers must de-duplicate. */
+  onInbound(
+    handler: (message: Record<string, unknown>, thid: string) => void | Promise<void>,
+  ): void;
   /** Resolved VTA key-agreement endpoint (inner authcrypt target). */
   vta: ResolvedKeyAgreement;
   /** Resolved mediator key-agreement endpoint (forward-envelope target). */
