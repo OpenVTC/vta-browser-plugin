@@ -38,7 +38,7 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "lint": "tsc -b --noEmit",
+    "lint": "tsc -b",
     "test": "tsc -b && node --test tests/*.mjs",
     "clean": "rm -rf dist *.tsbuildinfo"
   },

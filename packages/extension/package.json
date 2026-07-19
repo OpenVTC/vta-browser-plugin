@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite build --watch --mode development",
     "build": "tsc -b && vite build && vite build -c vite.config.background.ts",
-    "lint": "tsc -b --noEmit",
+    "lint": "tsc -b",
     "render:icons": "scripts/render-icons.sh"
   },
   "dependencies": {

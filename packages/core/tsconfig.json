@@ -6,5 +6,10 @@
     "rootDir": "./src",
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  // core imports @openvtc/vti-tsp-js, so it typechecks against that package's
+  // built `dist`. Without this reference `tsc -b` has no idea it must build
+  // tsp-js first, and a missing/stale dist surfaces as "cannot find module" in
+  // core's own source — a build-order problem wearing a code-bug costume.
+  "references": [{ "path": "../tsp-js" }]
 }
