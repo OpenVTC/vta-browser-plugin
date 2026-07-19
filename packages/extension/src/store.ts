@@ -64,7 +64,15 @@ interface State {
 const chromeStorage = {
   getItem: (key: string): Promise<string | null> =>
     new Promise((resolve) => {
-      chrome.storage.local.get(key, (items) => resolve(items[key] ?? null));
+      // `@types/chrome` >=0.2 types the stored values as `{}` rather than
+      // `any`, which is honest: nothing guarantees what is under this key.
+      // Narrow rather than assert — a non-string here (a half-written record,
+      // a key another version of the extension wrote) must read as absent,
+      // not be handed to the JSON parser as if it were state.
+      chrome.storage.local.get(key, (items: Record<string, unknown>) => {
+        const value = items[key];
+        resolve(typeof value === "string" ? value : null);
+      });
     }),
   setItem: (key: string, value: string): Promise<void> =>
     new Promise((resolve) => {

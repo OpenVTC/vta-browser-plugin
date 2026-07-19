@@ -52,6 +52,6 @@
     "cbor-x": "^1.6.4"
   },
   "devDependencies": {
-    "typescript": "^5.7.2"
+    "typescript": "^7.0.2"
   }
 }
