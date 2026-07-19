@@ -122,30 +122,38 @@ test("the ack waits for a promise-returning handler (the whole R1.6 premise)", a
   let release;
   const gate = new Promise((r) => (release = r));
 
-  const { ws, jwe, readAck } = await harness(async () => {
+  const { session, ws, jwe, readAck } = await harness(async () => {
     order.push("handler-start");
     await gate; // stand-in for the durable write
     order.push("persisted");
   });
 
-  const originalSend = ws.send.bind(ws);
-  ws.send = (data) => {
-    order.push("ack");
-    originalSend(data);
-  };
+  try {
+    const originalSend = ws.send.bind(ws);
+    ws.send = (data) => {
+      order.push("ack");
+      originalSend(data);
+    };
 
-  ws.inject(jwe);
-  await settle();
+    ws.inject(jwe);
+    await settle();
 
-  assert.deepEqual(order, ["handler-start"], "no ack while the persist is in flight");
-  assert.equal(ws.sent.length, 0, "the mediator must still hold its copy");
+    assert.deepEqual(order, ["handler-start"], "no ack while the persist is in flight");
+    assert.equal(ws.sent.length, 0, "the mediator must still hold its copy");
 
-  release();
-  await settle();
+    release();
+    await settle();
 
-  assert.deepEqual(order, ["handler-start", "persisted", "ack"]);
-  const ack = await readAck();
-  assert.equal(ack.type, ACK_TYPE, "and it is a messages-received ack");
+    assert.deepEqual(order, ["handler-start", "persisted", "ack"]);
+    const ack = await readAck();
+    assert.equal(ack.type, ACK_TYPE, "and it is a messages-received ack");
+  } finally {
+    // Always close. An open session leaves its socket and timers on the event
+    // loop, and `node --test` waits for the loop to drain — which hung CI on
+    // Node 20 while Node 22 happened to exit anyway.
+    release();
+    session.close();
+  }
 });
 
 test("KNOWN GAP: a rejecting handler does NOT suppress the ack (0.6.2)", async () => {
@@ -161,32 +169,40 @@ test("KNOWN GAP: a rejecting handler does NOT suppress the ack (0.6.2)", async (
   // which our `dedup.ts` already makes safe. If that lands upstream this test
   // FAILS, which is the point: the change should be noticed and the wallet's
   // comment in `onInboundMessage` updated, not silently absorbed.
-  const { ws, jwe } = await harness(async () => {
+  const { session, ws, jwe } = await harness(async () => {
     throw new Error("IndexedDB unavailable");
   });
 
-  ws.inject(jwe);
-  await settle();
+  try {
+    ws.inject(jwe);
+    await settle();
 
-  assert.equal(
-    ws.sent.length,
-    1,
-    "as of 0.6.2 the ack is sent even though the handler rejected — if this " +
-      "now reads 0, the library began honouring rejections: good news, but " +
-      "update onInboundMessage's comment and this test together",
-  );
+    assert.equal(
+      ws.sent.length,
+      1,
+      "as of 0.6.2 the ack is sent even though the handler rejected — if this " +
+        "now reads 0, the library began honouring rejections: good news, but " +
+        "update onInboundMessage's comment and this test together",
+    );
+  } finally {
+    session.close();
+  }
 });
 
 test("a synchronous handler still acks — nothing regressed for other callers", async () => {
   const seen = [];
-  const { ws, jwe, readAck } = await harness((m) => {
+  const { session, ws, jwe, readAck } = await harness((m) => {
     seen.push(m.id);
   });
 
-  ws.inject(jwe);
-  await settle();
+  try {
+    ws.inject(jwe);
+    await settle();
 
-  assert.deepEqual(seen, ["urn:uuid:consent-1"]);
-  assert.equal(ws.sent.length, 1);
-  assert.equal((await readAck()).type, ACK_TYPE);
+    assert.deepEqual(seen, ["urn:uuid:consent-1"]);
+    assert.equal(ws.sent.length, 1);
+    assert.equal((await readAck()).type, ACK_TYPE);
+  } finally {
+    session.close();
+  }
 });
