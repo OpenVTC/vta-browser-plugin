@@ -24,6 +24,7 @@ import {
   buildStepUpApproval,
   resolveKeyAgreement,
   parseTaskConsentRequest,
+  ReconnectScheduler,
   parseTaskConsentGranted,
   requestTask,
   buildTaskConsentDecision,
@@ -1325,6 +1326,24 @@ async function createWarmSession(
 // disturb the working worker inbound path.
 const approverIdentities = new Map<string, ApproverIdentityResult>();
 const approverPool = new Map<string, Promise<MediatorConnection>>();
+// The approver inbox needs the same re-arming backoff as the worker inbox, and
+// for a sharper reason: this is the session that receives
+// `task-consent/request`, so a dead approver listener means gated actions never
+// get their human check (R1.5, R7.2).
+//
+// Uses the tested `ReconnectScheduler` from core rather than a second
+// hand-rolled loop. The worker path above deliberately keeps its own copy for
+// now — this pool is documented as parallel and isolated so it "can never
+// disturb the working worker inbound path", and unifying them is a change to
+// that path, not to this one. It can adopt this scheduler separately.
+const approverReconnect = new ReconnectScheduler({
+  baseMs: INBOUND_RECONNECT_BASE_MS,
+  maxMs: INBOUND_RECONNECT_MAX_MS,
+  attempt: (vtaDid) => startApprover(vtaDid),
+  // A deliberate lock clears the held identity and must not be undone by a
+  // retry that was already in flight.
+  shouldRetry: (vtaDid) => approverIdentities.has(vtaDid),
+});
 
 function approverPoolKey(mediatorDid: string, vtaDid: string): string {
   return `approver:${poolKey(mediatorDid, vtaDid)}`;
@@ -1344,6 +1363,9 @@ async function doUnlockApprover(
     throw new Error(`no approver identity minted for ${vtaDid}`);
   }
   approverIdentities.set(vtaDid, approver);
+  // A deliberate unlock is a fresh start: drop any backoff left over from an
+  // earlier outage so this attempt isn't queued behind a grown delay.
+  approverReconnect.clear(vtaDid);
   await getApproverWarmSession(vtaDid);
   return { approverDid: approver.did };
 }
@@ -1378,9 +1400,7 @@ async function createApproverWarmSession(vtaDid: string): Promise<MediatorConnec
       approverPool.delete(key);
       // Re-arm only while the approver is still unlocked — a deliberate lock
       // clears the held identity and must not resurrect the session.
-      if (approverIdentities.has(vtaDid)) {
-        setTimeout(() => void getApproverWarmSession(vtaDid).catch(() => undefined), 2000);
-      }
+      if (approverIdentities.has(vtaDid)) approverReconnect.schedule(vtaDid);
     },
   });
   // Inbound on the approver session is handled as the approver (its identity +
@@ -1393,9 +1413,32 @@ async function createApproverWarmSession(vtaDid: string): Promise<MediatorConnec
   return conn;
 }
 
+/** Bring the approver inbox up for `vtaDid`, reporting success as a boolean
+ *  rather than throwing.
+ *
+ *  Mirrors `startInbound`: every failure mode — mediator down, DNS, auth
+ *  rejection, the identity having been locked mid-flight — has to become
+ *  `false` so the retry loop can re-arm on it. A throw here would escape the
+ *  timer callback and kill the loop, which is how the previous
+ *  `.catch(() => undefined)` retry silently gave up for good. */
+async function startApprover(vtaDid: string): Promise<boolean> {
+  if (!approverIdentities.has(vtaDid)) return false; // locked — do not resurrect
+  try {
+    await getApproverWarmSession(vtaDid);
+    return true;
+  } catch (err) {
+    console.warn("[pnm approver] inbox connect failed for", vtaDid, err);
+    return false;
+  }
+}
+
 /** Drop every held approver identity + close its sessions (operator lock). */
 function lockApprovers(): void {
   approverIdentities.clear();
+  // Cancel pending retries too. `shouldRetry` already stops a fired timer from
+  // reconnecting, but leaving them armed means a lock-then-unlock inherits a
+  // stale, already-grown delay.
+  approverReconnect.clearAll();
   for (const [key, pending] of approverPool) {
     void pending.then((c) => c.close?.()).catch(() => undefined);
     approverPool.delete(key);
