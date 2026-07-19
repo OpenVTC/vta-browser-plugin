@@ -17,6 +17,7 @@ import type { TrustTask } from "./protocol.js";
 import { parseTrustTaskReply } from "./trust-task.js";
 import { isTrustTaskErrorType } from "./protocol.js";
 import { getVtaBearer, makeReauth, type VtaAuthInputs } from "../vault/transport.js";
+import { withFetchTimeout, isFetchTimeout, DEFAULT_FETCH_TIMEOUT_MS } from "../http/timeout-fetch.js";
 
 export interface RestChannelOptions extends VtaAuthInputs {
   /** Trust-task dispatcher path. Defaults to `/api/trust-tasks`. */
@@ -45,7 +46,7 @@ export class RestChannel implements TrustTaskChannel {
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
     };
     this.path = opts.trustTasksPath ?? "/api/trust-tasks";
-    this.fetchImpl = opts.fetch ?? fetch.bind(globalThis);
+    this.fetchImpl = withFetchTimeout(opts.fetch);
   }
 
   async send<Res>(envelope: TrustTask<unknown>, opts: SendOpts = {}): Promise<Res> {
@@ -65,6 +66,12 @@ export class RestChannel implements TrustTaskChannel {
           body,
         });
       } catch (err) {
+        if (isFetchTimeout(err)) {
+          throw new VtaClientError(
+            "e.client.timeout",
+            `${label}: VTA did not respond within ${DEFAULT_FETCH_TIMEOUT_MS / 1000}s`,
+          );
+        }
         throw new VtaClientError("e.client.network", (err as Error).message);
       }
     };

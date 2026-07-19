@@ -1,6 +1,7 @@
 import type { PasskeyEnrollmentResult } from "../webauthn/register.js";
 import { errorFromResponse, VtaClientError } from "./errors.js";
 import type { VtaTransport } from "./transport.js";
+import { withFetchTimeout, isFetchTimeout, DEFAULT_FETCH_TIMEOUT_MS } from "../http/timeout-fetch.js";
 import type {
   EnrollmentChallengeResponse,
   EnrollmentSubmitRequest,
@@ -33,7 +34,7 @@ export class VtaClient implements VtaTransport {
   constructor(cfg: VtaClientConfig) {
     this.baseUrl = cfg.baseUrl.replace(/\/$/, "");
     this.accessToken = cfg.accessToken;
-    this.fetchImpl = cfg.fetch ?? fetch.bind(globalThis);
+    this.fetchImpl = withFetchTimeout(cfg.fetch);
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -49,6 +50,12 @@ export class VtaClient implements VtaTransport {
         },
       });
     } catch (err) {
+      if (isFetchTimeout(err)) {
+        throw new VtaClientError(
+          "e.client.timeout",
+          `VTA did not respond within ${DEFAULT_FETCH_TIMEOUT_MS / 1000}s`,
+        );
+      }
       throw new VtaClientError("e.client.network", (err as Error).message);
     }
     if (!res.ok) throw await errorFromResponse(res);

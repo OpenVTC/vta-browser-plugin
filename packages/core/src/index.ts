@@ -11,6 +11,7 @@ export * from "./trust-tasks/index.js";
 export * from "./vault/index.js";
 export * from "./device/index.js";
 export * from "./provision/index.js";
+export * from "./http/index.js";
 export * from "./util/timing.js";
 
 export { attestedOrigin, type SenderLike } from "./bridge/origin.js";

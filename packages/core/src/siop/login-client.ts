@@ -7,6 +7,7 @@
 
 import { createStopwatch, type TimingMark } from "../util/timing.js";
 import { issueIdToken, type SigningIdentity } from "./self-issued.js";
+import { withFetchTimeout } from "../http/timeout-fetch.js";
 
 /** The canonical authenticate Trust-Task type from trusttasks-tf.
  *  did-hosting + VTA + VTC all dispatch on this same URI. */
@@ -42,7 +43,7 @@ export interface SiopLoginOptions {
 export async function loginViaSiop(
   opts: SiopLoginOptions,
 ): Promise<SiopLoginResult> {
-  const fetchFn = opts.fetch ?? fetch.bind(globalThis);
+  const fetchFn = withFetchTimeout(opts.fetch);
   const base = opts.baseUrl.replace(/\/+$/, "");
   const sw = createStopwatch();
 
