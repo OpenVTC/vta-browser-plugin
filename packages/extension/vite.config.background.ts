@@ -5,10 +5,13 @@ import { resolve } from "node:path";
 
 // Separate build for the MV3 service worker. A service worker may not call
 // dynamic `import()` (HTML spec; see w3c/ServiceWorker#1356), so the entry
-// must be a single self-contained bundle — `inlineDynamicImports` folds all
+// must be a single self-contained bundle — `codeSplitting: false` folds all
 // code-split chunks (e.g. the shared ed25519 chunk, didwebvh-ts's `fs`
-// browser stub) into one file. `emptyOutDir: false` so it doesn't wipe the
-// main build's output (popup/confirm/content/provider) that runs first.
+// browser stub) into one file. (Rollup 5 renamed this from the older
+// `inlineDynamicImports`; same guarantee, and the guarantee is the point —
+// if this ever emits a second chunk the worker breaks at runtime, not at
+// build time.) `emptyOutDir: false` so it doesn't wipe the main build's
+// output (popup/confirm/content/provider) that runs first.
 export default defineConfig({
   plugins: [wasm(), topLevelAwait()],
   build: {
@@ -21,7 +24,7 @@ export default defineConfig({
       input: { background: resolve(__dirname, "src/background.ts") },
       output: {
         entryFileNames: "background.js",
-        inlineDynamicImports: true,
+        codeSplitting: false,
       },
     },
   },
