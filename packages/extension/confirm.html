@@ -19,8 +19,15 @@
         line-height: 1.45;
         -webkit-font-smoothing: antialiased;
       }
+      /* The consent sheet is its own `chrome.windows.create` popup, not the
+         action popup — the ~800px action cap does not apply here. Fill whatever
+         width the background opened the window at (see `consentWindowBounds` in
+         background.ts) rather than pinning one: a fixed body width inside a
+         wider window just leaves dead space. */
       body {
-        width: 480px;
+        width: 100%;
+        box-sizing: border-box;
+        overflow-x: hidden;
       }
     </style>
   </head>

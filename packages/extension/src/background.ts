@@ -464,7 +464,49 @@ const pendingConsents = new Map<
   (approved: boolean, remember: boolean, prfOutputB64u?: string) => void
 >();
 
-function requestConsent(args: {
+/**
+ * Size a consent popup as wide as the display sensibly allows.
+ *
+ * These are `type: "popup"` windows, not the action popup, so the ~800px cap
+ * does not apply — the only real limit is the screen. An MV3 service worker has
+ * no `screen`/`window`, so the focused browser window's own bounds stand in for
+ * the display; if even that is unavailable we fall back to the old 480px, which
+ * is narrow but never wrong.
+ *
+ * Width is not cosmetic here: the destructive task sheet asks the operator to
+ * eyeball a change diff and match a digest, and a prompt that wraps or clips the
+ * thing being compared is a prompt that encourages approving without reading
+ * (R7.2).
+ */
+async function consentWindowBounds(
+  height: number,
+): Promise<{ width: number; height: number; left?: number; top?: number }> {
+  const MIN_WIDTH = 480;
+  // Past this, diff/digest lines stop getting easier to scan and start getting
+  // harder — the eye loses the line it is on.
+  const MAX_WIDTH = 1100;
+  // Keep the popup clear of the screen edges and of the OS window chrome.
+  const MARGIN = 48;
+
+  try {
+    const focused = await chrome.windows.getLastFocused();
+    const availWidth = focused?.width;
+    const availHeight = focused?.height;
+    if (!availWidth || !availHeight) return { width: MIN_WIDTH, height };
+
+    const width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, availWidth - MARGIN * 2));
+    // Never taller than the window we measured against, or the decision buttons
+    // land off-screen — an unreachable Deny button is a broken security control.
+    const h = Math.max(360, Math.min(height, availHeight - MARGIN));
+    const left = Math.round((focused.left ?? 0) + (availWidth - width) / 2);
+    const top = Math.round((focused.top ?? 0) + Math.max(0, (availHeight - h) / 2));
+    return { width, height: h, left, top };
+  } catch {
+    return { width: MIN_WIDTH, height };
+  }
+}
+
+async function requestConsent(args: {
   origin?: string;
   /** Suppress the "remember this site" checkbox.
    *
@@ -501,6 +543,8 @@ function requestConsent(args: {
       ? `&changedFrom=${encodeURIComponent(args.changedFromRpDid)}`
       : "");
 
+  const bounds = await consentWindowBounds(560);
+
   return new Promise<{ approved: boolean; remember: boolean }>((resolve) => {
     let settled = false;
     const settle = (approved: boolean, remember: boolean) => {
@@ -511,7 +555,7 @@ function requestConsent(args: {
     };
     pendingConsents.set(consentId, settle);
 
-    chrome.windows.create({ url, type: "popup", width: 480, height: 560 }, (win) => {
+    chrome.windows.create({ url, type: "popup", ...bounds }, (win) => {
       const winId = win?.id;
       if (winId === undefined) return;
       // Closing the window without a decision is a denial.
@@ -556,6 +600,11 @@ async function requestTaskConsent(
   const url =
     `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=task` +
     (approver ? "&approver=1" : "");
+
+  // A destructive task asks the user to match a digest, which needs room.
+  const destructive = request.sideEffects === "destructive";
+  const bounds = await consentWindowBounds(destructive ? 680 : 620);
+
   return new Promise<{ approved: boolean; prfOutputB64u?: string }>((resolve) => {
     let settled = false;
     const settle = (approved: boolean, prfOutputB64u?: string) => {
@@ -569,25 +618,20 @@ async function requestTaskConsent(
       settle(approved, prfOutputB64u),
     );
 
-    // A destructive task asks the user to match a digest, which needs room.
-    const destructive = request.sideEffects === "destructive";
-    chrome.windows.create(
-      { url, type: "popup", width: 480, height: destructive ? 680 : 620 },
-      (win) => {
-        const winId = win?.id;
-        if (winId === undefined) return;
-        // Closing the window without deciding is a denial. Never assent: silence
-        // is not agreement, and a task-consent prompt that timed out into an
-        // approval would be the single worst bug in this system.
-        const onClosed = (closedId: number) => {
-          if (closedId === winId) {
-            chrome.windows.onRemoved.removeListener(onClosed);
-            settle(false);
-          }
-        };
-        chrome.windows.onRemoved.addListener(onClosed);
-      },
-    );
+    chrome.windows.create({ url, type: "popup", ...bounds }, (win) => {
+      const winId = win?.id;
+      if (winId === undefined) return;
+      // Closing the window without deciding is a denial. Never assent: silence
+      // is not agreement, and a task-consent prompt that timed out into an
+      // approval would be the single worst bug in this system.
+      const onClosed = (closedId: number) => {
+        if (closedId === winId) {
+          chrome.windows.onRemoved.removeListener(onClosed);
+          settle(false);
+        }
+      };
+      chrome.windows.onRemoved.addListener(onClosed);
+    });
   });
 }
 
