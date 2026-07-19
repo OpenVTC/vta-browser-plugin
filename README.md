@@ -251,7 +251,7 @@ pnm-browser-plugin/
 
 ## Development
 
-Prereqs: Node 20+. No Rust toolchain needed — DIDComm crypto comes
+Prereqs: Node 24+. No Rust toolchain needed — DIDComm crypto comes
 from the `@openvtc/vti-didcomm-js` npm package.
 
 ```bash

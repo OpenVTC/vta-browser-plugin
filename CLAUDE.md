@@ -75,8 +75,8 @@ a contract change affecting pnm-relay too (R4.1). Don't paper over it here.
   referenced composite project must emit (TS6310) and fails outright.
 - **Never add a cross-workspace import without the matching `references`
   entry** in that package's tsconfig, or `tsc -b` cannot know the build order.
-- **CI** (`.github/workflows/ci.yml`) runs lint → build → test on Node 20 and
-  22 from a cold checkout, and asserts the MV3 invariant that
+- **CI** (`.github/workflows/ci.yml`) runs lint → build → test on Node 24
+  (the `engines` floor) and 26 from a cold checkout, and asserts the MV3 invariant that
   `dist/background.js` stays a single bundle with **no dynamic `import()`** —
   a service worker cannot load one, and losing Rollup's `codeSplitting: false`
   would break the worker at runtime behind a green build.

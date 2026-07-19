@@ -19,9 +19,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # package.json declares engines.node >=20, so prove it on the floor as
-        # well as on current LTS rather than only on whatever the dev has.
-        node: ["20", "22"]
+        # package.json declares engines.node >=24, so prove it on the floor
+        # (24, Active LTS) as well as on Current, rather than only on whatever
+        # the dev happens to have. Keep the spread: a single version hides
+        # version-dependent bugs. The Node 20 runner previously caught a test
+        # that leaked an event-loop handle, which the newer runner exited past.
+        node: ["24", "26"]
 
     steps:
       - uses: actions/checkout@v5
