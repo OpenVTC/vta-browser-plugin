@@ -9,11 +9,24 @@ import {
 import { registerPushChannel } from "../dist/index.js";
 
 /** A fetch that never resolves until its signal aborts — a blackholed VTA.
- *  This is the case an unbounded fetch waits on forever. */
+ *  This is the case an unbounded fetch waits on forever.
+ *
+ *  The `keepAlive` interval is load-bearing, not defensive noise. Node unrefs
+ *  the timer behind `AbortSignal.timeout`, so a pending abort does NOT hold the
+ *  event loop open. With nothing else queued the process can drain and exit
+ *  before the deadline fires, and the runner reports every test in the file as
+ *  "Promise resolution is still pending but the event loop has already
+ *  resolved". That is exactly what happened on CI while this file passed
+ *  locally — the local run had other work in flight to keep the loop alive. A
+ *  ref'd timer removes the dependency on that accident. */
 function blackhole() {
   return (_input, init) =>
     new Promise((_resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => reject(init.signal.reason));
+      const keepAlive = setInterval(() => {}, 1_000);
+      init?.signal?.addEventListener("abort", () => {
+        clearInterval(keepAlive);
+        reject(init.signal.reason);
+      });
     });
 }
 
