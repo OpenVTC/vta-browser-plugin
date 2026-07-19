@@ -147,15 +147,17 @@ test("falls back to the global fetch when no impl is injected", async () => {
 
 test("registerPushChannel bounds its request (R1.2 wiring)", async () => {
   let seenSignal = "absent";
+  // A real Response, not an `{ ok, json }` literal — a hand-rolled stub only
+  // implements what the code happened to call when it was written.
   const fetchStub = async (_url, init) => {
     seenSignal = init?.signal;
-    return {
-      ok: true,
-      json: async () => ({
+    return new Response(
+      JSON.stringify({
         type: "https://trusttasks.org/spec/push/register/0.2#response",
         payload: { wakeHandle: { gateway: "https://gw.example", handle: "z6MkHandle" } },
       }),
-    };
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
   };
 
   await registerPushChannel({
