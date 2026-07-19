@@ -20,6 +20,7 @@
 import { signTrustTask } from "../trust-tasks/sign.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import type { TrustTask } from "../vta/protocol.js";
+import { withFetchTimeout } from "../http/timeout-fetch.js";
 
 // Canonical step-up approval spec from trusttasks-tf. The proof on the
 // approve-response is what the RP verifies to elevate the session's acr.
@@ -105,7 +106,7 @@ export async function stepUpVtaStart(
   accessToken: string,
   fetchFn?: typeof fetch,
 ): Promise<StepUpApproveRequest> {
-  const f = fetchFn ?? fetch.bind(globalThis);
+  const f = withFetchTimeout(fetchFn);
   const base = baseUrl.replace(/\/+$/, "");
   const res = await f(`${base}/auth/step-up/vta/start`, {
     method: "POST",
@@ -146,7 +147,7 @@ export async function stepUpVtaFinish(
   approval: TrustTask<StepUpApproveResponsePayload> & { proof?: unknown },
   fetchFn?: typeof fetch,
 ): Promise<StepUpVtaFinishResult> {
-  const f = fetchFn ?? fetch.bind(globalThis);
+  const f = withFetchTimeout(fetchFn);
   const base = baseUrl.replace(/\/+$/, "");
   const res = await f(`${base}/auth/step-up/vta/finish`, {
     method: "POST",

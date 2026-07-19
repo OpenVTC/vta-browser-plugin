@@ -23,6 +23,7 @@
 
 import { packAuthcrypt, type Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import { withFetchTimeout } from "../http/timeout-fetch.js";
 
 const VTA_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
 
@@ -70,7 +71,7 @@ export interface VtaAuthInputs {
  * round-trip so it doesn't trip the VTA's per-IP unauth rate limit.
  */
 export async function getVtaBearer(opts: VtaAuthInputs): Promise<string> {
-  const f = opts.fetch ?? fetch.bind(globalThis);
+  const f = withFetchTimeout(opts.fetch);
   const base = opts.baseUrl.replace(/\/+$/, "");
 
   const cacheKey = bearerCacheKey(base, opts.holder.did);

@@ -13,6 +13,12 @@ export type VtaErrorCode =
   | "e.p.msg.bad_request"
   | "e.p.msg.internal"
   | "e.client.network"
+  // A request that hit its own deadline rather than being refused. Distinct
+  // from `e.client.network` on purpose: "the VTA never answered" is a
+  // different operational fact from "the connection failed", and callers that
+  // want to retry or tell the user which one happened need a stable code to
+  // switch on rather than the message text (R3.7).
+  | "e.client.timeout"
   | "e.client.parse"
   | "e.client.unsupported";
 

@@ -14,6 +14,7 @@
 
 import type { WakeHandle } from "./set-wake.js";
 import { isTrustTaskErrorType } from "../vta/protocol.js";
+import { withFetchTimeout } from "../http/timeout-fetch.js";
 
 // push/register/0.2 — the payload is field-identical to 0.1 (no enum values),
 // so this is a pure version-string bump. The gateway accepts both 0.1 and 0.2
@@ -50,7 +51,7 @@ export interface RegisterPushChannelOptions {
 export async function registerPushChannel(
   opts: RegisterPushChannelOptions,
 ): Promise<WakeHandle> {
-  const f = opts.fetch ?? fetch.bind(globalThis);
+  const f = withFetchTimeout(opts.fetch);
   const base = opts.gatewayUrl.replace(/\/+$/, "");
 
   const doc = {
