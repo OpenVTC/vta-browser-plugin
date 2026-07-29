@@ -39,6 +39,13 @@ const holderDid = params.get("holder");
 // When present, this prompt is an RP-initiated action to confirm (inbound),
 // not an outbound login.
 const action = params.get("action");
+// Session step-up (aal1 → aal2). The background sets these only after the
+// offscreen has verified the signed approve-request, so `reason` — when
+// present — is RP-authored prose from *inside* that signature (spec:
+// "consumers MUST verify the proof BEFORE surfacing the reason"). It is
+// attributed, not trusted: rendered as plain text, never markup.
+const isStepUp = params.get("stepUp") === "1";
+const stepUpReason = params.get("reason");
 // M5: when set, the rpDid this origin previously used. Render a
 // louder warning so the operator sees the swap and decides
 // whether to approve it.
@@ -389,8 +396,21 @@ function Confirm() {
   }, []);
 
   const isAction = !!action;
-  const title = isAction ? "Confirmation request" : "Sign-in request";
-  const subtitle = isAction ? (
+  const title = isStepUp
+    ? "Step-up approval request"
+    : isAction
+      ? "Confirmation request"
+      : "Sign-in request";
+  const subtitle = isStepUp ? (
+    originHost ? (
+      <>
+        <strong style={{ fontFamily: colours.mono }}>{originHost}</strong> is asking you to
+        re-approve your session at a higher assurance level.
+      </>
+    ) : (
+      <>An unknown page is requesting a session step-up.</>
+    )
+  ) : isAction ? (
     <>
       {originHost ? (
         <strong style={{ fontFamily: colours.mono }}>{originHost}</strong>
@@ -462,6 +482,56 @@ function Confirm() {
         </div>
       )}
 
+      {/* Step-up reason — the RP's stated purpose for wanting elevation,
+          pulled from INSIDE its signed approve-request (verified in the
+          offscreen before this window existed). Untrusted-but-attributed
+          prose: React renders it as text, so it cannot inject markup; the
+          background already capped its length and stripped control
+          characters, and the render cap below is belt-and-braces. Absent
+          reason = this card is absent and the prompt is the plain
+          origin/rpDid one. */}
+      {isStepUp && stepUpReason && (
+        <div
+          style={{
+            background: colours.card,
+            border: `1px solid ${colours.border}`,
+            borderLeft: `3px solid ${colours.primary}`,
+            borderRadius: 10,
+            padding: 14,
+            marginBottom: 12,
+          }}
+        >
+          <div
+            style={{
+              color: colours.textMuted,
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: 0.3,
+              textTransform: "uppercase",
+              marginBottom: 6,
+            }}
+          >
+            Reason given by the relying party
+          </div>
+          <div
+            style={{
+              fontSize: 13,
+              lineHeight: 1.5,
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+              maxHeight: 150,
+              overflowY: "auto",
+            }}
+          >
+            {stepUpReason.length > 600 ? `${stepUpReason.slice(0, 600)}…` : stepUpReason}
+          </div>
+          <p style={{ margin: "8px 0 0", fontSize: 11, color: colours.textMuted }}>
+            Signature-verified as written by the relying party below. It is their claim —
+            approve only if it matches what you were doing.
+          </p>
+        </div>
+      )}
+
       {/* RP card — omitted for actions with no specific relying party. */}
       {rpDid && (
         <div
@@ -493,7 +563,10 @@ function Confirm() {
             marginBottom: 14,
           }}
         >
-          <DidField label={isAction ? "Acting as" : "Sign in as"} value={holderDid} />
+          <DidField
+            label={isStepUp ? "Approving as" : isAction ? "Acting as" : "Sign in as"}
+            value={holderDid}
+          />
         </div>
       )}
 

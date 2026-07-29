@@ -267,6 +267,14 @@ export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
  *  enrolled executor is asking, not a site), and its approval is single-use so
  *  there is nothing to remember. */
 export const RUNTIME_TASK_CONSENT = "vta-wallet/task-consent" as const;
+/** offscreen → background: a step-up approve-request has VERIFIED and the
+ *  human must now decide. Fired mid-flow — after the offscreen fetched the RP
+ *  `start` response and `verifyStepUpApproveRequest` passed, before anything
+ *  is signed — so the prompt can render the `reason` from *inside* the signed
+ *  document (spec: "consumers MUST verify the proof BEFORE surfacing the
+ *  reason"). Reply via sendResponse is a [`RuntimeStepUpConsentResponse`];
+ *  anything but `approved: true` means nothing is signed or sent. */
+export const RUNTIME_STEP_UP_CONSENT = "vta-wallet/step-up-consent" as const;
 /** confirm popup → background → offscreen: resolve + verify an RP DID so the
  *  consent prompt can render a verification badge. Reply via sendResponse is a
  *  [`VerifyDidResult`]. */
@@ -1382,11 +1390,38 @@ export interface OffscreenRestLoginRequest {
 }
 
 /** background → offscreen: run a VTA-approval step-up. Reply is a
- *  [`RuntimeLoginResponse`] via `sendResponse`. */
+ *  [`RuntimeLoginResponse`] via `sendResponse`. Mid-flow the offscreen calls
+ *  back with a [`RuntimeStepUpConsentRequest`] once the approve-request has
+ *  verified — the background raises the consent prompt then, not before. */
 export interface OffscreenStepUpVtaRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_STEP_UP_VTA;
   params: StepUpVtaParams;
+  /** The RP page's origin — threaded through so the mid-flow consent prompt
+   *  can show it (and honour per-origin trust). Display only, never auth. */
+  origin: string;
+}
+
+/** offscreen → background: raise the step-up consent prompt for a VERIFIED
+ *  approve-request. Every member below is post-verification: `rpDid` has been
+ *  checked equal to the document's proven issuer, and `reason` comes from
+ *  inside the signature — never from the unsigned start-response copy. */
+export interface RuntimeStepUpConsentRequest {
+  type: typeof RUNTIME_STEP_UP_CONSENT;
+  /** The RP page's origin, echoed from the [`OffscreenStepUpVtaRequest`]. */
+  origin: string;
+  /** The RP DID (== the approve-request's proven issuer). */
+  rpDid: string;
+  /** The holder DID that will sign the approve-response. */
+  holderDid: string;
+  /** The RP's reason from inside the verified document. Absent when the
+   *  signed payload carried none — the prompt then shows its plain
+   *  origin/rpDid text. */
+  reason?: string;
+}
+
+export interface RuntimeStepUpConsentResponse {
+  approved: boolean;
 }
 
 
