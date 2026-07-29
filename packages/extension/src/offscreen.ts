@@ -19,7 +19,7 @@ import {
   markInboundHandled,
   type MediatorConnection,
   MediatorSessionBridge,
-  buildStepUpApproval,
+  performStepUpVta,
   resolveKeyAgreement,
   parseTaskConsentRequest,
   putPendingInbound,
@@ -44,9 +44,6 @@ import {
   setDeviceWake,
   type SigningIdentity,
   signingIdentityFromSecret,
-  stepUpVtaFinish,
-  stepUpVtaStart,
-  verifyStepUpApproveRequest,
   signTrustTask,
   deriveSigningKeyId,
   forgetHolderRecord,
@@ -103,6 +100,7 @@ import {
   OFFSCREEN_VAULT_UPSERT,
   OFFSCREEN_VERIFY_DID,
   RUNTIME_TASK_CONSENT,
+  RUNTIME_STEP_UP_CONSENT,
   RUNTIME_EMIT_WALLET_EVENT,
   type OffscreenDidcommLoginRequest,
   type OffscreenRestLoginRequest,
@@ -114,6 +112,8 @@ import {
   type OffscreenSetWakeRequest,
   type OffscreenSignTrustTaskRequest,
   type OffscreenStepUpVtaRequest,
+  type RuntimeStepUpConsentRequest,
+  type RuntimeStepUpConsentResponse,
   type OffscreenVaultDeleteRequest,
   type OffscreenRequestTaskRequest,
   type OffscreenVaultListRequest,
@@ -1965,67 +1965,51 @@ async function doStepUpVta(
   const { signing } = await loadHolder(req.params.vtaDid);
   sw.mark("load holder");
 
-  // 1. RP start (REST) → the signed `auth/step-up/approve-request/0.2`
-  //    Trust-Task document (plus legacy top-level fields for cross-checking).
-  const start = await stepUpVtaStart(req.params.baseUrl, req.params.accessToken);
-  sw.mark("rp start (challenge)");
-
-  // 1b. Verify BEFORE acting on anything in it. The document's proof must
-  //     verify (eddsa-jcs-2022, assertionMethod), its issuer must be the proven
-  //     signer, and that signer must be an executor this wallet is enrolled
-  //     with — the spec's "consumers MUST verify the proof BEFORE surfacing the
-  //     reason" rule, applied to everything the wallet echoes into the signed
-  //     approve-response, not just the reason. A start response with no
-  //     `document` is refused: the proofless legacy `{subject, sessionId,
-  //     challenge, reason}` path was removed deliberately once the control
-  //     plane began signing approve-requests, so its absence means an
-  //     out-of-date (or lying) server and never a prompt.
-  const verified = await verifyStepUpApproveRequest(start, {
-    enrolledExecutorDids: await enrolledExecutorDids(req.params.vtaDid),
-  });
-  if (!verified.ok) {
-    console.warn("[pnm step-up] refusing approve-request:", verified.reason);
-    throw new Error(`step-up approve-request refused: ${verified.reason}`);
-  }
-  // The RP the page named is the audience the approve-response will be bound
-  // to (`recipient: rpDid`); the approve-request's proven issuer must be that
-  // same party, or the wallet would be answering a question nobody it trusts
-  // asked.
-  if (verified.issuer !== req.params.rpDid) {
-    console.warn(
-      "[pnm step-up] approve-request issuer",
-      verified.issuer,
-      "does not match the page-supplied rpDid",
-      req.params.rpDid,
-    );
-    throw new Error("step-up approve-request refused: issuer does not match rpDid");
-  }
-  sw.mark("verify approve-request");
-
-  // 2. Wallet signs the approve-response/0.2 locally (holder-self-signs — no
-  //    VTA round-trip). The DI proof over the subject key is the elevation
-  //    gate. Every echoed field comes from the *verified* document's payload.
-  const approval = await buildStepUpApproval({
+  // The flow itself — start → verify → consent → sign → finish, in that
+  // enforced order — lives in core (`performStepUpVta`), where it is unit
+  // tested. This function contributes only what core cannot know: the holder
+  // identity, the enrolled-executor set, and how to reach a human. The
+  // consent prompt fires HERE, mid-flow, via the background (only it can open
+  // windows): after `verifyStepUpApproveRequest` has passed — so the `reason`
+  // the human reads comes from inside the verified signature, per the spec's
+  // "consumers MUST verify the proof BEFORE surfacing the reason" — and
+  // before anything is signed. A refused approve-request (missing document,
+  // bad proof, non-enrolled signer, issuer ≠ rpDid) returns before the
+  // consent callback runs, so no prompt is ever raised for it; a declined
+  // prompt sends nothing, and the RP's challenge lapses on its TTL.
+  const outcome = await performStepUpVta({
+    baseUrl: req.params.baseUrl,
+    accessToken: req.params.accessToken,
     signing,
     rpDid: req.params.rpDid,
-    request: verified.request,
-    approved: true,
+    enrolledExecutorDids: await enrolledExecutorDids(req.params.vtaDid),
+    onMark: (label) => sw.mark(label),
+    requestConsent: async (ctx) => {
+      const ask: RuntimeStepUpConsentRequest = {
+        type: RUNTIME_STEP_UP_CONSENT,
+        origin: req.origin,
+        rpDid: req.params.rpDid,
+        holderDid: signing.did,
+        ...(ctx.reason !== undefined ? { reason: ctx.reason } : {}),
+      };
+      const result = (await chrome.runtime.sendMessage(ask)) as
+        | RuntimeStepUpConsentResponse
+        | undefined;
+      // Anything but an explicit true — including a vanished background or a
+      // malformed reply — is a denial.
+      return result?.approved === true;
+    },
   });
-  sw.mark("sign approval");
-
-  // 3. RP finish (REST) → elevated session tokens.
-  const tokens = await stepUpVtaFinish(
-    req.params.baseUrl,
-    req.params.accessToken,
-    approval,
-  );
-  sw.mark("rp finish (elevate)");
+  if (!outcome.ok) {
+    console.warn("[pnm step-up]", outcome.error);
+    return { ok: false, error: outcome.error };
+  }
   return {
     ok: true,
     result: {
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      sessionId: tokens.sessionId,
+      accessToken: outcome.tokens.accessToken,
+      refreshToken: outcome.tokens.refreshToken,
+      sessionId: outcome.tokens.sessionId,
       holderDid: signing.did,
       timings: sw.marks,
     },

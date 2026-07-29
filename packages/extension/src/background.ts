@@ -88,6 +88,7 @@ import {
   RUNTIME_REQUEST_TASK,
   RUNTIME_SIGN_TRUST_TASK,
   RUNTIME_TASK_CONSENT,
+  RUNTIME_STEP_UP_CONSENT,
   RUNTIME_STEP_UP_VTA,
   RUNTIME_VERIFY_RP_DID,
   RUNTIME_WALLET_DEFAULTS,
@@ -128,6 +129,8 @@ import {
   type RuntimeRequestTaskResponse,
   type RuntimeSignTrustTaskRequest,
   type RuntimeSignTrustTaskResponse,
+  type RuntimeStepUpConsentRequest,
+  type RuntimeStepUpConsentResponse,
   type RuntimeStepUpVtaRequest,
   type RuntimeVaultDeleteRequest,
   type RuntimeVaultDeleteResponse,
@@ -527,6 +530,13 @@ async function requestConsent(args: {
    * operator has to explicitly approve the swap.
    */
   changedFromRpDid?: string;
+  /** Frames the prompt as a session step-up rather than a sign-in. */
+  stepUp?: boolean;
+  /** VERIFIED RP-authored reason to render (plain text, already length-capped
+   *  and control-stripped by the caller). Only ever set from the step-up path,
+   *  where it comes from inside the signed approve-request — never pass a
+   *  page-supplied string here. */
+  reason?: string;
 }): Promise<{ approved: boolean; remember: boolean }> {
   const consentId = crypto.randomUUID();
   const url =
@@ -537,11 +547,14 @@ async function requestConsent(args: {
     (args.holderDid ? `&holder=${encodeURIComponent(args.holderDid)}` : "") +
     (args.action ? `&action=${encodeURIComponent(args.action)}` : "") +
     (args.noRemember ? `&noRemember=1` : "") +
+    (args.stepUp ? `&stepUp=1` : "") +
+    (args.reason ? `&reason=${encodeURIComponent(args.reason)}` : "") +
     (args.changedFromRpDid
       ? `&changedFrom=${encodeURIComponent(args.changedFromRpDid)}`
       : "");
 
-  const bounds = await consentWindowBounds(560);
+  // The reason card needs room, or the decision buttons slide off-screen.
+  const bounds = await consentWindowBounds(args.reason ? 660 : 560);
 
   return new Promise<{ approved: boolean; remember: boolean }>((resolve) => {
     let settled = false;
@@ -645,6 +658,8 @@ async function gatedConsent(args: {
   holderDid?: string;
   action?: string;
   changedFromRpDid?: string;
+  stepUp?: boolean;
+  reason?: string;
 }): Promise<boolean> {
   // A pinned-RP *change* must always re-prompt, even for a trusted site —
   // it's exactly the redirect-to-attacker-RP case the louder warning exists
@@ -752,25 +767,70 @@ async function handleLoginDidcomm(
 async function handleStepUpVta(
   req: RuntimeStepUpVtaRequest,
 ): Promise<RuntimeLoginResponse> {
-  // Display-only DID lookup — see handleLoginDidcomm for the
-  // background-vs-offscreen scope rationale.
+  // Fast-fail without spinning up the offscreen document. Display-only DID
+  // lookup — see handleLoginDidcomm for the background-vs-offscreen rationale.
   const holderDid = await readActiveHolderDid();
   if (!holderDid) return { ok: false, error: "no active VTA connection — connect first" };
 
-  const approved = await gatedConsent({
-    origin: req.origin,
-    rpDid: req.params.rpDid,
-    holderDid,
-  });
-  if (!approved) return { ok: false, error: "step-up denied by user" };
-
+  // NO consent prompt here. The step-up prompt fires mid-flow instead: the
+  // offscreen fetches the RP `start` response, verifies the signed
+  // approve-request (proof + enrolled-executor signer + issuer == rpDid), and
+  // only then asks back via RUNTIME_STEP_UP_CONSENT — so the prompt can show
+  // the human the VERIFIED `reason` from inside the signature. Prompting
+  // before the fetch (the old shape) showed origin/rpDid only and left the
+  // signed reason unread, which defeated the point of signing it (the spec's
+  // rule is verify-BEFORE-surfacing, not verify-instead-of-surfacing).
+  // Nothing is signed or sent unless that prompt approves.
   await ensureOffscreenDocument();
   const offscreenRequest: OffscreenStepUpVtaRequest = {
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_STEP_UP_VTA,
     params: req.params,
+    origin: req.origin,
   };
   return (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
+}
+
+/** Longest RP-authored reason the consent prompt will carry. Anything past
+ *  this is truncated with an ellipsis — the prompt is a decision surface, not
+ *  a document viewer, and an unbounded string in a query param is asking for
+ *  trouble. */
+const MAX_STEP_UP_REASON_CHARS = 500;
+
+/**
+ * The offscreen's mid-flow step-up consent ask (RUNTIME_STEP_UP_CONSENT).
+ * Reached only after the approve-request verified, so the `reason` shown here
+ * is attributable to the proven issuer. Still routed through `gatedConsent`:
+ * an origin the user ticked "remember this site" for keeps skipping the
+ * prompt, exactly as the pre-#103 step-up prompt did — the reorder changes
+ * *when* the prompt fires and *what it shows*, not who sees one.
+ */
+async function handleStepUpConsent(
+  req: RuntimeStepUpConsentRequest,
+): Promise<RuntimeStepUpConsentResponse> {
+  // Untrusted-but-attributed prose: cap the length and strip control
+  // characters (bidi overrides, escapes) that could visually reorder or hide
+  // parts of what the human reads. React already renders it as plain text —
+  // this guards the *legibility* of the string, not just its inertness.
+  const cleaned = req.reason
+    ?.replace(
+      // eslint-disable-next-line no-control-regex -- stripping controls is the point
+      /[\u0000-\u0008\u000B-\u001F\u007F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g,
+      "",
+    )
+    .trim();
+  const reason =
+    cleaned && cleaned.length > MAX_STEP_UP_REASON_CHARS
+      ? `${cleaned.slice(0, MAX_STEP_UP_REASON_CHARS)}…`
+      : cleaned;
+  const approved = await gatedConsent({
+    origin: req.origin,
+    rpDid: req.rpDid,
+    holderDid: req.holderDid,
+    stepUp: true,
+    ...(reason ? { reason } : {}),
+  });
+  return { approved };
 }
 
 // Page-facing authenticated fetches must never hang the requesting page against
@@ -1712,6 +1772,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     requestTaskConsent(m.request, m.approver === true)
       .then(sendResponse)
       .catch(() => sendResponse({ approved: false }));
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_STEP_UP_CONSENT) {
+    handleStepUpConsent(message as RuntimeStepUpConsentRequest)
+      .then(sendResponse)
+      // Any failure to raise or resolve the prompt is a denial — silence is
+      // not agreement, here as everywhere else in this file.
+      .catch(() => sendResponse({ approved: false } satisfies RuntimeStepUpConsentResponse));
     return true; // async sendResponse
   }
 

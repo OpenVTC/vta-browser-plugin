@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import {
   buildStepUpApproval,
+  performStepUpVta,
   verifyStepUpApproveRequest,
   verifyTrustTaskProof,
   generateSigningIdentity,
@@ -193,4 +194,166 @@ test("verifyStepUpApproveRequest: a lapsed request is refused", async () => {
   );
   assert.equal(res.ok, false);
   assert.match(res.reason, /lapsed/);
+});
+
+// ── performStepUpVta: the whole flow, in its enforced order ──────────────────
+//
+// start → verify → CONSENT → sign → finish. The consent callback stands in
+// for the human: it must be shown only post-verification content (the reason
+// from inside the signature), a decline must send nothing to the RP, and a
+// refused approve-request must never reach it at all.
+
+/** Mock the RP's two REST endpoints; records every request it serves. */
+function mockRp(startBody) {
+  const calls = [];
+  const fetchFn = async (url, init) => {
+    const u = String(url);
+    calls.push({ url: u, body: init?.body ? JSON.parse(init.body) : undefined });
+    if (u.endsWith("/auth/step-up/vta/start")) {
+      return new Response(JSON.stringify(startBody), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (u.endsWith("/auth/step-up/vta/finish")) {
+      return new Response(
+        JSON.stringify({
+          session_id: "sess-42",
+          access_token: "elevated-access",
+          refresh_token: "elevated-refresh",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response("not found", { status: 404 });
+  };
+  return { fetchFn, calls };
+}
+
+function flowArgs(holder, fetchFn, requestConsent) {
+  return {
+    baseUrl: "https://rp.example",
+    accessToken: "aal1-token",
+    signing: holder,
+    rpDid: RP.did,
+    enrolledExecutorDids: [RP.did],
+    fetchFn,
+    requestConsent,
+  };
+}
+
+test("performStepUpVta: consent sees the reason from INSIDE the signed document, then sign+finish", async () => {
+  const holder = generateSigningIdentity();
+  const start = await startResponse();
+  // Tamper the unsigned top-level reason — the human must never see this copy.
+  start.reason = "Totally harmless, click approve.";
+  const { fetchFn, calls } = mockRp(start);
+
+  const seen = [];
+  const res = await performStepUpVta(
+    flowArgs(holder, fetchFn, async (ctx) => {
+      seen.push(ctx);
+      return true;
+    }),
+  );
+
+  assert.equal(res.ok, true, res.ok ? undefined : res.error);
+  assert.equal(res.tokens.accessToken, "elevated-access");
+  assert.equal(res.tokens.refreshToken, "elevated-refresh");
+  assert.equal(res.tokens.sessionId, "sess-42");
+
+  // The prompt content is the verified payload, not the unsigned echo.
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].reason, "Confirm the transfer of $1,000 to ACME Corp.");
+  assert.equal(seen[0].issuer, RP.did);
+  assert.equal(seen[0].subject, "did:key:zSubject");
+  assert.equal(seen[0].sessionId, "sess-42");
+
+  // finish carried a signed approve-response echoing only verified fields.
+  const finish = calls.find((c) => c.url.endsWith("/finish"));
+  assert.ok(finish, "finish was called");
+  assert.equal(finish.body.type, APPROVE_RESPONSE_TYPE);
+  assert.equal(finish.body.payload.decision, "approved");
+  assert.equal(finish.body.payload.challenge, "a".repeat(32));
+  const proofCheck = await verifyTrustTaskProof(finish.body, {
+    expectedProofPurpose: "assertionMethod",
+  });
+  assert.equal(proofCheck.verified, true, proofCheck.reason);
+  assert.equal(proofCheck.signer, holder.did);
+});
+
+test("performStepUpVta: a document with no reason still prompts — with no reason member", async () => {
+  const holder = generateSigningIdentity();
+  const start = await startResponse({ unsigned: true, legacy: false });
+  delete start.document.payload.reason; // the RP signed a payload with no reason
+  await signTrustTask({ envelope: start.document, signing: RP });
+  const { fetchFn } = mockRp(start);
+
+  const seen = [];
+  const res = await performStepUpVta(
+    flowArgs(holder, fetchFn, async (ctx) => {
+      seen.push(ctx);
+      return true;
+    }),
+  );
+  assert.equal(res.ok, true, res.ok ? undefined : res.error);
+  assert.equal(seen.length, 1);
+  assert.equal("reason" in seen[0], false);
+});
+
+test("performStepUpVta: declined prompt sends NOTHING to the RP", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn, calls } = mockRp(await startResponse());
+
+  const res = await performStepUpVta(flowArgs(holder, fetchFn, async () => false));
+
+  assert.equal(res.ok, false);
+  assert.equal(res.declined, true);
+  assert.match(res.error, /denied by user/);
+  // Only the start fetch happened — no finish, no denied approve-response.
+  assert.deepEqual(
+    calls.map((c) => c.url),
+    ["https://rp.example/auth/step-up/vta/start"],
+  );
+});
+
+test("performStepUpVta: missing document refuses WITHOUT prompting", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn, calls } = mockRp(await startResponse({ withDocument: false }));
+
+  let prompted = false;
+  const res = await performStepUpVta(
+    flowArgs(holder, fetchFn, async () => {
+      prompted = true;
+      return true;
+    }),
+  );
+  assert.equal(res.ok, false);
+  assert.equal(res.declined, false);
+  assert.match(res.error, /no signed approve-request document/);
+  assert.equal(prompted, false, "no prompt for an unverifiable request");
+  assert.equal(calls.filter((c) => c.url.endsWith("/finish")).length, 0);
+});
+
+test("performStepUpVta: issuer ≠ page rpDid refuses WITHOUT prompting", async () => {
+  const holder = generateSigningIdentity();
+  // Signed by an executor the wallet IS enrolled with — but not the RP the
+  // page named. Verification alone passes; the binding check must still stop
+  // the flow before any human is asked.
+  const other = generateSigningIdentity();
+  const { fetchFn, calls } = mockRp(await startResponse({ as: other, legacy: false }));
+
+  let prompted = false;
+  const res = await performStepUpVta({
+    ...flowArgs(holder, fetchFn, async () => {
+      prompted = true;
+      return true;
+    }),
+    enrolledExecutorDids: [RP.did, other.did],
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.declined, false);
+  assert.match(res.error, /does not match the page-supplied rpDid/);
+  assert.equal(prompted, false);
+  assert.equal(calls.filter((c) => c.url.endsWith("/finish")).length, 0);
 });
