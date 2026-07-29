@@ -26,6 +26,18 @@ export interface WalletSettings {
   /** Optional default VTA mediator DID prefilled into the step-up flow. */
   defaultStepUpVtaMediatorDid?: string;
   /**
+   * Additional executor DIDs this wallet is enrolled with, beyond its
+   * onboarded VTA(s) — e.g. a did:webvh DID-hosting control plane that signs
+   * `task-consent/request`s and step-up `approve-request`s.
+   *
+   * Every approval request an approver renders must be a Trust-Task document
+   * signed by an executor the approver is enrolled with; this list is the
+   * operator's way of enrolling executors that are not onboarded VTAs. The
+   * onboarded VTA DIDs are always members of the effective set — this only
+   * ever widens it.
+   */
+  enrolledExecutorDids?: string[];
+  /**
    * H1 from the May 2026 security review: encrypt the persisted
    * Ed25519 root secret with a key derived from the operator's
    * WebAuthn-PRF authenticator.
@@ -104,6 +116,13 @@ export async function getSettings(): Promise<WalletSettings> {
     ...(s?.defaultStepUpVtaDid ? { defaultStepUpVtaDid: s.defaultStepUpVtaDid } : {}),
     ...(s?.defaultStepUpVtaMediatorDid
       ? { defaultStepUpVtaMediatorDid: s.defaultStepUpVtaMediatorDid }
+      : {}),
+    ...(Array.isArray(s?.enrolledExecutorDids)
+      ? {
+          enrolledExecutorDids: s.enrolledExecutorDids.filter(
+            (d): d is string => typeof d === "string" && d.length > 0,
+          ),
+        }
       : {}),
     encryptHolderSecret,
     preferTsp: typeof s?.preferTsp === "boolean" ? s.preferTsp : true,

@@ -63,7 +63,6 @@ import {
   RUNTIME_VAULT_UPSERT,
   OFFSCREEN_LOCK_WALLET,
   RUNTIME_CONSENT_RESULT,
-  RUNTIME_INBOUND_CONSENT,
   RUNTIME_BROADCAST_EVENT,
   RUNTIME_LOCK_WALLET,
   RUNTIME_LOGIN,
@@ -100,7 +99,6 @@ import {
   type RuntimeApiGetResponse,
   type RuntimeApiPostRequest,
   type RuntimeConsentResult,
-  type RuntimeInboundConsentRequest,
   type RuntimeLoginDidcommRequest,
   type RuntimeLoginRequest,
   type RuntimeLoginResponse,
@@ -1868,15 +1866,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
-    return true; // async sendResponse
-  }
-
-  // Offscreen asks us to prompt the user for an inbound RP confirm request.
-  if ((message as { type?: string })?.type === RUNTIME_INBOUND_CONSENT) {
-    const req = message as RuntimeInboundConsentRequest;
-    requestConsent({ rpDid: req.rpDid, action: req.action })
-      .then((approved) => sendResponse({ approved }))
-      .catch(() => sendResponse({ approved: false }));
     return true; // async sendResponse
   }
 

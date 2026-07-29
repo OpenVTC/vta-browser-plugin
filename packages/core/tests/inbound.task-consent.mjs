@@ -17,6 +17,9 @@ import { TRUST_TASK_ENVELOPE_TYPE } from "../dist/vta/protocol.js";
 // Real did:key identities — the wallet's own minting helper, so the DID, the
 // verification method and the key actually agree with what the verifier resolves.
 const VTA = generateSigningIdentity();
+// A second enrolled executor — e.g. a DID-hosting control plane that signs
+// task-consent requests. Enrolled below, unlike IMPOSTOR.
+const CONTROL_PLANE = generateSigningIdentity();
 const IMPOSTOR = generateSigningIdentity();
 const DEVICE = generateSigningIdentity();
 const HOLDER = DEVICE.did;
@@ -63,13 +66,19 @@ async function inbound({ as = VTA, over = {}, drop = [], recipient = HOLDER, uns
   return { id: doc.id, type: TRUST_TASK_ENVELOPE_TYPE, from: as.did, body: doc };
 }
 
-const opts = { expectedVtaDid: VTA.did, holderDid: HOLDER };
+const opts = { enrolledExecutorDids: [VTA.did, CONTROL_PLANE.did], holderDid: HOLDER };
 
 test("a request signed by this device's VTA is accepted", async () => {
   const res = await parseTaskConsentRequest(await inbound(), opts);
   assert.equal(res.ok, true);
-  assert.equal(res.parsed.vtaDid, VTA.did);
+  assert.equal(res.parsed.executorDid, VTA.did);
   assert.equal(res.parsed.request.taskType, "https://trusttasks.org/spec/webvh/dids/update/1.0");
+});
+
+test("a request signed by any enrolled executor (e.g. a control plane) is accepted", async () => {
+  const res = await parseTaskConsentRequest(await inbound({ as: CONTROL_PLANE }), opts);
+  assert.equal(res.ok, true);
+  assert.equal(res.parsed.executorDid, CONTROL_PLANE.did);
 });
 
 test("an unsigned request never reaches a human", async () => {
@@ -80,11 +89,11 @@ test("an unsigned request never reaches a human", async () => {
   assert.equal(res.reason, "untrusted_issuer");
 });
 
-test("a request signed by someone other than this device's VTA is refused", async () => {
+test("a request signed by an executor this device is NOT enrolled with is refused", async () => {
   const res = await parseTaskConsentRequest(await inbound({ as: IMPOSTOR }), opts);
   assert.equal(res.ok, false);
   assert.equal(res.reason, "untrusted_issuer");
-  assert.match(res.detail, /not this device's VTA/);
+  assert.match(res.detail, /not an executor this device is enrolled with/);
 });
 
 test("a tampered request is refused — the effects are inside the signature", async () => {

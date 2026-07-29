@@ -40,6 +40,10 @@ function Options() {
   const [mediatorDid, setMediatorDid] = useState("");
   const [vtaDid, setVtaDid] = useState("");
   const [vtaMediatorDid, setVtaMediatorDid] = useState("");
+  // Additional enrolled executor DIDs (one per line) — executors beyond the
+  // onboarded VTA(s) whose signed approval requests this wallet will render
+  // (e.g. a did:webvh DID-hosting control plane).
+  const [enrolledExecutors, setEnrolledExecutors] = useState("");
   const [pushGatewayUrl, setPushGatewayUrl] = useState("");
   const [pushGatewayVapidPublicKey, setPushGatewayVapidPublicKey] = useState("");
   const [holderDid, setHolderDid] = useState("");
@@ -73,6 +77,7 @@ function Options() {
       setMediatorDid(s.mediatorDid);
       setVtaDid(s.defaultStepUpVtaDid ?? "");
       setVtaMediatorDid(s.defaultStepUpVtaMediatorDid ?? "");
+      setEnrolledExecutors((s.enrolledExecutorDids ?? []).join("\n"));
       setPushGatewayUrl(s.pushGatewayUrl ?? "");
       setPushGatewayVapidPublicKey(s.pushGatewayVapidPublicKey ?? "");
       setEncryptOn(Boolean(s.encryptHolderSecret));
@@ -253,6 +258,12 @@ function Options() {
         mediatorDid: trimmedMediator,
         ...(vtaDid.trim() ? { defaultStepUpVtaDid: vtaDid.trim() } : {}),
         ...(vtaMediatorDid.trim() ? { defaultStepUpVtaMediatorDid: vtaMediatorDid.trim() } : {}),
+        // Always written (an empty list is a valid state): un-enrolling an
+        // executor must actually revoke it, not linger as a stale merge.
+        enrolledExecutorDids: enrolledExecutors
+          .split("\n")
+          .map((d) => d.trim())
+          .filter((d) => d.length > 0),
         ...(pushGatewayUrl.trim() ? { pushGatewayUrl: pushGatewayUrl.trim() } : {}),
         ...(pushGatewayVapidPublicKey.trim()
           ? { pushGatewayVapidPublicKey: pushGatewayVapidPublicKey.trim() }
@@ -307,6 +318,19 @@ function Options() {
         placeholder="did:webvh:…"
         onChange={(e) => setVtaMediatorDid(e.target.value)}
       />
+
+      <label style={labelStyle}>Enrolled executor DIDs (optional — one per line)</label>
+      <textarea
+        style={{ ...inputStyle, minHeight: 64, resize: "vertical" }}
+        value={enrolledExecutors}
+        placeholder={"did:webvh:… (e.g. a DID-hosting control plane)"}
+        onChange={(e) => setEnrolledExecutors(e.target.value)}
+      />
+      <small style={{ color: "#9aa3b2", marginTop: 4 }}>
+        Executors beyond your onboarded VTA(s) whose signed approval requests (task consent,
+        step-up) this wallet will render. Requests signed by anyone not enrolled are dropped
+        without prompting.
+      </small>
 
       <label style={labelStyle}>Push gateway URL (optional — Web Push test)</label>
       <input
