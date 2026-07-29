@@ -7,8 +7,9 @@
 //
 // ## Why this is not `confirm/*`
 //
-// The superficially similar `confirm/request` (see `./confirm.ts`) carries an
-// **RP-authored `reason` shown to the user verbatim**, and that is correct there:
+// The superficially similar `confirm/request` (retired ecosystem-wide; the
+// registry marks it supersededBy task-consent) carried an
+// **RP-authored `reason` shown to the user verbatim**, and that was correct there:
 // in `confirm/*` the relying party holds the authority and is merely asking a
 // human to vouch for something it will then do itself. The RP is the executing
 // party, so RP-authored prose is prose from the party who will act.
@@ -18,9 +19,12 @@
 // the requester could author what the human reads, it would be writing the basis
 // of a decision that authorizes it — while every signature still verified. So:
 //
-//   **This module renders only content it has verified came from the user's own
-//   VTA.** A request whose proof does not verify, or which was signed by anyone
-//   other than the VTA this device is enrolled with, MUST NOT reach a human.
+//   **This module renders only content it has verified came from an executor
+//   this device is enrolled with.** A request whose proof does not verify, or
+//   which was signed by anyone outside the enrolled-executor set — the user's
+//   own VTA(s) plus any other executors the operator has enrolled (e.g. a
+//   DID-hosting control plane that signs task-consent requests) — MUST NOT
+//   reach a human.
 //
 // ## Why the effects, and not the payload
 //
@@ -139,8 +143,10 @@ export interface TaskConsentRequestPayload {
 }
 
 export interface ParsedTaskConsentRequest {
-  /** The VTA that signed it — verified, not merely claimed. */
-  vtaDid: string;
+  /** The enrolled executor that signed it — verified, not merely claimed.
+   *  Decisions are routed back to this DID (the issuer awaiting the answer),
+   *  which for the classic flow is the device's own VTA. */
+  executorDid: string;
   request: TaskConsentRequestPayload;
   thid: string;
 }
@@ -156,9 +162,11 @@ export type ParseTaskConsentResult =
   | { ok: false; reason: TaskConsentRequestRejection; detail?: string };
 
 export interface ParseTaskConsentOptions {
-  /** The VTA this device is enrolled with. A request signed by anyone else is
-   *  refused — it does not matter how well-formed it is. */
-  expectedVtaDid: string;
+  /** The executors this device is enrolled with: its own VTA DID(s), plus any
+   *  additional executor DIDs the operator has enrolled (e.g. a DID-hosting
+   *  control plane). A request signed by any DID outside this set is refused —
+   *  it does not matter how well-formed it is. */
+  enrolledExecutorDids: readonly string[];
   /** This device's holder DID: who the request must be addressed to, and who it
    *  would be approving as. */
   holderDid: string;
@@ -205,10 +213,10 @@ export async function parseTaskConsentRequest(
   if (!verification.verified) {
     return reject("untrusted_issuer", verification.reason ?? "proof did not verify");
   }
-  if (verification.signer !== opts.expectedVtaDid) {
+  if (!verification.signer || !opts.enrolledExecutorDids.includes(verification.signer)) {
     return reject(
       "untrusted_issuer",
-      `signed by ${verification.signer ?? "an unknown key"}, not this device's VTA`,
+      `signed by ${verification.signer ?? "an unknown key"}, not an executor this device is enrolled with`,
     );
   }
   // The in-band issuer must agree with the proven signer (SPEC §4.8.1).
@@ -264,7 +272,7 @@ export async function parseTaskConsentRequest(
   return {
     ok: true,
     parsed: {
-      vtaDid: verification.signer,
+      executorDid: verification.signer,
       thid,
       request: payload as TaskConsentRequestPayload,
     },

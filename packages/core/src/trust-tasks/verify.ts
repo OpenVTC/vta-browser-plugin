@@ -1,8 +1,9 @@
 // Verify a W3C Data Integrity proof (`eddsa-jcs-2022`) on a Trust-Task
 // envelope — the inverse of `./sign.ts`. The wallet uses this to verify the
-// `proof` on inbound proof-bearing Trust-Task documents (e.g. a spec-conformant
-// `confirm/request` whose `reason` is bound to the RP's key), mirroring the
-// Rust `verify_trust_task_proof` in the VTA.
+// `proof` on inbound proof-bearing Trust-Task documents (e.g. a
+// `task-consent/request` whose effects are bound to the executor's key, or a
+// step-up `approve-request` whose `reason` is bound to the RP's key),
+// mirroring the Rust `verify_trust_task_proof` in the VTA.
 //
 // Same canonicalization (JCS / RFC 8785) and signing input as `sign.ts`:
 // SHA-256(JCS(proofConfig-minus-proofValue)) || SHA-256(JCS(doc-minus-proof)),

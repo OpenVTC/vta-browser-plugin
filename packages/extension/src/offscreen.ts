@@ -7,7 +7,6 @@
 // those, which is why this lives here rather than in `background.ts`.
 
 import {
-  buildConfirmResponse,
   connectMediatorSession,
   createStopwatch,
   DidcommVtaTransport,
@@ -20,7 +19,6 @@ import {
   markInboundHandled,
   type MediatorConnection,
   MediatorSessionBridge,
-  parseConfirmRequest,
   buildStepUpApproval,
   resolveKeyAgreement,
   parseTaskConsentRequest,
@@ -44,9 +42,11 @@ import {
   MediatorSessionTspTransport,
   tspHolderIdentityFromSecret,
   setDeviceWake,
+  type SigningIdentity,
   signingIdentityFromSecret,
   stepUpVtaFinish,
   stepUpVtaStart,
+  verifyStepUpApproveRequest,
   signTrustTask,
   deriveSigningKeyId,
   forgetHolderRecord,
@@ -102,7 +102,6 @@ import {
   OFFSCREEN_VAULT_RELEASE,
   OFFSCREEN_VAULT_UPSERT,
   OFFSCREEN_VERIFY_DID,
-  RUNTIME_INBOUND_CONSENT,
   RUNTIME_TASK_CONSENT,
   RUNTIME_EMIT_WALLET_EVENT,
   type OffscreenDidcommLoginRequest,
@@ -208,6 +207,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (msg.type === OFFSCREEN_START_INBOUND) {
     const req = message as { vtaDids: string[] };
+    // Background sends the full onboarded-VTA set on boot and on every
+    // connection change; it doubles as the base of the enrolled-executor set
+    // (offscreen has no chrome.storage, so the list is threaded in here).
+    knownVtaDids = [...(req.vtaDids ?? [])];
     void reconcileInbound(req.vtaDids ?? []);
     return false; // fire-and-forget
   }
@@ -598,6 +601,38 @@ async function doRequestTask(req: OffscreenRequestTaskRequest) {
 // not open two popups for the same change.
 const activeConsentDigests = new Set<string>();
 
+// ─── Enrolled executors ───
+//
+// Every approval request this wallet renders must be a Trust-Task document
+// signed by an executor the wallet is *enrolled with* — proof verification
+// alone only says who signed, not that the signer is entitled to ask this
+// device's human anything. The enrolled set is:
+//
+//   - the onboarded VTA DIDs (threaded in via OFFSCREEN_START_INBOUND — the
+//     same connection-store source the per-session vtaDid comes from);
+//   - the operator-configured default step-up VTA (settings), when set;
+//   - any operator-enrolled executor DIDs from settings — this is how a
+//     did:webvh DID-hosting control plane (which signs task-consent requests
+//     and step-up approve-requests) gets enrolled.
+//
+// The wallet stores no delegated-consent grants of its own that could name
+// executor DIDs (grants live VTA-side), so operator config is the source for
+// non-VTA executors. Unknown signer → reject("untrusted_issuer"), log, and
+// never prompt.
+let knownVtaDids: string[] = [];
+
+/** The enrolled-executor set, always including `vtaDid` when given. */
+async function enrolledExecutorDids(vtaDid?: string): Promise<string[]> {
+  const settings = await getSettings();
+  const set = new Set<string>([
+    ...(vtaDid ? [vtaDid] : []),
+    ...knownVtaDids,
+    ...(settings.defaultStepUpVtaDid ? [settings.defaultStepUpVtaDid] : []),
+    ...(settings.enrolledExecutorDids ?? []),
+  ]);
+  return [...set];
+}
+
 /**
  * Hand a `requireConsent` rejection to a co-located approver identity.
  *
@@ -633,15 +668,17 @@ async function maybeRelayConsentLocally(
 
   if (activeConsentDigests.has(outcome.payloadDigest)) return;
 
-  // Verify it is genuinely from this VTA before showing a human anything — the
-  // same gate the mediator-push path applies in `parseTaskConsentRequest`.
+  // Verify it is genuinely from an enrolled executor before showing a human
+  // anything — the same gate the mediator-push path applies in
+  // `parseTaskConsentRequest`. (On this path the signer is expected to be the
+  // VTA the rejection came from; the enrolled set always contains it.)
   const parsed = await parseTaskConsentRequest(
     {
       type: TRUST_TASK_ENVELOPE_TYPE,
       body: raw,
       id: (raw as { id?: unknown }).id,
     } as Record<string, unknown>,
-    { expectedVtaDid: vtaDid, holderDid: myApproverDid },
+    { enrolledExecutorDids: await enrolledExecutorDids(vtaDid), holderDid: myApproverDid },
   );
   if (!parsed.ok) {
     console.warn(
@@ -1660,8 +1697,8 @@ async function drainPendingInbound(vtaDids: readonly string[]): Promise<void> {
  */
 async function onInboundMessage(
   conn: MediatorConnection,
-  identity: Parameters<typeof buildConfirmResponse>[0]["holder"],
-  signing: Parameters<typeof buildConfirmResponse>[0]["signing"],
+  identity: Identity,
+  signing: SigningIdentity,
   vtaDid: string,
   message: Record<string, unknown>,
   isApprover = false,
@@ -1702,8 +1739,8 @@ async function onInboundMessage(
  */
 async function handleInbound(
   conn: MediatorConnection,
-  identity: Parameters<typeof buildConfirmResponse>[0]["holder"],
-  signing: Parameters<typeof buildConfirmResponse>[0]["signing"],
+  identity: Identity,
+  signing: SigningIdentity,
   vtaDid: string,
   message: Record<string, unknown>,
   isApprover = false,
@@ -1725,8 +1762,8 @@ async function handleInbound(
 
 async function dispatchInbound(
   conn: MediatorConnection,
-  identity: Parameters<typeof buildConfirmResponse>[0]["holder"],
-  signing: Parameters<typeof buildConfirmResponse>[0]["signing"],
+  identity: Identity,
+  signing: SigningIdentity,
   vtaDid: string,
   message: Record<string, unknown>,
   // True when this is the approver's own inbox session: the decision is signed
@@ -1753,21 +1790,22 @@ async function dispatchInbound(
     return;
   }
 
-  // Task-execution consent, first — it is the one inbound the *VTA itself*
+  // Task-execution consent, first — it is the one inbound an *executor itself*
   // sends, and it is the one whose content a human will act on.
   //
   // `parseTaskConsentRequest` verifies the Data-Integrity proof and that the
-  // signer is this device's own VTA *before* returning anything. Nothing is
-  // shown to a user on the strength of the transport alone: a mediator delivers
-  // what it is given, and the effects a person reads are the basis of an
-  // authorization, so they must be attributable to the executor that authored
-  // them.
+  // signer is an executor this device is enrolled with (its own VTA(s), plus
+  // any operator-enrolled executors such as a DID-hosting control plane)
+  // *before* returning anything. Nothing is shown to a user on the strength of
+  // the transport alone: a mediator delivers what it is given, and the effects
+  // a person reads are the basis of an authorization, so they must be
+  // attributable to the executor that authored them.
   const consent = await parseTaskConsentRequest(message, {
-    expectedVtaDid: vtaDid,
+    enrolledExecutorDids: await enrolledExecutorDids(vtaDid),
     holderDid: signing.did,
   });
   if (consent.ok) {
-    await handleTaskConsent(conn, identity, signing, vtaDid, consent.parsed, message, isApprover);
+    await handleTaskConsent(conn, identity, signing, consent.parsed, message, isApprover);
     return;
   }
   if (consent.reason !== "not-a-task-consent-request") {
@@ -1781,65 +1819,21 @@ async function dispatchInbound(
     return;
   }
 
-  const parsed = parseConfirmRequest(message);
-  if (!parsed) return; // not a confirm/request/0.1 — ignore other traffic
-
-  // De-dup: the mediator replays un-acked messages on every reconnect, and
-  // the MV3 worker respawns the offscreen session often. Skip a confirm we've
-  // already handled so a replay doesn't pop a second consent prompt. Marked
-  // before prompting so a replay during the consent window is also skipped.
-  // Persisted (survives respawns — exactly when replays arrive).
-  //
-  // The drain path bypasses this. A drained message is one we persisted and
-  // very likely already prompted for — so its id IS in the handled set — but
-  // the user never got to answer before the worker died. Treating that as a
-  // duplicate would discard exactly the interrupted interaction the pending
-  // store exists to finish.
-  const messageId = typeof message.id === "string" ? message.id : undefined;
-  if (messageId && !fromDrain) {
-    const isNew = await markInboundHandled(new IndexedDBKVStore(), messageId);
-    if (!isNew) {
-      console.info("[pnm inbound] skipping replayed confirm:", messageId);
-      return;
-    }
-  }
-  try {
-    // Ask the background to prompt the user (consent UI is a background API).
-    // The spec `reason` maps to the generic consent-prompt `action` label.
-    const consent = (await chrome.runtime.sendMessage({
-      type: RUNTIME_INBOUND_CONSENT,
-      rpDid: parsed.rpDid,
-      action: parsed.request.reason,
-    })) as { approved?: boolean } | undefined;
-    const approved = consent?.approved === true;
-
-    const rp = await resolveKeyAgreement(parsed.rpDid);
-    const outer = await buildConfirmResponse({
-      holder: identity,
-      signing,
-      rp,
-      mediator: conn.mediator,
-      approved,
-      subject: parsed.request.subject,
-      challenge: parsed.request.challenge,
-      thid: parsed.thid,
-    });
-    conn.send(outer);
-    console.info("[pnm inbound] confirm responded:", approved ? "approved" : "denied");
-  } catch (e) {
-    console.error("[pnm inbound] confirm handling failed:", e);
-  }
+  // Anything else is ignored. This used to fall through to the
+  // `confirm/request/0.1` family; that fallback was removed deliberately when
+  // the family was retired ecosystem-wide (the registry marks it supersededBy
+  // task-consent) — a retired, RP-authored prompt path is exactly the thing an
+  // attacker would reach for once the strict path shuts them out.
 }
 
 /**
- * A verified `task-consent/request` from this device's VTA: ask the human, sign
- * their answer, send it back.
+ * A verified `task-consent/request` from an enrolled executor: ask the human,
+ * sign their answer, send it back to the executor that asked.
  */
 async function handleTaskConsent(
   conn: MediatorConnection,
   identity: Parameters<typeof buildTaskConsentDecision>[0]["holder"],
   signing: Parameters<typeof buildTaskConsentDecision>[0]["signing"],
-  vtaDid: string,
   parsed: ParsedTaskConsentRequest,
   message: Record<string, unknown>,
   isApprover = false,
@@ -1880,7 +1874,11 @@ async function handleTaskConsent(
     // mistaken for it.
     const decision = result?.approved === true ? "approve" : "deny";
 
-    const vta = await resolveKeyAgreement(vtaDid);
+    // The decision goes back to the executor whose proof we verified — for the
+    // classic flow that is this device's VTA; for an enrolled control plane it
+    // is the control plane itself. `parsed.executorDid` is the proven signer,
+    // never a value the transport claimed.
+    const vta = await resolveKeyAgreement(parsed.executorDid);
     const outer = await buildTaskConsentDecision({
       holder: identity,
       signing,
@@ -1967,16 +1965,50 @@ async function doStepUpVta(
   const { signing } = await loadHolder(req.params.vtaDid);
   sw.mark("load holder");
 
-  // 1. RP start (REST) → approve-request {subject, sessionId, challenge}.
-  const request = await stepUpVtaStart(req.params.baseUrl, req.params.accessToken);
+  // 1. RP start (REST) → the signed `auth/step-up/approve-request/0.2`
+  //    Trust-Task document (plus legacy top-level fields for cross-checking).
+  const start = await stepUpVtaStart(req.params.baseUrl, req.params.accessToken);
   sw.mark("rp start (challenge)");
 
+  // 1b. Verify BEFORE acting on anything in it. The document's proof must
+  //     verify (eddsa-jcs-2022, assertionMethod), its issuer must be the proven
+  //     signer, and that signer must be an executor this wallet is enrolled
+  //     with — the spec's "consumers MUST verify the proof BEFORE surfacing the
+  //     reason" rule, applied to everything the wallet echoes into the signed
+  //     approve-response, not just the reason. A start response with no
+  //     `document` is refused: the proofless legacy `{subject, sessionId,
+  //     challenge, reason}` path was removed deliberately once the control
+  //     plane began signing approve-requests, so its absence means an
+  //     out-of-date (or lying) server and never a prompt.
+  const verified = await verifyStepUpApproveRequest(start, {
+    enrolledExecutorDids: await enrolledExecutorDids(req.params.vtaDid),
+  });
+  if (!verified.ok) {
+    console.warn("[pnm step-up] refusing approve-request:", verified.reason);
+    throw new Error(`step-up approve-request refused: ${verified.reason}`);
+  }
+  // The RP the page named is the audience the approve-response will be bound
+  // to (`recipient: rpDid`); the approve-request's proven issuer must be that
+  // same party, or the wallet would be answering a question nobody it trusts
+  // asked.
+  if (verified.issuer !== req.params.rpDid) {
+    console.warn(
+      "[pnm step-up] approve-request issuer",
+      verified.issuer,
+      "does not match the page-supplied rpDid",
+      req.params.rpDid,
+    );
+    throw new Error("step-up approve-request refused: issuer does not match rpDid");
+  }
+  sw.mark("verify approve-request");
+
   // 2. Wallet signs the approve-response/0.2 locally (holder-self-signs — no
-  //    VTA round-trip). The DI proof over the subject key is the elevation gate.
+  //    VTA round-trip). The DI proof over the subject key is the elevation
+  //    gate. Every echoed field comes from the *verified* document's payload.
   const approval = await buildStepUpApproval({
     signing,
     rpDid: req.params.rpDid,
-    request,
+    request: verified.request,
     approved: true,
   });
   sw.mark("sign approval");
