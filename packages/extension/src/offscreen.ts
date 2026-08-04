@@ -1704,6 +1704,24 @@ async function onInboundMessage(
   isApprover = false,
 ): Promise<void> {
   const id = typeof message.id === "string" ? message.id : undefined;
+  // First thing, before any handling can drop it. Two inboxes run in parallel
+  // (worker + approver) and the mediator routes by the authenticating DID, so
+  // "did anything arrive, on which inbox, addressed to whom" was previously
+  // unanswerable from the console — a request delivered to the worker session
+  // and a request never sent at all produced identical output: none.
+  //
+  // `to` is logged because that is the field that distinguishes them: a
+  // `task-consent/request` is addressed to the approver DID, and seeing it
+  // arrive on the worker inbox would be a routing bug rather than a missing
+  // message.
+  console.info(
+    "[pnm inbound] received",
+    isApprover ? "(approver inbox)" : "(worker inbox)",
+    "type=", message.type,
+    "id=", id ?? "(none)",
+    "from=", message.from,
+    "to=", message.to,
+  );
   let persistError: unknown;
   if (id) {
     try {
