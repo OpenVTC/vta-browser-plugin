@@ -568,7 +568,30 @@ async function requestConsent(args: {
 
     chrome.windows.create({ url, type: "popup", ...bounds }, (win) => {
       const winId = win?.id;
-      if (winId === undefined) return;
+      if (winId === undefined) {
+        // The window could not be opened. This used to `return` without
+        // settling, leaving the promise pending forever: the caller's `await`
+        // never resolved, no decision was ever produced, and nothing was logged
+        // in any context. From the outside that is indistinguishable from a
+        // request that never arrived — which is exactly how it presented, after
+        // the message had already been verified, de-duplicated, and acked to
+        // the mediator (so its queued copy was gone too).
+        //
+        // Settle as a DENIAL, never assent. A prompt the user never saw must
+        // not become an approval, and the rest of this file is built on
+        // "silence is not agreement".
+        //
+        // `lastError` is read inside the callback because that is the only
+        // place it exists; leaving it unread also emits an "unchecked
+        // runtime.lastError" warning that buries the real reason.
+        const why = chrome.runtime.lastError?.message ?? "no window was created";
+        console.error(
+          "[pnm consent] could not open the consent window — treating as a denial:",
+          why,
+        );
+        settle(false, false);
+        return;
+      }
       // Closing the window without a decision is a denial.
       const onClosed = (closedId: number) => {
         if (closedId === winId) {
@@ -631,7 +654,30 @@ async function requestTaskConsent(
 
     chrome.windows.create({ url, type: "popup", ...bounds }, (win) => {
       const winId = win?.id;
-      if (winId === undefined) return;
+      if (winId === undefined) {
+        // The window could not be opened. This used to `return` without
+        // settling, leaving the promise pending forever: the caller's `await`
+        // never resolved, no decision was ever produced, and nothing was logged
+        // in any context. From the outside that is indistinguishable from a
+        // request that never arrived — which is exactly how it presented, after
+        // the message had already been verified, de-duplicated, and acked to
+        // the mediator (so its queued copy was gone too).
+        //
+        // Settle as a DENIAL, never assent. A prompt the user never saw must
+        // not become an approval, and the rest of this file is built on
+        // "silence is not agreement".
+        //
+        // `lastError` is read inside the callback because that is the only
+        // place it exists; leaving it unread also emits an "unchecked
+        // runtime.lastError" warning that buries the real reason.
+        const why = chrome.runtime.lastError?.message ?? "no window was created";
+        console.error(
+          "[pnm consent] could not open the consent window — treating as a denial:",
+          why,
+        );
+        settle(false);
+        return;
+      }
       // Closing the window without deciding is a denial. Never assent: silence
       // is not agreement, and a task-consent prompt that timed out into an
       // approval would be the single worst bug in this system.
