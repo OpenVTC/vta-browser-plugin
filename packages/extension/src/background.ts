@@ -592,6 +592,18 @@ async function requestConsent(args: {
         settle(false, false);
         return;
       }
+      // A window id proves creation succeeded; it does NOT prove the window is
+      // visible. `consentWindowBounds` derives left/top from
+      // `chrome.windows.getLastFocused()`, so a minimised window, a second
+      // display, or an undocked DevTools window can place the prompt somewhere
+      // the user never looks — and that is indistinguishable from no prompt at
+      // all, which is precisely the ambiguity that made the silent hang above
+      // so hard to find. Log where it went so "I see no popup" is answerable.
+      console.info(
+        "[pnm consent] consent window opened",
+        "id=", winId,
+        "bounds=", JSON.stringify(bounds),
+      );
       // Closing the window without a decision is a denial.
       const onClosed = (closedId: number) => {
         if (closedId === winId) {
@@ -678,6 +690,18 @@ async function requestTaskConsent(
         settle(false);
         return;
       }
+      // A window id proves creation succeeded; it does NOT prove the window is
+      // visible. `consentWindowBounds` derives left/top from
+      // `chrome.windows.getLastFocused()`, so a minimised window, a second
+      // display, or an undocked DevTools window can place the prompt somewhere
+      // the user never looks — and that is indistinguishable from no prompt at
+      // all, which is precisely the ambiguity that made the silent hang above
+      // so hard to find. Log where it went so "I see no popup" is answerable.
+      console.info(
+        "[pnm consent] consent window opened",
+        "id=", winId,
+        "bounds=", JSON.stringify(bounds),
+      );
       // Closing the window without deciding is a denial. Never assent: silence
       // is not agreement, and a task-consent prompt that timed out into an
       // approval would be the single worst bug in this system.
