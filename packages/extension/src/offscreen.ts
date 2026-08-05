@@ -1766,6 +1766,24 @@ async function handleInbound(
 ): Promise<void> {
   try {
     await dispatchInbound(conn, identity, signing, vtaDid, message, isApprover, fromDrain);
+  } catch (err) {
+    // There was no catch here, and the call site is `void handleInbound(...)`.
+    // So anything dispatch threw — rather than returned as a refusal — became an
+    // unhandled rejection: no log from this file, no prompt, no decision sent
+    // back to the executor, and the message already acked to the mediator so its
+    // queued copy was gone.
+    //
+    // That is indistinguishable from a request that never arrived, and it is
+    // what it looked like: `[pnm inbound] received` followed by silence, while
+    // the same request dispatched by hand from the console prompted correctly.
+    // Every deliberate refusal in `dispatchInbound` logs and returns; only a
+    // *thrown* error could vanish, and nothing was watching for one.
+    console.error(
+      "[pnm inbound] handling threw — no prompt was raised for this message:",
+      typeof message.type === "string" ? message.type : "(no type)",
+      typeof message.id === "string" ? message.id : "(no id)",
+      err,
+    );
   } finally {
     const id = typeof message.id === "string" ? message.id : undefined;
     if (id) {
