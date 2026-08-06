@@ -88,6 +88,7 @@ import {
   RUNTIME_REQUEST_TASK,
   RUNTIME_SIGN_TRUST_TASK,
   RUNTIME_TASK_CONSENT,
+  CONSENT_KEEPALIVE_PORT,
   RUNTIME_STEP_UP_CONSENT,
   RUNTIME_STEP_UP_VTA,
   RUNTIME_VERIFY_RP_DID,
@@ -456,6 +457,29 @@ async function ensureOffscreenDocument(): Promise<void> {
   }
   await creatingOffscreen;
 }
+
+// A port is the only reliable way for the offscreen document to reach this
+// worker. `chrome.runtime.sendMessage` from an offscreen document does not
+// dependably START a terminated MV3 service worker: the send resolves nowhere,
+// nothing is thrown, and the caller's await hangs forever. That is exactly how
+// a consent request went missing — arriving, verifying, de-duplicating, being
+// acked to the mediator, and then vanishing with no prompt and no error, while
+// the identical message dispatched by hand from the console (with the worker
+// already awake) prompted correctly.
+//
+// `chrome.runtime.connect` does start the worker, and an open port keeps it
+// alive for the connection's lifetime — which also covers the second half of
+// the problem: `requestTaskConsent` awaits a human decision that can take
+// minutes, far past the ~30s idle teardown, with the resolver held in memory.
+//
+// The listener body is deliberately empty. Accepting the connection is the
+// entire purpose; there is no protocol here.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== CONSENT_KEEPALIVE_PORT) return;
+  port.onDisconnect.addListener(() => {
+    // Nothing to clean up — the port exists only to hold the worker awake.
+  });
+});
 
 // ─── Consent coordination ───
 // A login request opens a consent popup and parks here until the popup

@@ -267,6 +267,14 @@ export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
  *  enrolled executor is asking, not a site), and its approval is single-use so
  *  there is nothing to remember. */
 export const RUNTIME_TASK_CONSENT = "vta-wallet/task-consent" as const;
+
+/** Port the offscreen document opens before asking for a consent prompt.
+ *
+ *  `chrome.runtime.sendMessage` from an offscreen document does not dependably
+ *  START a terminated MV3 service worker, so the ask can resolve nowhere and
+ *  hang with nothing thrown. `connect` does start it, and holding the port open
+ *  keeps it alive across a decision that waits on a human. */
+export const CONSENT_KEEPALIVE_PORT = "pnm/consent-keepalive" as const;
 /** offscreen → background: a step-up approve-request has VERIFIED and the
  *  human must now decide. Fired mid-flow — after the offscreen fetched the RP
  *  `start` response and `verifyStepUpApproveRequest` passed, before anything
