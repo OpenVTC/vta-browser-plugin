@@ -100,6 +100,7 @@ import {
   OFFSCREEN_VAULT_UPSERT,
   OFFSCREEN_VERIFY_DID,
   RUNTIME_TASK_CONSENT,
+  CONSENT_KEEPALIVE_PORT,
   RUNTIME_STEP_UP_CONSENT,
   RUNTIME_EMIT_WALLET_EVENT,
   type OffscreenDidcommLoginRequest,
@@ -690,6 +691,22 @@ async function maybeRelayConsentLocally(
   }
 
   activeConsentDigests.add(outcome.payloadDigest);
+  // Open a port to the background BEFORE asking, and hold it for the whole
+  // interaction. `chrome.runtime.sendMessage` from an offscreen document does
+  // not dependably start a terminated MV3 service worker — the send resolves
+  // nowhere, nothing throws, and this await hangs forever. That is how a
+  // verified, de-duplicated, mediator-acked consent request went missing with
+  // no prompt and no error, while the same message sent by hand from this
+  // console (worker already awake) prompted correctly.
+  //
+  // `connect` does start the worker, and an open port keeps it alive — which
+  // also covers the decision itself: the prompt awaits a human, far past the
+  // ~30s idle teardown that would otherwise discard the resolver held in the
+  // worker's memory.
+  //
+  // Disconnected in `finally` so an answered, denied or failed prompt does not
+  // leave the worker pinned awake.
+  const keepAlive = chrome.runtime.connect({ name: CONSENT_KEEPALIVE_PORT });
   try {
     const result = (await chrome.runtime.sendMessage({
       type: RUNTIME_TASK_CONSENT,
@@ -733,6 +750,7 @@ async function maybeRelayConsentLocally(
     conn.send(outer);
     console.info("[pnm consent relay] decision relayed over the worker session");
   } finally {
+    keepAlive.disconnect();
     activeConsentDigests.delete(outcome.payloadDigest);
   }
 }
@@ -1895,6 +1913,22 @@ async function handleTaskConsent(
   }
   activeConsentDigests.add(parsed.request.payloadDigest);
 
+  // Open a port to the background BEFORE asking, and hold it for the whole
+  // interaction. `chrome.runtime.sendMessage` from an offscreen document does
+  // not dependably start a terminated MV3 service worker — the send resolves
+  // nowhere, nothing throws, and this await hangs forever. That is how a
+  // verified, de-duplicated, mediator-acked consent request went missing with
+  // no prompt and no error, while the same message sent by hand from this
+  // console (worker already awake) prompted correctly.
+  //
+  // `connect` does start the worker, and an open port keeps it alive — which
+  // also covers the decision itself: the prompt awaits a human, far past the
+  // ~30s idle teardown that would otherwise discard the resolver held in the
+  // worker's memory.
+  //
+  // Disconnected in `finally` so an answered, denied or failed prompt does not
+  // leave the worker pinned awake.
+  const keepAlive = chrome.runtime.connect({ name: CONSENT_KEEPALIVE_PORT });
   try {
     const result = (await chrome.runtime.sendMessage({
       type: RUNTIME_TASK_CONSENT,
@@ -1934,6 +1968,7 @@ async function handleTaskConsent(
   } catch (e) {
     console.error("[pnm inbound] task-consent handling failed:", e);
   } finally {
+    keepAlive.disconnect();
     activeConsentDigests.delete(parsed.request.payloadDigest);
   }
 }
