@@ -146,12 +146,19 @@ test("…but may approve its own task when policy permits it", async () => {
   assert.equal(res.ok, true);
 });
 
-test("a payload missing required members is refused", async () => {
+test("a payload missing required members is refused, and says so distinctly", async () => {
   // A genuinely-signed request that is nonetheless unusable: without the digest
   // there is nothing to bind an approval to, so there is nothing to approve.
   const res = await parseTaskConsentRequest(await inbound({ drop: ["payloadDigest"] }), opts);
   assert.equal(res.ok, false);
-  assert.equal(res.reason, "not-a-task-consent-request");
+  // NOT "not-a-task-consent-request". That reason means "not addressed to this
+  // handler", and callers are entitled to ignore it silently — which is exactly
+  // what happened to a malformed request in the field: dropped with no prompt,
+  // no log, and its pending record cleared, indistinguishable from a message
+  // that never arrived. A request that claimed to be a consent ask and failed
+  // is something a human is waiting on, so it must stay reportable.
+  assert.equal(res.reason, "malformed-payload");
+  assert.match(res.detail ?? "", /missing required members/);
 });
 
 // ── What the human is shown ──────────────────────────────────────────────────

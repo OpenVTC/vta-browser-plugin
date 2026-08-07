@@ -152,7 +152,16 @@ export interface ParsedTaskConsentRequest {
 }
 
 export type TaskConsentRequestRejection =
+  /** Not addressed to this handler at all — the ONLY reason a caller may
+   *  ignore silently. Everything else claimed to be a consent request and
+   *  failed, which a human is waiting on and must therefore be reported. */
   | "not-a-task-consent-request"
+  /** It IS a consent request, but its payload is unusable. Distinct from the
+   *  above because it used to share it, and callers key on that reason to
+   *  decide whether to stay quiet: a malformed request was dropped in total
+   *  silence — no prompt, no log, and the pending record cleared — which is
+   *  indistinguishable from a message that never arrived. */
+  | "malformed-payload"
   | "untrusted_issuer"
   | "expired"
   | "not_eligible";
@@ -246,7 +255,7 @@ export async function parseTaskConsentRequest(
     !payload.exposure ||
     typeof payload.exposure !== "object"
   ) {
-    return reject("not-a-task-consent-request", "payload is missing required members");
+    return reject("malformed-payload", "payload is missing required members");
   }
 
   const now = opts.now ?? new Date();
