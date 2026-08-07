@@ -8,6 +8,7 @@
 // REST flow: content → RUNTIME_LOGIN → consent → offscreen REST login → tokens.
 // DIDComm flow: content → RUNTIME_LOGIN_DIDCOMM → consent → offscreen doc.
 
+import { IndexedDBKVStore, listPendingInbound } from "@openvtc/pnm-core";
 import {
   parseActiveVtaDid,
   parseAllVtaDids,
@@ -474,9 +475,47 @@ async function ensureOffscreenDocument(): Promise<void> {
 //
 // The listener body is deliberately empty. Accepting the connection is the
 // entire purpose; there is no protocol here.
+// ─── Pending-approval surface ───
+//
+// A prompt window that must appear at an arbitrary moment is the least reliable
+// thing this extension can attempt: it needs a live service worker, a live
+// offscreen document, and a promise chain spanning both, on a runtime that is
+// free to kill either. Every failure we chased came from that.
+//
+// A badge does not. It is derived from durable state, so it is correct after
+// any teardown, and it gives the user a way IN rather than depending on a
+// window finding its way OUT. The window remains the fast path; this is the
+// floor beneath it.
+//
+// Read from the same durable record the inbound path writes before it acks the
+// mediator (`pending.ts`), so the badge cannot claim a request the recipient
+// never durably held — nor miss one it did.
+async function refreshPendingBadge(): Promise<void> {
+  try {
+    const pending = await listPendingInbound(new IndexedDBKVStore());
+    const waiting = pending.filter((p: { isApprover: boolean }) => p.isApprover).length;
+    await chrome.action.setBadgeText({ text: waiting > 0 ? String(waiting) : "" });
+    if (waiting > 0) {
+      await chrome.action.setBadgeBackgroundColor({ color: "#8B1A1A" });
+    }
+  } catch (err) {
+    // Never let a cosmetic surface break a wake path.
+    console.warn("[pnm consent] could not refresh the pending badge:", err);
+  }
+}
+
+// Every wake is a chance to be correct: startup, a consent port opening, a push
+// doorbell. Idempotent and cheap, so running it often costs nothing and means
+// no single missed call leaves the badge lying.
+void refreshPendingBadge();
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== CONSENT_KEEPALIVE_PORT) return;
+  // A consent port opening means a request was just durably recorded; a
+  // disconnect means the interaction ended. Both change the count.
+  void refreshPendingBadge();
   port.onDisconnect.addListener(() => {
+    void refreshPendingBadge();
     // Nothing to clean up — the port exists only to hold the worker awake.
   });
 });
