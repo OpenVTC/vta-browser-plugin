@@ -8,6 +8,8 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-09
+
 ### Added
 
 - **`digestMultibase` decoding, and the approver match code derived from the
@@ -53,6 +55,34 @@ For history before this file, see `git log` on `packages/core`.
   `details.consentRequests` so it works regardless of whether the VTA in front
   of it emits the explicit reason yet. The prior tests encoded the wrong wire
   shape as correct and were rewritten against the real one.
+
+### Migration
+
+The `payloadDigest` **wire format changed**, on both sides at once and without
+a type-URI version to signal it — Trust Tasks 0.4 re-pinned
+`task-consent/{request,decision,granted}` errata-style, in place. This release
+pairs with `verifiable-trust-infrastructure` **#911**; a wallet and an executor
+on opposite sides of that change do not interoperate on consent.
+
+**Upgrade the wallet and the VTA together.** Unlike the 0.1.3 authcrypt change
+there is no dual-accept fallback to stage behind, because the digest is the
+value the approver signs — accepting both encodings would mean accepting two
+different digests for one payload, which is precisely the substitution the
+digest exists to prevent.
+
+The failure is fail-closed in both directions, which bounds the blast radius:
+
+- **Wallet ≥ 0.3.0, VTA pre-0.4** (bare hex on the wire): the digest is refused
+  as non-conforming, no match code is rendered, and approval is blocked with an
+  explicit message.
+- **Wallet ≤ 0.2.0, VTA on 0.4** (multibase on the wire): the old code slices
+  the encoded string, so the wallet displays `zQmSK9…` where the requesting
+  screen and the mobile approver display `3b0c7f`. Destructive approvals become
+  impossible — the codes cannot match — while non-destructive ones still
+  complete with a cosmetically wrong code shown. **Rebuild and reinstall the
+  extension**; there is no store auto-update path in this repository.
+
+Nothing is silently mis-approved in either direction.
 
 ## [0.2.0] - 2026-06-08
 
