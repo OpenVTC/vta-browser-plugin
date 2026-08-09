@@ -8,7 +8,13 @@ import {
   type RuntimeVerifyRpDidResponse,
   type VerifyRpDidResult,
 } from "./bridge-protocol.js";
-import { effectDiffView, ABSENT_VALUE, type ConsentEffect } from "@openvtc/pnm-core";
+import {
+  effectDiffView,
+  matchCodeFromDigest,
+  MATCH_CODE_LEN,
+  ABSENT_VALUE,
+  type ConsentEffect,
+} from "@openvtc/pnm-core";
 import { base64url } from "@openvtc/vti-didcomm-js";
 import { runApproverUnlockCeremony } from "./webauthn-prf-unlock.js";
 
@@ -680,8 +686,29 @@ interface TaskConsentRequest {
   consequences?: string[];
 }
 
-/** The prefix the user matches across two screens for a destructive task. */
-const DIGEST_PREFIX_LEN = 6;
+/**
+ * The code the user matches across two screens for a destructive task.
+ *
+ * `matchCodeFromDigest` decodes the `digestMultibase` and renders the first
+ * bytes as hex, rather than slicing the encoded string — every SHA-256
+ * `payloadDigest` begins with a constant `zQm`, so a slice of the encoding
+ * would spend half the code on a format marker while still looking like six
+ * random characters. It also has to agree character-for-character with the
+ * mobile approver's `match_code_from_digest`, or the two surfaces show
+ * different codes for the same task and the mismatch reads as an attack.
+ *
+ * Returns `null` when the digest will not decode. That fails the comparison
+ * closed: a request whose digest we cannot parse is one whose match code we
+ * cannot compute, and rendering *something* would be the one outcome worse than
+ * rendering nothing.
+ */
+function matchCode(payloadDigest: string): string | null {
+  try {
+    return matchCodeFromDigest(payloadDigest);
+  } catch {
+    return null;
+  }
+}
 
 function taskLabel(typeUri: string): string {
   // `https://trusttasks.org/spec/webvh/dids/update/1.0` → `webvh/dids/update`
@@ -775,7 +802,7 @@ function TaskConsent() {
   }
 
   const destructive = request.sideEffects === "destructive";
-  const prefix = request.payloadDigest.slice(0, DIGEST_PREFIX_LEN);
+  const prefix = matchCode(request.payloadDigest);
 
   // What the VTA said this will do. `effects` when it dry-ran the handler; the
   // specification's static text when it could not; and — when it has neither —
@@ -794,7 +821,16 @@ function TaskConsent() {
   // the human performs across two independent screens catches a hostile device,
   // because only that moves the check somewhere the device cannot reach. A tap
   // is a reflex; a comparison is an act of attention.
-  const mayApprove = !destructive || typed.trim().toLowerCase() === prefix.toLowerCase();
+  //
+  // An undecodable digest (`prefix === null`) blocks approval outright. The
+  // comparison is the control; with no code to compare there is nothing left to
+  // downgrade to, and letting the tap through would silently convert the
+  // strongest check on this screen into the weakest.
+  //
+  // The code is hex, so the case-insensitive compare is right — it forgives the
+  // keyboard without widening the match.
+  const mayApprove =
+    !destructive || (prefix !== null && typed.trim().toLowerCase() === prefix.toLowerCase());
 
   // Approve. On the approver surface, the signature is gated behind a fresh
   // WebAuthn gesture whose challenge is THIS payloadDigest — the biometric that
@@ -919,13 +955,24 @@ function TaskConsent() {
         </div>
       ) : null}
 
-      {/* The digest. Shown for every task; matched for destructive ones. */}
-      <div style={{ fontSize: 11, color: "#777" }}>
-        Request code{" "}
-        <code style={{ fontSize: 13, letterSpacing: 1.5, color: "#222" }}>{prefix}</code>
-      </div>
+      {/* The digest. Shown for every task; matched for destructive ones.
+          When it will not decode we say so instead of rendering a placeholder:
+          a human who sees six characters compares them, and six characters we
+          invented would be compared successfully against nothing. */}
+      {prefix !== null ? (
+        <div style={{ fontSize: 11, color: "#777" }}>
+          Request code{" "}
+          <code style={{ fontSize: 13, letterSpacing: 1.5, color: "#222" }}>{prefix}</code>
+        </div>
+      ) : (
+        <div style={{ fontSize: 11, color: colours.danger, lineHeight: 1.4 }}>
+          This request carries a digest this wallet cannot read, so there is no code to
+          compare. Do not approve it — check that your agent and wallet are on the same
+          version.
+        </div>
+      )}
 
-      {destructive ? (
+      {destructive && prefix !== null ? (
         <div style={{ display: "grid", gap: 6 }}>
           <label style={{ fontSize: 12, fontWeight: 600 }}>
             This cannot be undone. Type the request code shown where you started this
@@ -934,7 +981,7 @@ function TaskConsent() {
           <input
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
-            placeholder={"·".repeat(DIGEST_PREFIX_LEN)}
+            placeholder={"·".repeat(MATCH_CODE_LEN)}
             style={{
               padding: "8px 10px",
               fontSize: 15,
