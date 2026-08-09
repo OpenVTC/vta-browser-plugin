@@ -8,6 +8,29 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+### Added
+
+- **`digestMultibase` decoding, and the approver match code derived from the
+  digest bytes** (`trust-tasks/digest.ts`). Trust Tasks 0.4 moved
+  `payloadDigest` to the shared `DigestMultibase` type — a multibase-encoded
+  multihash — and landed it **errata-style, in place** on
+  `task-consent/{request,decision,granted}/0.1`. The type URI did not move, so
+  no version check can detect the change; the encoding is the only signal.
+  `matchCodeFromDigest` multibase-decodes, strips the `0x12 0x20` sha2-256
+  multihash prefix and renders the first bytes as hex, matching
+  `vta_mobile_core::consent::match_code_from_digest` character-for-character
+  (OpenVTC/verifiable-trust-infrastructure#911). Because the digest is still
+  SHA-256, this reproduces exactly the six characters the approver screen showed
+  when the wire carried bare hex — the migration is invisible to the human.
+
+  Slicing the *encoded* string would not have been: every SHA-256
+  `digestMultibase` begins with a constant `zQm` (the base58btc marker plus the
+  multihash prefix), so a six-character slice carries ~17.6 bits where the
+  approver believes they are comparing ~35, while still looking like six random
+  characters. A bare hex digest — the pre-0.4 wire form — is now refused rather
+  than rendered, so a version-skewed request fails on the surface that would
+  otherwise show a code for a decision the executor could never match.
+
 ### Fixed
 
 - **VTA DIDComm auth → canonical Trust-Task type.** The authcrypt-auth
