@@ -39,7 +39,12 @@
 
 import { packAuthcrypt, packAuthcryptJson, wrapForward, type Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
-import { TRUST_TASK_ENVELOPE_TYPE, type TrustTask } from "../vta/protocol.js";
+import {
+  TRUST_TASK_ENVELOPE_TYPE,
+  isTrustTaskErrorType,
+  type TrustTask,
+  type TrustTaskErrorPayload,
+} from "../vta/protocol.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
 import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
@@ -51,6 +56,118 @@ export const TASK_CONSENT_DECISION_TYPE =
 /** VTA → requester: an approval landed and a grant is ready — re-submit now. */
 export const TASK_CONSENT_GRANTED_TYPE =
   "https://trusttasks.org/spec/task-consent/granted/0.1";
+/** The executor's acknowledgement of a decision this device sent. */
+export const TASK_CONSENT_DECISION_RESPONSE_TYPE = `${TASK_CONSENT_DECISION_TYPE}#response`;
+
+/**
+ * What the executor did with a decision this device sent.
+ *
+ * `accepted: false` is the case that matters. A refusal means a human was
+ * shown a change, agreed to it, and the agreement did not take — which is
+ * strictly worse than a prompt that never arrived, because the person believes
+ * they have acted. It has to reach them.
+ */
+export type TaskConsentOutcome =
+  | {
+      accepted: true;
+      /** `granted` = threshold met, the requester can execute. `pending` =
+       *  recorded, more approvals needed. `denied` = the request was aborted,
+       *  which is a successful *outcome* of a `deny`, not a failure. */
+      status: string;
+      approvals?: number;
+      needed?: number;
+      payloadDigest?: string;
+      /** The decision document id this answers, when the reply carried one. */
+      thid?: string;
+    }
+  | {
+      accepted: false;
+      /** Framework status code — snake_case in error/0.1, lowerCamelCase in
+       *  0.2. Opaque: log it, don't branch on a casing. */
+      code: string;
+      message?: string;
+      retryable: boolean;
+      details?: unknown;
+      thid?: string;
+    };
+
+/**
+ * Parse the executor's reply to a `task-consent/decision` this device sent.
+ *
+ * Returns `null` for anything that is not such a reply — that is the only case
+ * a caller may ignore.
+ *
+ * ## Why this exists
+ *
+ * The executor answers a decision on the same DIDComm thread, as a Trust-Task
+ * envelope: a `decision/0.1#response` document on success, a
+ * `trust-task-error/{0.1,0.2}` on refusal. Nothing here recognised either, so
+ * both fell through the inbound handler's final "anything else is ignored"
+ * branch — no log, no surface, nothing.
+ *
+ * That is how an approval refused by the VTA looked identical, from this side,
+ * to one that was delivered and worked: the human approved, the wallet sent,
+ * the executor replied "no", and the wallet discarded the reply. The operator
+ * then watched the requester re-submit forever with no clue which end was at
+ * fault. Reading the answer is the difference between a two-minute diagnosis
+ * and an afternoon of packet-staring.
+ *
+ * ## What is trusted
+ *
+ * Only the authcrypt sender, and only to decide whether to *believe* the
+ * reply — it is diagnostic, and grants nothing. A reply whose sender is not an
+ * enrolled executor is dropped: an unauthenticated party must not be able to
+ * tell this device that its approval failed (a lie that invites the human to
+ * approve a second time), nor that it succeeded.
+ */
+export function parseTaskConsentOutcome(
+  message: Record<string, unknown>,
+  opts: { enrolledExecutorDids: readonly string[] },
+): TaskConsentOutcome | null {
+  if (message.type !== TRUST_TASK_ENVELOPE_TYPE) return null;
+
+  // A missing `from` means the transport could not authenticate the sender.
+  // Unlike the `granted` nudge — which is cross-checked against a digest the
+  // page already holds — nothing downstream re-verifies this, so an
+  // unattributable reply is dropped rather than believed.
+  const from = typeof message.from === "string" ? message.from : null;
+  if (!from || !opts.enrolledExecutorDids.includes(from)) return null;
+
+  const doc = (message.body ?? {}) as Partial<TrustTask<Record<string, unknown>>>;
+  const thid =
+    (typeof message.thid === "string" ? message.thid : undefined) ??
+    (typeof doc.threadId === "string" ? doc.threadId : undefined);
+
+  if (isTrustTaskErrorType(doc.type)) {
+    const payload = (doc.payload ?? {}) as Partial<TrustTaskErrorPayload>;
+    return {
+      accepted: false,
+      code: typeof payload.code === "string" ? payload.code : "unknown",
+      ...(typeof payload.message === "string" ? { message: payload.message } : {}),
+      // The framework schema requires `retryable`; treat a missing one as
+      // "don't retry" rather than inventing optimism about a refusal.
+      retryable: payload.retryable === true,
+      ...(payload.details !== undefined ? { details: payload.details } : {}),
+      ...(thid ? { thid } : {}),
+    };
+  }
+
+  if (doc.type === TASK_CONSENT_DECISION_RESPONSE_TYPE) {
+    const payload = (doc.payload ?? {}) as Record<string, unknown>;
+    return {
+      accepted: true,
+      status: typeof payload.status === "string" ? payload.status : "unknown",
+      ...(typeof payload.approvals === "number" ? { approvals: payload.approvals } : {}),
+      ...(typeof payload.needed === "number" ? { needed: payload.needed } : {}),
+      ...(typeof payload.payloadDigest === "string"
+        ? { payloadDigest: payload.payloadDigest }
+        : {}),
+      ...(thid ? { thid } : {}),
+    };
+  }
+
+  return null;
+}
 
 /**
  * Parse a VTA→requester `task-consent/granted` notice.
@@ -362,10 +479,23 @@ export async function buildTaskConsentDecisionDocument(
   return document;
 }
 
+/** A `task-consent/decision` ready to send, and the id to recognise its
+ *  answer by. */
+export interface BuiltTaskConsentDecision {
+  /** The packed, mediator-routed wire message. */
+  packed: string;
+  /** The decision document's id. The executor answers on this thread
+   *  (`thid`), so a caller that keeps it can match the reply to the decision
+   *  it sent — and therefore tell the human *which* approval was refused.
+   *  Returned rather than left inside the opaque packed blob because the
+   *  alternative is not correlating at all, which is where this started. */
+  id: string;
+}
+
 /** Build the authcrypted, mediator-routed `task-consent/decision` wire message. */
 export async function buildTaskConsentDecision(
   args: BuildTaskConsentDecisionArgs,
-): Promise<string> {
+): Promise<BuiltTaskConsentDecision> {
   const document = await buildTaskConsentDecisionDocument(args);
 
   const message = {
@@ -381,7 +511,8 @@ export async function buildTaskConsentDecision(
     { kid: args.vta.keyAgreementKid, jwk: args.vta.keyAgreementPublicJwk },
   ]);
   const forwardJson = wrapForward(args.vta.did, args.holder.did, args.mediator.did, inner);
-  return packAuthcryptJson(forwardJson, args.holder, [
+  const packed = await packAuthcryptJson(forwardJson, args.holder, [
     { kid: args.mediator.keyAgreementKid, jwk: args.mediator.keyAgreementPublicJwk },
   ]);
+  return { packed, id: document.id };
 }

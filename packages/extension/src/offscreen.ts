@@ -29,6 +29,7 @@ import {
   parseTaskConsentGranted,
   requestTask,
   buildTaskConsentDecision,
+  parseTaskConsentOutcome,
   loadApproverIdentity,
   approverDid,
   TRUST_TASK_ENVELOPE_TYPE,
@@ -602,6 +603,106 @@ async function doRequestTask(req: OffscreenRequestTaskRequest) {
 // not open two popups for the same change.
 const activeConsentDigests = new Set<string>();
 
+// ── Decisions awaiting the executor's answer ─────────────────────────────────
+//
+// Keyed by the decision document's id, which is the `thid` the executor answers
+// on. Sending a decision is not the end of the ceremony: the executor replies
+// accepted-or-refused, and a refusal means a human agreed to a change that then
+// did not happen. Without this the reply had nothing to match against and was
+// dropped unread, so an approval the VTA rejected was indistinguishable here
+// from one that worked.
+//
+// In-memory and best-effort by design. It exists to *explain* an outcome, never
+// to decide one — the executor's grant is the authority, and nothing here is
+// consulted for anything. So an MV3 teardown losing the map costs a good log
+// line, not correctness; persisting it would buy nothing and add a write to the
+// consent hot path. Bounded, because unbounded is how a long-lived offscreen
+// document leaks.
+const MAX_AWAITING_DECISIONS = 64;
+interface AwaitingDecision {
+  payloadDigest: string;
+  decision: "approve" | "deny";
+  taskType: string;
+  sentAt: number;
+}
+const awaitingDecisions = new Map<string, AwaitingDecision>();
+
+function recordDecisionSent(id: string, entry: AwaitingDecision): void {
+  if (awaitingDecisions.size >= MAX_AWAITING_DECISIONS) {
+    // Oldest-first: `Map` preserves insertion order, and the executor answers
+    // in seconds, so anything at the head is long past being answered.
+    const oldest = awaitingDecisions.keys().next();
+    if (!oldest.done) awaitingDecisions.delete(oldest.value);
+  }
+  awaitingDecisions.set(id, entry);
+}
+
+/** Tell the human their approval did not take. A refusal is the one inbound
+ *  event that contradicts something they were just shown and agreed to, so it
+ *  gets a notification rather than a console line they will never read. */
+function notifyApprovalRefused(summary: string): void {
+  try {
+    chrome.notifications?.create({
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icon-128.png"),
+      title: "Approval was not accepted",
+      message: summary,
+      priority: 2,
+    });
+  } catch (e) {
+    // Notifications are a courtesy on top of the log, never the record of what
+    // happened — a browser that refuses one must not take the handler down.
+    console.warn("[pnm inbound] could not raise a refusal notification:", e);
+  }
+}
+
+/**
+ * Handle the executor's answer to a decision this device sent.
+ *
+ * Returns `true` when the message was such an answer (and is now dealt with),
+ * so the caller stops treating it as anything else.
+ */
+async function handleTaskConsentOutcome(
+  vtaDid: string,
+  message: Record<string, unknown>,
+): Promise<boolean> {
+  const outcome = parseTaskConsentOutcome(message, {
+    enrolledExecutorDids: await enrolledExecutorDids(vtaDid),
+  });
+  if (!outcome) return false;
+
+  // The decision this answers, when we still remember sending it. Absent after
+  // an MV3 teardown, or if the executor answered something we never sent — the
+  // outcome is still reported, just without the local detail.
+  const sent = outcome.thid ? awaitingDecisions.get(outcome.thid) : undefined;
+  if (outcome.thid) awaitingDecisions.delete(outcome.thid);
+  const what = sent
+    ? `${sent.decision} of ${sent.taskType} (digest ${sent.payloadDigest.slice(0, 12)}…)`
+    : `a decision this device sent (thid ${outcome.thid ?? "unknown"})`;
+
+  if (outcome.accepted) {
+    console.info(
+      `[pnm inbound] task-consent decision accepted: ${outcome.status} — ${what}`,
+      outcome.approvals !== undefined
+        ? `approvals=${outcome.approvals}${outcome.needed !== undefined ? `/${outcome.needed}` : ""}`
+        : "",
+    );
+    return true;
+  }
+
+  console.error(
+    `[pnm inbound] task-consent decision REFUSED by the executor: ${what} — ` +
+      `code=${outcome.code} retryable=${outcome.retryable} ${outcome.message ?? ""}`,
+    outcome.details ?? "",
+  );
+  notifyApprovalRefused(
+    sent
+      ? `The VTA refused your approval (${outcome.code}). The change has NOT been made.`
+      : `The VTA refused an approval from this device (${outcome.code}).`,
+  );
+  return true;
+}
+
 // ─── Enrolled executors ───
 //
 // Every approval request this wallet renders must be a Trust-Task document
@@ -747,8 +848,18 @@ async function maybeRelayConsentLocally(
       payloadDigest: parsed.parsed.request.payloadDigest,
       thid: parsed.parsed.thid,
     });
-    conn.send(outer);
-    console.info("[pnm consent relay] decision relayed over the worker session");
+    conn.send(outer.packed);
+    recordDecisionSent(outer.id, {
+      payloadDigest: parsed.parsed.request.payloadDigest,
+      decision: "approve",
+      taskType: parsed.parsed.request.taskType,
+      sentAt: Date.now(),
+    });
+    console.info(
+      "[pnm consent relay] decision relayed over the worker session; awaiting the",
+      "executor's answer on thid",
+      outer.id,
+    );
   } finally {
     keepAlive.disconnect();
     activeConsentDigests.delete(outcome.payloadDigest);
@@ -1844,6 +1955,15 @@ async function dispatchInbound(
     return;
   }
 
+  // The executor's answer to a decision this device already sent — accepted, or
+  // refused with a reason. Checked before the request parser because it is a
+  // reply on the same envelope type, and `parseTaskConsentRequest` can only
+  // report it as `not-a-task-consent-request`, which is the one reason a caller
+  // is allowed to ignore. That is exactly how a refused approval used to vanish.
+  if (await handleTaskConsentOutcome(vtaDid, message)) {
+    return;
+  }
+
   // Task-execution consent, first — it is the one inbound an *executor itself*
   // sends, and it is the one whose content a human will act on.
   //
@@ -1963,8 +2083,22 @@ async function handleTaskConsent(
       payloadDigest: parsed.request.payloadDigest,
       thid: parsed.thid,
     });
-    conn.send(outer);
-    console.info("[pnm inbound] task-consent decision sent:", decision);
+    conn.send(outer.packed);
+    // Remember what we sent, so the executor's answer can be matched to it.
+    // Sending is not the end of the ceremony — a refusal means the human agreed
+    // to a change that did not happen, and they have to be told which one.
+    recordDecisionSent(outer.id, {
+      payloadDigest: parsed.request.payloadDigest,
+      decision,
+      taskType: parsed.request.taskType,
+      sentAt: Date.now(),
+    });
+    console.info(
+      "[pnm inbound] task-consent decision sent:",
+      decision,
+      "awaiting the executor's answer on thid",
+      outer.id,
+    );
   } catch (e) {
     console.error("[pnm inbound] task-consent handling failed:", e);
   } finally {
