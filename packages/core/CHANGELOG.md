@@ -8,6 +8,31 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every VTA rejection was decoded as a success** (`vta/protocol.ts`).
+  `isTrustTaskErrorType` enumerated `trust-task-error/0.1` and `/0.2`;
+  `trust-tasks-rs` has emitted `/0.3` since its 0.3 release (it carries the
+  §8.2 `inResponseTo` member, which `0.2`'s `additionalProperties: false`
+  payload schema cannot). An unrecognised error document is not treated as an
+  error — `parseTrustTaskReply` returns its payload as the operation's *result* —
+  so a refused task reported success to the calling page. A `webvh/dids/update`
+  the VTA refused rendered "your agent signed and published the update"; nothing
+  was published.
+
+  A `requireConsent` refusal travels as the same error document, so the
+  consent ceremony was affected the same way: `requestTask` resolved as
+  `accepted` instead of `consentRequired`, the cross-device match code never
+  rendered, and no approver was ever asked. This is the more serious half — the
+  failure is silent on both the requesting and the approving side.
+
+  The predicate now matches the framework slug at any `0.x` minor (per SPEC.md
+  §5.2 forward-minor compatibility), so a later minor cannot break it again.
+  A major bump is still excluded: `1.x` is where the payload shape may change.
+  Covers all four consumers — the REST channel, `parseTrustTaskReply`, the
+  approver's decision-outcome reader and push-gateway registration — which
+  already routed through this one predicate.
+
 ## [0.3.0] - 2026-08-09
 
 ### Added

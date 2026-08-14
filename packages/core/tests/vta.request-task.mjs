@@ -35,23 +35,37 @@ function capturing(reply = { ok: true }) {
  * This exercises `parseTrustTaskReply`, which THROWS on an error document. That
  * throw is the whole point of the test: the refusal has to survive it.
  */
-function rejecting(errorPayload) {
+function rejecting(errorPayload, errorType = TT_ERROR_TYPES.emitted) {
   const channel = {
     kind: "test",
     async send(envelope) {
       // What a channel does with the reply document, everywhere in this codebase.
       return parseTrustTaskReply(
-        {
-          id: "urn:uuid:reply",
-          type: "https://trusttasks.org/spec/trust-task-error/0.1",
-          payload: errorPayload,
-        },
+        { id: "urn:uuid:reply", type: errorType, payload: errorPayload },
         { operationLabel: envelope.type },
       );
     },
   };
   return new VtaSession([channel]);
 }
+
+/**
+ * The framework error-document versions this wallet must handle.
+ *
+ * `emitted` is the one a current VTA actually sends — `trust-tasks-rs` has
+ * emitted `trust-task-error/0.3` since its 0.3 release. Every test here used to
+ * hard-code `0.1`, which is how the wallet came to recognise only 0.1 and 0.2
+ * while every real rejection arrived as 0.3: the suite exercised a version no
+ * VTA sends, and an unrecognised error document is decoded as a *success*, so
+ * nothing failed anywhere. Default to what ships; keep the older forms in the
+ * table so the compatibility claim stays tested.
+ */
+const TT_ERROR_TYPES = {
+  "0.1": "https://trusttasks.org/spec/trust-task-error/0.1",
+  "0.2": "https://trusttasks.org/spec/trust-task-error/0.2",
+  "0.3": "https://trusttasks.org/spec/trust-task-error/0.3",
+  emitted: "https://trusttasks.org/spec/trust-task-error/0.3",
+};
 
 // The REAL wire shape the VTA emits for a consent-gated task: the standard
 // Trust Task error code `taskFailed` (see trust-tasks-rs `RejectReason::TaskFailed`
@@ -196,6 +210,45 @@ test("consent is recognised by the machine-readable reason in the error details,
   const res = await requestTask(rejecting(CONSENT_REJECT), base);
   assert.equal(res.kind, "consentRequired");
   assert.equal(res.consentRequests.length, 1);
+});
+
+test("a consent refusal is recognised at every framework error-document version", async () => {
+  // The regression that let a whole class of failure read as success.
+  //
+  // The wallet enumerated 0.1 and 0.2. `trust-tasks-rs` has emitted 0.3 since
+  // its 0.3 release, and an error document this code does not recognise is not
+  // treated as an error at all — `parseTrustTaskReply` hands its payload back as
+  // the operation's RESULT. So a refused task reported success to the page, and
+  // a task the VTA was holding for human approval resolved as *done*: the match
+  // code never rendered, and no approver was ever asked to approve anything.
+  //
+  // Every version, not just the current one — a peer mid-upgrade may still be on
+  // an older minor, and the point is that no minor can break this again.
+  for (const version of ["0.1", "0.2", "0.3"]) {
+    const res = await requestTask(rejecting(CONSENT_REJECT, TT_ERROR_TYPES[version]), base);
+    assert.equal(res.kind, "consentRequired", `consent not recognised at ${version}`);
+    assert.equal(res.consentRequests.length, 1, `signed requests lost at ${version}`);
+  }
+});
+
+test("a plain task failure at the emitted version still THROWS — it is not a result", async () => {
+  // The other half of the same bug, and the one the operator saw first: a
+  // `taskFailed` with no consent details must reach the caller as an error. When
+  // the version went unrecognised this resolved instead, and the relying party
+  // rendered "your agent signed and published the update" for an update the VTA
+  // had refused.
+  const failure = {
+    code: "taskFailed",
+    retryable: false,
+    message: "did not found: SCID did:webvh:QmNope:example.com:agent not found",
+  };
+  await assert.rejects(
+    () => requestTask(rejecting(failure), base),
+    (err) => {
+      assert.match(err.message, /did not found/);
+      return true;
+    },
+  );
 });
 
 test("consent is recognised before the VTA emits an explicit reason — by the signed consentRequests", async () => {

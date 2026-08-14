@@ -101,7 +101,7 @@ export type TaskConsentOutcome =
  *
  * The executor answers a decision on the same DIDComm thread, as a Trust-Task
  * envelope: a `decision/0.1#response` document on success, a
- * `trust-task-error/{0.1,0.2}` on refusal. Nothing here recognised either, so
+ * `trust-task-error/0.x` on refusal. Nothing here recognised either, so
  * both fell through the inbound handler's final "anything else is ignored"
  * branch — no log, no surface, nothing.
  *
