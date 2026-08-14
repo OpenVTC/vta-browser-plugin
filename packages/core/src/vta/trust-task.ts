@@ -10,7 +10,7 @@
 //   - `buildTrustTask`     — construct the request envelope.
 //   - `parseTrustTaskReply` — turn a reply document into a typed payload, or
 //                             throw a normalized `VtaClientError` for a
-//                             `trust-task-error/{0.1,0.2}` document.
+//                             `trust-task-error/0.x` document.
 //
 // A `TrustTaskChannel` (see `channel.ts`) builds a request with the former
 // and hands the decoded reply document to the latter; the channel itself only
@@ -80,7 +80,7 @@ type ReplyDocument = { type?: string; payload?: unknown };
 /**
  * Decode a Trust-Task reply document into its typed payload.
  *
- * - A `trust-task-error/{0.1,0.2}` document throws a `VtaClientError` whose
+ * - A `trust-task-error/0.x` document throws a `VtaClientError` whose
  *   `code` is the coerced typed {@link VtaErrorCode}, whose `message` is the
  *   framework's human message, and whose `details` is the raw error payload
  *   (so callers can still read the framework `code`, `retryable`, etc.).

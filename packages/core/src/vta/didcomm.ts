@@ -114,7 +114,7 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
    * DIDComm and return its response payload. Authcrypts the envelope to the
    * VTA, optionally forwards via the mediator, awaits the reply correlated by
    * the envelope id (`thid`), validates the binding envelope, and decodes the
-   * body — either the success `payload` or a `trust-task-error/{0.1,0.2}`
+   * body — either the success `payload` or a `trust-task-error/0.x`
    * (throws a normalized {@link VtaClientError}).
    */
   async send<Res>(envelope: TrustTask<unknown>, opts: SendOpts = {}): Promise<Res> {
