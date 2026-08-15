@@ -1,11 +1,13 @@
-// @openvtc/vti-tsp-js — WebCrypto/hpke-js TSP primitives, byte-compatible with
+// @openvtc/vti-tsp-js — pure-TS TSP primitives, byte-compatible with
 // affinidi-tsp (the crate the VTA links). v1 = HPKE-Auth only (RFC 9180,
 // DHKEM-X25519 + HKDF-SHA256 + ChaCha20Poly1305) + binary CESR framing.
+// No WebCrypto dependency: runs identically in browser, Node, and React
+// Native (only `crypto.getRandomValues` is required of the runtime).
 //
 // Layers (built incrementally):
 //   cesr/wire       — binary CESR frame primitives          [done]
 //   message/envelope — the -E envelope (HPKE info)          [done]
-//   crypto/hpke     — HPKE-Auth seal/open via hpke-js       [done]
+//   crypto/hpke     — HPKE-Auth seal/open via @noble        [done]
 //   crypto/sign     — Ed25519 sign/verify via @noble        [done]
 //   message/direct  — pack/unpack (seal+sign / verify+open) [done]
 //   vid             — VID → keys resolution                 [todo]

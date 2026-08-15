@@ -16,8 +16,6 @@
     "README.md"
   ],
   "dependencies": {
-    "@hpke/chacha20poly1305": "^1.8.0",
-    "@hpke/core": "^1.9.0",
     "@noble/ciphers": "^2.0.0",
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.0.0"
@@ -40,6 +38,8 @@
   "homepage": "https://github.com/OpenVTC/vta-browser-plugin/tree/main/packages/tsp-js#readme",
   "license": "Apache-2.0",
   "devDependencies": {
+    "@hpke/chacha20poly1305": "^1.8.0",
+    "@hpke/core": "^1.9.0",
     "typescript": "^7.0.2"
   }
 }

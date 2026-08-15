@@ -1,14 +1,18 @@
 // HPKE-Auth (RFC 9180) implemented on @noble primitives — no WebCrypto.
 //
-// Byte-identical companion to `hpke.ts`'s hpke-js path: the same suite
-// (KEM 0x0020 DHKEM(X25519,HKDF-SHA256), KDF 0x0001 HKDF-SHA256, AEAD 0x0003
-// ChaCha20Poly1305, mode_auth 0x02), single-shot, so `seal`/`open` produce and
-// accept exactly the same bytes.
+// This is the package's HPKE implementation, for every runtime. The suite is
+// the one affinidi-tsp mandates (KEM 0x0020 DHKEM(X25519,HKDF-SHA256), KDF
+// 0x0001 HKDF-SHA256, AEAD 0x0003 ChaCha20Poly1305, mode_auth 0x02),
+// single-shot. The test suite holds it byte-identical to hpke-js (kept as a
+// dev-dependency for exactly that cross-check) and to the official CFRG
+// RFC 9180 vectors.
 //
-// Why: hpke-js reaches for `crypto.subtle` for HKDF and X25519, which does not
-// exist on React Native's Hermes engine (and is absent or partial on some
-// older Node/edge runtimes). This module keeps the package's "runs anywhere"
-// promise literal.
+// Why pure JS: hpke-js reaches for `crypto.subtle` for HKDF and X25519, which
+// does not exist on React Native's Hermes engine and is only *partially*
+// polyfilled in real apps (a wallet that provides `subtle.digest` alone looks
+// WebCrypto-capable to any feature probe and then fails at runtime). One
+// implementation with no platform dependency keeps the package's "runs
+// anywhere" promise literal — and keeps behavior identical everywhere.
 //
 // Section numbers below are RFC 9180. `ephemeralSk` is exposed on `seal` only
 // so RFC 9180 test vectors (which fix skEm) can be verified; production
