@@ -18,7 +18,9 @@ const fromHex = (s) => Uint8Array.from(s.match(/../g), (b) => parseInt(b, 16));
 const toHex = (u) => Array.from(u, (b) => b.toString(16).padStart(2, "0")).join("");
 
 test("AuthEncap reproduces the vector's enc and shared_secret", () => {
-  const { enc, sharedSecret } = authEncap(fromHex(vec.pkRm), fromHex(vec.skSm), fromHex(vec.skEm));
+  const { enc, sharedSecret } = authEncap(fromHex(vec.pkRm), fromHex(vec.skSm), {
+    __unsafeFixedEphemeralSk: fromHex(vec.skEm),
+  });
   assert.equal(toHex(enc), vec.enc);
   assert.equal(toHex(sharedSecret), vec.shared_secret);
 });
@@ -36,7 +38,7 @@ test("single-shot seal reproduces the vector's seq-0 ciphertext", async () => {
     fromHex(vec.skSm),
     fromHex(vec.pkRm),
     fromHex(vec.info),
-    fromHex(vec.skEm),
+    { __unsafeFixedEphemeralSk: fromHex(vec.skEm) },
   );
   assert.equal(toHex(sealed.enc), vec.enc);
   assert.equal(toHex(sealed.ciphertext), e0.ct);

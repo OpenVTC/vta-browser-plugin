@@ -68,3 +68,52 @@ test("@noble opens what hpke-js seals", async () => {
   const opened = await hpke.open(ciphertext, EMPTY, new Uint8Array(sender.enc), k.recipientSk, k.senderPk, info);
   assert.deepEqual(opened, pt);
 });
+
+// Base mode — the suite `@openvtc/pnm-core` uses for VTA sealed bundles. Same
+// KEM/KDF/AEAD as auth mode, so a mistake in the shared key schedule would
+// show up here too; the mode byte is what these two tests pin independently.
+
+test("hpke-js opens what @noble seals (base mode)", async () => {
+  const k = keys();
+  const pt = enc.encode("base-mode: sealed by noble, opened by hpke-js");
+  const info = enc.encode("vta-sealed-transfer/v1");
+  const aad = enc.encode("chunk-header-aad");
+
+  const sealed = await hpke.sealBase(pt, aad, k.recipientPk, info);
+
+  const s = suite();
+  const recipientKey = await s.kem.importKey("raw", ab(k.recipientSk), false);
+  const recipient = await s.createRecipientContext({
+    recipientKey,
+    enc: ab(sealed.enc),
+    info: ab(info),
+  });
+  const opened = new Uint8Array(await recipient.open(ab(sealed.ciphertext), ab(aad)));
+  assert.deepEqual(opened, pt);
+});
+
+test("@noble opens what hpke-js seals (base mode)", async () => {
+  const k = keys();
+  const pt = enc.encode("base-mode: sealed by hpke-js, opened by noble");
+  const info = enc.encode("vta-sealed-transfer/v1");
+  const aad = enc.encode("chunk-header-aad");
+
+  const s = suite();
+  const recipientPublicKey = await s.kem.importKey("raw", ab(k.recipientPk), true);
+  const sender = await s.createSenderContext({ recipientPublicKey, info: ab(info) });
+  const ciphertext = new Uint8Array(await sender.seal(ab(pt), ab(aad)));
+
+  const opened = await hpke.openBase(ciphertext, aad, new Uint8Array(sender.enc), k.recipientSk, info);
+  assert.deepEqual(opened, pt);
+});
+
+test("base mode and auth mode are not interchangeable", async () => {
+  const k = keys();
+  const pt = enc.encode("mode separation");
+  const info = enc.encode("same-info-both-modes");
+
+  // Same suite, same keys, same info — only the mode byte differs, so opening
+  // one with the other must fail the AEAD tag rather than return plaintext.
+  const sealed = await hpke.sealBase(pt, EMPTY, k.recipientPk, info);
+  await assert.rejects(() => hpke.open(sealed.ciphertext, EMPTY, sealed.enc, k.recipientSk, k.senderPk, info));
+});
