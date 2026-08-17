@@ -1,0 +1,147 @@
+/* Design tokens for every extension surface — popup, options, confirm.
+ *
+ * Before this file there were two visual identities: options.html hardcoded a
+ * dark ground in its <style>, popup.html set none and rendered white, and the
+ * popup carried ~20 inline hex literals with duplicates doing one job (#666 and
+ * #888 both "muted", #c00 and #c81e1e both "error"). Tokens exist so there is
+ * something to be consistent *with*.
+ *
+ * Both themes are defined here and follow the browser. Consuming code must go
+ * through `theme.ts` (or `var(--w-*)` directly) and never hardcode a colour —
+ * a literal that works in dark is unreadable in light, and nothing catches it
+ * at build time.
+ *
+ * Neutrals carry a slight blue bias toward the accent; a pure grey next to a
+ * signal blue reads as unconsidered.
+ */
+
+:root {
+  /* Light — the default set. */
+  --w-ground: #f7f8fa;
+  --w-surface: #ffffff;
+  --w-raised: #f1f3f7;
+  --w-line: #dde2eb;
+  --w-line-soft: #e8ecf3;
+  --w-text: #131722;
+  --w-muted: #5b6478;
+  --w-faint: #8992a3;
+
+  --w-accent: #2e63d6;
+  --w-accent-soft: #e7eefc;
+  --w-accent-ink: #ffffff;
+
+  /* Semantic. Never doubles as the accent — "this is actionable" and "this
+   * verified" must stay visually separable in a security UI. Hues match the
+   * ones already in the codebase (#e0a64a caution, #b0442d danger) so existing
+   * warnings keep their meaning. */
+  --w-ok: #1e8a5f;
+  --w-ok-soft: #e4f4ec;
+  --w-warn: #9a6a12;
+  --w-warn-soft: #fbf0dc;
+  --w-danger: #b33a2a;
+  --w-danger-soft: #fbe9e6;
+
+  /* Full-page mode tints for the consent window. Barely-there on purpose:
+     they must distinguish "your agent is asking" from "you are authorising"
+     at a glance without competing with the content. The -soft tokens are chip
+     fills and read as a wash of colour over a whole page. */
+  --w-accent-wash: #f4f7fe;
+  --w-danger-wash: #fdf7f6;
+
+  --w-t-xs: 11px;
+  --w-t-sm: 12.5px;
+  --w-t-base: 14px;
+  --w-t-md: 16px;
+  --w-t-lg: 20px;
+  --w-t-xl: 28px;
+
+  --w-r-sm: 5px;
+  --w-r-md: 9px;
+  --w-r-lg: 14px;
+
+  --w-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --w-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --w-ground: #0b0e14;
+    --w-surface: #141924;
+    --w-raised: #1b2230;
+    --w-line: #273040;
+    --w-line-soft: #1e2634;
+    --w-text: #e8ebf2;
+    --w-muted: #8b95a9;
+    --w-faint: #5c6577;
+
+    --w-accent: #5a8dff;
+    --w-accent-soft: #16213a;
+    --w-accent-ink: #08101f;
+
+    --w-ok: #3fb27f;
+    --w-ok-soft: #10241c;
+    --w-warn: #e0a64a;
+    --w-warn-soft: #241c0e;
+    --w-danger: #e0523f;
+    --w-danger-soft: #26130f;
+    --w-accent-wash: #0d111a;
+    --w-danger-wash: #150f0e;
+  }
+}
+
+html,
+body {
+  margin: 0;
+  font-family: var(--w-sans);
+  background: var(--w-ground);
+  color: var(--w-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Form controls inherit nothing useful by default and would otherwise render
+ * as light-theme widgets on a dark ground. */
+input,
+select,
+textarea,
+button {
+  font-family: inherit;
+  font-size: var(--w-t-base);
+  color: var(--w-text);
+}
+
+input,
+select,
+textarea {
+  max-width: 100%;
+  box-sizing: border-box;
+  background: var(--w-ground);
+  border: 1px solid var(--w-line);
+  border-radius: var(--w-r-sm);
+  padding: 7px 10px;
+}
+
+input[type="checkbox"] {
+  accent-color: var(--w-accent);
+  padding: 0;
+}
+
+code,
+pre {
+  font-family: var(--w-mono);
+}
+
+/* Keyboard focus must stay visible — several controls here are the last step
+ * before an irreversible action. */
+:focus-visible {
+  outline: 2px solid var(--w-accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,5 +1,5 @@
 /// <reference types="chrome" />
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ApproverPrfSecretWrap,
@@ -15,29 +15,32 @@ import { readActiveHolderDid, readActiveVtaDid } from "./active-vta.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import { runPrfUnlockCeremony } from "./webauthn-prf-unlock.js";
 import {
+  RUNTIME_APPROVER_STATE,
   RUNTIME_UNLOCK_APPROVER,
+  type RuntimeApproverStateResponse,
   type RuntimeUnlockApproverResponse,
 } from "./bridge-protocol.js";
-import { listTrustedSites, untrustOrigin, type TrustedSiteRecord } from "./trusted-sites.js";
+import { AppShell } from "./app-shell.js";
+import { sendToBackground } from "./send-message.js";
+import { VaultPanel } from "./vault-panel.js";
+import "./theme.css";
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
   boxSizing: "border-box",
   padding: "8px 10px",
-  background: "#1a1d24",
-  color: "#e6e8ee",
-  border: "1px solid #2a2f3a",
+  background: "var(--w-ground)",
+  color: "var(--w-text)",
+  border: "1px solid var(--w-line)",
   borderRadius: 6,
   fontFamily: "ui-monospace, monospace",
   fontSize: 13,
 };
-const labelStyle: React.CSSProperties = { fontSize: 13, color: "#9aa3b2", marginTop: 14 };
+const labelStyle: React.CSSProperties = { fontSize: 13, color: "var(--w-muted)", marginTop: 14 };
 
-function Options() {
+export function AdvancedPane() {
   // The mediator DID the existing holder was minted with — changing away from
   // this is what forces a re-mint.
-  const [savedMediatorDid, setSavedMediatorDid] = useState(DEFAULT_WALLET_MEDIATOR_DID);
-  const [mediatorDid, setMediatorDid] = useState("");
   const [vtaDid, setVtaDid] = useState("");
   const [vtaMediatorDid, setVtaMediatorDid] = useState("");
   // Additional enrolled executor DIDs (one per line) — executors beyond the
@@ -57,24 +60,15 @@ function Options() {
   // minted, so the operator can register it in the VTA's approver_set + ACL.
   const [approverDidValue, setApproverDidValue] = useState<string | null>(null);
   const [approverBusy, setApproverBusy] = useState(false);
+  const [approverRunning, setApproverRunning] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [trustedSites, setTrustedSites] = useState<TrustedSiteRecord[]>([]);
-
-  useEffect(() => {
-    void listTrustedSites().then(setTrustedSites);
-  }, []);
-
-  async function revokeSite(origin: string): Promise<void> {
-    await untrustOrigin(origin);
-    setTrustedSites(await listTrustedSites());
-  }
+  // Trusted-site state moved into SitesPanel, which owns both permission
+  // sources and refreshes itself from chrome.permissions events.
 
   useEffect(() => {
     void (async () => {
       const s = await getSettings();
-      setSavedMediatorDid(s.mediatorDid);
-      setMediatorDid(s.mediatorDid);
       setVtaDid(s.defaultStepUpVtaDid ?? "");
       setVtaMediatorDid(s.defaultStepUpVtaMediatorDid ?? "");
       setEnrolledExecutors((s.enrolledExecutorDids ?? []).join("\n"));
@@ -142,6 +136,25 @@ function Options() {
    * random-challenge unlock (the per-decision, digest-bound gesture happens in
    * the approval popup).
    */
+  /** Re-read whether the approver's inbox is actually live. */
+  const refreshApproverState = useCallback(async () => {
+    const res = await sendToBackground<RuntimeApproverStateResponse>({
+      type: RUNTIME_APPROVER_STATE,
+    }).catch(() => null);
+    if (res?.ok) {
+      setApproverRunning(res.result.running);
+      if (res.result.approverDid) setApproverDidValue(res.result.approverDid);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshApproverState();
+    // The offscreen document can be torn down at any point, taking the session
+    // with it. Poll while this page is open rather than trusting one reading.
+    const id = setInterval(() => void refreshApproverState(), 5000);
+    return () => clearInterval(id);
+  }, [refreshApproverState]);
+
   async function startApproving(): Promise<void> {
     setApproverBusy(true);
     setStatus(null);
@@ -152,13 +165,18 @@ function Options() {
         return;
       }
       const { prfOutput } = await runPrfUnlockCeremony(chrome.runtime.id);
-      const res = (await chrome.runtime.sendMessage({
+      // sendToBackground rather than a bare sendMessage: an unanswered
+      // message resolves undefined, and reading `.ok` off it produced
+      // "Cannot read properties of undefined" — a TypeError that named none
+      // of the actual causes.
+      const res = await sendToBackground<RuntimeUnlockApproverResponse>({
         type: RUNTIME_UNLOCK_APPROVER,
         prfOutputB64u: base64url.encode(prfOutput),
         vtaDid: activeVta,
-      })) as RuntimeUnlockApproverResponse;
+      });
       if (res.ok) {
         setStatus("Approver unlocked — its inbox is now listening for approvals.");
+        await refreshApproverState();
       } else {
         setStatus(`Error: ${res.error}`);
       }
@@ -170,7 +188,6 @@ function Options() {
     }
   }
 
-  const mediatorChanged = mediatorDid.trim() !== savedMediatorDid;
 
   /**
    * Auto-migrate the holder secret to the requested encryption
@@ -237,25 +254,13 @@ function Options() {
     setBusy(true);
     setStatus(null);
     try {
-      const trimmedMediator = mediatorDid.trim() || DEFAULT_WALLET_MEDIATOR_DID;
-
-      if (trimmedMediator !== savedMediatorDid) {
-        const ok = window.confirm(
-          "Changing the mediator DID mints a NEW wallet identity (a new did:peer). " +
-            "Your current wallet DID will stop working until you re-grant the new DID " +
-            "in every relying party's ACL.\n\nProceed and re-mint?",
-        );
-        if (!ok) {
-          setBusy(false);
-          return;
-        }
-        // Drop the persisted holder so the next load re-mints with the new
-        // mediator baked into the did:peer service endpoint.
-        await clearHolderIdentity(new IndexedDBKVStore());
-      }
-
+      // `mediatorDid` is deliberately NOT written here. The inbox moved to the
+      // Setup pane, which owns the re-mint confirmation that changing it
+      // requires. Writing it from this form too would let a stale copy — read
+      // when Advanced mounted — silently revert an inbox the user just changed
+      // on the other pane, re-minting their identity as a side effect of
+      // saving an unrelated setting.
       await setSettings({
-        mediatorDid: trimmedMediator,
         ...(vtaDid.trim() ? { defaultStepUpVtaDid: vtaDid.trim() } : {}),
         ...(vtaMediatorDid.trim() ? { defaultStepUpVtaMediatorDid: vtaMediatorDid.trim() } : {}),
         // Always written (an empty list is a valid state): un-enrolling an
@@ -269,16 +274,8 @@ function Options() {
           ? { pushGatewayVapidPublicKey: pushGatewayVapidPublicKey.trim() }
           : {}),
       });
-      setSavedMediatorDid(trimmedMediator);
-
-      // Reflect the (possibly re-minted) holder DID — display-only,
-      // read from the persisted connection.
       setHolderDid((await readActiveHolderDid()) ?? "");
-      setStatus(
-        trimmedMediator !== savedMediatorDid
-          ? "Saved — wallet identity re-minted. Re-grant the new DID in your RP ACLs."
-          : "Saved.",
-      );
+      setStatus("Saved.");
     } catch (e) {
       setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -288,20 +285,15 @@ function Options() {
 
   return (
     <div style={{ display: "grid", gap: 4 }}>
-      <h1 style={{ margin: "0 0 4px", fontSize: 20 }}>VTA Wallet · Settings</h1>
-      <div style={{ fontSize: 13, color: "#9aa3b2" }}>
-        Current wallet DID:{" "}
-        <code style={{ wordBreak: "break-all", color: "#e6e8ee" }}>{holderDid || "—"}</code>
+      <h1 style={{ margin: "0 0 4px", fontSize: 20 }}>Advanced</h1>
+      <div style={{ fontSize: 13, color: "var(--w-muted)", maxWidth: "64ch", lineHeight: 1.55 }}>
+        Everything here is optional — the wallet works without any of it. Your inbox and the
+        passkey lock live under <strong>Setup</strong>.
       </div>
-
-      <label style={labelStyle}>Mediator DID (wallet inbox + DIDComm login)</label>
-      <input style={inputStyle} value={mediatorDid} onChange={(e) => setMediatorDid(e.target.value)} />
-      {mediatorChanged && (
-        <small style={{ color: "#e0a64a", marginTop: 4 }}>
-          ⚠ Changing this re-mints your wallet identity (new did:peer). You must re-grant the new
-          DID in every RP&apos;s ACL.
-        </small>
-      )}
+      <div style={{ fontSize: 13, color: "var(--w-muted)", marginTop: 6 }}>
+        Current wallet DID:{" "}
+        <code style={{ wordBreak: "break-all", color: "var(--w-text)" }}>{holderDid || "—"}</code>
+      </div>
 
       <label style={labelStyle}>Default step-up VTA DID (optional)</label>
       <input
@@ -326,7 +318,7 @@ function Options() {
         placeholder={"did:webvh:… (e.g. a DID-hosting control plane)"}
         onChange={(e) => setEnrolledExecutors(e.target.value)}
       />
-      <small style={{ color: "#9aa3b2", marginTop: 4 }}>
+      <small style={{ color: "var(--w-muted)", marginTop: 4 }}>
         Executors beyond your onboarded VTA(s) whose signed approval requests (task consent,
         step-up) this wallet will render. Requests signed by anyone not enrolled are dropped
         without prompting.
@@ -347,7 +339,7 @@ function Options() {
         placeholder="base64url P-256 public key"
         onChange={(e) => setPushGatewayVapidPublicKey(e.target.value)}
       />
-      <small style={{ color: "#9aa3b2", marginTop: 4 }}>
+      <small style={{ color: "var(--w-muted)", marginTop: 4 }}>
         Set both to enable Web Push wake-up: the wallet subscribes with this VAPID key, registers
         with the gateway (<code>push/register</code>), and conveys the handle to the active VTA
         (<code>device/set-wake</code>). Leave blank to keep push off.
@@ -357,9 +349,9 @@ function Options() {
         style={{
           marginTop: 22,
           padding: 14,
-          border: "1px solid #2a2f3a",
+          border: "1px solid var(--w-line)",
           borderRadius: 8,
-          background: "#15181f",
+          background: "var(--w-surface)",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -371,22 +363,24 @@ function Options() {
             onChange={(e) => void toggleEncryption(e.target.checked)}
             style={{ transform: "scale(1.2)" }}
           />
-          <label htmlFor="encryptHolderSecret" style={{ fontSize: 14, color: "#e6e8ee" }}>
+          <label htmlFor="encryptHolderSecret" style={{ fontSize: 14, color: "var(--w-text)" }}>
             Encrypt wallet at rest (WebAuthn / passkey)
             {encryptBusy && (
-              <span style={{ marginLeft: 8, color: "#9aa3b2", fontSize: 12 }}>working…</span>
+              <span style={{ marginLeft: 8, color: "var(--w-muted)", fontSize: 12 }}>working…</span>
             )}
           </label>
         </div>
-        <div style={{ marginTop: 10, fontSize: 12, color: "#9aa3b2", lineHeight: 1.5 }}>
+        <div style={{ marginTop: 10, fontSize: 12, color: "var(--w-muted)", lineHeight: 1.5 }}>
           Wraps the Ed25519 root secret with an AES key derived from a WebAuthn
           PRF credential on your authenticator (Touch ID, Windows Hello, FIDO2
           key). Without this, the secret lives plaintext in IndexedDB.
           <br />
-          <strong style={{ color: "#e0a64a" }}>Trade-off:</strong> you&apos;ll tap your
-          authenticator on each cold start (new browser session). Losing the
-          authenticator without disabling first means losing the wallet — no
-          recovery path. {encryptOn ? "Toggle off to revert." : ""}
+          <strong>If you lose your passkey:</strong> you won&apos;t be able to unlock this
+          wallet again, but nothing important is lost — your credentials are kept by your
+          trust agent, not in this browser. You&apos;d set the wallet up again and reconnect,
+          and the sites you use would need reconnecting too. You&apos;ll be asked for your
+          passkey once per browser session.{" "}
+          {encryptOn ? "Toggle off to revert." : ""}
         </div>
       </div>
 
@@ -394,20 +388,25 @@ function Options() {
         style={{
           marginTop: 16,
           padding: 14,
-          border: "1px solid #48291f",
+          border: "1px solid var(--w-line)",
           borderRadius: 8,
-          background: "#1a1210",
+          background: "var(--w-surface)",
         }}
       >
+        {/* Neutral surface, not the danger palette. This panel describes a
+            protective feature, and in its healthy state — approver created and
+            listening — a red card contradicted the green "running" pill inside
+            it. Red here also spends the one colour that should mean "something
+            is wrong". */}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span aria-hidden style={{ fontSize: 16 }}>
             🛡️
           </span>
-          <strong style={{ fontSize: 14, color: "#ffd9cf" }}>
+          <strong style={{ fontSize: 14, color: "var(--w-text)" }}>
             Approver identity (biometric approval)
           </strong>
         </div>
-        <div style={{ marginTop: 10, fontSize: 12, color: "#c9a99f", lineHeight: 1.5 }}>
+        <div style={{ marginTop: 10, fontSize: 12, color: "var(--w-muted)", lineHeight: 1.5 }}>
           A second, distinct identity this browser uses to <em>approve</em> tasks —
           separate from the working identity that <em>requests</em> them. Its
           signing key is released only by your authenticator, per approval. Create
@@ -420,33 +419,41 @@ function Options() {
             style={{
               marginTop: 10,
               fontSize: 12,
-              color: "#9fd0b0",
+              color: "var(--w-ok)",
               lineHeight: 1.5,
-              background: "#12210f",
-              border: "1px solid #26421f",
+              background: "var(--w-ok-soft)",
+              border: "1px solid var(--w-ok-soft)",
               borderRadius: 6,
               padding: "8px 10px",
             }}
           >
-            Ready. When a task in this browser needs approval, the biometric
-            prompt appears automatically — no unlock to remember. &ldquo;Start
-            approving&rdquo; below is only needed to receive requests for a task
-            proposed on a <em>different</em> device.
+            {approverRunning ? (
+              <>
+                Listening. Approvals for tasks proposed on <em>other</em> devices reach you
+                here, and a task started in this browser prompts you directly.
+              </>
+            ) : (
+              <>
+                Ready. A task started in this browser prompts you automatically. Unlock the
+                wallet — or use the button below — to also receive approvals for tasks
+                proposed on a <em>different</em> device.
+              </>
+            )}
           </div>
         ) : null}
 
         {approverDidValue ? (
           <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 11, color: "#9aa3b2", marginBottom: 4 }}>
+            <div style={{ fontSize: 11, color: "var(--w-muted)", marginBottom: 4 }}>
               Approver DID (active VTA)
             </div>
             <code
               style={{
                 display: "block",
                 wordBreak: "break-all",
-                color: "#ffe1d9",
-                background: "#241512",
-                border: "1px solid #48291f",
+                color: "var(--w-accent)",
+                background: "var(--w-accent-soft)",
+                border: "1px solid var(--w-accent-soft)",
                 borderRadius: 6,
                 padding: "8px 10px",
                 fontSize: 12,
@@ -461,8 +468,8 @@ function Options() {
                 style={{
                   padding: "6px 12px",
                   background: "none",
-                  color: "#e0876f",
-                  border: "1px solid #48291f",
+                  color: "var(--w-accent)",
+                  border: "1px solid var(--w-line)",
                   borderRadius: 6,
                   cursor: "pointer",
                   fontSize: 12,
@@ -471,24 +478,47 @@ function Options() {
               >
                 Copy DID
               </button>
-              <button
-                type="button"
-                onClick={() => void startApproving()}
-                disabled={approverBusy}
-                style={{
-                  padding: "6px 14px",
-                  background: "#b0442d",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 6,
-                  cursor: approverBusy ? "not-allowed" : "pointer",
-                  fontSize: 12,
-                  fontWeight: 700,
-                  opacity: approverBusy ? 0.6 : 1,
-                }}
-              >
-                {approverBusy ? "Working…" : "Start approving (unlock)"}
-              </button>
+              {/* State, not a button that always says the same thing. The
+                  session is in-memory in the offscreen document, so it is
+                  re-read rather than remembered — MV3 can evict it at any
+                  moment, and a UI insisting the approver is up when it is not
+                  means approval requests nobody ever sees. */}
+              {approverRunning ? (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 7,
+                    padding: "6px 12px",
+                    borderRadius: 999,
+                    background: "var(--w-ok-soft)",
+                    color: "var(--w-ok)",
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  <span aria-hidden>●</span> Approver is running
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void startApproving()}
+                  disabled={approverBusy}
+                  style={{
+                    padding: "6px 14px",
+                    background: "var(--w-accent)",
+                    color: "var(--w-accent-ink)",
+                    border: "none",
+                    borderRadius: 6,
+                    cursor: approverBusy ? "not-allowed" : "pointer",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    opacity: approverBusy ? 0.6 : 1,
+                  }}
+                >
+                  {approverBusy ? "Working…" : "Start approving (unlock)"}
+                </button>
+              )}
             </div>
           </div>
         ) : (
@@ -499,8 +529,8 @@ function Options() {
             style={{
               marginTop: 12,
               padding: "9px 16px",
-              background: encryptOn ? "#b0442d" : "#3a2a25",
-              color: "#fff",
+              background: encryptOn ? "var(--w-accent)" : "var(--w-raised)",
+              color: "var(--w-accent-ink)",
               border: "none",
               borderRadius: 6,
               cursor: approverBusy || !encryptOn ? "not-allowed" : "pointer",
@@ -513,7 +543,7 @@ function Options() {
           </button>
         )}
         {!encryptOn && !approverDidValue && (
-          <div style={{ marginTop: 8, fontSize: 12, color: "#e0a64a" }}>
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--w-warn)" }}>
             Enable “Encrypt wallet at rest” above first — it enrolls the
             authenticator the approver key reuses.
           </div>
@@ -524,9 +554,9 @@ function Options() {
         style={{
           marginTop: 22,
           padding: 14,
-          border: "1px solid #2a2f3a",
+          border: "1px solid var(--w-line)",
           borderRadius: 8,
-          background: "#15181f",
+          background: "var(--w-surface)",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -541,73 +571,16 @@ function Options() {
             }}
             style={{ transform: "scale(1.2)" }}
           />
-          <label htmlFor="preferTsp" style={{ fontSize: 14, color: "#e6e8ee" }}>
+          <label htmlFor="preferTsp" style={{ fontSize: 14, color: "var(--w-text)" }}>
             Prefer TSP transport
           </label>
         </div>
-        <div style={{ marginTop: 10, fontSize: 12, color: "#9aa3b2", lineHeight: 1.5 }}>
+        <div style={{ marginTop: 10, fontSize: 12, color: "var(--w-muted)", lineHeight: 1.5 }}>
           When a VTA advertises a <code>TSPTransport</code> service, route trust tasks over TSP
           first (TSP &gt; DIDComm &gt; REST). TSP shares the same mediator socket as DIDComm and
           falls back to DIDComm if it can&apos;t connect. <strong>On by default.</strong> Turn off
           to pin a VTA to DIDComm/REST if a particular mediator&apos;s TSP delivery misbehaves.
         </div>
-      </div>
-
-      <div
-        style={{
-          marginTop: 22,
-          padding: 14,
-          border: "1px solid #2a2f3a",
-          borderRadius: 8,
-          background: "#15181f",
-        }}
-      >
-        <div style={{ fontSize: 14, color: "#e6e8ee", marginBottom: 4 }}>Connected sites</div>
-        <div style={{ fontSize: 12, color: "#9aa3b2", lineHeight: 1.5, marginBottom: 10 }}>
-          Sites you ticked “Remember this site” for. A connected site can log in and read your
-          vault entries without a prompt. Revoke any you no longer trust — the next request from
-          that site will prompt again.
-        </div>
-        {trustedSites.length === 0 ? (
-          <div style={{ fontSize: 12, color: "#6b7280" }}>No connected sites.</div>
-        ) : (
-          <div style={{ display: "grid", gap: 6 }}>
-            {trustedSites.map((s) => (
-              <div
-                key={s.origin}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  padding: "8px 10px",
-                  border: "1px solid #2a2f3a",
-                  borderRadius: 6,
-                  background: "#11141a",
-                }}
-              >
-                <code style={{ wordBreak: "break-all", color: "#e6e8ee", fontSize: 12 }}>
-                  {s.origin}
-                </code>
-                <button
-                  onClick={() => void revokeSite(s.origin)}
-                  style={{
-                    flex: "none",
-                    padding: "5px 10px",
-                    background: "transparent",
-                    color: "#e0524a",
-                    border: "1px solid #5a2a27",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    fontSize: 12,
-                  }}
-                >
-                  Revoke
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
       <button
@@ -616,8 +589,8 @@ function Options() {
         style={{
           marginTop: 18,
           padding: "10px 16px",
-          background: mediatorChanged ? "#7a4a18" : "#2d6cdf",
-          color: "white",
+          background: "var(--w-accent)",
+          color: "var(--w-accent-ink)",
           border: "none",
           borderRadius: 6,
           cursor: busy ? "default" : "pointer",
@@ -625,13 +598,27 @@ function Options() {
           justifySelf: "start",
         }}
       >
-        {busy ? "Working…" : mediatorChanged ? "Save & re-mint identity" : "Save settings"}
+        {busy ? "Working…" : "Save settings"}
       </button>
       {status && (
-        <small style={{ marginTop: 8, color: status.startsWith("Error") ? "#e0524a" : "#4ad07a" }}>
+        <small style={{ marginTop: 8, color: status.startsWith("Error") ? "var(--w-danger)" : "var(--w-ok)" }}>
           {status}
         </small>
       )}
+    </div>
+  );
+}
+
+function Wallet() {
+  return <AppShell advanced={<AdvancedPane />} vault={<VaultPane />} />;
+}
+
+/** The Vault pane. VaultPanel carries its own heading and empty states, so
+ *  this only supplies the surrounding page furniture. */
+function VaultPane() {
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <VaultPanel />
     </div>
   );
 }
@@ -640,7 +627,7 @@ const root = document.getElementById("root");
 if (root) {
   createRoot(root).render(
     <StrictMode>
-      <Options />
+      <Wallet />
     </StrictMode>,
   );
 }

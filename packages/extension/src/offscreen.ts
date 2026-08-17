@@ -80,6 +80,7 @@ import {
   OFFSCREEN_LIST_CONTEXTS,
   OFFSCREEN_LIST_DIDS,
   OFFSCREEN_UNLOCK_PRF,
+  OFFSCREEN_APPROVER_STATE,
   OFFSCREEN_UNLOCK_APPROVER,
   type OffscreenUnlockApproverRequest,
   OFFSCREEN_FORGET_HOLDER_RECORD,
@@ -87,6 +88,9 @@ import {
   OFFSCREEN_REST_LOGIN,
   OFFSCREEN_SET_WAKE,
   OFFSCREEN_WALLET_LOCK_STATE,
+  MEDIATOR_REQUIRED,
+  type OnboardStage,
+  RUNTIME_ONBOARD_PROGRESS,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_SIGN_TRUST_TASK,
@@ -238,6 +242,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     doOnboardConnect({
       ...(req.context ? { context: req.context } : {}),
       createIfMissing: req.createIfMissing ?? false,
+      ...(req.mediatorDid ? { mediatorDid: req.mediatorDid } : {}),
     })
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) => {
@@ -253,6 +258,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             code: e.report.code,
             candidates: e.report.args,
           });
+          return;
+        }
+        // Same reasoning for the one local failure that is recoverable by
+        // asking the operator a question rather than by giving up.
+        if (e instanceof MediatorRequiredError) {
+          sendResponse({ ok: false, error: e.message, code: MEDIATOR_REQUIRED });
           return;
         }
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
@@ -330,6 +341,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       );
     return true; // async sendResponse
   }
+  if (msg.type === OFFSCREEN_APPROVER_STATE) {
+    doApproverState((message as { vtaDid: string }).vtaDid)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
   if (msg.type === OFFSCREEN_UNLOCK_APPROVER) {
     const req = message as OffscreenUnlockApproverRequest;
     let prfOutput: Uint8Array;
@@ -939,6 +959,7 @@ async function doVerifyDid(did: string): Promise<VerifyRpDidResult> {
     method: v.method,
     resolved: v.resolved,
     ...(v.domain ? { domain: v.domain } : {}),
+    ...(v.alsoKnownAs ? { alsoKnownAs: v.alsoKnownAs } : {}),
     ...(v.error ? { error: v.error } : {}),
   };
 }
@@ -1103,20 +1124,59 @@ interface OnboardConnectParams {
    *  the wallet does not auto-create against an inferred context.
    *  Requires the ephemeral's grant to be super-admin. */
   createIfMissing: boolean;
+  /** Operator-supplied mediator, used only when the VTA published none.
+   *  See the resolution note in `doOnboardConnect`. */
+  mediatorDid?: string;
+}
+
+/** No mediator is known and the VTA published none — the caller should ask the
+ *  operator for one and retry. Distinct from a generic failure because it is
+ *  recoverable by a prompt rather than by giving up. */
+export class MediatorRequiredError extends Error {
+  readonly code = MEDIATOR_REQUIRED;
+  constructor(readonly vtaDid: string) {
+    super(
+      `${vtaDid} publishes no mediator, and onboarding needs one to route ` +
+        `through. Supply a mediator DID and try again.`,
+    );
+    this.name = "MediatorRequiredError";
+  }
+}
+
+/**
+ * Announce a phase change to whichever view is watching.
+ *
+ * Fire-and-forget by design: with no listener (popup closed, tab navigated
+ * away) `sendMessage` rejects, and a failed progress ping must never take
+ * down the onboarding it is merely narrating. Hence the swallowed catch —
+ * this is the one place where discarding an error is the correct behaviour.
+ */
+function reportStage(stage: OnboardStage): void {
+  void chrome.runtime
+    .sendMessage({ type: RUNTIME_ONBOARD_PROGRESS, stage })
+    .catch(() => {});
 }
 
 async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardConnectResult> {
   const store = new IndexedDBKVStore();
   const pending = await store.get<PendingOnboard>(ONBOARD_KEY);
   if (!pending) throw new Error("no pending onboarding — prepare first");
-  if (!pending.mediatorDid) {
-    // provision-integration is DIDComm-only in this port. REST fallback is
-    // doable but doubles the implementation surface for a path the wallet
-    // rarely hits (every VTA we ship today advertises #vta-didcomm). Drop
-    // back to a clear error rather than silently failing later.
-    throw new Error(
-      "VTA does not advertise #vta-didcomm — provision-integration requires DIDComm",
-    );
+
+  // provision-integration is DIDComm-only in this port, so a mediator to route
+  // through is mandatory. Prefer the one the VTA published: a discovered value
+  // is authoritative, and letting a typed-in override win could silently
+  // redirect a connection that would otherwise have reached the right place.
+  //
+  // Only when the VTA published nothing do we fall back to the operator's
+  // answer. That case is not exotic — a bare `did:peer` VTA has no document to
+  // resolve, so it is the guaranteed outcome for a supported topology. This
+  // used to throw outright, which made those VTAs impossible to onboard at
+  // all.
+  const mediatorDid = pending.mediatorDid ?? params.mediatorDid;
+  if (!mediatorDid) {
+    // Carries a stable code so the caller can render a prompt and retry with
+    // `mediatorDid`, rather than regex-matching this sentence (R3.7).
+    throw new MediatorRequiredError(pending.vtaDid);
   }
 
   // Reconstruct the operator-granted ephemeral as both an X25519 DIDComm
@@ -1133,18 +1193,21 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
     jwk: ka.secretJwk,
   });
 
+  reportStage("resolving-agent");
   const service = await resolveKeyAgreement(pending.vtaDid);
 
   // Round-trip: build VP → authcrypt → forward via mediator → open sealed
   // reply → extract MinimalAdminReply. The full pipeline lives in
   // @openvtc/pnm-core/provision; offscreen.ts just wires the mediator session in.
+  reportStage("connecting-mediator");
   const conn = await connectMediatorSession({
     holder: ephemeral,
-    mediatorDid: pending.mediatorDid,
+    mediatorDid,
     vtaDid: pending.vtaDid,
   });
   let adminReply;
   try {
+    reportStage("provisioning");
     const bridge = new MediatorSessionBridge(conn);
     adminReply = await runProvisionIntegration({
       bridge,
@@ -1184,6 +1247,7 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
   // `pendingConnect` handling and unconditionally surfaces the
   // post-onboard encrypt prompt (PR #32/#35) so the operator can opt
   // into encryption when they choose.
+  reportStage("installing-identity");
   const holderInputs = holderInputsFromAdminReply(adminReply);
   await installVtaMintedHolder(store, holderInputs);
 
@@ -1520,6 +1584,31 @@ function approverPoolKey(mediatorDid: string, vtaDid: string): string {
 
 /** Unlock the approver for `vtaDid` from a popup-derived PRF output, hold its
  *  identity in memory for the session, and bring up its inbox. */
+/**
+ * Whether the approver exists and whether it is actually listening.
+ *
+ * Both halves are read live. "Minted" comes from storage; "running" is
+ * in-memory state that MV3 discards whenever it evicts the offscreen
+ * document, so a UI that remembered it would keep claiming an approver was up
+ * long after its session died — the failure mode being an approval request
+ * nobody ever sees.
+ */
+async function doApproverState(
+  vtaDid: string,
+): Promise<{ minted: boolean; running: boolean; approverDid?: string }> {
+  const did = await approverDid(new IndexedDBKVStore(), vtaDid);
+  if (!did) return { minted: false, running: false };
+
+  // Loaded identity alone is not enough: the inbox session is what receives
+  // requests, so an open connection is the thing worth reporting.
+  const mediatorDid = await walletMediatorDid();
+  const pending = approverPool.get(approverPoolKey(mediatorDid, vtaDid));
+  const conn = pending ? await pending.catch(() => null) : null;
+  const running = approverIdentities.has(vtaDid) && Boolean(conn?.isOpen);
+
+  return { minted: true, running, approverDid: did };
+}
+
 async function doUnlockApprover(
   prfOutput: Uint8Array,
   vtaDid: string,

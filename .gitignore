@@ -17,6 +17,12 @@ target/
 packages/didcomm-wasm/pkg/
 packages/didcomm-wasm/pkg-node/
 
+# Extension signing key and Web Store upload artefacts. The *public* key
+# (packages/extension/extension-key.txt) is committed on purpose — it ships in
+# every CRX and pins the extension ID. The private key must never be.
+packages/extension/extension-key.pem
+packages/extension/release/
+
 # Local scratch: holder identity snapshots and ad-hoc test harnesses
 # in packages/core. The .json snapshots contain private key material
 # (jwk.d), so must never be committed.

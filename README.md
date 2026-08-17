@@ -276,18 +276,27 @@ extension. Side-load it like this:
    `packages/extension/dist/` from this checkout.
 4. Pin **VTA Wallet** to the toolbar (Chrome's puzzle-piece icon →
    pin) so it's one click away.
-5. **Open the Options page and set your mediator DID before doing
-   anything else.** Right-click the toolbar icon → **Options** (or
-   click the gear in the popup) and paste the DID of the mediator
-   you intend to use. The wallet ships with a placeholder default
-   pointing at a demo mediator — leaving it in place will work, but
-   the mediator DID gets baked into your holder `did:peer` the
-   first time you onboard a VTA, and changing it later re-mints a
-   brand-new wallet identity that must be re-granted in every
-   relying party's ACL. Set it once, up front.
-6. Onboard your first VTA from the popup. Optionally fill in the
-   **Default step-up VTA DID / mediator DID** fields in Options so
-   subsequent step-up flows are pre-populated.
+5. **Setup opens automatically on install.** Work through it top to
+   bottom — the order matters. The agent's address comes first because
+   its mediator is resolved from it; you're only asked for a mediator
+   if the agent publishes none. The passkey lock and your inbox follow.
+   You can reopen it any time at **Options → Setup**, or from the
+   popup's **Open setup** button.
+
+   The agent field takes either form: an agent name
+   (`webvh.storm.ws/@glenn-vta`) or a full `did:webvh:…`. A name is
+   resolved in three stages — HTTPS redirect to a DID, DID resolution,
+   then the document must claim the name back via `alsoKnownAs`. The
+   third stage is mandatory: a redirect alone proves nothing, since
+   whoever controls a domain can point a name at somebody else's DID.
+   The DID is what gets stored; names are re-claimable.
+
+   Onboarding deliberately runs in a tab rather than the toolbar popup:
+   Chrome tears the popup down whenever a native dialog takes focus
+   (crbug 40721470), and this flow raises two — the host-permission
+   grant and the passkey ceremony.
+6. Optional extras — a separate approver identity, background wake-up,
+   step-up defaults — live under **Advanced** and can wait.
 
 **Firefox**
 
@@ -309,6 +318,95 @@ DevTools for the background script. The popup, options page, and
 offscreen document each have their own DevTools — right-click →
 Inspect on the popup, or use the **Inspect views** links on the
 extension card.
+
+### Permissions model
+
+The extension requests **no host permissions at install time** and declares
+**no static content scripts**. The manifest carries `optional_host_permissions`
+only, and the page provider is registered at runtime for granted origins
+(`src/content-registration.ts`) — so the install prompt no longer asks to read
+and change your data on all websites.
+
+A grant therefore means three things at once: the wallet may talk to that host,
+may write its cookies, and `window.vtaWallet` exists on its pages. Turning a
+site off in **Sites** stops all three.
+
+The wallet asks for one origin at a time, at the moment it needs it:
+
+- **Connecting to a VTA** — the host is read out of the `did:webvh` before any
+  request is made, and Chrome prompts on the Prepare click. Needed because
+  vta-service applies an origin-allowlist CORS layer.
+- **Signing in to a bound origin** — the "Sign in to …" button on a ready
+  session prompts for that site, then writes the SessionBlob's cookies.
+- **Visiting a site for the first time** — the popup shows "Enable on
+  <site>". Until then the site cannot see the wallet at all, so its sign-in
+  button does nothing; enabling registers the provider and reloads the page.
+  Cookies are never written automatically, and never for a domain that does
+  not domain-match the bound origin (`src/cookie-scope.ts`).
+
+Resolving DIDs needs no grant: the did:webvh hosting service serves public
+resolution with `Access-Control-Allow-Origin: *`. A did:webvh host behind a
+restrictive CORS policy is the known gap — it surfaces in the consent prompt
+as an unresolved DID, which fails closed.
+
+### Cookie injection is for legacy relying parties only
+
+The normal sign-in path writes no cookies: a SIOPv2 sign-in returns a signed
+`id_token` the site verifies itself, and a DIDComm login never touches the jar.
+`chrome.cookies.set` serves exactly one case — a relying party that is an
+ordinary web app with a server-side session and no notion of DIDs.
+
+That boundary is enforced, not just intended (`src/cookie-scope.ts`): the write
+happens only on an explicit click, only for an origin the user granted at that
+moment, only over HTTPS (bar loopback), and only for cookies whose domain
+RFC 6265 domain-matches the bound origin. Nothing is ever read from the jar.
+
+Keep the boundary sharp when changing this code — see
+[docs/web-store-review.md](docs/web-store-review.md). "The wallet writes cookies
+for sites you signed in to through a legacy password form" is a claim a
+reviewer can check; "the wallet can write cookies" is not.
+
+### Packaging for the Chrome Web Store
+
+```bash
+npm run package --workspace @openvtc/pnm-extension
+# → packages/extension/release/vta-wallet-<version>.zip
+```
+
+The zip holds the *contents* of `dist/` (manifest at the archive root,
+as the Store requires). CI builds and validates it on every run and
+uploads it as the `vta-wallet-extension` artifact, so a submission is
+never the first time the packaging path runs.
+
+**Version.** `packages/extension/package.json` is the single source of
+truth; `packages/extension/manifest.json` is a template and carries no
+`version` field. The build injects it and rejects anything the Store
+would reject — npm prerelease spellings like `0.3.0-rc.1` are not valid
+Chrome versions. Bump the package version before each upload: the Store
+refuses a version that is not greater than the last one it accepted.
+
+**Extension ID.** `chrome.runtime.id` is load-bearing — `src/holder.ts`
+uses it as the WebAuthn PRF rpId, so if it changes, every
+passkey-wrapped secret becomes unopenable and any
+`chrome-extension://<id>` allowlist (VTA CORS) breaks. It is pinned by
+`extension-key.txt`, whose public key the build injects into `dist/`'s
+manifest as `key`.
+
+The Store zip deliberately omits `key`: the Store issues its own key on
+the first upload of a new item and rejects a package that carries one.
+So the local ID matches the published one only after cutover — once the
+item exists in the Developer Dashboard, replace `extension-key.txt`
+with the dashboard's **Package → View public key** value and delete
+`extension-key.pem`. Confirm the result:
+
+```bash
+npm run generate:key --workspace @openvtc/pnm-extension -- --show
+# prints the derived ID; it must equal the dashboard's Item ID
+```
+
+Until then the pinned key is a locally generated one (`npm run
+generate:key`), which holds the ID still across machines and checkouts
+but is *not* the published ID. Cutover re-keys every dev passkey once.
 
 ### Validating in a browser
 
