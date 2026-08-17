@@ -64,3 +64,51 @@ jobs:
             exit 1
           fi
           echo "OK: $bundle is a single bundle with no dynamic import()"
+
+      # Build the Chrome Web Store upload artefact from the dist/ that the
+      # Build step just produced (scripts/package.mjs re-stages it; it does
+      # not rebuild). Doing this every run means a submission is never the
+      # first time the packaging path is exercised.
+      - name: Package Web Store zip
+        working-directory: packages/extension
+        run: node scripts/package.mjs
+
+      # Two ways a package passes CI and then fails at upload, both silent:
+      #
+      #  - a `key` field, which the Store's "+ New item" upload rejects
+      #    outright (it issues its own key). `dist/` carries one on purpose so
+      #    local unpacked installs hold a stable ID; only the zip must not.
+      #  - a version that drifted from package.json, which the Store rejects
+      #    as non-increasing against the last accepted upload.
+      - name: Assert Web Store zip is uploadable
+        working-directory: packages/extension
+        run: |
+          version=$(node -p "require('./package.json').version")
+          zip="release/vta-wallet-${version}.zip"
+          test -f "$zip" || { echo "::error::$zip was not produced"; exit 1; }
+          manifest=$(unzip -p "$zip" manifest.json)
+          if [ "$(echo "$manifest" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).key ?? ''")" != "" ]; then
+            echo "::error::$zip manifest contains a 'key' field; the Web Store rejects it on a new item"
+            exit 1
+          fi
+          got=$(echo "$manifest" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
+          if [ "$got" != "$version" ]; then
+            echo "::error::packaged manifest version $got != package.json version $version"
+            exit 1
+          fi
+          if [ "$(echo "$manifest" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).content_scripts ? 'yes' : ''")" = "yes" ]; then
+            echo "::error::manifest declares content_scripts; the page provider is registered dynamically for granted origins only (src/content-registration.ts). A static match would re-grant blanket host access and double-inject."
+            exit 1
+          fi
+          test -f dist/content.js || { echo "::error::dist/content.js missing; chrome.scripting registers it by path"; exit 1; }
+          echo "OK: $zip is version $version, no 'key', no static content_scripts"
+
+      # One upload only — actions/upload-artifact errors on a duplicate name,
+      # and the zip is identical across the Node matrix.
+      - name: Upload Web Store zip
+        if: matrix.node == '26'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vta-wallet-extension
+          path: packages/extension/release/*.zip
+          if-no-files-found: error

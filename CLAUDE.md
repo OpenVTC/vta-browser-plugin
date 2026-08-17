@@ -80,6 +80,34 @@ a contract change affecting pnm-relay too (R4.1). Don't paper over it here.
   `dist/background.js` stays a single bundle with **no dynamic `import()`** —
   a service worker cannot load one, and losing Rollup's `codeSplitting: false`
   would break the worker at runtime behind a green build.
+- **`packages/extension/manifest.json` is a template, not the manifest.** It
+  carries no `version` (that comes from the package's `package.json`, the one
+  source of truth) and no `key`. The real manifest is assembled into `dist/`
+  by a vite plugin — assembly lives in `scripts/manifest.mjs`. `dist/`'s copy
+  gets `key` so unpacked installs hold a stable ID; the Web Store zip
+  (`npm run package`) omits it, because a new item's upload is rejected if it
+  carries one. Changing the pinned key changes `chrome.runtime.id`, which is
+  the WebAuthn PRF rpId (`src/holder.ts`) — it orphans every wrapped secret.
+- **Host permissions are optional and requested just-in-time.** The manifest
+  has `optional_host_permissions`, not `host_permissions`, so nothing is
+  granted at install. `chrome.permissions.request` needs a live user gesture
+  and throws in a service worker, so the background only *checks*
+  (`hasOriginPermission`) and reports `HOST_PERMISSION_REQUIRED` with the
+  origin; the popup does the asking, and the request must be the **first**
+  `await` in the click handler or the gesture is already spent. This works
+  only because DID resolution needs no grant (the webvh hosting service
+  serves `Access-Control-Allow-Origin: *`) — the VTA does *not*, since
+  vta-service uses an origin allowlist. See `src/host-permissions.ts`.
+- **No static `content_scripts`, and don't add one back.** The page provider
+  is registered at runtime for granted origins only
+  (`src/content-registration.ts`); a manifest match would re-grant blanket
+  host access and double-inject. CI asserts the packaged manifest has none.
+  Two consequences: `registerContentScripts` needs the host permission first,
+  so the reconcile must re-run on every `permissions.onAdded`/`onRemoved` and
+  on cold start; and registration never reaches already-open tabs, so callers
+  reload the tab after granting. Anything that used to read
+  `manifest.content_scripts` for a match list must read the grants instead —
+  `broadcastWalletEvent` silently reached no tabs when it didn't.
 - **Stub `Response` objects with a real `Response`**, not an `{ ok, json }`
   literal. A hand-rolled stub only implements whatever the code happened to
   call when it was written, and stops representing a Response the moment the

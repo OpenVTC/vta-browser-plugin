@@ -1,7 +1,6 @@
 {
   "manifest_version": 3,
   "name": "VTA Wallet",
-  "version": "0.1.0",
   "description": "Verifiable Trust Agent wallet — manage logins, credentials, and DIDs via your VTA. Bridges WebAuthn passkeys to VTA-managed identities.",
   "icons": {
     "16": "icon-16.png",
@@ -26,19 +25,12 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "run_at": "document_start"
-    }
-  ],
   "web_accessible_resources": [
     {
       "resources": ["provider.js"],
       "matches": ["<all_urls>"]
     }
   ],
-  "permissions": ["storage", "offscreen", "notifications", "cookies", "tabs"],
-  "host_permissions": ["<all_urls>"]
+  "permissions": ["storage", "offscreen", "notifications", "cookies", "tabs", "scripting"],
+  "optional_host_permissions": ["<all_urls>"]
 }

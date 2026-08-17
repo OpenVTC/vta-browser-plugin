@@ -33,6 +33,21 @@ export interface VerifyDidResult {
   domain?: string;
   /** Human-readable error if resolution failed. */
   error?: string;
+  /**
+   * The resolved document's `alsoKnownAs`, verbatim and unfiltered.
+   *
+   * Carried through because it is the **only** authoritative source for the
+   * agent names a DID claims (`example.com/@alice`). The name → DID direction
+   * is an HTTP redirect the name's own web server controls and proves nothing
+   * on its own; only the DID's controller can add an `alsoKnownAs` entry, so
+   * this is the half of the binding that makes a name trustworthy.
+   *
+   * Left unparsed here: `alsoKnownAs` legitimately holds other identifier
+   * types (`did:`, `mailto:`), and deciding which entries are agent names is
+   * the consumer's job. Present only when `resolved` is true — an unresolved
+   * document makes no claims.
+   */
+  alsoKnownAs?: string[];
 }
 
 /**
@@ -81,7 +96,7 @@ export async function verifyDid(did: string): Promise<VerifyDidResult> {
   }
   try {
     const resolution = (await vtiResolve(did, {})) as {
-      didDocument?: { id?: string };
+      didDocument?: { id?: string; alsoKnownAs?: unknown };
       didResolutionMetadata?: { error?: string };
     };
     const resolverError = resolution.didResolutionMetadata?.error;
@@ -91,7 +106,18 @@ export async function verifyDid(did: string): Promise<VerifyDidResult> {
     if (!resolution.didDocument?.id) {
       return { ...base, error: "Resolver returned no DID document" };
     }
-    return { ...base, resolved: true };
+    // Defensive: `alsoKnownAs` is remote input. The spec allows any strings,
+    // and a malformed document must degrade to "claims no names" rather than
+    // putting a non-string into a comparison downstream.
+    const aka = resolution.didDocument.alsoKnownAs;
+    const alsoKnownAs = Array.isArray(aka)
+      ? aka.filter((e): e is string => typeof e === "string")
+      : undefined;
+    return {
+      ...base,
+      resolved: true,
+      ...(alsoKnownAs && alsoKnownAs.length > 0 ? { alsoKnownAs } : {}),
+    };
   } catch (e) {
     return { ...base, error: e instanceof Error ? e.message : String(e) };
   }

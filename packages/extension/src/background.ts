@@ -40,6 +40,7 @@ import {
   OFFSCREEN_REST_LOGIN,
   OFFSCREEN_SET_WAKE,
   OFFSCREEN_WALLET_LOCK_STATE,
+  OFFSCREEN_APPROVER_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
   OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_SIGN_TRUST_TASK,
@@ -92,6 +93,8 @@ import {
   CONSENT_KEEPALIVE_PORT,
   RUNTIME_STEP_UP_CONSENT,
   RUNTIME_STEP_UP_VTA,
+  RUNTIME_APPROVER_STATE,
+  RUNTIME_RESOLVE_AGENT_NAME,
   RUNTIME_VERIFY_RP_DID,
   RUNTIME_WALLET_DEFAULTS,
   type MediatorStatusResult,
@@ -148,16 +151,62 @@ import {
   type RuntimeVaultReleaseResponse,
   type RuntimeVaultUpsertRequest,
   type RuntimeVaultUpsertResponse,
+  type RuntimeApproverStateResponse,
+  type RuntimeResolveAgentNameRequest,
+  type RuntimeResolveAgentNameResponse,
   type RuntimeVerifyRpDidRequest,
   type RuntimeVerifyRpDidResponse,
   type RuntimeWalletDefaultsResponse,
   type VerifyRpDidResult,
 } from "./bridge-protocol.js";
 import { getSettings } from "./config.js";
+import { providerMatches, syncProviderRegistration } from "./content-registration.js";
+import { AgentNameError, resolveAgentName } from "./agent-name.js";
+import { checkInjectableOrigin, cookieDomainScope } from "./cookie-scope.js";
+import {
+  HOST_PERMISSION_REQUIRED,
+  displayHostFor,
+  hasOriginPermission,
+} from "./host-permissions.js";
+
+// Keep the provider registration in step with the grants.
+//
+// Three triggers, and all three are needed. `onStartup` covers a browser
+// restart where the persisted registration and the grants may disagree. The
+// permission events cover the live case — granting an origin in the popup has
+// to start the provider there without a restart, and revoking has to stop it.
+// The service worker also runs this on every cold start, because MV3 evicts
+// it constantly and a missed event would otherwise persist until the next one.
+chrome.permissions.onAdded.addListener(() => void syncProviderRegistration());
+chrome.permissions.onRemoved.addListener(() => void syncProviderRegistration());
+chrome.runtime.onStartup.addListener(() => void syncProviderRegistration());
+void syncProviderRegistration().then((matches) => {
+  console.info(
+    matches.length > 0
+      ? `[pnm] page provider registered for: ${matches.join(", ")}`
+      : "[pnm] page provider registered for no sites — grant one to enable sign-in",
+  );
+});
 
 chrome.runtime.onInstalled.addListener((details) => {
   console.info("[pnm] extension installed:", details.reason);
   void ensurePushWake();
+
+  // Fresh install: open setup in a tab rather than leaving the user to find
+  // it. The order of the steps there is load-bearing — the agent's address
+  // comes first because its mediator is resolved from it — and a user who
+  // starts from the toolbar popup instead has no way to know that. This is
+  // also the only container the flow's native dialogs survive (crbug
+  // 40721470). Install only: doing it on every update would hijack a tab
+  // during the dev edit-reload loop.
+  if (details.reason === "install") {
+    void chrome.tabs.create({ url: chrome.runtime.getURL("options.html#setup") });
+  }
+
+  // Re-register the provider for whatever is granted. An update replaces the
+  // extension's registrations, so without this the provider quietly stops
+  // running everywhere until the next permission change.
+  void syncProviderRegistration();
   // On update (the dev-iteration case the operator hits constantly:
   // edit the plugin → "Reload" in chrome://extensions), reload every
   // tab that the content script matches. Without this, the OLD content
@@ -175,14 +224,23 @@ chrome.runtime.onInstalled.addListener((details) => {
   }
 });
 
-/** Reload every tab whose URL matches the manifest's content_scripts
- *  pattern. Called from `onInstalled` after an extension update so
- *  open RP pages pick up a fresh content script wired to the new
- *  background SW. */
+/** Origins the provider currently runs on.
+ *
+ *  Was read from `manifest.content_scripts`. That list no longer exists — the
+ *  provider is registered dynamically for granted origins only
+ *  (content-registration.ts) — and leaving the manifest lookup in place would
+ *  have made both callers silently no-op: no tab reloads after an update, and
+ *  no wallet events reaching any page. */
+async function providerMatchPatterns(): Promise<string[]> {
+  const all = await chrome.permissions.getAll();
+  return providerMatches(all.origins ?? []);
+}
+
+/** Reload every tab the provider runs on. Called from `onInstalled` after an
+ *  extension update so open RP pages pick up a fresh content script wired to
+ *  the new background SW. */
 async function reloadContentScriptTabs(): Promise<void> {
-  const manifest = chrome.runtime.getManifest();
-  const matches =
-    manifest.content_scripts?.flatMap((cs) => cs.matches ?? []) ?? [];
+  const matches = await providerMatchPatterns();
   if (matches.length === 0) return;
   const tabs = await chrome.tabs.query({ url: matches });
   for (const tab of tabs) {
@@ -204,9 +262,7 @@ async function broadcastWalletEvent(
   event: WalletEventKind,
   detail?: Record<string, unknown>,
 ): Promise<void> {
-  const manifest = chrome.runtime.getManifest();
-  const matches =
-    manifest.content_scripts?.flatMap((cs) => cs.matches ?? []) ?? [];
+  const matches = await providerMatchPatterns();
   if (matches.length === 0) return;
   const tabs = await chrome.tabs.query({ url: matches });
   const msg = {
@@ -973,7 +1029,28 @@ async function handleStepUpConsent(
 // pins the MV3 worker awake and stacks further requests behind it.
 const PROXY_FETCH_TIMEOUT_MS = 20_000;
 
+/** Thrown when an egress point needs a host grant the user hasn't made.
+ *  Carries the origin so the UI can name it in the prompt, and a stable
+ *  `code` so callers match on it rather than on the message (R3.7). */
+export class HostPermissionError extends Error {
+  readonly code = HOST_PERMISSION_REQUIRED;
+  constructor(readonly origin: string) {
+    super(
+      `access to ${displayHostFor(origin)} has not been granted — ` +
+        `approve it in the wallet popup and retry`,
+    );
+    this.name = "HostPermissionError";
+  }
+}
+
 async function proxyFetch(url: string, init: RequestInit): Promise<Response> {
+  // Host grants are per-origin and requested just-in-time from a UI context
+  // (host-permissions.ts). A service worker cannot prompt, so an ungranted
+  // origin fails fast with a code the popup knows how to act on — rather
+  // than as an opaque CORS failure 20 seconds later.
+  if (!(await hasOriginPermission(url))) {
+    throw new HostPermissionError(url);
+  }
   try {
     return await fetch(url, {
       ...init,
@@ -1046,6 +1123,7 @@ async function handleOnboardConnect(
     // tell "not provided" from "provided as empty string".
     ...(req.context ? { context: req.context } : {}),
     ...(req.createIfMissing ? { createIfMissing: true } : {}),
+    ...(req.mediatorDid ? { mediatorDid: req.mediatorDid } : {}),
   })) as RuntimeOnboardConnectResponse;
 }
 
@@ -1328,6 +1406,60 @@ async function handleWalletDefaults(): Promise<RuntimeWalletDefaultsResponse> {
 // posts this after rendering and updates the verification badge with the
 // result. Routed through the offscreen because did:webvh resolution needs
 // dynamic import + DOM, which a service worker lacks.
+/**
+ * Turn an agent name into the DID it names.
+ *
+ * Runs here rather than in the popup because stage 1 needs to read a
+ * cross-origin redirect's `Location`, which requires the host permission the
+ * service worker holds. `redirect: "manual"` is essential: letting fetch
+ * follow the redirect discards the header that *is* the answer.
+ */
+async function handleApproverState(): Promise<RuntimeApproverStateResponse> {
+  const vtaDid = await readActiveVtaDid();
+  // No active VTA means no approver to speak of — not an error, just nothing.
+  if (!vtaDid) return { ok: true, result: { minted: false, running: false } };
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_APPROVER_STATE,
+    vtaDid,
+  })) as RuntimeApproverStateResponse;
+}
+
+async function handleResolveAgentName(
+  req: RuntimeResolveAgentNameRequest,
+): Promise<RuntimeResolveAgentNameResponse> {
+  try {
+    const { did, name } = await resolveAgentName(req.name, {
+      fetchRedirect: async (url) => {
+        // R1.2: every outbound fetch gets a timeout, applied where fetch is
+        // used rather than left to the caller.
+        const res = await fetch(url, {
+          method: "GET",
+          redirect: "manual",
+          signal: AbortSignal.timeout(15_000),
+        });
+        return { status: res.status, location: res.headers.get("location") };
+      },
+      resolveDid: async (did) => {
+        const reply = await handleVerifyRpDid({ type: RUNTIME_VERIFY_RP_DID, did });
+        if (!reply.ok) return { resolved: false, error: reply.error };
+        return {
+          resolved: reply.result.resolved,
+          ...(reply.result.alsoKnownAs ? { alsoKnownAs: reply.result.alsoKnownAs } : {}),
+          ...(reply.result.error ? { error: reply.result.error } : {}),
+        };
+      },
+    });
+    return { ok: true, result: { did, name: name.canonical } };
+  } catch (e) {
+    if (e instanceof AgentNameError) {
+      return { ok: false, error: e.message, code: e.code };
+    }
+    throw e;
+  }
+}
+
 async function handleVerifyRpDid(
   req: RuntimeVerifyRpDidRequest,
 ): Promise<RuntimeVerifyRpDidResponse> {
@@ -1578,29 +1710,73 @@ async function handleVaultProxyLoginPage(
   })) as RuntimeVaultProxyLoginResponse;
 }
 
-// Inject the cookies from a SessionBlob into the user's browser
-// cookie jar for the bound origin. The host permission for the
-// target origin must be granted in the manifest (or via
-// chrome.permissions.request) — we don't request dynamically here.
+// Inject the cookies from a SessionBlob into the user's browser cookie jar
+// for the bound origin.
 //
-// Per-cookie failures are tolerated: we log a warn and continue. The
-// caller gets back the count of successful writes so the popup can
-// surface a partial-success state.
+// **Scope: legacy sites only.** This path exists for one driver — Password
+// POST — where the relying party is an ordinary web app that issues a
+// server-side session and has no notion of DIDs. Every modern path avoids it
+// entirely: a SIOP entry returns an id_token the site verifies itself and
+// writes no cookies at all, and a DIDComm login never touches the jar. If the
+// vault gains a form-fill driver, this shrinks again, because letting the site
+// set its own cookie is strictly better than writing one on its behalf.
+//
+// Keeping that boundary sharp matters beyond tidiness: "the wallet writes
+// cookies for sites the user signed in to via a legacy password form" is a
+// reviewable claim, where "the wallet can write cookies" is not. The host permission for the target origin is
+// requested just-in-time by the caller (`ensureOriginPermission`), so this
+// runs with a grant the user made for this specific origin.
+//
+// Two distinct failure modes, deliberately reported separately:
+//
+//   - *Refused* — the cookie's scope does not domain-match `bindOrigin`
+//     (cookie-scope.ts). The VTA sent something it had no business sending;
+//     no write is attempted and the user is told.
+//   - *Failed* — chrome.cookies.set threw. Tolerated per-cookie: warn-log and
+//     continue, with the shortfall visible as `injected < total`.
+//
+// Collapsing the two would let a misbehaving VTA hide behind what looks like
+// a transient write error.
 async function handleInjectCookies(
   req: RuntimeInjectCookiesRequest,
 ): Promise<RuntimeInjectCookiesResponse> {
-  if (!req.bindOrigin) {
-    return { ok: false, error: "missing bindOrigin — cookies need a host to write under" };
+  // https-only (loopback excepted), and the host must be real. See
+  // cookie-scope.ts for why this is checked here rather than left to
+  // chrome.cookies.set.
+  const origin = checkInjectableOrigin(req.bindOrigin);
+  if (!origin.ok) {
+    return { ok: false, error: origin.reason };
   }
-  let baseUrl: URL;
-  try {
-    baseUrl = new URL(req.bindOrigin);
-  } catch {
-    return { ok: false, error: `bindOrigin is not a URL: ${req.bindOrigin}` };
+  const baseUrl = origin.url;
+
+  // chrome.cookies.set hard-requires a host permission for the target. The
+  // popup asks for it on the injection click; if it is missing here the user
+  // declined or the grant was revoked, and writing is simply not possible.
+  if (!(await hasOriginPermission(baseUrl.origin))) {
+    return {
+      ok: false,
+      error:
+        `the wallet has not been granted access to ${displayHostFor(baseUrl.origin)}, ` +
+        `so it cannot write this session's cookies`,
+      code: HOST_PERMISSION_REQUIRED,
+      origin: baseUrl.origin,
+    };
   }
+
   const cookies = req.cookies ?? [];
   let injected = 0;
+  const refused: { name: string; reason: string }[] = [];
   for (const c of cookies) {
+    // Scope-check before the write, not after: a `domain` that does not
+    // domain-match the bound host is a cookie aimed at a site the user never
+    // authenticated to, and it must not reach chrome.cookies.set at all.
+    const scope = cookieDomainScope(c.domain, baseUrl.hostname);
+    if (scope.kind === "rejected") {
+      refused.push({ name: c.name, reason: scope.reason });
+      // eslint-disable-next-line no-console
+      console.warn(`[background] refusing out-of-scope cookie ${c.name}: ${scope.reason}`);
+      continue;
+    }
     try {
       // Per the chrome.cookies API:
       //   - `url` is required and must match the cookie's resulting
@@ -1638,8 +1814,8 @@ async function handleInjectCookies(
       // computes the host from `url` when omitted; passing the bound
       // origin's bare host explicitly would mis-scope cookies the
       // third party intended to be host-only.
-      if (c.domain && c.domain !== baseUrl.host) {
-        details.domain = c.domain;
+      if (scope.kind === "domain") {
+        details.domain = scope.domain;
       }
       if (typeof c.secure === "boolean") details.secure = c.secure;
       if (typeof c.httpOnly === "boolean") details.httpOnly = c.httpOnly;
@@ -1663,6 +1839,7 @@ async function handleInjectCookies(
       injected,
       total: cookies.length,
       bindOrigin: baseUrl.origin,
+      refused,
     },
   };
 }
@@ -2046,6 +2223,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_LOGIN_DIDCOMM) {
     handleLoginDidcomm(message as RuntimeLoginDidcommRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_APPROVER_STATE) {
+    handleApproverState()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_RESOLVE_AGENT_NAME) {
+    handleResolveAgentName(message as RuntimeResolveAgentNameRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

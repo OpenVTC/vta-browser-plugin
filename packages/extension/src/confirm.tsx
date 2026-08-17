@@ -2,6 +2,9 @@
 
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { collapseDid, splitDid, type DidPart } from "./did-display.js";
+import { extractAgentNames, withoutScheme } from "./agent-name.js";
+import "./theme.css";
 import {
   RUNTIME_CONSENT_RESULT,
   RUNTIME_VERIFY_RP_DID,
@@ -81,20 +84,22 @@ function originHostname(o: string): string | undefined {
 // popup is a single screen and the styles are only used here.
 
 const colours = {
-  bg: "#f6f7f9",
-  card: "#ffffff",
-  border: "#e3e5ea",
-  text: "#1d1f24",
-  textMuted: "#6b7280",
-  textSubtle: "#9aa0a6",
-  primary: "#1f6feb",
-  primaryHover: "#1959c4",
-  ok: "#1f8a4c",
-  okBg: "#e9f7ef",
-  warn: "#a87015",
-  warnBg: "#fff5e1",
-  danger: "#b3261e",
-  dangerBg: "#fdecea",
+  bg: "var(--w-raised)",
+  card: "var(--w-surface)",
+  border: "var(--w-line)",
+  // Body text. Was mis-set to --w-surface, which rendered the heading,
+  // the DID host and the Deny label as white-on-white.
+  text: "var(--w-text)",
+  textMuted: "var(--w-faint)",
+  textSubtle: "var(--w-muted)",
+  primary: "var(--w-accent)",
+  primaryHover: "var(--w-accent)",
+  ok: "var(--w-ok)",
+  okBg: "var(--w-ok-soft)",
+  warn: "var(--w-warn)",
+  warnBg: "var(--w-warn-soft)",
+  danger: "var(--w-danger)",
+  dangerBg: "var(--w-danger-soft)",
   mono: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
 };
 
@@ -125,21 +130,21 @@ const modeTheme: Record<
     label: "WORKER",
     tagline: "Your agent is sending a request on your behalf",
     icon: "🤖",
-    bannerBg: "#0e2a4d",
-    bannerFg: "#dbe9ff",
+    bannerBg: "var(--w-accent-soft)",
+    bannerFg: "var(--w-accent)",
     accent: colours.primary,
     accentHover: colours.primaryHover,
-    pageTint: "#f5f8fd",
+    pageTint: "var(--w-accent-wash)",
   },
   approver: {
     label: "APPROVER",
     tagline: "You are authorizing a change — read it before you approve",
     icon: "🛡️",
-    bannerBg: "#4a1410",
-    bannerFg: "#ffe1d9",
+    bannerBg: "var(--w-danger-soft)",
+    bannerFg: "var(--w-danger)",
     accent: colours.danger,
-    accentHover: "#8f1e17",
-    pageTint: "#fdf6f4",
+    accentHover: "var(--w-danger)",
+    pageTint: "var(--w-danger-wash)",
   },
 };
 
@@ -181,10 +186,10 @@ function Badge({
   children: React.ReactNode;
 }) {
   const palette = {
-    ok: { fg: colours.ok, bg: colours.okBg, border: "#bfe5cd" },
-    warn: { fg: colours.warn, bg: colours.warnBg, border: "#f1d9a6" },
-    danger: { fg: colours.danger, bg: colours.dangerBg, border: "#f1b8b3" },
-    neutral: { fg: colours.textMuted, bg: "#eef0f3", border: "#dadde3" },
+    ok: { fg: colours.ok, bg: colours.okBg, border: "var(--w-ok)" },
+    warn: { fg: colours.warn, bg: colours.warnBg, border: "var(--w-warn)" },
+    danger: { fg: colours.danger, bg: colours.dangerBg, border: "var(--w-danger)" },
+    neutral: { fg: colours.textMuted, bg: "var(--w-raised)", border: "var(--w-line)" },
   }[tone];
   return (
     <span
@@ -206,14 +211,6 @@ function Badge({
       {children}
     </span>
   );
-}
-
-function shortenDid(did: string): string {
-  // did:peer:2.E…V…S… is huge — show the first ~16 and last ~10 chars so the
-  // operator can sanity-check both ends without the full string wrapping six
-  // lines. The expand toggle reveals the full identifier when they need it.
-  if (did.length <= 48) return did;
-  return `${did.slice(0, 22)}…${did.slice(-12)}`;
 }
 
 function DidField({
@@ -261,7 +258,7 @@ function DidField({
           fontFamily: colours.mono,
           fontSize: 11.5,
           lineHeight: 1.5,
-          background: "#f3f4f6",
+          background: "var(--w-raised)",
           border: `1px solid ${colours.border}`,
           borderRadius: 6,
           padding: "8px 10px",
@@ -270,7 +267,12 @@ function DidField({
         }}
         title={value}
       >
-        {expanded || !longish ? value : shortenDid(value)}
+        {/* Collapsed or not, the host is always rendered in full and at full
+            weight. The previous head-and-tail truncation could hide it
+            outright — for `did:webvh:<scid>:<host>:contexts:acme` the tail is
+            the path — which put the one segment this prompt asks the operator
+            to verify off screen. */}
+        <DidParts parts={expanded || !longish ? splitDid(value) : collapseDid(value)} />
       </div>
       <div style={{ display: "flex", gap: 12, marginTop: 4 }}>
         {longish && (
@@ -287,6 +289,27 @@ function DidField({
         </button>
       </div>
     </div>
+  );
+}
+
+/** Render pre-split DID parts with the host leading. Local to the consent
+ *  window because it inherits `colours`, which this file scopes to the
+ *  prompt's own surface. */
+function DidParts({ parts }: { parts: DidPart[] }) {
+  const style: Record<DidPart["role"], React.CSSProperties> = {
+    method: { color: colours.textMuted },
+    opaque: { color: colours.textMuted },
+    host: { color: colours.text, fontWeight: 700 },
+    path: { color: colours.textMuted },
+  };
+  return (
+    <>
+      {parts.map((p, i) => (
+        <span key={i} style={style[p.role]}>
+          {p.text}
+        </span>
+      ))}
+    </>
   );
 }
 
@@ -365,6 +388,14 @@ function Confirm() {
   const [verification, setVerification] = useState<VerificationState>({ kind: "pending" });
   const [remember, setRemember] = useState(false);
   const originHost = originHostname(origin);
+
+  // Names the RESOLVED DOCUMENT claims. Never inferred from the DID: the
+  // name → DID link is a web redirect and is not derivable from DID
+  // structure, so anything not backed by `alsoKnownAs` is a guess.
+  const verifiedName =
+    verification.kind === "ok"
+      ? extractAgentNames(verification.result.alsoKnownAs).map(withoutScheme)[0]
+      : undefined;
 
   useEffect(() => {
     // No relying party to resolve (e.g. a `vaultList()` consent) — skip.
@@ -466,9 +497,9 @@ function Confirm() {
         <div
           role="alert"
           style={{
-            border: `1px solid #f1b8b3`,
+            border: `1px solid var(--w-danger)`,
             background: colours.dangerBg,
-            color: "#7a1a13",
+            color: "var(--w-danger)",
             padding: 12,
             margin: "0 0 14px",
             borderRadius: 8,
@@ -549,6 +580,41 @@ function Confirm() {
             marginBottom: 12,
           }}
         >
+          {/* The claimed agent name, shown only when the resolved document
+              actually lists it. A name is a peer-supplied string until
+              `alsoKnownAs` confirms it, and rendering an unverified one here
+              — on the screen whose whole job is "is this who you think it
+              is?" — would be the spoof this check exists to stop. */}
+          {verifiedName && (
+            <div style={{ marginBottom: 10 }}>
+              <div
+                style={{
+                  color: colours.textMuted,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  letterSpacing: 0.3,
+                  textTransform: "uppercase",
+                  marginBottom: 4,
+                }}
+              >
+                Agent name
+              </div>
+              <div
+                style={{
+                  fontFamily: colours.mono,
+                  fontSize: 14,
+                  fontWeight: 700,
+                  color: colours.ok,
+                  wordBreak: "break-all",
+                }}
+              >
+                {verifiedName}
+              </div>
+              <div style={{ fontSize: 11, color: colours.textMuted, marginTop: 2 }}>
+                Confirmed by this DID&apos;s own document.
+              </div>
+            </div>
+          )}
           <DidField
             label="Relying party"
             value={rpDid}
@@ -612,7 +678,7 @@ function Confirm() {
             flex: 1,
             padding: "10px 0",
             border: `1px solid ${colours.border}`,
-            background: "#fff",
+            background: "var(--w-surface)",
             color: colours.text,
             borderRadius: 8,
             fontSize: 13,
@@ -629,7 +695,7 @@ function Confirm() {
             padding: "10px 0",
             border: "none",
             background: colours.primary,
-            color: "#fff",
+            color: "var(--w-accent-ink)",
             borderRadius: 8,
             fontSize: 13,
             fontWeight: 600,
@@ -878,12 +944,12 @@ function TaskConsent() {
             textTransform: "uppercase",
             padding: "3px 7px",
             borderRadius: 4,
-            color: "#fff",
+            color: "var(--w-accent-ink)",
             background: destructive
-              ? "#b3261e"
+              ? "var(--w-danger)"
               : request.sideEffects === "mutating"
-                ? "#8a5a00"
-                : "#3a6b35",
+                ? "var(--w-warn)"
+                : "var(--w-ok)",
           }}
         >
           {request.sideEffects}
@@ -891,7 +957,7 @@ function TaskConsent() {
         <strong style={{ fontSize: 14 }}>Approve this action?</strong>
       </div>
 
-      <div style={{ color: "#555", lineHeight: 1.45 }}>
+      <div style={{ color: "var(--w-muted)", lineHeight: 1.45 }}>
         Your agent is asking permission to run{" "}
         <code style={{ fontSize: 12 }}>{taskLabel(request.taskType)}</code>
         {request.subject ? (
@@ -906,10 +972,10 @@ function TaskConsent() {
       {/* What will actually happen. Authored by the VTA, rendered verbatim. */}
       <div
         style={{
-          border: `1px solid ${determined ? "#ddd" : "#b3261e"}`,
+          border: `1px solid ${determined ? "var(--w-line)" : "var(--w-danger)"}`,
           borderRadius: 6,
           padding: 12,
-          background: determined ? "#fafafa" : "#fff4f3",
+          background: determined ? "var(--w-raised)" : "var(--w-danger-soft)",
         }}
       >
         <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 12 }}>
@@ -943,13 +1009,13 @@ function TaskConsent() {
       </div>
 
       {request.origin ? (
-        <div style={{ fontSize: 12, color: "#555" }}>
+        <div style={{ fontSize: 12, color: "var(--w-muted)" }}>
           Requested by <strong>{originHostname(request.origin) ?? request.origin}</strong>
         </div>
       ) : null}
 
       {request.statePin ? (
-        <div style={{ fontSize: 11, color: "#777" }}>
+        <div style={{ fontSize: 11, color: "var(--w-muted)" }}>
           Computed against version <code>{request.statePin.version}</code>. If it changes
           before you approve, your agent will ask again.
         </div>
@@ -960,9 +1026,9 @@ function TaskConsent() {
           a human who sees six characters compares them, and six characters we
           invented would be compared successfully against nothing. */}
       {prefix !== null ? (
-        <div style={{ fontSize: 11, color: "#777" }}>
+        <div style={{ fontSize: 11, color: "var(--w-muted)" }}>
           Request code{" "}
-          <code style={{ fontSize: 13, letterSpacing: 1.5, color: "#222" }}>{prefix}</code>
+          <code style={{ fontSize: 13, letterSpacing: 1.5, color: "var(--w-text)" }}>{prefix}</code>
         </div>
       ) : (
         <div style={{ fontSize: 11, color: colours.danger, lineHeight: 1.4 }}>
@@ -987,7 +1053,7 @@ function TaskConsent() {
               fontSize: 15,
               letterSpacing: 2,
               fontFamily: "monospace",
-              border: "1px solid #ccc",
+              border: "1px solid var(--w-line)",
               borderRadius: 5,
             }}
           />
@@ -1019,7 +1085,7 @@ function TaskConsent() {
             fontWeight: 700,
             border: "none",
             borderRadius: 8,
-            color: "#fff",
+            color: "var(--w-accent-ink)",
             background: modeTheme.approver.accent,
             opacity: mayApprove && !bioBusy ? 1 : 0.45,
             cursor: mayApprove && !bioBusy ? "pointer" : "not-allowed",

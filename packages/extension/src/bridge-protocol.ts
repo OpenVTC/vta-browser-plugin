@@ -410,6 +410,11 @@ export interface VerifyRpDidResult {
   resolved: boolean;
   domain?: string;
   error?: string;
+  /** The resolved document's `alsoKnownAs`, verbatim. The only authoritative
+   *  source for the agent names this DID claims — a name shown without
+   *  checking it against this is an unverified peer assertion. Relayed
+   *  unparsed; `agent-name.ts` decides which entries are names. */
+  alsoKnownAs?: string[];
 }
 
 export type RuntimeVerifyRpDidResponse =
@@ -421,6 +426,41 @@ export type RuntimeVerifyRpDidResponse =
 // PREPARE resolves the VTA's transports + mints an ephemeral did:key the
 // operator grants; CONNECT authenticates as that ephemeral and swaps the ACL
 // entry onto the wallet's holder did:peer.
+
+/** popup → background: turn an agent name (`example.com/@alice`) into the DID
+ *  it names, verified against that DID's own `alsoKnownAs`. Needs a host grant
+ *  for the name's host first — reading a cross-origin redirect's `Location`
+ *  requires it. */
+/** UI → background: is the approver minted, and is its inbox actually live?
+ *
+ *  "Minted" is a stored fact; "running" is in-memory state in the offscreen
+ *  document that MV3 can discard at any moment. The UI must ask rather than
+ *  remember, or it will keep offering "Start approving" for a session that is
+ *  already up — or worse, claim one is running after the worker was evicted. */
+export const RUNTIME_APPROVER_STATE = "vta-wallet/approver-state" as const;
+
+export interface ApproverStateView {
+  /** An approver identity exists for the active VTA. */
+  minted: boolean;
+  /** Its inbox session is open, so it can receive approval requests now. */
+  running: boolean;
+  approverDid?: string;
+}
+
+export type RuntimeApproverStateResponse =
+  | { ok: true; result: ApproverStateView }
+  | { ok: false; error: string };
+
+export const RUNTIME_RESOLVE_AGENT_NAME = "vta-wallet/resolve-agent-name" as const;
+
+export interface RuntimeResolveAgentNameRequest {
+  type: typeof RUNTIME_RESOLVE_AGENT_NAME;
+  name: string;
+}
+
+export type RuntimeResolveAgentNameResponse =
+  | { ok: true; result: { did: string; name: string } }
+  | { ok: false; error: string; code?: string };
 
 export const RUNTIME_ONBOARD_PREPARE = "vta-wallet/onboard-prepare" as const;
 export const RUNTIME_ONBOARD_CONNECT = "vta-wallet/onboard-connect" as const;
@@ -465,6 +505,63 @@ export interface RuntimeOnboardConnectRequest {
    *  doesn't make sense). Requires the ephemeral's grant to carry
    *  super-admin role; the popup hints this in its UI. */
   createIfMissing?: boolean;
+  /**
+   * Operator-supplied mediator, used only when the VTA published none of its
+   * own.
+   *
+   * `provision-integration` is DIDComm-only, so onboarding needs a mediator
+   * to route through. A `did:webvh` VTA normally declares one and it is
+   * discovered during prepare; a bare `did:peer` has no document to read, and
+   * a `did:webvh` may simply omit `#vta-didcomm`. Both used to be a dead end
+   * — `doOnboardConnect` threw and onboarding stopped, which made a supported
+   * topology unreachable. The wizard now asks, and passes the answer here.
+   *
+   * Ignored when the VTA declared a mediator: the published record wins over
+   * anything typed into the UI, so a stale or mistyped value cannot silently
+   * redirect a connection that would otherwise have gone to the right place.
+   */
+  mediatorDid?: string;
+}
+
+/** Stable code on a failed onboard-connect meaning "no mediator is known and
+ *  the VTA didn't publish one — ask the operator, then retry with
+ *  `mediatorDid`". Matched on directly, never by parsing the message (R3.7). */
+export const MEDIATOR_REQUIRED = "wallet/mediator-required";
+
+/** offscreen → any listener: onboarding reached a new phase.
+ *
+ *  Fire-and-forget, emitted while `OFFSCREEN_ONBOARD_CONNECT` is still
+ *  awaiting its response. Connect does four round trips and can take many
+ *  seconds; without this the UI can only show an unchanging "Connecting…",
+ *  which is indistinguishable from a hang. */
+export const RUNTIME_ONBOARD_PROGRESS = "vta-wallet/onboard-progress";
+
+/**
+ * Phases of `doOnboardConnect`, in order.
+ *
+ * Codes, not sentences: the wording belongs to the view, and the offscreen
+ * document has no business deciding how a step reads to a person (R3.7). The
+ * UI maps these to copy and to an ordered checklist.
+ */
+export type OnboardStage =
+  | "resolving-agent"
+  | "connecting-mediator"
+  | "provisioning"
+  | "installing-identity";
+
+/** Declared order, so the UI can render steps ahead of the current one
+ *  instead of revealing them one at a time — seeing what remains is most of
+ *  the reassurance a progress display provides. */
+export const ONBOARD_STAGES: OnboardStage[] = [
+  "resolving-agent",
+  "connecting-mediator",
+  "provisioning",
+  "installing-identity",
+];
+
+export interface RuntimeOnboardProgressMessage {
+  type: typeof RUNTIME_ONBOARD_PROGRESS;
+  stage: OnboardStage;
 }
 
 export interface OnboardConnectResult {
@@ -1103,11 +1200,31 @@ export interface InjectCookiesResultView {
   /** The URL `chrome.cookies.set` was invoked with — useful for the
    *  popup's "Open site" link after injection. */
   bindOrigin: string;
+  /** Cookies refused by the scope check in `cookie-scope.ts` before
+   *  any write was attempted — a cookie claiming a domain that does
+   *  not domain-match `bindOrigin`.
+   *
+   *  Kept distinct from the `injected`/`total` shortfall, which also
+   *  covers ordinary write failures. A refusal means the VTA sent
+   *  something it had no business sending, so it is surfaced to the
+   *  user rather than only warn-logged: silently dropping it would
+   *  hide a misbehaving or compromised VTA. */
+  refused: { name: string; reason: string }[];
 }
 
 export type RuntimeInjectCookiesResponse =
   | { ok: true; result: InjectCookiesResultView }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      /** Set to `HOST_PERMISSION_REQUIRED` when the failure is only that the
+       *  user has not granted access to `origin`. The popup matches on this
+       *  code — never on `error` (R3.7) — and can recover by prompting from
+       *  its own click handler, which the service worker cannot do. */
+      code?: string;
+      /** The origin to request, present whenever `code` is set. */
+      origin?: string;
+    };
 
 // ─── background ↔ offscreen document ───
 //
@@ -1155,6 +1272,7 @@ export interface OffscreenUnlockPrfRequest {
 
 /** background → offscreen: unlock the approver identity for `vtaDid` from a
  *  popup-derived PRF output and start its inbox session. */
+export const OFFSCREEN_APPROVER_STATE = "offscreen/approver-state" as const;
 export const OFFSCREEN_UNLOCK_APPROVER = "offscreen/unlock-approver" as const;
 
 export interface OffscreenUnlockApproverRequest {
@@ -1365,6 +1483,9 @@ export interface OffscreenOnboardConnectRequest {
   context?: string;
   /** Mirrors `RuntimeOnboardConnectRequest.createIfMissing`. */
   createIfMissing?: boolean;
+  /** Mirrors `RuntimeOnboardConnectRequest.mediatorDid` — the operator's
+   *  answer when the VTA published no mediator of its own. */
+  mediatorDid?: string;
 }
 
 /** background → offscreen: run a DIDComm login. Reply is a

@@ -3,9 +3,38 @@ import react from "@vitejs/plugin-react";
 import wasm from "vite-plugin-wasm";
 import topLevelAwait from "vite-plugin-top-level-await";
 import { resolve } from "node:path";
+import { writeFileSync } from "node:fs";
+// Plain .mjs, and unlisted in tsconfig's `include` (which is `src/**/*`), so
+// it is bundled by vite's esbuild config loader and never typechecked.
+import { buildManifest } from "./scripts/manifest.mjs";
+
+/**
+ * Emit `dist/manifest.json` from `manifest.json` + `package.json`.
+ *
+ * This runs inside the vite build rather than as a `&&`-chained script step
+ * so that `npm run dev` (`vite build --watch`) keeps the manifest in `dist/`
+ * on every rebuild. A chained step would run once and then be wiped by the
+ * next watch rebuild's `emptyOutDir`, leaving an unloadable extension.
+ *
+ * `includeKey: true` — this output is what you load unpacked. The Store zip
+ * is produced by `scripts/package.mjs` with the key omitted; see
+ * `scripts/manifest.mjs` for why the two differ.
+ */
+function emitManifest() {
+  return {
+    name: "pnm-emit-manifest",
+    writeBundle() {
+      const manifest = buildManifest({ includeKey: true });
+      writeFileSync(
+        resolve(__dirname, "dist/manifest.json"),
+        `${JSON.stringify(manifest, null, 2)}\n`,
+      );
+    },
+  };
+}
 
 export default defineConfig({
-  plugins: [react(), wasm(), topLevelAwait()],
+  plugins: [react(), wasm(), topLevelAwait(), emitManifest()],
   build: {
     outDir: "dist",
     emptyOutDir: true,

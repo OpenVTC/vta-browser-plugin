@@ -3,28 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <title>PNM</title>
+    <!-- Colours, fonts and form-control resets come from src/theme.css,
+         imported by popup.tsx. The popup used to set no background at all and
+         so rendered white against a dark options page; the token sheet is what
+         keeps the two surfaces one product. Only geometry lives here. -->
     <style>
-      html,
-      body {
-        margin: 0;
-        font-family: ui-sans-serif, system-ui, sans-serif;
-      }
       body {
         /* Chrome caps extension popups at ~800px wide; go near that so
            long DIDs and the action buttons aren't clipped. */
         width: 760px;
         min-height: 240px;
       }
-      /* Keep form fields inside their container: a <select> sizes to its
-         widest option (long DIDs) and an <input> to its value, either of
-         which would otherwise force horizontal overflow and clip the
-         popup. Cap to 100% and let selects ellipsize the shown value. */
-      input,
-      select,
-      textarea {
-        max-width: 100%;
-        box-sizing: border-box;
-      }
+      /* A <select> sizes to its widest option (long DIDs), which would force
+         horizontal overflow and clip the popup. Let it ellipsize instead. */
       select {
         width: 100%;
         text-overflow: ellipsis;
