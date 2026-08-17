@@ -1,7 +1,7 @@
 {
   "name": "@openvtc/vti-tsp-js",
-  "version": "0.1.0",
-  "description": "Pure-TypeScript TSP (Trust Spanning Protocol) primitives \u2014 byte-compatible with affinidi-tsp. RFC 9180 HPKE seal/open on @noble + binary CESR framing. No WebCrypto, no WASM: runs in browsers, Node, and React Native.",
+  "version": "0.2.0",
+  "description": "Pure-TypeScript TSP (Trust Spanning Protocol) primitives — byte-compatible with affinidi-tsp. RFC 9180 HPKE seal/open on @noble + binary CESR framing. No WebCrypto, no WASM: runs in browsers, Node, and React Native.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
