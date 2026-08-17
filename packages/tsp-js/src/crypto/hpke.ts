@@ -1,33 +1,31 @@
-// HPKE-Auth (RFC 9180) seal/open for TSP — the exact suite affinidi-tsp
-// mandates: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20Poly1305, Auth
-// mode, single-shot. affinidi-tsp hand-rolls this from primitives; we use
-// hpke-js, which implements the identical standard suite, so the wire bytes
-// (shared secret, key schedule, ciphertext, enc) match byte-for-byte.
+// HPKE (RFC 9180) seal/open — the exact suite affinidi-tsp and the VTA
+// sealed-transfer format both mandate: DHKEM(X25519, HKDF-SHA256),
+// HKDF-SHA256, ChaCha20Poly1305, single-shot.
 //
-// Suite IDs (must match): KEM 0x0020, KDF 0x0001 (HKDF-SHA256), AEAD 0x0003
-// (ChaCha20Poly1305) — exactly `DhkemX25519HkdfSha256 + HkdfSha256 +
-// Chacha20Poly1305`.
+// Two modes, one implementation:
+//   - Auth mode (`seal`/`open`)          — TSP messages; the KEM also
+//     authenticates the sender, so no separate signature is needed for it.
+//   - Base mode (`sealBase`/`openBase`)  — VTA sealed bundles; the sender is
+//     anonymous and authentication comes from the surrounding envelope.
+//
+// Implemented in pure TypeScript on the @noble primitives (`hpke-noble.ts`)
+// so ONE code path runs identically in every JS runtime — browser, Node, and
+// React Native, whose Hermes engine ships no `crypto.subtle` (and real apps
+// polyfill it only partially, which is why runtime detection was dropped).
+// hpke-js remains as a dev-dependency: the test suite holds this
+// implementation byte-identical to it, in both modes, and to the official
+// RFC 9180 vectors.
+//
+// The only runtime requirement is `crypto.getRandomValues` (native in
+// browsers/Node; on React Native: `react-native-get-random-values`) — and
+// only for sealing. Opening needs no randomness at all.
 
-import { CipherSuite, DhkemX25519HkdfSha256, HkdfSha256 } from "@hpke/core";
-import { Chacha20Poly1305 } from "@hpke/chacha20poly1305";
+import * as noble from "./hpke-noble.js";
 
 /** ChaCha20Poly1305 tag length appended to the ciphertext. */
 export const TAG_LEN = 16;
 /** X25519 encapsulated-key length. */
 export const ENC_LEN = 32;
-
-const suite = (): CipherSuite =>
-  new CipherSuite({
-    kem: new DhkemX25519HkdfSha256(),
-    kdf: new HkdfSha256(),
-    aead: new Chacha20Poly1305(),
-  });
-
-/** View a Uint8Array as an ArrayBuffer (copying only the used region) — hpke-js
- *  takes ArrayBuffer inputs. */
-function ab(u8: Uint8Array): ArrayBuffer {
-  return u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer;
-}
 
 export interface SealResult {
   /** The X25519 ephemeral public key (32 bytes). */
@@ -50,12 +48,7 @@ export async function seal(
   recipientPk: Uint8Array,
   info: Uint8Array,
 ): Promise<SealResult> {
-  const s = suite();
-  const senderKey = await s.kem.importKey("raw", ab(senderSk), false);
-  const recipientPublicKey = await s.kem.importKey("raw", ab(recipientPk), true);
-  const sender = await s.createSenderContext({ recipientPublicKey, senderKey, info: ab(info) });
-  const ciphertext = new Uint8Array(await sender.seal(ab(plaintext), ab(aad)));
-  return { enc: new Uint8Array(sender.enc), ciphertext };
+  return noble.seal(plaintext, aad, senderSk, recipientPk, info);
 }
 
 /**
@@ -71,14 +64,39 @@ export async function open(
   senderPk: Uint8Array,
   info: Uint8Array,
 ): Promise<Uint8Array> {
-  const s = suite();
-  const recipientKey = await s.kem.importKey("raw", ab(recipientSk), false);
-  const senderPublicKey = await s.kem.importKey("raw", ab(senderPk), true);
-  const recipient = await s.createRecipientContext({
-    recipientKey,
-    enc: ab(enc),
-    senderPublicKey,
-    info: ab(info),
-  });
-  return new Uint8Array(await recipient.open(ab(ciphertext), ab(aad)));
+  return noble.open(ciphertext, aad, enc, recipientSk, senderPk, info);
+}
+
+/**
+ * HPKE base-mode seal: encrypt `plaintext` to the recipient with an anonymous
+ * sender. Use this only where the sender is authenticated by the surrounding
+ * format; where the sender must be proven, use {@link seal} (auth mode).
+ *
+ * Keys are raw 32-byte X25519 keys.
+ */
+export async function sealBase(
+  plaintext: Uint8Array,
+  aad: Uint8Array,
+  recipientPk: Uint8Array,
+  info: Uint8Array,
+): Promise<SealResult> {
+  return noble.sealBase(plaintext, aad, recipientPk, info);
+}
+
+/**
+ * HPKE base-mode open: decrypt `ciphertext` (`ct ‖ tag(16)`) sealed to us with
+ * an anonymous sender. `enc` is the sender's encapsulated key (32 bytes).
+ * Throws on AEAD failure — wrong recipient secret, tampered AAD, or a
+ * ciphertext that was not sealed to this key.
+ *
+ * `recipientSk` is a raw 32-byte X25519 secret.
+ */
+export async function openBase(
+  ciphertext: Uint8Array,
+  aad: Uint8Array,
+  enc: Uint8Array,
+  recipientSk: Uint8Array,
+  info: Uint8Array,
+): Promise<Uint8Array> {
+  return noble.openBase(ciphertext, aad, enc, recipientSk, info);
 }

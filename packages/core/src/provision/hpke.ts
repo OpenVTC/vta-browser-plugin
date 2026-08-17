@@ -10,30 +10,22 @@
 // string `vta-sealed-transfer/v1` domain-separates this suite from any
 // future use of the same primitives.
 //
-// We feed the X25519 secret as raw 32-byte material via the suite's KEM
-// `importKey("raw", secret, false)` — the Rust side derives the X25519
-// secret from an Ed25519 seed via SHA-512 + clamping; the wallet does the
-// same conversion in `bundle-secret.ts` before calling `hpkeOpen` here.
+// The primitives come from `@openvtc/vti-tsp-js/hpke` — the ecosystem's single
+// RFC 9180 implementation, pure TypeScript on @noble. That package owns both
+// modes (TSP uses auth mode over the same suite), so there is exactly one key
+// schedule in the tree rather than one per caller, and this path no longer
+// needs `crypto.subtle` — which the MV3 worker has but a React Native host
+// does not.
+//
+// The X25519 secret is passed as raw 32-byte material: the Rust side derives
+// it from an Ed25519 seed via SHA-512 + clamping, and the wallet does the same
+// conversion in `bundle-secret.ts` before calling `hpkeOpen` here.
 
-import { CipherSuite, DhkemX25519HkdfSha256, HkdfSha256 } from "@hpke/core";
-import { Chacha20Poly1305 } from "@hpke/chacha20poly1305";
+import { openBase } from "@openvtc/vti-tsp-js/hpke";
 
 /** Domain-binding info string. Hardcoded — a different envelope format means
  *  a different info string, not a parameter the caller picks. */
 const HPKE_INFO = new TextEncoder().encode("vta-sealed-transfer/v1");
-
-let _suite: CipherSuite | null = null;
-
-function suite(): CipherSuite {
-  if (!_suite) {
-    _suite = new CipherSuite({
-      kem: new DhkemX25519HkdfSha256(),
-      kdf: new HkdfSha256(),
-      aead: new Chacha20Poly1305(),
-    });
-  }
-  return _suite;
-}
 
 export interface HpkeOpenInput {
   /** 32-byte X25519 secret. Derived from the wallet's Ed25519 seed via
@@ -58,25 +50,5 @@ export async function hpkeOpen(input: HpkeOpenInput): Promise<Uint8Array> {
   if (input.kemEncap.length !== 32) {
     throw new Error(`hpke: kemEncap must be 32 bytes (got ${input.kemEncap.length})`);
   }
-  const cs = suite();
-  const recipientKey = await cs.kem.importKey("raw", asArrayBuffer(input.recipientSecret), false);
-  const pt = await cs.open(
-    {
-      recipientKey,
-      enc: asArrayBuffer(input.kemEncap),
-      info: HPKE_INFO,
-    },
-    asArrayBuffer(input.ciphertext),
-    asArrayBuffer(input.aad),
-  );
-  return new Uint8Array(pt);
-}
-
-/** Force-detached ArrayBuffer copy. `@hpke/core` rejects typed-array views
- *  whose underlying buffer is a SharedArrayBuffer or has unusual byteOffset
- *  semantics; a fresh copy normalises everything. */
-function asArrayBuffer(u8: Uint8Array): ArrayBuffer {
-  const out = new ArrayBuffer(u8.byteLength);
-  new Uint8Array(out).set(u8);
-  return out;
+  return openBase(input.ciphertext, input.aad, input.kemEncap, input.recipientSecret, HPKE_INFO);
 }

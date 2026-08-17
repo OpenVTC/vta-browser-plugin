@@ -1,12 +1,22 @@
 # @openvtc/vti-tsp-js
 
-WebCrypto / [hpke-js](https://github.com/dajiaji/hpke-js) implementation of the
-**Trust Spanning Protocol (TSP)** message layer — **byte-compatible with
+Pure-TypeScript implementation of the **Trust Spanning Protocol (TSP)** message
+layer — **byte-compatible with
 [`affinidi-tsp`](https://crates.io/crates/affinidi-tsp)** (the Rust crate the VTA
-links). Pure TypeScript, **no WASM**: HPKE-Auth via `hpke-js`, Ed25519 and
-X25519 via `@noble/curves`, binary CESR framing hand-ported from the reference.
+links). **No WASM and no WebCrypto**: RFC 9180 HPKE, Ed25519 and X25519 all via
+[`@noble`](https://paulmillr.com/noble/), binary CESR framing hand-ported from
+the reference.
 
-Runs anywhere WebCrypto does — browsers, service workers, Node ≥ 20, Deno.
+**Runs anywhere JavaScript does** — browsers, service workers, Node ≥ 20, Deno,
+and **React Native** (whose Hermes engine ships no `crypto.subtle`, and which
+real apps polyfill only partially). There is one code path, not one per
+environment: no runtime backend detection, so behavior is identical everywhere.
+
+The only platform requirement is `crypto.getRandomValues`, and only for
+*sealing* — opening a message needs no randomness. Browsers, Node and Deno have
+it natively; on React Native, import
+[`react-native-get-random-values`](https://github.com/LinusU/react-native-get-random-values)
+once at app startup.
 
 ## What it does
 
@@ -18,7 +28,10 @@ CESR encode/decode, the `-E` envelope, HPKE seal/open, Ed25519 sign/verify, and
 
 - **HPKE-Auth** — RFC 9180, `DHKEM(X25519, HKDF-SHA256)` + `HKDF-SHA256` +
   `ChaCha20Poly1305`. The `-E` envelope frame (sender VID · receiver VID) is the
-  HPKE `info`, binding the ciphertext to both parties.
+  HPKE `info`, binding the ciphertext to both parties. The same module also
+  exposes **base mode** (`hpke.sealBase` / `hpke.openBase`) over the identical
+  suite, so the ecosystem has one RFC 9180 key schedule rather than one per
+  caller — `@openvtc/pnm-core` uses it for VTA sealed bundles.
 - **CESR** — binary `qb2` framing (selectors `-E`, `-Z`, `B`, `G`, `I`, `A`, `X`;
   markers `YTSP`, `XSCS`/`XHOP`, `XRFI`/`XRFA`/`XRFD`).
 - **Message modes** — Direct, Nested (metadata privacy), and Routed (multi-hop
@@ -27,6 +40,14 @@ CESR encode/decode, the `-E` envelope, HPKE seal/open, Ed25519 sign/verify, and
 Byte-compatibility is proven by an interop test that unpacks a message packed by
 the Rust reference with fixed keys and recovers the plaintext + thread digest
 exactly (`tests/interop.rust-vector.mjs`).
+
+The HPKE implementation is pinned three ways on every CI run: the official CFRG
+RFC 9180 `mode_auth` vector asserted in-tree (`tests/crypto.cfrg-vector.mjs` —
+every key fixed, so exactly one correct output), and cross-implementation
+equivalence against [hpke-js](https://github.com/dajiaji/hpke-js) in both modes
+(`tests/crypto.hpke-js-equivalence.mjs`, each opening the other's output).
+hpke-js is a **dev-dependency only** — it is never shipped and never loaded at
+runtime.
 
 ## Install
 
@@ -72,7 +93,7 @@ import { packRouted } from "@openvtc/vti-tsp-js";
 | `encodeEnvelope` / `decodeEnvelope` | The `-E` cleartext envelope (also the HPKE `info`) |
 | `sha256` | Thread-digest helper |
 | `cesr` | Binary CESR frame primitives |
-| `hpke` | HPKE-Auth seal/open |
+| `hpke` | RFC 9180 HPKE seal/open — auth mode (`seal`/`open`) and base mode (`sealBase`/`openBase`). Also importable directly as `@openvtc/vti-tsp-js/hpke`. |
 | `sign` | Ed25519 sign/verify |
 
 ## Scope

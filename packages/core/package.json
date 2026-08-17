@@ -43,8 +43,6 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@hpke/chacha20poly1305": "^1.8.0",
-    "@hpke/core": "^1.9.0",
     "@noble/curves": "^2.2.0",
     "@openvtc/vti-didcomm-js": "^0.6.2",
     "@openvtc/vti-tsp-js": "*",
@@ -52,6 +50,8 @@
     "cbor-x": "^1.6.4"
   },
   "devDependencies": {
+    "@hpke/chacha20poly1305": "^1.8.0",
+    "@hpke/core": "^1.9.0",
     "typescript": "^7.0.2"
   }
 }
