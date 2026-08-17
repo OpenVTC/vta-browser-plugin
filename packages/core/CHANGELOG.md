@@ -8,6 +8,46 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-17
+
+### Changed
+
+- **The sealed-bundle path no longer needs `crypto.subtle`, and no longer
+  carries its own HPKE.** `provision/hpke.ts` used `@hpke/core` +
+  `@hpke/chacha20poly1305` directly; it now calls `openBase` from
+  `@openvtc/vti-tsp-js/hpke`, the ecosystem's single RFC 9180 implementation
+  (pure TypeScript on `@noble`).
+
+  The repo previously held two independent implementations of the same suite —
+  base mode here, auth mode in tsp-js — which is the duplication the stack
+  guide's **R4.1** warns about. There is now one key schedule.
+
+  `hpkeOpen` keeps its exact signature, validation and error strings; the
+  sealed-bundle wire format is unchanged. This is transparent to callers.
+
+### Removed
+
+- **`@hpke/core` and `@hpke/chacha20poly1305` are no longer runtime
+  dependencies.** They are retained as dev-dependencies, where they now seal
+  the fixtures that hold the new implementation byte-identical to the one it
+  replaced.
+
+  This matters for React Native hosts: `@openvtc/pnm-core` no longer drags a
+  WebCrypto-dependent HPKE into the install. **It is not yet `crypto.subtle`-free**
+  — WebAuthn, the PRF vault wrap, DID verification methods and trust-task
+  canonicalisation all still use it. This removes HPKE from that list, not the
+  rest.
+
+### Security
+
+- `hpkeOpen` — the VTA sealed-bundle decryption path — **had no direct test
+  coverage** before this release. `tests/provision.hpke-open.mjs` adds seven
+  cases in which the *sealing* side is hpke-js, deliberately the other
+  implementation: a round-trip against our own seal would pass even if both
+  directions drifted together. It covers the pinned `vta-sealed-transfer/v1`
+  info binding, the chunk-header AAD binding, wrong-recipient, ciphertext and
+  AAD tampering, and length validation.
+
 ### Fixed
 
 - **Every VTA rejection was decoded as a success** (`vta/protocol.ts`).
@@ -32,6 +72,14 @@ For history before this file, see `git log` on `packages/core`.
   Covers all four consumers — the REST channel, `parseTrustTaskReply`, the
   approver's decision-outcome reader and push-gateway registration — which
   already routed through this one predicate.
+
+### Migration
+
+Requires `@openvtc/vti-tsp-js` **≥ 0.2.0** — the dependency range moved from
+`*` to `^0.2.0`. `*` expressed no floor, so it was satisfied by the old
+`0.1.0`, which has no `./hpke` export; a consumer whose lockfile pinned
+`0.1.0` would have installed this release against it and failed to resolve the
+import. Nothing else in the public API changed.
 
 ## [0.3.0] - 2026-08-09
 
