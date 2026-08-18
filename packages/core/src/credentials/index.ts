@@ -1,12 +1,11 @@
 // Credential issuance and presentation.
 //
 // Reachable by a wallet as well as a console — unlike `admin/`, this is
-// holder-side surface: the deferred presentations a verifier asked for while
-// nobody was there to answer, and the decision on them.
+// holder-side surface.
 //
-// The threaded steps of an exchange (`offer → request → issue`,
-// `query → present`) are **not** here. They define no response document, and
-// this library's only transport primitive awaits one; see the note at the top
-// of `exchange.ts` for what supporting them would take.
+// The threaded steps of an exchange take a `TrustTaskNotifier` and resolve on
+// delivery: they define no response, so there is nothing to await. The
+// `pending/*` calls are request/response and take a sender. Which one a
+// function takes is the honest statement of what it can tell you.
 
 export * from "./exchange.js";

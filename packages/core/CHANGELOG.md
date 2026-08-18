@@ -62,21 +62,38 @@ For history before this file, see `git log` on `packages/core`.
   `keys/import` is absent: its body carries the private key in one of three
   mutually exclusive encodings (sealed, JWE, multibase), and modelling that
   honestly needs a sealed-envelope helper this library does not yet have.
+- **A one-way transport primitive: `TrustTaskNotifier.notify`.** Some tasks
+  define no response document, and `send` — which awaits a reply — is the
+  wrong call for them: it blocks until a timeout on a message the counterparty
+  received perfectly and owes no answer to.
+
+  `notify` resolves when the message reaches the transport, and promises
+  nothing more. All three channels implement it: REST posts and treats a 2xx as
+  delivered without reading the body (while still surfacing a refusal's code
+  from a non-2xx — rejected is not delivered); DIDComm uses the bridge's
+  existing fire-and-forget path; TSP uses an optional one-way `send` on the
+  transport and, when the transport has none, **refuses with
+  `e.client.unsupported` rather than falling back to `sendAndAwaitReply`** —
+  the fallback would look like it worked and then hang. `VtaSession.notify`
+  treats that code the way it always has, so a one-way task moves to a channel
+  that can carry it.
+
+  Callers take the narrower capability they need: functions that cannot report
+  an outcome take a `TrustTaskNotifier`, so what a call can tell you is visible
+  in its signature.
+- **The threaded steps of a credential exchange** — `credentialOffer`,
+  `credentialRequest`, `credentialIssue`, `credentialQuery`,
+  `credentialPresent` — now that there is a primitive that can express them.
+  Each carries an OID4VCI or OID4VP structure verbatim; `credentialIssue`
+  enforces the cleartext-or-sealed union in the type, because sending both
+  would ship the credential in cleartext beside the envelope that exists to
+  avoid exactly that.
 - **`@openvtc/pnm-core/credentials`** — `pendingPresentations`,
   `approvePendingPresentation`, `denyPendingPresentation`. The deferred
   presentations a verifier asked for while the holder was away, and the
   decision on them. A separate entry point from `admin/` because this is
   holder-side: a wallet reaches for it.
 
-  **The threaded steps of an exchange are deliberately absent.**
-  `offer → request → issue` and `query → present` define no response document;
-  per SPEC.md §8.6 a consumer *may* send a courtesy `trust-task-ok`, but "a
-  producer MUST NOT rely on receiving one, and the absence of one carries no
-  information". `TrustTaskChannel` has one primitive — `send()`, which awaits
-  a reply — so wrapping them would await something a conforming counterparty
-  is entitled never to send: a hang, or a timeout reported as failure when the
-  message arrived perfectly. They need a one-way path on the channel and on
-  all three transports, which is a change to make deliberately.
 - **`consent/*` and `messaging/ping`.** Messaging consent — who may talk to an
   agent, on which platform, in which conversation — plus the approver bindings
   that decide who gets asked. Not to be confused with `task-consent/*`, the

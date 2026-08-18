@@ -37,11 +37,43 @@ export interface SendOpts {
 }
 
 /**
- * A transport over which Trust-Task request/response exchanges run. The
- * request is always a canonical {@link TrustTask} envelope; the channel
- * returns the decoded response payload, or throws a `VtaClientError`.
+ * The "deliver a Trust-Task and do not wait for an answer" capability.
+ *
+ * Some tasks define no response document at all — the threaded steps of a
+ * credential exchange, for instance. SPEC.md §8.6 reserves a courtesy
+ * `trust-task-ok` for them, and is explicit that a producer MUST NOT rely on
+ * receiving one and that its absence carries no information. Calling
+ * {@link TrustTaskSender.send} for such a task waits for something the
+ * counterparty is entitled never to send: at best a timeout reported as a
+ * failure after the message was delivered perfectly.
+ *
+ * `notify` resolves when the message has been handed to the transport. That is
+ * the only promise any of the three transports can honestly make, and it is
+ * deliberately weaker than `send`'s: **delivery is not application-level
+ * success**, and nothing here tells a caller the task was performed.
  */
-export interface TrustTaskChannel extends TrustTaskSender {
+export interface TrustTaskNotifier {
+  notify(envelope: TrustTask<unknown>, opts?: NotifyOpts): Promise<void>;
+}
+
+export interface NotifyOpts {
+  /** Per-request timeout override (ms). */
+  timeoutMs?: number;
+  /** Label used to enrich error messages (defaults to the task type). */
+  operationLabel?: string;
+}
+
+/**
+ * A transport over which Trust-Task exchanges run. The request is always a
+ * canonical {@link TrustTask} envelope; the channel returns the decoded
+ * response payload, or throws a `VtaClientError`.
+ *
+ * A channel carries both capabilities. A *caller* should depend on the
+ * narrower one it needs — {@link TrustTaskSender} for request/response,
+ * {@link TrustTaskNotifier} for one-way — so what a function does to the
+ * network is visible in its signature.
+ */
+export interface TrustTaskChannel extends TrustTaskSender, TrustTaskNotifier {
   /** Which transport this is — for selection, logging, and diagnostics. */
   readonly kind: TrustTaskChannelKind;
 

@@ -178,16 +178,15 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
     [...REFERENCED.keys()].map(family).filter((f) => canonicalFamilies.has(f)),
   );
 
-  // 65 of 161 as of vta-sdk 0.25.0: acl/* (6), consent/* (6), keys/* (6),
+  // 70 of 161 as of vta-sdk 0.25.0: credential-exchange/* (8), acl/* (6),
+  // consent/* (6), keys/* (6),
   // vault/* (6), vta/did-templates/* (6), policy/* (4), vta/contexts/* (4),
   // vta/passkey-vms/* (4), auth/* (4 — authenticate, whoami, sessions/list,
   // revoke-session), device/* (4 — list, disable, wipe, set-wake),
   // vta/memory/* (3), config/* (2), task-consent/* (2), audit/list,
   // auth/step-up/approve-response, messaging/ping, provision/integration,
-  // vta/webvh/dids/list, and credential-exchange/pending/* (3 — the threaded
-  // steps of an exchange define no response, so this library cannot call them
-  // over a request/response channel).
-  const expected = 65;
+  // vta/webvh/dids/list.
+  const expected = 70;
   assert.equal(
     implemented.size,
     expected,
