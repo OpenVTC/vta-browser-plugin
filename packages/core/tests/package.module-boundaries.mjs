@@ -33,7 +33,7 @@ const LAYERS = [
   ["did", "didcomm", "webauthn"], //  1 — identity + crypto primitives
   ["siop"], //                   2 — token formats
   ["vta", "trust-tasks"], //     3 — the VTA protocol: channels, envelopes, auth
-  ["store", "vault", "device", "provision", "rp-login", "onboarding", "admin"], // 4
+  ["store", "vault", "device", "provision", "rp-login", "onboarding", "admin", "credentials"], // 4
   ["inbound"], //                5 — the running session, on top of everything
 ];
 

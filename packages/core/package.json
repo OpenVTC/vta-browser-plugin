@@ -24,6 +24,10 @@
       "types": "./dist/admin/index.d.ts",
       "import": "./dist/admin/index.js"
     },
+    "./credentials": {
+      "types": "./dist/credentials/index.d.ts",
+      "import": "./dist/credentials/index.js"
+    },
     "./device": {
       "types": "./dist/device/index.d.ts",
       "import": "./dist/device/index.js"

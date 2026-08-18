@@ -62,6 +62,21 @@ For history before this file, see `git log` on `packages/core`.
   `keys/import` is absent: its body carries the private key in one of three
   mutually exclusive encodings (sealed, JWE, multibase), and modelling that
   honestly needs a sealed-envelope helper this library does not yet have.
+- **`@openvtc/pnm-core/credentials`** — `pendingPresentations`,
+  `approvePendingPresentation`, `denyPendingPresentation`. The deferred
+  presentations a verifier asked for while the holder was away, and the
+  decision on them. A separate entry point from `admin/` because this is
+  holder-side: a wallet reaches for it.
+
+  **The threaded steps of an exchange are deliberately absent.**
+  `offer → request → issue` and `query → present` define no response document;
+  per SPEC.md §8.6 a consumer *may* send a courtesy `trust-task-ok`, but "a
+  producer MUST NOT rely on receiving one, and the absence of one carries no
+  information". `TrustTaskChannel` has one primitive — `send()`, which awaits
+  a reply — so wrapping them would await something a conforming counterparty
+  is entitled never to send: a hang, or a timeout reported as failure when the
+  message arrived perfectly. They need a one-way path on the channel and on
+  all three transports, which is a change to make deliberately.
 - **`consent/*` and `messaging/ping`.** Messaging consent — who may talk to an
   agent, on which platform, in which conversation — plus the approver bindings
   that decide who gets asked. Not to be confused with `task-consent/*`, the
