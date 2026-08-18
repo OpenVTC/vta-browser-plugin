@@ -32,7 +32,7 @@ npm install @openvtc/pnm-core
 | **`@openvtc/pnm-core/did`** | Multikey ↔ JWK conversion, DID-URL parsing, did:webvh log resolution. |
 | **`@openvtc/pnm-core/vta`** | The VTA protocol: Trust-Task envelopes, REST/DIDComm/TSP channels, and the REST auth bootstrap. Mirrors the [`vta-sdk`](https://crates.io/crates/vta-sdk) Rust client's surface. |
 | **`@openvtc/pnm-core/vault`** | Vault Trust Tasks — list, upsert, delete, release, proxy-login, sign. |
-| **`@openvtc/pnm-core/admin`** | Agent administration: `acl/*` (grant, list, show, revoke, change-role), `keys/*` (create, list, show, rename, revoke, sign), `policy/*` (list, get, upsert, delete), session introspection (whoami, sessions, revoke), and context deletion. Operator surface — not in the root barrel, import it explicitly. |
+| **`@openvtc/pnm-core/admin`** | Agent administration: `acl/*`, `keys/*`, `policy/*`, `device/*` (list, disable, wipe), `audit/list`, `config/{show,patch}`, session introspection, and context deletion. Operator surface — not in the root barrel, import it explicitly. |
 | **`@openvtc/pnm-core/siop`** | SIOPv2 / OpenID4VP RP-side helpers. |
 | **`@openvtc/pnm-core/provision`** | Sealed-bootstrap provisioning (`provision/integration`). |
 | **`@openvtc/pnm-core/didcomm`** | DIDComm v2 packing, mediator routing, forward envelopes. |
@@ -95,7 +95,7 @@ together:
   rename, a task that moved — fails the build here rather than at a user;
 - a task version the SDK has **deprecated** fails too, during the window where
   the agent still accepts it and everything appears to work;
-- **coverage is a recorded number** (40 of 270 task families today), so a gap
+- **coverage is a recorded number** (46 of 270 task families today), so a gap
   that grows or shrinks shows up in a diff someone reviews.
 
 Refresh the snapshot against a local checkout:

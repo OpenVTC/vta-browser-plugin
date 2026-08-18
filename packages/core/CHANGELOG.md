@@ -62,6 +62,17 @@ For history before this file, see `git log` on `packages/core`.
   `keys/import` is absent: its body carries the private key in one of three
   mutually exclusive encodings (sealed, JWE, multibase), and modelling that
   honestly needs a sealed-envelope helper this library does not yet have.
+- **`device/*` (the operator half)** — `deviceList`, `deviceDisable`,
+  `deviceWipe`. The device-side tasks (register, heartbeat, set-wake) stay in
+  `device/`, since they belong to whatever is *being* a device. `deviceWipe`
+  takes `scope` and `reason` as required parameters, matching a schema that
+  refuses a wipe with no recorded reason.
+- **`audit/list` and `config/{show,patch}`** — `auditList`, `configShow`,
+  `configPatch`. `auditList` surfaces `truncated` rather than smoothing it
+  away: a partial audit page read as a complete account is the failure an
+  audit trail exists to prevent. `configPatch` returns all three outcome lists
+  (`applied`, `pendingRestart`, `rejected`), because a caller reading only the
+  status code will report a queued or refused setting as live.
 - **`policy/*`** — `policyList`, `policyGet`, `policyUpsert`, `policyDelete`.
   Writes are optimistically concurrent: pass the `version` the operator was
   shown as `expectedVersion` and a racing edit is refused rather than silently

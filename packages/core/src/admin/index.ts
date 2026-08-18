@@ -14,4 +14,6 @@ export * from "./acl.js";
 export * from "./keys.js";
 export * from "./policy.js";
 export * from "./sessions.js";
+export * from "./devices.js";
+export * from "./observability.js";
 export * from "./contexts.js";
