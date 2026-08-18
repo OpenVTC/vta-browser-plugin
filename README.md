@@ -285,11 +285,19 @@ extension. Side-load it like this:
 
    The agent field takes either form: an agent name
    (`webvh.storm.ws/@glenn-vta`) or a full `did:webvh:…`. A name is
-   resolved in three stages — HTTPS redirect to a DID, DID resolution,
-   then the document must claim the name back via `alsoKnownAs`. The
-   third stage is mandatory: a redirect alone proves nothing, since
-   whoever controls a domain can point a name at somebody else's DID.
-   The DID is what gets stored; names are re-claimable.
+   resolved in three stages — an HTTPS request that answers with a DID,
+   DID resolution, then the document must claim the name back via
+   `alsoKnownAs`. The third stage is mandatory: a redirect alone proves
+   nothing, since whoever controls a domain can point a name at somebody
+   else's DID. The DID is what gets stored; names are re-claimable.
+
+   Stage 1 needs the name's server to answer in a form a *browser* can
+   read. The reference (Rust) resolver reads a `did:…` straight out of a
+   `Location` header; no browser can, so the wallet sends a browser-shaped
+   `Accept` and follows whatever it is given — the webvh hosting service
+   answers that with a redirect to the DID's log. A name server that only
+   ever answers with a bare `did:` redirect cannot be resolved from an
+   extension at all; paste the full `did:webvh:…` instead.
 
    Onboarding deliberately runs in a tab rather than the toolbar popup:
    Chrome tears the popup down whenever a native dialog takes focus
