@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>VTA Wallet — reviewer demo</title>
+    <link rel="stylesheet" href="/static/demo.css" />
+  </head>
+  <body>
+    <main>
+      <p class="banner">
+        <b>This is a throwaway demo.</b> The agent behind it holds nothing real, every
+        authorisation it issues expires after <span data-config="grantExpires">7 days</span>, and the
+        whole thing is deleted <span data-config="deletesOn-phrase">7 days after it is stood up</span>.
+        Do not put anything of your own into it.
+      </p>
+
+      <h1>VTA Wallet — reviewer demo</h1>
+      <p class="sub">
+        Sign in to authorise your wallet against the demo agent, and for the walkthrough of what to
+        test.
+      </p>
+
+      <section class="card">
+        <h2>1. First time here</h2>
+        <p>
+          Use the reviewer key ID from this listing's test instructions. This is how you get in
+          before the wallet is set up — you will need it to authorise your wallet in the first place.
+        </p>
+        <form id="key-form" autocomplete="off">
+          <label for="key">Reviewer key ID</label>
+          <input id="key" name="key" type="text" spellcheck="false" required />
+          <button type="submit" id="key-submit">Sign in</button>
+        </form>
+        <p class="msg" id="key-msg" hidden></p>
+      </section>
+
+      <section class="card">
+        <h2>2. Once your wallet is set up</h2>
+        <p>
+          Sign in with the wallet itself, over SIOPv2. This is the flow under review: the wallet
+          proves control of your DID to the demo agent, and this site checks the result with the
+          agent rather than taking the browser's word for it. It works only after you have completed
+          step 1 and onboarded.
+        </p>
+        <button id="siop-go">Sign in with your VTA Wallet</button>
+        <p class="msg" id="siop-msg" hidden></p>
+        <p class="hint" id="siop-hint" hidden>
+          The wallet is not available on this page yet. Open the extension's popup and choose
+          <b>Enable on this site</b> — until you do, the wallet is invisible here by design. The page
+          reloads once you enable it.
+        </p>
+      </section>
+
+      <section class="card muted">
+        <h2>The demo agent</h2>
+        <dl>
+          <dt>Agent DID</dt>
+          <dd><code data-config="vtaDid">…</code></dd>
+          <dt>API</dt>
+          <dd><code data-config="vtaBaseUrl">…</code></dd>
+        </dl>
+      </section>
+    </main>
+    <script type="module" src="/static/login.js"></script>
+  </body>
+</html>

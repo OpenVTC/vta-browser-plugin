@@ -9,7 +9,8 @@
     "packages/core",
     "packages/pwa",
     "packages/extension",
-    "packages/demo-rp"
+    "packages/demo-rp",
+    "packages/reviewer-demo"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

@@ -1,0 +1,16 @@
+{
+  "name": "@openvtc/pnm-reviewer-demo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Reviewer demo site — signs a Chrome Web Store reviewer in with a key ID, authorises their wallet against a throwaway demo agent, and walks them through the flows to test. Also an SIOPv2 relying party, so the wallet sign-in can be exercised once they are onboarded.",
+  "type": "module",
+  "main": "./server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
