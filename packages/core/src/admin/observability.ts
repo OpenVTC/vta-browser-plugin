@@ -25,6 +25,12 @@ import {
   type ConfigField,
 } from "@openvtc/trust-tasks/config/show/0.1/payload";
 import {
+  TYPE_URI as MESSAGING_PING,
+  RESPONSE_TYPE_URI as MESSAGING_PING_RESPONSE,
+  type MessagingPingPayload,
+  type MessagingPingResponsePayload,
+} from "@openvtc/trust-tasks/messaging/ping/0.1/payload";
+import {
   TYPE_URI as CONFIG_PATCH,
   RESPONSE_TYPE_URI as CONFIG_PATCH_RESPONSE,
   type ConfigPatchPayload,
@@ -147,5 +153,36 @@ export async function configPatch(
   return sender.send<ConfigPatchResponsePayload>(envelope, {
     expectedResponseType: CONFIG_PATCH_RESPONSE,
     operationLabel: "config/patch/0.1",
+  });
+}
+
+export interface AgentPingParams extends ObservabilityCallerParams {
+  /** Echoed back by the agent. Supply one to prove the response belongs to
+   *  this request rather than a cached or replayed earlier one. */
+  nonce?: string;
+}
+
+/**
+ * Liveness and capability check.
+ *
+ * `status` is `ok` or **`degraded`** — an agent that answers is not
+ * necessarily an agent that is working, and a console showing a green light on
+ * any response would hide exactly the state worth seeing. `protocols` is what
+ * it will speak, which is the honest basis for deciding what to render.
+ */
+export async function agentPing(
+  sender: TrustTaskSender,
+  params: AgentPingParams,
+): Promise<MessagingPingResponsePayload> {
+  const payload: MessagingPingPayload = {
+    ...(params.nonce ? { nonce: params.nonce } : {}),
+  };
+  const envelope = buildTrustTask(MESSAGING_PING, payload, {
+    issuer: params.holder.did,
+    recipient: params.service.did,
+  });
+  return sender.send<MessagingPingResponsePayload>(envelope, {
+    expectedResponseType: MESSAGING_PING_RESPONSE,
+    operationLabel: "messaging/ping/0.1",
   });
 }

@@ -62,6 +62,19 @@ For history before this file, see `git log` on `packages/core`.
   `keys/import` is absent: its body carries the private key in one of three
   mutually exclusive encodings (sealed, JWE, multibase), and modelling that
   honestly needs a sealed-envelope helper this library does not yet have.
+- **`consent/*` and `messaging/ping`.** Messaging consent — who may talk to an
+  agent, on which platform, in which conversation — plus the approver bindings
+  that decide who gets asked. Not to be confused with `task-consent/*`, the
+  human-approval flow for privileged actions, which is inbound and lives in
+  `inbound/`.
+
+  A grant is identified by its whole subject (platform, conversation, kind,
+  agent) rather than by an id, so every call carries all four. Two distinctions
+  are pinned by tests because getting either backwards misinforms a user in the
+  worst direction: a **recorded `deny`** is a decision and is surfaced rather
+  than treated as an absence, while a **`rejected` decision** means the agent
+  refused to record anything at all. And `agentPing` reports `degraded` — an
+  agent that answers is not necessarily an agent that works.
 - **`vta/did-templates/*` (2.0) and `vta/memory/*`.** Templates are the shape
   an agent stamps DIDs from; `didTemplateRender` performs the same substitution
   the agent would and returns the document **without creating anything**, which

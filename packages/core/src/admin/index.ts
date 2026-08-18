@@ -18,4 +18,5 @@ export * from "./devices.js";
 export * from "./observability.js";
 export * from "./did-templates.js";
 export * from "./memory.js";
+export * from "./consent.js";
 export * from "./contexts.js";
