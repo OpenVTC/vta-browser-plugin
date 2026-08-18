@@ -178,15 +178,12 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
     [...REFERENCED.keys()].map(family).filter((f) => canonicalFamilies.has(f)),
   );
 
-  // 74 of 161 as of vta-sdk 0.25.0: keys/* (9), credential-exchange/* (8),
-  // acl/* (6), consent/* (6), vault/* (7),
-  // vault/* (6), vta/did-templates/* (6), policy/* (4), vta/contexts/* (4),
-  // vta/passkey-vms/* (4), auth/* (4 — authenticate, whoami, sessions/list,
-  // revoke-session), device/* (4 — list, disable, wipe, set-wake),
-  // vta/memory/* (3), config/* (2), task-consent/* (2), audit/list,
-  // auth/step-up/approve-response, messaging/ping, provision/integration,
-  // vta/webvh/dids/list.
-  const expected = 74;
+  // 110 of 161 as of vta-sdk 0.25.0. The families this library does NOT
+  // implement are, with two exceptions, the ones with no published schema —
+  // see the gap list in the repo's notes. The exceptions are deliberate: the
+  // wider `vtc/*` surface belongs to a community rather than an agent, and
+  // `vault/*`'s archive/restore/purge and credential sub-family are unspecced.
+  const expected = 110;
   assert.equal(
     implemented.size,
     expected,

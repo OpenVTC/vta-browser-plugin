@@ -28,6 +28,10 @@
       "types": "./dist/credentials/index.d.ts",
       "import": "./dist/credentials/index.js"
     },
+    "./did-hosting": {
+      "types": "./dist/did-hosting/index.d.ts",
+      "import": "./dist/did-hosting/index.js"
+    },
     "./device": {
       "types": "./dist/device/index.d.ts",
       "import": "./dist/device/index.js"
@@ -83,6 +87,10 @@
     "./vta": {
       "types": "./dist/vta/index.d.ts",
       "import": "./dist/vta/index.js"
+    },
+    "./vtc": {
+      "types": "./dist/vtc/index.d.ts",
+      "import": "./dist/vtc/index.js"
     },
     "./webauthn": {
       "types": "./dist/webauthn/index.d.ts",

@@ -14,6 +14,7 @@ export * from "./rest-channel.js";
 export * from "./session.js";
 export * from "./smoke.js";
 export * from "./auth.js";
+export * from "./auth-tasks.js";
 export * from "./transport.js";
 export * from "./trust-task.js";
 export * from "./tsp-channel.js";

@@ -62,6 +62,37 @@ For history before this file, see `git log` on `packages/core`.
   `keys/import` is absent: its body carries the private key in one of three
   mutually exclusive encodings (sealed, JWE, multibase), and modelling that
   honestly needs a sealed-envelope helper this library does not yet have.
+- **`@openvtc/pnm-core/did-hosting`** — the `did-management/*` control plane
+  (23 tasks). A **different counterparty**: these go to a did:webvh hosting
+  service, which publishes DID documents and serves their logs, not to an
+  agent. `dids.ts` manages individual DIDs, `domains.ts` the domains they are
+  served under and the instances serving them.
+
+  A DID is addressed by its **mnemonic** — the hosting service's handle for the
+  record, unrelated to the BIP-39 phrase `keys/*` means by that word. The
+  collision is the specification's; the module says so rather than letting a
+  caller discover it.
+
+  `reportHostedDidProblem` is one-way and takes a notifier: the task defines no
+  response, which is the right shape for a courtesy report.
+- **`@openvtc/pnm-core/vtc`** — the member's side of a Verifiable Trust
+  Community: apply, track the application, hold the membership credential,
+  leave. Eight tasks, not the sixty the bindings ship: the rest is the
+  *community's* administration plane, implemented by a VTC rather than an
+  agent, and wrapping it here would be building a VTC console inside a wallet
+  library.
+- **`device/register` and `device/heartbeat`** in the device module (the
+  operator's half stays in `admin/devices.ts`). A heartbeat's
+  `queuedOperations` is how a remote wipe reaches a device — a client that
+  treats a heartbeat as a liveness ping and drops the array cannot be wiped.
+- **`pushWake`** — spend a `WakeHandle`. `tokenUnregistered` means the
+  subscription is gone: re-register rather than retry, or retry forever against
+  a device that can never answer.
+- **`auth/challenge` and `auth/refresh` as tasks**, for the transports where
+  the bootstrap chicken-and-egg does not arise: TSP and DIDComm authenticate
+  the sender in the envelope, so a client already speaking either can ask
+  without a bearer. `vta/auth.ts` keeps the REST bootstrap, which cannot be a
+  task. A refresh may **rotate** the refresh token — store what comes back.
 - **`keys/*` is complete** — `keysImport`, `keysDeriveAndSign`,
   `keysDeriveAndSignDocument` join the six already there.
 
