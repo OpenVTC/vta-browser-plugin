@@ -1,4 +1,4 @@
-import { bytesToBase64url } from "../webauthn/base64url.js";
+import { bytesToBase64url } from "../util/base64url.js";
 
 /**
  * A `verificationMethod` entry, in the shape we want appended to the

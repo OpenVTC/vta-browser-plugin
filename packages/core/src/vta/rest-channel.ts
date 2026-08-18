@@ -16,7 +16,7 @@ import { errorFromBody, VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
 import { parseTrustTaskReply } from "./trust-task.js";
 import { isTrustTaskErrorType } from "./protocol.js";
-import { getVtaBearer, makeReauth, type VtaAuthInputs } from "../vault/transport.js";
+import { getVtaBearer, makeReauth, type VtaAuthInputs } from "./auth.js";
 import { withFetchTimeout, isFetchTimeout, DEFAULT_FETCH_TIMEOUT_MS } from "../http/timeout-fetch.js";
 
 export interface RestChannelOptions extends VtaAuthInputs {

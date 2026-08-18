@@ -1,4 +1,4 @@
-import { bytesToBase64url } from "./base64url.js";
+import { bytesToBase64url } from "../util/base64url.js";
 import { COSE_ALG, cryptoKeyToMultikey, type CoseAlg } from "./multikey.js";
 
 export interface PasskeyEnrollmentChallenge {

@@ -8,6 +8,91 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+### Changed
+
+- **The VTA's REST auth bootstrap moved from `vault/transport.ts` to
+  `vta/auth.ts`.** `getVtaBearer`, `makeReauth`, `invalidateVtaBearer` and
+  `VtaAuthInputs` were never vault-specific — they are how you authenticate to
+  a VTA over REST — but living under `vault/` made `vta` and `vault` mutually
+  dependent, so `import "@openvtc/pnm-core/vta"` pulled the entire vault
+  surface in behind it. `VtaAuthInputs` is still re-exported from `/vault`, so
+  nothing importing it needs to change.
+- **The `base64url` helpers moved from `webauthn/` to `util/`.** Plain byte
+  encoding, needed by `did/` and `vta/`, which had to depend on WebAuthn to
+  get it. Still re-exported from `@openvtc/pnm-core/webauthn`.
+
+### Added
+
+- **`@openvtc/pnm-core/admin` is built on `@openvtc/trust-tasks`**, the
+  generated TypeScript bindings for the same JSON Schemas the agent's Rust is
+  generated from. Payload types, response types and task URIs come from there;
+  this package owns the call layer only — build the envelope, dispatch it,
+  unwrap the answer.
+
+  The first version of the module transcribed those shapes by hand from the
+  Rust structs. Adopting the bindings caught two mistakes that copy had already
+  made: `acl/show`'s response `entry` is **nullable** ("not in the ACL" is a
+  successful answer, and it was typed as always present), and `acl/revoke`'s
+  `scopes` has `minItems: 1`, so the empty array the hand-written version
+  accepted — and had a test asserting — is not a legal request.
+
+  Known divergence: the agent implements `internal` on `keys/create` and
+  `origin: "internal"` on a key record; the published schema has neither. Both
+  are modelled as explicit extensions rather than smuggled in as `any`.
+- **`@openvtc/pnm-core/admin` — agent administration.** The canonical `acl/*`
+  Trust Tasks (`aclGrant`, `aclList`, `aclShow`, `aclRevoke`, `aclChangeRole`)
+  plus `contextDelete` / `contextPreviewDelete`, over any `TrustTaskSender`, so
+  they work against a REST, DIDComm or TSP agent without the caller choosing.
+  Request bodies mirror `vta_sdk::protocols::acl_management` field for field —
+  those structs are `deny_unknown_fields`, so an invented field is a rejected
+  request, not a tolerated one.
+
+  **Not exported from the package root**, deliberately: this is operator
+  surface and a wallet should not ship it. Import it from the subpath. CI
+  asserts the extension's bundle contains none of its task URIs.
+
+  `acl/update` is absent until its response shape is confirmed with the Rust
+  side; a decoder written from a guess is worse than a missing function.
+- **`keys/*` in the same module** — `keysCreate`, `keysList`, `keysShow`,
+  `keysRename`, `keysRevoke`, `keysSign`. Private key material never crosses
+  this boundary: the agent derives, holds and signs, and returns public halves
+  and signatures. `keysShow` resolves to `null` for a key the agent does not
+  hold, because that is a successful answer rather than a failure.
+
+  `keys/import` is absent: its body carries the private key in one of three
+  mutually exclusive encodings (sealed, JWE, multibase), and modelling that
+  honestly needs a sealed-envelope helper this library does not yet have.
+- **`policy/*`** — `policyList`, `policyGet`, `policyUpsert`, `policyDelete`.
+  Writes are optimistically concurrent: pass the `version` the operator was
+  shown as `expectedVersion` and a racing edit is refused rather than silently
+  overwritten. `module` (Rego source) is authoritative — the agent validates it
+  and never synthesises it.
+- **Session introspection** — `whoAmI`, `sessionsList`, `sessionRevoke`.
+  `whoAmI` re-resolves roles and scopes at call time, so a role change since the
+  token was minted is visible immediately. **`sessionsList` returns the
+  caller's own sessions only**, unlike the agent's admin REST route which lists
+  everyone's.
+- **`task-surface.json` + a conformance test.** A committed snapshot of the
+  VTA's canonical Trust-Task surface (285 tasks, from `vta-sdk` 0.25.0), and a
+  test that checks this library against it: every task URI referenced here must
+  exist in the agent's surface, none may target a version the SDK has
+  deprecated, and coverage (27 of 270 task families) is a recorded number that
+  moves in a diff rather than something you discover by grepping. Refresh with
+  `npm run tasks:sync -- /path/to/vta-sdk`. It is a snapshot because `vta-sdk`
+  lives in another repository and CI here builds from a cold checkout of this
+  one — a test that needed the sibling checkout would not run where it counts.
+- **Every module directory is now a published entry point** — `/vault`,
+  `/didcomm`, `/store`, `/siop`, `/provision`, `/device`, `/inbound`,
+  `/onboarding`, `/rp-login`, `/trust-tasks`, `/http`, `/util`, alongside the
+  existing `/webauthn`, `/did` and `/vta`.
+- **`sideEffects: false`**, so a bundler can drop any entry point a consumer
+  never imports. No module does anything at import time.
+- **Two tests that enforce the structure** rather than describing it:
+  `package.module-boundaries.mjs` fails on a sideways or upward import, on any
+  cycle between modules, and on a stale entry in its own exceptions list;
+  `package.entry-points.mjs` imports every advertised entry point in plain Node
+  with no DOM, and checks the `exports` map against the source tree.
+
 ## [0.4.0] - 2026-08-17
 
 ### Changed

@@ -18,7 +18,7 @@ import type { TrustTaskSender } from "./channel.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";
 import { RestChannel } from "./rest-channel.js";
 import { buildTrustTask } from "./trust-task.js";
-import type { VtaAuthInputs } from "../vault/transport.js";
+import type { VtaAuthInputs } from "./auth.js";
 
 const TASK_CONTEXTS_LIST = "https://trusttasks.org/spec/vta/contexts/list/1.0";
 const TASK_CONTEXTS_LIST_RESPONSE = `${TASK_CONTEXTS_LIST}#response`;

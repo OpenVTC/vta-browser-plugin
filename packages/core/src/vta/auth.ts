@@ -1,7 +1,6 @@
-// Shared REST auth for the vault/* Trust Task surface — the bearer half of
-// the `RestChannel`. The `RestChannel` (vta/rest-channel.ts) owns the actual
-// POST to /api/trust-tasks + response decode; this module owns getting the
-// token it posts with:
+// REST auth for the VTA — the bearer half of the `RestChannel`. The channel
+// (vta/rest-channel.ts) owns the POST to /api/trust-tasks and the response
+// decode; this module owns getting the token it posts with:
 //
 //   - `getVtaBearer` — runs the canonical /auth/challenge → DIDComm
 //     authcrypt → /auth/ → bearer-token round-trip, with caching.
@@ -10,6 +9,12 @@
 //
 // (Only the REST transport needs any of this — TSP and DIDComm are
 // sender-authenticated by their envelope, so their channels carry no bearer.)
+//
+// This lived under `vault/` until it was the only thing making `vta` and
+// `vault` mutually dependent: every channel needs a bearer, and reaching into
+// the vault module to get one meant `import "@openvtc/pnm-core/vta"` dragged the
+// whole vault surface in behind it. Nothing here was ever vault-specific — it is
+// how you authenticate to a VTA over REST, whatever you then ask it to do.
 //
 // Bearer caching: the VTA's access token has a ~15-minute TTL, so we
 // reuse it across vault ops within a conservative window. Without this,
@@ -22,7 +27,7 @@
 // force re-auth.
 
 import { packAuthcrypt, type Identity } from "../didcomm/index.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { RemoteDidcommEndpoint } from "./didcomm.js";
 import { withFetchTimeout } from "../http/timeout-fetch.js";
 
 const VTA_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";

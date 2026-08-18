@@ -15,7 +15,7 @@
 // reuse the shared vault transport helpers.
 
 import type { Identity } from "../didcomm/index.js";
-import type { VtaAuthInputs } from "../vault/transport.js";
+import type { VtaAuthInputs } from "./auth.js";
 
 import type { TrustTaskSender } from "./channel.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";

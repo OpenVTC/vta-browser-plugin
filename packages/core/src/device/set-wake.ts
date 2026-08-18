@@ -17,7 +17,7 @@ import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { RestChannel } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
-import type { VtaAuthInputs } from "../vault/transport.js";
+import type { VtaAuthInputs } from "../vta/auth.js";
 
 const TASK_DEVICE_SET_WAKE = "https://trusttasks.org/spec/device/set-wake/0.2";
 const TASK_DEVICE_SET_WAKE_RESPONSE =

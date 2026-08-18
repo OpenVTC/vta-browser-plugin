@@ -23,7 +23,7 @@ import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { RestChannel } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
-import type { VtaAuthInputs } from "./transport.js";
+import type { VtaAuthInputs } from "../vta/auth.js";
 import type { TrustTaskEnvelope } from "../trust-tasks/sign.js";
 
 const TASK_VAULT_SIGN_TRUST_TASK = "https://trusttasks.org/spec/vault/sign-trust-task/0.2";
