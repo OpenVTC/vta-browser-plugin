@@ -55,7 +55,6 @@ import {
   OFFSCREEN_VERIFY_DID,
   RUNTIME_API_GET,
   RUNTIME_API_POST,
-  RUNTIME_INJECT_COOKIES,
   RUNTIME_VAULT_DELETE,
   RUNTIME_VAULT_LIST,
   RUNTIME_VAULT_LIST_PAGE,
@@ -141,8 +140,6 @@ import {
   type RuntimeVaultDeleteResponse,
   type RuntimeVaultListRequest,
   type RuntimeVaultListResponse,
-  type RuntimeInjectCookiesRequest,
-  type RuntimeInjectCookiesResponse,
   type RuntimeVaultListPageRequest,
   type RuntimeVaultProxyLoginPageRequest,
   type RuntimeVaultProxyLoginRequest,
@@ -162,7 +159,6 @@ import {
 import { getSettings } from "./config.js";
 import { providerMatches, syncProviderRegistration } from "./content-registration.js";
 import { AgentNameError, resolveAgentName } from "./agent-name.js";
-import { checkInjectableOrigin, cookieDomainScope } from "./cookie-scope.js";
 import {
   HOST_PERMISSION_REQUIRED,
   displayHostFor,
@@ -1710,140 +1706,6 @@ async function handleVaultProxyLoginPage(
   })) as RuntimeVaultProxyLoginResponse;
 }
 
-// Inject the cookies from a SessionBlob into the user's browser cookie jar
-// for the bound origin.
-//
-// **Scope: legacy sites only.** This path exists for one driver — Password
-// POST — where the relying party is an ordinary web app that issues a
-// server-side session and has no notion of DIDs. Every modern path avoids it
-// entirely: a SIOP entry returns an id_token the site verifies itself and
-// writes no cookies at all, and a DIDComm login never touches the jar. If the
-// vault gains a form-fill driver, this shrinks again, because letting the site
-// set its own cookie is strictly better than writing one on its behalf.
-//
-// Keeping that boundary sharp matters beyond tidiness: "the wallet writes
-// cookies for sites the user signed in to via a legacy password form" is a
-// reviewable claim, where "the wallet can write cookies" is not. The host permission for the target origin is
-// requested just-in-time by the caller (`ensureOriginPermission`), so this
-// runs with a grant the user made for this specific origin.
-//
-// Two distinct failure modes, deliberately reported separately:
-//
-//   - *Refused* — the cookie's scope does not domain-match `bindOrigin`
-//     (cookie-scope.ts). The VTA sent something it had no business sending;
-//     no write is attempted and the user is told.
-//   - *Failed* — chrome.cookies.set threw. Tolerated per-cookie: warn-log and
-//     continue, with the shortfall visible as `injected < total`.
-//
-// Collapsing the two would let a misbehaving VTA hide behind what looks like
-// a transient write error.
-async function handleInjectCookies(
-  req: RuntimeInjectCookiesRequest,
-): Promise<RuntimeInjectCookiesResponse> {
-  // https-only (loopback excepted), and the host must be real. See
-  // cookie-scope.ts for why this is checked here rather than left to
-  // chrome.cookies.set.
-  const origin = checkInjectableOrigin(req.bindOrigin);
-  if (!origin.ok) {
-    return { ok: false, error: origin.reason };
-  }
-  const baseUrl = origin.url;
-
-  // chrome.cookies.set hard-requires a host permission for the target. The
-  // popup asks for it on the injection click; if it is missing here the user
-  // declined or the grant was revoked, and writing is simply not possible.
-  if (!(await hasOriginPermission(baseUrl.origin))) {
-    return {
-      ok: false,
-      error:
-        `the wallet has not been granted access to ${displayHostFor(baseUrl.origin)}, ` +
-        `so it cannot write this session's cookies`,
-      code: HOST_PERMISSION_REQUIRED,
-      origin: baseUrl.origin,
-    };
-  }
-
-  const cookies = req.cookies ?? [];
-  let injected = 0;
-  const refused: { name: string; reason: string }[] = [];
-  for (const c of cookies) {
-    // Scope-check before the write, not after: a `domain` that does not
-    // domain-match the bound host is a cookie aimed at a site the user never
-    // authenticated to, and it must not reach chrome.cookies.set at all.
-    const scope = cookieDomainScope(c.domain, baseUrl.hostname);
-    if (scope.kind === "rejected") {
-      refused.push({ name: c.name, reason: scope.reason });
-      // eslint-disable-next-line no-console
-      console.warn(`[background] refusing out-of-scope cookie ${c.name}: ${scope.reason}`);
-      continue;
-    }
-    try {
-      // Per the chrome.cookies API:
-      //   - `url` is required and must match the cookie's resulting
-      //     host+scheme. We use the bindOrigin + the cookie's path
-      //     so chrome scopes the write correctly.
-      //   - `domain`: omit for host-only cookies (the third party
-      //     didn't set a Domain attribute), include otherwise. A
-      //     leading dot is canonical for parent-domain cookies.
-      //   - `secure`/`httpOnly`/`sameSite`/`expirationDate`: passed
-      //     through when set. `expirationDate` is a Unix timestamp
-      //     in SECONDS — we parse the cookie's Expires header (RFC
-      //     1123 / 6265) and convert.
-      const url = new URL(c.path ?? "/", baseUrl).toString();
-      type SameSite = "no_restriction" | "lax" | "strict" | "unspecified";
-      const sameSite: SameSite = (() => {
-        switch (c.sameSite) {
-          case "None":
-            return "no_restriction";
-          case "Lax":
-            return "lax";
-          case "Strict":
-            return "strict";
-          default:
-            return "unspecified";
-        }
-      })();
-      const details: chrome.cookies.SetDetails = {
-        url,
-        name: c.name,
-        value: c.value,
-        path: c.path ?? "/",
-        sameSite,
-      };
-      // Only include domain when the cookie wasn't host-only. Chrome
-      // computes the host from `url` when omitted; passing the bound
-      // origin's bare host explicitly would mis-scope cookies the
-      // third party intended to be host-only.
-      if (scope.kind === "domain") {
-        details.domain = scope.domain;
-      }
-      if (typeof c.secure === "boolean") details.secure = c.secure;
-      if (typeof c.httpOnly === "boolean") details.httpOnly = c.httpOnly;
-      if (c.expires) {
-        const t = Date.parse(c.expires);
-        if (Number.isFinite(t)) details.expirationDate = Math.floor(t / 1000);
-      }
-      await chrome.cookies.set(details);
-      injected += 1;
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[background] cookie.set failed for ${c.name}=${c.value.slice(0, 8)}…:`,
-        e,
-      );
-    }
-  }
-  return {
-    ok: true,
-    result: {
-      injected,
-      total: cookies.length,
-      bindOrigin: baseUrl.origin,
-      refused,
-    },
-  };
-}
-
 // Authenticated POST proxied through the wallet (host permission → no CORS).
 async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetResponse> {
   const base = req.params.baseUrl.replace(/\/+$/, "");
@@ -2168,15 +2030,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_VAULT_LIST_PAGE) {
     handleVaultListPage(message as RuntimeVaultListPageRequest)
-      .then(sendResponse)
-      .catch((e: unknown) =>
-        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
-      );
-    return true;
-  }
-
-  if ((message as { type?: string })?.type === RUNTIME_INJECT_COOKIES) {
-    handleInjectCookies(message as RuntimeInjectCookiesRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

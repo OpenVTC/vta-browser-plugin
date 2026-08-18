@@ -932,10 +932,10 @@ export type RuntimeVaultListResponse =
 export const RUNTIME_VAULT_UPSERT = "vta-wallet/vault-upsert" as const;
 export const RUNTIME_VAULT_DELETE = "vta-wallet/vault-delete" as const;
 export const RUNTIME_VAULT_RELEASE = "vta-wallet/vault-release" as const;
-/** popup → background: vault/proxy-login/0.1. The VTA logs into the
- *  entry's bound third party on the holder's behalf and returns a
- *  short-lived SessionBlob (cookies / headers); the long-term secret
- *  never leaves the VTA. */
+/** popup → background: vault/proxy-login/0.1. The VTA mints a
+ *  short-lived session (a SIOP id_token, carried as an `Authorization`
+ *  header) on the holder's behalf; the long-term secret never leaves
+ *  the VTA. */
 export const RUNTIME_VAULT_PROXY_LOGIN = "vta-wallet/vault-proxy-login" as const;
 /** content-script (relayed from page world) → background: same op as
  *  the popup's `RUNTIME_VAULT_PROXY_LOGIN`, but the request arrives
@@ -956,14 +956,6 @@ export const RUNTIME_VAULT_PROXY_LOGIN_PAGE =
  *  `window.vtaWallet.login()`; origin-pinned filtering lands with M3
  *  policy. */
 export const RUNTIME_VAULT_LIST_PAGE = "vta-wallet/vault-list-page" as const;
-/** popup → background: inject the cookies from a SessionBlob into the
- *  user's browser cookie jar for the bound origin (M2B.5). Used after
- *  a successful Password POST proxy-login — the wallet has a list of
- *  cookies the third party set in response to the credentialed POST,
- *  and they get written into Chrome's cookie store for the bound
- *  origin so the user can navigate there and be logged in. */
-export const RUNTIME_INJECT_COOKIES = "vta-wallet/inject-cookies" as const;
-
 /** Loose secret shape over the bridge — keeps the protocol decoupled
  *  from @openvtc/pnm-core's narrowed enum. Matches the canonical
  *  vault/_shared/0.1/vault-secret discriminator (`kind: password |
@@ -974,20 +966,6 @@ export interface VaultSecretView {
   kind: string;
   username?: string;
   password?: string;
-  /** Optional driver config on Password-kind entries — instructs the
-   *  VTA to POST these credentials at a specific URL during
-   *  vault/proxy-login/0.1. Mirrors `vault/_shared/0.1/vault-secret#/$defs/PasswordLoginConfig`.
-   *  When absent, proxy-login returns `not_proxyable` and the
-   *  consumer falls back to vault/release. */
-  loginConfig?: {
-    loginUrl: string;
-    format?: "json" | "formUrlencoded";
-    usernameField?: string;
-    passwordField?: string;
-    totpField?: string;
-    extraFields?: Record<string, string>;
-    successStatus?: number[];
-  };
   credentialId?: string;
   privateKey?: string;
   algorithm?: string;
@@ -1082,21 +1060,16 @@ export type RuntimeVaultReleaseResponse =
 /** Loose SessionBlob shape over the bridge — keeps the protocol
  *  decoupled from @openvtc/pnm-core's narrowed types. Mirrors the canonical
  *  `vault/_shared/0.1/session-blob` schema. The offscreen handler
- *  casts to @openvtc/pnm-core's `SessionBlob` at the boundary. */
+ *  casts to @openvtc/pnm-core's `SessionBlob` at the boundary.
+ *
+ *  Deliberately **no `cookies` field**, though the schema has one: the
+ *  wallet holds no `cookies` permission and writes nothing to the jar,
+ *  so a cookie jar it cannot use must not cross this bridge at all.
+ *  `doVaultProxyLogin` (offscreen) drops it before returning. */
 export interface SessionBlobView {
   sessionId: string;
   /** RFC 3339. Popup MUST schedule a wipe at this instant. */
   expiresAt: string;
-  cookies?: Array<{
-    name: string;
-    value: string;
-    domain: string;
-    path: string;
-    expires?: string;
-    secure?: boolean;
-    httpOnly?: boolean;
-    sameSite?: "Strict" | "Lax" | "None";
-  }>;
   headers?: Array<{ name: string; value: string }>;
   localStorage?: Array<{ key: string; value: string }>;
   sessionStorage?: Array<{ key: string; value: string }>;
@@ -1176,55 +1149,6 @@ export interface RuntimeVaultListPageRequest {
   params: VaultListParams;
   origin: string;
 }
-
-export interface RuntimeInjectCookiesRequest {
-  type: typeof RUNTIME_INJECT_COOKIES;
-  /** Bound origin from the SessionBlob — used to derive the URL each
-   *  cookie is written under. Per RFC 6265 §5.3, `chrome.cookies.set`
-   *  requires a URL parameter so it can scope the cookie to a real
-   *  host + scheme; the bound origin gives us both. */
-  bindOrigin: string;
-  /** Cookies harvested from the third-party login response. Shape
-   *  mirrors the SessionBlob's CookieJarEntry view from
-   *  `vault/_shared/0.1/session-blob`. */
-  cookies: SessionBlobView["cookies"];
-}
-
-export interface InjectCookiesResultView {
-  /** Number of cookies actually written to the cookie jar. May be
-   *  less than the input length if some failed (e.g. malformed
-   *  domain). Failures get warn-logged at the background. */
-  injected: number;
-  /** Number of cookies the maintainer asked us to inject. */
-  total: number;
-  /** The URL `chrome.cookies.set` was invoked with — useful for the
-   *  popup's "Open site" link after injection. */
-  bindOrigin: string;
-  /** Cookies refused by the scope check in `cookie-scope.ts` before
-   *  any write was attempted — a cookie claiming a domain that does
-   *  not domain-match `bindOrigin`.
-   *
-   *  Kept distinct from the `injected`/`total` shortfall, which also
-   *  covers ordinary write failures. A refusal means the VTA sent
-   *  something it had no business sending, so it is surfaced to the
-   *  user rather than only warn-logged: silently dropping it would
-   *  hide a misbehaving or compromised VTA. */
-  refused: { name: string; reason: string }[];
-}
-
-export type RuntimeInjectCookiesResponse =
-  | { ok: true; result: InjectCookiesResultView }
-  | {
-      ok: false;
-      error: string;
-      /** Set to `HOST_PERMISSION_REQUIRED` when the failure is only that the
-       *  user has not granted access to `origin`. The popup matches on this
-       *  code — never on `error` (R3.7) — and can recover by prompting from
-       *  its own click handler, which the service worker cannot do. */
-      code?: string;
-      /** The origin to request, present whenever `code` is set. */
-      origin?: string;
-    };
 
 // ─── background ↔ offscreen document ───
 //

@@ -97,6 +97,31 @@ export function readPublicKey() {
 }
 
 /**
+ * Store listing limits the *manifest* carries. Both are silent locally — Chrome
+ * loads an over-long description unpacked without complaint — and both are hard
+ * rejections at upload, which is the worst possible place to learn about them.
+ *
+ * `description` becomes the listing's short description (132 chars); `name` is
+ * capped at 75. Enforced here for the same reason as `assertChromeVersion`:
+ * this file is the last point where a bad value is still cheap to fix.
+ */
+export function assertStoreListingLimits({ name, description }) {
+  if (typeof name === "string" && name.length > 75) {
+    throw new Error(
+      `manifest "name" is ${name.length} characters; the Chrome Web Store ` +
+        `caps it at 75 and rejects the upload otherwise.`,
+    );
+  }
+  if (typeof description === "string" && description.length > 132) {
+    throw new Error(
+      `manifest "description" is ${description.length} characters; the Chrome ` +
+        `Web Store caps it at 132 (it is the listing's short description) and ` +
+        `rejects the upload otherwise. Trim it in manifest.json.`,
+    );
+  }
+}
+
+/**
  * Assemble the manifest. `includeKey` decides whether the pinned `key` is
  * emitted; see the header — `true` for local `dist/`, `false` for the Store.
  */
@@ -118,11 +143,13 @@ export function buildManifest({ includeKey }) {
   // readable (manifest_version, name, version, key, …) in diffs and in the
   // Store's package viewer.
   const { manifest_version, name, ...rest } = template;
-  return {
+  const manifest = {
     manifest_version,
     name,
     version,
     ...(key ? { key } : {}),
     ...rest,
   };
+  assertStoreListingLimits(manifest);
+  return manifest;
 }

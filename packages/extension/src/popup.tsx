@@ -29,7 +29,6 @@ import {
   MEDIATOR_REQUIRED,
   RUNTIME_ONBOARD_CONNECT,
   RUNTIME_ONBOARD_PREPARE,
-  RUNTIME_INJECT_COOKIES,
   RUNTIME_VAULT_DELETE,
   RUNTIME_VAULT_LIST,
   RUNTIME_VAULT_PROXY_LOGIN,
@@ -38,12 +37,10 @@ import {
   type ContextRecordView,
   type DidRecordView,
   type HolderStateInfo,
-  type InjectCookiesResultView,
   type OnboardPrepareResult,
   type RuntimeCreateContextResponse,
   type RuntimeDeriveSigningKeyIdResponse,
   type RuntimeHolderStateResponse,
-  type RuntimeInjectCookiesResponse,
   type RuntimeListContextsResponse,
   type RuntimeListDidsResponse,
   type RuntimeOnboardConnectResponse,
@@ -67,7 +64,6 @@ import { getSettings, setSettings } from "./config.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import { PrfUnlockError, runPrfUnlockCeremony } from "./webauthn-prf-unlock.js";
 import {
-  HOST_PERMISSION_REQUIRED,
   displayHostFor,
   hasOriginPermission,
   requestOriginPermission,

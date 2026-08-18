@@ -14,7 +14,6 @@ import { base64url } from "@openvtc/vti-didcomm-js";
 import {
   RUNTIME_CREATE_CONTEXT,
   RUNTIME_DERIVE_SIGNING_KEY_ID,
-  RUNTIME_INJECT_COOKIES,
   RUNTIME_LIST_CONTEXTS,
   RUNTIME_LIST_DIDS,
   RUNTIME_VAULT_DELETE,
@@ -24,12 +23,10 @@ import {
   RUNTIME_VAULT_UPSERT,
   type ContextRecordView,
   type DidRecordView,
-  type InjectCookiesResultView,
   type RuntimeCreateContextResponse,
   type RuntimeDeriveSigningKeyIdResponse,
   type RuntimeListContextsResponse,
   type RuntimeListDidsResponse,
-  type RuntimeInjectCookiesResponse,
   type RuntimeVaultDeleteResponse,
   type RuntimeVaultListResponse,
   type RuntimeVaultProxyLoginResponse,
@@ -39,11 +36,6 @@ import {
   type VaultEntryView,
   type VaultSecretView,
 } from "./bridge-protocol.js";
-import {
-  HOST_PERMISSION_REQUIRED,
-  displayHostFor,
-  requestOriginPermission,
-} from "./host-permissions.js";
 import { useActiveConnection } from "./store.js";
 import { c, t } from "./theme.js";
 
@@ -172,13 +164,13 @@ export function VaultPanel() {
     }
   }
 
-  // M2B.3 — proxy-login (the "Use" button). VTA logs in on the
-  // holder's behalf and returns a SessionBlob (cookies / headers /
-  // id_token). The popup holds the SessionBlob in memory only for the
-  // server-declared TTL and shows a redacted preview so the user can
-  // confirm the session was minted; full integration (header injection
-  // via declarativeNetRequest) lands in a follow-up that builds on the
-  // M2B.4 demo.
+  // M2B.3 — proxy-login (the "Use" button). The VTA mints a SIOP
+  // id_token on the holder's behalf and returns it inside a SessionBlob
+  // as an `Authorization` header; the long-term key never leaves the
+  // VTA. The popup holds the blob in memory only for the server-declared
+  // TTL and shows a redacted preview so the user can confirm the session
+  // was minted; full integration (header injection via
+  // declarativeNetRequest) lands in a follow-up.
   async function useEntry(entry: VaultEntryView) {
     // Hide any previously-used session or reveal — switching to a new
     // entry should wipe the prior in-memory material immediately.
@@ -199,20 +191,10 @@ export function VaultPanel() {
       const parsed = Date.parse(res.result.expiresAt);
       const expiresAtMs = Number.isFinite(parsed) ? parsed : Date.now() + 60_000;
 
-      // Cookie injection deliberately does NOT happen here.
-      //
-      // It used to: a SessionBlob carrying cookies (Password POST driver
-      // path, M2B.5) was written straight into the jar as a side effect of
-      // this call. Two reasons that moved to an explicit button in
-      // UsedSessionView:
-      //
-      //  - Writing cookies received over the wire into the user's jar with
-      //    no visible action is, in shape, indistinguishable from session
-      //    hijacking. A click makes the hand-off the user's act. It is also
-      //    the difference a Web Store reviewer can actually see.
-      //  - `chrome.permissions.request` for the bound origin needs a live
-      //    user gesture, which no longer exists this far into an async
-      //    handler. The button's own click handler has one.
+      // Nothing is written to the browser here, or anywhere else in this
+      // flow: the wallet holds no `cookies` permission, and the offscreen
+      // handler discards any cookie jar the VTA returns. The session is
+      // shown, and it is the user's to copy — it is never installed.
       setUsedSession({
         entryId: entry.id,
         sessionBlob: res.result.sessionBlob,
@@ -378,17 +360,17 @@ export function VaultPanel() {
                 />
               ) : (
                 <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                  {(e.secretKind === "didSelfIssued" ||
-                    e.secretKind === "password") && (
+                  {/* SIOP entries only. Password entries used to offer this
+                      too, driving the VTA's password-POST login and writing
+                      the resulting cookies into the jar; that legacy path is
+                      gone, so a password entry is browser-fill only and its
+                      action is Reveal. */}
+                  {e.secretKind === "didSelfIssued" && (
                     <button
                       onClick={() => void useEntry(e)}
                       disabled={busy}
                       style={{ fontSize: 11 }}
-                      title={
-                        e.secretKind === "didSelfIssued"
-                          ? "VTA mints a SIOP id_token on your behalf — long-term key never leaves the VTA"
-                          : "VTA logs in on your behalf and injects the session cookies — the password never reaches this browser"
-                      }
+                      title="VTA mints a SIOP id_token on your behalf — long-term key never leaves the VTA"
                     >
                       🔑 Use
                     </button>
@@ -431,15 +413,21 @@ export function VaultPanel() {
 // (Passkey, OAuth, BearerToken, Custom) follow when there's a UX
 // pattern for them; for now the canonical schema + the @openvtc/pnm-core
 // vaultUpsertRest helper accept all eight kinds.
-// ─── Add-entry form (M2A.6 password / M2B.5 password+loginConfig / M2B.4 did-self-issued) ───
+// ─── Add-entry form (M2A.6 password / M2B.4 did-self-issued) ───
 // The form owns the kind-specific shape: it decides which targets[]
 // entry to construct, builds the cleartext secret, and emits a single
 // ready-to-send object to the parent. The parent just hands that off
 // to RUNTIME_VAULT_UPSERT — no per-kind branching in the dispatcher.
 //
-// Currently supports `password` (with optional `loginConfig`) and
-// `did-self-issued`. Passkey / OAuth / DIDComm-peer / SSH / custom
-// follow when there's an end-to-end flow that exercises them.
+// Currently supports `password` and `did-self-issued`. Passkey / OAuth /
+// DIDComm-peer / SSH / custom follow when there's an end-to-end flow that
+// exercises them.
+//
+// A password entry is browser-fill only. It deliberately offers no
+// `loginConfig`, which is what told the VTA to POST the credentials at a
+// third-party login form and hand back the resulting cookie jar — the
+// wallet no longer writes cookies, so an entry configured that way would
+// mint a session it could not use.
 
 type AddEntryOutput = {
   label: string;
@@ -511,9 +499,6 @@ function AddEntryForm({
   const [showPassword, setShowPassword] = useState(false);
 
   // Optional auto-login config (M2B.5) for password entries
-  const [loginConfigEnabled, setLoginConfigEnabled] = useState(false);
-  const [loginUrl, setLoginUrl] = useState("");
-  const [loginFormat, setLoginFormat] = useState<"json" | "formUrlencoded">("json");
 
   // did-self-issued fields
   const [rpDid, setRpDid] = useState("");
@@ -614,11 +599,7 @@ function AddEntryForm({
   }, [kind, contextId]);
 
   const passwordValid =
-    label.trim() &&
-    contextId.trim() &&
-    origin.trim() &&
-    password.length > 0 &&
-    (!loginConfigEnabled || loginUrl.trim().length > 0);
+    label.trim() && contextId.trim() && origin.trim() && password.length > 0;
   const didSelfIssuedValid =
     label.trim() &&
     contextId.trim() &&
@@ -669,14 +650,6 @@ function AddEntryForm({
         password,
         ...(username ? { username } : {}),
         ...(notes ? { secureNotes: notes } : {}),
-        ...(loginConfigEnabled
-          ? {
-              loginConfig: {
-                loginUrl: loginUrl.trim(),
-                format: loginFormat,
-              },
-            }
-          : {}),
       };
       return {
         label,
@@ -842,43 +815,6 @@ function AddEntryForm({
               </button>
             </div>
           </label>
-          <label
-            style={{ display: "flex", gap: 6, alignItems: "center", color: "var(--w-muted)" }}
-            title="When enabled, the VTA POSTs these credentials to loginUrl during vault/proxy-login. Without this, the entry is browser-fill only."
-          >
-            <input
-              type="checkbox"
-              checked={loginConfigEnabled}
-              onChange={(e) => setLoginConfigEnabled(e.target.checked)}
-            />
-            Auto-login (proxy-login via VTA)
-          </label>
-          {loginConfigEnabled && (
-            <>
-              <label style={{ display: "grid", gap: 2 }}>
-                <span style={{ color: "var(--w-muted)" }}>Login URL</span>
-                <input
-                  value={loginUrl}
-                  onChange={(e) => setLoginUrl(e.target.value)}
-                  placeholder="http://127.0.0.1:4040/api/login"
-                  style={mono}
-                />
-              </label>
-              <label style={{ display: "grid", gap: 2 }}>
-                <span style={{ color: "var(--w-muted)" }}>Body format</span>
-                <select
-                  value={loginFormat}
-                  onChange={(e) =>
-                    setLoginFormat(e.target.value as "json" | "formUrlencoded")
-                  }
-                  style={{ fontSize: 11 }}
-                >
-                  <option value="json">JSON</option>
-                  <option value="formUrlencoded">form-urlencoded</option>
-                </select>
-              </label>
-            </>
-          )}
         </>
       )}
 
@@ -1086,6 +1022,12 @@ function RevealedSecretView({
 // with a copy button so a developer can paste it into a curl / RP test
 // flow. The parent's setTimeout wipes `usedSession` at `expiresAtMs`;
 // this component only renders + counts down — it never persists.
+//
+// It also never *installs* the session. An earlier version had a "Sign in
+// to <site>" button that wrote the blob's cookie jar into the browser via
+// `chrome.cookies.set`; that path, the `cookies` permission behind it, and
+// the scope checks guarding it are all gone. Read-only display is the
+// whole contract now, which is why there is nothing here to scope-check.
 function UsedSessionView({
   sessionBlob,
   expiresAtMs,
@@ -1095,12 +1037,6 @@ function UsedSessionView({
   expiresAtMs: number;
   onDismiss: () => void;
 }): React.JSX.Element {
-  // Injection state is local, and starts empty: nothing is written to the
-  // cookie jar until the user clicks. See the note at the proxy-login call
-  // site for why this is not done automatically.
-  const [injection, setInjection] = useState<InjectCookiesResultView | null>(null);
-  const [injectionWarning, setInjectionWarning] = useState<string | null>(null);
-  const [injectBusy, setInjectBusy] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(
     Math.max(0, Math.round((expiresAtMs - Date.now()) / 1000)),
   );
@@ -1116,75 +1052,10 @@ function UsedSessionView({
     (h) => h.name.toLowerCase() === "authorization",
   );
   const headerCount = sessionBlob.headers?.length ?? 0;
-  const cookieCount = sessionBlob.cookies?.length ?? 0;
 
   function openBoundOrigin() {
     if (sessionBlob.bindOrigin) {
       void chrome.tabs.create({ url: sessionBlob.bindOrigin });
-    }
-  }
-
-  /**
-   * Write the SessionBlob's cookies into the jar for the bound origin, then
-   * open it. Runs only from this button's click.
-   *
-   * `requestOriginPermission` must be the FIRST await: Chrome only honours
-   * `permissions.request` while the user gesture is live, and an earlier
-   * `await` would spend it. Everything else follows the grant.
-   */
-  async function signInToBoundOrigin(): Promise<void> {
-    const { bindOrigin } = sessionBlob;
-    const cookies = sessionBlob.cookies ?? [];
-    if (!bindOrigin || cookies.length === 0) return;
-
-    setInjectBusy(true);
-    setInjectionWarning(null);
-    try {
-      const granted = await requestOriginPermission(bindOrigin);
-      if (!granted) {
-        setInjectionWarning(
-          `Access to ${displayHostFor(bindOrigin)} was not granted, so no cookies were written.`,
-        );
-        return;
-      }
-
-      const res = (await chrome.runtime.sendMessage({
-        type: RUNTIME_INJECT_COOKIES,
-        bindOrigin,
-        cookies,
-      })) as RuntimeInjectCookiesResponse;
-
-      if (!res.ok) {
-        // Match the code, never the message (R3.7). A revoked or racing
-        // grant is the one failure worth distinguishing — it is recoverable
-        // by clicking again, and saying so beats a bare error string.
-        setInjectionWarning(
-          res.code === HOST_PERMISSION_REQUIRED
-            ? `The wallet still has no access to ${displayHostFor(bindOrigin)}. Try again and approve the prompt.`
-            : `Could not write cookies: ${res.error}`,
-        );
-        return;
-      }
-
-      setInjection(res.result);
-      if (res.result.refused.length > 0) {
-        // A cookie aimed at a domain that does not match the bound origin is
-        // the VTA overstepping, not a transient glitch — name it.
-        const names = res.result.refused.map((r) => r.name).join(", ");
-        setInjectionWarning(
-          `Refused ${res.result.refused.length} out-of-scope cookie(s) not belonging to ` +
-            `${displayHostFor(bindOrigin)}: ${names}`,
-        );
-      } else if (res.result.injected < res.result.total) {
-        setInjectionWarning(
-          `Wrote ${res.result.injected} of ${res.result.total} cookies; some failed. Check console for details.`,
-        );
-      }
-      openBoundOrigin();
-    } catch (e) {
-      setInjectionWarning(e instanceof Error ? e.message : String(e));
-    } finally {
-      setInjectBusy(false);
     }
   }
 
@@ -1218,8 +1089,7 @@ function UsedSessionView({
         <code style={mono}>{sessionBlob.sessionId.slice(0, 12)}…</code>
       </div>
       <div style={{ color: "var(--w-muted)", fontSize: 10 }}>
-        {headerCount} header{headerCount === 1 ? "" : "s"} ·{" "}
-        {cookieCount} cookie{cookieCount === 1 ? "" : "s"}
+        {headerCount} header{headerCount === 1 ? "" : "s"}
         {sessionBlob.refreshHint && <> · refresh: {sessionBlob.refreshHint}</>}
       </div>
       {authHeader && (
@@ -1231,34 +1101,11 @@ function UsedSessionView({
           <CopyButton text={authHeader.value} />
         </div>
       )}
-      {injection && (
-        <div style={{ marginTop: 6, padding: 4, background: "var(--w-ok-soft)", borderRadius: 3 }}>
-          🍪 Injected {injection.injected}/{injection.total} cookies into{" "}
-          <code style={mono}>{injection.bindOrigin}</code>
-        </div>
-      )}
-      {injectionWarning && (
-        <div style={{ color: "var(--w-warn)", fontSize: 10 }}>{injectionWarning}</div>
-      )}
       <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-        {/* The cookie hand-off, gated behind an explicit click. Chrome will
-            ask for access to the bound origin the first time; the label
-            names the host so the prompt that follows is not a surprise. */}
-        {sessionBlob.bindOrigin && cookieCount > 0 && !injection && (
-          <button
-            onClick={() => void signInToBoundOrigin()}
-            disabled={injectBusy}
-            style={{ fontSize: 10 }}
-            title={
-              `Writes this session's ${cookieCount} cookie(s) into your browser for ` +
-              `${displayHostFor(sessionBlob.bindOrigin)} and opens the site. ` +
-              `Chrome will ask you to grant the wallet access to that site.`
-            }
-          >
-            {injectBusy ? "Signing in…" : `Sign in to ${displayHostFor(sessionBlob.bindOrigin)}`}
-          </button>
-        )}
-        {sessionBlob.bindOrigin && injection && injection.injected > 0 && (
+        {/* Opens the site, and only that. Nothing of this session is
+            installed into the browser on the way — the user carries the
+            token across by copying it. */}
+        {sessionBlob.bindOrigin && (
           <button onClick={openBoundOrigin} style={{ fontSize: 10 }}>
             Open site
           </button>
