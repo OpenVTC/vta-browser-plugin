@@ -178,7 +178,7 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
     [...REFERENCED.keys()].map(family).filter((f) => canonicalFamilies.has(f)),
   );
 
-  // 55 of 270 as of vta-sdk 0.25.0: acl/* (6), keys/* (6), vault/* (6),
+  // 55 of 161 as of vta-sdk 0.25.0: acl/* (6), keys/* (6), vault/* (6),
   // vta/did-templates/* (6), policy/* (4), vta/contexts/* (4),
   // vta/passkey-vms/* (4), auth/* (4 — authenticate, whoami, sessions/list,
   // revoke-session), device/* (4 — list, disable, wipe, set-wake),

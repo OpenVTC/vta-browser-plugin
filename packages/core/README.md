@@ -95,7 +95,7 @@ together:
   rename, a task that moved — fails the build here rather than at a user;
 - a task version the SDK has **deprecated** fails too, during the window where
   the agent still accepts it and everything appears to work;
-- **coverage is a recorded number** (55 of 270 task families today), so a gap
+- **coverage is a recorded number** (55 of 161 task families today), so a gap
   that grows or shrinks shows up in a diff someone reviews.
 
 Refresh the snapshot against a local checkout:

@@ -55,10 +55,22 @@ const CONST_DECL = /(?:pub\s+)?const\s+([A-Z0-9_]+)\s*:\s*&'?\w*\s*str\s*=\s*"([
 /** @type {Map<string, {uri: string, consts: Set<string>, deprecated?: string, files: Set<string>}>} */
 const tasks = new Map();
 
+const SPEC_PREFIX = "https://trusttasks.org/spec/";
+
 function record(uri, file) {
+  // Only task URIs. `CONST_DECL` matches every `const NAME: &str = "…"` in the
+  // crate, which is most of a string table — service names, DID examples, error
+  // codes — and an earlier version of this script recorded all of them. That
+  // inflated the snapshot by a third and, worse, inflated the denominator the
+  // coverage check reports, so the gap looked bigger than it is.
+  if (!uri.startsWith(SPEC_PREFIX)) return null;
   // A `#response` URI is the same task; the response half is derived, and
   // recording both would double the surface for no gain.
   const base = uri.replace(/#response$/, "");
+  // A canonical task URI ends in its version. What does not is a family prefix
+  // other constants are built from (`…/spec/acl/`), which is a building block
+  // rather than something callable.
+  if (!/\/\d+\.\d+$/.test(base)) return null;
   if (!tasks.has(base)) {
     tasks.set(base, { uri: base, consts: new Set(), files: new Set() });
   }
@@ -85,6 +97,10 @@ for (const file of rustFiles(sdkSrc)) {
     const decl = CONST_DECL.exec(line);
     if (decl) {
       const entry = record(decl[2], rel);
+      if (!entry) {
+        pendingDeprecation = null;
+        continue;
+      }
       entry.consts.add(decl[1]);
       if (pendingDeprecation) {
         const note = /note\s*=\s*"([^"]*)"/.exec(pendingDeprecation);

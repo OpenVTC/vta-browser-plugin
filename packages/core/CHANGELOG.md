@@ -99,10 +99,10 @@ For history before this file, see `git log` on `packages/core`.
   caller's own sessions only**, unlike the agent's admin REST route which lists
   everyone's.
 - **`task-surface.json` + a conformance test.** A committed snapshot of the
-  VTA's canonical Trust-Task surface (285 tasks, from `vta-sdk` 0.25.0), and a
+  VTA's canonical Trust-Task surface (175 tasks, from `vta-sdk` 0.25.0), and a
   test that checks this library against it: every task URI referenced here must
   exist in the agent's surface, none may target a version the SDK has
-  deprecated, and coverage (27 of 270 task families) is a recorded number that
+  deprecated, and coverage (of 161 task families) is a recorded number that
   moves in a diff rather than something you discover by grepping. Refresh with
   `npm run tasks:sync -- /path/to/vta-sdk`. It is a snapshot because `vta-sdk`
   lives in another repository and CI here builds from a cold checkout of this

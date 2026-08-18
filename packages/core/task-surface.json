@@ -7,424 +7,10 @@
   },
   "tasks": [
     {
-      "uri": " [unverified]",
-      "consts": [
-        "UNVERIFIED_SUFFIX"
-      ]
-    },
-    {
-      "uri": "-----BEGIN VTA SEALED BUNDLE-----",
-      "consts": [
-        "BEGIN"
-      ]
-    },
-    {
-      "uri": "-----END VTA SEALED BUNDLE-----",
-      "consts": [
-        "END"
-      ]
-    },
-    {
-      "uri": "#didcomm",
-      "consts": [
-        "DIDCOMM_FRAGMENT"
-      ]
-    },
-    {
-      "uri": "#trust-registry",
-      "consts": [
-        "SERVICE_ID_FRAGMENT"
-      ]
-    },
-    {
-      "uri": "#tsp",
-      "consts": [
-        "TSP_FRAGMENT"
-      ]
-    },
-    {
-      "uri": "a3f1c09b7e2d4856a3f1c09b7e2d4856",
-      "consts": [
-        "CHALLENGE"
-      ]
-    },
-    {
-      "uri": "AclSwapRequest",
-      "consts": [
-        "SWAP_TYPE"
-      ]
-    },
-    {
-      "uri": "approvals",
-      "consts": [
-        "DECLARATIVE_POLICY_ID"
-      ]
-    },
-    {
-      "uri": "Declarative approvals",
-      "consts": [
-        "DECLARATIVE_POLICY_NAME"
-      ]
-    },
-    {
-      "uri": "did-host-didcomm",
-      "consts": [
-        "BUILTIN_DID_HOST_DIDCOMM_TEMPLATE"
-      ]
-    },
-    {
-      "uri": "did-host-http",
-      "consts": [
-        "BUILTIN_DID_HOST_HTTP_TEMPLATE"
-      ]
-    },
-    {
-      "uri": "did-host-http-didcomm",
-      "consts": [
-        "BUILTIN_DID_HOST_HTTP_DIDCOMM_TEMPLATE"
-      ]
-    },
-    {
-      "uri": "did-host-http-tsp",
-      "consts": [
-        "BUILTIN_DID_HOST_HTTP_TSP_TEMPLATE"
-      ]
-    },
-    {
-      "uri": "did-host-tsp",
-      "consts": [
-        "BUILTIN_DID_HOST_TSP_TEMPLATE"
-      ]
-    },
-    {
-      "uri": "did:key:z6MkfrQjWzPQrTuVwXyZaBcDeFgHiJkLmNoPqRsTuVwXyZ4rT",
-      "consts": [
-        "DID_A"
-      ]
-    },
-    {
-      "uri": "did:web:mediator.example",
-      "consts": [
-        "MEDIATOR"
-      ]
-    },
-    {
-      "uri": "did:web:vta.example",
-      "consts": [
-        "VTA"
-      ]
-    },
-    {
-      "uri": "did:webvh:mediator.test",
-      "consts": [
-        "MEDIATOR"
-      ]
-    },
-    {
-      "uri": "did:webvh:QmOtherXyZ123:evil.example",
-      "consts": [
-        "THEIRS"
-      ]
-    },
-    {
-      "uri": "did:webvh:QmScidAbCdEfGh:example.com",
-      "consts": [
-        "OURS"
-      ]
-    },
-    {
-      "uri": "did:webvh:QmTS3:webvh.example.com:mediator",
-      "consts": [
-        "MEDIATOR"
-      ]
-    },
-    {
-      "uri": "did:webvh:scid:vta.example",
-      "consts": [
-        "AUD"
-      ]
-    },
-    {
-      "uri": "did:webvh:tsp-mediator.test",
-      "consts": [
-        "TSP_MEDIATOR"
-      ]
-    },
-    {
-      "uri": "didcomm-mediator",
-      "consts": [
-        "BUILTIN_MEDIATOR_TEMPLATE"
-      ]
-    },
-    {
-      "uri": "DIDCommMessaging",
-      "consts": [
-        "DIDCOMM_SERVICE_TYPE"
-      ]
-    },
-    {
-      "uri": "e.p.msg.bad-request",
-      "consts": [
-        "BAD_REQUEST"
-      ]
-    },
-    {
-      "uri": "e.p.msg.conflict",
-      "consts": [
-        "CONFLICT"
-      ]
-    },
-    {
-      "uri": "e.p.msg.forbidden",
-      "consts": [
-        "FORBIDDEN"
-      ]
-    },
-    {
-      "uri": "e.p.msg.internal-error",
-      "consts": [
-        "INTERNAL"
-      ]
-    },
-    {
-      "uri": "e.p.msg.not-found",
-      "consts": [
-        "NOT_FOUND"
-      ]
-    },
-    {
-      "uri": "e.p.msg.unauthorized",
-      "consts": [
-        "UNAUTHORIZED"
-      ]
-    },
-    {
-      "uri": "https://didcomm.org/messagepickup/3.0/status",
-      "consts": [
-        "MESSAGE_PICKUP_STATUS_TYPE"
-      ]
-    },
-    {
-      "uri": "https://didcomm.org/report-problem/2.0/problem-report",
-      "consts": [
-        "PROBLEM_REPORT_TYPE"
-      ]
-    },
-    {
-      "uri": "https://didcomm.org/trust-ping/2.0/ping",
-      "consts": [
-        "TRUST_PING_TYPE"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/acl-management/1.0",
-      "consts": [
-        "PROTOCOL_BASE"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/acl-management/1.0/create-acl",
-      "consts": [
-        "CREATE_ACL"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/acl-management/1.0/delete-acl",
-      "consts": [
-        "DELETE_ACL"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/acl-management/1.0/get-acl",
-      "consts": [
-        "GET_ACL"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/acl-management/1.0/list-acl",
-      "consts": [
-        "LIST_ACL"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/acl-management/1.0/swap-acl",
-      "consts": [
-        "SWAP_ACL"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/acl-management/1.0/update-acl",
-      "consts": [
-        "UPDATE_ACL"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/audit-management/1.0",
-      "consts": [
-        "PROTOCOL_BASE"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/audit-management/1.0/list-logs",
-      "consts": [
-        "LIST_LOGS"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/backup-management/1.0",
-      "consts": [
-        "PROTOCOL_BASE"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/context-management/1.0",
-      "consts": [
-        "PROTOCOL_BASE"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/did-management/1.0",
-      "consts": [
-        "PROTOCOL_BASE"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/did-template-management/1.0",
-      "consts": [
-        "PROTOCOL_BASE"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/discovery/1.0",
-      "consts": [
-        "PROTOCOL_BASE"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/key-management/1.0",
-      "consts": [
-        "PROTOCOL_BASE"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/key-management/1.0/create-key",
-      "consts": [
-        "CREATE_KEY"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/key-management/1.0/get-key",
-      "consts": [
-        "GET_KEY"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/key-management/1.0/import-key",
-      "consts": [
-        "IMPORT_KEY"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/key-management/1.0/list-keys",
-      "consts": [
-        "LIST_KEYS"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/key-management/1.0/rename-key",
-      "consts": [
-        "RENAME_KEY"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/key-management/1.0/revoke-key",
-      "consts": [
-        "REVOKE_KEY"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/seed-management/1.0",
-      "consts": [
-        "PROTOCOL_BASE"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/seed-management/1.0/list-seeds",
-      "consts": [
-        "LIST_SEEDS"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/vta-management/1.0",
-      "consts": [
-        "PROTOCOL_BASE"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/vta-management/1.0/get-config",
-      "consts": [
-        "GET_CONFIG"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/protocols/vta-management/1.0/restart",
-      "consts": [
-        "RESTART"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/vta/1.0/attestation/request",
-      "consts": [
-        "REQUEST_ATTESTATION"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/vta/1.0/attestation/result",
-      "consts": [
-        "ATTESTATION_RESULT"
-      ]
-    },
-    {
-      "uri": "https://firstperson.network/vta/1.0/attestation/status",
-      "consts": [
-        "GET_TEE_STATUS"
-      ]
-    },
-    {
-      "uri": "https://openvtc.org/contexts/bootstrap-v1",
-      "consts": [
-        "BOOTSTRAP_CONTEXT_URL"
-      ]
-    },
-    {
-      "uri": "https://openvtc.org/contexts/vta-authorization-v1",
-      "consts": [
-        "VTA_AUTHORIZATION_CONTEXT_URL"
-      ]
-    },
-    {
-      "uri": "https://trustoverip.org/profiles/trqp/v2",
-      "consts": [
-        "TRQP_PROFILE_URI"
-      ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/",
-      "consts": [
-        "PREFIX"
-      ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/acl/"
-    },
-    {
       "uri": "https://trusttasks.org/spec/acl/change-role/0.1",
       "consts": [
         "TASK_ACL_CHANGE_ROLE_0_1"
       ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/acl/grant"
     },
     {
       "uri": "https://trusttasks.org/spec/acl/grant/0.1",
@@ -432,12 +18,6 @@
         "ACL_GRANT",
         "TASK_ACL_GRANT_0_1"
       ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/acl/grant/0.1\\"
-    },
-    {
-      "uri": "https://trusttasks.org/spec/acl/grant/v1"
     },
     {
       "uri": "https://trusttasks.org/spec/acl/list/0.1",
@@ -471,16 +51,10 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/audit/"
-    },
-    {
       "uri": "https://trusttasks.org/spec/audit/list/0.1",
       "consts": [
         "TASK_AUDIT_LIST_0_1"
       ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/auth/"
     },
     {
       "uri": "https://trusttasks.org/spec/auth/authenticate/0.1",
@@ -534,9 +108,6 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/config/"
-    },
-    {
       "uri": "https://trusttasks.org/spec/config/patch/0.1",
       "consts": [
         "TASK_CONFIG_PATCH_0_1"
@@ -547,9 +118,6 @@
       "consts": [
         "TASK_CONFIG_SHOW_0_1"
       ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/consent/"
     },
     {
       "uri": "https://trusttasks.org/spec/consent/approver-list/1.0"
@@ -582,9 +150,6 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/credential-exchange/"
-    },
-    {
       "uri": "https://trusttasks.org/spec/credential-exchange/issue/0.1",
       "consts": [
         "ISSUE"
@@ -595,9 +160,6 @@
       "consts": [
         "OFFER"
       ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/credential-exchange/pending/"
     },
     {
       "uri": "https://trusttasks.org/spec/credential-exchange/pending/approve/0.1"
@@ -631,9 +193,6 @@
       "consts": [
         "REQUEST"
       ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/device/"
     },
     {
       "uri": "https://trusttasks.org/spec/device/disable/0.1",
@@ -698,9 +257,6 @@
       "consts": [
         "TASK_DEVICE_WIPE_0_1"
       ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/did-management/"
     },
     {
       "uri": "https://trusttasks.org/spec/did-management/did/change-owner/0.1"
@@ -772,9 +328,6 @@
       "uri": "https://trusttasks.org/spec/did-management/server/stats-sync/0.1"
     },
     {
-      "uri": "https://trusttasks.org/spec/keys/"
-    },
-    {
       "uri": "https://trusttasks.org/spec/keys/create/0.1",
       "consts": [
         "TASK_KEYS_CREATE_0_1"
@@ -823,16 +376,10 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/messaging/"
-    },
-    {
       "uri": "https://trusttasks.org/spec/messaging/ping/0.1",
       "consts": [
         "TASK_MESSAGING_PING_0_1"
       ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/policy/"
     },
     {
       "uri": "https://trusttasks.org/spec/policy/delete/0.1",
@@ -859,9 +406,6 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/provision/"
-    },
-    {
       "uri": "https://trusttasks.org/spec/provision/integration/0.1"
     },
     {
@@ -871,19 +415,10 @@
       "uri": "https://trusttasks.org/spec/push/wake/0.2"
     },
     {
-      "uri": "https://trusttasks.org/spec/task-consent/"
-    },
-    {
       "uri": "https://trusttasks.org/spec/task-consent/decision/0.1"
     },
     {
       "uri": "https://trusttasks.org/spec/task-consent/request/0.1"
-    },
-    {
-      "uri": "https://trusttasks.org/spec/vault/"
-    },
-    {
-      "uri": "https://trusttasks.org/spec/vault/_shared/0.1/vault-secret"
     },
     {
       "uri": "https://trusttasks.org/spec/vault/archive/0.1",
@@ -927,9 +462,6 @@
         "TASK_VAULT_GET_0_1"
       ],
       "deprecated": "0.1 is superseded by the 0.2 wire form (response enums use camelCase values). The VTA still accepts 0.1 during the migration window but it will be removed in a future release — prefer TASK_VAULT_GET_0_2."
-    },
-    {
-      "uri": "https://trusttasks.org/spec/vault/get/0.1#reject"
     },
     {
       "uri": "https://trusttasks.org/spec/vault/get/0.2",
@@ -1012,9 +544,6 @@
       "consts": [
         "TASK_VAULT_UPSERT_0_2"
       ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/vta/"
     },
     {
       "uri": "https://trusttasks.org/spec/vta/attestation/report/1.0"
@@ -1257,129 +786,6 @@
       "uri": "https://trusttasks.org/spec/vtc/members/vmc/0.1",
       "consts": [
         "MEMBER_VMC_TYPE"
-      ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/webvh/"
-    },
-    {
-      "uri": "https://vta.example/api",
-      "consts": [
-        "REST"
-      ]
-    },
-    {
-      "uri": "https://vta.test",
-      "consts": [
-        "REST"
-      ]
-    },
-    {
-      "uri": "https://www.w3.org/ns/credentials/v2",
-      "consts": [
-        "VC_V2_CONTEXT_URL"
-      ]
-    },
-    {
-      "uri": "MembershipCredential",
-      "consts": [
-        "VERIFIABLE_MEMBERSHIP_CREDENTIAL_TYPE"
-      ]
-    },
-    {
-      "uri": "openvtc.approvals",
-      "consts": [
-        "EXT_KEY_RULES"
-      ]
-    },
-    {
-      "uri": "openvtc.approver-sets",
-      "consts": [
-        "EXT_KEY_APPROVER_SETS"
-      ]
-    },
-    {
-      "uri": "provision/integration:context_required",
-      "consts": [
-        "PROVISION_CONTEXT_REQUIRED"
-      ]
-    },
-    {
-      "uri": "SERVICE_DIDCOMM",
-      "consts": [
-        "DIDCOMM_SERVICE_VAR"
-      ]
-    },
-    {
-      "uri": "SERVICE_TRUST_REGISTRY",
-      "consts": [
-        "TRUST_REGISTRY_SERVICE_VAR"
-      ]
-    },
-    {
-      "uri": "SERVICE_TSP",
-      "consts": [
-        "TSP_SERVICE_VAR"
-      ]
-    },
-    {
-      "uri": "sha256",
-      "consts": [
-        "DEFAULT_DIGEST_ALGO"
-      ]
-    },
-    {
-      "uri": "test-challenge-0123456789abcdef",
-      "consts": [
-        "TEST_CHALLENGE"
-      ]
-    },
-    {
-      "uri": "TRQPRest",
-      "consts": [
-        "TRQP_REST_SERVICE_TYPE"
-      ]
-    },
-    {
-      "uri": "Trust-Task",
-      "consts": [
-        "TRUST_TASK_HEADER"
-      ]
-    },
-    {
-      "uri": "TrustRegistry",
-      "consts": [
-        "TRUST_REGISTRY_SERVICE_TYPE"
-      ]
-    },
-    {
-      "uri": "TSPTransport",
-      "consts": [
-        "TSP_SERVICE_TYPE"
-      ]
-    },
-    {
-      "uri": "VerifiablePresentation",
-      "consts": [
-        "VP_TYPE"
-      ]
-    },
-    {
-      "uri": "vta-admin",
-      "consts": [
-        "BUILTIN_VTA_ADMIN_TEMPLATE"
-      ]
-    },
-    {
-      "uri": "VTARest",
-      "consts": [
-        "REST_SERVICE_TYPE"
-      ]
-    },
-    {
-      "uri": "X-Backup-Token",
-      "consts": [
-        "TOKEN_HEADER"
       ]
     }
   ]
