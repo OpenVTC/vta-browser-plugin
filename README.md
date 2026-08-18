@@ -327,44 +327,45 @@ only, and the page provider is registered at runtime for granted origins
 (`src/content-registration.ts`) — so the install prompt no longer asks to read
 and change your data on all websites.
 
-A grant therefore means three things at once: the wallet may talk to that host,
-may write its cookies, and `window.vtaWallet` exists on its pages. Turning a
-site off in **Sites** stops all three.
+A grant means two things at once: the wallet may talk to that host, and
+`window.vtaWallet` exists on its pages. Turning a site off in **Sites** stops
+both.
 
 The wallet asks for one origin at a time, at the moment it needs it:
 
 - **Connecting to a VTA** — the host is read out of the `did:webvh` before any
   request is made, and Chrome prompts on the Prepare click. Needed because
   vta-service applies an origin-allowlist CORS layer.
-- **Signing in to a bound origin** — the "Sign in to …" button on a ready
-  session prompts for that site, then writes the SessionBlob's cookies.
 - **Visiting a site for the first time** — the popup shows "Enable on
   <site>". Until then the site cannot see the wallet at all, so its sign-in
   button does nothing; enabling registers the provider and reloads the page.
-  Cookies are never written automatically, and never for a domain that does
-  not domain-match the bound origin (`src/cookie-scope.ts`).
 
 Resolving DIDs needs no grant: the did:webvh hosting service serves public
 resolution with `Access-Control-Allow-Origin: *`. A did:webvh host behind a
 restrictive CORS policy is the known gap — it surfaces in the consent prompt
 as an unresolved DID, which fails closed.
 
-### Cookie injection is for legacy relying parties only
+### The wallet writes nothing into your browser
 
-The normal sign-in path writes no cookies: a SIOPv2 sign-in returns a signed
-`id_token` the site verifies itself, and a DIDComm login never touches the jar.
-`chrome.cookies.set` serves exactly one case — a relying party that is an
-ordinary web app with a server-side session and no notion of DIDs.
+A sign-in produces a signed `id_token` the site verifies for itself by
+resolving your published DID document; a DIDComm login never touches browser
+state either. The extension holds no `cookies` permission and calls no cookie
+API — `chrome.cookies.set` appears nowhere in the source.
 
-That boundary is enforced, not just intended (`src/cookie-scope.ts`): the write
-happens only on an explicit click, only for an origin the user granted at that
-moment, only over HTTPS (bar loopback), and only for cookies whose domain
-RFC 6265 domain-matches the bound origin. Nothing is ever read from the jar.
+It did once. A relying party that was an ordinary web app with a server-side
+session and no notion of DIDs could have its login performed by the VTA, which
+returned a `SessionBlob` whose cookie jar the wallet wrote into the browser
+(guarded by scope checks in what was `src/cookie-scope.ts`). That legacy path
+is gone: the `cookies` permission is off the manifest, the vault's password
+entries are browser-fill only, and any cookie jar a VTA still returns is
+dropped in the offscreen document before it can cross into the popup
+(`doVaultProxyLogin`, `src/offscreen.ts`).
 
-Keep the boundary sharp when changing this code — see
-[docs/web-store-review.md](docs/web-store-review.md). "The wallet writes cookies
-for sites you signed in to through a legacy password form" is a claim a
-reviewer can check; "the wallet can write cookies" is not.
+What remains of `vault/proxy-login` is the modern half — the VTA mints a SIOP
+`id_token` on your behalf and the long-term key never leaves it. The wallet
+displays that session; it never installs it. Keep it that way when changing
+this code: "the wallet writes nothing into your browser" is a claim a reviewer
+can check in one grep, and it is worth more than any scoping argument.
 
 ### Packaging for the Chrome Web Store
 

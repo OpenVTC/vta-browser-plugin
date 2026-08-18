@@ -75,11 +75,30 @@ a contract change affecting pnm-relay too (R4.1). Don't paper over it here.
   referenced composite project must emit (TS6310) and fails outright.
 - **Never add a cross-workspace import without the matching `references`
   entry** in that package's tsconfig, or `tsc -b` cannot know the build order.
+- **`packages/core` is layered, and the layering is enforced.** Modules import
+  downwards only — `util`/`http` → `did`/`didcomm`/`webauthn` → `siop` →
+  `vta`/`trust-tasks` → `store`/`vault`/`device`/`provision`/`rp-login`/
+  `onboarding` → `inbound` — with no cycles and no sideways imports.
+  `tests/package.module-boundaries.mjs` fails the build on a violation and
+  names the file; its `KNOWN_EXCEPTIONS` list may only shrink (a stale entry
+  also fails). Every module directory is a published entry point, so
+  `tests/package.entry-points.mjs` imports each one in plain Node with no DOM —
+  core is heading for its own repo as a general-purpose library, and a browser
+  global reaching a shared module is the failure that only shows up after
+  someone `npm i`s it into a server. If a shared helper is needed one layer up,
+  move it down rather than adding an exception.
 - **CI** (`.github/workflows/ci.yml`) runs lint → build → test on Node 24
   (the `engines` floor) and 26 from a cold checkout, and asserts the MV3 invariant that
   `dist/background.js` stays a single bundle with **no dynamic `import()`** —
   a service worker cannot load one, and losing Rollup's `codeSplitting: false`
   would break the worker at runtime behind a green build.
+- **The wallet writes nothing into the browser on a site's behalf.** No
+  `cookies` permission, no `chrome.cookies` call anywhere in the shipped
+  bundle — CI asserts both. The legacy password-site login that needed them
+  (VTA performs the login, wallet injects the returned cookie jar) was removed
+  rather than defended; `doVaultProxyLogin` in `src/offscreen.ts` now drops any
+  cookie jar a VTA returns before it crosses the bridge. `vault/proxy-login`
+  survives for the SIOP `id_token` path only, which installs nothing.
 - **`packages/extension/manifest.json` is a template, not the manifest.** It
   carries no `version` (that comes from the package's `package.json`, the one
   source of truth) and no `key`. The real manifest is assembled into `dist/`
