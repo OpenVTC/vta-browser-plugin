@@ -18,9 +18,12 @@
 // smuggled in as `any`. If the spec catches up, these annotations disappear;
 // until then they are the honest description of what the agent accepts.
 //
-// `keys/import` is not wrapped yet: its payload carries the private key in one
-// of several mutually exclusive encodings, and offering it without a
-// sealed-envelope helper would invite the cleartext one.
+// **`keysImport` carries private key material.** Three carriers, exactly one
+// of which may be present: `sealed` (an armored bundle only the agent can
+// open), `jwe`, or `multibase` — and the last is a **cleartext private key**.
+// The schema's one-of constraint does not survive into the generated type, so
+// the parameter type enforces it here; the cleartext warning cannot be
+// enforced by any type and is stated where a caller will read it.
 
 import type { Identity } from "../didcomm/index.js";
 import type { TrustTaskSender } from "../vta/channel.js";
@@ -58,6 +61,24 @@ import {
   type KeysRevokePayload,
   type KeysRevokeResponsePayload,
 } from "@openvtc/trust-tasks/keys/revoke/0.1/payload";
+import {
+  TYPE_URI as KEYS_IMPORT,
+  RESPONSE_TYPE_URI as KEYS_IMPORT_RESPONSE,
+  type KeysImportPayload,
+  type KeysImportResponsePayload,
+} from "@openvtc/trust-tasks/keys/import/0.1/payload";
+import {
+  TYPE_URI as KEYS_DERIVE_SIGN,
+  RESPONSE_TYPE_URI as KEYS_DERIVE_SIGN_RESPONSE,
+  type KeysDeriveAndSignPayload,
+  type KeysDeriveAndSignResponsePayload,
+} from "@openvtc/trust-tasks/keys/derive-and-sign/0.1/payload";
+import {
+  TYPE_URI as KEYS_DERIVE_SIGN_DOC,
+  RESPONSE_TYPE_URI as KEYS_DERIVE_SIGN_DOC_RESPONSE,
+  type KeysDeriveAndSignDocumentPayload,
+  type KeysDeriveAndSignDocumentResponsePayload,
+} from "@openvtc/trust-tasks/keys/derive-and-sign-document/0.1/payload";
 import {
   TYPE_URI as KEYS_SIGN,
   RESPONSE_TYPE_URI as KEYS_SIGN_RESPONSE,
@@ -279,5 +300,126 @@ export async function keysSign(
   return sender.send<KeysSignResponsePayload>(envelope, {
     expectedResponseType: KEYS_SIGN_RESPONSE,
     operationLabel: "keys/sign/0.1",
+  });
+}
+
+/**
+ * Import an externally-generated key.
+ *
+ * **Exactly one carrier**, and they are not equivalent:
+ *
+ * - `sealed` — an armored bundle encrypted to the agent. The safe form: the
+ *   key is unreadable in transit and at rest in any log that captured the
+ *   request.
+ * - `jwe` — a JWE the agent can decrypt.
+ * - `multibase` — the **private key in cleartext**. It is in the payload, so
+ *   it is in anything that touched the payload: proxy logs, a browser's
+ *   network panel, an error report that echoed the request. Use it only on a
+ *   transport you control end to end, and prefer `sealed` everywhere else.
+ *
+ * The union is enforced by this parameter type. The schema states it too, but
+ * as a `oneOf` that does not survive into the generated TypeScript, so without
+ * this a caller could send two carriers and have the agent decide which one
+ * counts.
+ */
+export type KeysImportParams = KeysCallerParams & {
+  keyType: KeyType;
+  label?: string;
+  contextId?: string;
+} & (
+    | { sealed: string; jwe?: never; multibase?: never }
+    | { jwe: string; sealed?: never; multibase?: never }
+    | { multibase: string; sealed?: never; jwe?: never }
+  );
+
+export async function keysImport(
+  sender: TrustTaskSender,
+  params: KeysImportParams,
+): Promise<KeyRecord> {
+  const payload: KeysImportPayload = {
+    keyType: params.keyType,
+    ...(params.sealed !== undefined ? { privateKeySealed: params.sealed } : {}),
+    ...(params.jwe !== undefined ? { privateKeyJwe: params.jwe } : {}),
+    ...(params.multibase !== undefined ? { privateKeyMultibase: params.multibase } : {}),
+    ...(params.label ? { label: params.label } : {}),
+    ...(params.contextId ? { contextId: params.contextId } : {}),
+  };
+  const envelope = buildTrustTask(KEYS_IMPORT, payload, {
+    issuer: params.holder.did,
+    recipient: params.service.did,
+  });
+  const res = await sender.send<KeysImportResponsePayload>(envelope, {
+    expectedResponseType: KEYS_IMPORT_RESPONSE,
+    operationLabel: "keys/import/0.1",
+  });
+  return res.key as KeyRecord;
+}
+
+export interface KeysDeriveAndSignParams extends KeysCallerParams {
+  keyType: KeyType;
+  /** BIP-32 path. The key is derived for this signature and not stored. */
+  derivationPath: string;
+  /** The bytes to sign, base64. */
+  payload: string;
+  algorithm: SignAlgorithm;
+}
+
+/**
+ * Derive a key at a path, sign with it, and keep nothing.
+ *
+ * Different from {@link keysSign} in a way worth knowing: there is no key
+ * record afterwards, so nothing lists it and nothing can revoke it. What ties
+ * the signature to the agent is the returned `publicKey` and the seed the path
+ * derives from — an audit answers "who signed this" by re-deriving, not by
+ * looking it up.
+ */
+export async function keysDeriveAndSign(
+  sender: TrustTaskSender,
+  params: KeysDeriveAndSignParams,
+): Promise<KeysDeriveAndSignResponsePayload> {
+  const payload: KeysDeriveAndSignPayload = {
+    keyType: params.keyType,
+    derivationPath: params.derivationPath,
+    payload: params.payload,
+    algorithm: params.algorithm,
+  };
+  const envelope = buildTrustTask(KEYS_DERIVE_SIGN, payload, {
+    issuer: params.holder.did,
+    recipient: params.service.did,
+  });
+  return sender.send<KeysDeriveAndSignResponsePayload>(envelope, {
+    expectedResponseType: KEYS_DERIVE_SIGN_RESPONSE,
+    operationLabel: "keys/derive-and-sign/0.1",
+  });
+}
+
+export interface KeysDeriveAndSignDocumentParams extends KeysCallerParams {
+  keyType: KeyType;
+  derivationPath: string;
+  /** The document to sign. Returned with its proof attached. */
+  document: KeysDeriveAndSignDocumentPayload["document"];
+  /** Data Integrity proof purpose, e.g. `assertionMethod`. */
+  proofPurpose?: string;
+}
+
+/** Derive a key and attach a Data Integrity proof to a document. Returns the
+ *  signed document and the `signerDid` a verifier resolves to check it. */
+export async function keysDeriveAndSignDocument(
+  sender: TrustTaskSender,
+  params: KeysDeriveAndSignDocumentParams,
+): Promise<KeysDeriveAndSignDocumentResponsePayload> {
+  const payload: KeysDeriveAndSignDocumentPayload = {
+    keyType: params.keyType,
+    derivationPath: params.derivationPath,
+    document: params.document,
+    ...(params.proofPurpose ? { proofPurpose: params.proofPurpose } : {}),
+  };
+  const envelope = buildTrustTask(KEYS_DERIVE_SIGN_DOC, payload, {
+    issuer: params.holder.did,
+    recipient: params.service.did,
+  });
+  return sender.send<KeysDeriveAndSignDocumentResponsePayload>(envelope, {
+    expectedResponseType: KEYS_DERIVE_SIGN_DOC_RESPONSE,
+    operationLabel: "keys/derive-and-sign-document/0.1",
   });
 }

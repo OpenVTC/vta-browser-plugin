@@ -62,6 +62,31 @@ For history before this file, see `git log` on `packages/core`.
   `keys/import` is absent: its body carries the private key in one of three
   mutually exclusive encodings (sealed, JWE, multibase), and modelling that
   honestly needs a sealed-envelope helper this library does not yet have.
+- **`keys/*` is complete** — `keysImport`, `keysDeriveAndSign`,
+  `keysDeriveAndSignDocument` join the six already there.
+
+  `keysImport` takes **exactly one** of three carriers, enforced by its
+  parameter type because the schema's `oneOf` does not survive into the
+  generated TypeScript: `sealed` (an armored bundle only the agent can open),
+  `jwe`, or `multibase` — and the last is a **cleartext private key**, which
+  means it is in anything that touched the request. The doc comment says so
+  where a caller will read it, since no type can.
+
+  `keysDeriveAndSign` leaves no key record behind: nothing lists it and nothing
+  revokes it, and an audit answers "who signed this" by re-deriving from the
+  path rather than by looking it up.
+- **`vaultGet`** — one entry's metadata, in the wallet-facing `vault/` module.
+  Never the secret: releasing one is its own task with its own gating, so that
+  reading a vault's contents and obtaining what is inside them stay separate
+  authorities. `redactedFields` is surfaced rather than swallowed — an entry
+  rendered without saying parts were withheld reads as a complete record.
+
+  It does **not** re-export `VaultEntry`: `vault/list.ts` already exports a
+  hand-written type of that name, and the two disagree (the spec's `targets` is
+  a non-empty tuple; its `AttachmentRef` has no `sha256`). Migrating the rest
+  of `vault/` onto the generated types is the same job `admin/` has had done,
+  and is worth doing — but it changes a published surface, so it is not being
+  slipped into a new call.
 - **A one-way transport primitive: `TrustTaskNotifier.notify`.** Some tasks
   define no response document, and `send` — which awaits a reply — is the
   wrong call for them: it blocks until a timeout on a message the counterparty
