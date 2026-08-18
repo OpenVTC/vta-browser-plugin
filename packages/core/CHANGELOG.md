@@ -62,6 +62,21 @@ For history before this file, see `git log` on `packages/core`.
   `keys/import` is absent: its body carries the private key in one of three
   mutually exclusive encodings (sealed, JWE, multibase), and modelling that
   honestly needs a sealed-envelope helper this library does not yet have.
+- **`vta/did-templates/*` (2.0) and `vta/memory/*`.** Templates are the shape
+  an agent stamps DIDs from; `didTemplateRender` performs the same substitution
+  the agent would and returns the document **without creating anything**, which
+  is the safe way to show an operator what they are about to publish under
+  their own identity. `didTemplateUpdate` replaces rather than patches.
+
+  Scoping differs between the two families and both are pinned by tests:
+  omitting `contextId` on a template addresses the global namespace (a name can
+  exist in both), while memory has no global namespace and requires one.
+  `memoryList` returns keys, never values — enumerating memory does not spill
+  its contents.
+
+  Targets 2.0 for templates because that is what `vta-sdk` declares; the
+  bindings also ship 1.0, and a 1.0 import compiles fine and fails at the
+  agent. The conformance test is what catches that.
 - **`device/*` (the operator half)** — `deviceList`, `deviceDisable`,
   `deviceWipe`. The device-side tasks (register, heartbeat, set-wake) stay in
   `device/`, since they belong to whatever is *being* a device. `deviceWipe`

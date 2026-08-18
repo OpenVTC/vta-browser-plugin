@@ -16,4 +16,6 @@ export * from "./policy.js";
 export * from "./sessions.js";
 export * from "./devices.js";
 export * from "./observability.js";
+export * from "./did-templates.js";
+export * from "./memory.js";
 export * from "./contexts.js";

@@ -72,7 +72,7 @@ jobs:
       # tell: they only appear in a bundle that pulled the module in.
       - name: Assert the wallet ships no agent-administration surface
         run: |
-          for task in 'acl/grant/0.1' 'acl/revoke/0.1' 'contexts/delete/1.0' 'keys/create/0.1' 'keys/sign/0.1' 'policy/upsert/0.2' 'device/wipe/0.1' 'config/patch/0.1'; do
+          for task in 'acl/grant/0.1' 'acl/revoke/0.1' 'contexts/delete/1.0' 'keys/create/0.1' 'keys/sign/0.1' 'policy/upsert/0.2' 'device/wipe/0.1' 'config/patch/0.1' 'vta/did-templates/create/2.0'; do
             if grep -rlF "$task" packages/extension/dist/; then
               echo "::error::the extension bundle contains $task — @openvtc/pnm-core/admin must not be reachable from the wallet (check for a root-barrel import)"
               exit 1
