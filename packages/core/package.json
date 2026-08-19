@@ -32,6 +32,10 @@
       "types": "./dist/did-hosting/index.d.ts",
       "import": "./dist/did-hosting/index.js"
     },
+    "./webvh": {
+      "types": "./dist/webvh/index.d.ts",
+      "import": "./dist/webvh/index.js"
+    },
     "./device": {
       "types": "./dist/device/index.d.ts",
       "import": "./dist/device/index.js"
@@ -111,7 +115,7 @@
   },
   "dependencies": {
     "@noble/curves": "^2.2.0",
-    "@openvtc/trust-tasks": "^0.9.0",
+    "@openvtc/trust-tasks": "^0.10.0",
     "@openvtc/vti-didcomm-js": "^0.6.2",
     "@openvtc/vti-tsp-js": "^0.2.0",
     "@scure/base": "^2.2.0",

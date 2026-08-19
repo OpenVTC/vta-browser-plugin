@@ -23,6 +23,12 @@ import type { VtaAuthInputs } from "./auth.js";
 const TASK_CONTEXTS_LIST = "https://trusttasks.org/spec/vta/contexts/list/1.0";
 const TASK_CONTEXTS_LIST_RESPONSE = `${TASK_CONTEXTS_LIST}#response`;
 const TASK_CONTEXTS_CREATE = "https://trusttasks.org/spec/vta/contexts/create/1.0";
+const TASK_CONTEXTS_GET = "https://trusttasks.org/spec/vta/contexts/get/1.0";
+const TASK_CONTEXTS_GET_RESPONSE = `${TASK_CONTEXTS_GET}#response`;
+const TASK_CONTEXTS_UPDATE = "https://trusttasks.org/spec/vta/contexts/update/1.0";
+const TASK_CONTEXTS_UPDATE_RESPONSE = `${TASK_CONTEXTS_UPDATE}#response`;
+const TASK_CONTEXTS_UPDATE_DID = "https://trusttasks.org/spec/vta/contexts/update-did/1.0";
+const TASK_CONTEXTS_UPDATE_DID_RESPONSE = `${TASK_CONTEXTS_UPDATE_DID}#response`;
 const TASK_CONTEXTS_CREATE_RESPONSE = `${TASK_CONTEXTS_CREATE}#response`;
 
 /** One context record — mirrors `CreateContextResultBody` (the shape returned
@@ -160,6 +166,105 @@ export interface VtaListContextsOptions extends ContextsListParams, VtaAuthInput
 /** @deprecated Use {@link contextsList} with a channel from a `VtaSession`.
  *  List over REST — builds a one-shot {@link RestChannel} (dispatches
  *  `contexts/list/1.0` over `/api/trust-tasks`, NOT the bespoke `/contexts`). */
+export interface ContextsGetParams {
+  holder: Identity;
+  service: RemoteDidcommEndpoint;
+  /** Context id — the full path for a nested context. */
+  id: string;
+}
+
+/**
+ * Read one context.
+ *
+ * The distinction from {@link contextsList} matters when the answer is
+ * "nothing": list filters to what the caller may reach and returns an empty
+ * array, which is indistinguishable from an agent holding none. This answers
+ * `notFound` for an id that is absent, so it is the call to make when you need
+ * to tell "no access" from "does not exist".
+ */
+export async function contextsGet(
+  sender: TrustTaskSender,
+  params: ContextsGetParams,
+): Promise<ContextRecord> {
+  const envelope = buildTrustTask(
+    TASK_CONTEXTS_GET,
+    { id: params.id },
+    { issuer: params.holder.did, recipient: params.service.did },
+  );
+  const payload = await sender.send<Record<string, unknown>>(envelope, {
+    expectedResponseType: TASK_CONTEXTS_GET_RESPONSE,
+    operationLabel: "vta/contexts/get/1.0",
+  });
+  return normalizeContext(payload);
+}
+
+export interface ContextsUpdateParams {
+  holder: Identity;
+  service: RemoteDidcommEndpoint;
+  /** Context to update. The id itself cannot be changed. */
+  id: string;
+  /** New human-readable name. Omit to leave unchanged. */
+  name?: string;
+  /** New description. Omit to leave unchanged. */
+  description?: string;
+  /**
+   * Replacement policy.
+   *
+   * Sent whole, not merged: the agent stores what it is given, so a partial
+   * object silently drops the constraints it omits. Read the current policy
+   * first and send it back with your edit applied.
+   */
+  policy?: Record<string, unknown>;
+}
+
+/** Update a context's metadata or policy. */
+export async function contextsUpdate(
+  sender: TrustTaskSender,
+  params: ContextsUpdateParams,
+): Promise<ContextRecord> {
+  const envelope = buildTrustTask(
+    TASK_CONTEXTS_UPDATE,
+    {
+      id: params.id,
+      ...(params.name !== undefined ? { name: params.name } : {}),
+      ...(params.description !== undefined ? { description: params.description } : {}),
+      ...(params.policy !== undefined ? { policy: params.policy } : {}),
+    },
+    { issuer: params.holder.did, recipient: params.service.did },
+  );
+  const payload = await sender.send<Record<string, unknown>>(envelope, {
+    expectedResponseType: TASK_CONTEXTS_UPDATE_RESPONSE,
+    operationLabel: "vta/contexts/update/1.0",
+  });
+  return normalizeContext(payload);
+}
+
+export interface ContextsUpdateDidParams {
+  holder: Identity;
+  service: RemoteDidcommEndpoint;
+  /** Context whose DID is being set. */
+  id: string;
+  /** The DID to associate with this context. */
+  did: string;
+}
+
+/** Set the DID a context acts as. */
+export async function contextsUpdateDid(
+  sender: TrustTaskSender,
+  params: ContextsUpdateDidParams,
+): Promise<ContextRecord> {
+  const envelope = buildTrustTask(
+    TASK_CONTEXTS_UPDATE_DID,
+    { id: params.id, did: params.did },
+    { issuer: params.holder.did, recipient: params.service.did },
+  );
+  const payload = await sender.send<Record<string, unknown>>(envelope, {
+    expectedResponseType: TASK_CONTEXTS_UPDATE_DID_RESPONSE,
+    operationLabel: "vta/contexts/update-did/1.0",
+  });
+  return normalizeContext(payload);
+}
+
 export function vtaListContexts(opts: VtaListContextsOptions): Promise<ContextRecord[]> {
   return contextsList(new RestChannel(opts), opts);
 }
