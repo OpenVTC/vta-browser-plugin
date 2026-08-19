@@ -30,13 +30,30 @@ npm install @openvtc/pnm-core
 |---|---|
 | **`@openvtc/pnm-core/webauthn`** | Passkey enrol / login ceremonies, COSE-key extraction, DID `verificationMethod` builder, PRF-derived secret-wrap helpers. |
 | **`@openvtc/pnm-core/did`** | Multikey ↔ JWK conversion, DID-URL parsing, did:webvh log resolution. |
-| **`@openvtc/pnm-core/vta`** | Typed REST + DIDComm transports against a VTA daemon. Mirrors the [`vta-sdk`](https://crates.io/crates/vta-sdk) Rust client's surface. |
-| Plus modules for | SIOPv2 / OpenID4VP RP-side helpers, sealed-bootstrap provisioning, vault proxy-login flows, Trust-Task envelope construction, indexed-DB key/value persistence. |
+| **`@openvtc/pnm-core/vta`** | The VTA protocol: Trust-Task envelopes, REST/DIDComm/TSP channels, and the REST auth bootstrap. Mirrors the [`vta-sdk`](https://crates.io/crates/vta-sdk) Rust client's surface. |
+| **`@openvtc/pnm-core/did-hosting`** | The `did-management/*` control plane — registering, publishing, disabling and rolling back hosted DIDs, plus domains and server instances. A hosting service, not an agent. |
+| **`@openvtc/pnm-core/vtc`** | Verifiable Trust Community membership, from the member's side: apply, track, hold the credential, leave. |
+| **`@openvtc/pnm-core/credentials`** | OID4VCI issuance and OID4VP presentation, plus the deferred presentations a verifier asked for while you were away. Holder-side. |
+| **`@openvtc/pnm-core/vault`** | Vault Trust Tasks — list, upsert, delete, release, proxy-login, sign. |
+| **`@openvtc/pnm-core/admin`** | Agent administration: `acl/*`, `keys/*`, `policy/*`, `consent/*`, `device/*` (list, disable, wipe), `vta/did-templates/*`, `vta/memory/*`, `audit/list`, `config/{show,patch}`, `messaging/ping`, session introspection, and context deletion. Operator surface — not in the root barrel, import it explicitly. |
+| **`@openvtc/pnm-core/siop`** | SIOPv2 / OpenID4VP RP-side helpers. |
+| **`@openvtc/pnm-core/provision`** | Sealed-bootstrap provisioning (`provision/integration`). |
+| **`@openvtc/pnm-core/didcomm`** | DIDComm v2 packing, mediator routing, forward envelopes. |
+| **`@openvtc/pnm-core/store`** | Key/value persistence (IndexedDB in a browser, in-memory elsewhere). |
+| Plus | `/device`, `/inbound`, `/onboarding`, `/rp-login`, `/trust-tasks`, `/http`, `/util`. |
 
-The package's [`src/index.ts`](https://github.com/OpenVTC/vta-browser-plugin/blob/main/packages/core/src/index.ts)
-re-exports everything from a single entry; the slash-suffixed
-sub-entries above are an optional convenience for callers who only
-want a slice of the surface.
+**Import the module you need, not the package.** Every module directory is a
+published entry point, the package is marked `sideEffects: false`, and the
+modules are layered so that lower ones never import higher ones — so
+`import "@openvtc/pnm-core/vta"` gets you the VTA protocol without the
+wallet's WebAuthn ceremonies or its IndexedDB store coming with it. Two tests
+enforce this rather than trusting it (`tests/package.module-boundaries.mjs`,
+`tests/package.entry-points.mjs`): one fails the build on a sideways or upward
+import or a cycle, the other imports every advertised entry point in plain Node
+so a stray browser global cannot reach npm.
+
+The root [`src/index.ts`](https://github.com/OpenVTC/vta-browser-plugin/blob/main/packages/core/src/index.ts)
+still re-exports everything, for callers who want it all in one import.
 
 ## Minimal example — passkey enrolment
 
@@ -62,6 +79,34 @@ const result = await finishEnrolment(credential, challenge.session_id);
 ```
 
 ## Wire compatibility
+
+### Types come from the specification, not from a copy of it
+
+The `admin/*` calls take their payload types, response types and task URIs from
+[`@openvtc/trust-tasks`](https://www.npmjs.com/package/@openvtc/trust-tasks) —
+generated from the same JSON Schemas the agent's own implementation is generated
+from. This package supplies the call layer: envelope, dispatch, unwrap.
+
+### Checked against the agent, not assumed
+
+Every VTA call this library makes names a canonical Trust-Task URI, and
+`task-surface.json` is a committed snapshot of the surface the agent actually
+publishes (from `vta-sdk`). `tests/task-surface.mjs` holds the two of them
+together:
+
+- a URI this library names that the agent has never heard of — a typo, a
+  rename, a task that moved — fails the build here rather than at a user;
+- a task version the SDK has **deprecated** fails too, during the window where
+  the agent still accepts it and everything appears to work;
+- **coverage is a recorded number** (110 of 161 task families today), so a gap
+  that grows or shrinks shows up in a diff someone reviews.
+
+Refresh the snapshot against a local checkout:
+
+```sh
+npm run tasks:sync -- /path/to/vta-sdk
+```
+
 
 This package is byte-compatible with:
 

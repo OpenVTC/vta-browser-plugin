@@ -15,6 +15,8 @@
 // front and this stays a no-surprise single hop in the common case.
 
 import type {
+  NotifyOpts,
+  TrustTaskNotifier,
   SendOpts,
   TrustTaskChannel,
   TrustTaskChannelKind,
@@ -41,7 +43,7 @@ export function orderChannelsByPriority(channels: TrustTaskChannel[]): TrustTask
  * VTA (a live DIDComm channel, a REST channel, later a TSP channel) — the
  * session orders them and hides the choice.
  */
-export class VtaSession implements TrustTaskSender {
+export class VtaSession implements TrustTaskSender, TrustTaskNotifier {
   private readonly channels: TrustTaskChannel[];
 
   constructor(channels: TrustTaskChannel[]) {
@@ -110,6 +112,56 @@ export class VtaSession implements TrustTaskSender {
       new VtaClientError(
         "e.client.unsupported",
         `no channel routes trust task ${envelope.type}`,
+      )
+    );
+  }
+
+  /**
+   * Deliver a one-way Trust-Task over the first channel that can carry it.
+   *
+   * Same fallback rule as {@link send}: only an explicit "this channel does not
+   * carry this" (`e.client.unsupported`) moves to the next candidate, and
+   * everything else is a real failure. That rule matters more here — a TSP
+   * transport with no one-way path refuses with exactly that code, so a
+   * one-way task falls through to DIDComm or REST instead of blocking on a
+   * reply nobody owes.
+   */
+  async notify(envelope: TrustTask<unknown>, opts?: NotifyOpts): Promise<void> {
+    const candidates = this.channels.filter(
+      (c) => !c.supports || c.supports(envelope.type),
+    );
+    if (candidates.length === 0) {
+      throw new VtaClientError(
+        "e.client.unsupported",
+        `no channel routes trust task ${envelope.type}`,
+      );
+    }
+
+    let lastUnsupported: VtaClientError | undefined;
+    for (let i = 0; i < candidates.length; i++) {
+      const channel = candidates[i]!;
+      try {
+        await channel.notify(envelope, opts);
+        return;
+      } catch (err) {
+        const isLast = i === candidates.length - 1;
+        if (
+          err instanceof VtaClientError &&
+          err.code === "e.client.unsupported" &&
+          !isLast
+        ) {
+          lastUnsupported = err;
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    throw (
+      lastUnsupported ??
+      new VtaClientError(
+        "e.client.unsupported",
+        `no channel carries one-way trust task ${envelope.type}`,
       )
     );
   }

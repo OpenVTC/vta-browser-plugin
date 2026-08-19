@@ -945,7 +945,16 @@ async function doVaultProxyLogin(req: OffscreenVaultProxyLoginRequest) {
   const { session, holder, service } = await getVtaSession(req.vtaDid, req.restBaseUrl);
   type Params = Parameters<typeof vaultProxyLogin>[1];
   const params = { holder, service, ...req.body } as unknown as Params;
-  return await vaultProxyLogin(session, params);
+  const res = await vaultProxyLogin(session, params);
+
+  // Drop any cookie jar before the blob crosses the bridge. The wallet holds
+  // no `cookies` permission and never writes to the jar, so a `cookies` array
+  // is session material with no possible consumer here — forwarding it would
+  // only spread it into the popup's memory. A VTA that still returns one is
+  // driving a legacy password-POST login this wallet no longer performs; the
+  // rest of the blob (the SIOP id_token header) is still usable.
+  const { cookies: _discardedCookieJar, ...sessionBlob } = res.sessionBlob;
+  return { ...res, sessionBlob };
 }
 
 // Resolve + verify a DID for the consent prompt's verification badge. The
@@ -1370,7 +1379,7 @@ async function doListContexts(req: {
  *  populate the Persona-DID dropdown for a did-self-issued entry — these
  *  are the DIDs the VTA can mint a SIOP id_token AS. Returns the
  *  popup-narrow shape (`did` + `contextId`); the wire record carries
- *  more (server_id, scid, …) the UI doesn't use. */
+ *  more (serverId, scid, …) the UI doesn't use. */
 async function doListDids(req: {
   vtaDid: string;
   restBaseUrl: string;
@@ -1382,7 +1391,7 @@ async function doListDids(req: {
     service,
     ...(req.contextId ? { contextId: req.contextId } : {}),
   });
-  return { dids: dids.map((d) => ({ did: d.did, contextId: d.context_id })) };
+  return { dids: dids.map((d) => ({ did: d.did, contextId: d.contextId })) };
 }
 
 /** Create a new context at the connected VTA. Requires the wallet's

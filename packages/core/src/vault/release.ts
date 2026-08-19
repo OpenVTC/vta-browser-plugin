@@ -15,7 +15,7 @@ import { RestChannel } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import type { SecretKind } from "./list.js";
-import type { VtaAuthInputs } from "./transport.js";
+import type { VtaAuthInputs } from "../vta/auth.js";
 import type { VaultSecret } from "./upsert.js";
 
 const TASK_VAULT_RELEASE = "https://trusttasks.org/spec/vault/release/0.2";

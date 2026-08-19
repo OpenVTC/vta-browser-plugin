@@ -32,10 +32,10 @@ export interface AclSwapResult {
   did: string;
   role: string;
   label?: string | null;
-  allowed_contexts: string[];
-  created_at: number;
-  created_by: string;
-  expires_at?: number | null;
+  allowedContexts: string[];
+  createdAt: number;
+  createdBy: string;
+  expiresAt?: number | null;
 }
 
 export interface SwapAclParams {

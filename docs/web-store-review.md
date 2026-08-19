@@ -12,6 +12,10 @@ credentials, signs in to relying parties on their behalf using SIOPv2, and
 renders the human approval prompts that gate privileged actions at the user's
 Verifiable Trust Agent.
 
+The wallet writes nothing into the browser on a site's behalf: no cookies, no
+storage, no injected session. A sign-in produces a signed token the site
+verifies for itself.
+
 ## Permissions
 
 ### `storage`
@@ -47,50 +51,14 @@ has explicitly granted. The extension deliberately declares no static
 so a site the user has not approved cannot see the wallet at all. See
 `src/content-registration.ts`.
 
-### `cookies` — the one worth reading closely
-
-**Scope: legacy relying parties only.**
-
-The wallet's normal sign-in path writes no cookies. A SIOPv2 sign-in returns a
-signed `id_token` that the site verifies for itself by resolving the user's
-published DID document; a DIDComm login never touches the cookie jar either.
-
-This permission serves exactly one case: a relying party that is an ordinary
-web application, issues a server-side session, and has no notion of DIDs. For
-those, the user's trust agent performs the password sign-in and returns the
-resulting session, which the wallet writes into the jar so the user lands
-signed in.
-
-Every one of these constraints is enforced in code, and each is a few lines a
-reviewer can check in `src/cookie-scope.ts` and `src/background.ts`:
-
-- **The user starts it.** Cookies are written only from an explicit "Sign in
-  to `<site>`" click on a session the user has just released from their vault.
-  Nothing is written as a side effect of loading a page or of an earlier action.
-- **Per-site permission, asked at that moment.** The extension holds no host
-  permissions at install time (`optional_host_permissions` only). Writing a
-  cookie for a site requires a grant the user makes in Chrome's own dialog,
-  for that site, at that moment.
-- **Scoped to the bound origin.** Every cookie is checked against the origin
-  the session is bound to using RFC 6265 domain-matching before any write is
-  attempted. A cookie claiming a domain that does not match is refused and
-  reported to the user, not silently dropped.
-- **HTTPS only**, except `localhost` for local development.
-- **Nothing is read.** The wallet never enumerates or reads the user's cookies.
-  Only `chrome.cookies.set` is used, and only on the path above.
-
-The user can see and revoke every granted site under **Sites** in the
-extension's own options page.
-
 ### `optional_host_permissions: <all_urls>`
 
-Requested one origin at a time, never at install. Three uses, each asked for
+Requested one origin at a time, never at install. Two uses, each asked for
 when it is needed: reaching the user's trust agent (its REST API applies an
-origin allowlist, so an ungranted request is blocked), writing the legacy
-session cookies described above, and running the page provider on sites the
-user chooses. The wildcard is declared because the set of relying parties is
-not knowable in advance — it is a ceiling on what the user *may* grant, not a
-grant.
+origin allowlist, so an ungranted request is blocked), and running the page
+provider on sites the user chooses. The wildcard is declared because the set of
+relying parties is not knowable in advance — it is a ceiling on what the user
+*may* grant, not a grant.
 
 ## Remote code
 
@@ -109,10 +77,81 @@ purpose beyond the wallet's single purpose above.
 
 ## Notes for the reviewer
 
-- Source: <repository URL> — the published bundle can be diffed against it.
-- A test agent and credentials for exercising the sign-in and approval flows:
-  <fill in before submitting>.
-- The cookie path is the one most worth watching. The quickest way to see its
-  boundary is `src/cookie-scope.ts`, which is dependency-free and covered by
-  unit tests, including the case where a session claims a domain that does not
-  belong to the site it is bound to.
+- Source: https://github.com/OpenVTC/vta-browser-plugin — the published bundle can be diffed against it.
+- Test instructions, including the demo agent and demo relying party, are in
+  the section below — paste them into the dashboard's **Test instructions**
+  field verbatim.
+- The extension holds no `cookies` permission and calls no cookie API. An
+  earlier version wrote a trust-agent-issued session into the jar for legacy
+  password-based sites; that feature was removed rather than defended. The
+  wallet now discards any cookie jar a trust agent returns before it leaves
+  the offscreen document (`doVaultProxyLogin` in `src/offscreen.ts`).
+- The most privileged remaining action is a SIOP sign-in, which mints a signed
+  `id_token` and hands it to the page that asked — behind a consent prompt
+  naming the requesting origin (`gatedConsent` in `src/background.ts`).
+
+## Test instructions (paste into the dashboard field)
+
+The dashboard's *Test instructions* box is free text and the reviewer follows it
+literally, so it is written for someone who has never seen this project and will
+not open a terminal. Everything it needs is served by the demo site
+(`packages/reviewer-demo/`). Fill every `<PLACEHOLDER>` before submitting.
+
+> This wallet connects to a **Verifiable Trust Agent** — a service the user runs
+> or subscribes to. We host a throwaway demo agent so you can exercise every
+> flow without setting anything up, and a demo site that walks you through it.
+> Nothing below needs a terminal.
+>
+> **The demo is disposable.** Every authorisation it issues expires after 7
+> days, and the whole demo — agent, accounts, anything created in it — is
+> deleted on `<DELETION DATE>`. Please do not put your own data into it.
+>
+> 1. Open `<DEMO SITE URL>` and sign in with this reviewer key ID:
+>    `<REVIEWER KEY ID>`
+>    The page that follows is the walkthrough, and it shows the demo agent's
+>    DID. Keep it open.
+> 2. Install the extension. A setup tab opens by itself.
+> 3. In the wallet's setup step 1, paste the **Agent DID** from the demo site
+>    and click **Prepare**. Chrome asks for access to that host — approve it.
+> 4. The wallet now shows a command containing a `did:key:z…`. Copy the whole
+>    line, paste it into **step 3** on the demo site, and click **Authorise this
+>    wallet**. (That command would normally be run by whoever operates the
+>    agent; the demo site runs it for you, for 7 days.)
+> 5. Back in the wallet, click **Connect**. Setup completes and the wallet shows
+>    the agent as connected. The passkey lock offered during setup is optional —
+>    if you would rather not enrol an authenticator, leave it off and everything
+>    below still works.
+> 6. On the demo site, click **Sign out**, then **Sign in with your VTA Wallet**.
+>    The first time, the wallet is invisible to the page by design: open the
+>    extension's popup and choose **Enable on this site**, which is the per-site
+>    grant. Then click it again.
+> 7. The wallet raises a consent prompt naming the site — this is the human
+>    check the extension exists to provide. Approve it, and you are signed in as
+>    your own DID, which the demo site verified with the agent rather than
+>    trusting the browser. No cookie is written at any point; the extension
+>    holds no cookie permission.
+> 8. Finally, click **Ask the agent to do something** in step 6 of the
+>    walkthrough. This is the generic path any site can use to ask your agent to
+>    carry out a task, and the wallet stops it to ask you first. **Click Deny the
+>    first time**: the request fails and the page learns only that you refused.
+>    Then try again and approve. The prompt names the site and the task, and the
+>    site supplies neither — it is drawn by the extension in its own window and
+>    the page cannot restyle it, dismiss it, or answer for you.
+>
+> If anything goes wrong, the walkthrough page has a **Reset the demo agent**
+> button that returns it to a known starting state (clearing its login profiles
+> and contexts) so you can begin again from step 1.
+>
+> If the demo is unreachable when you review, a full screen recording of this
+> walkthrough is at `<VIDEO URL>`.
+
+Before every submission:
+
+- **The demo is up.** `curl <DEMO SITE URL>/health` returns `ok`. A reviewer who
+  hits a dead demo has no way to test, and this is the single most likely cause
+  of a failed review.
+- **The key ID matches.** It is `REVIEWER_KEY` on the demo site, and it must be
+  what the instructions say.
+- **The deletion date is in the future**, and the agent behind it still exists.
+- **A reset leaves the agent in the state step 3 assumes** — run the reset, then
+  walk the whole flow yourself with a fresh browser profile.

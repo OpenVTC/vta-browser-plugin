@@ -1,7 +1,7 @@
 {
   "name": "@openvtc/pnm-core",
   "version": "0.4.0",
-  "description": "Browser-side bridge between WebAuthn passkeys and VTA-managed DIDs. Wire types, WebAuthn ceremony helpers, COSE→Multikey conversion, DID verificationMethod builder, REST + DIDComm transports, mediator client, SIOP / RP-login / provision-integration flows.",
+  "description": "Browser-side bridge between WebAuthn passkeys and VTA-managed DIDs. Wire types, WebAuthn ceremony helpers, COSE\u2192Multikey conversion, DID verificationMethod builder, REST + DIDComm transports, mediator client, SIOP / RP-login / provision-integration flows.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -20,19 +20,85 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./webauthn": {
-      "types": "./dist/webauthn/index.d.ts",
-      "import": "./dist/webauthn/index.js"
+    "./admin": {
+      "types": "./dist/admin/index.d.ts",
+      "import": "./dist/admin/index.js"
+    },
+    "./credentials": {
+      "types": "./dist/credentials/index.d.ts",
+      "import": "./dist/credentials/index.js"
+    },
+    "./did-hosting": {
+      "types": "./dist/did-hosting/index.d.ts",
+      "import": "./dist/did-hosting/index.js"
+    },
+    "./device": {
+      "types": "./dist/device/index.d.ts",
+      "import": "./dist/device/index.js"
     },
     "./did": {
       "types": "./dist/did/index.d.ts",
       "import": "./dist/did/index.js"
     },
+    "./didcomm": {
+      "types": "./dist/didcomm/index.d.ts",
+      "import": "./dist/didcomm/index.js"
+    },
+    "./http": {
+      "types": "./dist/http/index.d.ts",
+      "import": "./dist/http/index.js"
+    },
+    "./inbound": {
+      "types": "./dist/inbound/index.d.ts",
+      "import": "./dist/inbound/index.js"
+    },
+    "./onboarding": {
+      "types": "./dist/onboarding/index.d.ts",
+      "import": "./dist/onboarding/index.js"
+    },
+    "./provision": {
+      "types": "./dist/provision/index.d.ts",
+      "import": "./dist/provision/index.js"
+    },
+    "./rp-login": {
+      "types": "./dist/rp-login/index.d.ts",
+      "import": "./dist/rp-login/index.js"
+    },
+    "./siop": {
+      "types": "./dist/siop/index.d.ts",
+      "import": "./dist/siop/index.js"
+    },
+    "./store": {
+      "types": "./dist/store/index.d.ts",
+      "import": "./dist/store/index.js"
+    },
+    "./trust-tasks": {
+      "types": "./dist/trust-tasks/index.d.ts",
+      "import": "./dist/trust-tasks/index.js"
+    },
+    "./util": {
+      "types": "./dist/util/index.d.ts",
+      "import": "./dist/util/index.js"
+    },
+    "./vault": {
+      "types": "./dist/vault/index.d.ts",
+      "import": "./dist/vault/index.js"
+    },
     "./vta": {
       "types": "./dist/vta/index.d.ts",
       "import": "./dist/vta/index.js"
-    }
+    },
+    "./vtc": {
+      "types": "./dist/vtc/index.d.ts",
+      "import": "./dist/vtc/index.js"
+    },
+    "./webauthn": {
+      "types": "./dist/webauthn/index.d.ts",
+      "import": "./dist/webauthn/index.js"
+    },
+    "./package.json": "./package.json"
   },
+  "sideEffects": false,
   "files": [
     "dist"
   ],
@@ -40,10 +106,12 @@
     "build": "tsc -b",
     "lint": "tsc -b",
     "test": "tsc -b && node --test tests/*.mjs",
+    "tasks:sync": "node scripts/sync-task-surface.mjs",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
     "@noble/curves": "^2.2.0",
+    "@openvtc/trust-tasks": "^0.9.0",
     "@openvtc/vti-didcomm-js": "^0.6.2",
     "@openvtc/vti-tsp-js": "^0.2.0",
     "@scure/base": "^2.2.0",

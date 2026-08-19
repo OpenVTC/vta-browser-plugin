@@ -11,12 +11,12 @@
 // avoidance, 401 self-heal) is quarantined here in `getVtaBearer`/`makeReauth`
 // and never leaks into a domain op.
 
-import type { SendOpts, TrustTaskChannel } from "./channel.js";
+import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
 import { errorFromBody, VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
 import { parseTrustTaskReply } from "./trust-task.js";
 import { isTrustTaskErrorType } from "./protocol.js";
-import { getVtaBearer, makeReauth, type VtaAuthInputs } from "../vault/transport.js";
+import { getVtaBearer, makeReauth, type VtaAuthInputs } from "./auth.js";
 import { withFetchTimeout, isFetchTimeout, DEFAULT_FETCH_TIMEOUT_MS } from "../http/timeout-fetch.js";
 
 export interface RestChannelOptions extends VtaAuthInputs {
@@ -49,13 +49,19 @@ export class RestChannel implements TrustTaskChannel {
     this.fetchImpl = withFetchTimeout(opts.fetch);
   }
 
-  async send<Res>(envelope: TrustTask<unknown>, opts: SendOpts = {}): Promise<Res> {
+  /**
+   * POST the envelope, with the bearer handshake and its one retry.
+   *
+   * Shared by `send` and `notify`: the difference between them is entirely in
+   * what they do with the reply, and duplicating the auth path would be one
+   * more place for a stale-token retry to go missing.
+   */
+  private async post(envelope: TrustTask<unknown>, label: string): Promise<Response> {
     const base = this.auth.baseUrl.replace(/\/+$/, "");
     const url = `${base}${this.path}`;
     const body = JSON.stringify(envelope);
-    const label = opts.operationLabel ?? envelope.type;
 
-    const post = async (bearer: string): Promise<Response> => {
+    const once = async (bearer: string): Promise<Response> => {
       try {
         return await this.fetchImpl(url, {
           method: "POST",
@@ -79,10 +85,14 @@ export class RestChannel implements TrustTaskChannel {
     // A cached bearer can outlive its server-side session (VTA restart or
     // session eviction). On 401, re-authenticate once and retry so a stale
     // token self-heals instead of surfacing as an auth failure.
-    let res = await post(await getVtaBearer(this.auth));
-    if (res.status === 401) {
-      res = await post(await makeReauth(this.auth)());
-    }
+    const res = await once(await getVtaBearer(this.auth));
+    if (res.status !== 401) return res;
+    return once(await makeReauth(this.auth)());
+  }
+
+  async send<Res>(envelope: TrustTask<unknown>, opts: SendOpts = {}): Promise<Res> {
+    const label = opts.operationLabel ?? envelope.type;
+    const res = await this.post(envelope, label);
 
     return decodeTrustTaskHttpReply<Res>(res, {
       ...(opts.expectedResponseType !== undefined
@@ -91,6 +101,47 @@ export class RestChannel implements TrustTaskChannel {
       operationLabel: label,
     });
   }
+
+  /**
+   * `TrustTaskChannel.notify` — POST the envelope and treat a 2xx as delivered.
+   *
+   * The body is deliberately not decoded on success: a task with no response
+   * document may be answered with a courtesy `trust-task-ok`, with an empty
+   * body, or with nothing at all, and none of those is information a caller
+   * should act on. What *is* still honoured is a refusal — a non-2xx carrying a
+   * `trust-task-error` keeps its code and details (R3.7), because "the agent
+   * rejected this" is not the same as "delivered".
+   */
+  async notify(envelope: TrustTask<unknown>, opts: NotifyOpts = {}): Promise<void> {
+    const res = await this.post(envelope, opts.operationLabel ?? envelope.type);
+    return decodeTrustTaskHttpAck(res);
+  }
+}
+
+/**
+ * Decide whether a one-way POST was delivered.
+ *
+ * The mirror of {@link decodeTrustTaskHttpReply}, and deliberately much
+ * weaker. A task with no response document may be answered with a courtesy
+ * `trust-task-ok`, with an empty body, or with nothing at all — none of which
+ * a caller should act on, so a 2xx is simply "delivered" and the body is left
+ * unread.
+ *
+ * What does not weaken is a refusal. A non-2xx still has its body read once
+ * and its machine-readable code preferred over the status (R3.7): "the agent
+ * rejected this" is not delivery, and a caller that cannot tell the two apart
+ * will report a rejected task as sent.
+ */
+export async function decodeTrustTaskHttpAck(res: Response): Promise<void> {
+  if (res.ok) return;
+  let doc: { type?: string; payload?: unknown } | undefined;
+  try {
+    doc = (await res.json()) as { type?: string; payload?: unknown };
+  } catch {
+    // Not JSON, so there is no code to recover — build from the status alone.
+    throw errorFromBody(undefined, res.status, res.statusText);
+  }
+  throw errorFromBody(doc, res.status, res.statusText);
 }
 
 /**

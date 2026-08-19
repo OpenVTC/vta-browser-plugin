@@ -15,12 +15,13 @@
 // reuse the shared vault transport helpers.
 
 import type { Identity } from "../didcomm/index.js";
-import type { VtaAuthInputs } from "../vault/transport.js";
+import type { VtaAuthInputs } from "./auth.js";
 
 import type { TrustTaskSender } from "./channel.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";
 import { RestChannel } from "./rest-channel.js";
 import { buildTrustTask } from "./trust-task.js";
+import { fold } from "./contexts.js";
 
 const TASK_WEBVH_DIDS_LIST_1_0 = "https://trusttasks.org/spec/vta/webvh/dids/list/1.0";
 const TASK_WEBVH_DIDS_LIST_1_0_RESPONSE = `${TASK_WEBVH_DIDS_LIST_1_0}#response`;
@@ -35,9 +36,9 @@ export interface WebvhDidRecord {
    *  entry acts AS — becomes the SIOP `iss`/`sub`. */
   did: string;
   /** Context this DID belongs to (matches a `ContextRecord.id`). */
-  context_id: string;
+  contextId: string;
   /** Hosting server the DID is registered with. */
-  server_id?: string;
+  serverId?: string;
   /** Whether the DID is portable across hosting servers. */
   portable?: boolean;
 }
@@ -77,7 +78,16 @@ export async function vtaListDids(
     expectedResponseType: TASK_WEBVH_DIDS_LIST_1_0_RESPONSE,
     operationLabel: "webvh/dids/list",
   });
-  return result.dids ?? [];
+  // Accept either spelling while agents migrate to the canonical casing
+  // (SPEC §4.10). Changing the type alone would leave `contextId` undefined
+  // against an agent that has not taken the fold.
+  return (result.dids ?? []).map(
+    (d) =>
+      fold(d as unknown as Record<string, unknown>, [
+        ["contextId", "context_id"],
+        ["serverId", "server_id"],
+      ]) as unknown as WebvhDidRecord,
+  );
 }
 
 /** @deprecated Use {@link vtaListDids} with a channel from a `VtaSession`.

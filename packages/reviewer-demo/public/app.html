@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>VTA Wallet — reviewer walkthrough</title>
+    <link rel="stylesheet" href="/static/demo.css" />
+  </head>
+  <body>
+    <main>
+      <p class="banner">
+        <b>This is a throwaway demo.</b> Every authorisation it issues expires after
+        <span data-config="grantExpires">7 days</span>, and the whole demo — agent, accounts,
+        anything created in it — is deleted
+        <span data-config="deletesOn-phrase">7 days after it is stood up</span>. Nothing here is
+        private and nothing here survives. Do not put anything of your own into it.
+      </p>
+
+      <header class="row">
+        <h1>What to test</h1>
+        <button id="logout" class="link">Sign out</button>
+      </header>
+      <p class="sub" id="signed-in-as"></p>
+
+      <section class="card">
+        <h2>The demo agent</h2>
+        <p>This is the agent the wallet connects to. You will need its address in step 2.</p>
+        <dl>
+          <dt>Agent DID</dt>
+          <dd>
+            <code data-config="vtaDid">…</code>
+            <button class="copy" data-copy-config="vtaDid">Copy</button>
+          </dd>
+          <dt>API</dt>
+          <dd><code data-config="vtaBaseUrl">…</code></dd>
+        </dl>
+      </section>
+
+      <section class="card" id="reset-card" hidden>
+        <h2>Start from a known state</h2>
+        <p>
+          If you have been through this before, or a previous reviewer left the agent mid-flow,
+          reset it first. This clears the agent's login profiles and contexts and puts it back to
+          the state these instructions assume. It affects the demo agent only.
+        </p>
+        <p class="warn">
+          After a reset, any wallet already connected to this agent — including one you set up a
+          moment ago — is no longer known to it, and you start again from step 1.
+        </p>
+        <button id="reset-go" class="danger">Reset the demo agent</button>
+        <p class="msg" id="reset-msg" hidden></p>
+      </section>
+
+      <section class="card">
+        <h2>1. Install the wallet</h2>
+        <p>
+          Install the extension. A setup tab opens by itself. If you closed it, open the extension's
+          popup and click <b>Open setup</b>.
+        </p>
+        <p class="hint">
+          The wallet asks for no site access when it installs. It asks for one site at a time,
+          later, at the moment it needs each one.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>2. Point it at the demo agent</h2>
+        <p>
+          In step 1 of the wallet's setup, paste the <b>Agent DID</b> from the top of this page and
+          click <b>Prepare</b>. Chrome asks for access to the agent's host — approve it, or the
+          wallet cannot reach the agent.
+        </p>
+        <p>
+          The wallet then shows a command, because normally a person who runs the agent would run
+          it. Here, this page runs it for you.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>3. Authorise your wallet</h2>
+        <p>
+          Copy the whole command the wallet is showing you — it looks like
+          <code>pnm acl create --did did:key:z… --role admin --expires 1h</code> — and paste it
+          below. Pasting just the <code>did:key:z…</code> works too.
+        </p>
+        <form id="acl-form" autocomplete="off">
+          <label for="command">Command from the wallet</label>
+          <textarea id="command" name="command" rows="3" spellcheck="false"
+            placeholder="pnm acl create --did did:key:z… --role admin --expires 1h"></textarea>
+          <button type="submit" id="acl-submit">Authorise this wallet</button>
+        </form>
+        <p class="msg" id="acl-msg" hidden></p>
+        <p class="hint">
+          The authorisation is granted for <span data-config="grantExpires">7 days</span> rather than
+          the one hour the command asks for, so it does not expire underneath you mid-review.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>4. Connect</h2>
+        <p>
+          Back in the wallet, click <b>Connect</b>. Setup finishes and the wallet shows the agent as
+          connected.
+        </p>
+        <p class="hint">
+          The passkey lock offered during setup is optional. If you would rather not enrol an
+          authenticator on your machine, leave it off — everything below still works.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>5. Sign in with the wallet (SIOPv2)</h2>
+        <p>
+          Sign out of this site, then sign back in using <b>Sign in with your VTA Wallet</b>. The
+          wallet proves control of your DID to the agent, and this site verifies the result with the
+          agent rather than trusting the browser.
+        </p>
+        <p>
+          The first time, the wallet is invisible to this page until you enable it: open the
+          extension's popup and choose <b>Enable on this site</b>. That is the per-site grant — the
+          wallet does not appear on any page you have not approved.
+        </p>
+        <p class="hint">
+          No cookie is written at any point in this flow. The extension holds no cookie permission
+          at all; the site receives a signed token it verifies for itself.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>6. See the approval prompt on its own</h2>
+        <p>
+          This is the control the extension exists to provide, so it is worth seeing deliberately
+          rather than in passing. The button below does what any relying party can do: it asks your
+          agent to carry out a task — here a harmless, read-only one
+          (<code data-config="demoTaskType">…</code>).
+        </p>
+        <p>
+          The wallet stops it and asks you first. The prompt names <b>this site</b> as the asker and
+          names the task; the site supplies neither. It is drawn by the wallet in its own window, so
+          the page cannot restyle it, dismiss it, or answer on your behalf.
+        </p>
+        <p class="hint">
+          <b>Click Deny the first time.</b> The request fails and this page is told only that you
+          refused — which is the useful thing to verify. Then try again and approve.
+        </p>
+        <button id="task-go">Ask the agent to do something</button>
+        <p class="msg" id="task-msg" hidden></p>
+        <p class="hint" id="task-hint" hidden>
+          The wallet is not available on this page yet — open the extension's popup and choose
+          <b>Enable on this site</b> first.
+        </p>
+        <p class="hint">
+          A task your agent's policy gates goes one step further: the agent works out the real
+          effects itself, and asks an approver to confirm them against a digest — never the
+          description the site supplied. That second round needs an approver enrolled, which is more
+          than this demo sets up; the prompt you see here is the first round.
+        </p>
+      </section>
+
+      <section class="card muted">
+        <h2>If something goes wrong</h2>
+        <ul>
+          <li>
+            <b>"Connect" fails after authorising.</b> The authorisation is tied to the exact
+            <code>did:key</code> in the command the wallet showed you. If you clicked
+            <b>Prepare</b> again, the wallet minted a new one — copy the new command and authorise
+            again.
+          </li>
+          <li>
+            <b>The wallet cannot reach the agent.</b> Chrome's site-access prompt was probably
+            declined. Open the extension's popup and enable the agent's host, then retry.
+          </li>
+          <li>
+            <b>Anything else.</b> Reset the demo agent above and start from step 1.
+          </li>
+        </ul>
+      </section>
+    </main>
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>

@@ -22,7 +22,7 @@ import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { RestChannel } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
-import type { VtaAuthInputs } from "./transport.js";
+import type { VtaAuthInputs } from "../vta/auth.js";
 
 const TASK_VAULT_LIST_0_2 = "https://trusttasks.org/spec/vault/list/0.2";
 const TASK_VAULT_LIST_0_2_RESPONSE = "https://trusttasks.org/spec/vault/list/0.2#response";

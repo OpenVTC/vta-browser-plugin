@@ -25,7 +25,7 @@ import { RestChannel } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import type { SecretKind, SiteTarget, VaultEntry } from "./list.js";
-import type { VtaAuthInputs } from "./transport.js";
+import type { VtaAuthInputs } from "../vta/auth.js";
 
 const TASK_VAULT_UPSERT = "https://trusttasks.org/spec/vault/upsert/0.2";
 const TASK_VAULT_UPSERT_RESPONSE = "https://trusttasks.org/spec/vault/upsert/0.2#response";

@@ -13,7 +13,7 @@
 import { base58 } from "@scure/base";
 
 import { resolveDidDocument, resolveKeyAgreement } from "../didcomm/index.js";
-import { base64urlToBytes } from "../webauthn/base64url.js";
+import { base64urlToBytes } from "../util/base64url.js";
 import { VtaClientError } from "./errors.js";
 import type { TspRemoteEndpoint } from "./tsp-channel.js";
 

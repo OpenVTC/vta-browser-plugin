@@ -6,25 +6,25 @@
 // `host_permissions`. Nothing is granted at install time; the user grants a
 // specific origin at the moment the wallet first needs it. Two reasons:
 //
-//  - `chrome.cookies.set` is the most powerful thing this extension does, and
-//    a blanket `<all_urls>` grant means blanket cookie-write access to every
-//    site the user visits, forever. Per-origin grants mean the wallet can only
-//    touch the cookie jar of a site the user explicitly consented to at the
-//    time of a session hand-off.
+//  - A blanket `<all_urls>` grant means the wallet can reach every site the
+//    user visits, forever, and `window.vtaWallet` appears on all of them.
+//    Per-origin grants keep both to sites the user named.
 //  - `<all_urls>` in `host_permissions` is a documented cause of extended
 //    Chrome Web Store review; a reviewer has to rule out data harvesting
 //    across the entire web before approving.
 //
 // Why this doesn't break the rest of the wallet
 // ---------------------------------------------
-// Only two egress paths actually need a host grant:
+// Only one egress path actually needs a host grant:
 //
 //  - **VTA REST** — vta-service applies an origin allowlist CORS layer
 //    (`AllowOrigin::list`), so an ungranted fetch is CORS-blocked. Granted at
 //    onboarding, where the host is derivable from the VTA `did:webvh` before
 //    any request is made.
-//  - **Cookie injection** — `chrome.cookies.set` hard-requires it. Granted at
-//    the injection click.
+//
+// (There used to be a second: cookie injection, which `chrome.cookies.set`
+// hard-requires. That path and the `cookies` permission are gone — the wallet
+// writes nothing to the cookie jar.)
 //
 // The other two do not:
 //

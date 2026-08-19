@@ -98,7 +98,7 @@ export function SitesPanel() {
           <Legend
             edge={c.ok}
             title="Wallet can reach it"
-            body="You granted access to this host, so the wallet can make requests to it and write its sign-in cookies."
+            body="You granted access to this host, so the wallet can make requests to it and run the page provider there."
           />
         </div>
       </Panel>

@@ -65,6 +65,21 @@ jobs:
           fi
           echo "OK: $bundle is a single bundle with no dynamic import()"
 
+      # `@openvtc/pnm-core/admin` is operator surface — granting authority at an
+      # agent, revoking it, destroying contexts. A wallet has no business
+      # shipping any of it, and the way it would arrive is someone importing it
+      # from the package root instead of the subpath. The task URIs are the
+      # tell: they only appear in a bundle that pulled the module in.
+      - name: Assert the wallet ships no agent-administration surface
+        run: |
+          for task in 'acl/grant/0.1' 'acl/revoke/0.1' 'contexts/delete/1.0' 'keys/create/0.1' 'keys/sign/0.1' 'policy/upsert/0.2' 'device/wipe/0.1' 'config/patch/0.1' 'vta/did-templates/create/2.0' 'consent/approver-set/1.0' 'keys/import/0.1' 'did-management/did/delete/0.1'; do
+            if grep -rlF "$task" packages/extension/dist/; then
+              echo "::error::the extension bundle contains $task — @openvtc/pnm-core/admin must not be reachable from the wallet (check for a root-barrel import)"
+              exit 1
+            fi
+          done
+          echo "OK: no admin task URIs in the extension bundle"
+
       # Build the Chrome Web Store upload artefact from the dist/ that the
       # Build step just produced (scripts/package.mjs re-stages it; it does
       # not rebuild). Doing this every run means a submission is never the
@@ -100,8 +115,25 @@ jobs:
             echo "::error::manifest declares content_scripts; the page provider is registered dynamically for granted origins only (src/content-registration.ts). A static match would re-grant blanket host access and double-inject."
             exit 1
           fi
+          # The wallet writes nothing into the browser on a site's behalf, and
+          # that is the claim docs/web-store-review.md makes to a reviewer. It
+          # holds for exactly as long as nobody re-adds the permission, so
+          # assert it rather than trust it: `cookies` is the permission a
+          # reviewer looks hardest at, and its cost is an extended review.
+          if [ "$(echo "$manifest" | node -p "(JSON.parse(require('fs').readFileSync(0,'utf8')).permissions ?? []).includes('cookies') ? 'yes' : ''")" = "yes" ]; then
+            echo "::error::manifest requests the 'cookies' permission; the legacy password-site login that needed it was removed (see README 'The wallet writes nothing into your browser')."
+            exit 1
+          fi
+          # Checked against dist/, not src/: the built bundle has no comments,
+          # so prose *about* the removed path (README, code comments) doesn't
+          # trip it, while a real call site would.
+          if grep -rl "chrome\.cookies" dist/ >/dev/null 2>&1; then
+            echo "::error::the built bundle calls chrome.cookies; the wallet must not write to the cookie jar"
+            grep -rl "chrome\.cookies" dist/
+            exit 1
+          fi
           test -f dist/content.js || { echo "::error::dist/content.js missing; chrome.scripting registers it by path"; exit 1; }
-          echo "OK: $zip is version $version, no 'key', no static content_scripts"
+          echo "OK: $zip is version $version, no 'key', no static content_scripts, no cookie access"
 
       # One upload only — actions/upload-artifact errors on a duplicate name,
       # and the zip is identical across the Node matrix.

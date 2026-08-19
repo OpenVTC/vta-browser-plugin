@@ -1,0 +1,155 @@
+#!/usr/bin/env node
+// Refresh `task-surface.json` — the checked-in snapshot of the VTA's canonical
+// Trust-Task surface, and the thing `tests/task-surface.mjs` checks this
+// library against.
+//
+//   npm run tasks:sync --workspace @openvtc/pnm-core
+//   npm run tasks:sync --workspace @openvtc/pnm-core -- ../path/to/vta-sdk
+//
+// Why a snapshot rather than reading the Rust at test time: `vta-sdk` lives in
+// another repository, and CI here builds from a cold checkout of this one. A
+// test that needed the sibling checkout would simply not run in CI, which is
+// where it matters. So the surface is committed, refreshed deliberately by a
+// human running this, and the refresh shows up in a diff someone reviews.
+//
+// The snapshot records where it came from and when. A stale one is not a
+// silent failure — `tests/task-surface.mjs` reports the version it is checking
+// against, and a task this library targets that the SDK has since renamed or
+// deprecated fails the test rather than the deployment.
+
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { join, resolve } from "node:path";
+
+const PKG_ROOT = resolve(import.meta.dirname, "..");
+const OUT = join(PKG_ROOT, "task-surface.json");
+
+const DEFAULT_SDK = resolve(
+  PKG_ROOT,
+  "../../../verifiable-trust-infrastructure/vta-sdk",
+);
+const sdkRoot = resolve(process.argv[2] ?? DEFAULT_SDK);
+const sdkSrc = join(sdkRoot, "src");
+
+if (!existsSync(sdkSrc)) {
+  console.error(
+    `No vta-sdk source at ${sdkSrc}.\n` +
+      `Pass the path: npm run tasks:sync --workspace @openvtc/pnm-core -- /path/to/vta-sdk`,
+  );
+  process.exit(1);
+}
+
+function rustFiles(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...rustFiles(full));
+    else if (entry.endsWith(".rs")) out.push(full);
+  }
+  return out;
+}
+
+const URI = /"(https:\/\/trusttasks\.org\/spec\/[^"]+)"/g;
+/** `pub const NAME: &str = "…"` — the constant a deprecation attaches to. */
+const CONST_DECL = /(?:pub\s+)?const\s+([A-Z0-9_]+)\s*:\s*&'?\w*\s*str\s*=\s*"([^"]+)"/;
+
+/** @type {Map<string, {uri: string, consts: Set<string>, deprecated?: string, files: Set<string>}>} */
+const tasks = new Map();
+
+const SPEC_PREFIX = "https://trusttasks.org/spec/";
+
+function record(uri, file) {
+  // Only task URIs. `CONST_DECL` matches every `const NAME: &str = "…"` in the
+  // crate, which is most of a string table — service names, DID examples, error
+  // codes — and an earlier version of this script recorded all of them. That
+  // inflated the snapshot by a third and, worse, inflated the denominator the
+  // coverage check reports, so the gap looked bigger than it is.
+  if (!uri.startsWith(SPEC_PREFIX)) return null;
+  // A `#response` URI is the same task; the response half is derived, and
+  // recording both would double the surface for no gain.
+  const base = uri.replace(/#response$/, "");
+  // A canonical task URI ends in its version. What does not is a family prefix
+  // other constants are built from (`…/spec/acl/`), which is a building block
+  // rather than something callable.
+  if (!/\/\d+\.\d+$/.test(base)) return null;
+  if (!tasks.has(base)) {
+    tasks.set(base, { uri: base, consts: new Set(), files: new Set() });
+  }
+  tasks.get(base).files.add(file);
+  return tasks.get(base);
+}
+
+for (const file of rustFiles(sdkSrc)) {
+  const rel = file.slice(sdkRoot.length + 1);
+  const lines = readFileSync(file, "utf8").split("\n");
+
+  // A `#[deprecated…]` attribute may wrap across lines; hold it until the
+  // declaration it applies to arrives, and drop it on any other statement.
+  let pendingDeprecation = null;
+  let inDeprecation = false;
+
+  for (const line of lines) {
+    if (inDeprecation || /^\s*#\[deprecated/.test(line)) {
+      pendingDeprecation = (pendingDeprecation ?? "") + line.trim();
+      inDeprecation = !line.includes("]");
+      continue;
+    }
+
+    const decl = CONST_DECL.exec(line);
+    if (decl) {
+      const entry = record(decl[2], rel);
+      if (!entry) {
+        pendingDeprecation = null;
+        continue;
+      }
+      entry.consts.add(decl[1]);
+      if (pendingDeprecation) {
+        const note = /note\s*=\s*"([^"]*)"/.exec(pendingDeprecation);
+        // Rust wraps long notes with a trailing backslash; fold those away too,
+        // or the snapshot carries line-continuation artefacts.
+        entry.deprecated = note?.[1]?.replace(/\\\s*/g, " ").replace(/\s+/g, " ").trim() ?? "deprecated";
+      }
+      pendingDeprecation = null;
+      continue;
+    }
+
+    for (const m of line.matchAll(URI)) record(m[1], rel);
+    if (line.trim() && !line.trim().startsWith("//")) pendingDeprecation = null;
+  }
+}
+
+const sdkVersion =
+  /^version\s*=\s*"([^"]+)"/m.exec(
+    existsSync(join(sdkRoot, "Cargo.toml"))
+      ? readFileSync(join(sdkRoot, "Cargo.toml"), "utf8")
+      : "",
+  )?.[1] ?? "unknown";
+
+const snapshot = {
+  $comment:
+    "Generated by scripts/sync-task-surface.mjs from a vta-sdk checkout. " +
+    "Do not hand-edit: re-run the script. Checked by tests/task-surface.mjs.",
+  source: {
+    crate: "vta-sdk",
+    version: sdkVersion,
+    // No capture date: it would churn the file on every sync and tell a reader
+    // nothing the version and the git history do not.
+    scanned: "vta-sdk/src/**/*.rs",
+  },
+  tasks: [...tasks.values()]
+    .sort((a, b) => a.uri.localeCompare(b.uri))
+    .map((t) => ({
+      uri: t.uri,
+      ...(t.consts.size ? { consts: [...t.consts].sort() } : {}),
+      ...(t.deprecated ? { deprecated: t.deprecated } : {}),
+    })),
+};
+
+writeFileSync(OUT, `${JSON.stringify(snapshot, null, 2)}\n`);
+
+const deprecated = snapshot.tasks.filter((t) => t.deprecated).length;
+console.log(
+  `wrote ${OUT}\n` +
+    `  vta-sdk    ${sdkVersion}\n` +
+    `  tasks      ${snapshot.tasks.length}\n` +
+    `  deprecated ${deprecated}`,
+);

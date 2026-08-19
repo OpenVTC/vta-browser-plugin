@@ -20,7 +20,7 @@
 import { pack, unpack } from "@openvtc/vti-tsp-js";
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 
-import type { SendOpts, TrustTaskChannel } from "./channel.js";
+import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
 import { VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
 import { parseTrustTaskReply } from "./trust-task.js";
@@ -82,6 +82,17 @@ export interface TspRemoteEndpoint {
 export interface TspTransport {
   /** Send a packed TSP message and await the packed reply. */
   sendAndAwaitReply(packed: Uint8Array, options?: { timeoutMs?: number }): Promise<Uint8Array>;
+  /**
+   * Send a packed TSP message without awaiting a reply, for tasks that define
+   * no response document.
+   *
+   * **Optional.** A transport that cannot do this must not have
+   * `sendAndAwaitReply` used in its place: that would block on a reply the
+   * counterparty is entitled never to send. {@link TspChannel.notify} refuses
+   * with `e.client.unsupported` instead, which is the code a `VtaSession`
+   * treats as "try the next channel".
+   */
+  send?(packed: Uint8Array): Promise<void>;
   /** Release any live transport (e.g. the mediator socket). */
   close?(): Promise<void>;
 }
@@ -116,15 +127,39 @@ export class TspChannel implements TrustTaskChannel {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
-  async send<Res>(envelope: TrustTask<unknown>, opts: SendOpts = {}): Promise<Res> {
+  /** Seal the envelope to the VTA. Shared by both directions. */
+  private async packForVta(envelope: TrustTask<unknown>): Promise<Uint8Array> {
     // TSP plaintext = the Trust-Task envelope JSON (no binding wrapper).
     const plaintext = utf8.encode(JSON.stringify(envelope));
-
     const packed = await pack(plaintext, this.holder.vid, this.vta.vid, {
       senderSigningKey: this.holder.signingPrivateKey,
       senderEncryptionKey: this.holder.encryptionPrivateKey,
       receiverEncryptionKey: this.vta.encryptionPublicKey,
     });
+    return packed.bytes;
+  }
+
+  /**
+   * `TrustTaskChannel.notify` — seal and send, with no reply awaited.
+   *
+   * Refuses with `e.client.unsupported` when the transport has no one-way
+   * path, rather than falling back to `sendAndAwaitReply`. The fallback would
+   * look like it worked and then block until the timeout on a task whose
+   * counterparty owes no answer; the refusal lets a session move to a channel
+   * that can carry this.
+   */
+  async notify(envelope: TrustTask<unknown>, opts: NotifyOpts = {}): Promise<void> {
+    if (!this.transport.send) {
+      throw new VtaClientError(
+        "e.client.unsupported",
+        `${opts.operationLabel ?? envelope.type}: this TSP transport has no one-way send`,
+      );
+    }
+    await this.transport.send(await this.packForVta(envelope));
+  }
+
+  async send<Res>(envelope: TrustTask<unknown>, opts: SendOpts = {}): Promise<Res> {
+    const packed = { bytes: await this.packForVta(envelope) };
 
     const replyBytes = await this.transport.sendAndAwaitReply(packed.bytes, {
       timeoutMs: opts.timeoutMs ?? this.timeoutMs,

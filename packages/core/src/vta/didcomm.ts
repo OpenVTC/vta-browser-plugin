@@ -16,7 +16,7 @@ import {
   type TrustTask,
 } from "./protocol.js";
 import { buildTrustTask, parseTrustTaskReply } from "./trust-task.js";
-import type { SendOpts, TrustTaskChannel } from "./channel.js";
+import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
 import type { DidcommMessageBridge, VtaTransport } from "./transport.js";
 import type {
   EnrollmentChallengeResponse,
@@ -160,6 +160,20 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
         ? { operationLabel: opts.operationLabel }
         : {}),
     });
+  }
+
+  /**
+   * `TrustTaskChannel.notify` — authcrypt the envelope, hand it to the bridge,
+   * and stop there.
+   *
+   * The bridge's own `send` is already fire-and-forget: it resolves once the
+   * bytes reach the transport and tracks no acknowledgement, which is exactly
+   * the promise a one-way task can honour. Nothing is correlated by `thid`
+   * afterwards, because there is no reply to correlate.
+   */
+  async notify(envelope: TrustTask<unknown>, _opts: NotifyOpts = {}): Promise<void> {
+    const { outer } = await this.packEnvelope(envelope);
+    await this.bridge.send(outer);
   }
 
   /**
