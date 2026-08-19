@@ -30,8 +30,8 @@ Rules that bite hardest here:
   `catch` and silently degrades to a status-only guess.
 - **R1.6 + MV3 — persist before ack.** Anything that acknowledges a mediator
   message must durably store it first; assume the worker/offscreen document
-  dies on the next line. **Currently violated, and not fixable from this repo
-  alone** — see "Known open defect" below.
+  dies on the next line. **Satisfied — and easy to break again**: see "How
+  persist-before-ack is held" below before touching the inbound path.
 - **R1.5 — reconnect must re-arm on failure, with exponential backoff.** Cap
   the *delay*, never the attempt count, and re-arm on **every** failure
   including first-connect: an `onClose`-driven retry cannot cover a session
@@ -47,22 +47,34 @@ Rules that bite hardest here:
   extracted**: the relay never received this repo's body-first error-parsing
   fix. Land contract/transport fixes in all three or extract the shared core.
 
-## Known open defect — R1.6 persist-before-ack
+## How persist-before-ack is held (R1.6)
 
-`@openvtc/vti-didcomm-js` acks an inbound frame **before** dispatching it to
-`onMessage` (`_dispatchFrame` in `mediator-transport.js`), and the ack tells
-the mediator to delete its queued copy. The wallet then persists only the
-message **id** (`inbound/dedup.ts`), never the body.
+This was an open defect and is now closed, in two halves that only work
+together. Both are load-bearing, and neither is obvious from the code that
+depends on it.
 
-So if the offscreen document or service worker dies between the ack and the
-user's decision, a `task-consent/request` is gone for good: the mediator
-deleted it, nothing stored the challenge or `payloadDigest`, and the id now
-suppresses any replay as a duplicate. The VTA waits for a decision that will
-never come and the task lapses on its TTL.
+**The transport acks after handoff.** `@openvtc/vti-didcomm-js` 0.6.2+
+(`_dispatchFrame` in `mediator-transport.js`) awaits `_deliver` — which awaits
+your `onMessage` — and only then acks. The ack is what tells the mediator to
+delete its queued copy, so acking first would make the mediator's copy the only
+copy during the window where we hold nothing. **The plugin's `^0.6.2` floor is
+therefore a correctness constraint, not a version preference.** An older
+transport acks first and silently reintroduces the defect.
 
-Fixing it needs either a persist hook in `vti-didcomm-js` or disabling its
-auto-ack and driving `acknowledgeMessages` explicitly after a durable write —
-a contract change affecting pnm-relay too (R4.1). Don't paper over it here.
+**The handler persists before it returns.** `onInboundMessage` in
+`src/offscreen.ts` awaits `putPendingInbound` (`core/src/inbound/pending.ts`)
+as its first action, so the whole message is durably stored before the promise
+settles and the ack goes out. `offscreen.ts` and `background.ts` drain
+`listPendingInbound` on boot, so anything interrupted mid-decision is re-driven
+rather than lost. `tests/inbound.ack-ordering.mjs` pins the ordering.
+
+**What breaks it:** making `onInboundMessage` return before the write settles
+(dropping the `await`, moving the persist after a branch, or handling a message
+type on a path that skips it), or relaxing the `vti-didcomm-js` floor below
+0.6.2. `pending.ts` is deliberately separate from `dedup.ts` — dedup answers
+"have I already prompted for this?", pending answers "is this still
+outstanding?" A message can be both, which is why the drain path bypasses the
+dedup check.
 
 ## Repo mechanics worth knowing before you start
 
