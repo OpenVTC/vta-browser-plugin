@@ -34,9 +34,56 @@ export interface ContextRecord {
   description: string | null;
   /** Parent context id, or absent for a top-level context. */
   parent?: string;
-  base_path: string;
-  created_at: string;
-  updated_at: string;
+  /** Resolved path from the root context — derived by the VTA, not settable. */
+  basePath: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+
+/**
+ * Read a member that the agent may still spell in snake_case.
+ *
+ * SPEC §4.10 makes lowerCamelCase the wire contract, and the VTA now emits it —
+ * but an agent that has not taken that change yet still sends the old spelling,
+ * and this library talks to agents it does not control. Accepting both on read
+ * is Postel's other half; this library emits only the canonical form.
+ *
+ * Delete once no supported agent predates the fold.
+ */
+export function fold(
+  raw: Record<string, unknown>,
+  pairs: readonly (readonly [string, string])[],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...raw };
+  for (const [camel, snake] of pairs) {
+    if (snake in out) {
+      if (!(camel in out)) out[camel] = out[snake];
+      delete out[snake];
+    }
+  }
+  return out;
+}
+
+/**
+ * Accept either spelling of the record's members; hand back the canonical one.
+ *
+ * Only rewrites what is present: a record that carries neither spelling of a
+ * member keeps not carrying it, rather than gaining the key with `undefined`.
+ */
+function normalizeContext(raw: Record<string, unknown>): ContextRecord {
+  const out: Record<string, unknown> = { ...raw };
+  for (const [camel, snake] of [
+    ["basePath", "base_path"],
+    ["createdAt", "created_at"],
+    ["updatedAt", "updated_at"],
+  ] as const) {
+    if (snake in out) {
+      if (!(camel in out)) out[camel] = out[snake];
+      delete out[snake];
+    }
+  }
+  return out as unknown as ContextRecord;
 }
 
 export interface ContextsListParams {
@@ -61,11 +108,11 @@ export async function contextsList(
     {},
     { issuer: params.holder.did, recipient: params.service.did },
   );
-  const payload = await sender.send<{ contexts?: ContextRecord[] }>(envelope, {
+  const payload = await sender.send<{ contexts?: Record<string, unknown>[] }>(envelope, {
     expectedResponseType: TASK_CONTEXTS_LIST_RESPONSE,
     operationLabel: "contexts/list/1.0",
   });
-  return payload.contexts ?? [];
+  return (payload.contexts ?? []).map(normalizeContext);
 }
 
 export interface ContextsCreateParams {
@@ -99,10 +146,11 @@ export async function contextsCreate(
     },
     { issuer: params.holder.did, recipient: params.service.did },
   );
-  return sender.send<ContextRecord>(envelope, {
+  const created = await sender.send<Record<string, unknown>>(envelope, {
     expectedResponseType: TASK_CONTEXTS_CREATE_RESPONSE,
     operationLabel: "contexts/create/1.0",
   });
+  return normalizeContext(created);
 }
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer

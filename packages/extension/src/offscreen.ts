@@ -1379,7 +1379,7 @@ async function doListContexts(req: {
  *  populate the Persona-DID dropdown for a did-self-issued entry — these
  *  are the DIDs the VTA can mint a SIOP id_token AS. Returns the
  *  popup-narrow shape (`did` + `contextId`); the wire record carries
- *  more (server_id, scid, …) the UI doesn't use. */
+ *  more (serverId, scid, …) the UI doesn't use. */
 async function doListDids(req: {
   vtaDid: string;
   restBaseUrl: string;
@@ -1391,7 +1391,7 @@ async function doListDids(req: {
     service,
     ...(req.contextId ? { contextId: req.contextId } : {}),
   });
-  return { dids: dids.map((d) => ({ did: d.did, contextId: d.context_id })) };
+  return { dids: dids.map((d) => ({ did: d.did, contextId: d.contextId })) };
 }
 
 /** Create a new context at the connected VTA. Requires the wallet's

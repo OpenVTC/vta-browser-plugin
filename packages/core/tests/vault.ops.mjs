@@ -79,7 +79,7 @@ test("vtaListDids scopes by context and unwraps dids[]", async () => {
   const res = await vtaListDids(ch, { holder, service, contextId: "work" });
   assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/vta/webvh/dids/list/1.0");
   assert.deepEqual(ch.sent[0].envelope.payload, { context_id: "work" });
-  assert.deepEqual(res, [{ did: "did:webvh:a", context_id: "work" }]);
+  assert.deepEqual(res, [{ did: "did:webvh:a", contextId: "work" }]);
 });
 
 test("contextsList sends contexts/list/1.0 with empty payload and unwraps contexts[]", async () => {
@@ -93,7 +93,7 @@ test("contextsList sends contexts/list/1.0 with empty payload and unwraps contex
 });
 
 test("contextsCreate defaults name to id and forwards description/parent", async () => {
-  const record = { id: "team", name: "Team", did: null, description: "d", base_path: "/team", created_at: "t", updated_at: "t" };
+  const record = { id: "team", name: "Team", did: null, description: "d", basePath: "/team", createdAt: "t", updatedAt: "t" };
   const ch = captureChannel(record);
   const res = await contextsCreate(ch, { holder, service, id: "team", description: "d", parent: "org" });
   assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/vta/contexts/create/1.0");
@@ -106,9 +106,9 @@ test("swapAcl sends acl/swap-key with currentSubject/newSubject/linkProof (ephem
   const ch = captureChannel({
     did: holderSigning.did,
     role: "admin",
-    allowed_contexts: [],
-    created_at: 1,
-    created_by: "did:web:vta.example",
+    allowedContexts: [],
+    createdAt: 1,
+    createdBy: "did:web:vta.example",
   });
   const res = await swapAcl(ch, {
     ephemeralDid: "did:key:zEphemeral",
@@ -147,4 +147,34 @@ test("setDeviceWake sets the handle; omitting it clears", async () => {
   const ch2 = captureChannel({ pushCapable: false });
   await setDeviceWake(ch2, { holder, service });
   assert.deepEqual(ch2.sent[0].envelope.payload, {}); // clear
+});
+
+test("a context record still arrives from an agent that predates the casing fold", async () => {
+  // SPEC §4.10 makes lowerCamelCase the wire contract and the VTA now emits it,
+  // but this library talks to agents it does not control. The old spelling is
+  // accepted on read and normalised away — a caller never sees both.
+  const ch = captureChannel({
+    contexts: [
+      { id: "work", name: "Work", base_path: "/work", created_at: "t1", updated_at: "t2" },
+    ],
+  });
+  const [ctx] = await contextsList(ch, { holder, service });
+  assert.equal(ctx.basePath, "/work");
+  assert.equal(ctx.createdAt, "t1");
+  assert.equal(ctx.updatedAt, "t2");
+  assert.ok(!("base_path" in ctx), "the pre-fold spelling must not survive into the result");
+});
+
+test("a webvh DID record likewise", async () => {
+  const ch = captureChannel({ dids: [{ did: "did:webvh:a", context_id: "work", server_id: "prod" }] });
+  const [d] = await vtaListDids(ch, { holder, service });
+  assert.equal(d.contextId, "work");
+  assert.equal(d.serverId, "prod");
+  assert.ok(!("context_id" in d));
+});
+
+test("the canonical spelling is passed through untouched", async () => {
+  const ch = captureChannel({ contexts: [{ id: "work", name: "Work", basePath: "/work" }] });
+  const [ctx] = await contextsList(ch, { holder, service });
+  assert.equal(ctx.basePath, "/work");
 });

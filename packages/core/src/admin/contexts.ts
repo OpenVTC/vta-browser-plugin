@@ -52,6 +52,9 @@ export async function contextPreviewDelete(
   const payload = await sender.send<{
     id: string;
     keys?: string[];
+    webvhDids?: string[];
+    /** Pre-fold spelling, still sent by an agent that has not taken the
+     *  camelCase change. Accepted on read; never emitted. */
     webvh_dids?: string[];
   }>(envelope, {
     expectedResponseType: `${TASK_CONTEXTS_PREVIEW_DELETE}#response`,
@@ -60,8 +63,7 @@ export async function contextPreviewDelete(
   return {
     id: payload.id,
     keys: payload.keys ?? [],
-    // snake_case on the wire, camelCase to the caller — the boundary is here.
-    webvhDids: payload.webvh_dids ?? [],
+    webvhDids: payload.webvhDids ?? payload.webvh_dids ?? [],
   };
 }
 
