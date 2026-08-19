@@ -178,12 +178,17 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
     [...REFERENCED.keys()].map(family).filter((f) => canonicalFamilies.has(f)),
   );
 
-  // 110 of 161 as of vta-sdk 0.25.0. The families this library does NOT
-  // implement are, with two exceptions, the ones with no published schema —
-  // see the gap list in the repo's notes. The exceptions are deliberate: the
-  // wider `vtc/*` surface belongs to a community rather than an agent, and
-  // `vault/*`'s archive/restore/purge and credential sub-family are unspecced.
-  const expected = 110;
+  // 130 of 161 as of vta-sdk 0.25.0. It was 110 until the `vta/webvh/*` DID
+  // lifecycle and `vta/contexts/{get,update,update-did}` were specified
+  // upstream (trust-tasks #240) and published as bindings in
+  // @openvtc/trust-tasks 0.10.0 — 20 families that had no schema to implement
+  // against before that, which is the usual reason a family is missing here.
+  //
+  // Of the 31 still outstanding: `vault/*`'s archive/restore/purge and its
+  // credentials sub-family are unspecced, and the wider `vtc/*` surface belongs
+  // to a community rather than an agent, so it is deliberately out of scope.
+  // The rest — backup, attestation, seeds, audit retention — are unspecced too.
+  const expected = 130;
   assert.equal(
     implemented.size,
     expected,
