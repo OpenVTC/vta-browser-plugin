@@ -12,6 +12,7 @@ import {
   AGENT_NAME_INVALID,
   AGENT_NAME_INSECURE,
   AGENT_NAME_NO_REDIRECT,
+  AGENT_NAME_UNREADABLE,
   AGENT_NAME_UNRESOLVABLE,
   AGENT_NAME_NOT_AUTHORIZED,
 } from "../src/agent-name.ts";
@@ -19,7 +20,7 @@ import {
 const DID = "did:webvh:QmScid:example.com";
 
 const deps = (over: Record<string, unknown> = {}) => ({
-  fetchRedirect: async () => ({ status: 302, location: DID }),
+  fetchName: async () => ({ status: 302, location: DID }),
   resolveDid: async () => ({ resolved: true, alsoKnownAs: ["https://example.com/@alice"] }),
   ...over,
 }) as never;
@@ -72,7 +73,7 @@ test("plain HTTP is refused before any request is made", async () => {
   let called = false;
   const code = await codeOf(() =>
     resolveAgentName("http://example.com/@alice", deps({
-      fetchRedirect: async () => {
+      fetchName: async () => {
         called = true;
         return { status: 302, location: DID };
       },
@@ -82,20 +83,21 @@ test("plain HTTP is refused before any request is made", async () => {
   assert.equal(called, false, "must not hit the network for an http name");
 });
 
-test("a non-redirect response fails", async () => {
+test("a response that names no DID fails", async () => {
   assert.equal(
     await codeOf(() =>
       resolveAgentName("example.com/@alice", deps({
-        fetchRedirect: async () => ({ status: 404, location: null }),
+        fetchName: async () => ({ status: 404, location: null }),
       })),
     ),
     AGENT_NAME_NO_REDIRECT,
   );
-  // A 200 is just as wrong as a 404: the Location header is the answer.
+  // A 200 carrying nothing is just as wrong as a 404 — the point is the DID,
+  // not the status.
   assert.equal(
     await codeOf(() =>
       resolveAgentName("example.com/@alice", deps({
-        fetchRedirect: async () => ({ status: 200, location: null }),
+        fetchName: async () => ({ status: 200, url: "https://example.com/@alice", body: "<html>hi</html>" }),
       })),
     ),
     AGENT_NAME_NO_REDIRECT,
@@ -106,7 +108,7 @@ test("a redirect to something that is not a DID fails", async () => {
   assert.equal(
     await codeOf(() =>
       resolveAgentName("example.com/@alice", deps({
-        fetchRedirect: async () => ({ status: 302, location: "https://example.com/login" }),
+        fetchName: async () => ({ status: 302, location: "https://example.com/login" }),
       })),
     ),
     AGENT_NAME_NO_REDIRECT,
@@ -143,4 +145,91 @@ test("errors name both halves of the binding", async () => {
     assert.match(msg, /did:webvh:QmScid:example\.com/);
     assert.match(msg, /alsoKnownAs/);
   }
+});
+
+// ── Stage 1 in browser shape ─────────────────────────────────────────────
+//
+// A browser cannot read a `Location` header at all: a manual redirect arrives
+// as an opaque-redirect response with no headers, and Chrome refuses a `did:`
+// target outright. So the extension follows the redirect instead and the DID
+// arrives in the landing URL or the body. These cover the shapes the guide's
+// permissive redirect contract allows.
+
+test("a followed redirect to a did:webvh log resolves — the browser path", async () => {
+  // Exactly what dids.firstperson.dev serves a browser: 302 to a relative
+  // `/{mnemonic}/did.jsonl`, whose first line carries the DID in `state.id`.
+  const log = [
+    JSON.stringify({ versionId: "1-QmX", state: { id: DID, alsoKnownAs: ["https://example.com/@alice"] } }),
+    JSON.stringify({ versionId: "2-QmY", state: { id: DID } }),
+  ].join("\n");
+  const r = await resolveAgentName("example.com/@alice", deps({
+    fetchName: async () => ({ status: 200, url: "https://example.com/motion-knife/did.jsonl", body: log }),
+  }));
+  assert.equal(r.did, DID);
+});
+
+test("the DID may arrive as JSON, a query parameter, or a path segment", async () => {
+  const shapes: Array<Record<string, unknown>> = [
+    { status: 200, url: "https://example.com/@alice", body: JSON.stringify({ did: DID }) },
+    { status: 200, url: "https://example.com/@alice", body: JSON.stringify({ id: DID }) },
+    { status: 200, url: "https://example.com/@alice", body: JSON.stringify({ didDocument: { id: DID } }) },
+    { status: 200, url: "https://example.com/@alice", body: `  ${DID}  ` },
+    { status: 200, url: `https://example.com/resolve?did=${encodeURIComponent(DID)}` },
+    { status: 200, url: `https://example.com/dids/${encodeURIComponent(DID)}` },
+    { status: 302, location: `/resolve?did=${encodeURIComponent(DID)}` },
+  ];
+  for (const stage1 of shapes) {
+    const r = await resolveAgentName("example.com/@alice", deps({ fetchName: async () => stage1 }));
+    assert.equal(r.did, DID, `failed for ${JSON.stringify(stage1)}`);
+  }
+});
+
+test("a landing page that names no DID does not become one", async () => {
+  // The landing URL's last segment is not a DID and the body is not JSON:
+  // nothing here may be manufactured into a candidate.
+  assert.equal(
+    await codeOf(() =>
+      resolveAgentName("example.com/@alice", deps({
+        fetchName: async () => ({
+          status: 200,
+          url: "https://example.com/profile/alice",
+          body: "<!doctype html><title>alice</title>",
+        }),
+      })),
+    ),
+    AGENT_NAME_NO_REDIRECT,
+  );
+});
+
+test("a DID found in stage 1 still has to survive stages 2 and 3", async () => {
+  // The permissive extraction is safe only because the candidate is untrusted.
+  // A body naming somebody else's DID buys nothing.
+  assert.equal(
+    await codeOf(() =>
+      resolveAgentName("example.com/@alice", deps({
+        fetchName: async () => ({
+          status: 200,
+          url: "https://example.com/other/did.jsonl",
+          body: JSON.stringify({ state: { id: "did:webvh:QmOther:example.com" } }),
+        }),
+        resolveDid: async () => ({ resolved: true, alsoKnownAs: ["https://example.com/@bob"] }),
+      })),
+    ),
+    AGENT_NAME_NOT_AUTHORIZED,
+  );
+});
+
+test("a transport that cannot read the answer says so with its own code", async () => {
+  // What the extension throws when Chrome refuses the `did:` redirect. It must
+  // not be reported as "the server did not redirect" — the server did.
+  assert.equal(
+    await codeOf(() =>
+      resolveAgentName("example.com/@alice", deps({
+        fetchName: async () => {
+          throw new AgentNameError(AGENT_NAME_UNREADABLE, "Could not read example.com/@alice");
+        },
+      })),
+    ),
+    AGENT_NAME_UNREADABLE,
+  );
 });

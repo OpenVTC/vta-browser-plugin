@@ -127,6 +127,20 @@ a contract change affecting pnm-relay too (R4.1). Don't paper over it here.
   reload the tab after granting. Anything that used to read
   `manifest.content_scripts` for a match list must read the grants instead —
   `broadcastWalletEvent` silently reached no tabs when it didn't.
+- **A browser cannot read a `Location` header, so agent-name stage 1 must
+  follow the redirect.** `fetch(url, { redirect: "manual" })` returns an
+  opaque-redirect response — status 0, no headers — on every host, and when the
+  target is a `did:` URI Chrome refuses the request outright in the network
+  stack (`net::ERR_UNSAFE_REDIRECT`), surfacing as a bare `TypeError: Failed to
+  fetch`. No extension API is given the header either: `webRequest` never fires
+  the callback that would carry it. `fetchAgentName` in `src/background.ts`
+  therefore sends an `Accept` that includes `text/html` and follows the
+  redirect; the webvh hosting service content-negotiates that into a same-origin
+  redirect to the DID's log, and `didFromNameResponse` takes the DID from the
+  landing URL or body. That is safe only because the DID is a *candidate* —
+  stages 2 and 3 still have to pass — so don't shortcut it into a trusted
+  answer. Node's `fetch` does expose `Location`, which is why the unit tests
+  cover both shapes.
 - **Stub `Response` objects with a real `Response`**, not an `{ ok, json }`
   literal. A hand-rolled stub only implements whatever the code happened to
   call when it was written, and stops representing a Response the moment the

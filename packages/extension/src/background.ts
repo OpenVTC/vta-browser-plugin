@@ -158,7 +158,11 @@ import {
 } from "./bridge-protocol.js";
 import { getSettings } from "./config.js";
 import { providerMatches, syncProviderRegistration } from "./content-registration.js";
-import { AgentNameError, resolveAgentName } from "./agent-name.js";
+import {
+  AGENT_NAME_UNREADABLE,
+  AgentNameError,
+  resolveAgentName,
+} from "./agent-name.js";
 import {
   HOST_PERMISSION_REQUIRED,
   displayHostFor,
@@ -1398,18 +1402,7 @@ async function handleWalletDefaults(): Promise<RuntimeWalletDefaultsResponse> {
   };
 }
 
-// Resolve + verify an RP DID on behalf of the consent prompt. The popup
-// posts this after rendering and updates the verification badge with the
-// result. Routed through the offscreen because did:webvh resolution needs
-// dynamic import + DOM, which a service worker lacks.
-/**
- * Turn an agent name into the DID it names.
- *
- * Runs here rather than in the popup because stage 1 needs to read a
- * cross-origin redirect's `Location`, which requires the host permission the
- * service worker holds. `redirect: "manual"` is essential: letting fetch
- * follow the redirect discards the header that *is* the answer.
- */
+// Does the active VTA have an approver identity, and is its inbox open?
 async function handleApproverState(): Promise<RuntimeApproverStateResponse> {
   const vtaDid = await readActiveVtaDid();
   // No active VTA means no approver to speak of — not an error, just nothing.
@@ -1422,21 +1415,114 @@ async function handleApproverState(): Promise<RuntimeApproverStateResponse> {
   })) as RuntimeApproverStateResponse;
 }
 
+/** How much of a stage-1 body to keep. The DID sits in the first line of a
+ *  did:webvh log; anything larger than this is not an answer we understand,
+ *  and reading it all would be an unbounded read of somebody else's server. */
+const AGENT_NAME_BODY_LIMIT = 256 * 1024;
+
+/** Stage 1 of agent-name resolution, in browser shape.
+ *
+ *  `Accept` lists JSON first and `text/html` last: a name server that content-
+ *  negotiates properly answers a machine with JSON, while one that only knows
+ *  "is this a browser?" — the webvh hosting service asks exactly that — sees
+ *  `text/html` in the list and answers with an ordinary same-origin redirect to
+ *  the DID's log. Both forms are readable here; the bare `did:` Location that
+ *  neither header would shake loose is not.
+ */
+async function fetchAgentName(url: string): Promise<{
+  status: number;
+  url: string;
+  body?: string;
+}> {
+  const shown = url.replace(/^https?:\/\//, "");
+  let res: Response;
+  try {
+    // R1.2: every outbound fetch gets a timeout, applied where fetch is used
+    // rather than left to the caller.
+    res = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json, application/did+json;q=0.9, text/html;q=0.8" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (e) {
+    // A `TypeError` here is indistinguishable between "host unreachable" and
+    // "Chrome refused the did: redirect", so the message covers both and names
+    // the way out — pasting the DID always works.
+    throw new AgentNameError(
+      AGENT_NAME_UNREADABLE,
+      `Could not read ${shown}: ${e instanceof Error ? e.message : String(e)}. ` +
+        `Either the name's server is unreachable, or it answered with a bare ` +
+        `did: redirect, which a browser is not allowed to read — paste the full ` +
+        `did:… instead.`,
+    );
+  }
+
+  // Defence in depth: `redirect: "follow"` above should make this unreachable,
+  // but an opaque redirect is a status-0 response with no headers and no body,
+  // and silently reporting that as "HTTP 0, no DID" would blame the server.
+  if (res.type === "opaqueredirect") {
+    throw new AgentNameError(
+      AGENT_NAME_UNREADABLE,
+      `${shown} answered with a redirect the browser will not expose. ` +
+        `Paste the full did:… instead.`,
+    );
+  }
+
+  const body = await readCapped(res, AGENT_NAME_BODY_LIMIT);
+  return { status: res.status, url: res.url || url, ...(body ? { body } : {}) };
+}
+
+/** Read at most `limit` characters, then hang up.
+ *
+ *  R1.2's foreign-fetch profile: this is a URL an outside party controls, so
+ *  the cap has to be enforced *while* reading. `text()` then `slice()` would
+ *  have downloaded the whole thing first, which is the same unbounded read
+ *  wearing a cap. `content-length` is no substitute either — a server that
+ *  omits it is exactly the one worth defending against. */
+async function readCapped(res: Response, limit: number): Promise<string> {
+  const reader = res.body?.getReader();
+  // No body stream (a 304, or a stubbed Response in a test) — nothing to cap.
+  if (!reader) return (await res.text()).slice(0, limit);
+  const decoder = new TextDecoder();
+  let out = "";
+  try {
+    while (out.length < limit) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    // Cancel rather than drain: an over-long body is one we have stopped
+    // reading, and leaving the stream open holds the connection.
+    await reader.cancel().catch(() => {});
+  }
+  return out.slice(0, limit);
+}
+
+/**
+ * Turn an agent name into the DID it names.
+ *
+ * Runs here rather than in the popup because stage 1 is a cross-origin request
+ * that needs the host permission, and because the DID it produces is fed
+ * straight into DID resolution.
+ *
+ * **The redirect is followed, deliberately.** `redirect: "manual"` looks like
+ * the right call — the `Location` header is the reference implementation's
+ * answer — but a browser never gets to see that header: a manual redirect is
+ * delivered as an opaque-redirect response with status 0 and no headers, and
+ * when the target is a `did:` URI Chrome refuses the request outright down in
+ * the network stack (`net::ERR_UNSAFE_REDIRECT`), which is where the raw
+ * "Failed to fetch" this replaces came from. So we send a browser-shaped
+ * `Accept`, let fetch follow whatever the server offers a browser, and read
+ * the DID out of where it landed. See the long note in `agent-name.ts`.
+ */
 async function handleResolveAgentName(
   req: RuntimeResolveAgentNameRequest,
 ): Promise<RuntimeResolveAgentNameResponse> {
   try {
     const { did, name } = await resolveAgentName(req.name, {
-      fetchRedirect: async (url) => {
-        // R1.2: every outbound fetch gets a timeout, applied where fetch is
-        // used rather than left to the caller.
-        const res = await fetch(url, {
-          method: "GET",
-          redirect: "manual",
-          signal: AbortSignal.timeout(15_000),
-        });
-        return { status: res.status, location: res.headers.get("location") };
-      },
+      fetchName: fetchAgentName,
       resolveDid: async (did) => {
         const reply = await handleVerifyRpDid({ type: RUNTIME_VERIFY_RP_DID, did });
         if (!reply.ok) return { resolved: false, error: reply.error };
@@ -1456,6 +1542,10 @@ async function handleResolveAgentName(
   }
 }
 
+// Resolve + verify an RP DID on behalf of the consent prompt. The popup
+// posts this after rendering and updates the verification badge with the
+// result. Routed through the offscreen because did:webvh resolution needs
+// dynamic import + DOM, which a service worker lacks.
 async function handleVerifyRpDid(
   req: RuntimeVerifyRpDidRequest,
 ): Promise<RuntimeVerifyRpDidResponse> {
