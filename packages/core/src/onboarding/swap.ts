@@ -130,7 +130,7 @@ export interface SwapAclRestOptions {
 
 /** @deprecated Use {@link swapAcl} with a channel/session whose identity is the
  *  ephemeral. Swap over REST — builds a {@link RestChannel} as the ephemeral and
- *  dispatches `acl/swap-key/0.1` over `/api/trust-tasks` (NOT the bespoke
+ *  dispatches `acl/swap-key/0.1` over `/trust-tasks` (NOT the bespoke
  *  `/acl/swap` route, which is being retired now the dispatcher handles it). */
 export function swapAclRest(opts: SwapAclRestOptions): Promise<AclSwapResult> {
   const channel = new RestChannel({

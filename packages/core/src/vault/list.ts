@@ -1,7 +1,7 @@
 // Vault — list (M1).
 //
 // Posts a `https://trusttasks.org/spec/vault/list/0.2` envelope to the VTA's
-// trust-task dispatcher (`POST /api/trust-tasks`) and returns the metadata
+// trust-task dispatcher (`POST /trust-tasks`) and returns the metadata
 // view of stored credentials. Read-only — secret material never crosses the
 // wire (it's only released by `vault/release/0.1`, which lands in M2).
 //

@@ -165,7 +165,7 @@ export interface VtaListContextsOptions extends ContextsListParams, VtaAuthInput
 
 /** @deprecated Use {@link contextsList} with a channel from a `VtaSession`.
  *  List over REST — builds a one-shot {@link RestChannel} (dispatches
- *  `contexts/list/1.0` over `/api/trust-tasks`, NOT the bespoke `/contexts`). */
+ *  `contexts/list/1.0` over `/trust-tasks`, NOT the bespoke `/contexts`). */
 export interface ContextsGetParams {
   holder: Identity;
   service: RemoteDidcommEndpoint;

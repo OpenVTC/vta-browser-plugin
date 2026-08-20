@@ -1,5 +1,5 @@
 // REST auth for the VTA — the bearer half of the `RestChannel`. The channel
-// (vta/rest-channel.ts) owns the POST to /api/trust-tasks and the response
+// (vta/rest-channel.ts) owns the POST to /trust-tasks and the response
 // decode; this module owns getting the token it posts with:
 //
 //   - `getVtaBearer` — runs the canonical /auth/challenge → DIDComm

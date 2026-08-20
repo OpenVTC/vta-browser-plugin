@@ -1,7 +1,7 @@
 // VTA — list webvh DIDs (optionally scoped to one context).
 //
 // Posts a `vta/webvh/dids/list/1.0` envelope to the VTA's trust-task
-// dispatcher (`POST /api/trust-tasks`, the same path `vaultListRest`
+// dispatcher (`POST /trust-tasks`, the same path `vaultListRest`
 // uses) and returns the DID records the VTA hosts. The popup's
 // AddEntryForm calls this with the selected context to populate the
 // Persona-DID dropdown for a `did-self-issued` entry: these are exactly
