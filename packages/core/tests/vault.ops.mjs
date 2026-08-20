@@ -78,7 +78,11 @@ test("vtaListDids scopes by context and unwraps dids[]", async () => {
   const ch = captureChannel({ dids: [{ did: "did:webvh:a", context_id: "work" }] });
   const res = await vtaListDids(ch, { holder, service, contextId: "work" });
   assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/vta/webvh/dids/list/1.0");
-  assert.deepEqual(ch.sent[0].envelope.payload, { context_id: "work" });
+  // camelCase: the schema names `contextId` and sets additionalProperties:false,
+  // so `context_id` was malformed rather than an accepted synonym. This
+  // assertion pinned the drift in place — the reply is still snake_case above,
+  // because the READ path deliberately folds both while agents migrate.
+  assert.deepEqual(ch.sent[0].envelope.payload, { contextId: "work" });
   assert.deepEqual(res, [{ did: "did:webvh:a", contextId: "work" }]);
 });
 

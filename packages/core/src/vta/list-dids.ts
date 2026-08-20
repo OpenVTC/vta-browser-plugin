@@ -71,7 +71,14 @@ export async function vtaListDids(
 ): Promise<WebvhDidRecord[]> {
   const envelope = buildTrustTask(
     TASK_WEBVH_DIDS_LIST_1_0,
-    params.contextId ? { context_id: params.contextId } : {},
+    // camelCase, per the published schema. This sent `context_id` until
+    // `vta/webvh/dids/list/1.0` was specified: the schema names `contextId`
+    // and sets `additionalProperties: false`, so the old spelling was not a
+    // tolerated synonym — it made the whole payload malformed, and a
+    // conforming agent refuses it. The filter silently did nothing before
+    // that, which is the worse half: an unfiltered list looks like a working
+    // one until you count the rows.
+    params.contextId ? { contextId: params.contextId } : {},
     { issuer: params.holder.did, recipient: params.service.did },
   );
   const result = await channel.send<ListDidsResultBody>(envelope, {
