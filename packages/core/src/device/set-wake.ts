@@ -7,7 +7,7 @@
 // clears it (the device becomes non-wakeable).
 //
 // Posts a `https://trusttasks.org/spec/device/set-wake/0.2` envelope to the
-// VTA's trust-task dispatcher (`POST /api/trust-tasks`) using the same
+// VTA's trust-task dispatcher (`POST /trust-tasks`) using the same
 // authcrypt → bearer primitive as the vault/* ops (`getVtaBearer`). The 0.2
 // payload is field- and value-identical to 0.1 (no enum fields), so this is a
 // pure minor-version bump; the VTA dual-accepts it via its 0.2 edge transform.

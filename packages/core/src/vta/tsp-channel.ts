@@ -6,7 +6,7 @@
 //
 // Wire binding (confirmed against the VTA's `tsp_inbound.rs`): the TSP message
 // plaintext is the Trust-Task envelope JSON — byte-identical to the REST
-// `/api/trust-tasks` body and the DIDComm message body — with NO extra binding
+// `/trust-tasks` body and the DIDComm message body — with NO extra binding
 // wrapper. The VTA seals its framework response document back to the proven
 // sender VID over TSP; we unpack it and decode with the shared
 // `parseTrustTaskReply`.

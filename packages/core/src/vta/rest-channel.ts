@@ -2,7 +2,7 @@
 //
 // Carries a canonical Trust-Task envelope over HTTP: authenticate to the VTA
 // for a short-lived bearer (the DIDComm-authcrypt `/auth/` handshake), POST
-// the envelope to the trust-task dispatcher (`/api/trust-tasks`), and decode
+// the envelope to the trust-task dispatcher (`<base>/trust-tasks`), and decode
 // the reply with the shared `parseTrustTaskReply`.
 //
 // This is the ONLY channel that carries a bearer — TSP and DIDComm are
@@ -12,6 +12,7 @@
 // and never leaks into a domain op.
 
 import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
+import { TRUST_TASK_PATH } from "./endpoint.js";
 import { errorFromBody, VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
 import { parseTrustTaskReply } from "./trust-task.js";
@@ -20,7 +21,15 @@ import { getVtaBearer, makeReauth, type VtaAuthInputs } from "./auth.js";
 import { withFetchTimeout, isFetchTimeout, DEFAULT_FETCH_TIMEOUT_MS } from "../http/timeout-fetch.js";
 
 export interface RestChannelOptions extends VtaAuthInputs {
-  /** Trust-task dispatcher path. Defaults to `/api/trust-tasks`. */
+  /**
+   * Trust-task dispatcher path, appended to `baseUrl`. Defaults to
+   * `/trust-tasks`, which the published HTTPS binding fixes — `baseUrl` is
+   * the **Trust-Task base** and the binding owns the suffix.
+   *
+   * Overriding this is an escape hatch for a non-conformant deployment, not
+   * a configuration knob: a VTA that needs it is one the binding cannot
+   * describe.
+   */
   trustTasksPath?: string;
 }
 
@@ -45,7 +54,7 @@ export class RestChannel implements TrustTaskChannel {
       service: opts.service,
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
     };
-    this.path = opts.trustTasksPath ?? "/api/trust-tasks";
+    this.path = opts.trustTasksPath ?? TRUST_TASK_PATH;
     this.fetchImpl = withFetchTimeout(opts.fetch);
   }
 

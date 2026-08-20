@@ -4,6 +4,7 @@ export * from "./channel.js";
 export * from "./client.js";
 export * from "./contexts.js";
 export * from "./didcomm.js";
+export * from "./endpoint.js";
 export * from "./errors.js";
 export * from "./list-dids.js";
 export * from "./mediation.js";
