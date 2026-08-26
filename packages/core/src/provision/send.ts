@@ -33,14 +33,26 @@ const PROBLEM_REPORT_TYPE = "https://didcomm.org/report-problem/2.0/problem-repo
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
+/**
+ * The VTA could not infer which context to provision into, and is handing back
+ * the candidates for a human to pick from.
+ *
+ * Spelled as the registry declares it today (lowerCamelCase, SPEC §4.10 rule 4
+ * — trustoverip/dtgwg-trust-tasks-tf#279). An agent that predates #279 still
+ * sends `provision/integration:context_required`, so **compare with
+ * `matchesTrustTaskCode` (`../trust-tasks/error-code.ts`), never with `===`** —
+ * see that module for why a plain equality here fails silently rather than
+ * loudly.
+ */
+export const PROVISION_CONTEXT_REQUIRED = "provision/integration:contextRequired";
+
 /** Parsed DIDComm problem-report body. Mirrors the wire shape
  *  emitted by the VTA's `app_err_to_response`. */
 export interface ProblemReportPayload {
   code: string;
   comment: string;
   /** Structured arguments — task-specific. For
-   *  `provision/integration:context_required` this carries the
-   *  candidates list. */
+   *  {@link PROVISION_CONTEXT_REQUIRED} this carries the candidates list. */
   args: string[];
 }
 
@@ -166,9 +178,12 @@ export async function sendProvisionIntegration(
   if (reply.type === PROBLEM_REPORT_TYPE) {
     // Throw a typed error so callers can branch on the code without
     // re-parsing the message string. The canonical case we surface a
-    // UX for is `provision/integration:context_required` — the
-    // wallet's popup catches the typed shape and shows the candidates
-    // (in `report.args`) as a picker so the operator can choose.
+    // UX for is `PROVISION_CONTEXT_REQUIRED` — the wallet's popup
+    // catches the typed shape and shows the candidates (in
+    // `report.args`) as a picker so the operator can choose. The code
+    // is passed through verbatim, in whatever spelling the agent used;
+    // folding it here would hide from the caller which side of the
+    // §4.10 re-casing its peer is on.
     const body = (reply.body ?? {}) as Partial<ProblemReportPayload>;
     throw new ProvisionProblemReportError({
       code: typeof body.code === "string" ? body.code : "(no code)",

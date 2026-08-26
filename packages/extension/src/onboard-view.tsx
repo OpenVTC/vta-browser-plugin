@@ -13,7 +13,11 @@
 
 import { useEffect, useState } from "react";
 import { useConnectionStore } from "./store.js";
-import { didWebvhDomain } from "@openvtc/pnm-core";
+import {
+  didWebvhDomain,
+  matchesTrustTaskCode,
+  PROVISION_CONTEXT_REQUIRED,
+} from "@openvtc/pnm-core";
 import {
   looksLikeAgentName,
   parseAgentName,
@@ -81,7 +85,7 @@ export function OnboardView({
   const [prep, setPrep] = useState<OnboardPrepareResult | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // When the VTA returns `provision/integration:context_required`
+  // When the VTA returns `provision/integration:contextRequired`
   // (multi-context VTA where inference can't auto-pick), we surface
   // the candidates as a picker so the operator can choose without
   // re-typing. The ephemeral grant is still valid — picking one
@@ -303,8 +307,15 @@ export function OnboardView({
         // candidates as a picker rather than bouncing the operator
         // back to a re-prepare cycle. The ephemeral grant is still
         // valid for its 1h TTL so picking immediately retries.
+        //
+        // Matched with `matchesTrustTaskCode`, not `===`. This wallet
+        // updates on the Web Store's schedule and the VTA on its own, so
+        // both spellings of the code are live at once (trust-tasks #279
+        // re-cased the local part). A hard equality on either one goes
+        // quietly false against half the fleet, and the symptom is not an
+        // error — it is the picker simply never appearing.
         if (
-          res.code === "provision/integration:context_required" &&
+          matchesTrustTaskCode(res.code, PROVISION_CONTEXT_REQUIRED) &&
           res.candidates &&
           res.candidates.length > 0
         ) {

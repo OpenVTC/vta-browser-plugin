@@ -585,12 +585,19 @@ export type RuntimeOnboardConnectResponse =
       ok: false;
       error: string;
       /** When the failure was a DIDComm problem-report from the VTA, the
-       *  structured code (e.g. `provision/integration:context_required`).
+       *  structured code (e.g. `provision/integration:contextRequired`).
        *  The popup branches on this to surface recovery UX — picker
-       *  dialogs, retry hints — rather than just dumping the message. */
+       *  dialogs, retry hints — rather than just dumping the message.
+       *
+       *  **Carried verbatim, in whatever spelling the VTA used.** This
+       *  crosses an extension message-passing boundary (offscreen ->
+       *  background -> popup), and normalising it in transit would mean
+       *  each hop had to be redeployed in lockstep with the agent. The
+       *  popup compares it with `matchesTrustTaskCode`, which accepts
+       *  both sides of the trust-tasks #279 re-casing. */
       code?: string;
       /** Problem-report `args` payload. Task-specific structure. For
-       *  `context_required` this is the candidates list the operator
+       *  `contextRequired` this is the candidates list the operator
        *  picks from. */
       candidates?: string[];
     };

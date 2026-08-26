@@ -108,8 +108,14 @@ export interface TrustTaskErrorPayload {
   /** RFC 3339 instant before which a retry SHOULD NOT be attempted. */
   retryAfter?: string;
   /** Task-specific structured context (e.g. `{ reason:
-   *  "cleartext_schema_invalid" }` on a `vault/upsert:sealed_secret_invalid`
-   *  reject). Shape is defined per Trust-Task spec. */
+   *  "cleartext_schema_invalid" }` on a `vault/upsert:sealedSecretInvalid`
+   *  reject). Shape is defined per Trust-Task spec.
+   *
+   *  The same casing caution as `code` applies to any *extended* code found in
+   *  here: trust-tasks #279 re-cased the local part of ~200 registry codes to
+   *  lowerCamelCase (`sealed_secret_invalid` -> `sealedSecretInvalid`), and a
+   *  deployed agent may be on either side of that. Compare with
+   *  `matchesTrustTaskCode` (`../trust-tasks/error-code.ts`), never `===`. */
   details?: unknown;
 }
 

@@ -22,8 +22,11 @@ export interface VaultDeleteOptions {
   service: RemoteDidcommEndpoint;
   id: string;
   /** Observed `version` for optimistic concurrency. Strongly RECOMMENDED;
-   *  the maintainer rejects with `vault/delete:version_conflict` on
-   *  mismatch (with `details.currentVersion` for retry). */
+   *  the maintainer rejects with `vault/delete:versionConflict` on
+   *  mismatch (with `details.currentVersion` for retry). An agent that
+   *  predates SPEC §4.10 rule 4 (trust-tasks #279) sends the same
+   *  rejection as `vault/delete:version_conflict`; match either with
+   *  `matchesTrustTaskCode` rather than `===`. */
   expectedVersion?: number;
   /** Human-readable rationale recorded in the audit trail. */
   reason?: string;
