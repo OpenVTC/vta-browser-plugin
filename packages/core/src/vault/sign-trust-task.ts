@@ -37,7 +37,9 @@ export interface VaultSignTrustTaskOptions {
   service: RemoteDidcommEndpoint;
   /** Identifier of the vault entry whose principal will sign. MUST
    *  point at a `did-self-issued` or `didcomm-peer` entry — other
-   *  kinds reject with `vault/sign-trust-task:not_signable`. */
+   *  kinds reject with `vault/sign-trust-task:notSignable` (an agent
+   *  that predates trust-tasks #279 spells it `not_signable`; match
+   *  either with `matchesTrustTaskCode`). */
   entryId: string;
   /** The Trust Task document to sign. MUST have no `proof` field.
    *  MUST set `issuer = <entry.principalDid>`. The VTA refuses to

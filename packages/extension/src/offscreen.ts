@@ -248,9 +248,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((e: unknown) => {
         // Preserve the structured problem-report fields when the VTA
         // replied with one. The popup branches on `code` to surface
-        // recovery UX (e.g. the context_required picker); without
+        // recovery UX (e.g. the contextRequired picker); without
         // these fields the message string would have to be regex-
-        // parsed, which is fragile.
+        // parsed, which is fragile. Forwarded verbatim — the popup
+        // does the spelling-tolerant compare, so nothing here has to
+        // know which side of trust-tasks #279 the VTA is on.
         if (e instanceof ProvisionProblemReportError) {
           sendResponse({
             ok: false,

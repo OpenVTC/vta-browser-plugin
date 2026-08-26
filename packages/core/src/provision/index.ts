@@ -20,6 +20,7 @@ export {
 export {
   sendProvisionIntegration,
   ProvisionProblemReportError,
+  PROVISION_CONTEXT_REQUIRED,
   type ProblemReportPayload,
   type ProvisionIntegrationRequestBody,
   type ProvisionIntegrationResponseBody,
