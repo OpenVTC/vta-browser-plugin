@@ -47,6 +47,13 @@ import {
 } from "../vta/protocol.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
 import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
+import {
+  describeViolations,
+  validateAgainstSchema,
+  type PayloadValidator,
+} from "../trust-tasks/validate.js";
+
+import { PAYLOAD_SCHEMA } from "@openvtc/trust-tasks/task-consent/request/0.1/payload";
 import type { SigningIdentity } from "../siop/self-issued.js";
 
 export const TASK_CONSENT_REQUEST_TYPE =
@@ -298,6 +305,15 @@ export interface ParseTaskConsentOptions {
   holderDid: string;
   /** Defaults to now. Injected for tests. */
   now?: Date;
+  /**
+   * SPEC §7.2 item 2, if you want a different one.
+   *
+   * Defaults to `validateAgainstSchema`. There is deliberately **no way to
+   * switch validation off**: a consent surface that skipped it would be
+   * rendering unchecked content to a human, and an option to do so is an
+   * option somebody eventually sets. Substitute a validator, don't remove one.
+   */
+  validatePayload?: PayloadValidator;
 }
 
 /**
@@ -357,23 +373,39 @@ export async function parseTaskConsentRequest(
     return reject("untrusted_issuer", "request is addressed to another device");
   }
 
-  const payload = (doc.payload ?? {}) as Partial<TaskConsentRequestPayload>;
-  if (
-    typeof payload.challenge !== "string" ||
-    typeof payload.taskType !== "string" ||
-    typeof payload.payloadDigest !== "string" ||
-    typeof payload.sideEffects !== "string" ||
-    typeof payload.requester !== "string" ||
-    typeof payload.approverSet !== "string" ||
-    typeof payload.expiresAt !== "string" ||
-    typeof payload.minApprovals !== "number" ||
-    typeof payload.excludeRequester !== "boolean" ||
-    !Array.isArray(payload.effects) ||
-    !payload.exposure ||
-    typeof payload.exposure !== "object"
-  ) {
-    return reject("malformed-payload", "payload is missing required members");
+  // ── The payload, against the schema the registry publishes ───────────────
+  //
+  // This replaced a hand-written block of `typeof` checks, and the difference
+  // is not thoroughness — it is that the hand-written version asked weaker
+  // questions than the schema does, in one place that mattered.
+  // `typeof payload.sideEffects !== "string"` admits any string, while the
+  // schema admits `none`, `mutating` or `destructive`; the consent surface
+  // renders severity by comparing against those three and falls through to its
+  // calmest styling for anything else. So a `sideEffects` the schema would have
+  // refused reached a human as the *least* alarming thing the UI can draw.
+  //
+  // The same gap ran through the rest: `minApprovals` was checked as a
+  // `number` where the schema says integer ≥ 1 (`0` means a threshold no
+  // approval is needed to meet), `effects` as `Array.isArray` with no element
+  // shape, `exposure` as any object at all, and `note` — bounded to 500 by
+  // framework 0.5 §7.3 item 19 precisely so a consent surface is not handed
+  // unbounded prose — was not checked at all. `additionalProperties: false`
+  // went unenforced too, so a member the schema forbids arrived silently.
+  //
+  // Validating the published schema also keeps this correct for free when the
+  // registry amends `0.1` in place, which it does: an errata-style bound or a
+  // widened enum lands with the binding, not with an edit here.
+  const validate = opts.validatePayload ?? validateAgainstSchema;
+  const schemaCheck = validate(PAYLOAD_SCHEMA, doc.payload);
+  if (!schemaCheck.valid) {
+    return reject(
+      "malformed-payload",
+      `payload does not satisfy ${TASK_CONSENT_REQUEST_TYPE} — ${describeViolations(schemaCheck.violations)}`,
+    );
   }
+  // Sound because the schema declares every member below REQUIRED and typed,
+  // and the check above is the published schema rather than a summary of it.
+  const payload = doc.payload as TaskConsentRequestPayload;
 
   const now = opts.now ?? new Date();
   const expiry = new Date(payload.expiresAt);

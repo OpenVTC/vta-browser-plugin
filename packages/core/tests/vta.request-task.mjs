@@ -77,7 +77,7 @@ const CONSENT_REJECT = {
   message: "task failed: auth:consent_required",
   details: {
     reason: "auth:consent_required",
-    payloadDigest: "3b0c7f1d9e2a5648c1f30b7ae4d2986153ca0f7b8d41e6295af03c8bd71e4a62",
+    payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ",
     challenge: "9c1f4b7a2e6d80f35a4c9b1e7d2f6083",
     approverSet: "operators",
     minApprovals: 1,
@@ -192,7 +192,7 @@ test("a consent refusal SURVIVES the transport's throw and comes back as a resul
   assert.equal(res.kind, "consentRequired");
   assert.equal(
     res.payloadDigest,
-    "3b0c7f1d9e2a5648c1f30b7ae4d2986153ca0f7b8d41e6295af03c8bd71e4a62",
+    "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ",
   );
   assert.equal(res.challenge, "9c1f4b7a2e6d80f35a4c9b1e7d2f6083");
   assert.equal(res.approverSet, "operators");
@@ -260,7 +260,7 @@ test("consent is recognised before the VTA emits an explicit reason — by the s
     retryable: false,
     message: "task failed: auth:consent_required",
     details: {
-      payloadDigest: "3b0c7f1d9e2a5648c1f30b7ae4d2986153ca0f7b8d41e6295af03c8bd71e4a62",
+      payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ",
       challenge: "9c1f4b7a2e6d80f35a4c9b1e7d2f6083",
       approverSet: "operators",
       minApprovals: 1,

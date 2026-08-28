@@ -28,7 +28,7 @@ function payload(over = {}) {
   return {
     challenge: "9c1f4b7a2e6d80f35a4c9b1e7d2f6083",
     taskType: "https://trusttasks.org/spec/webvh/dids/update/1.0",
-    payloadDigest: "3b0c7f1d9e2a5648c1f30b7ae4d2986153ca0f7b8d41e6295af03c8bd71e4a62",
+    payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ",
     sideEffects: "mutating",
     exposure: { discloses: "none", actsAsSubject: false },
     effects: [
@@ -158,7 +158,10 @@ test("a payload missing required members is refused, and says so distinctly", as
   // that never arrived. A request that claimed to be a consent ask and failed
   // is something a human is waiting on, so it must stay reportable.
   assert.equal(res.reason, "malformed-payload");
-  assert.match(res.detail ?? "", /missing required members/);
+  // The detail now comes from the schema rather than a hand-written sentence,
+  // so it names the member. That is the point: "missing required members" sent
+  // an operator looking through eleven of them.
+  assert.match(res.detail ?? "", /payloadDigest/);
 });
 
 // ── What the human is shown ──────────────────────────────────────────────────
@@ -204,7 +207,7 @@ test("the decision echoes the challenge and digest verbatim, and is signed", asy
     vta: { did: VTA.did },
     decision: "approve",
     challenge: "9c1f4b7a2e6d80f35a4c9b1e7d2f6083",
-    payloadDigest: "3b0c7f1d9e2a5648c1f30b7ae4d2986153ca0f7b8d41e6295af03c8bd71e4a62",
+    payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ",
   });
 
   assert.equal(doc.type, TASK_CONSENT_DECISION_TYPE);
@@ -212,7 +215,7 @@ test("the decision echoes the challenge and digest verbatim, and is signed", asy
   assert.equal(doc.payload.challenge, "9c1f4b7a2e6d80f35a4c9b1e7d2f6083");
   assert.equal(
     doc.payload.payloadDigest,
-    "3b0c7f1d9e2a5648c1f30b7ae4d2986153ca0f7b8d41e6295af03c8bd71e4a62",
+    "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ",
   );
   // The proof IS the authorization — the VTA takes the approver's identity from
   // it, not from the session that carried it.
