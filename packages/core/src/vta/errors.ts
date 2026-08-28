@@ -20,6 +20,11 @@ export type VtaErrorCode =
   // switch on rather than the message text (R3.7).
   | "e.client.timeout"
   | "e.client.parse"
+  // The envelope's in-band `issuer` is not the identity that would sign it.
+  // SPEC §7.2 item 6 has the consumer reject exactly this, so it is caught
+  // here rather than spent on a round-trip: a document signed by a key its
+  // issuer does not control proves only that somebody signed something.
+  | "e.client.identity"
   | "e.client.unsupported";
 
 export class VtaClientError extends Error {

@@ -63,6 +63,15 @@ function makeChannel(dispatch, replySenderVid) {
       encryptionPrivateKey: holder.encSk,
       encryptionPublicKey: holder.encPk,
     },
+    // The document proof (SPEC §7.2 item 7a), distinct from the outer TSP
+    // signature above though it uses the same key — exactly as production
+    // does, where both come from the holder's Ed25519 identity.
+    signing: {
+      did: holder.vid,
+      kid: `${holder.vid}#key-2`,
+      privateKey: holder.signSk,
+      publicKey: holder.signPk,
+    },
     vta: {
       vid: "did:web:vta.example", // what the channel expects as the reply sender
       encryptionPublicKey: vta.encPk,

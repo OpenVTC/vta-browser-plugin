@@ -15,12 +15,23 @@ import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
 import { TRUST_TASK_PATH } from "./endpoint.js";
 import { errorFromBody, VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
-import { parseTrustTaskReply } from "./trust-task.js";
+import { parseTrustTaskReply, signOutboundTask } from "./trust-task.js";
+import type { SigningIdentity } from "../siop/self-issued.js";
 import { isTrustTaskErrorType } from "./protocol.js";
 import { getVtaBearer, makeReauth, type VtaAuthInputs } from "./auth.js";
 import { withFetchTimeout, isFetchTimeout, DEFAULT_FETCH_TIMEOUT_MS } from "../http/timeout-fetch.js";
 
 export interface RestChannelOptions extends VtaAuthInputs {
+  /**
+   * Signs every outbound envelope (SPEC §7.2 item 7a). REQUIRED, and
+   * deliberately not optional: the bearer this channel carries authenticates
+   * the *connection*, which item 7 explicitly refuses as a substitute for a
+   * proof. A channel built without a signer would post documents a conforming
+   * VTA rejects with `proofRequired`, so there is no such channel to build.
+   *
+   * Its `did` must be the envelope's `issuer` — see {@link signOutboundTask}.
+   */
+  signing: SigningIdentity;
   /**
    * Trust-task dispatcher path, appended to `baseUrl`. Defaults to
    * `/trust-tasks`, which the published HTTPS binding fixes — `baseUrl` is
@@ -44,10 +55,12 @@ export interface RestChannelOptions extends VtaAuthInputs {
 export class RestChannel implements TrustTaskChannel {
   readonly kind = "rest" as const;
   private readonly auth: VtaAuthInputs;
+  private readonly signing: SigningIdentity;
   private readonly path: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(opts: RestChannelOptions) {
+    this.signing = opts.signing;
     this.auth = {
       baseUrl: opts.baseUrl,
       holder: opts.holder,
@@ -68,6 +81,10 @@ export class RestChannel implements TrustTaskChannel {
   private async post(envelope: TrustTask<unknown>, label: string): Promise<Response> {
     const base = this.auth.baseUrl.replace(/\/+$/, "");
     const url = `${base}${this.path}`;
+    // Before serialization, and before the bearer handshake: the proof is part
+    // of the document, so a body built from an unsigned envelope would be the
+    // one thing that reaches the VTA.
+    await signOutboundTask(envelope, this.signing);
     const body = JSON.stringify(envelope);
 
     const once = async (bearer: string): Promise<Response> => {

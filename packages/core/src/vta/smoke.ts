@@ -1,4 +1,5 @@
 import { Identity, type PublicJwk } from "../didcomm/index.js";
+import { generateSigningIdentity, type SigningIdentity } from "../siop/self-issued.js";
 import { InMemoryKVStore } from "../store/index.js";
 import { InMemoryDidcommBridge } from "./bridge-memory.js";
 import { DidcommVtaTransport } from "./didcomm.js";
@@ -16,6 +17,21 @@ import {
 } from "./protocol.js";
 import type { DidcommMessageBridge } from "./transport.js";
 import type { EnrollmentChallengeResponse } from "./types.js";
+
+/**
+ * A signing identity that answers for a stub holder DID.
+ *
+ * Every channel now signs what it sends, so this harness needs a key. The
+ * generated `did:key` is overridden to the stub holder's DID because
+ * {@link signOutboundTask} refuses a document whose `issuer` is not the signer
+ * (SPEC §7.2 item 6), and the stub holder is the issuer here. The resulting
+ * proof is internally consistent but not resolvable — which is correct for a
+ * harness whose bridges are in-memory and whose counterparty never verifies.
+ * Nothing outside `smoke.ts` may use it.
+ */
+function stubSigningFor(did: string): SigningIdentity {
+  return { ...generateSigningIdentity(), did, kid: `${did}#key-2` };
+}
 import { WalletSession } from "./wallet-session.js";
 
 export interface SmokeDidcommEnrollChallengeResult {
@@ -64,6 +80,7 @@ export async function smokeBuildDidcommEnrollChallenge(): Promise<SmokeDidcommEn
     const transport = new DidcommVtaTransport({
       bridge,
       holder,
+      signing: stubSigningFor(holder.did),
       vta: {
         did: vta.did,
         keyAgreementKid: vtaPub.kid,
@@ -179,6 +196,7 @@ export async function smokeDidcommVtaTransportRoundtrip(): Promise<SmokeDidcommR
     const transport = new DidcommVtaTransport({
       bridge,
       holder,
+      signing: stubSigningFor(holder.did),
       vta: {
         did: vta.did,
         keyAgreementKid: vtaPub.kid,

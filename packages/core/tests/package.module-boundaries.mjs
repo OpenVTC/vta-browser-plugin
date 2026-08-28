@@ -32,9 +32,18 @@ const LAYERS = [
   ["util", "http"], //           0 — no imports of their own
   ["did", "didcomm", "webauthn"], //  1 — identity + crypto primitives
   ["siop"], //                   2 — token formats
-  ["vta", "trust-tasks"], //     3 — the VTA protocol: channels, envelopes, auth
-  ["store", "app-state", "vault", "device", "provision", "rp-login", "onboarding", "admin", "credentials", "vtc", "did-hosting", "webvh"], // 4
-  ["inbound"], //                5 — the running session, on top of everything
+  // `trust-tasks` sits BELOW `vta` rather than beside it. The two were one
+  // layer while nothing crossed between them; then every outbound document
+  // needed a Data Integrity proof (SPEC §7.2 item 7a), which put the signer on
+  // the channel's path — a same-layer edge the rule refuses. Splitting is the
+  // fix the rule itself prescribes ("the shared part belongs one layer down")
+  // and it costs nothing: `trust-tasks` imports only `didcomm` and `siop`, and
+  // never referenced `vta` at all. It also tightens the check rather than
+  // loosening it — `trust-tasks` may no longer reach for a channel.
+  ["trust-tasks"], //            3 — Trust-Task documents: sign, verify, validate
+  ["vta"], //                    4 — the VTA protocol: channels, envelopes, auth
+  ["store", "app-state", "vault", "device", "provision", "rp-login", "onboarding", "admin", "credentials", "vtc", "did-hosting", "webvh"], // 5
+  ["inbound"], //                6 — the running session, on top of everything
 ];
 
 /**

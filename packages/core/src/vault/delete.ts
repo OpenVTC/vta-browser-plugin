@@ -8,9 +8,8 @@
 import type { Identity } from "../didcomm/index.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
-import { RestChannel } from "../vta/rest-channel.js";
+import { RestChannel, type RestChannelOptions } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
-import type { VtaAuthInputs } from "../vta/auth.js";
 
 import {
   TYPE_URI as TASK_VAULT_DELETE,
@@ -33,7 +32,7 @@ export interface VaultDeleteOptions {
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer
  *  {@link vaultDelete} with a channel from a `VtaSession`. */
-export interface VaultDeleteRestOptions extends VaultDeleteOptions, VtaAuthInputs {}
+export interface VaultDeleteRestOptions extends VaultDeleteOptions, RestChannelOptions {}
 
 export interface VaultDeleteResponse {
   id: string;

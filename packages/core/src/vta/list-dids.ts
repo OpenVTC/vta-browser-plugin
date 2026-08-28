@@ -15,11 +15,10 @@
 // reuse the shared vault transport helpers.
 
 import type { Identity } from "../didcomm/index.js";
-import type { VtaAuthInputs } from "./auth.js";
 
 import type { TrustTaskSender } from "./channel.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";
-import { RestChannel } from "./rest-channel.js";
+import { RestChannel, type RestChannelOptions } from "./rest-channel.js";
 import { buildTrustTask } from "./trust-task.js";
 import { fold } from "./contexts.js";
 
@@ -58,7 +57,7 @@ export interface VtaListDidsParams {
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer
  *  {@link vtaListDids} with a channel from a `VtaSession`. */
-export interface VtaListDidsOptions extends VtaListDidsParams, VtaAuthInputs {}
+export interface VtaListDidsOptions extends VtaListDidsParams, RestChannelOptions {}
 
 /** List the webvh DIDs the VTA hosts, optionally scoped to one context.
  *

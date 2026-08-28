@@ -21,11 +21,10 @@
 import { packAuthcrypt, type Identity } from "../didcomm/index.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
-import { RestChannel } from "../vta/rest-channel.js";
+import { RestChannel, type RestChannelOptions } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import type { SecretKind, SiteTarget, VaultEntry } from "./list.js";
-import type { VtaAuthInputs } from "../vta/auth.js";
 
 import {
   TYPE_URI as TASK_VAULT_UPSERT,
@@ -135,7 +134,7 @@ export interface VaultUpsertParams {
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer
  *  {@link vaultUpsert} with a channel from a `VtaSession`. */
-export interface VaultUpsertRestOptions extends VaultUpsertParams, VtaAuthInputs {}
+export interface VaultUpsertRestOptions extends VaultUpsertParams, RestChannelOptions {}
 
 export interface VaultUpsertResponse {
   entry: VaultEntry;

@@ -18,6 +18,8 @@
 
 import { isStandardCode, normalizeCode } from "@openvtc/trust-tasks/_runtime/codes";
 
+import type { SigningIdentity } from "../siop/self-issued.js";
+import { signTrustTask } from "../trust-tasks/sign.js";
 import { VtaClientError, type VtaErrorCode } from "./errors.js";
 import {
   isTrustTaskErrorType,
@@ -61,6 +63,63 @@ export function buildTrustTask<P>(
     payload,
   };
   return envelope;
+}
+
+/**
+ * Attach the Data Integrity proof a Trust-Task document is required to carry,
+ * in place, immediately before it goes on the wire.
+ *
+ * ## Why every channel calls this, rather than every caller
+ *
+ * SPEC §7.2 item 7a lets a *specification* declare `proof` REQUIRED, and 93 of
+ * the 141 task types this wallet speaks do — every `vault/*`, `acl/*`,
+ * `vta/webvh/*`, `credential-exchange/*` and `vtc/*` mutation among them. Item
+ * 7 admits **no transport substitute**: the bearer token on the REST channel
+ * and the sender-authenticated TSP and DIDComm envelopes all authenticate the
+ * *connection*, and none of them says the party named in `issuer` vouched for
+ * this payload. A consumer enforcing the rule refuses the document with
+ * `proofRequired` before a handler ever sees it.
+ *
+ * Signing at the ~116 call sites that build envelopes would be the same
+ * decision taken 116 times, and the failure mode of forgetting once is a task
+ * that stops working the day the maintainer turns the check on. So the channel
+ * — the one place every envelope passes through on its way out — owns it, and
+ * a `SigningIdentity` is a REQUIRED channel input for the same reason: a
+ * channel that could be built without one would be a channel that silently
+ * sends unsigned documents.
+ *
+ * ## Unconditional, not flag-driven
+ *
+ * We do not consult the specification's `isProofRequired`. A proof on a task
+ * that merely RECOMMENDs one is legal and strictly more attributable, and the
+ * alternative is carrying a 141-entry table whose staleness is invisible until
+ * a request is refused.
+ *
+ * ## Re-signing is safe
+ *
+ * `VtaSession` may hand the same envelope to a second channel after the first
+ * refuses it as unsupported. {@link signTrustTask} hashes a copy with `proof`
+ * removed, so a re-sign overwrites cleanly rather than signing over the stale
+ * proof — the bug that produces a signature covering bytes no verifier
+ * reconstructs.
+ */
+export async function signOutboundTask(
+  envelope: TrustTask<unknown>,
+  signing: SigningIdentity,
+): Promise<void> {
+  // SPEC §7.2 item 6 — the in-band issuer must be the party that signed. A
+  // consumer rejects the mismatch, so catching it here turns a remote
+  // `identityMismatch` into a local error naming both DIDs.
+  if (envelope.issuer !== undefined && envelope.issuer !== signing.did) {
+    throw new VtaClientError(
+      "e.client.identity",
+      `${envelope.type}: envelope issuer ${envelope.issuer} is not the signing identity ${signing.did}`,
+    );
+  }
+  await signTrustTask({
+    envelope: envelope as unknown as Record<string, unknown> & { proof?: unknown },
+    signing,
+  });
 }
 
 export interface ParseTrustTaskReplyOptions {
