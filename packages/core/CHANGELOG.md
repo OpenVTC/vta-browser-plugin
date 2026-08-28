@@ -8,7 +8,105 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-28
+
+### Migration
+
+- **`markInboundHandled(store, id)` is now `claimInboundDocument(store, doc)`,**
+  and it returns `"fresh" | "duplicate" | "conflict"` rather than a boolean.
+  Pass the **Trust-Task document** — a DIDComm envelope's `body`, not the
+  message. `"conflict"` is the case the boolean could not express and must not
+  be treated as a duplicate: SPEC §7.2 item 11 requires it be refused.
+- **`matchesTrustTaskCode` / `trustTaskCodeSnakeCase` are gone.** Compare an
+  extended error code with `===` against the spelling the registry declares
+  today. (They landed after 0.4.0 was cut, so no released version exported
+  them.)
+- **`VaultEntry`, `SecretKind`, `SiteTarget`, `ProvisionSummary` and the
+  passkey-VM payloads are now the generated types.** Structurally the same
+  except where the hand-written copies had drifted: `targets` is a non-empty
+  array, `transports` is optional, and an attachment's integrity is
+  `digestMultibase` rather than a hex `sha256`.
+- **`ProvisionIntegrationResponseBody.digest` is now `digestMultibase?`** — see
+  *Digests* below.
+- **`@cfworker/json-schema` is a new runtime dependency** (~6 kB gzipped, no
+  dependencies of its own). It is what makes the consent payload actually
+  checked against its schema.
+
+### Fixed
+
+- **A `sideEffects` value outside the schema's enum rendered to the human as
+  the *safest* thing a consent surface can draw.** `parseTaskConsentRequest`
+  checked the payload with hand-written `typeof` tests, and
+  `typeof sideEffects !== "string"` admits any string where the schema admits
+  `none`, `mutating` or `destructive`. A consent surface renders severity by
+  comparing against those three and falls through to its calm styling for
+  anything else, so a schema violation arrived looking reassuring. The payload
+  is now validated against the published `PAYLOAD_SCHEMA`. The same block also
+  missed `minApprovals >= 1` (`0` is a gate already open), `note`'s 500-char
+  bound, and `additionalProperties: false`.
+- **SPEC §7.2 item 11 was not implemented.** Inbound de-duplication recorded
+  bare ids, which cannot express the half of the rule that matters — a
+  *different* document under a used `id` MUST be refused, not absorbed — and
+  keyed on the DIDComm message id, the transport identifier §7.2 names
+  explicitly as one that MUST NOT substitute. Now keyed on the document's own
+  id plus a digest of its RFC 8785 canonicalization.
+- **`idConflict` was reported as a generic bad request.** It postdates the
+  error-code mapping and is why the framework runtimes emit
+  `trust-task-error/0.5`; it now maps to `e.p.msg.conflict`.
+- **`keys/create` was missing `keyId`** — not optional in practice for an
+  `internal` key, which derives from no seed and so has no path to be named
+  after.
+
+### Added
+
+- **`@openvtc/pnm-core/app-state`** — agent-held key/value records scoped to a
+  VTA context. Distinct from `/store`, which is one browser profile's own state
+  and invisible on the user's other devices.
+- **`trust-task-discovery/0.1`** (`discoverSupportedTypes`, `supportsType`) —
+  ask an agent which Trust Tasks it supports. Read the answer negatively: a
+  listed type is a capability claim, not a grant.
+- **Passkey login as a Trust Task** (`startPasskeyLogin`, `finishPasskeyLogin`,
+  `auth/passkey/login/*` 0.2), which separates a login from a step-up.
+- **`@openvtc/pnm-core/admin` gains `vta/services/*`** (including drains) **and
+  `vta/credentials/{issue,revoke}`**; `acl/update`; `vta/webvh/servers/
+  retire-orphan`; and `vtc/members/removal-notice` as a parser, since a member
+  receives it rather than sending it.
+- **`validateAgainstSchema`** and the `validatePayload` seam, for SPEC §7.2
+  item 2. Validation cannot be switched off, and an unusable schema refuses
+  rather than passes.
+
 ### Changed
+
+- **Adopting the generated types.** Wire shapes in `vta/protocol.ts`,
+  `vault/list.ts`, `provision/send.ts` and `admin/keys.ts` come from
+  `@openvtc/trust-tasks` rather than being transcribed. Every copy had drifted:
+  the vault entry was written from `_shared/0.1` while the module posted 0.2,
+  the passkey payload used a DOM type in the transport-free layer, and
+  `admin/keys.ts` carried widenings for `internal` on `keys/create` and
+  `origin: "internal"` that the registry has since specified.
+- **Digests are `digestMultibase`, never hex.** `vault/{list,get,upsert}` and
+  `provision/integration` moved to 0.3, which replaces bare-hex members with a
+  self-describing multibase multihash. Compare by *decoding* —
+  `decodeDigestMultibase` — because two encodings of one digest are the same
+  digest. No bare-hex wire digest remains.
+- **Task versions.** `vtc/join-requests/submit` 0.2 (a four-outcome `verdict`
+  replaces `status: "pending"`, so an *admitted* applicant is no longer
+  reported as pending), `device/wipe` 0.2, `vta/credentials/issue` 0.2.
+- **Runtime dependencies refreshed:** `@noble/curves` ^2.4.0 and `cbor-x`
+  ^1.6.6, both in-range and both things this package actually ships. The
+  toolchain and UI dependencies of the private workspaces were deliberately
+  left alone — `vite` in particular touches the MV3 bundle, and a bundle
+  change is worth being attributable to its own commit rather than a release.
+- **`@openvtc/trust-tasks` ^0.16.2**, which is the content the Rust side calls
+  0.17.x — the two packages version their own APIs, not `SPEC.md`. 0.16.2 also
+  makes `provision/integration/0.3`'s schema satisfiable; 0.16.0 shipped it
+  requiring a `digest` its `properties` no longer defined.
+- **Coverage against the agent's surface is 152 of 177 task families**, up from
+  130. Every family that is specced, published as a binding and named by
+  `vta-sdk` is implemented; all 25 outstanding are unspecced.
+
+
+### Changed — module layout (landed before this release was cut)
 
 - **The VTA's REST auth bootstrap moved from `vault/transport.ts` to
   `vta/auth.ts`.** `getVtaBearer`, `makeReauth`, `invalidateVtaBearer` and
@@ -21,7 +119,7 @@ For history before this file, see `git log` on `packages/core`.
   encoding, needed by `did/` and `vta/`, which had to depend on WebAuthn to
   get it. Still re-exported from `@openvtc/pnm-core/webauthn`.
 
-### Added
+### Added — earlier in this cycle
 
 - **`@openvtc/pnm-core/admin` is built on `@openvtc/trust-tasks`**, the
   generated TypeScript bindings for the same JSON Schemas the agent's Rust is
@@ -36,9 +134,10 @@ For history before this file, see `git log` on `packages/core`.
   `scopes` has `minItems: 1`, so the empty array the hand-written version
   accepted — and had a test asserting — is not a legal request.
 
-  Known divergence: the agent implements `internal` on `keys/create` and
-  `origin: "internal"` on a key record; the published schema has neither. Both
-  are modelled as explicit extensions rather than smuggled in as `any`.
+  (That module once carried two local widenings, for `internal` on
+  `keys/create` and `origin: "internal"` on a key record, because the published
+  schema had neither. It has both now, and the widenings are gone — see
+  *Adopting the generated types* below.)
 - **`@openvtc/pnm-core/admin` — agent administration.** The canonical `acl/*`
   Trust Tasks (`aclGrant`, `aclList`, `aclShow`, `aclRevoke`, `aclChangeRole`)
   plus `contextDelete` / `contextPreviewDelete`, over any `TrustTaskSender`, so
