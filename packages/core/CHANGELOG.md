@@ -8,6 +8,70 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-28
+
+### Migration
+
+- **Every channel now requires a `signing: SigningIdentity`.** `RestChannel`,
+  `TspChannel` and `DidcommVtaTransport` each take it as a REQUIRED
+  constructor input, as do the `*RestOptions` bags that build a channel for
+  you (`vaultList`, `vaultUpsert`, `vaultDelete`, `vaultGet`, `vaultRelease`,
+  `vaultProxyLogin`, `vaultSignTrustTask`, `contextsList`, `contextsCreate`,
+  `vtaListDids`, `setDeviceWake`). Pass the Ed25519 identity whose `did` is
+  the envelope's `issuer` — `generateOrLoadHolderIdentity` already returns it
+  as `signing` beside `identity`.
+
+  `swapAclRest` and `swapAclDidcomm` take it as `ephemeralSigning`, and it
+  MUST be the **ephemeral** identity: that DID is the envelope's `issuer`.
+  The new holder's key vouches for the `linkProof` inside the payload, which
+  is a different claim by a different party.
+
+  It is required rather than optional deliberately. A channel that could be
+  constructed without a signer is a channel that silently sends unsigned
+  documents, and the failure only appears as a `proofRequired` refusal from
+  the agent — at which point nothing local can tell you which of your call
+  sites forgot.
+
+### Fixed
+
+- **Outbound Trust-Task documents now carry a Data Integrity proof** (SPEC
+  §7.2 item 7a). 93 of the 141 task types this package speaks declare `proof`
+  REQUIRED — every `vault/*`, `acl/*`, `vta/webvh/*`, `credential-exchange/*`
+  and `vtc/*` mutation among them — and none of them was signed, so a
+  conforming agent refused them with `proofRequired` before a handler ran.
+
+  Item 7 admits **no transport substitute**: the REST bearer authenticates
+  the connection, the TSP outer signature authenticates the frame, and the
+  DIDComm authcrypt authenticates the sender of a message a mediator then
+  forwards. None of them says the party named in `issuer` vouched for this
+  payload. Signing happens at the channel — the one place every envelope
+  passes through on its way out — so callers that build envelopes with
+  `buildTrustTask` need no change beyond supplying the identity.
+
+- **`DidcommVtaTransport` now sets `recipient` on the passkey-VM tasks.**
+  `exchange` and `buildOutbound` both built envelopes with an `issuer` and no
+  `recipient`, which SPEC §7.2 item 5b makes REQUIRED on every dispatched
+  specification and item 8 audience-binds the proof to. A signed document
+  naming no audience is replayable at another agent.
+
+### Added
+
+- `signOutboundTask(envelope, signing)` — attaches the proof in place, and
+  refuses an envelope whose `issuer` is not the signer (SPEC §7.2 item 6)
+  rather than spending a round-trip on the agent's rejection. Exported for
+  consumers implementing their own `TrustTaskChannel`; the three bundled
+  channels call it for you.
+- `e.client.identity` — new `VtaErrorCode` for that refusal.
+
+### Changed
+
+- `@openvtc/trust-tasks` moves to `^0.16.3`. It adds only
+  `consent/approve-request/0.1`, which this package does not implement.
+- **Module layering:** `trust-tasks` is now a layer *below* `vta` rather than
+  beside it, so the channel can reach the signer. No entry point moved and no
+  export changed — `@openvtc/pnm-core/trust-tasks` and
+  `@openvtc/pnm-core/vta` are exactly as before.
+
 ## [0.5.0] - 2026-08-28
 
 ### Migration
