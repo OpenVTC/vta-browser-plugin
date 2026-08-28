@@ -83,12 +83,12 @@ test("details ride through — that is where a task-specific reason lives", () =
       errorDoc(TRUST_TASK_ERROR_TYPE_0_2, {
         code: "taskFailed",
         retryable: false,
-        details: { payloadDigest: "abc123" },
+        details: { payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ" },
       }),
     ),
     OPTS,
   );
-  assert.deepEqual(outcome.details, { payloadDigest: "abc123" });
+  assert.deepEqual(outcome.details, { payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ" });
 });
 
 test("a missing retryable reads as not-retryable, never as optimism", () => {
@@ -105,14 +105,14 @@ test("an accepted decision reports the status and the tally", () => {
       id: "urn:uuid:ok-1",
       type: TASK_CONSENT_DECISION_RESPONSE_TYPE,
       threadId: THID,
-      payload: { status: "granted", payloadDigest: "abc123", approvals: 1 },
+      payload: { status: "granted", payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ", approvals: 1 },
     }),
     OPTS,
   );
   assert.equal(outcome.accepted, true);
   assert.equal(outcome.status, "granted");
   assert.equal(outcome.approvals, 1);
-  assert.equal(outcome.payloadDigest, "abc123");
+  assert.equal(outcome.payloadDigest, "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ");
 });
 
 test("a partial approval is accepted, and says how many more are needed", () => {
@@ -121,7 +121,7 @@ test("a partial approval is accepted, and says how many more are needed", () => 
       id: "urn:uuid:ok-2",
       type: TASK_CONSENT_DECISION_RESPONSE_TYPE,
       threadId: THID,
-      payload: { status: "pending", payloadDigest: "abc123", approvals: 1, needed: 2 },
+      payload: { status: "pending", payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ", approvals: 1, needed: 2 },
     }),
     OPTS,
   );
