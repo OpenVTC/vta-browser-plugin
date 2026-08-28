@@ -192,3 +192,39 @@ test("a refusal propagates rather than resolving to a half-answer", async () => 
     /e\.keys\.revoked/,
   );
 });
+
+test("keyId is sent, and an internal key needs one", async () => {
+  // `keys/create/0.1` gained `keyId` errata-style (dtgwg-trust-tasks-tf#275),
+  // and vta-sdk 0.30.0 was cut for exactly that field. It is optional in the
+  // schema, but not in practice for `internal: true`: such a key derives from
+  // no seed and records no derivation path, so there is nothing for the agent
+  // to name it after. Omitting it there is how an unrecoverable key ends up
+  // unaddressable as well.
+  const channel = recorder({ key: { keyId: "signing-1", origin: "internal" } });
+  await keysCreate(channel, {
+    holder: HOLDER,
+    service: SERVICE,
+    keyType: "ed25519",
+    keyId: "signing-1",
+    internal: true,
+  });
+  const payload = channel.sent[0].envelope.payload;
+  assert.equal(payload.keyId, "signing-1");
+  assert.equal(payload.internal, true);
+  assert.equal("derivationPath" in payload, false, "an internal key has no path");
+});
+
+test("internal is a first-class member now, not a widening", async () => {
+  // `internal` and `origin: "internal"` were the agent's own extensions, carried
+  // here as explicit widenings of the generated types. The registry specified
+  // both, so the widenings went; this pins that the plain generated types still
+  // carry them, which is what makes their removal safe.
+  const channel = recorder({ key: { keyId: "k", origin: "internal" } });
+  const rec = await keysCreate(channel, {
+    holder: HOLDER, service: SERVICE, keyType: "ed25519", internal: false,
+  });
+  // `internal: false` is a decision — "derive it, keep it recoverable" — and
+  // must survive rather than being dropped as falsy.
+  assert.equal(channel.sent[0].envelope.payload.internal, false);
+  assert.equal(rec.origin, "internal");
+});

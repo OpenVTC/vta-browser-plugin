@@ -12,7 +12,7 @@ import {
   listPendingInbound,
   removePendingInbound,
 } from "../dist/inbound/pending.js";
-import { markInboundHandled } from "../dist/inbound/dedup.js";
+import { claimInboundDocument } from "../dist/inbound/dedup.js";
 
 /** In-memory KVStore matching the interface IndexedDBKVStore implements. */
 function memStore() {
@@ -139,12 +139,16 @@ test("pending and dedup answer different questions", async () => {
     vtaDid: "v",
     isApprover: false,
   });
-  assert.equal(await markInboundHandled(store, CONSENT.id), true);
+  assert.equal(await claimInboundDocument(store, CONSENT), "fresh");
 
   // ...worker dies here, before the user answers.
 
   // On restart: dedup says "seen it", pending says "not finished".
-  assert.equal(await markInboundHandled(store, CONSENT.id), false, "dedup: already prompted");
+  assert.equal(
+    await claimInboundDocument(store, CONSENT),
+    "duplicate",
+    "dedup: already prompted",
+  );
   const outstanding = await listPendingInbound(store);
   assert.equal(outstanding.length, 1, "pending: still outstanding — must be re-driven");
   assert.equal(outstanding[0].id, CONSENT.id);

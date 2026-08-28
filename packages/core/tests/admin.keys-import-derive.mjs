@@ -136,7 +136,7 @@ test("vault get returns metadata and reports what was withheld", async () => {
   const channel = recorder({ entry, redactedFields: ["notes"] });
   const result = await vaultGet(channel, { holder: HOLDER, service: SERVICE, id: "e1" });
 
-  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/vault/get/0.2");
+  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/vault/get/0.3");
   assert.deepEqual(channel.sent[0].envelope.payload, { id: "e1" });
   assert.deepEqual(result.redactedFields, ["notes"]);
   assert.equal(result.entry.label, "Example");

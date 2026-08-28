@@ -16,7 +16,7 @@ import {
   IndexedDBKVStore,
   loginViaDidcomm,
   loginViaSiop,
-  markInboundHandled,
+  claimInboundDocument,
   type MediatorConnection,
   MediatorSessionBridge,
   performStepUpVta,
@@ -250,9 +250,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // replied with one. The popup branches on `code` to surface
         // recovery UX (e.g. the contextRequired picker); without
         // these fields the message string would have to be regex-
-        // parsed, which is fragile. Forwarded verbatim — the popup
-        // does the spelling-tolerant compare, so nothing here has to
-        // know which side of trust-tasks #279 the VTA is on.
+        // parsed, which is fragile. Forwarded verbatim — rewriting a
+        // code in transit would mean this hop deciding what it means
+        // on behalf of the surface that acts on it.
         if (e instanceof ProvisionProblemReportError) {
           sendResponse({
             ok: false,
@@ -2116,13 +2116,30 @@ async function handleTaskConsent(
   // reconnect and the MV3 worker respawns often, so without this a single
   // pending consent would pop a fresh prompt each time — training the user to
   // dismiss it, which is precisely how consent surfaces are defeated.
-  const messageId = typeof message.id === "string" ? message.id : undefined;
-  if (messageId) {
-    const isNew = await markInboundHandled(new IndexedDBKVStore(), messageId);
-    if (!isNew) {
-      console.info("[pnm inbound] skipping replayed task-consent:", messageId);
-      return;
-    }
+  //
+  // Claimed on the **Trust-Task document** — the envelope's `body` — not on
+  // `message.id`. SPEC §7.2 item 11 says transport message identifiers MUST
+  // NOT substitute for the document `id`, and a mediator is free to redeliver
+  // under a fresh transport id: keying on that let the same consent request
+  // through as new. The document also carries the digest that separates the
+  // retry we must absorb from the conflict we must refuse.
+  const claim = await claimInboundDocument(new IndexedDBKVStore(), message.body);
+  if (claim === "duplicate") {
+    console.info("[pnm inbound] skipping replayed task-consent:", message.id);
+    return;
+  }
+  if (claim === "conflict") {
+    // Same document id, different document. §7.2 item 11 requires this be
+    // refused rather than absorbed, and it must NOT reach a prompt: the human
+    // would be shown one set of effects under an id whose already-recorded
+    // decision belongs to another. Nothing signs or answers it — the requester
+    // sees no decision, which is the correct outcome for a document this
+    // device is not entitled to act on.
+    console.warn(
+      "[pnm inbound] refusing task-consent: idConflict — document id already claimed by different content:",
+      message.id,
+    );
+    return;
   }
 
   // Cross-path de-dup: if the same change also reached the co-located approver

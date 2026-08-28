@@ -16,6 +16,8 @@
 // and hands the decoded reply document to the latter; the channel itself only
 // deals with transport concerns.
 
+import { isStandardCode, normalizeCode } from "@openvtc/trust-tasks/_runtime/codes";
+
 import { VtaClientError, type VtaErrorCode } from "./errors.js";
 import {
   isTrustTaskErrorType,
@@ -115,25 +117,57 @@ export function parseTrustTaskReply<Res>(
  * Map a framework Trust-Task status `code` to a typed {@link VtaErrorCode} so
  * the CLI/UI layer can give targeted guidance.
  *
- * Normalizes across framework versions and namespacing: 0.1 codes are
- * snake_case (`permission_denied`), 0.2 lowerCamelCase (`permissionDenied`),
- * and extended task codes are namespaced `<slug>:<local>` (e.g.
- * `vta/passkey-vms:unknownCeremony`). Reduce to the local part and fold
- * snake→camel so one switch covers all forms.
+ * **The standard-code spellings come from the framework runtime, not from a
+ * regex here.** `normalizeCode` folds the frozen framework 0.1 snake_case
+ * spellings (`permission_denied`) to their canonical 0.2 form
+ * (`permissionDenied`) *only when the result is a SPEC §8.3 standard code*,
+ * and `isStandardCode` says whether it is one. The old version hand-rolled
+ * both: an unconditional snake→camel fold over whatever followed the last
+ * `:`. That fold is wrong in one direction the framework's is not — it
+ * rewrites the local part of an *extended* code whose spec legitimately
+ * contains an underscore — and it silently missed `idConflict`, a §8.3 code
+ * added after the switch was written.
+ *
+ * **An extended code (§8.5) is mapped by its local part, deliberately.**
+ * `vault/list:permissionDenied` reports as forbidden. The namespace exists so
+ * an extended code cannot *collide* with the standard set, so this is a
+ * courtesy reading and not an identity: a specification is free to define
+ * `<slug>:expired` to mean something its own spec decides. It is done anyway
+ * because the alternative — every extended code arriving as a generic bad
+ * request — throws away the only hint the UI has for a refusal an agent chose
+ * to namespace, and `tests/tsp.channel.mjs` pins the behaviour. A caller that
+ * needs the actual meaning reads the raw code off `VtaClientError.details` and
+ * compares it directly, never against this bucket.
  */
 export function coerceTrustTaskCode(code: string | undefined): VtaErrorCode {
-  const local = (code ?? "").split(":").pop() ?? "";
-  const norm = local.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase());
-  switch (norm) {
+  const raw = code ?? "";
+  // Standard first, on the whole code. Only if that fails is the §8.5 local
+  // part read — so a bare `permissionDenied` never takes the extended path.
+  const norm = normalizeCode(raw);
+  const local = isStandardCode(norm)
+    ? norm
+    : normalizeCode(raw.slice(raw.lastIndexOf(":") + 1));
+
+  switch (local) {
     case "permissionDenied":
       return "e.p.msg.forbidden";
+    case "idConflict":
+      // §8.3's `idConflict` — this document id already executed with a
+      // different body. It postdates the original switch: `trust-tasks-rs` and
+      // the TypeScript framework runtime both emit it, and it is absent from
+      // `trust-task-error/0.3`'s code enum, which is why that runtime's error
+      // documents are `0.5`. It has an exact counterpart in `VtaErrorCode`,
+      // and reporting it as a generic bad request loses the one thing a caller
+      // can act on: that retrying under a fresh id is the fix.
+      return "e.p.msg.conflict";
     case "internalError":
     case "unavailable":
       return "e.p.msg.internal";
     default:
       // malformedRequest, unsupportedType, unsupportedVersion, proofRequired,
       // proofInvalid, wrongRecipient, identityMismatch, taskFailed, expired,
-      // and all task-specific extended codes.
+      // cancelled, and every extended code with no standard-code local part.
       return "e.p.msg.bad_request";
   }
 }
+

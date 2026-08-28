@@ -178,17 +178,32 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
     [...REFERENCED.keys()].map(family).filter((f) => canonicalFamilies.has(f)),
   );
 
-  // 130 of 161 as of vta-sdk 0.25.0. It was 110 until the `vta/webvh/*` DID
-  // lifecycle and `vta/contexts/{get,update,update-did}` were specified
-  // upstream (trust-tasks #240) and published as bindings in
-  // @openvtc/trust-tasks 0.10.0 — 20 families that had no schema to implement
-  // against before that, which is the usual reason a family is missing here.
+  // 152 of 177 as of vta-sdk 0.29.0. It was 130 until the specced-but-
+  // unimplemented gap was closed in one pass: `trust-task-discovery/0.1`,
+  // `acl/update/0.1`, `vta/webvh/servers/retire-orphan/0.1`,
+  // `vtc/members/removal-notice/0.1`, `vta/app-state/*` (6), `vta/services/*`
+  // (8), `vta/credentials/{issue,revoke}/0.1`, and
+  // `auth/passkey/login/{start,finish}/0.2`.
   //
-  // Of the 31 still outstanding: `vault/*`'s archive/restore/purge and its
-  // credentials sub-family are unspecced, and the wider `vtc/*` surface belongs
-  // to a community rather than an agent, so it is deliberately out of scope.
-  // The rest — backup, attestation, seeds, audit retention — are unspecced too.
-  const expected = 130;
+  // **All 25 still outstanding are unspecced** — no schema in the registry, so
+  // no binding in @openvtc/trust-tasks to implement against: `vault/*`'s
+  // archive/restore/purge/unarchive and its whole `credentials` sub-family,
+  // `vta/backup/*`, `vta/attestation/*`, `vta/seeds/*`,
+  // `vta/audit/*-retention`, and `vta/management/reload-services`. That makes
+  // this number, for the first time, a statement about upstream rather than
+  // about this repo: it moves when a spec lands, not when someone here finds
+  // time.
+  //
+  // **Nothing is behind any more.** Every implemented family names the newest
+  // version `vta-sdk` publishes: `vault/{list,get,upsert}` and
+  // `provision/integration` at 0.3 (both the hex-digest -> `digestMultibase`
+  // change), `device/wipe` at 0.2, `vta/credentials/issue` at 0.2. The last of
+  // those was a *removal* rather than a deprecation — VTI dropped the 0.1
+  // constant outright — which is why it surfaced in the check above as a URI
+  // the agent does not name, rather than as a deprecation warning. That is the
+  // expected shape of a cutover here: nothing is deployed, so neither side
+  // keeps an old version alive.
+  const expected = 152;
   assert.equal(
     implemented.size,
     expected,

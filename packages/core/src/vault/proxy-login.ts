@@ -33,9 +33,10 @@ import { buildTrustTask } from "../vta/trust-task.js";
 import type { SiteTarget } from "./list.js";
 import type { VtaAuthInputs } from "../vta/auth.js";
 
-const TASK_VAULT_PROXY_LOGIN = "https://trusttasks.org/spec/vault/proxy-login/0.2";
-const TASK_VAULT_PROXY_LOGIN_RESPONSE =
-  "https://trusttasks.org/spec/vault/proxy-login/0.2#response";
+import {
+  TYPE_URI as TASK_VAULT_PROXY_LOGIN,
+  RESPONSE_TYPE_URI as TASK_VAULT_PROXY_LOGIN_RESPONSE,
+} from "@openvtc/trust-tasks/vault/proxy-login/0.2/payload";
 
 /** Refresh hint the maintainer attaches to the SessionBlob — the holder
  *  uses this to decide whether to background-refresh, refresh on 401, or

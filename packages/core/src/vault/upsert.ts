@@ -1,6 +1,6 @@
 // Vault — upsert (M2A.5).
 //
-// Posts a `https://trusttasks.org/spec/vault/upsert/0.2` envelope to the
+// Posts a `https://trusttasks.org/spec/vault/upsert/0.3` envelope to the
 // VTA's trust-task dispatcher. The cleartext secret is wrapped in a
 // DIDComm authcrypt envelope (the `didcomm-authcrypt` variant of the
 // canonical SealedEnvelope schema), so the long-term credential rides
@@ -27,8 +27,11 @@ import { buildTrustTask } from "../vta/trust-task.js";
 import type { SecretKind, SiteTarget, VaultEntry } from "./list.js";
 import type { VtaAuthInputs } from "../vta/auth.js";
 
-const TASK_VAULT_UPSERT = "https://trusttasks.org/spec/vault/upsert/0.2";
-const TASK_VAULT_UPSERT_RESPONSE = "https://trusttasks.org/spec/vault/upsert/0.2#response";
+import {
+  TYPE_URI as TASK_VAULT_UPSERT,
+  RESPONSE_TYPE_URI as TASK_VAULT_UPSERT_RESPONSE,
+} from "@openvtc/trust-tasks/vault/upsert/0.3/payload";
+
 const INNER_MSG_TYPE = "https://openvtc.org/vault/upsert/secret-envelope/1.0";
 
 /** Optional driver config on Password-kind entries — instructs the
@@ -187,7 +190,7 @@ export async function vaultUpsert(
   });
   return channel.send<VaultUpsertResponse>(envelope, {
     expectedResponseType: TASK_VAULT_UPSERT_RESPONSE,
-    operationLabel: "vault/upsert/0.2",
+    operationLabel: "vault/upsert/0.3",
   });
 }
 

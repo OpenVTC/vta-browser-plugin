@@ -1,4 +1,4 @@
-// `vault/get/0.2` — one entry's metadata.
+// `vault/get/0.3` — one entry's metadata.
 //
 // The counterpart to `vault/list`, and deliberately *not* the counterpart to
 // `vault/release`: this returns the entry's shape — label, targets, context,
@@ -21,7 +21,7 @@ import {
   type VaultGetPayload,
   type VaultGetResponsePayload,
   type VaultEntry,
-} from "@openvtc/trust-tasks/vault/get/0.2/payload";
+} from "@openvtc/trust-tasks/vault/get/0.3/payload";
 
 // `VaultEntry` is deliberately NOT re-exported here.
 //
@@ -70,7 +70,7 @@ export async function vaultGet(
   });
   const res = await sender.send<VaultGetResponsePayload>(envelope, {
     expectedResponseType: VAULT_GET_RESPONSE,
-    operationLabel: "vault/get/0.2",
+    operationLabel: "vault/get/0.3",
   });
   return { entry: res.entry, redactedFields: res.redactedFields ?? [] };
 }

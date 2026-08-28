@@ -26,9 +26,10 @@ import { buildTrustTask } from "../vta/trust-task.js";
 import type { VtaAuthInputs } from "../vta/auth.js";
 import type { TrustTaskEnvelope } from "../trust-tasks/sign.js";
 
-const TASK_VAULT_SIGN_TRUST_TASK = "https://trusttasks.org/spec/vault/sign-trust-task/0.2";
-const TASK_VAULT_SIGN_TRUST_TASK_RESPONSE =
-  "https://trusttasks.org/spec/vault/sign-trust-task/0.2#response";
+import {
+  TYPE_URI as TASK_VAULT_SIGN_TRUST_TASK,
+  RESPONSE_TYPE_URI as TASK_VAULT_SIGN_TRUST_TASK_RESPONSE,
+} from "@openvtc/trust-tasks/vault/sign-trust-task/0.2/payload";
 
 export interface VaultSignTrustTaskOptions {
   /** Issuer of the request (envelope `issuer`). */
@@ -37,9 +38,7 @@ export interface VaultSignTrustTaskOptions {
   service: RemoteDidcommEndpoint;
   /** Identifier of the vault entry whose principal will sign. MUST
    *  point at a `did-self-issued` or `didcomm-peer` entry — other
-   *  kinds reject with `vault/sign-trust-task:notSignable` (an agent
-   *  that predates trust-tasks #279 spells it `not_signable`; match
-   *  either with `matchesTrustTaskCode`). */
+   *  kinds reject with `vault/sign-trust-task:notSignable`. */
   entryId: string;
   /** The Trust Task document to sign. MUST have no `proof` field.
    *  MUST set `issuer = <entry.principalDid>`. The VTA refuses to

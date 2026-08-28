@@ -42,6 +42,12 @@ import {
   type Payload as ServersReconcilePayload,
   type Response as ServersReconcileResponse,
 } from "@openvtc/trust-tasks/vta/webvh/servers/reconcile/0.1/payload";
+import {
+  TYPE_URI as SERVERS_RETIRE_ORPHAN,
+  RESPONSE_TYPE_URI as SERVERS_RETIRE_ORPHAN_RESPONSE,
+  type VTAWebVHServersRetireOrphanPayload as ServersRetireOrphanPayload,
+  type VTAWebVHServersRetireOrphanResponsePayload as ServersRetireOrphanResponse,
+} from "@openvtc/trust-tasks/vta/webvh/servers/retire-orphan/0.1/payload";
 
 import type { TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
@@ -131,4 +137,37 @@ export async function webvhServerReconcile(
   const { holder, service, ...payload } = params;
   return send(sender, { holder, service }, SERVERS_RECONCILE, SERVERS_RECONCILE_RESPONSE,
     "vta/webvh/servers/reconcile/0.1", payload);
+}
+
+/**
+ * Retire a slot the host serves and the agent has no record of — the
+ * `hostOnly` half of what {@link webvhServerReconcile} reports.
+ *
+ * Reconcile reports drift and repairs nothing, which leaves one direction of it
+ * with no action at all: a slot the host still serves that no agent record
+ * claims. Nothing else can retire it, because every other task in this family
+ * addresses a DID, and a slot reserved but never published to has no DID — it
+ * is exactly as orphaned, and exactly as invisible.
+ *
+ * **Pass `expectedDid` whenever the reconcile report carried one.** Slot ids
+ * are reused. Without it, a report taken before a reuse retires whatever now
+ * occupies the slot; with it, the agent refuses on mismatch. Omit it only for a
+ * slot that was genuinely never published to, which is the one case where there
+ * is no DID to name.
+ *
+ * There is no undo, which is why `reason` is worth sending even though it is
+ * optional: it is recorded in the audit trail and outlives the record of what
+ * was retired.
+ *
+ * `retired: false` in the answer is a real outcome, not an error — an agent
+ * that could not confirm removal with the host reports it rather than claiming
+ * success. Check it.
+ */
+export async function webvhServerRetireOrphan(
+  sender: TrustTaskSender,
+  params: WebvhCall & ServersRetireOrphanPayload,
+): Promise<ServersRetireOrphanResponse> {
+  const { holder, service, ...payload } = params;
+  return send(sender, { holder, service }, SERVERS_RETIRE_ORPHAN,
+    SERVERS_RETIRE_ORPHAN_RESPONSE, "vta/webvh/servers/retire-orphan/0.1", payload);
 }

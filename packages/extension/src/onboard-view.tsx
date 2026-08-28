@@ -15,7 +15,6 @@ import { useEffect, useState } from "react";
 import { useConnectionStore } from "./store.js";
 import {
   didWebvhDomain,
-  matchesTrustTaskCode,
   PROVISION_CONTEXT_REQUIRED,
 } from "@openvtc/pnm-core";
 import {
@@ -308,14 +307,12 @@ export function OnboardView({
         // back to a re-prepare cycle. The ephemeral grant is still
         // valid for its 1h TTL so picking immediately retries.
         //
-        // Matched with `matchesTrustTaskCode`, not `===`. This wallet
-        // updates on the Web Store's schedule and the VTA on its own, so
-        // both spellings of the code are live at once (trust-tasks #279
-        // re-cased the local part). A hard equality on either one goes
-        // quietly false against half the fleet, and the symptom is not an
-        // error — it is the picker simply never appearing.
+        // `===` against the registry's current spelling. This used to fold
+        // the pre-#279 snake_case spelling in as well; every agent now emits
+        // the lowerCamelCase one, so the fold was removed rather than left
+        // to be wondered about.
         if (
-          matchesTrustTaskCode(res.code, PROVISION_CONTEXT_REQUIRED) &&
+          res.code === PROVISION_CONTEXT_REQUIRED &&
           res.candidates &&
           res.candidates.length > 0
         ) {

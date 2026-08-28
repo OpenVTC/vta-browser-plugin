@@ -8,15 +8,13 @@
 // Payload and response types come from `@openvtc/trust-tasks` (generated from
 // the published schemas). This file owns the call layer only.
 //
-// **One divergence to know about.** The agent implements two things this
-// version of the specification does not describe: a top-level `internal` member
-// on `keys/create`, and a matching `internal` value for `KeyRecord.origin`
-// (`vta-sdk`'s `KeyOrigin::Internal` — a key generated from the CSPRNG, absent
-// from every backup, and by design **unrecoverable**). Since the schema's
-// `KeyOrigin` is `"derived" | "imported"` and its create payload has no
-// `internal`, both are modelled here as explicit extensions rather than
-// smuggled in as `any`. If the spec catches up, these annotations disappear;
-// until then they are the honest description of what the agent accepts.
+// **The two local extensions this file used to carry are gone.** `internal` on
+// `keys/create` and `internal` as a `KeyRecord.origin` value were the agent's
+// own, modelled here as explicit widenings of the generated types. The registry
+// has since specified both — `KeysCreatePayload.internal` and
+// `KeyOrigin = "derived" | "imported" | "internal"` — so the widenings were
+// removed rather than left to be maintained. The note that stood here promised
+// exactly that: "if the spec catches up, these annotations disappear".
 //
 // **`keysImport` carries private key material.** Three carriers, exactly one
 // of which may be present: `sealed` (an armored bundle only the agent can
@@ -48,6 +46,7 @@ import {
   RESPONSE_TYPE_URI as KEYS_SHOW_RESPONSE,
   type KeysShowResponsePayload,
   type KeyRecord as SpecKeyRecord,
+  type KeyOrigin,
   type KeyStatus,
 } from "@openvtc/trust-tasks/keys/show/0.1/payload";
 import {
@@ -94,14 +93,13 @@ export type { KeyType, KeyStatus, SignAlgorithm };
  *
  * `derived` keys come from the BIP-39 master seed, which is what makes an agent
  * recoverable — and also what makes "the operator cannot obtain this key"
- * false. `internal` is the VTA's extension: generated from the system CSPRNG,
- * in no backup and no export, and **recoverable by no means at all**. Losing
- * the keyspace loses the key and everything it authorises.
+ * false. `internal` is generated from the system CSPRNG: in no backup and no
+ * export, and **recoverable by no means at all**. Losing the keyspace loses the
+ * key and everything it authorises.
  */
-export type KeyOrigin = "derived" | "imported" | "internal";
+export type { KeyOrigin };
 
-/** A key record, with the agent's `origin: "internal"` extension admitted. */
-export type KeyRecord = Omit<SpecKeyRecord, "origin"> & { origin?: KeyOrigin };
+export type KeyRecord = SpecKeyRecord;
 
 export interface KeysCallerParams {
   /** Envelope `issuer` — the caller's DIDComm identity. */
@@ -126,8 +124,19 @@ export interface KeysCreateParams extends KeysCallerParams {
   mnemonic?: string;
   label?: string;
   contextId?: string;
+  /**
+   * Durable identifier to give the new key.
+   *
+   * Optional in the schema, and for a *derived* key the agent defaults it to
+   * `derivationPath`. **It is not optional in practice for `internal: true`**:
+   * such a key is derived from no seed and records no path, so there is nothing
+   * for the agent to name it after. That gap is why the member was added to
+   * `keys/create/0.1` in the first place (dtgwg-trust-tasks-tf#275), and it is
+   * what `vta-sdk` 0.30.0 was cut for.
+   */
+  keyId?: string;
   /** Generate from the CSPRNG instead of the seed — unrecoverable by design.
-   *  A VTA extension; see the note at the top of this file. */
+   *  Pair it with {@link KeysCreateParams.keyId}. */
   internal?: boolean;
 }
 
@@ -136,9 +145,10 @@ export async function keysCreate(
   sender: TrustTaskSender,
   params: KeysCreateParams,
 ): Promise<KeyRecord> {
-  const payload: KeysCreatePayload & { internal?: boolean } = {
+  const payload: KeysCreatePayload = {
     keyType: params.keyType,
     ...(params.derivationPath ? { derivationPath: params.derivationPath } : {}),
+    ...(params.keyId ? { keyId: params.keyId } : {}),
     ...(params.mnemonic ? { mnemonic: params.mnemonic } : {}),
     ...(params.label ? { label: params.label } : {}),
     ...(params.contextId ? { contextId: params.contextId } : {}),

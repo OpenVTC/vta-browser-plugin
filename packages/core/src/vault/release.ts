@@ -18,8 +18,10 @@ import type { SecretKind } from "./list.js";
 import type { VtaAuthInputs } from "../vta/auth.js";
 import type { VaultSecret } from "./upsert.js";
 
-const TASK_VAULT_RELEASE = "https://trusttasks.org/spec/vault/release/0.2";
-const TASK_VAULT_RELEASE_RESPONSE = "https://trusttasks.org/spec/vault/release/0.2#response";
+import {
+  TYPE_URI as TASK_VAULT_RELEASE,
+  RESPONSE_TYPE_URI as TASK_VAULT_RELEASE_RESPONSE,
+} from "@openvtc/trust-tasks/vault/release/0.2/payload";
 
 export interface VaultReleaseParams {
   /** Envelope `issuer` + the keyAgreement recipient the maintainer seals to. */
