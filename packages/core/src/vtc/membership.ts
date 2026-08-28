@@ -73,8 +73,10 @@ import {
 } from "@openvtc/trust-tasks/vtc/members/self-remove-receipt/0.1/payload";
 import {
   TYPE_URI as MEMBERS_REMOVAL_NOTICE,
+  PAYLOAD_SCHEMA as REMOVAL_NOTICE_SCHEMA,
   type VTCMembersRemovalNoticePayload,
 } from "@openvtc/trust-tasks/vtc/members/removal-notice/0.1/payload";
+import { validateAgainstSchema } from "../trust-tasks/validate.js";
 
 export interface CommunityCallerParams {
   /** Envelope `issuer` — the member's (or applicant's) identity. */
@@ -377,27 +379,14 @@ export function parseRemovalNotice(
     return null;
   }
 
-  const payload = envelope.payload as Partial<RemovalNotice> | undefined;
-  if (!payload) return null;
-  const { did, code, disposition, decidedAt, decidedBy } = payload;
-  // Every REQUIRED member checked before the notice is believed. A partial one
-  // would render as a removal with blanks where the recourse should be.
-  if (
-    typeof did !== "string" ||
-    (code !== "adminRemoved" && code !== "purged") ||
-    (disposition !== "purge" && disposition !== "tombstone" && disposition !== "historical") ||
-    typeof decidedAt !== "string" ||
-    typeof decidedBy !== "string"
-  ) {
-    return null;
-  }
-
-  return {
-    did,
-    code,
-    disposition,
-    decidedAt,
-    decidedBy,
-    ...(typeof payload.reason === "string" ? { reason: payload.reason } : {}),
-  };
+  // Checked against the published schema, not by hand. The hand-written version
+  // this replaces enumerated the two `code` values and the three `disposition`
+  // values as literals — a transcription that is correct only until the
+  // registry adds a fourth, at which point a legitimate notice is dropped in
+  // silence and a member is not told they were removed. The schema is the one
+  // copy that cannot fall behind itself, and it also enforces what the hand
+  // version had no way to: `additionalProperties: false`, and the bounds on
+  // `reason`, which is the prose this surface renders.
+  if (!validateAgainstSchema(REMOVAL_NOTICE_SCHEMA, envelope.payload).valid) return null;
+  return envelope.payload as RemovalNotice;
 }

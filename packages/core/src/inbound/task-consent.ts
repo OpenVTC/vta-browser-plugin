@@ -54,6 +54,7 @@ import {
 } from "../trust-tasks/validate.js";
 
 import { PAYLOAD_SCHEMA } from "@openvtc/trust-tasks/task-consent/request/0.1/payload";
+import { RESPONSE_PAYLOAD_SCHEMA as DECISION_RESPONSE_SCHEMA } from "@openvtc/trust-tasks/task-consent/decision/0.1/payload";
 import type { SigningIdentity } from "../siop/self-issued.js";
 
 export const TASK_CONSENT_REQUEST_TYPE =
@@ -146,6 +147,12 @@ export function parseTaskConsentOutcome(
     (typeof doc.threadId === "string" ? doc.threadId : undefined);
 
   if (isTrustTaskErrorType(doc.type)) {
+    // **Deliberately not schema-validated.** This branch carries the executor
+    // refusing an approval a human already gave, and the one thing that must
+    // not happen is failing to tell them. Refusing a malformed error document
+    // would drop that notification for a defect in the *refusal*, which is
+    // strictly worse than reporting a refusal whose members are read
+    // defensively — as they are, member by member, below.
     const payload = (doc.payload ?? {}) as Partial<TrustTaskErrorPayload>;
     return {
       accepted: false,
@@ -160,7 +167,27 @@ export function parseTaskConsentOutcome(
   }
 
   if (doc.type === TASK_CONSENT_DECISION_RESPONSE_TYPE) {
-    const payload = (doc.payload ?? {}) as Record<string, unknown>;
+    // Validated, unlike the error branch above. `status` is an enum of
+    // `granted | pending | denied` and `payloadDigest` is a REQUIRED
+    // `DigestMultibase`, and the hand-read below would have passed any string
+    // through for the first and silently omitted the second. Nothing branches
+    // on `status` today — it is reported, not acted on — so this is not the
+    // fail-open the request path had. It is here because "the executor said
+    // *granted*" is a claim worth being able to trust when something does
+    // start branching on it.
+    const check = validateAgainstSchema(DECISION_RESPONSE_SCHEMA, doc.payload);
+    if (!check.valid) {
+      return {
+        accepted: false,
+        code: "malformedRequest",
+        message:
+          `the executor's decision response does not satisfy ` +
+          `${TASK_CONSENT_DECISION_RESPONSE_TYPE} — ${describeViolations(check.violations)}`,
+        retryable: false,
+        ...(thid ? { thid } : {}),
+      };
+    }
+    const payload = doc.payload as Record<string, unknown>;
     return {
       accepted: true,
       status: typeof payload.status === "string" ? payload.status : "unknown",

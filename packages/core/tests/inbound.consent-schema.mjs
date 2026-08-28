@@ -161,3 +161,71 @@ test("no shipped schema requires a member it does not define", async () => {
   }
   assert.deepEqual(problems, [], "unsatisfiable schema — report upstream, do not work around it here");
 });
+
+// ── the two paths that were still reading payloads by hand ──────────────────
+
+test("a decision response with a status outside the enum is reported malformed", async () => {
+  // `status` is `granted | pending | denied`. The hand-read passed any string
+  // through as the outcome. Nothing branches on it today — it is logged, not
+  // acted on — which is why this was not the fail-open the request path had;
+  // it is validated so that "the executor said granted" stays a claim worth
+  // trusting when something eventually does branch on it.
+  const { parseTaskConsentOutcome } = await import("../dist/inbound/index.js");
+  const { TRUST_TASK_ENVELOPE_TYPE } = await import("../dist/vta/index.js");
+  const reply = (payload) => ({
+    type: TRUST_TASK_ENVELOPE_TYPE,
+    from: "did:webvh:QmVta:vta.example",
+    thid: "t-1",
+    body: {
+      type: "https://trusttasks.org/spec/task-consent/decision/0.1#response",
+      payload,
+    },
+  });
+  const opts = { enrolledExecutorDids: ["did:webvh:QmVta:vta.example"] };
+
+  const good = parseTaskConsentOutcome(
+    reply({ status: "granted", payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ" }),
+    opts,
+  );
+  assert.equal(good.accepted, true);
+  assert.equal(good.status, "granted");
+
+  const bad = parseTaskConsentOutcome(
+    reply({ status: "granted-ish", payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ" }),
+    opts,
+  );
+  assert.equal(bad.accepted, false, "an out-of-enum status is not an acceptance");
+  assert.match(bad.message ?? "", /status/);
+
+  // `payloadDigest` is REQUIRED; the hand-read silently omitted it.
+  const missing = parseTaskConsentOutcome(reply({ status: "granted" }), opts);
+  assert.equal(missing.accepted, false);
+  assert.match(missing.message ?? "", /payloadDigest/);
+});
+
+test("a removal notice is checked against the schema, not a transcribed enum", async () => {
+  const { parseRemovalNotice } = await import("../dist/vtc/index.js");
+  const community = "did:webvh:QmCommunity:vtc.example";
+  const notice = (over = {}) => ({
+    type: "https://trusttasks.org/spec/vtc/members/removal-notice/0.1",
+    issuer: community,
+    payload: {
+      did: "did:key:zHolder",
+      code: "adminRemoved",
+      disposition: "tombstone",
+      decidedAt: "2026-08-20T09:00:00Z",
+      decidedBy: "did:key:zAdmin",
+      ...over,
+    },
+  });
+
+  assert.ok(parseRemovalNotice(notice(), community), "the baseline notice parses");
+  // `additionalProperties: false` — the hand-written version had no way to see
+  // an unknown member, so a producer and consumer disagreeing about the
+  // contract went unnoticed.
+  assert.equal(parseRemovalNotice(notice({ surprise: 1 }), community), null);
+  // Out-of-enum values still refused, now because the schema says so rather
+  // than because someone transcribed the two spellings correctly.
+  assert.equal(parseRemovalNotice(notice({ code: "removed" }), community), null);
+  assert.equal(parseRemovalNotice(notice({ disposition: "shredded" }), community), null);
+});

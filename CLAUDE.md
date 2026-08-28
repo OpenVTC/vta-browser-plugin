@@ -94,6 +94,15 @@ dedup check.
   so a stale `dist` produces phantom "cannot find module" / "no exported
   member" errors in source that is perfectly correct. `tsc -b` walks the
   project references and builds them in order.
+- **Never `rm -rf packages/core/dist` on its own — use `npm run clean`.** The
+  `.tsbuildinfo` survives the delete, so the next `tsc -b` believes the output
+  is current, **prints nothing, exits 0, and emits no files**. Every dependent
+  workspace then fails with "cannot find module `@openvtc/pnm-core`" across
+  dozens of files, which reads like a broken package rather than an empty
+  `dist`. This is the nastier sibling of the stale-`dist` trap above: there the
+  build tells you something is wrong, here it reports success. The `clean`
+  script removes `dist` *and* `*.tsbuildinfo`, which is the whole reason it
+  exists; `tsc -b --force` also works.
 - **Lint is `tsc -b`, never `tsc -b --noEmit`** — the latter is invalid when a
   referenced composite project must emit (TS6310) and fails outright.
 - **Never add a cross-workspace import without the matching `references`
