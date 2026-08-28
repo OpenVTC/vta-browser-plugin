@@ -33,7 +33,7 @@ import {
   RESPONSE_TYPE_URI as DEVICE_WIPE_RESPONSE,
   type DeviceWipePayload,
   type DeviceWipeResponsePayload,
-} from "@openvtc/trust-tasks/device/wipe/0.1/payload";
+} from "@openvtc/trust-tasks/device/wipe/0.2/payload";
 
 export type { DeviceBinding };
 
@@ -137,8 +137,12 @@ export async function deviceDisable(
 export interface DeviceWipeParams extends DeviceCallerParams {
   deviceId: string;
   /**
-   * `cache` — transient state only; `cache-and-keys` — also the device's key
+   * `cache` — transient state only; `cacheAndKeys` — also the device's key
    * material; `full` — everything the device holds.
+   *
+   * The middle value is the whole reason this call is on `0.2`: `0.1` spelled
+   * it `cache-and-keys`, and the enum is closed, so the old spelling is not a
+   * synonym the agent tolerates — it is a value outside the schema.
    */
   scope: WipeScope;
   /** Required by the specification. A wipe with no recorded reason is an audit
@@ -165,6 +169,6 @@ export async function deviceWipe(
   });
   return sender.send<DeviceWipeResponsePayload>(envelope, {
     expectedResponseType: DEVICE_WIPE_RESPONSE,
-    operationLabel: "device/wipe/0.1",
+    operationLabel: "device/wipe/0.2",
   });
 }

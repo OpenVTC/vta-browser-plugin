@@ -24,3 +24,4 @@ export * from "./tsp-vid.js";
 export * from "./types.js";
 export * from "./wallet-session.js";
 export * from "./request-task.js";
+export * from "./discovery.js";

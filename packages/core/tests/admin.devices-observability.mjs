@@ -84,12 +84,12 @@ test("wipe carries scope and reason, both required by the schema", async () => {
     holder: HOLDER,
     service: SERVICE,
     deviceId: "dev-1",
-    scope: "cache-and-keys",
+    scope: "cacheAndKeys",
     reason: "stolen at conference",
   });
   assert.deepEqual(channel.sent[0].envelope.payload, {
     deviceId: "dev-1",
-    scope: "cache-and-keys",
+    scope: "cacheAndKeys",
     reason: "stolen at conference",
   });
 });

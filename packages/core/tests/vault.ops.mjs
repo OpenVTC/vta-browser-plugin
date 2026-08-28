@@ -12,6 +12,7 @@ import {
   swapAcl,
   generateSigningIdentity,
   VtaSession,
+  decodeDigestMultibase,
 } from "../dist/index.js";
 
 /** A TrustTaskChannel that records the envelope + opts and returns a canned
@@ -32,16 +33,16 @@ function captureChannel(payload) {
 const holder = { did: "did:example:holder" };
 const service = { did: "did:example:vta", keyAgreementKid: "did:example:vta#ka", keyAgreementPublicJwk: {} };
 
-test("vaultList builds vault/list/0.2 with issuer+recipient and maps the reply", async () => {
+test("vaultList builds vault/list/0.3 with issuer+recipient and maps the reply", async () => {
   const ch = captureChannel({ entries: [{ id: "e1" }], truncated: true, cursor: "c2" });
   const res = await vaultList(ch, { holder, service, filter: { contextId: "work" } });
 
   const { envelope, opts } = ch.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/vault/list/0.2");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vault/list/0.3");
   assert.equal(envelope.issuer, "did:example:holder");
   assert.equal(envelope.recipient, "did:example:vta");
   assert.deepEqual(envelope.payload, { contextId: "work" });
-  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vault/list/0.2#response");
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vault/list/0.3#response");
   assert.ok(typeof envelope.id === "string" && envelope.id.length > 0);
   assert.ok(typeof envelope.issuedAt === "string");
 
@@ -139,7 +140,7 @@ test("ops accept a VtaSession (not just a raw channel) and route through it", as
   const didcomm = captureChannel({ entries: [{ id: "via-session" }] });
   const session = new VtaSession([didcomm]);
   const res = await vaultList(session, { holder, service });
-  assert.equal(didcomm.sent[0].envelope.type, "https://trusttasks.org/spec/vault/list/0.2");
+  assert.equal(didcomm.sent[0].envelope.type, "https://trusttasks.org/spec/vault/list/0.3");
   assert.deepEqual(res.entries, [{ id: "via-session" }]);
 });
 
@@ -181,4 +182,46 @@ test("the canonical spelling is passed through untouched", async () => {
   const ch = captureChannel({ contexts: [{ id: "work", name: "Work", basePath: "/work" }] });
   const [ctx] = await contextsList(ch, { holder, service });
   assert.equal(ctx.basePath, "/work");
+});
+
+test("an attachment's integrity is a digestMultibase, and it decodes", async () => {
+  // The point of the 0.3 cutover. `AttachmentRef` at 0.2 carried `sha256`, a
+  // bare hex string that hard-codes one algorithm into the wire contract;
+  // `vault/_shared/0.3` replaces it with a self-describing multibase multihash.
+  //
+  // Pinned as a *decode*, not a string compare. Two encodings of one digest are
+  // the same digest, so comparing the encoded forms answers a different
+  // question than the one a caller verifying an attachment is asking.
+  const entry = {
+    id: "e1",
+    contextId: "c1",
+    targets: [{ kind: "webOrigin", origin: "https://example.com" }],
+    label: "Recovery codes",
+    secretKind: "custom",
+    attachments: [
+      {
+        id: "a1",
+        name: "recovery-codes.txt",
+        sizeBytes: 128,
+        digestMultibase: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ",
+      },
+    ],
+    createdAt: "2026-08-28T00:00:00Z",
+    updatedAt: "2026-08-28T00:00:00Z",
+    version: 1,
+  };
+  const ch = captureChannel({ entries: [entry], truncated: false });
+  const res = await vaultList(ch, { holder, service });
+
+  const ref = res.entries[0].attachments[0];
+  assert.equal("sha256" in ref, false, "the 0.2 hex member is gone");
+  const bytes = decodeDigestMultibase(ref.digestMultibase);
+  assert.equal(bytes.length, 32, "sha2-256 digest bytes, multihash prefix stripped");
+});
+
+test("an attachment digest that is not a sha2-256 multihash is refused", () => {
+  // Fails closed rather than guessing. A bare hex string is exactly what a 0.2
+  // producer would send, and silently accepting it would make the cutover
+  // invisible at the one place it matters.
+  assert.throws(() => decodeDigestMultibase("deadbeef"), /unsupported multibase prefix/);
 });

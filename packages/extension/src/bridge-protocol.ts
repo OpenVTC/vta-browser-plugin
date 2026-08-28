@@ -589,12 +589,10 @@ export type RuntimeOnboardConnectResponse =
        *  The popup branches on this to surface recovery UX — picker
        *  dialogs, retry hints — rather than just dumping the message.
        *
-       *  **Carried verbatim, in whatever spelling the VTA used.** This
-       *  crosses an extension message-passing boundary (offscreen ->
-       *  background -> popup), and normalising it in transit would mean
-       *  each hop had to be redeployed in lockstep with the agent. The
-       *  popup compares it with `matchesTrustTaskCode`, which accepts
-       *  both sides of the trust-tasks #279 re-casing. */
+       *  **Carried verbatim.** This crosses an extension message-passing
+       *  boundary (offscreen -> background -> popup), and a hop that
+       *  rewrote it would be deciding what the code means on behalf of
+       *  the surface that has to act on it. */
       code?: string;
       /** Problem-report `args` payload. Task-specific structure. For
        *  `contextRequired` this is the candidates list the operator

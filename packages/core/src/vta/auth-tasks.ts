@@ -29,6 +29,18 @@ import {
   type AuthRefreshResponsePayload,
   type TokenBundle,
 } from "@openvtc/trust-tasks/auth/refresh/0.1/payload";
+import {
+  TYPE_URI as AUTH_PASSKEY_LOGIN_START,
+  RESPONSE_TYPE_URI as AUTH_PASSKEY_LOGIN_START_RESPONSE,
+  type AuthPasskeyLoginStart,
+  type AuthPasskeyLoginStartResponsePayload,
+} from "@openvtc/trust-tasks/auth/passkey/login/start/0.2/payload";
+import {
+  TYPE_URI as AUTH_PASSKEY_LOGIN_FINISH,
+  RESPONSE_TYPE_URI as AUTH_PASSKEY_LOGIN_FINISH_RESPONSE,
+  type AuthPasskeyLoginFinish,
+  type AuthPasskeyLoginFinishResponsePayload,
+} from "@openvtc/trust-tasks/auth/passkey/login/finish/0.2/payload";
 
 export type { TokenBundle };
 
@@ -94,5 +106,100 @@ export async function refreshAuthSession(
   return sender.send<AuthRefreshResponsePayload>(envelope, {
     expectedResponseType: AUTH_REFRESH_RESPONSE,
     operationLabel: "auth/refresh/0.1",
+  });
+}
+
+// ── Passkey login as a Trust Task ───────────────────────────────────────────
+//
+// A two-step ceremony: `start` returns the WebAuthn request options and an
+// `authId` binding them; the browser runs `navigator.credentials.get()`;
+// `finish` submits the assertion under that `authId` and gets a session back.
+//
+// **Distinct from the bespoke REST bootstrap in `vta/auth.ts`,** and subject to
+// the same constraint as everything else in this file: posting a Trust Task
+// over REST needs a bearer, so a REST-only client cannot log in this way. Over
+// TSP or DIDComm the envelope authenticates the sender, and this works.
+//
+// **Pinned at 0.2, and the version carries meaning.** 0.2 adds `purpose`, which
+// separates "log this session in" from "raise this session's assurance for one
+// operation". Sending a step-up as a login is not a naming preference — it asks
+// the agent for a broader session than the operation needed.
+
+/** The `purpose` a passkey assertion is spent on. */
+export type PasskeyLoginPurpose = "login" | "stepUp";
+
+export interface PasskeyLoginStartParams extends AuthTaskCallerParams {
+  /** DID being authenticated. Defaults to the caller's own. */
+  subject?: string;
+  /**
+   * `login` for a new session, `stepUp` to raise an existing one.
+   *
+   * The agent echoes what it actually granted on `finish`. Read that rather
+   * than assuming the request was honoured — the two differ in what the
+   * resulting session may do.
+   */
+  purpose?: PasskeyLoginPurpose;
+}
+
+/**
+ * Open a passkey login ceremony.
+ *
+ * The returned `options` go straight to `navigator.credentials.get()`; the
+ * `authId` binds that ceremony and is what {@link finishPasskeyLogin} submits
+ * under. It is single-use and the agent expires it, so do not open one
+ * speculatively ahead of the user gesture.
+ */
+export async function startPasskeyLogin(
+  sender: TrustTaskSender,
+  params: PasskeyLoginStartParams,
+): Promise<AuthPasskeyLoginStartResponsePayload> {
+  const payload: AuthPasskeyLoginStart = {
+    ...(params.subject !== undefined ? { subject: params.subject } : {}),
+    ...(params.purpose !== undefined ? { purpose: params.purpose } : {}),
+  };
+  const envelope = buildTrustTask(AUTH_PASSKEY_LOGIN_START, payload, {
+    issuer: params.holder.did,
+    recipient: params.service.did,
+  });
+  return sender.send<AuthPasskeyLoginStartResponsePayload>(envelope, {
+    expectedResponseType: AUTH_PASSKEY_LOGIN_START_RESPONSE,
+    operationLabel: "auth/passkey/login/start/0.2",
+  });
+}
+
+export interface PasskeyLoginFinishParams extends AuthTaskCallerParams {
+  /** The `authId` from {@link startPasskeyLogin}. Single-use. */
+  authId: string;
+  /** The WebAuthn assertion, base64url-encoded per the specification. */
+  credential: AuthPasskeyLoginFinish["credential"];
+}
+
+/**
+ * Submit the assertion and take the session.
+ *
+ * Two things in the answer are easy to skip and both matter:
+ *
+ * - **`purpose`** is what the agent granted, not what was asked for. Treating
+ *   a `stepUp` as a `login` means believing a session is broader than it is.
+ * - **`tokens` is optional.** A `stepUp` typically raises the session already
+ *   in hand rather than minting a bundle, so its absence is the normal case
+ *   there and is not a failure. Where tokens *are* present they replace what
+ *   was held — including the refresh token, which the agent may rotate.
+ */
+export async function finishPasskeyLogin(
+  sender: TrustTaskSender,
+  params: PasskeyLoginFinishParams,
+): Promise<AuthPasskeyLoginFinishResponsePayload> {
+  const payload: AuthPasskeyLoginFinish = {
+    authId: params.authId,
+    credential: params.credential,
+  };
+  const envelope = buildTrustTask(AUTH_PASSKEY_LOGIN_FINISH, payload, {
+    issuer: params.holder.did,
+    recipient: params.service.did,
+  });
+  return sender.send<AuthPasskeyLoginFinishResponsePayload>(envelope, {
+    expectedResponseType: AUTH_PASSKEY_LOGIN_FINISH_RESPONSE,
+    operationLabel: "auth/passkey/login/finish/0.2",
   });
 }

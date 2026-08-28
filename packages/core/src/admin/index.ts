@@ -20,3 +20,5 @@ export * from "./did-templates.js";
 export * from "./memory.js";
 export * from "./consent.js";
 export * from "./contexts.js";
+export * from "./services.js";
+export * from "./credentials.js";

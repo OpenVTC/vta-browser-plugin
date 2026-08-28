@@ -31,7 +31,10 @@ import {
   RESPONSE_TYPE_URI as JR_SUBMIT_RESPONSE,
   type VTCJoinRequestsSubmitPayload,
   type VTCJoinRequestsSubmitResponsePayload,
-} from "@openvtc/trust-tasks/vtc/join-requests/submit/0.1/payload";
+  type Verdict,
+  type VerdictEffect,
+  type VerdictWith,
+} from "@openvtc/trust-tasks/vtc/join-requests/submit/0.2/payload";
 import {
   TYPE_URI as JR_STATUS,
   RESPONSE_TYPE_URI as JR_STATUS_RESPONSE,
@@ -68,6 +71,10 @@ import {
   type VTCMembersSelfRemoveReceiptPayload,
   type VTCMembersSelfRemoveReceiptResponsePayload,
 } from "@openvtc/trust-tasks/vtc/members/self-remove-receipt/0.1/payload";
+import {
+  TYPE_URI as MEMBERS_REMOVAL_NOTICE,
+  type VTCMembersRemovalNoticePayload,
+} from "@openvtc/trust-tasks/vtc/members/removal-notice/0.1/payload";
 
 export interface CommunityCallerParams {
   /** Envelope `issuer` — the member's (or applicant's) identity. */
@@ -112,7 +119,29 @@ export interface JoinSubmitParams extends CommunityCallerParams {
   extensions?: VTCJoinRequestsSubmitPayload["extensions"];
 }
 
-/** Apply to join. Returns the request id to follow up with. */
+/**
+ * The community's decision on a submission, and its effect-dependent detail.
+ *
+ * Re-exported so a caller can branch without importing the bindings directly.
+ * **Branch on `effect`, never on which members of `with` happen to be
+ * present** — every member is optional at the schema level, and which ones are
+ * meaningful is decided by `effect` (`role`/`obligations`/`bundleRef` on
+ * `allow`, `code`/`reason` on `deny`, `queue`/`reason` on `refer`,
+ * `needs`/`presentationDefinition` on `requestMore`).
+ */
+export type { Verdict, VerdictEffect, VerdictWith };
+
+/**
+ * Apply to join. Returns the request id to follow up with, and the community's
+ * `verdict` on the submission.
+ *
+ * **Read `verdict`, not a status constant.** `submit/0.1` returned
+ * `status: "pending"` — a literal, so a community that admits outright,
+ * refuses outright, or wants more evidence had no way to say so on the
+ * response and had to be reported as "pending" regardless. `0.2` replaces it
+ * with a {@link Verdict}, which carries all four outcomes. A caller that
+ * renders "pending" unconditionally is now describing one branch of four.
+ */
 export async function submitJoinRequest(
   sender: TrustTaskSender,
   params: JoinSubmitParams,
@@ -132,7 +161,7 @@ export async function submitJoinRequest(
   });
   return sender.send<VTCJoinRequestsSubmitResponsePayload>(envelope, {
     expectedResponseType: JR_SUBMIT_RESPONSE,
-    operationLabel: "vtc/join-requests/submit/0.1",
+    operationLabel: "vtc/join-requests/submit/0.2",
   });
 }
 
@@ -298,4 +327,77 @@ export async function acknowledgeSelfRemoval(
     expectedResponseType: MEMBERS_SELF_REMOVE_RECEIPT_RESPONSE,
     operationLabel: "vtc/members/self-remove-receipt/0.1",
   });
+}
+
+/** The community's account of a removal this member did not ask for. */
+export type RemovalNotice = VTCMembersRemovalNoticePayload;
+
+/**
+ * Read an inbound `vtc/members/removal-notice/0.1`.
+ *
+ * **A parser, not a sender** — the whole family here is the member's side, and
+ * this is the one document in it that arrives unsolicited. Unlike
+ * {@link acknowledgeSelfRemoval}'s receipt it answers no request, because the
+ * member did not make one: the first they learn of it is this.
+ *
+ * Returns `null` for anything that is not a removal notice from
+ * `expectedCommunityDid`, which is the only case a caller may ignore in
+ * silence. **The sender check is the security boundary**: an unauthenticated
+ * party must not be able to tell a wallet its membership is gone. That would
+ * be a cheap way to make someone abandon a community they are still in, and it
+ * is the same reasoning `parseTaskConsentGranted` applies to its own nudge.
+ *
+ * Three members carry more than their types show, and a surface that renders
+ * this should use all three:
+ *
+ * - **`code`** distinguishes `adminRemoved` (policy-governed) from `purged`
+ *   (a super-administrator deletion that skips the removal policy). They are
+ *   not one `removed` state because what recourse the member has differs.
+ * - **`disposition`** says what happened to the member's *published* record —
+ *   `purge`, `tombstone` or `historical`. Always concrete: a community
+ *   resolves any policy default before sending.
+ * - **`decidedAt`** is when the removal took effect, which is **not** the
+ *   envelope's `issuedAt` — those diverge by however long the member was
+ *   offline, and it is the decision that has to be placed in time.
+ *
+ * `reason` absent and `reason: ""` are different claims. This is the member's
+ * only account of why, so render the absence as "no reason given" rather than
+ * as an empty line.
+ */
+export function parseRemovalNotice(
+  doc: unknown,
+  expectedCommunityDid: string,
+): RemovalNotice | null {
+  if (typeof doc !== "object" || doc === null) return null;
+  const envelope = doc as { type?: unknown; issuer?: unknown; payload?: unknown };
+  if (envelope.type !== MEMBERS_REMOVAL_NOTICE) return null;
+  // The community is the document's `issuer`; `decidedBy` names the individual
+  // administrator, and is not who the notice is trusted as coming from.
+  if (typeof envelope.issuer !== "string" || envelope.issuer !== expectedCommunityDid) {
+    return null;
+  }
+
+  const payload = envelope.payload as Partial<RemovalNotice> | undefined;
+  if (!payload) return null;
+  const { did, code, disposition, decidedAt, decidedBy } = payload;
+  // Every REQUIRED member checked before the notice is believed. A partial one
+  // would render as a removal with blanks where the recourse should be.
+  if (
+    typeof did !== "string" ||
+    (code !== "adminRemoved" && code !== "purged") ||
+    (disposition !== "purge" && disposition !== "tombstone" && disposition !== "historical") ||
+    typeof decidedAt !== "string" ||
+    typeof decidedBy !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    did,
+    code,
+    disposition,
+    decidedAt,
+    decidedBy,
+    ...(typeof payload.reason === "string" ? { reason: payload.reason } : {}),
+  };
 }

@@ -20,6 +20,17 @@ interaction code:
 
 Rules that bite hardest here:
 
+- **Nothing is deployed — do not write compatibility folds.** The extension has
+  never been published to the Chrome Web Store and has no users outside this
+  workspace, so "an older agent is still a supported peer" is not true and the
+  fold it justifies is dead code that reads like a live constraint. Dual-accept
+  arms for the trust-tasks #279 re-casing and a legacy inbound-dedup record were
+  both removed for exactly this reason; don't reintroduce the pattern. Match the
+  spelling the registry declares **today**, with `===`. When a wire format
+  changes, the plugin and the VTA cut over together — say so in the coordinating
+  issue rather than absorbing the old shape here. This is also why a request to
+  another repo should not ask for a deprecation window on this repo's behalf.
+
 - **R3.7 — match errors on stable machine-readable codes, never on strings,
   and parse error *bodies* before throwing on status.** Any condition this
   wallet must detect needs a stable field agreed with the Rust side —

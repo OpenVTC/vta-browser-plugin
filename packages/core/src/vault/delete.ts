@@ -12,8 +12,10 @@ import { RestChannel } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 import type { VtaAuthInputs } from "../vta/auth.js";
 
-const TASK_VAULT_DELETE = "https://trusttasks.org/spec/vault/delete/0.1";
-const TASK_VAULT_DELETE_RESPONSE = "https://trusttasks.org/spec/vault/delete/0.1#response";
+import {
+  TYPE_URI as TASK_VAULT_DELETE,
+  RESPONSE_TYPE_URI as TASK_VAULT_DELETE_RESPONSE,
+} from "@openvtc/trust-tasks/vault/delete/0.1/payload";
 
 export interface VaultDeleteOptions {
   /** Issuer of the request (envelope `issuer`). */
@@ -23,10 +25,7 @@ export interface VaultDeleteOptions {
   id: string;
   /** Observed `version` for optimistic concurrency. Strongly RECOMMENDED;
    *  the maintainer rejects with `vault/delete:versionConflict` on
-   *  mismatch (with `details.currentVersion` for retry). An agent that
-   *  predates SPEC §4.10 rule 4 (trust-tasks #279) sends the same
-   *  rejection as `vault/delete:version_conflict`; match either with
-   *  `matchesTrustTaskCode` rather than `===`. */
+   *  mismatch (with `details.currentVersion` for retry). */
   expectedVersion?: number;
   /** Human-readable rationale recorded in the audit trail. */
   reason?: string;

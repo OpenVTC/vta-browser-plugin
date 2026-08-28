@@ -4,17 +4,24 @@
 // authcrypt-forward-outer + send-and-await-reply shape. The only thing
 // that differs is the message type URI and the body wire shape.
 //
-// Wire URIs — the canonical Trust Task spec URIs, version 0.2:
-//   request:  https://trusttasks.org/spec/provision/integration/0.2
-//   reply:    https://trusttasks.org/spec/provision/integration/0.2#response
-// The VTA dual-accepts 0.1 + 0.2 and `result_uri_for` echoes the request
-// version into the `#response` (a 0.2 request gets the 0.2 reply). The legacy
-// firstperson.network type was retired VTA-side; this client is fully off it.
+// Wire URIs come from the generated bindings, at version 0.3. `result_uri_for`
+// echoes the request version into the `#response`, so a 0.3 request gets a 0.3
+// reply. The legacy firstperson.network type was retired VTA-side; this client
+// is fully off it.
 //
-// Body field naming on the wire stays `snake_case`: the VTA's 0.1/0.2 paths
-// share one handler that deserializes the same `ProvisionIntegrationRequest`
-// (snake_case) struct, and the response summary is snake_case on both. The
-// 0.2 delta is purely the camelCase `ask.type` discriminator inside the SIGNED
+// **0.3 replaces the response's hex `digest` with `digestMultibase`** — see
+// {@link ProvisionIntegrationResponseBody}. VTI adopted it in #1147; the
+// service keeps a hex digest internally for what an operator reads and
+// `--expect-digest` takes, and puts the multibase form on the wire.
+//
+// Request body field naming on the wire is `snake_case`: the VTA deserializes
+// a `ProvisionIntegrationRequest` (snake_case) struct. **The response summary
+// is camelCase** — `vta-sdk`'s `ProvisionSummary` carries
+// `#[serde(rename_all = "camelCase")]` with snake_case aliases for reading a
+// legacy producer. This header used to claim the summary was snake_case "on
+// both", which contradicted the type declared below it; the type was right.
+//
+// The 0.2 delta was the camelCase `ask.type` discriminator inside the SIGNED
 // BootstrapRequest VP (`adminRotation` vs 0.1 `AdminRotation`) — see
 // `request.ts`. The VTA verifies the VP proof over the received bytes and
 // accepts the camelCase tag via a serde alias.
@@ -25,10 +32,13 @@ import type { DidcommMessageBridge } from "../vta/transport.js";
 
 import type { BootstrapRequestVp } from "./request.js";
 
-const PROVISION_INTEGRATION =
-  "https://trusttasks.org/spec/provision/integration/0.2";
-const PROVISION_INTEGRATION_RESULT =
-  "https://trusttasks.org/spec/provision/integration/0.2#response";
+import {
+  TYPE_URI as PROVISION_INTEGRATION,
+  RESPONSE_TYPE_URI as PROVISION_INTEGRATION_RESULT,
+  type ProvisionIntegrationResponsePayload,
+  type ProvisionSummary,
+} from "@openvtc/trust-tasks/provision/integration/0.3/payload";
+
 const PROBLEM_REPORT_TYPE = "https://didcomm.org/report-problem/2.0/problem-report";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -37,12 +47,10 @@ const DEFAULT_TIMEOUT_MS = 60_000;
  * The VTA could not infer which context to provision into, and is handing back
  * the candidates for a human to pick from.
  *
- * Spelled as the registry declares it today (lowerCamelCase, SPEC §4.10 rule 4
- * — trustoverip/dtgwg-trust-tasks-tf#279). An agent that predates #279 still
- * sends `provision/integration:context_required`, so **compare with
- * `matchesTrustTaskCode` (`../trust-tasks/error-code.ts`), never with `===`** —
- * see that module for why a plain equality here fails silently rather than
- * loudly.
+ * Spelled as the registry declares it (lowerCamelCase, SPEC §4.10 rule 4 —
+ * trustoverip/dtgwg-trust-tasks-tf#279). Compared with `===`: every agent this
+ * package talks to emits the #279 spelling, so the both-spellings fold that
+ * used to live here has been removed rather than carried indefinitely.
  */
 export const PROVISION_CONTEXT_REQUIRED = "provision/integration:contextRequired";
 
@@ -86,30 +94,23 @@ export interface ProvisionIntegrationRequestBody {
   create_context?: boolean;
 }
 
-/** Body of the outbound `provision-integration-result` reply. Mirrors
- *  `vta_sdk::provision_integration::http::ProvisionIntegrationResponse`. */
-export interface ProvisionIntegrationResponseBody {
-  bundle: string;
-  digest: string;
-  summary: ProvisionSummary;
-}
+/**
+ * Body of the outbound `provision-integration-result` reply.
+ *
+ * From the generated bindings rather than transcribed. **The bundle digest is
+ * `digestMultibase`, not the `digest` hex string `0.2` carried** — a
+ * self-describing multibase multihash, the same type
+ * `task-consent`'s `payloadDigest` uses, so decode it with
+ * `../trust-tasks/digest.ts` rather than comparing the encoded strings. It is
+ * OPTIONAL: it exists for holders that pinned the bundle out-of-band, and its
+ * absence is not a failure. It is taken over the **armored bytes exactly as
+ * carried** in `bundle`, not over a canonicalization — re-armoring the same
+ * ciphertext need not reproduce the same bytes, so re-deriving it from a
+ * round-tripped bundle can legitimately disagree.
+ */
+export type ProvisionIntegrationResponseBody = ProvisionIntegrationResponsePayload;
 
-/** lowerCamelCase per `provision/integration/0.2` (the VTA emits camelCase
- *  on 0.2 endpoints — see verifiable-trust-infrastructure #520). */
-export interface ProvisionSummary {
-  clientDid: string;
-  adminDid?: string;
-  adminRolledOver?: boolean;
-  integrationDid?: string;
-  templateName?: string;
-  templateKind?: string;
-  adminTemplateName?: string | null;
-  bundleIdHex: string;
-  secretCount: number;
-  outputCount: number;
-  webvhServerId?: string | null;
-  contextCreated?: boolean;
-}
+export type { ProvisionSummary };
 
 export interface SendProvisionIntegrationOptions {
   /** Mediator-backed bridge — ships the JWE and surfaces the decrypted,

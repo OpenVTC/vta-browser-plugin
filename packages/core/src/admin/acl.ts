@@ -42,6 +42,12 @@ import {
   type ACLRevokeResponsePayload,
 } from "@openvtc/trust-tasks/acl/revoke/0.1/payload";
 import {
+  TYPE_URI as ACL_UPDATE,
+  RESPONSE_TYPE_URI as ACL_UPDATE_RESPONSE,
+  type ACLUpdatePayload,
+  type ACLUpdateResponsePayload,
+} from "@openvtc/trust-tasks/acl/update/0.1/payload";
+import {
   TYPE_URI as ACL_CHANGE_ROLE,
   RESPONSE_TYPE_URI as ACL_CHANGE_ROLE_RESPONSE,
   type ACLChangeRolePayload,
@@ -252,4 +258,99 @@ export async function aclChangeRole(
     expectedResponseType: ACL_CHANGE_ROLE_RESPONSE,
     operationLabel: "acl/change-role/0.1",
   });
+}
+
+export interface AclUpdateParams extends AclCallerParams {
+  /** VID of the entry to amend. It MUST already exist — this does not create
+   *  one, and an agent refuses rather than upserting. */
+  subject: string;
+  /**
+   * Replacement label. `null` clears it; omitted leaves it unchanged.
+   *
+   * The three-way distinction runs through every member below and is the
+   * reason this call takes `null` at all rather than treating absence as
+   * "clear": on a partial update, absent and cleared are opposite intentions,
+   * and a wrapper that collapses them silently wipes whatever it did not
+   * mention.
+   */
+  label?: string | null;
+  /**
+   * Replacement scope set, applied **wholesale, not merged** — send the full
+   * intended set, not the additions.
+   *
+   * **Narrowing is refused here by the agent, deliberately.** A reduction in
+   * authority has to pass through {@link aclRevoke}, which is named and
+   * audited as a revocation. This is not a limitation to work around by
+   * calling update twice.
+   */
+  scopes?: string[];
+  /**
+   * Replacement key filter, applied wholesale. Three distinct meanings, and
+   * the agent acts on all three:
+   *
+   * - **omitted** — leave the filter as it is;
+   * - **`null`** — REMOVE the filter, so the subject reaches every key within
+   *   its scopes again. A privilege *increase*, gated like clearing an expiry;
+   * - **`[]`** — set the filter to no keys at all. The narrowest possible
+   *   grant, and the opposite of `null`.
+   *
+   * Unlike `scopes`, a narrowing here is accepted rather than routed to
+   * revoke — `acl/revoke/0.1` cannot express a per-key reduction. The agent
+   * must still audit it as a reduction and apply it to live sessions.
+   */
+  allowedKeys?: string[] | null;
+  /** Replacement expiry. `null` makes the entry **permanent** — a privilege
+   *  increase, which an agent gates at least as strictly as the grant was. */
+  expiresAt?: string | null;
+  /** Replacement per-entry step-up. Additive only: it may raise the assurance
+   *  required of this subject above the system floor, never lower it. */
+  stepUp?: ACLUpdatePayload["stepUp"];
+  /**
+   * Replacement approve-authority — what the subject may **confer on others**,
+   * as distinct from what it may exercise itself.
+   *
+   * Widening this is an escalation vector rather than a convenience: a subject
+   * able to confer can manufacture an approver for an operation it could not
+   * itself authorize. Agents gate it more strictly than the rest.
+   */
+  approve?: ACLUpdatePayload["approve"];
+  /** Rationale, recorded with the change. */
+  reason?: string;
+}
+
+/**
+ * Amend the non-role attributes of an existing ACL entry.
+ *
+ * Role changes are not expressible here at all — they go through
+ * {@link aclChangeRole}, which compare-and-swaps against the current role.
+ * That split is the point: every path that alters authority is a task with its
+ * own name in the audit trail.
+ */
+export async function aclUpdate(
+  sender: TrustTaskSender,
+  params: AclUpdateParams,
+): Promise<AclEntry> {
+  // `!== undefined` throughout, never truthiness. `null` is a live instruction
+  // on five of these members and `[]` is the narrowest grant on one — both are
+  // falsy, and a `params.x ? …` guard drops exactly the values that mean the
+  // most.
+  const payload: ACLUpdatePayload = {
+    subject: params.subject,
+    ...(params.label !== undefined ? { label: params.label } : {}),
+    ...(params.scopes !== undefined ? { scopes: params.scopes } : {}),
+    ...(params.allowedKeys !== undefined ? { allowedKeys: params.allowedKeys } : {}),
+    ...(params.expiresAt !== undefined ? { expiresAt: params.expiresAt } : {}),
+    ...(params.stepUp !== undefined ? { stepUp: params.stepUp } : {}),
+    ...(params.approve !== undefined ? { approve: params.approve } : {}),
+    ...(params.reason !== undefined ? { reason: params.reason } : {}),
+  };
+  const envelope = buildTrustTask(ACL_UPDATE, payload, {
+    issuer: params.holder.did,
+    recipient: params.service.did,
+  });
+  const res = await sender.send<ACLUpdateResponsePayload>(envelope, {
+    expectedResponseType: ACL_UPDATE_RESPONSE,
+    operationLabel: "acl/update/0.1",
+  });
+  return res.entry;
 }

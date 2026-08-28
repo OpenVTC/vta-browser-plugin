@@ -30,12 +30,13 @@ npm install @openvtc/pnm-core
 |---|---|
 | **`@openvtc/pnm-core/webauthn`** | Passkey enrol / login ceremonies, COSE-key extraction, DID `verificationMethod` builder, PRF-derived secret-wrap helpers. |
 | **`@openvtc/pnm-core/did`** | Multikey ↔ JWK conversion, DID-URL parsing, did:webvh log resolution. |
-| **`@openvtc/pnm-core/vta`** | The VTA protocol: Trust-Task envelopes, REST/DIDComm/TSP channels, and the REST auth bootstrap. Mirrors the [`vta-sdk`](https://crates.io/crates/vta-sdk) Rust client's surface. |
+| **`@openvtc/pnm-core/vta`** | The VTA protocol: Trust-Task envelopes, REST/DIDComm/TSP channels, the REST auth bootstrap, passkey login as a Trust Task, and `trust-task-discovery` for asking an agent what it supports. Mirrors the [`vta-sdk`](https://crates.io/crates/vta-sdk) Rust client's surface. |
 | **`@openvtc/pnm-core/did-hosting`** | The `did-management/*` control plane — registering, publishing, disabling and rolling back hosted DIDs, plus domains and server instances. A hosting service, not an agent. |
 | **`@openvtc/pnm-core/vtc`** | Verifiable Trust Community membership, from the member's side: apply, track, hold the credential, leave. |
 | **`@openvtc/pnm-core/credentials`** | OID4VCI issuance and OID4VP presentation, plus the deferred presentations a verifier asked for while you were away. Holder-side. |
 | **`@openvtc/pnm-core/vault`** | Vault Trust Tasks — list, upsert, delete, release, proxy-login, sign. |
-| **`@openvtc/pnm-core/admin`** | Agent administration: `acl/*`, `keys/*`, `policy/*`, `consent/*`, `device/*` (list, disable, wipe), `vta/did-templates/*`, `vta/memory/*`, `audit/list`, `config/{show,patch}`, `messaging/ping`, session introspection, and context deletion. Operator surface — not in the root barrel, import it explicitly. |
+| **`@openvtc/pnm-core/app-state`** | Agent-held key/value state scoped to a VTA context — the state a wallet needs true on *every* device, as distinct from `/store`, which is this browser profile's own. |
+| **`@openvtc/pnm-core/admin`** | Agent administration: `acl/*`, `keys/*`, `policy/*`, `consent/*`, `device/*` (list, disable, wipe), `vta/did-templates/*`, `vta/memory/*`, `vta/services/*` (including drains), `vta/credentials/{issue,revoke}`, `audit/list`, `config/{show,patch}`, `messaging/ping`, session introspection, and context deletion. Operator surface — not in the root barrel, import it explicitly. |
 | **`@openvtc/pnm-core/siop`** | SIOPv2 / OpenID4VP RP-side helpers. |
 | **`@openvtc/pnm-core/provision`** | Sealed-bootstrap provisioning (`provision/integration`). |
 | **`@openvtc/pnm-core/didcomm`** | DIDComm v2 packing, mediator routing, forward envelopes. |
@@ -98,8 +99,9 @@ together:
   rename, a task that moved — fails the build here rather than at a user;
 - a task version the SDK has **deprecated** fails too, during the window where
   the agent still accepts it and everything appears to work;
-- **coverage is a recorded number** (110 of 161 task families today), so a gap
-  that grows or shrinks shows up in a diff someone reviews.
+- **coverage is a recorded number** (152 of 177 task families today), so a gap
+  that grows or shrinks shows up in a diff someone reviews — and it moves when
+  the *agent* grows a family just as much as when this library adds one.
 
 Refresh the snapshot against a local checkout:
 

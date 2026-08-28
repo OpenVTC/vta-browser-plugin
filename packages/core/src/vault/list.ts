@@ -1,6 +1,6 @@
 // Vault — list (M1).
 //
-// Posts a `https://trusttasks.org/spec/vault/list/0.2` envelope to the VTA's
+// Posts a `https://trusttasks.org/spec/vault/list/0.3` envelope to the VTA's
 // trust-task dispatcher (`POST /trust-tasks`) and returns the metadata
 // view of stored credentials. Read-only — secret material never crosses the
 // wire (it's only released by `vault/release/0.1`, which lands in M2).
@@ -24,64 +24,46 @@ import { buildTrustTask } from "../vta/trust-task.js";
 
 import type { VtaAuthInputs } from "../vta/auth.js";
 
-const TASK_VAULT_LIST_0_2 = "https://trusttasks.org/spec/vault/list/0.2";
-const TASK_VAULT_LIST_0_2_RESPONSE = "https://trusttasks.org/spec/vault/list/0.2#response";
+import {
+  TYPE_URI as VAULT_LIST,
+  RESPONSE_TYPE_URI as VAULT_LIST_RESPONSE,
+  type SecretKind,
+  type VaultEntry,
+} from "@openvtc/trust-tasks/vault/list/0.3/payload";
 
-/** Discriminator that mirrors the canonical SecretKind enum. */
-export type SecretKind =
-  | "password"
-  | "passkey"
-  | "oauthTokens"
-  | "didSelfIssued"
-  | "didcommPeer"
-  | "bearerToken"
-  | "sshKey"
-  | "custom";
+/**
+ * The wire types come from the generated bindings, which are compiled from the
+ * same JSON Schemas the agent's own implementation is generated from.
+ *
+ * They used to be hand-written here from `vault/_shared/0.1` — a version older
+ * than the `0.2` task this module posts, which is the drift a copy invites and
+ * cannot signal. The copy had also lost a constraint the schema states:
+ * `targets` is a **non-empty** array, and an entry that reaches nothing is not
+ * a vault entry. The names below are this package's published API, so they are
+ * kept as aliases rather than renamed to the generated spellings.
+ */
+export type {
+  SecretKind,
+  SiteTarget,
+  AttachmentRef,
+  VaultEntry,
+} from "@openvtc/trust-tasks/vault/list/0.3/payload";
 
-/** Tagged union — see `vault/_shared/0.1/vault-entry.schema.json` $defs/SiteTarget. */
-export type SiteTarget =
-  | { kind: "webOrigin"; origin: string }
-  | { kind: "did"; did: string }
-  | { kind: "iosApp"; bundleId: string; teamId?: string }
-  | { kind: "androidApp"; packageName: string; sha256CertFingerprints: string[] };
+// ── Attachment integrity is a `digestMultibase`, not a hex string ───────────
+//
+// `AttachmentRef` at vault 0.2 carried `sha256`: a bare hex string, which
+// hard-codes one algorithm into the wire contract. `vault/_shared/0.3` replaces
+// it with `digestMultibase` — a self-describing multibase-encoded multihash,
+// the same type `task-consent`'s `payloadDigest` uses, decodable by
+// `../trust-tasks/digest.ts`.
+//
+// **Verify it before trusting an attachment, and decode rather than compare
+// strings.** Two encodings of one digest are the same digest; two multibase
+// strings that differ may not be two different files. `decodeDigestMultibase`
+// is the comparison, and it refuses anything that is not a well-formed
+// sha2-256 multihash rather than guessing.
 
-/** Metadata view of a single vault entry. No secret bytes. */
-export interface VaultEntry {
-  id: string;
-  contextId: string;
-  targets: SiteTarget[];
-  label: string;
-  secretKind: SecretKind;
-  tags?: string[];
-  notes?: string;
-  favicon?: string;
-  selectors?: string[];
-  customFieldNames?: string[];
-  attachments?: Array<{
-    id: string;
-    name: string;
-    sizeBytes: number;
-    sha256: string;
-    contentType?: string;
-  }>;
-  expiresAt?: string;
-  breachedAt?: string;
-  passwordChangedAt?: string;
-  createdAt: string;
-  createdBy?: string;
-  updatedAt: string;
-  updatedBy?: string;
-  lastUsedAt?: string;
-  version: number;
-  /** Cached DID the entry acts AS for DID-shaped flows. Mirrors the
-   *  `did` field of `did-self-issued` / `didcomm-peer` secrets;
-   *  absent for kinds without a DID concept. Maintainer-derived from
-   *  the secret at every upsert — a producer-supplied value on the
-   *  wire is ignored. */
-  principalDid?: string;
-}
-
-/** Filters accepted by vault/list/0.2. All AND-combined. */
+/** Filters accepted by vault/list/0.3. All AND-combined. */
 export interface VaultListFilter {
   contextId?: string;
   targetOriginPrefix?: string;
@@ -119,7 +101,7 @@ export interface VaultListParams {
 export interface VaultListRestOptions extends VaultListParams, VtaAuthInputs {}
 
 /**
- * Post the canonical vault/list/0.2 Trust Task over the given channel and
+ * Post the canonical vault/list/0.3 Trust Task over the given channel and
  * return the parsed metadata entries. Read-only — no secret material crosses
  * the wire.
  */
@@ -127,7 +109,7 @@ export async function vaultList(
   channel: TrustTaskSender,
   params: VaultListParams,
 ): Promise<VaultListResponse> {
-  const envelope = buildTrustTask(TASK_VAULT_LIST_0_2, params.filter ?? {}, {
+  const envelope = buildTrustTask(VAULT_LIST, params.filter ?? {}, {
     issuer: params.holder.did,
     recipient: params.service.did,
   });
@@ -137,8 +119,8 @@ export async function vaultList(
     cursor?: string;
     redactedFields?: string[];
   }>(envelope, {
-    expectedResponseType: TASK_VAULT_LIST_0_2_RESPONSE,
-    operationLabel: "vault/list/0.2",
+    expectedResponseType: VAULT_LIST_RESPONSE,
+    operationLabel: "vault/list/0.3",
   });
 
   return {
