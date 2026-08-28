@@ -86,6 +86,11 @@ export interface SwapAclDidcommOptions {
   ephemeral: Identity;
   /** Signs the VP-JWT; its DID is the NEW DID (the wallet's holder did:peer). */
   holderSigning: SigningIdentity;
+  /** Signs the swap-key envelope itself (SPEC §7.2 item 7a). Its DID MUST be
+   *  the **ephemeral**, because that is the envelope's `issuer` — the new
+   *  holder's key vouches for the `linkProof` inside the payload, which is a
+   *  different claim by a different party and cannot stand in for this one. */
+  ephemeralSigning: SigningIdentity;
   /** The VTA's DID + keyAgreement key (inner authcrypt recipient). */
   service: RemoteDidcommEndpoint;
   /** The VTA's mediator (forward target); omit for a direct, non-mediated send. */
@@ -102,6 +107,7 @@ export function swapAclDidcomm(opts: SwapAclDidcommOptions): Promise<AclSwapResu
   const channel = new DidcommVtaTransport({
     bridge: opts.bridge,
     holder: opts.ephemeral,
+    signing: opts.ephemeralSigning,
     vta: opts.service,
     ...(opts.mediator ? { mediator: opts.mediator } : {}),
     ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
@@ -120,6 +126,11 @@ export interface SwapAclRestOptions {
   ephemeral: Identity;
   /** Signs the VP-JWT; its DID is the NEW DID (the wallet's holder did:peer). */
   holderSigning: SigningIdentity;
+  /** Signs the swap-key envelope itself (SPEC §7.2 item 7a). Its DID MUST be
+   *  the **ephemeral**, because that is the envelope's `issuer` — the new
+   *  holder's key vouches for the `linkProof` inside the payload, which is a
+   *  different claim by a different party and cannot stand in for this one. */
+  ephemeralSigning: SigningIdentity;
   /** The VTA's DID + keyAgreement (authcrypt recipient for `/auth/`). */
   service: RemoteDidcommEndpoint;
   /** The VTA's DID — the presentation `aud`. Usually `service.did`. */
@@ -136,6 +147,7 @@ export function swapAclRest(opts: SwapAclRestOptions): Promise<AclSwapResult> {
   const channel = new RestChannel({
     baseUrl: opts.baseUrl,
     holder: opts.ephemeral,
+    signing: opts.ephemeralSigning,
     service: opts.service,
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });

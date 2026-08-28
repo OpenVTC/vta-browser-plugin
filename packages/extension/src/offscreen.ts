@@ -535,6 +535,12 @@ async function getVtaSession(
         new TspChannel({
           transport: new MediatorSessionTspTransport({ connection: conn }),
           holder: tspHolderIdentityFromSecret(holder.did, signing.privateKey),
+          // The same Ed25519 key signs the outer TSP envelope (above) and the
+          // Trust-Task document (here). They are not redundant: the outer
+          // signature authenticates the *sender of the frame*, and SPEC §7.2
+          // item 7 admits no transport substitute for a proof over the
+          // document itself.
+          signing,
           vta: vtaTsp,
         }),
       );
@@ -555,12 +561,18 @@ async function getVtaSession(
     // supply its own VTA target. Using `conn.vta` here would authcrypt+forward
     // the request back to the holder.
     channels.push(
-      new DidcommVtaTransport({ bridge, holder, vta: service, mediator: conn.mediator }),
+      new DidcommVtaTransport({
+        bridge,
+        holder,
+        signing,
+        vta: service,
+        mediator: conn.mediator,
+      }),
     );
   }
   const rest = restBaseUrl || services.rest?.baseUrl;
   if (rest) {
-    channels.push(new RestChannel({ baseUrl: rest, holder, service }));
+    channels.push(new RestChannel({ baseUrl: rest, holder, signing, service }));
   }
   if (channels.length === 0) {
     throw new Error(

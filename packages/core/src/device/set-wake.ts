@@ -15,9 +15,8 @@
 import type { Identity } from "../didcomm/index.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
-import { RestChannel } from "../vta/rest-channel.js";
+import { RestChannel, type RestChannelOptions } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
-import type { VtaAuthInputs } from "../vta/auth.js";
 
 const TASK_DEVICE_SET_WAKE = "https://trusttasks.org/spec/device/set-wake/0.2";
 const TASK_DEVICE_SET_WAKE_RESPONSE =
@@ -59,7 +58,7 @@ export interface DeviceSetWakeParams {
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer
  *  {@link setDeviceWake} with a channel from a `VtaSession`. */
-export interface DeviceSetWakeOptions extends DeviceSetWakeParams, VtaAuthInputs {}
+export interface DeviceSetWakeOptions extends DeviceSetWakeParams, RestChannelOptions {}
 
 /**
  * Convey (or clear) the device's wake handle at the connected VTA. Idempotent;

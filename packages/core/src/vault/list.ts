@@ -19,10 +19,9 @@
 import { type Identity } from "../didcomm/index.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
-import { RestChannel } from "../vta/rest-channel.js";
+import { RestChannel, type RestChannelOptions } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
-import type { VtaAuthInputs } from "../vta/auth.js";
 
 import {
   TYPE_URI as VAULT_LIST,
@@ -98,7 +97,7 @@ export interface VaultListParams {
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer
  *  {@link vaultList} with a channel from a `VtaSession`. */
-export interface VaultListRestOptions extends VaultListParams, VtaAuthInputs {}
+export interface VaultListRestOptions extends VaultListParams, RestChannelOptions {}
 
 /**
  * Post the canonical vault/list/0.3 Trust Task over the given channel and

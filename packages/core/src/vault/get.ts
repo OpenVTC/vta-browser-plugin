@@ -11,9 +11,8 @@
 import { type Identity } from "../didcomm/index.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
-import { RestChannel } from "../vta/rest-channel.js";
+import { RestChannel, type RestChannelOptions } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
-import type { VtaAuthInputs } from "../vta/auth.js";
 
 import {
   TYPE_URI as VAULT_GET,
@@ -77,7 +76,7 @@ export async function vaultGet(
 
 /** @deprecated REST-transport options. Kept for symmetry with the rest of this
  *  module; prefer {@link vaultGet} with a channel from a `VtaSession`. */
-export interface VaultGetRestOptions extends VaultGetParams, VtaAuthInputs {}
+export interface VaultGetRestOptions extends VaultGetParams, RestChannelOptions {}
 
 /** @deprecated Use {@link vaultGet} with a channel from a `VtaSession`. */
 export function vaultGetRest(opts: VaultGetRestOptions): Promise<VaultGetResult> {

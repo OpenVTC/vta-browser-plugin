@@ -16,9 +16,8 @@
 import type { Identity } from "../didcomm/index.js";
 import type { TrustTaskSender } from "./channel.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";
-import { RestChannel } from "./rest-channel.js";
+import { RestChannel, type RestChannelOptions } from "./rest-channel.js";
 import { buildTrustTask } from "./trust-task.js";
-import type { VtaAuthInputs } from "./auth.js";
 
 const TASK_CONTEXTS_LIST = "https://trusttasks.org/spec/vta/contexts/list/1.0";
 const TASK_CONTEXTS_LIST_RESPONSE = `${TASK_CONTEXTS_LIST}#response`;
@@ -161,7 +160,7 @@ export async function contextsCreate(
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer
  *  {@link contextsList} with a channel from a `VtaSession`. */
-export interface VtaListContextsOptions extends ContextsListParams, VtaAuthInputs {}
+export interface VtaListContextsOptions extends ContextsListParams, RestChannelOptions {}
 
 /** @deprecated Use {@link contextsList} with a channel from a `VtaSession`.
  *  List over REST — builds a one-shot {@link RestChannel} (dispatches
@@ -271,7 +270,7 @@ export function vtaListContexts(opts: VtaListContextsOptions): Promise<ContextRe
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer
  *  {@link contextsCreate} with a channel from a `VtaSession`. */
-export interface VtaCreateContextOptions extends ContextsCreateParams, VtaAuthInputs {}
+export interface VtaCreateContextOptions extends ContextsCreateParams, RestChannelOptions {}
 
 /** @deprecated Use {@link contextsCreate} with a channel from a `VtaSession`.
  *  Create over REST — builds a one-shot {@link RestChannel}. */

@@ -11,11 +11,10 @@
 import { unpackMessage, type Identity } from "../didcomm/index.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
-import { RestChannel } from "../vta/rest-channel.js";
+import { RestChannel, type RestChannelOptions } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import type { SecretKind } from "./list.js";
-import type { VtaAuthInputs } from "../vta/auth.js";
 import type { VaultSecret } from "./upsert.js";
 
 import {
@@ -37,7 +36,7 @@ export interface VaultReleaseParams {
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer
  *  {@link vaultRelease} with a channel from a `VtaSession`. */
-export interface VaultReleaseRestOptions extends VaultReleaseParams, VtaAuthInputs {}
+export interface VaultReleaseRestOptions extends VaultReleaseParams, RestChannelOptions {}
 
 export interface VaultReleaseResponse {
   /** Unpacked secret material. Caller MUST wipe / zero this reference

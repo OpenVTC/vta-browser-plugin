@@ -23,7 +23,8 @@ import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
 import { VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
-import { parseTrustTaskReply } from "./trust-task.js";
+import { parseTrustTaskReply, signOutboundTask } from "./trust-task.js";
+import type { SigningIdentity } from "../siop/self-issued.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -101,6 +102,16 @@ export interface TspChannelOptions {
   transport: TspTransport;
   holder: TspHolderIdentity;
   vta: TspRemoteEndpoint;
+  /**
+   * Signs every outbound envelope (SPEC §7.2 item 7a). REQUIRED.
+   *
+   * Not served by {@link TspHolderIdentity.signingPrivateKey}, which signs the
+   * **outer** TSP envelope: that is transport authentication, and item 7
+   * admits no transport substitute. The proof has to be inside the document,
+   * over the document, naming a `verificationMethod` a verifier can resolve —
+   * which the outer signature is not and cannot become.
+   */
+  signing: SigningIdentity;
   /** Per-request timeout (default 30s). */
   timeoutMs?: number;
 }
@@ -118,9 +129,11 @@ export class TspChannel implements TrustTaskChannel {
   private readonly transport: TspTransport;
   private readonly holder: TspHolderIdentity;
   private readonly vta: TspRemoteEndpoint;
+  private readonly signing: SigningIdentity;
   private readonly timeoutMs: number;
 
   constructor(opts: TspChannelOptions) {
+    this.signing = opts.signing;
     this.transport = opts.transport;
     this.holder = opts.holder;
     this.vta = opts.vta;
@@ -129,6 +142,9 @@ export class TspChannel implements TrustTaskChannel {
 
   /** Seal the envelope to the VTA. Shared by both directions. */
   private async packForVta(envelope: TrustTask<unknown>): Promise<Uint8Array> {
+    // Both `send` and `notify` seal through here, so this is the one place the
+    // proof has to be attached — before the JSON the seal is taken over.
+    await signOutboundTask(envelope, this.signing);
     // TSP plaintext = the Trust-Task envelope JSON (no binding wrapper).
     const plaintext = utf8.encode(JSON.stringify(envelope));
     const packed = await pack(plaintext, this.holder.vid, this.vta.vid, {

@@ -87,6 +87,47 @@ type on a path that skips it), or relaxing the `vti-didcomm-js` floor below
 outstanding?" A message can be both, which is why the drain path bypasses the
 dedup check.
 
+## Every outbound Trust-Task document is signed (SPEC §7.2 item 7a)
+
+The VTA enforces the four checks a Trust Task specification declares for
+itself, on the dispatch spine common to all three transports. Three of them
+this wallet has always satisfied — `recipient`, `issuedAt`, audience binding.
+The fourth it did not: **93 of the 141 task types it speaks declare `proof`
+REQUIRED**, and nothing on the channel path attached one, so every `vault/*`,
+`acl/*`, `vta/webvh/*`, `credential-exchange/*` and `vtc/*` call was refused
+with `proofRequired` before reaching a handler.
+
+**The channel signs, not the caller.** `signOutboundTask`
+(`vta/trust-task.ts`) is called by `RestChannel.post`, `TspChannel.packForVta`
+and `DidcommVtaTransport.packEnvelope` — the one place each transport funnels
+through on the way out. The ~116 sites that call `buildTrustTask` know nothing
+about it, which is the point: signing at each of them is the same decision
+taken 116 times, and forgetting once is a task that breaks the day someone
+turns a check on.
+
+**A `SigningIdentity` is a REQUIRED channel input.** Not optional, not
+defaulted — a channel that could be built without one is a channel that
+silently sends unsigned documents. `loadHolder` already returns `signing`
+beside `identity`, so the composition roots have it.
+
+**What breaks it:** making the input optional; signing at a call site instead
+(the next transport added would not inherit it); or reading the
+specification's `isProofRequired` to decide — we sign unconditionally, because
+a proof where one is merely RECOMMENDED is legal and strictly more
+attributable, and a 141-entry table of which tasks need one goes stale
+invisibly.
+
+**What is deliberately NOT signed:** the `/auth/` handshake
+(`vta/auth.ts`). That route is bespoke — it authenticates by the authcrypt
+sender and never reaches the dispatch spine — and `provision/integration`,
+which signs its own document with an `authentication`-purpose proof in
+`provision/request.ts` and sends outside the channels. Neither is an oversight;
+routing either through a channel would overwrite or duplicate a proof.
+
+`tests/vta.outbound-signing.mjs` pins it, running the real verifier over the
+document as the counterparty receives it — a signature copied from another
+document satisfies an "is there a `proof` member" check and fails this one.
+
 ## Repo mechanics worth knowing before you start
 
 - **Build `core` before typechecking anything that depends on it.** Each
@@ -109,7 +150,7 @@ dedup check.
   entry** in that package's tsconfig, or `tsc -b` cannot know the build order.
 - **`packages/core` is layered, and the layering is enforced.** Modules import
   downwards only — `util`/`http` → `did`/`didcomm`/`webauthn` → `siop` →
-  `vta`/`trust-tasks` → `store`/`vault`/`device`/`provision`/`rp-login`/
+  `trust-tasks` → `vta` → `store`/`vault`/`device`/`provision`/`rp-login`/
   `onboarding` → `inbound` — with no cycles and no sideways imports.
   `tests/package.module-boundaries.mjs` fails the build on a violation and
   names the file; its `KNOWN_EXCEPTIONS` list may only shrink (a stale entry

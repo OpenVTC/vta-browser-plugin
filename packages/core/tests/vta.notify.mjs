@@ -13,6 +13,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import { ed25519 } from "@noble/curves/ed25519.js";
+
 import { TspChannel, VtaSession, VtaClientError } from "../dist/index.js";
 import { decodeTrustTaskHttpAck } from "../dist/vta/rest-channel.js";
 
@@ -83,6 +85,18 @@ const TSP_HOLDER = {
   encryptionPrivateKey: new Uint8Array(32).fill(2),
   encryptionPublicKey: new Uint8Array(32).fill(3),
 };
+// Every channel now signs the document it sends (SPEC §7.2 item 7a), so a TSP
+// channel needs a key. `ENVELOPE` carries no `issuer`, so any identity is
+// consistent with it — this only has to be real Ed25519 material.
+const TSP_SIGNING = (() => {
+  const privateKey = ed25519.utils.randomSecretKey();
+  return {
+    did: TSP_HOLDER.vid,
+    kid: `${TSP_HOLDER.vid}#key-2`,
+    privateKey,
+    publicKey: ed25519.getPublicKey(privateKey),
+  };
+})();
 const TSP_VTA = {
   vid: "did:webvh:QmAgent:agent.example",
   encryptionPublicKey: new Uint8Array(32).fill(4),
@@ -97,7 +111,7 @@ test("TSP notify refuses rather than blocking when the transport is reply-only",
       return new Uint8Array();
     },
   };
-  const channel = new TspChannel({ transport, holder: TSP_HOLDER, vta: TSP_VTA });
+  const channel = new TspChannel({ transport, holder: TSP_HOLDER, signing: TSP_SIGNING, vta: TSP_VTA });
 
   await assert.rejects(() => channel.notify(ENVELOPE), (err) => {
     assert.equal(err.code, "e.client.unsupported");
@@ -114,7 +128,7 @@ test("TSP notify uses the one-way path when the transport has one", async () => 
       sent.push(packed);
     },
   };
-  const channel = new TspChannel({ transport, holder: TSP_HOLDER, vta: TSP_VTA });
+  const channel = new TspChannel({ transport, holder: TSP_HOLDER, signing: TSP_SIGNING, vta: TSP_VTA });
   await channel.notify(ENVELOPE);
   assert.equal(sent.length, 1);
   assert.ok(sent[0] instanceof Uint8Array && sent[0].length > 0);

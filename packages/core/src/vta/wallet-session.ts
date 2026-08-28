@@ -98,7 +98,7 @@ export class WalletSession {
    * ready session — no separate bootstrap step.
    */
   static async fromDids(cfg: WalletSessionFromDidsConfig): Promise<WalletSession> {
-    const { identity: holder, freshlyMinted } = await generateOrLoadHolderIdentity(
+    const { identity: holder, signing, freshlyMinted } = await generateOrLoadHolderIdentity(
       cfg.store,
     );
 
@@ -123,6 +123,7 @@ export class WalletSession {
     const vtaTransport = new DidcommVtaTransport({
       bridge,
       holder,
+      signing,
       vta: connection.vta,
       mediator: connection.mediator,
       ...(cfg.timeoutMs !== undefined ? { timeoutMs: cfg.timeoutMs } : {}),
@@ -143,12 +144,13 @@ export class WalletSession {
   static async withBridge(
     cfg: WalletSessionWithBridgeConfig,
   ): Promise<WalletSession> {
-    const { identity: holder, freshlyMinted } = await generateOrLoadHolderIdentity(
+    const { identity: holder, signing, freshlyMinted } = await generateOrLoadHolderIdentity(
       cfg.store,
     );
     const vtaTransport = new DidcommVtaTransport({
       bridge: cfg.bridge,
       holder,
+      signing,
       vta: cfg.vta,
       mediator: cfg.mediator,
       ...(cfg.timeoutMs !== undefined ? { timeoutMs: cfg.timeoutMs } : {}),

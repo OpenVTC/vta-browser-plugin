@@ -15,7 +15,8 @@ import {
   type RevokePayload,
   type TrustTask,
 } from "./protocol.js";
-import { buildTrustTask, parseTrustTaskReply } from "./trust-task.js";
+import { buildTrustTask, parseTrustTaskReply, signOutboundTask } from "./trust-task.js";
+import type { SigningIdentity } from "../siop/self-issued.js";
 import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
 import type { DidcommMessageBridge, VtaTransport } from "./transport.js";
 import type {
@@ -35,6 +36,15 @@ export interface DidcommVtaTransportOptions {
   bridge: DidcommMessageBridge;
   holder: Identity;
   vta: RemoteDidcommEndpoint;
+  /**
+   * Signs every outbound envelope (SPEC §7.2 item 7a). REQUIRED.
+   *
+   * The authcrypt this channel performs authenticates the *sender of the
+   * message*; item 7 admits no transport substitute, and a mediator on the
+   * path forwards whatever it is handed. The proof is what ties the payload to
+   * the DID named in `issuer`.
+   */
+  signing: SigningIdentity;
   /** Optional mediator. When set, every outbound message gets wrapped
    *  in a routing/2.0/forward envelope and anoncrypt'd to the mediator. */
   mediator?: RemoteDidcommEndpoint;
@@ -61,10 +71,12 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
   private readonly bridge: DidcommMessageBridge;
   private readonly holder: Identity;
   private readonly vta: RemoteDidcommEndpoint;
+  private readonly signing: SigningIdentity;
   private readonly mediator?: RemoteDidcommEndpoint;
   private readonly timeoutMs: number;
 
   constructor(opts: DidcommVtaTransportOptions) {
+    this.signing = opts.signing;
     this.bridge = opts.bridge;
     this.holder = opts.holder;
     this.vta = opts.vta;
@@ -182,7 +194,23 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
    * envelope with `buildTrustTask` and call {@link send} directly.
    */
   private exchange<Req extends object, Res>(taskUri: string, payload: Req): Promise<Res> {
-    return this.send<Res>(buildTrustTask<Req>(taskUri, payload, { issuer: this.holder.did }));
+    return this.send<Res>(this.buildRequest(taskUri, payload));
+  }
+
+  /**
+   * The one place this transport builds a request envelope.
+   *
+   * `recipient` is not decoration: SPEC §7.2 item 5b makes it REQUIRED on every
+   * dispatched specification, and item 8 audience-binds the proof to it. A
+   * signed document naming no audience is replayable at another VTA, which is
+   * most of what signing was supposed to buy. Both call sites below omitted it
+   * — which is the argument for there being one builder rather than two.
+   */
+  private buildRequest<Req extends object>(taskUri: string, payload: Req): TrustTask<Req> {
+    return buildTrustTask<Req>(taskUri, payload, {
+      issuer: this.holder.did,
+      recipient: this.vta.did,
+    });
   }
 
   /**
@@ -195,7 +223,7 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
     taskUri: string,
     payload: Req,
   ): Promise<{ outer: string; inner: string; requestId: string }> {
-    return this.packEnvelope(buildTrustTask<Req>(taskUri, payload, { issuer: this.holder.did }));
+    return this.packEnvelope(this.buildRequest(taskUri, payload));
   }
 
   /**
@@ -206,6 +234,10 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
   private async packEnvelope(
     envelope: TrustTask<unknown>,
   ): Promise<{ outer: string; inner: string; requestId: string }> {
+    // Every outbound path — `send`, `notify`, and the passkey-VM convenience
+    // surface — packs through here, which is why the proof is attached here
+    // and not in each of them.
+    await signOutboundTask(envelope, this.signing);
     const requestId = envelope.id;
     const message = {
       id: requestId,

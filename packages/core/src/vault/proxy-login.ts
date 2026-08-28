@@ -27,11 +27,10 @@
 import { unpackMessage, type Identity } from "../didcomm/index.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
-import { RestChannel } from "../vta/rest-channel.js";
+import { RestChannel, type RestChannelOptions } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import type { SiteTarget } from "./list.js";
-import type { VtaAuthInputs } from "../vta/auth.js";
 
 import {
   TYPE_URI as TASK_VAULT_PROXY_LOGIN,
@@ -120,7 +119,7 @@ export interface VaultProxyLoginParams {
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer
  *  {@link vaultProxyLogin} with a channel from a `VtaSession`. */
-export interface VaultProxyLoginRestOptions extends VaultProxyLoginParams, VtaAuthInputs {}
+export interface VaultProxyLoginRestOptions extends VaultProxyLoginParams, RestChannelOptions {}
 
 export interface VaultProxyLoginResponse {
   /** Cleartext session material. The caller MUST schedule a wipe at
