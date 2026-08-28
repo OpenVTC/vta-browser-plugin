@@ -104,3 +104,60 @@ test("an unusable schema refuses rather than passes", () => {
     assert.equal(validateAgainstSchema(notASchema, payload()).valid, false);
   }
 });
+
+test("no shipped schema requires a member it does not define", async () => {
+  // A guard on the schemas themselves, now that this package executes them
+  // rather than merely shipping them.
+  //
+  // `@openvtc/trust-tasks` 0.16.0 shipped `provision/integration/0.3` with
+  // `$defs/Response` requiring `digest` while its `properties` carried only
+  // `digestMultibase` — the member the 0.2 -> 0.3 rename replaced. With
+  // `additionalProperties: false` that schema is unsatisfiable: no document can
+  // validate against it, so a consumer that validated would have rejected every
+  // conforming response. It went unnoticed because nothing here ran the schemas.
+  // Fixed upstream in 0.16.2 (#326) after `check-bindings` caught the Rust and
+  // TypeScript halves disagreeing — only the Rust generator had been re-run.
+  //
+  // This is the cheap, decidable half of "is the schema satisfiable": a
+  // `required` naming a member no `properties` defines, where the object is
+  // closed. It is not general satisfiability, and is not meant to be.
+  const { readdirSync, statSync } = await import("node:fs");
+  const { join, resolve, dirname } = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+
+  const root = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../node_modules/@openvtc/trust-tasks/dist",
+  );
+
+  const problems = [];
+  const scan = (s, file, key, path = "#") => {
+    if (!s || typeof s !== "object") return;
+    if (Array.isArray(s.required) && s.properties && s.additionalProperties === false) {
+      const missing = s.required.filter((r) => !(r in s.properties));
+      if (missing.length) problems.push(`${file} ${key}${path}: requires ${missing.join(", ")}`);
+    }
+    for (const [k, v] of Object.entries(s)) {
+      if (Array.isArray(v)) v.forEach((x, i) => scan(x, file, key, `${path}/${k}/${i}`));
+      else if (v && typeof v === "object") scan(v, file, key, `${path}/${k}`);
+    }
+  };
+
+  const files = [];
+  (function walk(d) {
+    for (const e of readdirSync(d)) {
+      const f = join(d, e);
+      if (statSync(f).isDirectory()) walk(f);
+      else if (e === "payload.js") files.push(f);
+    }
+  })(root);
+
+  assert.ok(files.length > 300, `only ${files.length} schemas found — did the layout move?`);
+  for (const f of files) {
+    const m = await import(f);
+    for (const key of ["PAYLOAD_SCHEMA", "RESPONSE_PAYLOAD_SCHEMA"]) {
+      if (m[key]) scan(m[key], f.slice(root.length + 1), key);
+    }
+  }
+  assert.deepEqual(problems, [], "unsatisfiable schema — report upstream, do not work around it here");
+});
