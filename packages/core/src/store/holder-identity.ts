@@ -179,27 +179,22 @@ export async function generateOrLoadHolderIdentity(
   const peer = createDidPeer2({
     ed25519PublicKey: edPublic,
     x25519PublicKey: x25519Public,
-    // Both transports the wallet can *receive* on, advertised so an executor
-    // can negotiate against them the same way the wallet negotiates against a
-    // VTA's published services. One mediator carries both: it demultiplexes on
-    // the TSP magic byte, so the endpoint is the same DID twice under two
-    // types, not two deployments.
+    // A `TSPTransport` entry was briefly added here, to give an executor a
+    // capability signal to negotiate a push against. It did nothing, twice
+    // over, and both reasons are worth leaving written down:
     //
-    // Publishing this is what makes a push transport-agnostic. Without it an
-    // executor has no signal that this wallet handles TSP inbound, and hop
-    // acceptance is not delivery — a TSP push to a wallet that cannot route it
-    // is stored by the mediator and silently never handled, which for a
-    // consent request is a gated action that never got its human check (R7.2).
-    ...(opts?.mediatorDid
-      ? {
-          services: [
-            { serviceEndpoint: opts.mediatorDid },
-            // Spelled out, not `"tsp"`: the two resolvers in this ecosystem do
-            // not share an abbreviation table. See `DidPeerService.type`.
-            { type: "TSPTransport", serviceEndpoint: opts.mediatorDid },
-          ],
-        }
-      : {}),
+    //   1. **Nothing calls this function.** Onboarding adopts a VTA-minted
+    //      holder via `installVtaMintedHolder` (provision-integration, M2C);
+    //      this self-minting path is the earlier design and is currently
+    //      unreached.
+    //   2. **The adopted holder is a `did:key`**, and that method has no
+    //      service endpoints at all — its document is derived from the key
+    //      material alone. So no capability can be published in the holder's
+    //      DID document while the holder is a did:key, whichever code mints it.
+    //
+    // The signal has to live somewhere a did:key can carry it — announced at
+    // enrolment and held against the ACL/device record — not here.
+    ...(opts?.mediatorDid ? { services: [{ serviceEndpoint: opts.mediatorDid }] } : {}),
   });
 
   const wrapped = await wrapSecret(edSecret, opts?.secretWrap);
