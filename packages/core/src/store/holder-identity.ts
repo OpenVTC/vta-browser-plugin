@@ -179,7 +179,27 @@ export async function generateOrLoadHolderIdentity(
   const peer = createDidPeer2({
     ed25519PublicKey: edPublic,
     x25519PublicKey: x25519Public,
-    ...(opts?.mediatorDid ? { service: { serviceEndpoint: opts.mediatorDid } } : {}),
+    // Both transports the wallet can *receive* on, advertised so an executor
+    // can negotiate against them the same way the wallet negotiates against a
+    // VTA's published services. One mediator carries both: it demultiplexes on
+    // the TSP magic byte, so the endpoint is the same DID twice under two
+    // types, not two deployments.
+    //
+    // Publishing this is what makes a push transport-agnostic. Without it an
+    // executor has no signal that this wallet handles TSP inbound, and hop
+    // acceptance is not delivery — a TSP push to a wallet that cannot route it
+    // is stored by the mediator and silently never handled, which for a
+    // consent request is a gated action that never got its human check (R7.2).
+    ...(opts?.mediatorDid
+      ? {
+          services: [
+            { serviceEndpoint: opts.mediatorDid },
+            // Spelled out, not `"tsp"`: the two resolvers in this ecosystem do
+            // not share an abbreviation table. See `DidPeerService.type`.
+            { type: "TSPTransport", serviceEndpoint: opts.mediatorDid },
+          ],
+        }
+      : {}),
   });
 
   const wrapped = await wrapSecret(edSecret, opts?.secretWrap);
