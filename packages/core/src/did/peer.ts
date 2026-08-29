@@ -23,14 +23,24 @@ const ED25519_PUB = multibase.MULTICODEC.ED25519_PUB;
  *  abbreviation (`t`/`s`/`r`/`a`) is the did:peer:2 convention the resolver
  *  decodes back to a `DIDCommMessaging` service. */
 export interface DidPeerService {
-  /** Service type. `"dm"` abbreviates `DIDCommMessaging` (the default). */
+  /** Service type. `"dm"` abbreviates `DIDCommMessaging` (the default).
+   *
+   *  **Spell a non-DIDComm type out in full.** The abbreviation table is not
+   *  shared: `affinidi-did-common`'s peer resolver expands `"tsp"` to
+   *  `TSPTransport`, `vti-didcomm-js`'s expands only `"dm"` and passes
+   *  everything else through verbatim. So `"tsp"` resolves to two different
+   *  service types depending on which side reads the DID — while
+   *  `"TSPTransport"` is preserved verbatim by both and means the same thing
+   *  everywhere. */
   type?: string;
   /** serviceEndpoint URI — for mediator-routed delivery this is the
    *  mediator's DID. */
   serviceEndpoint: string;
   /** Optional routing keys. */
   routingKeys?: string[];
-  /** Accepted profiles (default `["didcomm/v2"]`). */
+  /** Accepted profiles. Defaults to `["didcomm/v2"]` for a DIDComm service and
+   *  is omitted otherwise — the media types are DIDComm's, and asserting them
+   *  on a TSP endpoint would advertise something untrue. */
   accept?: string[];
 }
 
@@ -48,8 +58,16 @@ export interface CreateDidPeer2Args {
   ed25519PublicKey: Uint8Array;
   /** X25519 public key (keyAgreement / authcrypt). */
   x25519PublicKey: Uint8Array;
-  /** Optional DIDComm service to advertise (e.g. the wallet's mediator). */
-  service?: DidPeerService;
+  /** Services to advertise, in order. Each becomes one `.S` element, and the
+   *  resolved ids follow the did:peer:2 numbering (`#service`, `#service-1`,
+   *  …) — which both this ecosystem's resolvers agree on.
+   *
+   *  More than one is how a peer says what it can *receive*. A wallet that
+   *  publishes only a DIDComm service is one an executor has no way to know
+   *  accepts TSP, so it will never be sent any: the negotiation the wallet
+   *  performs against a VTA's published services has no counterpart in the
+   *  other direction unless the wallet publishes too. */
+  services?: DidPeerService[];
 }
 
 /**
@@ -65,15 +83,23 @@ export function createDidPeer2(args: CreateDidPeer2Args): DidPeer2 {
 
   let did = `did:peer:2.E${kaMultibase}.V${authMultibase}`;
 
-  if (args.service) {
-    const s = args.service;
-    // Abbreviated DIDComm service; key insertion order t,s,r,a matches the
-    // did:peer:2 convention. `r` omitted when there are no routing keys.
+  for (const s of args.services ?? []) {
+    const type = s.type ?? "dm";
+    // One `.S` element per service rather than a single element carrying an
+    // array. Both are spec-legal, but the multiple-element form is what every
+    // resolver in this ecosystem indexes and numbers; the array form is the
+    // less-travelled path and there is nothing to gain by taking it.
+    //
+    // Key insertion order t,s,r,a matches the did:peer:2 convention. `r` is
+    // omitted when there are no routing keys, and `a` when the service is not
+    // DIDComm — see `accept` above.
+    const isDidcomm = type === "dm" || type === "DIDCommMessaging";
+    const accept = s.accept ?? (isDidcomm ? ["didcomm/v2"] : undefined);
     const abbreviated: Record<string, unknown> = {
-      t: s.type ?? "dm",
+      t: type,
       s: s.serviceEndpoint,
       ...(s.routingKeys && s.routingKeys.length > 0 ? { r: s.routingKeys } : {}),
-      a: s.accept ?? ["didcomm/v2"],
+      ...(accept ? { a: accept } : {}),
     };
     const encoded = base64url.encode(new TextEncoder().encode(JSON.stringify(abbreviated)));
     did += `.S${encoded}`;
