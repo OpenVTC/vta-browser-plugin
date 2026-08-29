@@ -20,6 +20,7 @@
 import { pack, unpack } from "@openvtc/vti-tsp-js";
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 
+import type { TspFrameClaim } from "../didcomm/index.js";
 import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
 import { VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
@@ -81,8 +82,18 @@ export interface TspRemoteEndpoint {
  * directly testable with a simulator.
  */
 export interface TspTransport {
-  /** Send a packed TSP message and await the packed reply. */
-  sendAndAwaitReply(packed: Uint8Array, options?: { timeoutMs?: number }): Promise<Uint8Array>;
+  /** Send a packed TSP message and await the packed reply.
+   *
+   *  `claims` decides which inbound frame *is* the reply. The transport shares
+   *  one socket with the wallet's inbox, so frames it did not ask for — a
+   *  `task-consent` push, a step-up request — arrive on it too; without a
+   *  predicate the next frame would be handed to the next waiter and a push
+   *  parsed as somebody's answer. Only this layer can tell them apart, because
+   *  only it holds the keys. */
+  sendAndAwaitReply(
+    packed: Uint8Array,
+    options?: { timeoutMs?: number; claims?: TspFrameClaim },
+  ): Promise<Uint8Array>;
   /**
    * Send a packed TSP message without awaiting a reply, for tasks that define
    * no response document.
@@ -177,36 +188,51 @@ export class TspChannel implements TrustTaskChannel {
   async send<Res>(envelope: TrustTask<unknown>, opts: SendOpts = {}): Promise<Res> {
     const packed = { bytes: await this.packForVta(envelope) };
 
-    const replyBytes = await this.transport.sendAndAwaitReply(packed.bytes, {
+    // Set by `claims` when it recognises a frame as this request's reply, so
+    // the frame is unpacked once rather than again on the way out.
+    let claimedDoc: { type?: string; payload?: unknown } | undefined;
+
+    // Only a frame that (a) unpacks under the VTA keys we addressed, (b) is
+    // *proven* to come from that VTA, and (c) threads to this request is our
+    // reply. Anything else — most importantly an executor-initiated push
+    // landing mid-request — is left for the next waiter or the inbox.
+    const claims: TspFrameClaim = async (bytes) => {
+      let reply;
+      try {
+        reply = await unpack(bytes, {
+          receiverDecryptionKey: this.holder.encryptionPrivateKey,
+          senderEncryptionKey: this.vta.encryptionPublicKey,
+          senderSigningKey: this.vta.signingPublicKey,
+        });
+      } catch {
+        // Not unpackable under these keys, so not ours. Not an error: another
+        // waiter's peer, or an inbound from someone else entirely.
+        return false;
+      }
+      if (reply.sender !== this.vta.vid) return false;
+      let doc: { type?: string; payload?: unknown; threadId?: unknown };
+      try {
+        doc = JSON.parse(fromUtf8.decode(reply.payload)) as typeof doc;
+      } catch {
+        return false;
+      }
+      // `threadId` on a response is the request's `threadId` or, as here, its
+      // `id` — the same `thid ?? id` rule DIDComm correlates on.
+      if (doc.threadId !== envelope.id) return false;
+      claimedDoc = doc;
+      return true;
+    };
+
+    await this.transport.sendAndAwaitReply(packed.bytes, {
       timeoutMs: opts.timeoutMs ?? this.timeoutMs,
+      claims,
     });
 
-    let reply;
-    try {
-      reply = await unpack(replyBytes, {
-        receiverDecryptionKey: this.holder.encryptionPrivateKey,
-        senderEncryptionKey: this.vta.encryptionPublicKey,
-        senderSigningKey: this.vta.signingPublicKey,
-      });
-    } catch (err) {
-      throw new VtaClientError("e.client.parse", `tsp reply unpack failed: ${(err as Error).message}`);
-    }
-
-    // The reply is sealed + signed by the VTA; unpack already verified the
-    // signature and sender-auth against the VTA's keys. Defence-in-depth: the
-    // proven sender VID must be the VTA we addressed.
-    if (reply.sender !== this.vta.vid) {
-      throw new VtaClientError(
-        "e.p.msg.unauthorized",
-        `tsp reply from ${reply.sender} != VTA ${this.vta.vid}`,
-      );
-    }
-
-    let doc: { type?: string; payload?: unknown };
-    try {
-      doc = JSON.parse(fromUtf8.decode(reply.payload)) as { type?: string; payload?: unknown };
-    } catch (err) {
-      throw new VtaClientError("e.client.parse", `tsp reply body not JSON: ${(err as Error).message}`);
+    // `claims` returned true, so it parsed the document; the transport cannot
+    // resolve without one having claimed. Defensive only.
+    const doc = claimedDoc;
+    if (!doc) {
+      throw new VtaClientError("e.client.parse", "tsp: reply resolved with no claimed document");
     }
 
     return parseTrustTaskReply<Res>(doc, {

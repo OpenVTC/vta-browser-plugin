@@ -148,7 +148,7 @@ test("TSP: the sealed document carries a proof, distinct from the outer signatur
 
   let received;
   const transport = {
-    async sendAndAwaitReply(bytes) {
+    async sendAndAwaitReply(bytes, options = {}) {
       const opened = await unpack(bytes, {
         receiverDecryptionKey: vtaEncSk,
         senderEncryptionKey: x25519.getPublicKey(holderEncSk),
@@ -157,7 +157,13 @@ test("TSP: the sealed document carries a proof, distinct from the outer signatur
       received = JSON.parse(fromUtf8.decode(opened.payload));
       const reply = await pack(
         utf8.encode(
-          JSON.stringify({ type: `${VAULT_DELETE}#response`, payload: { deleted: true } }),
+          // `threadId` threads to the request, as the VTA's `respond_with`
+          // does — the channel will not claim a reply without it.
+          JSON.stringify({
+            type: `${VAULT_DELETE}#response`,
+            threadId: received.id,
+            payload: { deleted: true },
+          }),
         ),
         vtaVid,
         holderVid,
@@ -167,6 +173,9 @@ test("TSP: the sealed document carries a proof, distinct from the outer signatur
           receiverEncryptionKey: x25519.getPublicKey(holderEncSk),
         },
       );
+      if (options.claims && !(await options.claims(reply.bytes))) {
+        throw new Error("the channel did not claim this reply");
+      }
       return reply.bytes;
     },
   };
