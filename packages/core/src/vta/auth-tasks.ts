@@ -23,6 +23,12 @@ import {
   type AuthChallengeResponsePayload,
 } from "@openvtc/trust-tasks/auth/challenge/0.1/payload";
 import {
+  TYPE_URI as AUTH_AUTHENTICATE,
+  RESPONSE_TYPE_URI as AUTH_AUTHENTICATE_RESPONSE,
+  type AuthAuthenticate,
+  type AuthAuthenticateResponsePayload,
+} from "@openvtc/trust-tasks/auth/authenticate/0.1/payload";
+import {
   TYPE_URI as AUTH_REFRESH,
   RESPONSE_TYPE_URI as AUTH_REFRESH_RESPONSE,
   type AuthRefresh,
@@ -72,6 +78,51 @@ export async function requestAuthChallenge(
   return sender.send<AuthChallengeResponsePayload>(envelope, {
     expectedResponseType: AUTH_CHALLENGE_RESPONSE,
     operationLabel: "auth/challenge/0.1",
+  });
+}
+
+export interface AuthAuthenticateParams extends AuthTaskCallerParams {
+  /** The exact `challenge` from the prior `auth/challenge` reply. */
+  challenge: string;
+  /** The `sessionId` that came with it. The consumer looks the challenge
+   *  binding up by this, so the pair travels together or not at all. */
+  sessionId: string;
+  /** Capability tags to ask for. The consumer decides what it grants; the
+   *  issued bundle's `scope` MAY be a subset. */
+  scope?: string[];
+}
+
+/**
+ * Spend a challenge and get a session.
+ *
+ * **The proof over this document is the authentication.** The channel signs
+ * every outbound Trust Task (`signOutboundTask`, SPEC §7.2 item 7a), and the
+ * consumer establishes the caller from that signature — binding it to the
+ * asserted `issuer`, or filling the issuer from the authenticated transport
+ * when the document asserts none. Possession of the challenge alone proves
+ * nothing; possession plus a signature over a document carrying it proves
+ * control of the VID, which is the whole point of the two-step.
+ *
+ * That is why this works identically over TSP, DIDComm and REST: the proof
+ * travels with the document, so the guarantee does not depend on which
+ * transport carried it.
+ */
+export async function authenticateSession(
+  sender: TrustTaskSender,
+  params: AuthAuthenticateParams,
+): Promise<AuthAuthenticateResponsePayload> {
+  const payload: AuthAuthenticate = {
+    challenge: params.challenge,
+    sessionId: params.sessionId,
+    ...(params.scope && params.scope.length > 0 ? { scope: params.scope } : {}),
+  };
+  const envelope = buildTrustTask(AUTH_AUTHENTICATE, payload, {
+    issuer: params.holder.did,
+    recipient: params.service.did,
+  });
+  return sender.send<AuthAuthenticateResponsePayload>(envelope, {
+    expectedResponseType: AUTH_AUTHENTICATE_RESPONSE,
+    operationLabel: "auth/authenticate/0.1",
   });
 }
 
