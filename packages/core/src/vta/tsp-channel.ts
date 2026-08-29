@@ -196,6 +196,12 @@ export class TspChannel implements TrustTaskChannel {
     // *proven* to come from that VTA, and (c) threads to this request is our
     // reply. Anything else — most importantly an executor-initiated push
     // landing mid-request — is left for the next waiter or the inbox.
+    // Why the last frame was declined, so a request that times out can say what
+    // it saw instead of only that it waited. Declining silently is what turned
+    // a correlation mismatch into a 30s hang with no reason anywhere — the
+    // predicate has to report, because by design nothing downstream can.
+    let lastDecline: string | undefined;
+
     const claims: TspFrameClaim = async (bytes) => {
       let reply;
       try {
@@ -204,29 +210,59 @@ export class TspChannel implements TrustTaskChannel {
           senderEncryptionKey: this.vta.encryptionPublicKey,
           senderSigningKey: this.vta.signingPublicKey,
         });
-      } catch {
-        // Not unpackable under these keys, so not ours. Not an error: another
-        // waiter's peer, or an inbound from someone else entirely.
+      } catch (err) {
+        // Not unpackable under these keys, so not ours. Expected on a shared
+        // socket — another peer's frame — but recorded, because "nothing I can
+        // read arrived" and "the VTA answered something I did not expect" are
+        // very different problems and they look identical from the timeout.
+        lastDecline = `unpack failed: ${(err as Error).message}`;
         return false;
       }
-      if (reply.sender !== this.vta.vid) return false;
-      let doc: { type?: string; payload?: unknown; threadId?: unknown };
+      if (reply.sender !== this.vta.vid) {
+        lastDecline = `sealed by ${reply.sender}, not the VTA ${this.vta.vid}`;
+        return false;
+      }
+      let doc: { type?: string; id?: unknown; payload?: unknown; threadId?: unknown };
       try {
         doc = JSON.parse(fromUtf8.decode(reply.payload)) as typeof doc;
-      } catch {
+      } catch (err) {
+        lastDecline = `payload not JSON: ${(err as Error).message}`;
         return false;
       }
       // `threadId` on a response is the request's `threadId` or, as here, its
-      // `id` — the same `thid ?? id` rule DIDComm correlates on.
-      if (doc.threadId !== envelope.id) return false;
+      // `id` — the same `thid ?? id` rule DIDComm correlates on, and what the
+      // framework's `respond_with` sets.
+      if (doc.threadId !== envelope.id) {
+        lastDecline =
+          `threadId ${JSON.stringify(doc.threadId)} != request id ` +
+          `${JSON.stringify(envelope.id)} (reply type ${JSON.stringify(doc.type)}, ` +
+          `reply id ${JSON.stringify(doc.id)})`;
+        return false;
+      }
       claimedDoc = doc;
       return true;
     };
 
-    await this.transport.sendAndAwaitReply(packed.bytes, {
-      timeoutMs: opts.timeoutMs ?? this.timeoutMs,
-      claims,
-    });
+    try {
+      await this.transport.sendAndAwaitReply(packed.bytes, {
+        timeoutMs: opts.timeoutMs ?? this.timeoutMs,
+        claims,
+      });
+    } catch (err) {
+      // A timeout here almost always means a frame *did* arrive and was
+      // declined. Say which, on the error the caller actually sees: without it
+      // the only evidence is a silent 30s wait, and the difference between
+      // "the VTA never answered" and "it answered something I did not
+      // recognise" is the whole diagnosis.
+      if (lastDecline) {
+        throw new VtaClientError(
+          (err as VtaClientError).code ?? "e.client.network",
+          `${(err as Error).message} — last inbound frame declined: ${lastDecline}`,
+          { details: { lastDecline } },
+        );
+      }
+      throw err;
+    }
 
     // `claims` returned true, so it parsed the document; the transport cannot
     // resolve without one having claimed. Defensive only.
