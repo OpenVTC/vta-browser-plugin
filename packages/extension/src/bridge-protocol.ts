@@ -47,8 +47,14 @@ export interface LoginParams {
 export interface DidcommLoginParams {
   /** The RP's control DID — authcrypt recipient + the DID the RP ACL-checks. */
   controlDid: string;
-  /** The RP's mediator DID (from the control DID's DIDCommMessaging service). */
+  /** The RP's mediator DID (from the control DID's DIDCommMessaging service).
+   *  Seeds the DIDComm channel when the RP's own document does not publish
+   *  one — a bare `did:peer` RP has no document to resolve. */
   mediatorDid: string;
+  /** Capability tags to request on the issued session. The RP decides what it
+   *  grants, and the issued scope MAY be narrower than this. Omit to take
+   *  whatever the RP's default is for this DID. */
+  scope?: string[];
 }
 
 /** Parameters for `window.vtaWallet.stepUpVta(...)` (VTA-approval step-up).

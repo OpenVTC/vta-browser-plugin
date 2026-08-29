@@ -14,7 +14,7 @@ import {
   generateSigningIdentity,
   Identity,
   IndexedDBKVStore,
-  loginViaDidcomm,
+  loginViaTrustTask,
   loginViaSiop,
   claimInboundDocument,
   type MediatorConnection,
@@ -2421,27 +2421,58 @@ async function doDidcommLogin(
   const { identity, signing } = await loadHolder(req.vtaDid);
   sw.mark("load holder");
 
-  // Reuse the warm session (instant if already live); resolve the VTA target
-  // separately (cached). No per-op connect/teardown.
-  const conn = await getWarmSession(req.params.mediatorDid, req.vtaDid);
-  sw.mark("warm session");
-  const service = await resolveKeyAgreement(req.params.controlDid);
-  sw.mark("resolve vta");
+  // A session to the **RP's control DID**, not to a VTA. `buildVtaSession`
+  // resolves whatever services the peer publishes and orders them
+  // TSP > DIDComm > REST — nothing in it is VTA-specific but the name, so a
+  // relying party gets the same chain every VTA operation has had since #79.
+  //
+  // The mediator the caller supplied still seeds the DIDComm channel: an RP
+  // reached through a mediator has that in its document, and a page that names
+  // one is answering for a peer whose document may not.
+  const advertised = await resolveVtaServices(req.params.controlDid).catch(
+    () => ({}) as VtaServices,
+  );
+  const services: VtaServices = {
+    ...advertised,
+    ...(advertised.didcomm || !req.params.mediatorDid
+      ? {}
+      : { didcomm: { mediatorDid: req.params.mediatorDid } }),
+  };
+  sw.mark("resolve rp services");
 
-  const bridge = new MediatorSessionBridge(conn);
-  const tokens = await loginViaDidcomm({
-    bridge,
+  const { session } = await buildVtaSession(
+    req.params.controlDid,
+    { holder: identity, signing },
+    (mediatorDid) => getWarmSession(mediatorDid, req.vtaDid),
+    { services },
+  );
+  sw.mark("rp session");
+
+  const service = await resolveKeyAgreement(req.params.controlDid);
+
+  // `auth/challenge` then `auth/authenticate`, as Trust Tasks. The RP
+  // establishes the caller from the proof on the document, so this is the same
+  // rule on every transport — where the bespoke DIDComm login it replaces
+  // authenticated on the authcrypt sender and never read the challenge at all.
+  //
+  // Needs an RP that dispatches the auth family (affinidi-webvh-service #171).
+  const rpSession = await loginViaTrustTask({
+    sender: session,
     holder: identity,
+    signing,
     service,
-    mediator: conn.mediator,
+    ...(req.params.scope ? { scope: req.params.scope } : {}),
   });
-  sw.mark("authenticate (didcomm)");
+  sw.mark("authenticate (trust-task)");
   return {
     ok: true,
     result: {
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      sessionId: tokens.sessionId,
+      accessToken: rpSession.accessToken,
+      // The RP may not rotate a refresh token on login; the bridge's response
+      // shape wants a string, and an empty one says "none" more honestly than
+      // a fabricated value would.
+      refreshToken: rpSession.refreshToken ?? "",
+      sessionId: rpSession.sessionId,
       holderDid: signing.did,
       timings: sw.marks,
     },
