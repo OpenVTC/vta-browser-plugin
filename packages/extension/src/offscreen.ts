@@ -39,6 +39,7 @@ import {
   resolveVtaServices,
   type VtaServices,
   resolveVtaTspEndpoint,
+  unpackInboundTsp,
   RestChannel,
   TspChannel,
   MediatorSessionTspTransport,
@@ -1653,6 +1654,14 @@ async function createWarmSession(
     // Return the promise: the transport awaits it and acks only once the
     // message is durably recorded (R1.6).
     conn.onInbound((message) => onInboundMessage(conn, identity, signing, vtaDid, message));
+    // The same inbox over TSP. One socket carries both, so an executor that
+    // pushes over TSP reaches the identical pipeline — same proof check, same
+    // dedup, same persist-before-ack — with `unpackInboundTsp` supplying the
+    // one thing that differs: turning a sealed frame into the message shape,
+    // and proving the sender while it does.
+    conn.onInboundTsp((bytes) =>
+      onInboundTspFrame(conn, identity, signing, vtaDid, bytes, false),
+    );
   }
   return conn;
 }
@@ -1776,6 +1785,9 @@ async function createApproverWarmSession(vtaDid: string): Promise<MediatorConnec
   });
   // Inbound on the approver session is handled as the approver (its identity +
   // signing), with `isApprover` so the popup demands the per-decision biometric.
+  conn.onInboundTsp((bytes) =>
+    onInboundTspFrame(conn, approver.identity, approver.signing, vtaDid, bytes, true),
+  );
   conn.onInbound((message) =>
     onInboundMessage(conn, approver.identity, approver.signing, vtaDid, message, true),
   );
@@ -2026,6 +2038,55 @@ async function drainPendingInbound(vtaDids: readonly string[]): Promise<void> {
  * behaviour so a fix upstream shows up as a failing test rather than a
  * silent change.
  */
+/**
+ * Verify an inbound TSP frame and hand it to the same pipeline DIDComm uses.
+ *
+ * Everything security-bearing downstream reads the Trust-Task **document** —
+ * the proof check, the enrolled-executor check, the §7.2 item 11 dedup claim —
+ * so the two transports converge the moment the document is in hand. What this
+ * adds is the part only TSP needs: the frame arrives sealed, naming its sender
+ * in cleartext, and `unpackInboundTsp` turns that claim into a proven identity
+ * or refuses.
+ *
+ * A refusal throws, which withholds the mediator's ack (vti-didcomm-js
+ * >=0.7.0) and leaves the frame queued for redelivery. That is the right
+ * outcome for a transient failure — a DID document that would not resolve, say
+ * — and harmless for a permanent one: an unverifiable frame is refused again on
+ * every redelivery and never reaches a human either way.
+ */
+async function onInboundTspFrame(
+  conn: MediatorConnection,
+  identity: Identity,
+  signing: SigningIdentity,
+  vtaDid: string,
+  bytes: Uint8Array,
+  isApprover: boolean,
+): Promise<void> {
+  let message;
+  try {
+    message = await unpackInboundTsp(bytes, {
+      holder: tspHolderIdentityFromSecret(identity.did, signing.privateKey),
+      // Despite the name this resolves any DID, which is what an inbound
+      // sender needs: an enrolled executor may be this device's VTA or an
+      // operator-enrolled control plane. Whether the sender is one we accept
+      // is decided downstream, on the document's proof — not here, and not on
+      // the strength of the transport.
+      resolveSender: resolveVtaTspEndpoint,
+    });
+  } catch (err) {
+    // Logged, not swallowed: a frame that repeatedly fails to verify is a
+    // routing or enrolment problem someone has to see, and the silent-drop
+    // version of this is precisely the failure mode that made an un-prompted
+    // consent indistinguishable from one that never arrived.
+    console.warn(
+      "[pnm inbound] refusing inbound TSP frame:",
+      err instanceof Error ? err.message : String(err),
+    );
+    throw err;
+  }
+  await onInboundMessage(conn, identity, signing, vtaDid, message, isApprover);
+}
+
 async function onInboundMessage(
   conn: MediatorConnection,
   identity: Identity,

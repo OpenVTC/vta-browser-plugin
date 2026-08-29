@@ -28,7 +28,9 @@ function tspIdentity(vid) {
  */
 function simulatedVtaTransport(vta, holder, dispatch, replySenderVid) {
   return {
-    async sendAndAwaitReply(packed) {
+    /** What the channel's predicate said about the last sealed reply. */
+    lastClaim: undefined,
+    async sendAndAwaitReply(packed, options = {}) {
       const req = await unpack(packed, {
         receiverDecryptionKey: vta.encSk,
         senderEncryptionKey: holder.encPk,
@@ -38,6 +40,12 @@ function simulatedVtaTransport(vta, holder, dispatch, replySenderVid) {
       assert.equal(req.receiver, vta.vid);
       const reqDoc = JSON.parse(fromUtf8.decode(req.payload));
       const replyDoc = dispatch(reqDoc);
+      // The real VTA threads its response to the request: `respond_with` sets
+      // `thread_id = self.thread_id.or(self.id)`. The channel correlates on
+      // exactly that, so a double that omitted it would let a broken predicate
+      // pass. A dispatch that sets `threadId` itself keeps it — that is how the
+      // mis-threaded case below is expressed.
+      if (replyDoc.threadId === undefined) replyDoc.threadId = reqDoc.id;
       // Seal the reply under `replySenderVid` (defaults to the VTA's real VID),
       // still using the VTA's keys — so the channel's own sender-VID check is
       // what's exercised, not a crypto failure.
@@ -46,6 +54,16 @@ function simulatedVtaTransport(vta, holder, dispatch, replySenderVid) {
         senderEncryptionKey: vta.encSk,
         receiverEncryptionKey: holder.encPk,
       });
+      // Honour the transport contract: the channel decides which frame is its
+      // reply, and the connection only resolves a waiter whose predicate says
+      // yes. A double that just returned the bytes would never exercise the
+      // correlation this seam exists for.
+      if (options.claims) {
+        this.lastClaim = await options.claims(sealed.bytes);
+        if (!this.lastClaim) {
+          throw new Error("simulated VTA: the channel did not claim this reply");
+        }
+      }
       return sealed.bytes;
     },
   };
@@ -78,7 +96,7 @@ function makeChannel(dispatch, replySenderVid) {
       signingPublicKey: vta.signPk,
     },
   });
-  return { channel, holder, vta };
+  return { channel, holder, vta, transport };
 }
 
 const LIST = "https://trusttasks.org/spec/vault/list/0.2";
@@ -113,17 +131,42 @@ test("TspChannel decodes a trust-task-error reply into a typed VtaClientError", 
   );
 });
 
-test("TspChannel rejects a reply from the wrong sender VID", async () => {
+test("TspChannel never accepts a reply sealed by the wrong sender VID", async () => {
   // The simulated VTA seals as a *different* VID than the channel expects.
-  const { channel } = makeChannel(
+  const { channel, transport } = makeChannel(
     () => ({ type: LIST_RESP, payload: {} }),
     "did:web:imposter.example",
   );
   const env = buildTrustTask(LIST, {}, { issuer: "did:web:holder.example", recipient: "did:web:vta.example" });
-  await assert.rejects(
-    () => channel.send(env, { expectedResponseType: LIST_RESP }),
-    (e) => e.code === "e.p.msg.unauthorized",
-  );
+  await assert.rejects(() => channel.send(env, { expectedResponseType: LIST_RESP }));
+
+  // The property is unchanged — an imposter's frame is never this request's
+  // answer — but where it is decided has moved, and that is the point. The
+  // channel used to accept the frame and then throw `unauthorized`; it now
+  // declines to claim it at all.
+  //
+  // That matters on a shared socket. A frame from someone else is not an error
+  // for *this* request, it is simply not its reply: refusing it here would let
+  // any peer with socket access fail an unrelated in-flight operation. Declined
+  // instead, it falls through to the unsolicited-inbound path, where
+  // `unpackInboundTsp` resolves the claimed sender's own keys and fails the
+  // unpack — so an imposter is still refused, by the code whose job that is.
+  assert.equal(transport.lastClaim, false, "an imposter's frame must not be claimed");
+});
+
+test("TspChannel does not claim a reply threaded to a different request", async () => {
+  // Correlation, not just crypto: a document the VTA legitimately sealed to us
+  // but threaded to some other request is not this request's reply. Under the
+  // old FIFO waiter it would have been taken as one — which is exactly what an
+  // executor-initiated push arriving mid-request looks like.
+  const { channel, transport } = makeChannel(() => ({
+    type: LIST_RESP,
+    threadId: "urn:uuid:some-other-request",
+    payload: { entries: [], truncated: false },
+  }));
+  const env = buildTrustTask(LIST, {}, { issuer: "did:web:holder.example", recipient: "did:web:vta.example" });
+  await assert.rejects(() => channel.send(env, { expectedResponseType: LIST_RESP }));
+  assert.equal(transport.lastClaim, false, "a mis-threaded document must not be claimed");
 });
 
 test("VtaSession routes over TSP when present (TSP > DIDComm > REST)", async () => {

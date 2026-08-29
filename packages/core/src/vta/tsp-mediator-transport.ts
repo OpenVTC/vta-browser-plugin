@@ -20,6 +20,7 @@
 // send binary, await the reply frame, with the transport-phase error codes
 // `TspChannel`/`VtaSession` expect.
 
+import type { TspFrameClaim } from "../didcomm/index.js";
 import { VtaClientError } from "./errors.js";
 import type { TspTransport } from "./tsp-channel.js";
 
@@ -30,8 +31,9 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 export interface TspCapableConnection {
   /** Send a raw TSP message (qb2 bytes) as a binary frame over the socket. */
   sendBinary(bytes: Uint8Array): void;
-  /** Await the next inbound TSP frame (FIFO). Rejects on timeout. */
-  awaitTspFrame(timeoutMs: number): Promise<Uint8Array>;
+  /** Await the inbound TSP frame `claims` recognises as this request's reply.
+   *  Rejects on timeout. A frame nothing claims is unsolicited inbound. */
+  awaitTspFrame(timeoutMs: number, claims: TspFrameClaim): Promise<Uint8Array>;
 }
 
 export interface MediatorSessionTspTransportOptions {
@@ -70,13 +72,27 @@ export class MediatorSessionTspTransport implements TspTransport {
 
   async sendAndAwaitReply(
     packed: Uint8Array,
-    options: { timeoutMs?: number } = {},
+    options: { timeoutMs?: number; claims?: TspFrameClaim } = {},
   ): Promise<Uint8Array> {
     const timeoutMs = options.timeoutMs ?? this.timeoutMs;
 
+    // Without a predicate this waiter would claim the first frame to arrive —
+    // including an executor-initiated push meant for the inbox. Refusing is the
+    // safe failure: `e.client.unsupported` is pre-send, so a VtaSession simply
+    // uses the next channel. A caller that reaches this has a bug, not a
+    // network problem.
+    const claims = options.claims;
+    if (!claims) {
+      throw new VtaClientError(
+        "e.client.unsupported",
+        "tsp: sendAndAwaitReply needs a `claims` predicate to tell its reply " +
+          "from an unsolicited inbound frame on the shared socket",
+      );
+    }
+
     // Register the reply waiter BEFORE sending (both synchronous — no frame can
     // arrive between them), per the MediatorConnection contract.
-    const replyPromise = this.conn.awaitTspFrame(timeoutMs);
+    const replyPromise = this.conn.awaitTspFrame(timeoutMs, claims);
 
     try {
       this.conn.sendBinary(packed);

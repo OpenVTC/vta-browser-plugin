@@ -537,11 +537,22 @@ export interface MediatorConnection {
    *  and DIDComm share one socket per holder DID (no second socket, so no
    *  one-socket-per-DID conflict; the reply arrives back on this socket). */
   sendBinary(bytes: Uint8Array): void;
-  /** Await the next inbound TSP frame. FIFO — TSP carries no thread id, and a
-   *  VtaSession drives one request at a time. Call this to register the waiter,
-   *  then `sendBinary` (both synchronous, so no frame can arrive between them).
-   *  Rejects on timeout. Frames arriving with no waiter are discarded. */
-  awaitTspFrame(timeoutMs: number): Promise<Uint8Array>;
+  /** Await the inbound TSP frame that `claims` recognises as this request's
+   *  reply. Call this to register the waiter, then `sendBinary` (both
+   *  synchronous, so no frame can arrive between them). Rejects on timeout.
+   *
+   *  **`claims` is not optional, and FIFO is not a substitute for it.** This
+   *  used to hand the next frame to the next waiter, which was sound only
+   *  while replies were the only thing arriving on the socket. They are not:
+   *  the VTA pushes `task-consent` and step-up requests over the same
+   *  connection, and under FIFO a push landing mid-request would be handed to
+   *  that request's waiter and parsed as its reply — while the push itself
+   *  vanished. The frame is opaque here (this layer holds no TSP keys), so
+   *  only the caller can tell one from the other; it unpacks and matches on
+   *  the Trust-Task `threadId`.
+   *
+   *  A frame no waiter claims is unsolicited, and goes to `onInboundTsp`. */
+  awaitTspFrame(timeoutMs: number, claims: TspFrameClaim): Promise<Uint8Array>;
   close(): void;
   /** True while the underlying WebSocket is open (live delivery active). A
    *  warm-session holder checks this before reusing a cached connection. */
@@ -565,11 +576,39 @@ export interface MediatorConnection {
   onInbound(
     handler: (message: Record<string, unknown>, thid: string) => void | Promise<void>,
   ): void;
+  /** Register a handler for inbound **TSP** frames no waiter claimed — the
+   *  executor-initiated requests (`task-consent`, step-up) that arrive over
+   *  TSP rather than DIDComm. Replaces any previously-registered handler.
+   *
+   *  Receives the raw qb2 bytes, still sealed: this layer holds no TSP keys.
+   *  `unpackInboundTsp` (`vta/tsp-inbound.ts`) is what turns them into a
+   *  verified message, resolving the sender's keys from the VID the frame
+   *  names in cleartext and then *proving* it on unpack.
+   *
+   *  The same R1.6 contract as {@link onInbound}: awaited before the frame is
+   *  acked (vti-didcomm-js >=0.7.0), so resolve once the message is durably
+   *  stored — not when the work is finished. A throw withholds the ack and the
+   *  mediator redelivers, so handlers must de-duplicate. */
+  onInboundTsp(handler: (bytes: Uint8Array) => void | Promise<void>): void;
   /** Resolved VTA key-agreement endpoint (inner authcrypt target). */
   vta: ResolvedKeyAgreement;
   /** Resolved mediator key-agreement endpoint (forward-envelope target). */
   mediator: ResolvedKeyAgreement;
 }
+
+/**
+ * Decides whether an inbound TSP frame is the reply to one outstanding
+ * request.
+ *
+ * The connection layer holds no TSP keys — a frame is opaque bytes to it — so
+ * recognising a reply is necessarily the caller's job. `TspChannel` unpacks
+ * with the VTA keys it addressed and matches the Trust-Task `threadId`, which
+ * threads to the request `id` exactly as DIDComm's `thid ?? id` does.
+ *
+ * Return `false` (or throw) for anything not yours: an unclaimed frame is
+ * offered to the next waiter, and finally to the unsolicited-inbound handler.
+ */
+export type TspFrameClaim = (bytes: Uint8Array) => boolean | Promise<boolean>;
 
 export interface ConnectMediatorSessionOptions {
   /** Holder identity (its X25519 key authenticates to the mediator). */
@@ -633,8 +672,10 @@ export async function connectMediatorSession(
   const tspWaiters: Array<{
     resolve: (b: Uint8Array) => void;
     reject: (e: Error) => void;
+    claims: TspFrameClaim;
     timer: ReturnType<typeof setTimeout>;
   }> = [];
+  let inboundTspHandler: ((bytes: Uint8Array) => void | Promise<void>) | undefined;
   const rejectTspWaiters = (err: Error) => {
     while (tspWaiters.length) {
       const w = tspWaiters.shift()!;
@@ -657,12 +698,36 @@ export async function connectMediatorSession(
       const r = await vtiResolveKeyAgreement(did);
       return { publicJwk: x25519PublicJwk(r.x25519Pub) };
     },
-    onTspFrame: (bytes: Uint8Array) => {
-      const w = tspWaiters.shift();
-      if (w) {
-        clearTimeout(w.timer);
-        w.resolve(bytes);
-      } // else: straggler with no outstanding request — discard.
+    // Awaited by the transport before it acks (vti-didcomm-js >=0.7.0), so
+    // everything this does happens while the mediator still holds its copy —
+    // the same R1.6 ordering `onInbound` gets. A throw withholds the ack and
+    // the frame is redelivered.
+    onTspFrame: async (bytes: Uint8Array) => {
+      // Offer the frame to each outstanding request in turn; the first that
+      // recognises it as its own reply takes it. Ordered, not FIFO: a waiter
+      // only claims a frame it can unpack AND whose `threadId` threads to its
+      // request, so a push arriving mid-request falls through to the inbound
+      // handler instead of being consumed as somebody's answer.
+      for (let i = 0; i < tspWaiters.length; i++) {
+        const w = tspWaiters[i]!;
+        let claimed = false;
+        try {
+          claimed = await w.claims(bytes);
+        } catch {
+          // A claim predicate that throws has not claimed anything. It must
+          // not take down the frame for every other consumer.
+          claimed = false;
+        }
+        if (claimed) {
+          tspWaiters.splice(i, 1);
+          clearTimeout(w.timer);
+          w.resolve(bytes);
+          return;
+        }
+      }
+      // Unclaimed: an executor-initiated request (task-consent, step-up).
+      // Awaited so a handler that persists finishes before the ack.
+      if (inboundTspHandler) await inboundTspHandler(bytes);
     },
     ...(opts.onClose ? { onClose: opts.onClose } : {}),
     ...(opts.webSocketImpl ? { WebSocketImpl: opts.webSocketImpl } : {}),
@@ -675,14 +740,14 @@ export async function connectMediatorSession(
     waitFor: (thid: string, timeoutMs: number) =>
       session.waitFor(thid, timeoutMs) as Promise<Record<string, unknown>>,
     sendBinary: (bytes: Uint8Array) => session.sendBinary(bytes),
-    awaitTspFrame: (timeoutMs: number) =>
+    awaitTspFrame: (timeoutMs: number, claims: TspFrameClaim) =>
       new Promise<Uint8Array>((resolve, reject) => {
         const timer = setTimeout(() => {
           const i = tspWaiters.indexOf(waiter);
           if (i >= 0) tspWaiters.splice(i, 1);
           reject(new Error("timed out awaiting reply frame"));
         }, timeoutMs);
-        const waiter = { resolve, reject, timer };
+        const waiter = { resolve, reject, claims, timer };
         tspWaiters.push(waiter);
       }),
     close: () => {
@@ -696,6 +761,9 @@ export async function connectMediatorSession(
     // post-connect assignment takes effect immediately.
     onInbound: (handler) => {
       (session as unknown as { onMessage: typeof handler }).onMessage = handler;
+    },
+    onInboundTsp: (handler) => {
+      inboundTspHandler = handler;
     },
     vta,
     mediator: {
