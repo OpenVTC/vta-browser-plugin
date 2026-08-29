@@ -7,7 +7,8 @@
   "main": "./server.mjs",
   "scripts": {
     "start": "node server.mjs",
-    "dev": "node --watch server.mjs"
+    "dev": "node --watch server.mjs",
+    "login-harness": "node login-harness.mjs"
   },
   "engines": {
     "node": ">=24"
