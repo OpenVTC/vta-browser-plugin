@@ -176,3 +176,77 @@ export async function resolveTspEndpoint(
 export function resolveVtaTspEndpoint(vtaDid: string): Promise<TspRemoteEndpoint> {
   return resolveTspEndpoint(vtaDid, resolveDidDocument);
 }
+
+/** How long a resolved endpoint is reused. Short enough that a key rotation
+ *  heals on its own — an inbound frame is redelivered until acked, so a frame
+ *  refused against a stale key succeeds on a later delivery once this lapses —
+ *  and long enough that a delivery burst resolves once rather than per frame. */
+const ENDPOINT_TTL_MS = 5 * 60_000;
+/** Bound: one entry per peer, and a wallet talks to a handful. */
+const ENDPOINT_CACHE_MAX = 32;
+
+const endpointCache = new Map<string, { at: number; endpoint: TspRemoteEndpoint }>();
+
+/**
+ * {@link resolveVtaTspEndpoint} with a short-lived cache.
+ *
+ * For the **inbound** path this is not an optimisation, it is what keeps the
+ * socket moving. An inbound TSP frame is awaited by the transport before it
+ * acks (R1.6) and before it takes the next frame, so whatever happens per
+ * frame is serial on the one socket that also carries replies. Resolving a DID
+ * there costs up to two network round-trips *each*, and a redelivery burst —
+ * guaranteed on the first connect after a client starts acking a backlog it
+ * had never acked — turns that into hundreds of serial fetches while an
+ * in-flight request waits behind them. A TSP reply timeout is a hard failure
+ * with no fallback, so the request does not degrade, it fails.
+ *
+ * Caching collapses a burst from one resolution per frame to one per peer.
+ *
+ * Deliberately TTL'd rather than invalidated on failure: eviction would need
+ * the unpack result plumbed back through a resolver that cannot see it, and
+ * redelivery already provides the retry. A rotation costs at most `TTL` of
+ * refusals for a frame that is being redelivered anyway.
+ */
+export function resolveVtaTspEndpointCached(vid: string): Promise<TspRemoteEndpoint> {
+  return resolveTspEndpointCachedWith(vid, resolveVtaTspEndpoint);
+}
+
+/**
+ * The caching half of {@link resolveVtaTspEndpointCached}, over an injected
+ * resolver.
+ *
+ * Split out so the cache policy is testable as itself. The obvious
+ * alternative — a test that re-implements the TTL and the bound and asserts
+ * against its own copy — passes whatever the real policy does, which is the
+ * one thing a cache test must not do.
+ */
+export async function resolveTspEndpointCachedWith(
+  vid: string,
+  resolve: (vid: string) => Promise<TspRemoteEndpoint>,
+  now: () => number = Date.now,
+): Promise<TspRemoteEndpoint> {
+  const hit = endpointCache.get(vid);
+  if (hit && now() - hit.at < ENDPOINT_TTL_MS) return hit.endpoint;
+
+  const endpoint = await resolve(vid);
+  endpointCache.set(vid, { at: now(), endpoint });
+  if (endpointCache.size > ENDPOINT_CACHE_MAX) {
+    // Oldest insertion first — Map preserves it, and a wallet's peer set is
+    // small enough that the eviction policy barely matters; the bound is what
+    // matters.
+    const oldest = endpointCache.keys().next().value;
+    if (oldest !== undefined) endpointCache.delete(oldest);
+  }
+  return endpoint;
+}
+
+/** The reuse window, exported so a test states the policy's own number rather
+ *  than a copy of it. */
+export const TSP_ENDPOINT_TTL_MS = ENDPOINT_TTL_MS;
+
+/** Drop cached endpoints. For tests, and for a caller that knows a peer's keys
+ *  have moved and does not want to wait out the TTL. */
+export function clearTspEndpointCache(vid?: string): void {
+  if (vid === undefined) endpointCache.clear();
+  else endpointCache.delete(vid);
+}
