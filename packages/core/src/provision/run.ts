@@ -2,19 +2,19 @@
 //
 // One call drives the full onboarding round-trip:
 //   1. Build + sign a BootstrapRequest VP for the AdminRotation ask.
-//   2. Ship it via DIDComm (authcrypt → forward via VTA's mediator).
+//   2. Ship it as a Trust Task over whichever transport the VTA advertises.
 //   3. Open the HPKE-sealed reply with the wallet's ephemeral Ed25519 seed.
 //   4. Cross-check that the bundle's `bundleIdHex` matches the request nonce.
 //   5. Return the minimal admin reply (DID + private keys) the wallet adopts
 //      as its long-term holder identity.
 //
-// The wallet's existing onboarding code (`offscreen.ts`) currently calls
-// `swapAclDidcomm` here — M2C-C swaps that call site to `runProvisionIntegration`.
+// Step 2 is a `TrustTaskSender`, not a DIDComm bridge — see `send.ts` for why it
+// moved. Every other step is transport-independent and always was: the VP, the
+// HPKE open, the nonce cross-check and the key extraction are the same work
+// whichever channel carried the bytes.
 
-import type { Identity } from "../didcomm/index.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
-import type { DidcommMessageBridge } from "../vta/transport.js";
+import type { TrustTaskSender } from "../vta/channel.js";
 
 import { openAdminRotationBundle } from "./open.js";
 import { buildBootstrapRequest, type BootstrapAsk } from "./request.js";
@@ -22,20 +22,16 @@ import { sendProvisionIntegration, type ProvisionSummary } from "./send.js";
 import type { AdminRotationPayload } from "./types.js";
 
 export interface RunProvisionIntegrationOptions {
-  /** Mediator-backed DIDComm bridge for the round-trip. */
-  bridge: DidcommMessageBridge;
-  /** Authcrypt sender X25519 identity for the ephemeral did:key. */
-  ephemeral: Identity;
-  /** Signing identity for the SAME ephemeral did:key — used to sign the
-   *  BootstrapRequest VP. The Ed25519 seed in `signing.privateKey` is also
-   *  the recipient secret the wallet uses to open the sealed bundle. */
+  /** Any transport that can carry a Trust Task, whose identity is the
+   *  operator-granted ephemeral did:key. A `VtaSession` gives the full
+   *  TSP > DIDComm > REST chain; a single channel works too. */
+  sender: TrustTaskSender;
+  /** Signing identity for the ephemeral did:key — signs the BootstrapRequest
+   *  VP, and its DID is the envelope `issuer`. The Ed25519 seed in
+   *  `signing.privateKey` is also the recipient secret the wallet uses to open
+   *  the sealed bundle. */
   ephemeralSigning: SigningIdentity;
-  /** The VTA's DID + keyAgreement key (inner authcrypt recipient and
-   *  expected `from` on the reply). */
-  service: RemoteDidcommEndpoint;
-  /** The VTA's mediator (forward target). Omit for direct DIDComm. */
-  mediator?: RemoteDidcommEndpoint;
-  /** The VTA's DID — passed to send.ts for the reply sender assertion. */
+  /** The VTA's DID — the envelope `recipient`. */
   vtaDid: string;
   /** The maintainer context to provision the admin DID into. **Optional**
    *  per the canonical Trust Task spec — when omitted, the VTA infers
@@ -112,27 +108,24 @@ export async function runProvisionIntegration(
     ...(opts.note ? { label: opts.note } : {}),
   });
 
-  // 2. DIDComm round-trip. Body field names are snake_case to match the
-  //    existing FPN protocol the VTA speaks today (see send.ts header for
-  //    the migration plan).
+  // 2. Trust-Task round-trip over whatever `sender` carries.
   const reply = await sendProvisionIntegration({
-    bridge: opts.bridge,
-    ephemeral: opts.ephemeral,
-    service: opts.service,
-    ...(opts.mediator ? { mediator: opts.mediator } : {}),
+    sender: opts.sender,
+    ephemeralDid: opts.ephemeralSigning.did,
     vtaDid: opts.vtaDid,
     body: {
       request: vp,
       // context is optional on the wire. When omitted, the VTA's
       // inference rules pick the target context (single-context grant
-      // → use it; super-admin + single-context VTA → use it;
-      // ambiguous → e.p.msg.context_required). Wallet-class callers
+      // → use it; super-admin + single-context VTA → use it; ambiguous →
+      // `provision/integration:contextRequired`, whose candidates
+      // `provisionRefusalOf` reads off the error). Wallet-class callers
       // typically omit; integration-class callers send explicitly.
       ...(opts.context ? { context: opts.context } : {}),
-      // create_context defaults to false on the wire; only emit when the
-      // caller actually asked for inline create so older VTAs that
-      // pre-date the field don't have to deal with an unexpected key.
-      ...(opts.createContext ? { create_context: true } : {}),
+      // `createContext` defaults to false on the wire; only emit it when the
+      // caller actually asked for an inline create, so the common request
+      // stays the minimal document.
+      ...(opts.createContext ? { createContext: true } : {}),
     },
     ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
   });

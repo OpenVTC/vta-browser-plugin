@@ -19,9 +19,9 @@ export {
 } from "./request.js";
 export {
   sendProvisionIntegration,
-  ProvisionProblemReportError,
+  provisionRefusalOf,
   PROVISION_CONTEXT_REQUIRED,
-  type ProblemReportPayload,
+  type ProvisionRefusal,
   type ProvisionIntegrationRequestBody,
   type ProvisionIntegrationResponseBody,
   type ProvisionSummary,

@@ -37,6 +37,7 @@ import {
   type ApproverIdentityResult,
   type ParsedTaskConsentRequest,
   resolveVtaServices,
+  type VtaServices,
   resolveVtaTspEndpoint,
   RestChannel,
   TspChannel,
@@ -51,7 +52,7 @@ import {
   holderIdentityState,
   holderInputsFromAdminReply,
   installVtaMintedHolder,
-  ProvisionProblemReportError,
+  provisionRefusalOf,
   runProvisionIntegration,
   type TrustTaskChannel,
   vaultDelete,
@@ -253,12 +254,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // parsed, which is fragile. Forwarded verbatim — rewriting a
         // code in transit would mean this hop deciding what it means
         // on behalf of the surface that acts on it.
-        if (e instanceof ProvisionProblemReportError) {
+        const refusal = provisionRefusalOf(e);
+        if (refusal) {
           sendResponse({
             ok: false,
-            error: e.message,
-            code: e.report.code,
-            candidates: e.report.args,
+            error: refusal.message,
+            code: refusal.code,
+            candidates: refusal.candidates,
           });
           return;
         }
@@ -499,19 +501,48 @@ interface VtaSessionHandle {
   didcommConn?: MediatorConnection;
 }
 
+/** The identity a session speaks as. Almost always the wallet's holder — the
+ *  exception is onboarding, which speaks as the operator-granted ephemeral
+ *  because the holder it is about to mint does not exist yet. */
+interface SessionIdentity {
+  holder: Identity;
+  signing: SigningIdentity;
+}
+
+/** How an identity reaches a mediator.
+ *
+ *  Injected rather than assumed, because the warm pool ({@link getWarmSession})
+ *  authenticates as the **holder** — it calls `loadHolder` itself. Handing the
+ *  onboarding ephemeral a pooled connection would send its provisioning request
+ *  under a DID the operator never granted. */
+type MediatorConnector = (mediatorDid: string) => Promise<MediatorConnection>;
+
 // Build a VtaSession for `vtaDid` honouring the advertised transports
 // (TSP > DIDComm > REST). `restBaseUrl` (from the popup's connection state) is
 // used when present; otherwise we fall back to the VTA's advertised #vta-rest.
 // A VTA that advertises only one transport yields a single-channel session; a
 // VTA advertising several prefers TSP, then DIDComm, then REST, with safe
 // fallback to the next when a higher-priority channel can't carry the task.
-async function getVtaSession(
+async function buildVtaSession(
   vtaDid: string,
-  restBaseUrl?: string,
+  who: SessionIdentity,
+  connect: MediatorConnector,
+  opts: {
+    restBaseUrl?: string;
+    /** Order DIDComm ahead of TSP. Set by onboarding — see that call site for
+     *  why the ephemeral does not lead with TSP. */
+    didcommFirst?: boolean;
+    /** Transports to build channels for. Defaults to what the VTA's document
+     *  advertises; onboarding passes its own so an operator-supplied mediator
+     *  can stand in for a DIDComm service a bare `did:peer` VTA has no document
+     *  to declare. */
+    services?: VtaServices;
+  } = {},
 ): Promise<VtaSessionHandle> {
-  const { identity: holder, signing } = await loadHolder(vtaDid);
+  const { holder, signing } = who;
+  const restBaseUrl = opts.restBaseUrl;
   const service = await resolveKeyAgreement(vtaDid);
-  const services = await resolveVtaServices(vtaDid);
+  const services = opts.services ?? (await resolveVtaServices(vtaDid));
 
   const channels: TrustTaskChannel[] = [];
   // TSP is the highest-priority transport. It rides the SAME warm mediator
@@ -530,7 +561,7 @@ async function getVtaSession(
       const vtaTsp = await resolveVtaTspEndpoint(vtaDid);
       // Same mediator as DIDComm in practice; getWarmSession is pooled by
       // (mediator, vtaDid) so this shares the one socket.
-      const conn = await getWarmSession(services.tsp.mediatorDid, vtaDid);
+      const conn = await connect(services.tsp.mediatorDid);
       channels.push(
         new TspChannel({
           transport: new MediatorSessionTspTransport({ connection: conn }),
@@ -552,39 +583,69 @@ async function getVtaSession(
   }
   let didcommConn: MediatorConnection | undefined;
   if (services.didcomm) {
-    const conn = await getWarmSession(services.didcomm.mediatorDid, vtaDid);
-    didcommConn = conn;
-    const bridge = new MediatorSessionBridge(conn);
-    // Encrypt/route to the REAL VTA (`service`), NOT `conn.vta`: the warm
-    // session seeds `conn.vta` with the holder's own DID as a harmless
-    // placeholder (it's a shared session with no fixed peer), so each op must
-    // supply its own VTA target. Using `conn.vta` here would authcrypt+forward
-    // the request back to the holder.
-    channels.push(
-      new DidcommVtaTransport({
-        bridge,
-        holder,
-        signing,
-        vta: service,
-        mediator: conn.mediator,
-      }),
-    );
+    // A mediator we cannot reach skips its channel rather than failing the
+    // whole session, mirroring the TSP branch above. Safe for the same reason:
+    // this is *pre-send*, so nothing has been dispatched and nothing can have
+    // been applied twice — the distinction `VtaSession` draws when it falls
+    // back on `e.client.unsupported` but never on a post-send failure.
+    const conn = await connect(services.didcomm.mediatorDid).catch((err: unknown) => {
+      console.warn("[pnm didcomm] skipping DIDComm channel:", (err as Error).message);
+      return undefined;
+    });
+    if (conn) {
+      didcommConn = conn;
+      const bridge = new MediatorSessionBridge(conn);
+      // Encrypt/route to the REAL VTA (`service`), NOT `conn.vta`: the warm
+      // session seeds `conn.vta` with the holder's own DID as a harmless
+      // placeholder (it's a shared session with no fixed peer), so each op must
+      // supply its own VTA target. Using `conn.vta` here would authcrypt+forward
+      // the request back to the holder.
+      channels.push(
+        new DidcommVtaTransport({
+          bridge,
+          holder,
+          signing,
+          vta: service,
+          mediator: conn.mediator,
+        }),
+      );
+    }
   }
   const rest = restBaseUrl || services.rest?.baseUrl;
   if (rest) {
     channels.push(new RestChannel({ baseUrl: rest, holder, signing, service }));
   }
   if (channels.length === 0) {
-    throw new Error(
-      `${vtaDid} advertises no usable transport (#vta-didcomm or #vta-rest)`,
-    );
+    throw new Error(`${vtaDid} advertises no usable transport (#tsp, #vta-didcomm or #vta-rest)`);
   }
+  // `channels` is already in priority order; onboarding asks for DIDComm to
+  // lead instead. A stable partition, so everything else keeps its order.
+  const ordered = opts.didcommFirst
+    ? [
+        ...channels.filter((c) => c.kind === "didcomm"),
+        ...channels.filter((c) => c.kind !== "didcomm"),
+      ]
+    : channels;
   return {
-    session: new VtaSession(channels),
+    session: new VtaSession(ordered),
     holder,
     service,
     ...(didcommConn ? { didcommConn } : {}),
   };
+}
+
+/** The wallet holder's session for `vtaDid`, over the warm mediator pool. */
+async function getVtaSession(
+  vtaDid: string,
+  restBaseUrl?: string,
+): Promise<VtaSessionHandle> {
+  const { identity: holder, signing } = await loadHolder(vtaDid);
+  return buildVtaSession(
+    vtaDid,
+    { holder, signing },
+    (mediatorDid) => getWarmSession(mediatorDid, vtaDid),
+    { ...(restBaseUrl ? { restBaseUrl } : {}) },
+  );
 }
 
 // Vault — list. Runs vault/list/0.2 over the VTA's preferred transport
@@ -1185,18 +1246,20 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
   const pending = await store.get<PendingOnboard>(ONBOARD_KEY);
   if (!pending) throw new Error("no pending onboarding — prepare first");
 
-  // provision-integration is DIDComm-only in this port, so a mediator to route
-  // through is mandatory. Prefer the one the VTA published: a discovered value
-  // is authoritative, and letting a typed-in override win could silently
-  // redirect a connection that would otherwise have reached the right place.
+  // Prefer the mediator the VTA published: a discovered value is authoritative,
+  // and letting a typed-in override win could silently redirect a connection
+  // that would otherwise have reached the right place. Only when the VTA
+  // published nothing do we fall back to the operator's answer — not exotic,
+  // since a bare `did:peer` VTA has no document to resolve.
   //
-  // Only when the VTA published nothing do we fall back to the operator's
-  // answer. That case is not exotic — a bare `did:peer` VTA has no document to
-  // resolve, so it is the guaranteed outcome for a supported topology. This
-  // used to throw outright, which made those VTAs impossible to onboard at
-  // all.
+  // A mediator is no longer *mandatory*. Provisioning is an ordinary Trust Task
+  // now, so a VTA advertising REST or TSP can be onboarded with no DIDComm
+  // mediator in the picture at all. The prompt below therefore fires only when
+  // a mediator is the sole remaining possibility and we have not been given
+  // one; `buildVtaSession` raises if nothing usable is left.
   const mediatorDid = pending.mediatorDid ?? params.mediatorDid;
-  if (!mediatorDid) {
+  const advertised = await resolveVtaServices(pending.vtaDid).catch(() => ({}) as VtaServices);
+  if (!mediatorDid && !advertised.rest && !advertised.didcomm && !advertised.tsp) {
     // Carries a stable code so the caller can render a prompt and retry with
     // `mediatorDid`, rather than regex-matching this sentence (R3.7).
     throw new MediatorRequiredError(pending.vtaDid);
@@ -1217,34 +1280,61 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
   });
 
   reportStage("resolving-agent");
-  const service = await resolveKeyAgreement(pending.vtaDid);
 
-  // Round-trip: build VP → authcrypt → forward via mediator → open sealed
-  // reply → extract MinimalAdminReply. The full pipeline lives in
-  // @openvtc/pnm-core/provision; offscreen.ts just wires the mediator session in.
+  // Round-trip: build VP → send as a Trust Task over the VTA's advertised
+  // transports → open the sealed reply → extract MinimalAdminReply. The
+  // pipeline lives in @openvtc/pnm-core/provision; offscreen.ts wires the
+  // session in.
+  //
+  // The session speaks as the **ephemeral**, not the holder — the holder is
+  // what this call is about to mint. That is also why it cannot use the warm
+  // mediator pool, which authenticates as the holder: every connection here is
+  // opened fresh for the ephemeral and closed when we are done.
+  //
+  // DIDComm leads for onboarding specifically. The chain is otherwise
+  // TSP-first, but a TSP reply timeout is a hard failure by design (a mutation
+  // may already have applied, and provisioning is as mutating as it gets), and
+  // TSP delivery to a *just-granted ephemeral* has never been exercised — the
+  // enrolled holder's mailbox is live-validated, the ephemeral's is a transient
+  // auth session. Leading with DIDComm keeps the proven path proven while still
+  // letting a VTA that advertises no DIDComm onboard over TSP or REST, which is
+  // the capability that was missing entirely. Promote TSP here once an
+  // ephemeral round-trip is confirmed against a live mediator.
   reportStage("connecting-mediator");
-  const conn = await connectMediatorSession({
-    holder: ephemeral,
-    mediatorDid,
-    vtaDid: pending.vtaDid,
-  });
+  const conns = new Map<string, Promise<MediatorConnection>>();
+  const connect: MediatorConnector = (m) => {
+    let c = conns.get(m);
+    if (!c) {
+      c = connectMediatorSession({ holder: ephemeral, mediatorDid: m, vtaDid: pending.vtaDid });
+      conns.set(m, c);
+    }
+    return c;
+  };
+  // An operator-supplied mediator is the answer to "the VTA published none", so
+  // it stands in for the DIDComm service the document does not carry.
+  const services: VtaServices = {
+    ...advertised,
+    ...(advertised.didcomm || !mediatorDid ? {} : { didcomm: { mediatorDid } }),
+  };
   let adminReply;
   try {
     reportStage("provisioning");
-    const bridge = new MediatorSessionBridge(conn);
+    const { session } = await buildVtaSession(
+      pending.vtaDid,
+      { holder: ephemeral, signing: ephSigning },
+      connect,
+      { didcommFirst: true, services },
+    );
     adminReply = await runProvisionIntegration({
-      bridge,
-      ephemeral,
+      sender: session,
       ephemeralSigning: ephSigning,
-      service,
-      mediator: conn.mediator,
       vtaDid: pending.vtaDid,
       ...(params.context ? { context: params.context } : {}),
       ...(params.createIfMissing ? { createContext: true } : {}),
       note: "browser-plugin onboarding",
     });
   } finally {
-    conn.close();
+    for (const c of conns.values()) await c.then((x) => x.close()).catch(() => {});
   }
 
   // Adopt the VTA-minted identity as the wallet's holder. The adopter
