@@ -62,11 +62,17 @@ export interface CreateDidPeer2Args {
    *  resolved ids follow the did:peer:2 numbering (`#service`, `#service-1`,
    *  …) — which both this ecosystem's resolvers agree on.
    *
-   *  More than one is how a peer says what it can *receive*. A wallet that
-   *  publishes only a DIDComm service is one an executor has no way to know
-   *  accepts TSP, so it will never be sent any: the negotiation the wallet
-   *  performs against a VTA's published services has no counterpart in the
-   *  other direction unless the wallet publishes too. */
+   *  More than one is how a peer says what it can *receive* — an executor has
+   *  no way to know a wallet accepts TSP unless the wallet publishes it, so
+   *  the negotiation a wallet performs against a VTA's services has no
+   *  counterpart in the other direction until it does.
+   *
+   *  **Nothing in this wallet publishes a second service today.** The holder
+   *  identity is minted by the VTA and adopted as a `did:key`, a method with
+   *  no service endpoints, so a holder's capabilities cannot be advertised
+   *  this way at all. This stays because it is the correct shape for a peer
+   *  DID and is exercised by tests; it is not the live path, and a reader
+   *  should not infer from it that holder capabilities are discoverable. */
   services?: DidPeerService[];
 }
 
