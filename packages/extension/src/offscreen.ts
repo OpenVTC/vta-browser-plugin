@@ -39,6 +39,7 @@ import {
   resolveVtaServices,
   type VtaServices,
   resolveVtaTspEndpoint,
+  resolveVtaTspEndpointCached,
   unpackInboundTsp,
   RestChannel,
   TspChannel,
@@ -2071,7 +2072,13 @@ async function onInboundTspFrame(
       // operator-enrolled control plane. Whether the sender is one we accept
       // is decided downstream, on the document's proof — not here, and not on
       // the strength of the transport.
-      resolveSender: resolveVtaTspEndpoint,
+      //
+      // The **cached** form, because this runs serially per frame on the socket
+      // that also carries replies: an uncached resolution here is up to two
+      // network round-trips per inbound frame, and a redelivery burst starves
+      // an in-flight request into a hard TSP timeout. See
+      // `resolveVtaTspEndpointCached`.
+      resolveSender: resolveVtaTspEndpointCached,
     });
   } catch (err) {
     // Logged, not swallowed: a frame that repeatedly fails to verify is a
