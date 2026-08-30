@@ -399,6 +399,13 @@ export interface RuntimeConsentResult {
    *  same-browser relay can sign the decision without a pre-unlocked session.
    *  Never sent for a denial, and never cached. */
   prfOutputB64u?: string;
+  /** First-use profile prompt only: the persona DID the operator picked, which
+   *  the background then binds to the requesting origin as a vault entry.
+   *  Approving that prompt without a selection is not a thing the surface can
+   *  produce — Approve stays disabled until one is chosen — so the background
+   *  treats an approval that arrives without it as a denial rather than
+   *  guessing a persona on the operator's behalf. */
+  selectedDid?: string;
 }
 
 /** confirm popup → background: resolve + verify an RP DID. */
@@ -1219,7 +1226,17 @@ export type RuntimeVaultProxyLoginResponse =
  *  request body — the content script + background unwrap `params`
  *  and reuse the same offscreen pipeline. */
 export interface ProxyLoginParams {
-  entryId: string;
+  /** The vault entry to log in with.
+   *
+   *  **Optional, and normally omitted.** When absent the wallet resolves the
+   *  entry itself from the browser-attested origin, and — on a site with no
+   *  persona bound yet — asks the operator which one to use and binds it.
+   *
+   *  A page that supplies one is naming an entry it learned from `vaultList()`,
+   *  which is a consent prompt that enumerates the user's vault to the site.
+   *  Omitting it is strictly better for the user: one prompt instead of two,
+   *  and the site never learns what else is in the vault. */
+  entryId?: string;
   target?: VaultEntryView["targets"][number];
   /** Caller-supplied nonce — typically the value the RP returned
    *  from its `/auth/challenge` endpoint, which the page threads

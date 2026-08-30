@@ -64,6 +64,11 @@ way a relying party would. Keep the wallet's offscreen console open beside this.
 
 <button id="didcomm">Login over DIDComm</button>
 <button id="siop">Login over REST (SIOP)</button>
+<button id="proxy">Login as a per-site persona (proxy SIOP)</button>
+
+<p class="muted">The proxy button names no vault entry, which is the point: the wallet resolves
+one from this origin, and on a first visit asks which identity to use and binds the answer. A
+second click should not prompt for an identity again.</p>
 
 <h2 style="font-size:1rem">Result</h2>
 <pre id="out">—</pre>
@@ -104,6 +109,24 @@ way a relying party would. Keep the wallet's offscreen console open beside this.
       show("loginDidcomm resolved", r);
     } catch (e) {
       show("loginDidcomm rejected", String(e && e.message ? e.message : e));
+    }
+  });
+
+  // Deliberately passes NO entryId. A page that supplies one has had to call
+  // vaultList() to learn it — a second consent prompt that enumerates the
+  // user's vault to this site. Omitting it is the shape a relying party should
+  // actually use, so it is the shape the harness exercises.
+  document.getElementById("proxy").addEventListener("click", async () => {
+    if (!probe()) return;
+    show(
+      "Requesting proxy login…",
+      "On a first visit the wallet should ask which identity to sign in as.",
+    );
+    try {
+      const r = await window.vtaWallet.proxyLogin({});
+      show("proxyLogin resolved", r);
+    } catch (e) {
+      show("proxyLogin rejected", String(e && e.message ? e.message : e));
     }
   });
 

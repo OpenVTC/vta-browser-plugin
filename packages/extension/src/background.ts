@@ -19,6 +19,11 @@ import {
 import { checkOriginPin, pinOrigin } from "./origin-pin.js";
 import { isOriginTrusted, trustOrigin } from "./trusted-sites.js";
 import {
+  buildProfileEntry,
+  matchProfileEntry,
+  PROFILE_SECRET_KIND,
+} from "./first-use-profile.js";
+import {
   attestedOrigin,
   registerPushChannel,
   type TaskConsentRequestPayload,
@@ -153,6 +158,7 @@ import {
   type RuntimeVaultProxyLoginResponse,
   type RuntimeVaultReleaseRequest,
   type RuntimeVaultReleaseResponse,
+  type ProxyLoginParams,
   type RuntimeVaultUpsertRequest,
   type RuntimeVaultUpsertResponse,
   type RuntimeApproverStateResponse,
@@ -588,7 +594,7 @@ chrome.runtime.onConnect.addListener((port) => {
 // reports the user's decision (or is closed, which counts as a denial).
 const pendingConsents = new Map<
   string,
-  (approved: boolean, remember: boolean, prfOutputB64u?: string) => void
+  (approved: boolean, remember: boolean, prfOutputB64u?: string, selectedDid?: string) => void
 >();
 
 /**
@@ -663,7 +669,11 @@ async function requestConsent(args: {
    *  where it comes from inside the signed approve-request — never pass a
    *  page-supplied string here. */
   reason?: string;
-}): Promise<{ approved: boolean; remember: boolean }> {
+  /** Render the first-use persona picker: this origin has no vault entry yet,
+   *  so the prompt asks which identity the site should know the user as and
+   *  returns the answer in `selectedDid`. */
+  chooseProfile?: boolean;
+}): Promise<{ approved: boolean; remember: boolean; selectedDid?: string }> {
   const consentId = crypto.randomUUID();
   const url =
     chrome.runtime.getURL("confirm.html") +
@@ -674,23 +684,28 @@ async function requestConsent(args: {
     (args.action ? `&action=${encodeURIComponent(args.action)}` : "") +
     (args.noRemember ? `&noRemember=1` : "") +
     (args.stepUp ? `&stepUp=1` : "") +
+    (args.chooseProfile ? `&chooseProfile=1` : "") +
     (args.reason ? `&reason=${encodeURIComponent(args.reason)}` : "") +
     (args.changedFromRpDid
       ? `&changedFrom=${encodeURIComponent(args.changedFromRpDid)}`
       : "");
 
-  // The reason card needs room, or the decision buttons slide off-screen.
-  const bounds = await consentWindowBounds(args.reason ? 660 : 560);
+  // The reason card and the persona picker each need room, or the decision
+  // buttons slide off-screen — and an Approve the operator has to scroll to
+  // find is one they approve without reading what is above it.
+  const bounds = await consentWindowBounds(args.reason ? 660 : args.chooseProfile ? 680 : 560);
 
-  return new Promise<{ approved: boolean; remember: boolean }>((resolve) => {
+  return new Promise<{ approved: boolean; remember: boolean; selectedDid?: string }>((resolve) => {
     let settled = false;
-    const settle = (approved: boolean, remember: boolean) => {
+    const settle = (approved: boolean, remember: boolean, selectedDid?: string) => {
       if (settled) return;
       settled = true;
       pendingConsents.delete(consentId);
-      resolve({ approved, remember });
+      resolve({ approved, remember, ...(selectedDid ? { selectedDid } : {}) });
     };
-    pendingConsents.set(consentId, settle);
+    pendingConsents.set(consentId, (approved, remember, _prf, selectedDid) =>
+      settle(approved, remember, selectedDid),
+    );
 
     chrome.windows.create({ url, type: "popup", ...bounds }, (win) => {
       const winId = win?.id;
@@ -1820,13 +1835,74 @@ async function handleVaultProxyLoginPage(
   // so require explicit consent naming the requesting origin + target RP.
   const target = req.params.target as { kind?: string; did?: string } | undefined;
   const targetDid = target?.kind === "did" ? target.did : undefined;
-  const approved = await gatedConsent({
+
+  // Resolve the entry BEFORE prompting. Which prompt to raise depends on
+  // whether this site already has a persona bound, and a page that calls this
+  // with no VTA connected should fail without raising one at all.
+  const resolved = await resolveProfileEntry(req);
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+
+  if (resolved.entryId) {
+    const approved = await gatedConsent({
+      origin: req.origin,
+      action: "Sign in via your VTA (proxied SIOP)",
+      ...(targetDid ? { rpDid: targetDid } : {}),
+    });
+    if (!approved) return { ok: false, error: "proxy-login denied by user" };
+    return dispatchProxyLogin({ ...req.params, entryId: resolved.entryId });
+  }
+
+  // First sign-in at this site: nothing is bound yet, so the prompt also asks
+  // which persona to use and we bind the answer.
+  //
+  // `requestConsent`, NOT `gatedConsent`. The trusted-origin short-circuit is
+  // wrong here for the same reason it is wrong for task consent: a "remember
+  // this site" tick made against an earlier sign-in meant "you may log me in as
+  // the identity I already chose for you". It cannot mean "you may choose a new
+  // identity for me and bind it silently" — that decision has never been put to
+  // the operator, and binding a persona is the one thing this whole prompt
+  // exists to ask about.
+  const decision = await requestConsent({
     origin: req.origin,
     action: "Sign in via your VTA (proxied SIOP)",
+    chooseProfile: true,
     ...(targetDid ? { rpDid: targetDid } : {}),
   });
-  if (!approved) return { ok: false, error: "proxy-login denied by user" };
+  if (!decision.approved || !decision.selectedDid) {
+    // An approval with no persona is not an approval of anything — the surface
+    // cannot produce one (Approve is disabled until a persona is picked), so
+    // this is either a denial or a malformed reply. Both deny.
+    return { ok: false, error: "proxy-login denied by user" };
+  }
 
+  const bound = await bindProfileEntry(req.origin, decision.selectedDid, targetDid);
+  if (!bound.ok) return { ok: false, error: bound.error };
+
+  if (decision.remember) await trustOrigin(req.origin, targetDid);
+
+  const result = await dispatchProxyLogin({ ...req.params, entryId: bound.entryId });
+  if (!result.ok) {
+    // The likeliest cause of a failure on the very first sign-in is the one
+    // thing this wallet cannot fix: the relying party has never heard of this
+    // persona. Say so, and name the DID — the prompt said this might happen,
+    // and this is where the operator finds out it did. The entry is kept: it is
+    // correct, and deleting it would make the retry-after-enrolment path ask
+    // them to choose an identity all over again.
+    return {
+      ok: false,
+      error:
+        `${result.error} — this was the first sign-in as ${decision.selectedDid}. ` +
+        `If ${req.origin} refused it, that identity needs to be on the site's access list.`,
+    };
+  }
+  return result;
+}
+
+/** Send a resolved proxy-login to the offscreen document, where the holder
+ *  identity and the DIDComm unpacking live. */
+async function dispatchProxyLogin(
+  params: ProxyLoginParams & { entryId: string },
+): Promise<RuntimeVaultProxyLoginResponse> {
   const c = await readActiveConnection();
   if (!c.ok) return { ok: false, error: c.error };
   await ensureOffscreenDocument();
@@ -1835,8 +1911,91 @@ async function handleVaultProxyLoginPage(
     type: OFFSCREEN_VAULT_PROXY_LOGIN,
     vtaDid: c.conn.vtaDid,
     restBaseUrl: c.conn.restBaseUrl,
-    body: req.params,
+    body: params,
   })) as RuntimeVaultProxyLoginResponse;
+}
+
+/**
+ * Which vault entry a page-initiated proxy login should use.
+ *
+ * `entryId` supplied by the page is honoured as-is — that is the pre-existing
+ * contract, and a page that discovered an id through `vaultList()` has already
+ * had its own consent prompt for it. Otherwise the entry comes from the origin
+ * the *browser* attested, never from anything the page said about itself.
+ *
+ * `entryId: undefined` with `ok: true` means "this site has no persona yet",
+ * which is a first-use prompt, not an error.
+ */
+async function resolveProfileEntry(
+  req: RuntimeVaultProxyLoginPageRequest,
+): Promise<{ ok: true; entryId?: string } | { ok: false; error: string }> {
+  if (req.params.entryId) return { ok: true, entryId: req.params.entryId };
+
+  const listed = await handleVaultList({
+    type: RUNTIME_VAULT_LIST,
+    // `targetOriginPrefix` narrows the set the VTA sends back; it does NOT
+    // decide the answer. A prefix is not an origin — `https://example.com` is a
+    // prefix of `https://example.com.evil.test` — so `matchProfileEntry` does
+    // the actual match locally, with `===`, on the attested origin.
+    filter: { secretKind: PROFILE_SECRET_KIND, targetOriginPrefix: req.origin },
+  });
+  if (!listed.ok) return { ok: false, error: listed.error };
+
+  const match = matchProfileEntry(listed.result.entries, req.origin);
+  return { ok: true, ...(match ? { entryId: match.id } : {}) };
+}
+
+/**
+ * Bind the persona the operator picked to `origin`, as a vault entry.
+ *
+ * The prompt returns a DID string and nothing else. Everything the entry needs
+ * beyond it — the context, the signing key — is re-derived here from the
+ * agent's own answers, so a DID that is not one the agent hosts cannot be
+ * bound no matter what the consent window sent back.
+ */
+async function bindProfileEntry(
+  origin: string,
+  did: string,
+  rpDid: string | undefined,
+): Promise<{ ok: true; entryId: string } | { ok: false; error: string }> {
+  const dids = await handleListDids({ type: RUNTIME_LIST_DIDS });
+  if (!dids.ok) return { ok: false, error: dids.error };
+  const record = dids.result.dids.find((d) => d.did === did);
+  if (!record) {
+    return { ok: false, error: `${did} is not an identity this agent hosts` };
+  }
+
+  const derived = await handleDeriveSigningKeyId({ type: RUNTIME_DERIVE_SIGNING_KEY_ID, did });
+  if (!derived.ok) return { ok: false, error: derived.error };
+  if (derived.result.error) return { ok: false, error: derived.result.error };
+  const candidates = derived.result.candidates;
+  if (candidates.length !== 1) {
+    // Zero: nothing in the document can sign, and an entry naming a key that
+    // does not exist fails later, opaquely, at the VTA. More than one: which
+    // key signs the id_token is a real choice with no default, and picking one
+    // here would be the wallet guessing. Both send the operator to the vault
+    // panel, which has the key picker this prompt deliberately does not.
+    return {
+      ok: false,
+      error:
+        candidates.length === 0
+          ? `no signing key could be derived from ${did}`
+          : `${did} has ${candidates.length} possible signing keys — bind it from the wallet's vault panel, which lets you choose one`,
+    };
+  }
+
+  const upserted = await handleVaultUpsert({
+    type: RUNTIME_VAULT_UPSERT,
+    ...buildProfileEntry({
+      origin,
+      did,
+      contextId: record.contextId,
+      signingKeyId: candidates[0]!,
+      ...(rpDid ? { rpDid } : {}),
+    }),
+  });
+  if (!upserted.ok) return { ok: false, error: upserted.error };
+  return { ok: true, entryId: upserted.result.entry.id };
 }
 
 // Authenticated POST proxied through the wallet (host permission → no CORS).
@@ -2271,8 +2430,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if ((message as { type?: string })?.type === RUNTIME_CONSENT_RESULT) {
-    const { consentId, approved, remember, prfOutputB64u } = message as RuntimeConsentResult;
-    pendingConsents.get(consentId)?.(approved, !!remember, prfOutputB64u);
+    const { consentId, approved, remember, prfOutputB64u, selectedDid } =
+      message as RuntimeConsentResult;
+    pendingConsents.get(consentId)?.(approved, !!remember, prfOutputB64u, selectedDid);
     return false;
   }
 
