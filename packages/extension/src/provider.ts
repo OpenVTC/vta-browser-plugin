@@ -4,6 +4,7 @@
 // `window.postMessage` using the bridge protocol.
 
 import type {
+  BridgeMethod,
   RequestTaskParams,
   ApiGetParams,
   ApiGetResult,
@@ -21,6 +22,8 @@ import type {
   VaultListResultView,
   VaultProxyLoginResultView,
   WalletDefaultsResult,
+  WalletProfileParams,
+  WalletProfileResult,
 } from "./bridge-protocol.js";
 
 // Bundled as a standalone page-world script, so it must be self-contained
@@ -87,6 +90,24 @@ interface VtaWallet {
    *  to learn one, which costs a second consent prompt and shows this site the
    *  rest of the user's vault. */
   proxyLogin(params: ProxyLoginParams): Promise<VaultProxyLoginResultView>;
+  /** Which persona this site knows the user as, resolving or binding one.
+   *
+   *  Mints nothing and issues no session — it answers a question. On a site
+   *  with no persona bound the user is asked to pick one and it is remembered;
+   *  after that this is a lookup.
+   *
+   *  For an RP whose `/auth/challenge` is bound to the persona DID, this is the
+   *  first call: the DID it returns is what the challenge is requested for, and
+   *  the `entryId` goes straight into `proxyLogin` so the wallet does not
+   *  repeat the lookup.
+   *
+   *      const { did, entryId } = await wallet.walletProfile({ target });
+   *      const { challenge } = await postChallenge(did);
+   *      await wallet.proxyLogin({ entryId, nonce: challenge, target });
+   *
+   *  `bound: true` means the persona was just created, so the relying party has
+   *  never seen it and may refuse the sign-in until it is on its access list. */
+  walletProfile(params: WalletProfileParams): Promise<WalletProfileResult>;
   /** Enumerate vault entries (metadata only, no secret material) via
    *  vault/list/0.1. Each returned entry's `principalDid` is the DID the entry
    *  would act AS when used in a proxy-login call.
@@ -140,19 +161,12 @@ window.addEventListener("message", (event: MessageEvent) => {
   else entry.reject(new Error(data.error));
 });
 
+// `BridgeMethod`, not a copy of it. This used to inline the same union, and the
+// copy silently went stale the moment a method was added — the union grew, this
+// did not, and the new method failed to typecheck at its own call site with an
+// error naming every method *but* the one being added.
 function call<T>(
-  method:
-    | "login"
-    | "loginDidcomm"
-    | "stepUpVta"
-    | "apiGet"
-    | "apiPost"
-    | "mediatorStatus"
-    | "walletDefaults"
-    | "signTrustTask"
-    | "proxyLogin"
-    | "vaultList"
-    | "requestTask",
+  method: BridgeMethod,
   params:
     | LoginParams
     | DidcommLoginParams
@@ -161,6 +175,7 @@ function call<T>(
     | ApiPostParams
     | SignTrustTaskParams
     | ProxyLoginParams
+    | WalletProfileParams
     | VaultListParams
     | RequestTaskParams
     | Record<string, never>,
@@ -185,6 +200,7 @@ if (!window.vtaWallet) {
     walletDefaults: () => call<WalletDefaultsResult>("walletDefaults", {}),
     signTrustTask: (params) => call<SignTrustTaskResult>("signTrustTask", params),
     proxyLogin: (params) => call<VaultProxyLoginResultView>("proxyLogin", params),
+    walletProfile: (params) => call<WalletProfileResult>("walletProfile", params),
     vaultList: (params) => call<VaultListResultView>("vaultList", params),
     requestTask: (params) => call<Record<string, unknown>>("requestTask", params),
   };

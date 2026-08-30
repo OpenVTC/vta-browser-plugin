@@ -67,6 +67,7 @@ import {
   RUNTIME_VAULT_LIST_PAGE,
   RUNTIME_VAULT_PROXY_LOGIN,
   RUNTIME_VAULT_PROXY_LOGIN_PAGE,
+  RUNTIME_WALLET_PROFILE,
   RUNTIME_VAULT_RELEASE,
   RUNTIME_VAULT_UPSERT,
   OFFSCREEN_LOCK_WALLET,
@@ -159,6 +160,8 @@ import {
   type RuntimeVaultReleaseRequest,
   type RuntimeVaultReleaseResponse,
   type ProxyLoginParams,
+  type RuntimeWalletProfileRequest,
+  type RuntimeWalletProfileResponse,
   type RuntimeVaultUpsertRequest,
   type RuntimeVaultUpsertResponse,
   type RuntimeApproverStateResponse,
@@ -1839,7 +1842,7 @@ async function handleVaultProxyLoginPage(
   // Resolve the entry BEFORE prompting. Which prompt to raise depends on
   // whether this site already has a persona bound, and a page that calls this
   // with no VTA connected should fail without raising one at all.
-  const resolved = await resolveProfileEntry(req);
+  const resolved = await resolveProfileEntry(req.origin, req.params.entryId);
   if (!resolved.ok) return { ok: false, error: resolved.error };
 
   if (resolved.entryId) {
@@ -1898,6 +1901,95 @@ async function handleVaultProxyLoginPage(
   return result;
 }
 
+/**
+ * Which persona this site knows the user as — resolve, or bind one.
+ *
+ * Split out of the sign-in because an RP whose `/auth/challenge` is bound to
+ * the persona DID needs that DID *before* it can ask for a nonce, and so cannot
+ * reach it through `proxyLogin` at all. The route it had was `vaultList()`,
+ * which discloses every entry to answer a question about one.
+ *
+ * ## Two prompts on a first sign-in, and why that is the right number
+ *
+ * A page that binds and then signs in raises the picker here and the sign-in
+ * consent in `handleVaultProxyLoginPage` — two decisions the first time, one
+ * every time after. Folding the second into the first would mean this call,
+ * which mints nothing and issues no session, silently pre-authorizing one that
+ * does. First contact with a site is the place to ask twice; every later
+ * sign-in is a single prompt, and the operator can still tick "remember".
+ *
+ * Nothing is minted here, and no session is issued. The result is a DID the
+ * site is about to be told anyway, and the id of the entry holding it.
+ */
+async function handleWalletProfile(
+  req: RuntimeWalletProfileRequest,
+): Promise<RuntimeWalletProfileResponse> {
+  const target = req.params.target as { kind?: string; did?: string } | undefined;
+  const targetDid = target?.kind === "did" ? target.did : undefined;
+
+  const resolved = await resolveProfileEntry(req.origin);
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+
+  if (resolved.entryId) {
+    // Already bound. No prompt: this discloses one DID, to the site that DID
+    // exists for, which is about to receive it inside an id_token anyway. A
+    // prompt here would be asking the operator to re-approve a decision they
+    // already made, which is how prompts stop being read.
+    const did = await principalDidFor(req.origin, resolved.entryId);
+    if (!did.ok) return { ok: false, error: did.error };
+    return { ok: true, result: { did: did.did, entryId: resolved.entryId, bound: false } };
+  }
+
+  // `requestConsent`, not `gatedConsent` — see handleVaultProxyLoginPage. A
+  // remembered origin has consented to being signed in as an identity already
+  // chosen, never to a new one being chosen for it.
+  const decision = await requestConsent({
+    origin: req.origin,
+    action: "Choose the identity this site knows you as",
+    chooseProfile: true,
+    ...(targetDid ? { rpDid: targetDid } : {}),
+  });
+  if (!decision.approved || !decision.selectedDid) {
+    return { ok: false, error: "identity selection denied by user" };
+  }
+
+  const bound = await bindProfileEntry(req.origin, decision.selectedDid, targetDid);
+  if (!bound.ok) return { ok: false, error: bound.error };
+  if (decision.remember) await trustOrigin(req.origin, targetDid);
+
+  return {
+    ok: true,
+    result: { did: decision.selectedDid, entryId: bound.entryId, bound: true },
+  };
+}
+
+/**
+ * The persona DID an already-bound entry acts as.
+ *
+ * `principalDid` is maintainer-derived, so it is read back from the VTA rather
+ * than reconstructed here: the wallet seals the secret and never sees it again,
+ * and an entry whose secret was rotated at the VTA would otherwise report a DID
+ * it no longer signs as.
+ */
+async function principalDidFor(
+  origin: string,
+  entryId: string,
+): Promise<{ ok: true; did: string } | { ok: false; error: string }> {
+  const listed = await handleVaultList({
+    type: RUNTIME_VAULT_LIST,
+    filter: { secretKind: PROFILE_SECRET_KIND, targetOriginPrefix: origin },
+  });
+  if (!listed.ok) return { ok: false, error: listed.error };
+  const entry = listed.result.entries.find((e) => e.id === entryId);
+  if (!entry?.principalDid) {
+    // An entry with no principalDid cannot mint an id_token, so returning it
+    // would hand the page a DID-shaped hole that fails at `/auth/challenge`
+    // with nothing pointing back here.
+    return { ok: false, error: `vault entry ${entryId} names no persona DID` };
+  }
+  return { ok: true, did: entry.principalDid };
+}
+
 /** Send a resolved proxy-login to the offscreen document, where the holder
  *  identity and the DIDComm unpacking live. */
 async function dispatchProxyLogin(
@@ -1918,18 +2010,20 @@ async function dispatchProxyLogin(
 /**
  * Which vault entry a page-initiated proxy login should use.
  *
- * `entryId` supplied by the page is honoured as-is — that is the pre-existing
- * contract, and a page that discovered an id through `vaultList()` has already
- * had its own consent prompt for it. Otherwise the entry comes from the origin
- * the *browser* attested, never from anything the page said about itself.
+ * `suppliedEntryId` is honoured as-is — that is the pre-existing contract, and
+ * an id the page holds came either from `vaultList()` (which had its own
+ * consent prompt) or from `walletProfile()` (which handed back this site's own
+ * entry). Otherwise the entry comes from the origin the *browser* attested,
+ * never from anything the page said about itself.
  *
  * `entryId: undefined` with `ok: true` means "this site has no persona yet",
  * which is a first-use prompt, not an error.
  */
 async function resolveProfileEntry(
-  req: RuntimeVaultProxyLoginPageRequest,
+  origin: string,
+  suppliedEntryId?: string,
 ): Promise<{ ok: true; entryId?: string } | { ok: false; error: string }> {
-  if (req.params.entryId) return { ok: true, entryId: req.params.entryId };
+  if (suppliedEntryId) return { ok: true, entryId: suppliedEntryId };
 
   const listed = await handleVaultList({
     type: RUNTIME_VAULT_LIST,
@@ -1937,11 +2031,11 @@ async function resolveProfileEntry(
     // decide the answer. A prefix is not an origin — `https://example.com` is a
     // prefix of `https://example.com.evil.test` — so `matchProfileEntry` does
     // the actual match locally, with `===`, on the attested origin.
-    filter: { secretKind: PROFILE_SECRET_KIND, targetOriginPrefix: req.origin },
+    filter: { secretKind: PROFILE_SECRET_KIND, targetOriginPrefix: origin },
   });
   if (!listed.ok) return { ok: false, error: listed.error };
 
-  const match = matchProfileEntry(listed.result.entries, req.origin);
+  const match = matchProfileEntry(listed.result.entries, origin);
   return { ok: true, ...(match ? { entryId: match.id } : {}) };
 }
 
@@ -2327,6 +2421,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
     return true;
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_WALLET_PROFILE) {
+    handleWalletProfile(message as RuntimeWalletProfileRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
   }
 
   if ((message as { type?: string })?.type === RUNTIME_VAULT_PROXY_LOGIN_PAGE) {
