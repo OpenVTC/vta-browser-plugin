@@ -28,6 +28,7 @@ const RUNTIME_MEDIATOR_STATUS = "vta-wallet/mediator-status";
 const RUNTIME_WALLET_DEFAULTS = "vta-wallet/wallet-defaults";
 const RUNTIME_SIGN_TRUST_TASK = "vta-wallet/sign-trust-task";
 const RUNTIME_VAULT_PROXY_LOGIN_PAGE = "vta-wallet/vault-proxy-login-page";
+const RUNTIME_WALLET_PROFILE = "vta-wallet/wallet-profile";
 const RUNTIME_VAULT_LIST_PAGE = "vta-wallet/vault-list-page";
 const RUNTIME_REQUEST_TASK = "vta-wallet/request-task";
 const RUNTIME_BROADCAST_EVENT = "vta-wallet/broadcast-event";
@@ -61,6 +62,7 @@ const RUNTIME_TYPE_BY_METHOD: Record<BridgeMethod, string> = {
   walletDefaults: RUNTIME_WALLET_DEFAULTS,
   signTrustTask: RUNTIME_SIGN_TRUST_TASK,
   proxyLogin: RUNTIME_VAULT_PROXY_LOGIN_PAGE,
+  walletProfile: RUNTIME_WALLET_PROFILE,
   vaultList: RUNTIME_VAULT_LIST_PAGE,
   requestTask: RUNTIME_REQUEST_TASK,
 };

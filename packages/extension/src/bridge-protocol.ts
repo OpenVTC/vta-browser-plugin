@@ -30,6 +30,7 @@ export type BridgeMethod =
   | "walletDefaults"
   | "signTrustTask"
   | "proxyLogin"
+  | "walletProfile"
   | "vaultList"
   | "requestTask";
 
@@ -265,6 +266,16 @@ export const RUNTIME_SIGN_TRUST_TASK = "vta-wallet/sign-trust-task" as const;
  *  only a type URI and a payload — the device mints the envelope and stamps the
  *  attested origin, so the wallet never attests to a document the page wrote. */
 export const RUNTIME_REQUEST_TASK = "vta-wallet/request-task" as const;
+
+/** page → background: which persona this site knows the user as.
+ *
+ *  Resolve-or-bind, and it mints nothing. An RP whose challenge is bound to the
+ *  persona DID — the shape both `did-hosting` and `vtc-service` use — needs the
+ *  DID *before* it can ask for a nonce, so it cannot get there through
+ *  `proxyLogin` alone. The alternative it had was `vaultList()`, which
+ *  enumerates the user's whole vault to the site to answer a question about one
+ *  entry. This answers that question and only that one. */
+export const RUNTIME_WALLET_PROFILE = "vta-wallet/wallet-profile" as const;
 
 export const RUNTIME_CONSENT_RESULT = "vta-wallet/consent-result" as const;
 /** offscreen → background: an inbound, executor-signed `task-consent/request`
@@ -1246,6 +1257,42 @@ export interface ProxyLoginParams {
   ttlSecondsHint?: number;
 }
 
+/** Page-world params for `window.vtaWallet.walletProfile(...)`. */
+export interface WalletProfileParams {
+  /** The relying party this is for, when the page has a DID for itself. Bound
+   *  as a second target on a newly created entry so the RP's own
+   *  `vaultList({ targetDid })` finds it; never used to *match* an entry, since
+   *  only the origin is browser-attested. */
+  target?: VaultEntryView["targets"][number];
+}
+
+export interface WalletProfileResult {
+  /** The persona DID this site knows the user as — the `iss`/`sub` of any SIOP
+   *  id_token minted for it, and the DID an RP binds its challenge to. */
+  did: string;
+  /** The vault entry backing it. Pass straight to `proxyLogin` so it does not
+   *  repeat the lookup this call just did. Naming an entry the wallet handed
+   *  back for this site costs nothing — the disclosure this avoids was
+   *  `vaultList()` returning every *other* entry too. */
+  entryId: string;
+  /** True when this call bound the persona rather than finding one already
+   *  bound, i.e. the operator was prompted. A page can use it to explain why
+   *  the sign-in that follows may be refused until the DID is on its ACL. */
+  bound: boolean;
+}
+
+export type RuntimeWalletProfileResponse =
+  | { ok: true; result: WalletProfileResult }
+  | { ok: false; error: string };
+
+export interface RuntimeWalletProfileRequest {
+  type: typeof RUNTIME_WALLET_PROFILE;
+  params: WalletProfileParams;
+  /** Origin of the calling page, captured by the content script. The entry is
+   *  resolved and bound against this, never against anything the page says. */
+  origin: string;
+}
+
 export interface RuntimeVaultProxyLoginPageRequest {
   type: typeof RUNTIME_VAULT_PROXY_LOGIN_PAGE;
   params: ProxyLoginParams;
@@ -1685,6 +1732,7 @@ export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_WALLET_DEFAULTS,
   RUNTIME_SIGN_TRUST_TASK,
   RUNTIME_VAULT_PROXY_LOGIN_PAGE,
+  RUNTIME_WALLET_PROFILE,
   RUNTIME_VAULT_LIST_PAGE,
   RUNTIME_REQUEST_TASK,
 ] as const;

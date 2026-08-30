@@ -65,6 +65,7 @@ way a relying party would. Keep the wallet's offscreen console open beside this.
 <button id="didcomm">Login over DIDComm</button>
 <button id="siop">Login over REST (SIOP)</button>
 <button id="proxy">Login as a per-site persona (proxy SIOP)</button>
+<button id="profile">Which identity does this site know me as?</button>
 
 <p class="muted">The proxy button names no vault entry, which is the point: the wallet resolves
 one from this origin, and on a first visit asks which identity to use and binds the answer. A
@@ -109,6 +110,25 @@ second click should not prompt for an identity again.</p>
       show("loginDidcomm resolved", r);
     } catch (e) {
       show("loginDidcomm rejected", String(e && e.message ? e.message : e));
+    }
+  });
+
+  // The shape an RP uses when its challenge is bound to the persona DID: ask
+  // the wallet who this site knows you as, THEN fetch a challenge for that DID,
+  // then mint. Here it just reports the answer — the harness has no challenge
+  // endpoint of its own — which is enough to see the first-use prompt fire and
+  // to confirm a second click does not prompt again.
+  document.getElementById("profile").addEventListener("click", async () => {
+    if (!probe()) return;
+    show(
+      "Asking the wallet…",
+      "On a first visit it should ask which identity to bind to this site.",
+    );
+    try {
+      const r = await window.vtaWallet.walletProfile({});
+      show(r.bound ? "walletProfile bound a new identity" : "walletProfile resolved", r);
+    } catch (e) {
+      show("walletProfile rejected", String(e && e.message ? e.message : e));
     }
   });
 
