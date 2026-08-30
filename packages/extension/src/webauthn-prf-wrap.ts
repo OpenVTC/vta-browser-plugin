@@ -332,6 +332,22 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
         pubKeyCredParams: [
           { type: "public-key", alg: -8 }, // EdDSA
           { type: "public-key", alg: -7 }, // ES256
+          // RS256, last and least preferred. Nothing here ever verifies a
+          // signature from this credential — it exists only to carry the PRF
+          // extension, and the PRF output is independent of the key's
+          // algorithm — so admitting RSA costs nothing and widens the set of
+          // authenticators that can hold the wallet's wrapping secret.
+          //
+          // It also silences a Chromium console warning that offering neither
+          // ES256 *nor* RS256 risks registration failures on incompatible
+          // authenticators. The warning surfaces in chrome://extensions as an
+          // error against the extension, where it sits next to real faults
+          // and costs someone the time to rule out. Do NOT copy this to
+          // `enrollPasskey` in core, whose key IS registered as a DID
+          // verification method: `importSpkiForAlg` accepts only
+          // ES256/EdDSA/ES384, so an RSA credential there would enroll and
+          // then fail to import.
+          { type: "public-key", alg: -257 }, // RS256
         ],
         authenticatorSelection: {
           residentKey: "required",
