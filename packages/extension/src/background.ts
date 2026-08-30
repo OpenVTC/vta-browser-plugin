@@ -28,6 +28,8 @@ import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
   OFFSCREEN_GET_STATUS,
+  OFFSCREEN_TRANSPORT_HEALTH,
+  OFFSCREEN_RUN_DIAGNOSTICS,
   OFFSCREEN_CREATE_CONTEXT,
   OFFSCREEN_DERIVE_SIGNING_KEY_ID,
   OFFSCREEN_HOLDER_STATE,
@@ -69,6 +71,8 @@ import {
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
   RUNTIME_MEDIATOR_STATUS,
+  RUNTIME_TRANSPORT_HEALTH,
+  RUNTIME_RUN_DIAGNOSTICS,
   RUNTIME_EMIT_WALLET_EVENT,
   type WalletEventKind,
   RUNTIME_CREATE_CONTEXT,
@@ -97,6 +101,9 @@ import {
   RUNTIME_VERIFY_RP_DID,
   RUNTIME_WALLET_DEFAULTS,
   type MediatorStatusResult,
+  type RuntimeTransportHealthResponse,
+  type RuntimeRunDiagnosticsRequest,
+  type RuntimeRunDiagnosticsResponse,
   type OffscreenDidcommLoginRequest,
   type OffscreenSetWakeResponse,
   type OffscreenStepUpVtaRequest,
@@ -1097,6 +1104,42 @@ async function handleMediatorStatus(): Promise<RuntimeMediatorStatusResponse> {
   return { ok: true, result };
 }
 
+// What the last session build observed per transport, for the wallet's own UI
+// (Setup / Network panes). Unlike `handleMediatorStatus` this is not page
+// facing — see the note on `RUNTIME_TRANSPORT_HEALTH`.
+//
+// Does NOT bring the offscreen document up. An observation only exists
+// because a session was built, so starting the document to ask would always
+// answer "nothing observed" while making the wallet do work; a wallet that
+// has done nothing yet should simply say so.
+async function handleTransportHealth(): Promise<RuntimeTransportHealthResponse> {
+  try {
+    const res = (await chrome.runtime.sendMessage({
+      target: OFFSCREEN_TARGET,
+      type: OFFSCREEN_TRANSPORT_HEALTH,
+    })) as RuntimeTransportHealthResponse | undefined;
+    return res ?? { ok: true, result: { byVta: {}, sessions: [] } };
+  } catch {
+    // No offscreen document listening yet — nothing has been observed.
+    return { ok: true, result: { byVta: {}, sessions: [] } };
+  }
+}
+
+// The connection self-test. Unlike `handleTransportHealth` this DOES bring the
+// offscreen document up: the user asked for the checks to run, and running
+// them is the point — there is no useful answer to give from the worker, which
+// has neither the DID resolver nor the wallet's origin-governed fetch.
+async function handleRunDiagnostics(
+  req: RuntimeRunDiagnosticsRequest,
+): Promise<RuntimeRunDiagnosticsResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_RUN_DIAGNOSTICS,
+    vtaDid: req.vtaDid,
+  })) as RuntimeRunDiagnosticsResponse;
+}
+
 // Onboarding (popup-driven): both phases run in the offscreen doc (DID
 // resolution + the mediator session need import()/DOM). The background just
 // brings the offscreen up and relays.
@@ -1906,6 +1949,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_MEDIATOR_STATUS) {
     handleMediatorStatus()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_RUN_DIAGNOSTICS) {
+    handleRunDiagnostics(message as RuntimeRunDiagnosticsRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_TRANSPORT_HEALTH) {
+    handleTransportHealth()
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

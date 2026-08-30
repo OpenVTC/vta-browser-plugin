@@ -36,7 +36,9 @@ import {
   ApproverPrfSecretWrap,
   type ApproverIdentityResult,
   type ParsedTaskConsentRequest,
+  resolveMediatorEndpoint,
   resolveVtaServices,
+  withFetchTimeout,
   type VtaServices,
   resolveVtaTspEndpoint,
   resolveVtaTspEndpointCached,
@@ -73,9 +75,22 @@ import { base64url } from "@openvtc/vti-didcomm-js";
 import { getSettings } from "./config.js";
 import { getWalletMediatorDid, loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
+import type { Transport, TransportHealth, TransportObservation } from "./transports.js";
+import {
+  classifyTransportFailure,
+  originOf,
+  probeReachable,
+  type Reachability,
+} from "./transport-diagnosis.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
   OFFSCREEN_GET_STATUS,
+  OFFSCREEN_TRANSPORT_HEALTH,
+  type TransportHealthResult,
+  OFFSCREEN_RUN_DIAGNOSTICS,
+  type OffscreenRunDiagnosticsRequest,
+  type DiagnosticCheck,
+  type DiagnosticsReport,
   OFFSCREEN_LOCK_WALLET,
   OFFSCREEN_CREATE_CONTEXT,
   OFFSCREEN_DERIVE_SIGNING_KEY_ID,
@@ -226,6 +241,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (msg.type === OFFSCREEN_GET_STATUS) {
     sendResponse({ mediators: statusSnapshot() });
     return false; // synchronous response
+  }
+  if (msg.type === OFFSCREEN_TRANSPORT_HEALTH) {
+    transportHealthSnapshot()
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_RUN_DIAGNOSTICS) {
+    runDiagnostics((message as OffscreenRunDiagnosticsRequest).vtaDid)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_LOCK_WALLET) {
     WebAuthnPrfSecretWrap.lock();
@@ -519,6 +550,354 @@ interface SessionIdentity {
  *  under a DID the operator never granted. */
 type MediatorConnector = (mediatorDid: string) => Promise<MediatorConnection>;
 
+// ─── Transport health: what a session build actually observed ───
+//
+// `buildVtaSession` is the only place that knows whether a channel was really
+// built or quietly skipped, and until this existed it knew it for the length
+// of one `console.warn`. The UI then derived its "transport in use" line from
+// the DID document instead, and named transports that had never carried a
+// byte. Recording the observation here is what makes that line honest — see
+// the header of `transports.ts`.
+//
+// Keyed by VTA DID. Module scope, so it shares the offscreen document's
+// lifetime: MV3 may tear the document down at any moment, and losing this is
+// harmless — it is an observation cache, not state anything depends on. An
+// absent entry means "not observed yet", which the UI renders differently
+// from "down".
+const vtaTransportHealth = new Map<string, TransportHealth>();
+
+function recordTransport(
+  vtaDid: string,
+  transport: Transport,
+  observation: TransportObservation,
+): void {
+  const current = vtaTransportHealth.get(vtaDid) ?? {};
+  vtaTransportHealth.set(vtaDid, { ...current, [transport]: observation });
+}
+
+/** Snapshot for the UI, shaped as the bridge declares it. */
+async function transportHealthSnapshot(): Promise<TransportHealthResult> {
+  const byVta: TransportHealthResult["byVta"] = {};
+  for (const [vtaDid, health] of vtaTransportHealth) byVta[vtaDid] = health;
+  // Which mediator is the wallet's own inbox decides whether a dead session
+  // is "an outbound channel fell back" or "nothing can reach this wallet".
+  const inbox = await walletMediatorDid().catch(() => undefined);
+  const sessions = statusSnapshot().map((s) => ({ ...s, isInbox: s.mediatorDid === inbox }));
+  return { byVta, sessions };
+}
+
+/**
+ * Record a channel as down, then work out *why* in the background.
+ *
+ * Two steps on purpose. The state is recorded synchronously so the UI is
+ * never briefly wrong about whether a transport works, while the diagnosis
+ * needs a network round-trip (resolve the mediator, probe it) that the
+ * session build must not wait on — this runs on a path where something has
+ * already failed and the caller is owed its answer promptly.
+ */
+function noteTransportDown(
+  vtaDid: string,
+  transport: Transport,
+  mediatorDid: string | undefined,
+  err: unknown,
+): void {
+  const message = err instanceof Error ? err.message : String(err);
+  console.warn(`[pnm ${transport.toLowerCase()}] skipping ${transport} channel:`, message);
+  recordTransport(vtaDid, transport, { state: "down", detail: message });
+  void diagnoseTransportDown(vtaDid, transport, mediatorDid, err);
+}
+
+/** Resolve the mediator, probe it, and upgrade the recorded reason from the
+ *  browser's opaque `Failed to fetch` to something actionable. Never throws:
+ *  a diagnosis that fails leaves the already-recorded raw message in place,
+ *  which is exactly what the wallet used to report. */
+async function diagnoseTransportDown(
+  vtaDid: string,
+  transport: Transport,
+  mediatorDid: string | undefined,
+  err: unknown,
+): Promise<void> {
+  try {
+    // A short leash: this is a diagnostic running behind a failure the user
+    // is already waiting on the consequences of, not a request that matters.
+    const fetchImpl = withFetchTimeout(undefined, 5_000);
+
+    let probeUrl: string | undefined;
+    if (mediatorDid) {
+      // The auth endpoint is the exact URL that just failed, so probing it
+      // asks about the thing that broke rather than a health route that may
+      // be served by something else. It answers `405` to the probe's GET —
+      // irrelevant, since an opaque response only has to exist.
+      probeUrl = await resolveMediatorEndpoint(mediatorDid)
+        .then((m) => m.authEndpoint)
+        .catch(() => undefined);
+    }
+
+    const reachable: Reachability = probeUrl
+      ? await probeReachable(probeUrl, fetchImpl)
+      : "unprobed";
+
+    const host = originOf(probeUrl);
+    const origin = extensionOrigin();
+    const diagnosis = classifyTransportFailure({
+      error: err,
+      reachable,
+      ...(host ? { host } : {}),
+      ...(origin ? { origin } : {}),
+    });
+
+    // Only overwrite while this transport is still the one we diagnosed as
+    // down. A rebuild that succeeded in the meantime must not be reverted to
+    // a stale failure.
+    if (vtaTransportHealth.get(vtaDid)?.[transport]?.state !== "down") return;
+    recordTransport(vtaDid, transport, {
+      state: "down",
+      code: diagnosis.code,
+      detail: diagnosis.remediation
+        ? `${diagnosis.detail} ${diagnosis.remediation}`
+        : diagnosis.detail,
+    });
+    console.warn(`[pnm ${transport.toLowerCase()}] ${diagnosis.code}: ${diagnosis.detail}`);
+  } catch {
+    /* diagnosis is best-effort; the raw message stands */
+  }
+}
+
+/** This extension's own origin, for a message an operator has to paste into a
+ *  config file. `chrome.runtime` is one of the few APIs an offscreen document
+ *  does have. */
+function extensionOrigin(): string | undefined {
+  try {
+    return new URL(chrome.runtime.getURL("")).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+// ─── Connection self-test ───
+//
+// Walks the chain a wallet depends on and names the broken link. Written
+// because diagnosing the failure it was built for — a mediator whose CORS
+// allowlist did not carry this extension's origin — required leaving the
+// wallet entirely and running `curl` against someone else's server. Every
+// check here is something the wallet can ask on its own behalf, from its own
+// origin, which is the only place the answer is true: the same request from a
+// terminal succeeds, because `curl` sends no `Origin` header.
+//
+// Read-only throughout. Nothing here authenticates, mutates, or spends a
+// credential — a diagnostic that changes state is one people are afraid to
+// run, and this one has to be safe to hand to a stranger mid-incident.
+
+/** Does a CORS-governed request to `url` succeed from this extension's origin?
+ *
+ *  A plain GET, deliberately: no custom headers means no preflight, so the
+ *  browser checks `Access-Control-Allow-Origin` on the actual response and a
+ *  refusal surfaces exactly as it does on the real path. The **status does not
+ *  matter** — a `405` from a POST-only auth route is a complete pass, because
+ *  reading any status at all proves the origin was allowed. That is also why
+ *  this cannot be replaced by hitting a health endpoint: it must be governed
+ *  by the same policy as the request that fails. */
+async function checkCorsReachable(
+  url: string,
+  fetchImpl: typeof fetch,
+): Promise<{ ok: boolean; status?: number; error?: unknown }> {
+  try {
+    const res = await fetchImpl(url, { method: "GET", cache: "no-store" });
+    return { ok: true, status: res.status };
+  } catch (err: unknown) {
+    return { ok: false, error: err };
+  }
+}
+
+/** One mediator's three checks: does its DID resolve, is it up, will it talk
+ *  to us. They are ordered so a failure explains the checks below it. */
+async function diagnoseMediator(
+  label: string,
+  mediatorDid: string,
+  fetchImpl: typeof fetch,
+  origin: string | undefined,
+): Promise<DiagnosticCheck[]> {
+  const checks: DiagnosticCheck[] = [];
+  const idBase = `mediator.${label}`;
+
+  let authEndpoint: string | undefined;
+  try {
+    authEndpoint = (await resolveMediatorEndpoint(mediatorDid)).authEndpoint;
+    checks.push({
+      id: `${idBase}.resolve`,
+      label: `${label} mediator DID resolves`,
+      status: "pass",
+      detail: `${mediatorDid} → ${originOf(authEndpoint) ?? authEndpoint}`,
+    });
+  } catch (err: unknown) {
+    checks.push({
+      id: `${idBase}.resolve`,
+      label: `${label} mediator DID resolves`,
+      status: "fail",
+      detail: err instanceof Error ? err.message : String(err),
+      remediation: "The mediator's DID document must resolve and advertise a WebSocket endpoint.",
+    });
+    return checks; // nothing below can be attempted without an endpoint
+  }
+
+  const host = originOf(authEndpoint);
+  const cors = await checkCorsReachable(authEndpoint, fetchImpl);
+  if (cors.ok) {
+    checks.push({
+      id: `${idBase}.origin`,
+      label: `${label} mediator accepts this wallet's origin`,
+      status: "pass",
+      // Naming the status makes it obvious to a reader that a 4xx is expected
+      // and is not the thing being tested.
+      detail: `${host} answered (HTTP ${cors.status}) with this extension's origin on the request.`,
+    });
+    return checks;
+  }
+
+  // Refused or unreachable — the probe separates them.
+  const reachable = await probeReachable(authEndpoint, fetchImpl);
+  const d = classifyTransportFailure({
+    error: cors.error,
+    reachable,
+    ...(host ? { host } : {}),
+    ...(origin ? { origin } : {}),
+  });
+  checks.push({
+    id: `${idBase}.origin`,
+    label: `${label} mediator accepts this wallet's origin`,
+    status: "fail",
+    detail: d.detail,
+    code: d.code,
+    ...(d.remediation ? { remediation: d.remediation } : {}),
+  });
+  return checks;
+}
+
+/** Run the self-test for one VTA. Never throws for a *check* failure — a
+ *  failed check is a result, and a report that aborts at the first problem
+ *  hides the others. */
+async function runDiagnostics(vtaDid: string): Promise<DiagnosticsReport> {
+  // Bounded, and shorter than a real request: someone is watching this run.
+  const fetchImpl = withFetchTimeout(undefined, 8_000);
+  const origin = extensionOrigin();
+  const checks: DiagnosticCheck[] = [];
+
+  let services: VtaServices | undefined;
+  try {
+    services = await resolveVtaServices(vtaDid);
+    const advertised = [
+      services.tsp ? "TSP" : null,
+      services.didcomm ? "DIDComm" : null,
+      services.rest ? "REST" : null,
+    ].filter(Boolean);
+    checks.push({
+      id: "vta.resolve",
+      label: "Trust agent DID resolves",
+      status: "pass",
+      detail: `Advertises ${advertised.join(", ") || "no transport"}.`,
+    });
+  } catch (err: unknown) {
+    checks.push({
+      id: "vta.resolve",
+      label: "Trust agent DID resolves",
+      status: "fail",
+      detail: err instanceof Error ? err.message : String(err),
+    });
+    return { vtaDid, extensionOrigin: origin ?? "unknown", generatedAt: new Date().toISOString(), checks };
+  }
+
+  // Both transports usually name the same mediator; check it once and say so,
+  // rather than reporting one host's failure twice as if they were two faults.
+  const mediators = new Map<string, string[]>();
+  if (services.tsp) mediators.set(services.tsp.mediatorDid, ["TSP"]);
+  if (services.didcomm) {
+    mediators.set(services.didcomm.mediatorDid, [
+      ...(mediators.get(services.didcomm.mediatorDid) ?? []),
+      "DIDComm",
+    ]);
+  }
+  for (const [mediatorDid, uses] of mediators) {
+    checks.push(...(await diagnoseMediator(uses.join("+"), mediatorDid, fetchImpl, origin)));
+  }
+  if (mediators.size === 0) {
+    checks.push({
+      id: "mediator.none",
+      label: "Mediator",
+      status: "skip",
+      detail: "This agent advertises no mediator — REST only, and nothing can be pushed to this wallet.",
+    });
+  }
+
+  // The wallet's own inbox mediator, which is configurable and often is NOT
+  // the agent's. This is the session whose death means consent prompts never
+  // arrive, so it gets its own check rather than being folded into the above.
+  const inbox = await walletMediatorDid().catch(() => undefined);
+  if (inbox && !mediators.has(inbox)) {
+    checks.push(...(await diagnoseMediator("inbox", inbox, fetchImpl, origin)));
+  }
+
+  if (services.rest) {
+    const restUrl = services.rest.baseUrl;
+    const cors = await checkCorsReachable(restUrl, fetchImpl);
+    if (cors.ok) {
+      checks.push({
+        id: "vta.rest",
+        label: "Trust agent REST accepts this wallet's origin",
+        status: "pass",
+        detail: `${originOf(restUrl) ?? restUrl} answered (HTTP ${cors.status}).`,
+      });
+    } else {
+      const reachable = await probeReachable(restUrl, fetchImpl);
+      const d = classifyTransportFailure({
+        error: cors.error,
+        reachable,
+        ...(originOf(restUrl) ? { host: originOf(restUrl)! } : {}),
+        ...(origin ? { origin } : {}),
+      });
+      checks.push({
+        id: "vta.rest",
+        label: "Trust agent REST accepts this wallet's origin",
+        status: "fail",
+        detail: d.detail,
+        code: d.code,
+        remediation:
+          "vta-service applies an origin allowlist — add this origin to `[server] cors_origins` " +
+          "in its config.toml and restart. The wallet also needs a host permission for this " +
+          "origin, which Setup requests.",
+      });
+    }
+  }
+
+  // Inbox liveness, from the session pool rather than a fresh probe: whether
+  // the listener is up right now is the question, and opening a second one to
+  // ask would answer about the probe instead.
+  const live = statusSnapshot().filter((s) => s.vtaDid === vtaDid && s.state === "live");
+  checks.push(
+    live.length > 0
+      ? {
+          id: "inbox.session",
+          label: "Inbox session is live",
+          status: "pass",
+          detail: `${live.length} mediator session(s) open for this agent.`,
+        }
+      : {
+          id: "inbox.session",
+          label: "Inbox session is live",
+          status: "warn",
+          detail:
+            "No mediator session is open for this agent. Nothing pushed to this wallet " +
+            "will arrive — including approval requests — until one is.",
+        },
+  );
+
+  return {
+    vtaDid,
+    extensionOrigin: origin ?? "unknown",
+    generatedAt: new Date().toISOString(),
+    checks,
+  };
+}
+
 // Build a VtaSession for `vtaDid` honouring the advertised transports
 // (TSP > DIDComm > REST). `restBaseUrl` (from the popup's connection state) is
 // used when present; otherwise we fall back to the VTA's advertised #vta-rest.
@@ -577,10 +956,13 @@ async function buildVtaSession(
           vta: vtaTsp,
         }),
       );
+      recordTransport(vtaDid, "TSP", { state: "up" });
     } catch (err) {
       // Resolution failure (e.g. the VTA advertises #tsp but its keys don't
-      // resolve) shouldn't kill the session — DIDComm/REST still work.
-      console.warn("[pnm tsp] skipping TSP channel:", (err as Error).message);
+      // resolve) shouldn't kill the session — DIDComm/REST still work. It is
+      // still recorded and diagnosed: a silent fallback that nothing reports
+      // is how a wallet ends up claiming a transport it is not using.
+      noteTransportDown(vtaDid, "TSP", services.tsp.mediatorDid, err);
     }
   }
   let didcommConn: MediatorConnection | undefined;
@@ -590,11 +972,13 @@ async function buildVtaSession(
     // this is *pre-send*, so nothing has been dispatched and nothing can have
     // been applied twice — the distinction `VtaSession` draws when it falls
     // back on `e.client.unsupported` but never on a post-send failure.
-    const conn = await connect(services.didcomm.mediatorDid).catch((err: unknown) => {
-      console.warn("[pnm didcomm] skipping DIDComm channel:", (err as Error).message);
+    const didcommMediator = services.didcomm.mediatorDid;
+    const conn = await connect(didcommMediator).catch((err: unknown) => {
+      noteTransportDown(vtaDid, "DIDComm", didcommMediator, err);
       return undefined;
     });
     if (conn) {
+      recordTransport(vtaDid, "DIDComm", { state: "up" });
       didcommConn = conn;
       const bridge = new MediatorSessionBridge(conn);
       // Encrypt/route to the REAL VTA (`service`), NOT `conn.vta`: the warm
@@ -616,6 +1000,12 @@ async function buildVtaSession(
   const rest = restBaseUrl || services.rest?.baseUrl;
   if (rest) {
     channels.push(new RestChannel({ baseUrl: rest, holder, signing, service }));
+    // Deliberately `"unknown"`, not `"up"`. A `RestChannel` is built from a
+    // URL without contacting anything, so construction is not evidence — and
+    // a REST channel that turns out to be unreachable fails the caller's
+    // request visibly, rather than degrading silently the way a skipped
+    // mediator channel does.
+    recordTransport(vtaDid, "REST", { state: "unknown" });
   }
   if (channels.length === 0) {
     throw new Error(`${vtaDid} advertises no usable transport (#tsp, #vta-didcomm or #vta-rest)`);

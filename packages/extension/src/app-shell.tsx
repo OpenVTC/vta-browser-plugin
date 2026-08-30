@@ -22,6 +22,7 @@ import { NetworkPane } from "./network-pane.js";
 import { SitesPanel } from "./sites-panel.js";
 import { getSettings } from "./config.js";
 import { activeTransport } from "./transports.js";
+import { useTransportHealth } from "./use-transport-health.js";
 import { c, t } from "./theme.js";
 import { Button, Note, Pill } from "./ui.js";
 import { unlockWalletAndApprover } from "./unlock-wallet.js";
@@ -170,6 +171,12 @@ export function AppShell({ advanced, vault }: { advanced: React.ReactNode; vault
   const [pane, setPane] = useState<PaneId>(paneFromHash);
   const connection = useActiveConnection();
   const [preferTsp, setPreferTsp] = useState(true);
+  const { health: transportHealth, sessions } = useTransportHealth(connection?.vtaDid);
+  // The wallet's own listening session, not just any warm one: an outbound
+  // channel to the agent's mediator says nothing about whether requests can
+  // arrive. Absent (no session at all) reads the same as closed, which is
+  // right — both mean nothing is listening.
+  const inbox = sessions.find((s) => s.isInbox)?.state ?? "closed";
   const [approver, setApprover] = useState<{ minted: boolean; running: boolean }>({
     minted: false,
     running: false,
@@ -278,12 +285,41 @@ export function AppShell({ advanced, vault }: { advanced: React.ReactNode; vault
             note={
               connection
                 ? (() => {
-                    const tr = activeTransport(connection, preferTsp);
+                    const tr = activeTransport(connection, preferTsp, transportHealth);
                     return tr ? `over ${tr}` : "no usable transport";
                   })()
                 : "no agent yet"
             }
-            warn={Boolean(connection) && !activeTransport(connection!, preferTsp)}
+            warn={Boolean(connection) && !activeTransport(connection!, preferTsp, transportHealth)}
+          />
+          {/* The inbox, on its own row, because "connected" and "can be
+              reached" are different states and only the second one decides
+              whether an approval request ever arrives. A wallet that has
+              fallen back to REST looks entirely healthy on the row above
+              while nothing can be pushed to it at all (R7.2). */}
+          <RoleStatus
+            label="Inbox"
+            pill={
+              !connection ? (
+                <Pill tone="off">—</Pill>
+              ) : inbox === "live" ? (
+                <Pill tone="ok">Live</Pill>
+              ) : inbox === "connecting" ? (
+                <Pill tone="warn">Connecting</Pill>
+              ) : (
+                <Pill tone="warn">Offline</Pill>
+              )
+            }
+            note={
+              !connection
+                ? "no agent yet"
+                : inbox === "live"
+                  ? "can receive requests"
+                  : inbox === "connecting"
+                    ? "opening a mediator session"
+                    : "nothing can reach this wallet"
+            }
+            warn={Boolean(connection) && inbox !== "live" && inbox !== "connecting"}
           />
           <RoleStatus
             label="Approval"
