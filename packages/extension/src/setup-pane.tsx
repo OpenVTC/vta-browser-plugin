@@ -27,7 +27,13 @@ import {
   requestOriginPermission,
 } from "./host-permissions.js";
 import { didWebvhDomain } from "@openvtc/pnm-core";
-import { activeTransport, transportSummary } from "./transports.js";
+import {
+  activeTransport,
+  isObserved,
+  transportSummary,
+  unavailableTransports,
+} from "./transports.js";
+import { useTransportHealth } from "./use-transport-health.js";
 import { c, t } from "./theme.js";
 import { Button, Did, DidNamed, Note, Panel, Pill } from "./ui.js";
 
@@ -173,7 +179,10 @@ export function SetupPane() {
   // Both the agent and its mediator get looked up: the mediator is a hosted
   // identity too and usually claims its own name (`…/@mediator`).
   const agentNames = useAgentNames([connection?.vtaDid, agentMediator]);
-  const transport = connection ? activeTransport(connection, preferTsp) : undefined;
+  const { health: transportHealth } = useTransportHealth(connection?.vtaDid);
+  const transport = connection ? activeTransport(connection, preferTsp, transportHealth) : undefined;
+  const observed = isObserved(transportHealth);
+  const broken = connection ? unavailableTransports(connection, transportHealth) : [];
 
   async function turnOnLock() {
     if (!connection) return;
@@ -267,11 +276,35 @@ export function SetupPane() {
                     Read from the agent&apos;s own record — nothing to enter.
                     {transport && (
                       <>
-                        {" "}Messages travel over{" "}
+                        {" "}Messages{" "}
+                        {/* "travel" once a session has actually been built;
+                            "should travel" before that, because until then
+                            this is read off the agent's DID document and the
+                            document only says what is offered, not what
+                            works. */}
+                        {observed ? "travel" : "should travel"} over{" "}
                         <strong style={{ color: c.text }}>{transport}</strong>.
                       </>
                     )}
                   </div>
+                  {/* The reason a transport is missing, in the one place
+                      someone looks when messages are not getting through.
+                      This used to be a `console.warn` on a page no ordinary
+                      user opens, which is how a dark inbox went unnoticed. */}
+                  {broken.map((t2) => (
+                    <div
+                      key={t2}
+                      style={{
+                        fontSize: t.sm,
+                        color: c.muted,
+                        borderLeft: `2px solid ${c.warn}`,
+                        paddingLeft: 8,
+                      }}
+                    >
+                      <strong style={{ color: c.text }}>{t2} unavailable.</strong>{" "}
+                      {transportHealth[t2]?.detail ?? "The channel could not be opened."}
+                    </div>
+                  ))}
                   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                     <DidNamed
                       value={agentMediator}

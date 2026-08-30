@@ -36,7 +36,21 @@
 //    control that silently degrades is worse than one that isn't there.
 //    A did:webvh host behind a restrictive CORS policy is the known gap —
 //    it surfaces as "unresolved" in the prompt, which fails closed.
-//  - **Mediator WebSocket** — not subject to CORS.
+//  - **Mediator** — but only half of it, and the half that is exempt is not
+//    the half that fails. The WebSocket upgrade is not subject to CORS; the
+//    authentication handshake that must precede it is two ordinary `fetch`
+//    calls (`POST {authEndpoint}/challenge`, then the packed response), and
+//    those are cross-origin like any other. A mediator whose
+//    `[security] cors_allow_origin` does not carry this extension's origin
+//    blocks them, and TSP and DIDComm both drop out — they share that
+//    handshake — leaving REST carrying everything and the inbox dark.
+//
+//    A host grant is deliberately still NOT requested for it, because it
+//    would not be a fix: the mediator applies the same origin policy to the
+//    WebSocket upgrade itself (server side, where no browser permission
+//    reaches), so an origin it refuses stays refused. The fix is the
+//    mediator's config, and `transport-diagnosis.ts` exists to say so instead
+//    of leaving a bare "Failed to fetch" for someone to guess at.
 //
 // Gesture constraint
 // ------------------

@@ -22,12 +22,19 @@ import {
   type VaultEntryView,
 } from "./bridge-protocol.js";
 import { useAgentNames } from "./use-agent-names.js";
-import { activeTransport, advertisedTransports } from "./transports.js";
+import {
+  activeTransport,
+  advertisedTransports,
+  isObserved,
+  unavailableTransports,
+} from "./transports.js";
+import { useTransportHealth } from "./use-transport-health.js";
 import { TrustGraph, displayLabel, type GraphEdge, type GraphNode } from "./trust-graph.js";
 import { c, t } from "./theme.js";
 import { SignInFlow } from "./signin-flow.js";
 import { DtteFlow } from "./dtte-flow.js";
 import { Did, Empty, Panel, Pill } from "./ui.js";
+import { DiagnosticsPanel } from "./diagnostics-panel.js";
 
 export function NetworkPane() {
   const connection = useActiveConnection();
@@ -74,7 +81,8 @@ export function NetworkPane() {
     ...sites.slice(0, 3).map((s) => s.rpDid),
     ...entries.slice(0, 6).map((e) => e.principalDid),
   ]);
-  const transport = connection ? activeTransport(connection, preferTsp) : undefined;
+  const { health: transportHealth } = useTransportHealth(connection?.vtaDid);
+  const transport = connection ? activeTransport(connection, preferTsp, transportHealth) : undefined;
 
   if (!connection) {
     return (
@@ -124,8 +132,23 @@ export function NetworkPane() {
       facts: [
         { label: "DID", value: connection.vtaDid },
         { label: "Your role", value: connection.role },
-        { label: "Transport in use", value: transport ?? "none usable" },
+        {
+          // Two facts, because they are two different claims and conflating
+          // them is what made this pane assert a transport that was dead.
+          label: isObserved(transportHealth) ? "Transport in use" : "Transport expected",
+          value: transport ?? "none usable",
+        },
         { label: "Advertises", value: advertisedTransports(connection).join(", ") || "nothing" },
+        ...(unavailableTransports(connection, transportHealth).length > 0
+          ? [
+              {
+                label: "Unavailable",
+                value: unavailableTransports(connection, transportHealth)
+                  .map((t2) => `${t2} — ${transportHealth[t2]?.detail ?? "could not be opened"}`)
+                  .join(" "),
+              },
+            ]
+          : []),
         { label: "REST endpoint", value: connection.restBaseUrl ?? "not advertised" },
         { label: "Connected", value: new Date(connection.connectedAt).toLocaleString() },
       ],
@@ -433,11 +456,13 @@ export function NetworkPane() {
 
       <DtteFlow />
 
+      <DiagnosticsPanel vtaDid={connection.vtaDid} />
+
       <Panel title="Details" description="The same facts as text, for pasting into a bug report.">
         <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "8px 18px", margin: 0, fontSize: t.sm }}>
-          <Row label="Transport in use">
+          <Row label={isObserved(transportHealth) ? "Transport in use" : "Transport expected"}>
             {transport ? (
-              <Pill tone="ok">{transport}</Pill>
+              <Pill tone={isObserved(transportHealth) ? "ok" : "off"}>{transport}</Pill>
             ) : (
               <Pill tone="warn">none usable</Pill>
             )}
@@ -445,6 +470,16 @@ export function NetworkPane() {
           <Row label="Advertised">
             {advertisedTransports(connection).join(", ") || "none"}
           </Row>
+          {/* The panel exists to be pasted into a bug report, and the reason a
+              transport is down is the one line that report actually needs —
+              it is usually fixed by whoever runs the mediator, not by the
+              person reading this. */}
+          {unavailableTransports(connection, transportHealth).map((t2) => (
+            <Row key={t2} label={`${t2} unavailable`}>
+              {transportHealth[t2]?.detail ?? "could not be opened"}
+              {transportHealth[t2]?.code ? ` (${transportHealth[t2]!.code})` : ""}
+            </Row>
+          ))}
           <Row label="Prefer TSP">{preferTsp ? "on" : "off"}</Row>
           <Row label="Wallet locked">{encrypted ? "yes" : "no"}</Row>
           <Row label="Your wallet address">

@@ -128,6 +128,62 @@ routing either through a channel would overwrite or duplicate a proof.
 document as the counterparty receives it — a signature copied from another
 document satisfies an "is there a `proof` member" check and fails this one.
 
+## Advertisement is not availability
+
+A VTA's DID document says what it *offers*. `buildVtaSession` skips a channel
+whose mediator it cannot reach and falls through to the next, so a wallet
+routinely advertises TSP, DIDComm and REST while every byte goes over REST.
+The UI used to derive "Transport in use" from the stored connection alone and
+therefore named transports that had never carried a byte — worse than saying
+nothing, because it stops anyone asking the question.
+
+`activeTransport` (`transports.ts`) now takes a `TransportHealth`, recorded by
+`buildVtaSession` at the two places it decides — and only there, because that
+is the only code that knows. Three states, and the third is load-bearing:
+`up` needs positive evidence (for TSP/DIDComm a completed mediator handshake
+and an open socket), `down` is a skip, and REST records **`unknown`** because
+a `RestChannel` is built from a URL without contacting anything. Marking a
+constructed REST channel `up` would reintroduce the same overconfidence one
+layer down. `unknown` is not a failure and never removes REST from selection.
+
+**What breaks it:** computing the status from `TransportSources` alone again;
+recording `up` on construction rather than on evidence; or adding a fourth
+transport without recording its outcome, which reads as "not observed" and
+silently restores the advertisement-only answer for that channel.
+
+## A CORS refusal is unreadable, so it is inferred
+
+Chrome hands JavaScript a bare `TypeError: Failed to fetch` for a CORS
+refusal, a dead host and a DNS failure alike; the actual reason ("No
+`Access-Control-Allow-Origin` header is present") goes to the devtools console
+and nowhere an extension can read. It cannot be recovered from the exception —
+don't try. `transport-diagnosis.ts` infers it from one bit instead: a request
+that fails at the network layer against a host that answers an opaque
+(`mode: "no-cors"`) probe a moment later was refused by policy, not by the
+network. Discrimination is structural — `TypeError`, `DOMException.name ===
+"TimeoutError"` — never message text (R3.7).
+
+This matters because **the mediator's auth handshake is CORS-governed even
+though its WebSocket is not**. `authenticateToMediator` POSTs to
+`{authEndpoint}/challenge` before any socket exists, so a mediator whose
+`[security] cors_allow_origin` omits this extension's origin takes out TSP and
+DIDComm together — they share that handshake — leaving REST carrying
+everything and **the inbox dark**. A host permission is deliberately not
+requested for it: the mediator applies the same origin policy to the WebSocket
+upgrade server-side, where no browser permission reaches, so the fix is the
+mediator's config and the wallet must say so rather than imply it can fix it
+locally.
+
+The self-test (`runDiagnostics` in `offscreen.ts`, surfaced by
+`diagnostics-panel.tsx`) exists because **`curl` cannot reproduce this**: a
+terminal sends no `Origin` header, so the endpoint answers perfectly and the
+operator concludes nothing is wrong. The wallet is the only place the question
+can be asked truthfully. Its checks are read-only, and its `checkCorsReachable`
+must keep using a plain `GET` against the *same* endpoint that fails — no
+custom headers, so no preflight, and any status is a pass because reading a
+status at all proves the origin was allowed. Swapping it for a health endpoint
+would test a different policy than the one that breaks.
+
 ## Repo mechanics worth knowing before you start
 
 - **Build `core` before typechecking anything that depends on it.** Each

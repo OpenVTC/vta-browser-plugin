@@ -933,6 +933,106 @@ export type RuntimeVaultListResponse =
   | { ok: true; result: VaultListResultView }
   | { ok: false; error: string };
 
+// ─── Transport health (popup → background → offscreen) ───
+//
+// What the last session build actually observed per transport, so the UI can
+// name the transport carrying traffic instead of the one the DID document
+// advertises. The two differ whenever a mediator is unreachable or refuses
+// the extension's origin, which is precisely when a person goes looking.
+//
+// Deliberately NOT in `PAGE_FACING_RUNTIME_TYPES`: which of a user's
+// transports are working is wallet diagnostics, not something an RP page has
+// any business enumerating. The page-facing `mediatorStatus` stays as it was.
+
+export const RUNTIME_TRANSPORT_HEALTH = "vta-wallet/transport-health" as const;
+
+export interface RuntimeTransportHealthRequest {
+  type: typeof RUNTIME_TRANSPORT_HEALTH;
+}
+
+/** Mirrors `TransportObservation` in `transports.ts`; duplicated here for the
+ *  same reason `VaultEntryView` is — this file stays import-free so the
+ *  content script can bundle it as a classic script. The two are checked
+ *  against each other by assignability wherever a value crosses this
+ *  boundary, so a drift breaks the build rather than the UI. */
+export interface TransportObservationView {
+  state: "unknown" | "up" | "down";
+  /** A `TRANSPORT_DIAGNOSIS` code when `state` is `"down"`. */
+  code?: string;
+  detail?: string;
+}
+
+export interface TransportHealthView {
+  TSP?: TransportObservationView;
+  DIDComm?: TransportObservationView;
+  REST?: TransportObservationView;
+}
+
+/** One warm mediator session, as the offscreen document sees it. `isInbox`
+ *  marks the wallet's own listening session — the one whose death means
+ *  nothing pushed to this wallet arrives, consent prompts included. */
+export interface InboxSessionView {
+  vtaDid: string;
+  mediatorDid: string;
+  state: "connecting" | "live" | "closed";
+  isInbox: boolean;
+}
+
+export interface TransportHealthResult {
+  /** Keyed by VTA DID. A VTA with no entry has had no session built yet —
+   *  which is "nothing observed", not "nothing works". */
+  byVta: { [vtaDid: string]: TransportHealthView };
+  /** Every warm mediator session. Empty means none has been opened. */
+  sessions: InboxSessionView[];
+}
+
+// ─── Connection self-test (popup → background → offscreen) ───
+//
+// Runs the chain a wallet actually depends on and says which link is broken,
+// in a form that can be pasted to whoever operates the service — which, for
+// the failure this was built for (a mediator refusing the extension's
+// origin), is someone other than the person reading it.
+
+export const RUNTIME_RUN_DIAGNOSTICS = "vta-wallet/run-diagnostics" as const;
+
+export interface RuntimeRunDiagnosticsRequest {
+  type: typeof RUNTIME_RUN_DIAGNOSTICS;
+  vtaDid: string;
+}
+
+/** `"pass"` = verified working. `"fail"` = verified broken. `"warn"` = works
+ *  but something is worth knowing. `"skip"` = not applicable (a transport
+ *  this agent does not advertise), which is not a failure. */
+export type DiagnosticStatus = "pass" | "fail" | "warn" | "skip";
+
+export interface DiagnosticCheck {
+  /** Stable id, so a report can be diffed across runs. */
+  id: string;
+  label: string;
+  status: DiagnosticStatus;
+  detail: string;
+  /** A `TRANSPORT_DIAGNOSIS` code where one applies. */
+  code?: string;
+  /** What to change, aimed at whoever operates the service. */
+  remediation?: string;
+}
+
+export interface DiagnosticsReport {
+  vtaDid: string;
+  /** This extension's origin — the string an operator has to allowlist. */
+  extensionOrigin: string;
+  generatedAt: string;
+  checks: DiagnosticCheck[];
+}
+
+export type RuntimeRunDiagnosticsResponse =
+  | { ok: true; result: DiagnosticsReport }
+  | { ok: false; error: string };
+
+export type RuntimeTransportHealthResponse =
+  | { ok: true; result: TransportHealthResult }
+  | { ok: false; error: string };
+
 // ─── Vault write surface (M2A.5) — upsert, delete, release ───
 //
 // Same active-connection lookup as RUNTIME_VAULT_LIST. The popup
@@ -1181,6 +1281,12 @@ export const OFFSCREEN_START_INBOUND = "offscreen/start-inbound" as const;
 /** background → offscreen: report the warm mediator-session status. Reply is
  *  a [`MediatorStatusResult`] via `sendResponse`. */
 export const OFFSCREEN_GET_STATUS = "offscreen/get-status" as const;
+/** background → offscreen: report what the last session build observed for
+ *  each transport. Reply is a [`TransportHealthResult`] via `sendResponse`. */
+export const OFFSCREEN_TRANSPORT_HEALTH = "offscreen/transport-health" as const;
+/** background → offscreen: run the connection self-test for one VTA. Reply is
+ *  a [`DiagnosticsReport`] via `sendResponse`. */
+export const OFFSCREEN_RUN_DIAGNOSTICS = "offscreen/run-diagnostics" as const;
 /** background → offscreen: resolve a VTA + mint the ephemeral to be granted. */
 export const OFFSCREEN_ONBOARD_PREPARE = "offscreen/onboard-prepare" as const;
 /** background → offscreen: connect as the granted ephemeral and run the
@@ -1402,6 +1508,17 @@ export interface OffscreenStartInboundRequest {
 export interface OffscreenGetStatusRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_GET_STATUS;
+}
+
+export interface OffscreenTransportHealthRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_TRANSPORT_HEALTH;
+}
+
+export interface OffscreenRunDiagnosticsRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_RUN_DIAGNOSTICS;
+  vtaDid: string;
 }
 
 export interface OffscreenOnboardPrepareRequest {
