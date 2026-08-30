@@ -16,6 +16,7 @@ import { TRUST_TASK_PATH } from "./endpoint.js";
 import { errorFromBody, VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
 import { parseTrustTaskReply, signOutboundTask } from "./trust-task.js";
+import { asTaskSigner, type ChannelSigner, type TaskSigner } from "./trust-task.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { isTrustTaskErrorType } from "./protocol.js";
 import { getVtaBearer, makeReauth, type VtaAuthInputs } from "./auth.js";
@@ -31,7 +32,7 @@ export interface RestChannelOptions extends VtaAuthInputs {
    *
    * Its `did` must be the envelope's `issuer` — see {@link signOutboundTask}.
    */
-  signing: SigningIdentity;
+  signing: ChannelSigner;
   /**
    * Trust-task dispatcher path, appended to `baseUrl`. Defaults to
    * `/trust-tasks`, which the published HTTPS binding fixes — `baseUrl` is
@@ -55,12 +56,12 @@ export interface RestChannelOptions extends VtaAuthInputs {
 export class RestChannel implements TrustTaskChannel {
   readonly kind = "rest" as const;
   private readonly auth: VtaAuthInputs;
-  private readonly signing: SigningIdentity;
+  private readonly signer: TaskSigner;
   private readonly path: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(opts: RestChannelOptions) {
-    this.signing = opts.signing;
+    this.signer = asTaskSigner(opts.signing);
     this.auth = {
       baseUrl: opts.baseUrl,
       holder: opts.holder,
@@ -84,7 +85,7 @@ export class RestChannel implements TrustTaskChannel {
     // Before serialization, and before the bearer handshake: the proof is part
     // of the document, so a body built from an unsigned envelope would be the
     // one thing that reaches the VTA.
-    await signOutboundTask(envelope, this.signing);
+    await signOutboundTask(envelope, this.signer);
     const body = JSON.stringify(envelope);
 
     const once = async (bearer: string): Promise<Response> => {

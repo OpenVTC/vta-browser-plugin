@@ -19,7 +19,14 @@ import {
 import { checkOriginPin, pinOrigin } from "./origin-pin.js";
 import { isOriginTrusted, trustOrigin } from "./trusted-sites.js";
 import {
+  forgetSiteIdentity,
+  HOLDER_IDENTITY,
+  prefersHolderIdentity,
+  rememberHolderIdentity,
+} from "./site-identity.js";
+import {
   buildProfileEntry,
+  decideSiteIdentity,
   matchProfileEntry,
   PROFILE_SECRET_KIND,
 } from "./first-use-profile.js";
@@ -676,6 +683,10 @@ async function requestConsent(args: {
    *  so the prompt asks which identity the site should know the user as and
    *  returns the answer in `selectedDid`. */
   chooseProfile?: boolean;
+  /** Offer the wallet's own identity as one of the answers, returned as
+   *  {@link HOLDER_IDENTITY}. Only `login()` sets it — the proxy paths mint
+   *  through a vault entry, and the holder is not one. */
+  allowHolder?: boolean;
 }): Promise<{ approved: boolean; remember: boolean; selectedDid?: string }> {
   const consentId = crypto.randomUUID();
   const url =
@@ -688,6 +699,7 @@ async function requestConsent(args: {
     (args.noRemember ? `&noRemember=1` : "") +
     (args.stepUp ? `&stepUp=1` : "") +
     (args.chooseProfile ? `&chooseProfile=1` : "") +
+    (args.allowHolder ? `&allowHolder=1` : "") +
     (args.reason ? `&reason=${encodeURIComponent(args.reason)}` : "") +
     (args.changedFromRpDid
       ? `&changedFrom=${encodeURIComponent(args.changedFromRpDid)}`
@@ -917,20 +929,112 @@ async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginRespon
     await pinOrigin(req.origin, req.params.rpDid);
   }
 
+  // Which identity signs in. A per-site persona when this origin has one, the
+  // wallet's own when the operator chose it, and otherwise ask — see
+  // `resolveLoginIdentity`.
+  const identity = await resolveLoginIdentity(req.origin, req.params.rpDid, holderDid);
+  if (!identity.ok) return { ok: false, error: identity.error };
+
   // Forward the actual SIOPv2 round-trip to offscreen — the holder's
   // signing key only lives unwrapped there (the PRF AES cache is
   // offscreen-module-scoped). Calling `loginViaSiop` from background
   // worked on plaintext wallets but threw `WalletLockedError` on
   // encrypted ones even when offscreen was unlocked.
   await ensureOffscreenDocument();
-  const activeVtaDid = await readActiveVtaDid();
-  if (!activeVtaDid) return { ok: false, error: "no active VTA connection — connect first" };
-  return (await chrome.runtime.sendMessage({
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
+  const activeVtaDid = active.conn.vtaDid;
+  const conn = active.conn;
+  const result = (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_REST_LOGIN,
     vtaDid: activeVtaDid,
     params: req.params,
+    ...(identity.entryId ? { entryId: identity.entryId } : {}),
+    ...(conn?.restBaseUrl ? { restBaseUrl: conn.restBaseUrl } : {}),
   })) as RuntimeLoginResponse;
+
+  if (!result.ok && identity.bound) {
+    return {
+      ok: false,
+      error:
+        `${result.error} — this was the first sign-in as ${identity.did}. ` +
+        `If ${req.origin ?? "the site"} refused it, that identity needs to be on its access list.`,
+    };
+  }
+  return result;
+}
+
+/**
+ * Which identity a `login()` at this origin signs in as.
+ *
+ * Three outcomes, and the third is the one that changed: a per-site persona
+ * (minted by the VTA, which holds its key), the wallet's own holder identity,
+ * or — when neither has been decided for this origin — a prompt that asks.
+ *
+ * `login()` used to have no third case. It signed as the holder DID for every
+ * site, unconditionally and silently, while the wallet's own explainer told the
+ * operator that "each site gets its own identity". Making the persona the
+ * default closes that gap; keeping the holder as an *offered* answer is what
+ * stops the change breaking every RP ACL that was enrolled before personas
+ * existed (see `site-identity.ts`).
+ */
+async function resolveLoginIdentity(
+  origin: string | undefined,
+  rpDid: string,
+  holderDid: string,
+): Promise<
+  { ok: true; entryId?: string; did: string; bound: boolean } | { ok: false; error: string }
+> {
+  // No attested origin means no site to bind a persona to. The wallet's own
+  // identity is the only honest answer, and it is what this path already did.
+  if (!origin) return { ok: true, did: holderDid, bound: false };
+
+  const listed = await handleVaultList({
+    type: RUNTIME_VAULT_LIST,
+    filter: { secretKind: PROFILE_SECRET_KIND, targetOriginPrefix: origin },
+  });
+  if (!listed.ok) return { ok: false, error: listed.error };
+
+  const decision = decideSiteIdentity(
+    listed.result.entries,
+    origin,
+    await prefersHolderIdentity(origin),
+  );
+
+  if (decision.kind === "holder") return { ok: true, did: holderDid, bound: false };
+  if (decision.kind === "persona") {
+    const did = await principalDidFor(origin, decision.entryId);
+    if (!did.ok) return { ok: false, error: did.error };
+    return { ok: true, entryId: decision.entryId, did: did.did, bound: false };
+  }
+
+  // `requestConsent`, not `gatedConsent` — a remembered origin consented to
+  // being signed in as an identity already chosen, never to one being chosen
+  // for it. Same reasoning as the proxy-login path.
+  const chosen = await requestConsent({
+    origin,
+    rpDid,
+    holderDid,
+    chooseProfile: true,
+    allowHolder: true,
+  });
+  if (!chosen.approved || !chosen.selectedDid) {
+    return { ok: false, error: "login denied by user" };
+  }
+  if (chosen.remember) await trustOrigin(origin, rpDid);
+
+  if (chosen.selectedDid === HOLDER_IDENTITY) {
+    await rememberHolderIdentity(origin);
+    return { ok: true, did: holderDid, bound: false };
+  }
+
+  const bound = await bindProfileEntry(origin, chosen.selectedDid, rpDid);
+  if (!bound.ok) return { ok: false, error: bound.error };
+  // A persona now answers for this origin, so a holder record left behind would
+  // be a second answer that never wins but is read on every sign-in.
+  await forgetSiteIdentity(origin);
+  return { ok: true, entryId: bound.entryId, did: chosen.selectedDid, bound: true };
 }
 
 async function handleLoginDidcomm(
@@ -966,16 +1070,35 @@ async function handleLoginDidcomm(
     await pinOrigin(req.origin, req.params.controlDid);
   }
 
+  // Same question as the REST path, same answer: a per-site persona signs the
+  // auth documents when this origin has one. The transport stays the wallet's
+  // own — the RP reads the caller off the document's proof, not off who
+  // delivered it.
+  const identity = await resolveLoginIdentity(req.origin, req.params.controlDid, holderDid);
+  if (!identity.ok) return { ok: false, error: identity.error };
+
   await ensureOffscreenDocument();
-  const activeVtaDid = await readActiveVtaDid();
-  if (!activeVtaDid) return { ok: false, error: "no active VTA connection — connect first" };
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
   const offscreenRequest: OffscreenDidcommLoginRequest = {
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_DIDCOMM_LOGIN,
-    vtaDid: activeVtaDid,
+    vtaDid: active.conn.vtaDid,
     params: req.params,
+    ...(identity.entryId ? { entryId: identity.entryId } : {}),
+    ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}),
   };
-  return (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
+  const result = (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
+
+  if (!result.ok && identity.bound) {
+    return {
+      ok: false,
+      error:
+        `${result.error} — this was the first sign-in as ${identity.did}. ` +
+        `If ${req.origin ?? "the site"} refused it, that identity needs to be on its access list.`,
+    };
+  }
+  return result;
 }
 
 async function handleStepUpVta(

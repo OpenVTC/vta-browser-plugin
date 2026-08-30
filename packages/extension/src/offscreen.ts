@@ -16,6 +16,11 @@ import {
   IndexedDBKVStore,
   loginViaTrustTask,
   loginViaSiop,
+  selfIssuedMinter,
+  vaultTaskSigner,
+  type ChannelSigner,
+  type SiopIdTokenMinter,
+  type TaskSigner,
   claimInboundDocument,
   type MediatorConnection,
   MediatorSessionBridge,
@@ -539,7 +544,26 @@ interface VtaSessionHandle {
  *  because the holder it is about to mint does not exist yet. */
 interface SessionIdentity {
   holder: Identity;
+  /** The wallet's own key. This is the **transport** identity — TSP seals from
+   *  it, the mediator authenticates it — and, by default, what signs outbound
+   *  documents too. */
   signing: SigningIdentity;
+  /**
+   * Signs the documents, when that is not the holder.
+   *
+   * Transport sender and document signer are different things, and the RP
+   * treats them as different things: it establishes the caller from the proof
+   * on the document (`session.did != input.signer_did` in vti-common's
+   * `handle_authenticate`), not from who delivered it. A per-site persona
+   * login rides the wallet's own transport — there is no second mediator
+   * session, and the persona has no key here to open one with — while the
+   * documents are issued by, and signed as, the persona.
+   *
+   * Kept out of `signing` deliberately: widening that field would have handed
+   * a keyless signer to `tspHolderIdentityFromSecret`, which needs the actual
+   * private key and would have failed at a distance from the cause.
+   */
+  documentSigner?: TaskSigner;
 }
 
 /** How an identity reaches a mediator.
@@ -921,6 +945,9 @@ async function buildVtaSession(
   } = {},
 ): Promise<VtaSessionHandle> {
   const { holder, signing } = who;
+  // Documents are signed by the persona when there is one; the transport
+  // stays the wallet's own either way.
+  const documentSigner: ChannelSigner = who.documentSigner ?? signing;
   const restBaseUrl = opts.restBaseUrl;
   const service = await resolveKeyAgreement(vtaDid);
   const services = opts.services ?? (await resolveVtaServices(vtaDid));
@@ -947,12 +974,14 @@ async function buildVtaSession(
         new TspChannel({
           transport: new MediatorSessionTspTransport({ connection: conn }),
           holder: tspHolderIdentityFromSecret(holder.did, signing.privateKey),
-          // The same Ed25519 key signs the outer TSP envelope (above) and the
-          // Trust-Task document (here). They are not redundant: the outer
-          // signature authenticates the *sender of the frame*, and SPEC §7.2
-          // item 7 admits no transport substitute for a proof over the
-          // document itself.
-          signing,
+          // Outer TSP envelope and inner Trust-Task proof are separate
+          // signatures, and not redundant: the outer one authenticates the
+          // *sender of the frame*, and SPEC §7.2 item 7 admits no transport
+          // substitute for a proof over the document itself. Which is exactly
+          // why they can be different keys — a persona login is sent by the
+          // wallet and issued by the persona, and the consumer reads the
+          // caller off the document.
+          signing: documentSigner,
           vta: vtaTsp,
         }),
       );
@@ -990,7 +1019,7 @@ async function buildVtaSession(
         new DidcommVtaTransport({
           bridge,
           holder,
-          signing,
+          signing: documentSigner,
           vta: service,
           mediator: conn.mediator,
         }),
@@ -999,7 +1028,7 @@ async function buildVtaSession(
   }
   const rest = restBaseUrl || services.rest?.baseUrl;
   if (rest) {
-    channels.push(new RestChannel({ baseUrl: rest, holder, signing, service }));
+    channels.push(new RestChannel({ baseUrl: rest, holder, signing: documentSigner, service }));
     // Deliberately `"unknown"`, not `"up"`. A `RestChannel` is built from a
     // URL without contacting anything, so construction is not evidence — and
     // a REST channel that turns out to be unreachable fails the caller's
@@ -2794,12 +2823,84 @@ async function doRestLogin(
   // (challenge → issueIdToken → authenticate), just running in the
   // context that owns the cache.
   const { signing } = await loadHolder(req.vtaDid);
+
+  // Which identity signs in was decided in the background, where the vault and
+  // the operator's choice live. Here it is only the difference between two
+  // id_token producers: the holder self-issues from a key this document holds,
+  // while a persona is minted by the VTA — the only place that key exists.
+  const minter = req.entryId
+    ? await personaMinter(req.vtaDid, req.restBaseUrl, req.entryId)
+    : selfIssuedMinter(signing);
+
   const tokens = await loginViaSiop({
     baseUrl: req.params.baseUrl,
     rpDid: req.params.rpDid,
-    signing,
+    minter,
   });
-  return { ok: true, result: { ...tokens, holderDid: signing.did } };
+  // The DID the RP actually authenticated, not the wallet's own. Reporting
+  // `signing.did` for a persona login would tell the page it is talking to an
+  // identity that never signed anything in this flow.
+  return { ok: true, result: { ...tokens, holderDid: minter.did } };
+}
+
+/**
+ * An `id_token` minter backed by `vault/proxy-login/0.2`.
+ *
+ * The persona's signing key never leaves the VTA, so the wallet cannot issue
+ * this token — it asks the VTA to, threading the RP's challenge through as the
+ * `nonce` so the result passes the RP's exact-match check. The `SessionBlob`
+ * comes back with the token in an `Authorization` header, which is the shape
+ * `vault/proxy-login` has always returned for did-self-issued entries.
+ *
+ * The DID is read from the entry rather than assumed, because `principalDid` is
+ * maintainer-derived: an entry whose secret was rotated at the VTA signs as
+ * something the wallet never chose, and the challenge must be requested for
+ * whatever actually signs or the RP refuses on `signer_did` mismatch.
+ */
+/** A {@link TaskSigner} for a vault entry's persona, plus the VTA session it
+ *  signs through. The persona DID is read from the entry rather than assumed,
+ *  for the same reason `personaMinter` reads it: `principalDid` is
+ *  maintainer-derived, and the RP checks the signer against the challenge
+ *  subject. */
+async function personaTaskSigner(
+  vtaDid: string,
+  restBaseUrl: string | undefined,
+  entryId: string,
+): Promise<TaskSigner> {
+  const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+  const listed = await vaultList(session, { holder, service });
+  const entry = listed.entries.find((e) => e.id === entryId);
+  if (!entry?.principalDid) {
+    throw new Error(`vault entry ${entryId} names no persona DID`);
+  }
+  return vaultTaskSigner({ session, holder, service, entryId, did: entry.principalDid });
+}
+
+async function personaMinter(
+  vtaDid: string,
+  restBaseUrl: string | undefined,
+  entryId: string,
+): Promise<SiopIdTokenMinter> {
+  const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+  const listed = await vaultList(session, { holder, service });
+  const entry = listed.entries.find((e) => e.id === entryId);
+  if (!entry?.principalDid) {
+    throw new Error(`vault entry ${entryId} names no persona DID`);
+  }
+  return {
+    did: entry.principalDid,
+    mint: async ({ nonce }) => {
+      const res = await vaultProxyLogin(session, { holder, service, entryId, nonce });
+      const auth = res.sessionBlob.headers?.find(
+        (h) => h.name.toLowerCase() === "authorization",
+      );
+      const token = auth ? /^\s*Bearer\s+(.+?)\s*$/i.exec(auth.value)?.[1] : undefined;
+      if (!token) {
+        throw new Error("vault/proxy-login: SessionBlob carried no id_token");
+      }
+      return token;
+    },
+  };
 }
 
 async function doDidcommLogin(
@@ -2830,9 +2931,17 @@ async function doDidcommLogin(
   };
   sw.mark("resolve rp services");
 
+  // A persona signs the documents when this origin has one; the transport
+  // stays the wallet's own either way. The signer talks to the **VTA** over the
+  // wallet's own session — a different channel from the RP one being built here
+  // — because that is where the persona's key lives.
+  const documentSigner = req.entryId
+    ? await personaTaskSigner(req.vtaDid, req.restBaseUrl, req.entryId)
+    : undefined;
+
   const { session } = await buildVtaSession(
     req.params.controlDid,
-    { holder: identity, signing },
+    { holder: identity, signing, ...(documentSigner ? { documentSigner } : {}) },
     (mediatorDid) => getWarmSession(mediatorDid, req.vtaDid),
     { services },
   );
@@ -2849,8 +2958,8 @@ async function doDidcommLogin(
   const rpSession = await loginViaTrustTask({
     sender: session,
     holder: identity,
-    signing,
     service,
+    ...(documentSigner ? { subject: documentSigner.did } : {}),
     ...(req.params.scope ? { scope: req.params.scope } : {}),
   });
   sw.mark("authenticate (trust-task)");
@@ -2863,7 +2972,8 @@ async function doDidcommLogin(
       // a fabricated value would.
       refreshToken: rpSession.refreshToken ?? "",
       sessionId: rpSession.sessionId,
-      holderDid: signing.did,
+      // The DID the RP authenticated, not the wallet's own — see doRestLogin.
+      holderDid: documentSigner?.did ?? signing.did,
       timings: sw.marks,
     },
   };

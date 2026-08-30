@@ -25,6 +25,7 @@ import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
 import { VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
 import { parseTrustTaskReply, signOutboundTask } from "./trust-task.js";
+import { asTaskSigner, type ChannelSigner, type TaskSigner } from "./trust-task.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -122,7 +123,7 @@ export interface TspChannelOptions {
    * over the document, naming a `verificationMethod` a verifier can resolve —
    * which the outer signature is not and cannot become.
    */
-  signing: SigningIdentity;
+  signing: ChannelSigner;
   /** Per-request timeout (default 30s). */
   timeoutMs?: number;
 }
@@ -140,11 +141,11 @@ export class TspChannel implements TrustTaskChannel {
   private readonly transport: TspTransport;
   private readonly holder: TspHolderIdentity;
   private readonly vta: TspRemoteEndpoint;
-  private readonly signing: SigningIdentity;
+  private readonly signer: TaskSigner;
   private readonly timeoutMs: number;
 
   constructor(opts: TspChannelOptions) {
-    this.signing = opts.signing;
+    this.signer = asTaskSigner(opts.signing);
     this.transport = opts.transport;
     this.holder = opts.holder;
     this.vta = opts.vta;
@@ -155,7 +156,7 @@ export class TspChannel implements TrustTaskChannel {
   private async packForVta(envelope: TrustTask<unknown>): Promise<Uint8Array> {
     // Both `send` and `notify` seal through here, so this is the one place the
     // proof has to be attached — before the JSON the seal is taken over.
-    await signOutboundTask(envelope, this.signing);
+    await signOutboundTask(envelope, this.signer);
     // TSP plaintext = the Trust-Task envelope JSON (no binding wrapper).
     const plaintext = utf8.encode(JSON.stringify(envelope));
     const packed = await pack(plaintext, this.holder.vid, this.vta.vid, {

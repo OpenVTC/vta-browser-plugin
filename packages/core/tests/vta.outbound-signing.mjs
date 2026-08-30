@@ -30,6 +30,7 @@ import {
   TRUST_TASK_ENVELOPE_TYPE,
   buildTrustTask,
   generateSigningIdentity,
+  localTaskSigner,
   signOutboundTask,
   verifyTrustTaskProof,
 } from "../dist/index.js";
@@ -220,7 +221,7 @@ test("an envelope whose issuer is not the signer is refused before it is sent", 
   });
 
   await assert.rejects(
-    () => signOutboundTask(envelope, signing),
+    () => signOutboundTask(envelope, localTaskSigner(signing)),
     (err) => {
       assert.equal(err.code, "e.client.identity");
       return true;
@@ -251,7 +252,7 @@ test("re-signing a document that already carries a proof does not sign over it",
   });
 
   envelope.proof = { type: "DataIntegrityProof", proofValue: "zStaleGarbage" };
-  await signOutboundTask(envelope, signing);
+  await signOutboundTask(envelope, localTaskSigner(signing));
 
   await assertSignedBy(envelope, signing.did);
 });

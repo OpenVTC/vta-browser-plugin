@@ -105,21 +105,79 @@ export function buildTrustTask<P>(
  */
 export async function signOutboundTask(
   envelope: TrustTask<unknown>,
-  signing: SigningIdentity,
+  signer: TaskSigner,
 ): Promise<void> {
   // SPEC §7.2 item 6 — the in-band issuer must be the party that signed. A
   // consumer rejects the mismatch, so catching it here turns a remote
   // `identityMismatch` into a local error naming both DIDs.
-  if (envelope.issuer !== undefined && envelope.issuer !== signing.did) {
+  if (envelope.issuer !== undefined && envelope.issuer !== signer.did) {
     throw new VtaClientError(
       "e.client.identity",
-      `${envelope.type}: envelope issuer ${envelope.issuer} is not the signing identity ${signing.did}`,
+      `${envelope.type}: envelope issuer ${envelope.issuer} is not the signing identity ${signer.did}`,
     );
   }
-  await signTrustTask({
-    envelope: envelope as unknown as Record<string, unknown> & { proof?: unknown },
-    signing,
-  });
+  await signer.sign(envelope);
+}
+
+/**
+ * Whatever can put a proof on an outbound document.
+ *
+ * An interface rather than a key, because the wallet does not hold every key it
+ * needs to sign with. A per-site persona's key lives at the VTA and never
+ * leaves it, so signing as one is a request, not a computation — but from the
+ * channel's point of view the two are the same operation, and the RP cannot
+ * tell them apart either: it verifies a proof against `did`, wherever the
+ * bytes were produced.
+ *
+ * **Still REQUIRED, for the reason above.** Widening the type does not weaken
+ * the rule that a channel cannot be built without one; a channel with no signer
+ * would still be a channel that silently sends unsigned documents. What it
+ * changes is only *where the key is*.
+ *
+ * `did` must be the DID the proof will verify under. A signer whose `did`
+ * disagrees with what it actually signs produces documents that fail at the
+ * consumer with `identityMismatch`, and the issuer check above cannot catch it
+ * — it compares the envelope against this field, not against the signature.
+ */
+export interface TaskSigner {
+  readonly did: string;
+  sign(envelope: TrustTask<unknown>): Promise<void>;
+}
+
+/** A signer backed by a key this process holds — the holder's own identity,
+ *  and what every channel used before the persona paths existed. */
+export function localTaskSigner(signing: SigningIdentity): TaskSigner {
+  return {
+    did: signing.did,
+    sign: async (envelope) => {
+      await signTrustTask({
+        envelope: envelope as unknown as Record<string, unknown> & { proof?: unknown },
+        signing,
+      });
+    },
+  };
+}
+
+/**
+ * What a channel accepts for its signing input.
+ *
+ * A bare {@link SigningIdentity} is still accepted because the deprecated
+ * `*Rest` helpers thread one straight through their own options types, and
+ * changing that would rewrite fourteen public interfaces to say something none
+ * of their callers need to know. It is normalised on the way in, so exactly one
+ * shape reaches {@link signOutboundTask}.
+ *
+ * This is not a compatibility fold: both arms are live, they describe local
+ * objects rather than a wire format, and neither is a legacy spelling of the
+ * other.
+ */
+export type ChannelSigner = SigningIdentity | TaskSigner;
+
+/** Normalise a channel's signing input. Call once, at construction — a channel
+ *  that re-normalised per send would re-derive the same object on every
+ *  outbound document. */
+export function asTaskSigner(signer: ChannelSigner): TaskSigner {
+  return "sign" in signer ? signer : localTaskSigner(signer);
 }
 
 export interface ParseTrustTaskReplyOptions {

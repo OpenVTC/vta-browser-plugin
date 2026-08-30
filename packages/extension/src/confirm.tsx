@@ -3,6 +3,7 @@
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { collapseDid, splitDid, type DidPart } from "./did-display.js";
+import { HOLDER_IDENTITY } from "./site-identity.js";
 import { extractAgentNames, withoutScheme } from "./agent-name.js";
 import "./theme.css";
 import {
@@ -64,6 +65,13 @@ const stepUpReason = params.get("reason");
 // the identity a site sees IS the approval, and splitting it into two screens
 // would only train the operator to click through both.
 const isChooseProfile = params.get("chooseProfile") === "1";
+// Whether "my wallet's own identity" is one of the answers.
+//
+// Only `login()` can honour it: it self-issues the id_token from a key the
+// browser holds. `proxyLogin` and `walletProfile` cannot — the VTA mints as a
+// vault entry's persona, and the holder is not one — so offering it there would
+// present a choice that fails after it is made.
+const allowsHolder = params.get("allowHolder") === "1";
 // M5: when set, the rpDid this origin previously used. Render a
 // louder warning so the operator sees the swap and decides
 // whether to approve it.
@@ -483,9 +491,11 @@ function Confirm() {
           return;
         }
         setPersonas(reply.result.dids);
-        // One persona is not a choice. Preselect it so the operator is deciding
-        // the thing that is actually in question — whether this site gets an
-        // identity at all — instead of confirming a dropdown with one row.
+        // Preselect a sole persona as the recommended default — the wallet's
+        // own identity is always in the list beside it, so this is offering a
+        // default rather than removing the choice. Approve stays disabled with
+        // no personas at all, so the operator has to pick the holder option
+        // deliberately rather than inherit it.
         if (reply.result.dids.length === 1) setSelectedDid(reply.result.dids[0]!.did);
       })
       .catch((e: unknown) => {
@@ -740,7 +750,7 @@ function Confirm() {
             </div>
           ) : personas === null ? (
             <div style={{ fontSize: 12, color: colours.textMuted }}>Loading your identities…</div>
-          ) : personas.length === 0 ? (
+          ) : personas.length === 0 && !allowsHolder ? (
             <div style={{ fontSize: 12, color: colours.warn }}>
               Your agent hosts no identities yet, so there is nothing to sign in as. Create one in
               the wallet (Vault → identities) and try again.
@@ -767,6 +777,18 @@ function Confirm() {
                     {collapsedDidText(d.did)} · {d.contextId}
                   </option>
                 ))}
+                {/* The wallet's own identity, offered explicitly rather than
+                    used as a silent fallback. Every ACL enrolment made before
+                    per-site personas existed names this DID, so removing the
+                    route would break those sites with an RP refusal as the
+                    only signal. Last in the list, and labelled with what it
+                    costs, because it is the weaker answer — not the default. */}
+                {allowsHolder && (
+                  <option value={HOLDER_IDENTITY}>
+                    My wallet&apos;s own identity
+                    {holderDid ? ` · ${collapsedDidText(holderDid)}` : ""}
+                  </option>
+                )}
               </select>
               {selectedDid && (
                 <div
@@ -778,7 +800,7 @@ function Confirm() {
                     color: colours.textMuted,
                   }}
                 >
-                  {selectedDid}
+                  {selectedDid === HOLDER_IDENTITY ? (holderDid ?? "") : selectedDid}
                 </div>
               )}
               {/* The ACL caveat. Stated as a fact about the site, not a wallet
@@ -786,21 +808,35 @@ function Confirm() {
                   identities it admits, and nothing this wallet does can add
                   one. Said here rather than after the failure so the operator
                   can copy the DID while it is on screen. */}
-              <p style={{ margin: "10px 0 0", fontSize: 11, color: colours.textMuted }}>
-                The site has to allow this identity before it will let you in. If sign-in is
-                refused, ask{" "}
-                {originHost ? (
-                  <strong style={{ fontFamily: colours.mono }}>{originHost}</strong>
-                ) : (
-                  "the site"
-                )}{" "}
-                to add the identity above to its access list, then try again.
-              </p>
-              {personas.length > 1 && (
-                <p style={{ margin: "6px 0 0", fontSize: 11, color: colours.textMuted }}>
-                  Using an identity you already use elsewhere lets both sites work out you are the
-                  same person. A fresh one for this site keeps them separate.
+              {selectedDid === HOLDER_IDENTITY ? (
+                // Different warning, because the trade is the opposite one.
+                // The holder DID already works at every site that enrolled it,
+                // so there is no ACL step — the cost is that those sites can
+                // all recognise the same person.
+                <p style={{ margin: "10px 0 0", fontSize: 11, color: colours.warn }}>
+                  This is the same identity you use everywhere else, so any site that has it can
+                  work out you are the same person. Choose it when this site&apos;s access list
+                  already names your wallet&apos;s identity.
                 </p>
+              ) : (
+                <>
+                  <p style={{ margin: "10px 0 0", fontSize: 11, color: colours.textMuted }}>
+                    The site has to allow this identity before it will let you in. If sign-in is
+                    refused, ask{" "}
+                    {originHost ? (
+                      <strong style={{ fontFamily: colours.mono }}>{originHost}</strong>
+                    ) : (
+                      "the site"
+                    )}{" "}
+                    to add the identity above to its access list, then try again.
+                  </p>
+                  {personas.length > 1 && (
+                    <p style={{ margin: "6px 0 0", fontSize: 11, color: colours.textMuted }}>
+                      Using an identity you already use elsewhere lets both sites work out you are
+                      the same person. A fresh one for this site keeps them separate.
+                    </p>
+                  )}
+                </>
               )}
             </>
           )}

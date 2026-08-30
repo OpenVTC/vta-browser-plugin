@@ -53,6 +53,15 @@ export type { TokenBundle };
 export interface AuthTaskCallerParams {
   holder: Identity;
   service: RemoteDidcommEndpoint;
+  /**
+   * DID the document is issued by. Defaults to the holder's.
+   *
+   * Different only when the channel signs as someone else — a per-site persona,
+   * whose key lives at the VTA. It MUST match the channel's signer:
+   * `signOutboundTask` refuses the mismatch locally, which is better than the
+   * consumer's `identityMismatch` with no hint that the cause is here.
+   */
+  issuer?: string;
 }
 
 export interface AuthChallengeParams extends AuthTaskCallerParams {
@@ -72,7 +81,7 @@ export async function requestAuthChallenge(
     ...(params.purpose ? { purpose: params.purpose } : {}),
   };
   const envelope = buildTrustTask(AUTH_CHALLENGE, payload, {
-    issuer: params.holder.did,
+    issuer: params.issuer ?? params.holder.did,
     recipient: params.service.did,
   });
   return sender.send<AuthChallengeResponsePayload>(envelope, {
@@ -117,7 +126,7 @@ export async function authenticateSession(
     ...(params.scope && params.scope.length > 0 ? { scope: params.scope } : {}),
   };
   const envelope = buildTrustTask(AUTH_AUTHENTICATE, payload, {
-    issuer: params.holder.did,
+    issuer: params.issuer ?? params.holder.did,
     recipient: params.service.did,
   });
   return sender.send<AuthAuthenticateResponsePayload>(envelope, {
@@ -151,7 +160,7 @@ export async function refreshAuthSession(
     ...(params.scope ? { scope: params.scope } : {}),
   };
   const envelope = buildTrustTask(AUTH_REFRESH, payload, {
-    issuer: params.holder.did,
+    issuer: params.issuer ?? params.holder.did,
     recipient: params.service.did,
   });
   return sender.send<AuthRefreshResponsePayload>(envelope, {
@@ -209,7 +218,7 @@ export async function startPasskeyLogin(
     ...(params.purpose !== undefined ? { purpose: params.purpose } : {}),
   };
   const envelope = buildTrustTask(AUTH_PASSKEY_LOGIN_START, payload, {
-    issuer: params.holder.did,
+    issuer: params.issuer ?? params.holder.did,
     recipient: params.service.did,
   });
   return sender.send<AuthPasskeyLoginStartResponsePayload>(envelope, {
@@ -246,7 +255,7 @@ export async function finishPasskeyLogin(
     credential: params.credential,
   };
   const envelope = buildTrustTask(AUTH_PASSKEY_LOGIN_FINISH, payload, {
-    issuer: params.holder.did,
+    issuer: params.issuer ?? params.holder.did,
     recipient: params.service.did,
   });
   return sender.send<AuthPasskeyLoginFinishResponsePayload>(envelope, {

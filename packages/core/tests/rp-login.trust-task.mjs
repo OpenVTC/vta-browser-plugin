@@ -88,19 +88,36 @@ test("a refresh token is omitted rather than invented when the RP sends none", a
   assert.ok(!("refreshToken" in s) || s.refreshToken === undefined);
 });
 
-test("a signing identity that is not the holder is refused before anything is sent", async () => {
-  // The proof is the authentication, so a signature by another key
-  // authenticates nobody — and the RP's answer for that is an opaque
-  // permissionDenied that says nothing about the cause being local.
+test("both auth documents are issued by the holder when no subject is named", async () => {
+  // The guard this replaces asserted "the signing identity must be the
+  // holder", checked inside `loginViaTrustTask`. It could not survive a
+  // channel that signs as a per-site persona, and it was checking the wrong
+  // thing anyway: `loginViaTrustTask` never signs. `signOutboundTask` compares
+  // the envelope's issuer against the signer's DID on every outbound document,
+  // which is the same rule enforced where the signature actually happens.
+  //
+  // What still has to hold here is that both steps name ONE identity. The RP
+  // refuses unless the DID it issued the challenge to is the one that signed
+  // (`session.did != input.signer_did`), so a challenge for A spent by a
+  // document issued by B fails remotely with nothing pointing here.
   const sender = rp();
-  await assert.rejects(
-    () =>
-      loginViaTrustTask(
-        opts(sender, { signing: { did: "did:key:zSomeoneElse", kid: "x", privateKey: new Uint8Array(32) } }),
-      ),
-    /is not the holder/,
-  );
-  assert.equal(sender.sent.length, 0, "nothing may reach the RP");
+  await loginViaTrustTask(opts(sender));
+  assert.equal(sender.sent.length, 2);
+  assert.equal(sender.sent[0].envelope.issuer, HOLDER);
+  assert.equal(sender.sent[1].envelope.issuer, HOLDER);
+  assert.equal(sender.sent[0].envelope.payload.subject, HOLDER);
+});
+
+test("a named subject issues BOTH documents, not just the challenge", async () => {
+  // The half that would break silently: request the challenge for the persona
+  // but issue the authenticate as the holder, and the RP rejects on the signer
+  // check — after the operator has already approved the sign-in.
+  const PERSONA = "did:webvh:zScid:agent.example:contexts:personal";
+  const sender = rp();
+  await loginViaTrustTask(opts(sender, { subject: PERSONA }));
+  assert.equal(sender.sent[0].envelope.issuer, PERSONA);
+  assert.equal(sender.sent[0].envelope.payload.subject, PERSONA);
+  assert.equal(sender.sent[1].envelope.issuer, PERSONA);
 });
 
 test("a refused challenge surfaces as itself, not as a login failure", async () => {

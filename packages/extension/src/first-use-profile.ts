@@ -104,3 +104,33 @@ export function buildProfileEntry(
     },
   };
 }
+
+/** What a sign-in at this origin should do about identity. */
+export type SiteIdentityDecision =
+  | { kind: "persona"; entryId: string }
+  | { kind: "holder" }
+  | { kind: "ask" };
+
+/**
+ * Resolve the identity for a sign-in, from the two places the answer can live.
+ *
+ * A bound persona is a vault entry; choosing the wallet's own identity is a
+ * local record (`site-identity.ts`). **A persona always wins**, and the order
+ * is not arbitrary: a persona is the more specific statement about this site,
+ * and it is the one the operator can see and revoke in the vault. Reading the
+ * local record first would let a stale holder choice mask an entry the operator
+ * later bound through `proxyLogin`, and the sign-in would quietly use a
+ * different identity than the vault says it does.
+ *
+ * `ask` means neither exists — raise the picker.
+ */
+export function decideSiteIdentity(
+  entries: readonly VaultEntryView[],
+  origin: string,
+  prefersHolder: boolean,
+): SiteIdentityDecision {
+  const match = matchProfileEntry(entries, origin);
+  if (match) return { kind: "persona", entryId: match.id };
+  if (prefersHolder) return { kind: "holder" };
+  return { kind: "ask" };
+}
