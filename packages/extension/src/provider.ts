@@ -74,19 +74,27 @@ interface VtaWallet {
    *  The wallet routes via `vault/sign-trust-task/0.1` so the long-term
    *  signing key never leaves the VTA. */
   signTrustTask(params: SignTrustTaskParams): Promise<SignTrustTaskResult>;
-  /** VTA-proxied login (vault/proxy-login/0.1). The VTA mints a session
+  /** VTA-proxied login (vault/proxy-login/0.2). The VTA mints a session
    *  credential (SIOP id_token for did-self-issued entries) on the
    *  holder's behalf and returns it in a SessionBlob. The long-term
    *  signing key never leaves the VTA. The caller threads its
    *  `nonce` (typically the RP's `/auth/challenge` value) so the
-   *  resulting id_token passes the RP's nonce verification. */
+   *  resulting id_token passes the RP's nonce verification.
+   *
+   *  **Omit `entryId`.** The wallet resolves the entry from this page's origin,
+   *  and on a first visit asks the user which identity to sign in as and
+   *  remembers the answer. Naming an entry means first calling `vaultList()`
+   *  to learn one, which costs a second consent prompt and shows this site the
+   *  rest of the user's vault. */
   proxyLogin(params: ProxyLoginParams): Promise<VaultProxyLoginResultView>;
   /** Enumerate vault entries (metadata only, no secret material) via
-   *  vault/list/0.1. Typical use from an RP page: filter by
-   *  `targetDid` and `secretKind: "didSelfIssued"` to discover
-   *  proxy-login candidates pinned to the RP. Each returned entry's
-   *  `principalDid` is the DID the entry would act AS when used in a
-   *  proxy-login call. */
+   *  vault/list/0.1. Each returned entry's `principalDid` is the DID the entry
+   *  would act AS when used in a proxy-login call.
+   *
+   *  Not needed to *drive* a proxy login — `proxyLogin({})` resolves the entry
+   *  itself. Reach for this only when the page has something to show about the
+   *  user's other entries, and expect a consent prompt: enumerating a vault to
+   *  the site it belongs to is a disclosure, not a lookup. */
   vaultList(params: VaultListParams): Promise<VaultListResultView>;
 }
 

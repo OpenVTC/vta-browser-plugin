@@ -7,7 +7,10 @@ import { extractAgentNames, withoutScheme } from "./agent-name.js";
 import "./theme.css";
 import {
   RUNTIME_CONSENT_RESULT,
+  RUNTIME_LIST_DIDS,
   RUNTIME_VERIFY_RP_DID,
+  type DidRecordView,
+  type RuntimeListDidsResponse,
   type RuntimeVerifyRpDidResponse,
   type VerifyRpDidResult,
 } from "./bridge-protocol.js";
@@ -55,20 +58,45 @@ const action = params.get("action");
 // attributed, not trusted: rendered as plain text, never markup.
 const isStepUp = params.get("stepUp") === "1";
 const stepUpReason = params.get("reason");
+// First sign-in at this site: no persona is bound to it yet, so this prompt
+// also asks WHICH persona to use and the background binds the answer as a vault
+// entry. The picker is part of the same decision, not a second one — choosing
+// the identity a site sees IS the approval, and splitting it into two screens
+// would only train the operator to click through both.
+const isChooseProfile = params.get("chooseProfile") === "1";
 // M5: when set, the rpDid this origin previously used. Render a
 // louder warning so the operator sees the swap and decides
 // whether to approve it.
 const changedFromRpDid = params.get("changedFrom");
 
-function decide(approved: boolean, remember = false, prfOutputB64u?: string): void {
+function decide(
+  approved: boolean,
+  remember = false,
+  prfOutputB64u?: string,
+  selectedDid?: string,
+): void {
   chrome.runtime.sendMessage({
     type: RUNTIME_CONSENT_RESULT,
     consentId,
     approved,
     remember,
     ...(prfOutputB64u ? { prfOutputB64u } : {}),
+    ...(selectedDid ? { selectedDid } : {}),
   });
   window.close();
+}
+
+/** `collapseDid` as a plain string.
+ *
+ *  An `<option>` renders text and nothing else, so the styled parts the rest of
+ *  this surface uses cannot go in one. Joining the parts keeps the same
+ *  elision — SCID shortened, host and path intact — rather than falling back to
+ *  a head-and-tail slice that would drop the host, which is the one segment a
+ *  human can actually check. */
+function collapsedDidText(did: string): string {
+  return collapseDid(did)
+    .map((p) => p.text)
+    .join("");
 }
 
 function originHostname(o: string): string | undefined {
@@ -387,6 +415,12 @@ function VerificationDetails({ state }: { state: VerificationState }) {
 function Confirm() {
   const [verification, setVerification] = useState<VerificationState>({ kind: "pending" });
   const [remember, setRemember] = useState(false);
+  // First-use persona picker. `personas === null` means "not loaded yet"; an
+  // empty array means the agent hosts none, which is a dead end this prompt has
+  // to say out loud rather than render as an empty dropdown.
+  const [personas, setPersonas] = useState<DidRecordView[] | null>(null);
+  const [personasError, setPersonasError] = useState<string | null>(null);
+  const [selectedDid, setSelectedDid] = useState("");
   const originHost = originHostname(origin);
 
   // Names the RESOLVED DOCUMENT claims. Never inferred from the DID: the
@@ -432,13 +466,56 @@ function Confirm() {
     // resolve runs once on mount.
   }, []);
 
+  // The personas the agent can mint a SIOP id_token as — it holds their signing
+  // keys, so this list is exactly the set of identities this site could be
+  // signed into as. Asked for across every context: a persona and its vault
+  // entry must share a context, and the record carries its own, so there is
+  // nothing for the operator to choose twice.
+  useEffect(() => {
+    if (!isChooseProfile) return;
+    let cancelled = false;
+    chrome.runtime
+      .sendMessage({ type: RUNTIME_LIST_DIDS })
+      .then((reply: RuntimeListDidsResponse) => {
+        if (cancelled) return;
+        if (!reply.ok) {
+          setPersonasError(reply.error);
+          return;
+        }
+        setPersonas(reply.result.dids);
+        // One persona is not a choice. Preselect it so the operator is deciding
+        // the thing that is actually in question — whether this site gets an
+        // identity at all — instead of confirming a dropdown with one row.
+        if (reply.result.dids.length === 1) setSelectedDid(reply.result.dids[0]!.did);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setPersonasError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const isAction = !!action;
   const title = isStepUp
     ? "Step-up approval request"
-    : isAction
-      ? "Confirmation request"
-      : "Sign-in request";
-  const subtitle = isStepUp ? (
+    : isChooseProfile
+      ? "First sign-in at this site"
+      : isAction
+        ? "Confirmation request"
+        : "Sign-in request";
+  const subtitle = isChooseProfile ? (
+    originHost ? (
+      <>
+        You have not signed in to{" "}
+        <strong style={{ fontFamily: colours.mono }}>{originHost}</strong> before. Choose the
+        identity it should know you as — the wallet will remember it for this site.
+      </>
+    ) : (
+      <>An unknown page is asking you to sign in for the first time.</>
+    )
+  ) : isStepUp ? (
     originHost ? (
       <>
         <strong style={{ fontFamily: colours.mono }}>{originHost}</strong> is asking you to
@@ -486,7 +563,11 @@ function Confirm() {
         <div style={{ fontSize: 11, fontWeight: 700, color: colours.textSubtle, letterSpacing: 0.5, textTransform: "uppercase" }}>
           VTA Wallet
         </div>
-        <Badge tone="neutral">{isAction ? "Inbound" : "Outbound"}</Badge>
+        {/* A first-use prompt carries an `action` string, but it is not an
+            inbound request — it is this browser asking to sign in. Labelling
+            it "Inbound" would invert the direction on the one screen whose job
+            is telling the operator who is asking whom. */}
+        <Badge tone="neutral">{isAction && !isChooseProfile ? "Inbound" : "Outbound"}</Badge>
       </div>
 
       <h1 style={{ fontSize: 18, margin: "0 0 4px", fontWeight: 700 }}>{title}</h1>
@@ -624,8 +705,110 @@ function Confirm() {
         </div>
       )}
 
+      {/* First-use persona picker.
+          The "Sign in as" holder card below is replaced by this: on a first
+          sign-in there is no answer to show yet, and a card naming the holder
+          DID would say the site is about to see the wallet's own address —
+          which is exactly what a per-site persona exists to avoid. */}
+      {isChooseProfile && (
+        <div
+          style={{
+            background: colours.card,
+            border: `1px solid ${colours.border}`,
+            borderLeft: `3px solid ${colours.primary}`,
+            borderRadius: 10,
+            padding: 14,
+            marginBottom: 14,
+          }}
+        >
+          <div
+            style={{
+              color: colours.textMuted,
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: 0.3,
+              textTransform: "uppercase",
+              marginBottom: 6,
+            }}
+          >
+            Sign in as
+          </div>
+
+          {personasError ? (
+            <div style={{ fontSize: 12, color: colours.danger }}>
+              Could not read your identities: {personasError}
+            </div>
+          ) : personas === null ? (
+            <div style={{ fontSize: 12, color: colours.textMuted }}>Loading your identities…</div>
+          ) : personas.length === 0 ? (
+            <div style={{ fontSize: 12, color: colours.warn }}>
+              Your agent hosts no identities yet, so there is nothing to sign in as. Create one in
+              the wallet (Vault → identities) and try again.
+            </div>
+          ) : (
+            <>
+              <select
+                value={selectedDid}
+                onChange={(e) => setSelectedDid(e.currentTarget.value)}
+                style={{
+                  width: "100%",
+                  fontFamily: colours.mono,
+                  fontSize: 12,
+                  padding: "8px 6px",
+                  borderRadius: 6,
+                  border: `1px solid ${colours.border}`,
+                  background: "var(--w-surface)",
+                  color: colours.text,
+                }}
+              >
+                <option value="">Choose an identity…</option>
+                {personas.map((d) => (
+                  <option key={d.did} value={d.did}>
+                    {collapsedDidText(d.did)} · {d.contextId}
+                  </option>
+                ))}
+              </select>
+              {selectedDid && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    fontFamily: colours.mono,
+                    fontSize: 11,
+                    wordBreak: "break-all",
+                    color: colours.textMuted,
+                  }}
+                >
+                  {selectedDid}
+                </div>
+              )}
+              {/* The ACL caveat. Stated as a fact about the site, not a wallet
+                  error, because it is not one: the relying party decides which
+                  identities it admits, and nothing this wallet does can add
+                  one. Said here rather than after the failure so the operator
+                  can copy the DID while it is on screen. */}
+              <p style={{ margin: "10px 0 0", fontSize: 11, color: colours.textMuted }}>
+                The site has to allow this identity before it will let you in. If sign-in is
+                refused, ask{" "}
+                {originHost ? (
+                  <strong style={{ fontFamily: colours.mono }}>{originHost}</strong>
+                ) : (
+                  "the site"
+                )}{" "}
+                to add the identity above to its access list, then try again.
+              </p>
+              {personas.length > 1 && (
+                <p style={{ margin: "6px 0 0", fontSize: 11, color: colours.textMuted }}>
+                  Using an identity you already use elsewhere lets both sites work out you are the
+                  same person. A fresh one for this site keeps them separate.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       {/* Holder card */}
-      {holderDid && (
+      {holderDid && !isChooseProfile && (
         <div
           style={{
             background: colours.card,
@@ -689,26 +872,32 @@ function Confirm() {
           Deny
         </button>
         <button
-          onClick={() => decide(true, remember)}
+          // A first-use approval that named no persona would leave the
+          // background to pick one, which is the wallet deciding who this site
+          // knows you as. Disabled until the operator has said.
+          disabled={isChooseProfile && !selectedDid}
+          onClick={() => decide(true, remember, undefined, selectedDid || undefined)}
           style={{
             flex: 1,
             padding: "10px 0",
             border: "none",
-            background: colours.primary,
-            color: "var(--w-accent-ink)",
+            background: isChooseProfile && !selectedDid ? colours.border : colours.primary,
+            color: isChooseProfile && !selectedDid ? colours.textMuted : "var(--w-accent-ink)",
             borderRadius: 8,
             fontSize: 13,
             fontWeight: 600,
-            cursor: "pointer",
+            cursor: isChooseProfile && !selectedDid ? "not-allowed" : "pointer",
           }}
           onMouseEnter={(e) => {
+            if (isChooseProfile && !selectedDid) return;
             (e.currentTarget as HTMLButtonElement).style.background = colours.primaryHover;
           }}
           onMouseLeave={(e) => {
+            if (isChooseProfile && !selectedDid) return;
             (e.currentTarget as HTMLButtonElement).style.background = colours.primary;
           }}
         >
-          Approve
+          {isChooseProfile ? "Approve & remember identity" : "Approve"}
         </button>
       </div>
     </div>
