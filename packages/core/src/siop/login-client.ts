@@ -21,13 +21,46 @@ export interface SiopLoginResult {
   timings: TimingMark[];
 }
 
+/**
+ * Where the `id_token` comes from.
+ *
+ * Two producers, and the difference is not an implementation detail: the
+ * holder self-issues locally with a key the browser holds, while a per-site
+ * persona is minted **by the VTA**, which is the only place that persona's
+ * signing key exists. The RP cannot tell them apart and should not — both are
+ * an `id_token` signed by `did` — but the caller has to choose, so the choice
+ * is a parameter rather than a branch buried in here.
+ *
+ * `did` is load-bearing beyond the signature: the challenge is requested for
+ * it, and the RP refuses unless the DID it issued the challenge to is the one
+ * that signed (`session.did != input.signer_did` in vti-common's
+ * `handle_authenticate`). So a minter whose `did` disagrees with what it
+ * actually signs with fails at the RP, not here.
+ */
+export interface SiopIdTokenMinter {
+  /** The DID the `id_token` is issued by — its `iss` and `sub`. */
+  readonly did: string;
+  mint(input: { audience: string; nonce: string }): Promise<string>;
+}
+
+/** The holder self-issuing locally, which is what this module did before the
+ *  source became pluggable. */
+export function selfIssuedMinter(signing: SigningIdentity): SiopIdTokenMinter {
+  return {
+    did: signing.did,
+    mint: ({ audience, nonce }) =>
+      Promise.resolve(issueIdToken({ identity: signing, audience, nonce })),
+  };
+}
+
 export interface SiopLoginOptions {
   /** Base URL of the RP's auth API (e.g. `https://hosting.example/api`). */
   baseUrl: string;
   /** The RP's identifier — its server DID — used as the `id_token` `aud`. */
   rpDid: string;
-  /** The holder's Ed25519 signing identity (from `generateOrLoadHolderIdentity().signing`). */
-  signing: SigningIdentity;
+  /** Who signs in, and how the `id_token` is produced. Use
+   *  {@link selfIssuedMinter} for the holder's own identity. */
+  minter: SiopIdTokenMinter;
   /** Optional ephemeral session pubkey (`z6Mk…` Ed25519 multikey) to bind
    *  for subsequent trust-task proofs. */
   sessionPubkeyB58btc?: string;
@@ -51,7 +84,7 @@ export async function loginViaSiop(
   const challengeRes = await fetchFn(`${base}/auth/challenge`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ did: opts.signing.did }),
+    body: JSON.stringify({ did: opts.minter.did }),
   });
   if (!challengeRes.ok) {
     throw new Error(
@@ -67,9 +100,10 @@ export async function loginViaSiop(
   };
   sw.mark("challenge");
 
-  // 2. Self-issue the id_token — aud = the RP's DID, nonce = the challenge.
-  const idToken = issueIdToken({
-    identity: opts.signing,
+  // 2. Mint the id_token — aud = the RP's DID, nonce = the challenge. Either
+  //    self-issued here, or minted by the VTA for a per-site persona whose key
+  //    the browser does not hold.
+  const idToken = await opts.minter.mint({
     audience: opts.rpDid,
     nonce: challenge.challenge,
   });
@@ -79,7 +113,7 @@ export async function loginViaSiop(
   const envelope = {
     id: `urn:uuid:${globalThis.crypto.randomUUID()}`,
     type: TASK_AUTH_AUTHENTICATE,
-    issuer: opts.signing.did,
+    issuer: opts.minter.did,
     issuedAt: new Date().toISOString(),
     payload: {
       id_token: idToken,

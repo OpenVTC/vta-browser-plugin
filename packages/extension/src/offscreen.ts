@@ -16,6 +16,8 @@ import {
   IndexedDBKVStore,
   loginViaTrustTask,
   loginViaSiop,
+  selfIssuedMinter,
+  type SiopIdTokenMinter,
   claimInboundDocument,
   type MediatorConnection,
   MediatorSessionBridge,
@@ -2794,12 +2796,65 @@ async function doRestLogin(
   // (challenge → issueIdToken → authenticate), just running in the
   // context that owns the cache.
   const { signing } = await loadHolder(req.vtaDid);
+
+  // Which identity signs in was decided in the background, where the vault and
+  // the operator's choice live. Here it is only the difference between two
+  // id_token producers: the holder self-issues from a key this document holds,
+  // while a persona is minted by the VTA — the only place that key exists.
+  const minter = req.entryId
+    ? await personaMinter(req.vtaDid, req.restBaseUrl, req.entryId)
+    : selfIssuedMinter(signing);
+
   const tokens = await loginViaSiop({
     baseUrl: req.params.baseUrl,
     rpDid: req.params.rpDid,
-    signing,
+    minter,
   });
-  return { ok: true, result: { ...tokens, holderDid: signing.did } };
+  // The DID the RP actually authenticated, not the wallet's own. Reporting
+  // `signing.did` for a persona login would tell the page it is talking to an
+  // identity that never signed anything in this flow.
+  return { ok: true, result: { ...tokens, holderDid: minter.did } };
+}
+
+/**
+ * An `id_token` minter backed by `vault/proxy-login/0.2`.
+ *
+ * The persona's signing key never leaves the VTA, so the wallet cannot issue
+ * this token — it asks the VTA to, threading the RP's challenge through as the
+ * `nonce` so the result passes the RP's exact-match check. The `SessionBlob`
+ * comes back with the token in an `Authorization` header, which is the shape
+ * `vault/proxy-login` has always returned for did-self-issued entries.
+ *
+ * The DID is read from the entry rather than assumed, because `principalDid` is
+ * maintainer-derived: an entry whose secret was rotated at the VTA signs as
+ * something the wallet never chose, and the challenge must be requested for
+ * whatever actually signs or the RP refuses on `signer_did` mismatch.
+ */
+async function personaMinter(
+  vtaDid: string,
+  restBaseUrl: string | undefined,
+  entryId: string,
+): Promise<SiopIdTokenMinter> {
+  const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+  const listed = await vaultList(session, { holder, service });
+  const entry = listed.entries.find((e) => e.id === entryId);
+  if (!entry?.principalDid) {
+    throw new Error(`vault entry ${entryId} names no persona DID`);
+  }
+  return {
+    did: entry.principalDid,
+    mint: async ({ nonce }) => {
+      const res = await vaultProxyLogin(session, { holder, service, entryId, nonce });
+      const auth = res.sessionBlob.headers?.find(
+        (h) => h.name.toLowerCase() === "authorization",
+      );
+      const token = auth ? /^\s*Bearer\s+(.+?)\s*$/i.exec(auth.value)?.[1] : undefined;
+      if (!token) {
+        throw new Error("vault/proxy-login: SessionBlob carried no id_token");
+      }
+      return token;
+    },
+  };
 }
 
 async function doDidcommLogin(

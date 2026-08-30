@@ -5,6 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildProfileEntry,
+  decideSiteIdentity,
   matchProfileEntry,
   profileLabelFor,
   PROFILE_SECRET_KIND,
@@ -138,4 +139,40 @@ test("the label is the hostname, and never a fabricated one", () => {
   assert.equal(profileLabelFor("https://shop.example:8443"), "shop.example");
   // Unparseable input comes back verbatim rather than as a guess.
   assert.equal(profileLabelFor("not a url"), "not a url");
+});
+
+// ─── Which identity a login() at this origin uses ───
+
+test("a bound persona is used, and beats a stale holder choice", () => {
+  // The operator once chose the wallet's own identity here, then later bound a
+  // persona (through proxyLogin, say). The persona is the more specific
+  // statement and the one visible in the vault, so reading the local record
+  // first would sign in as an identity the vault contradicts.
+  const e = entry("01A", [{ kind: "webOrigin", origin }]);
+  assert.deepEqual(decideSiteIdentity([e], origin, true), { kind: "persona", entryId: "01A" });
+  assert.deepEqual(decideSiteIdentity([e], origin, false), { kind: "persona", entryId: "01A" });
+});
+
+test("the recorded holder choice is honoured when no persona is bound", () => {
+  assert.deepEqual(decideSiteIdentity([], origin, true), { kind: "holder" });
+});
+
+test("neither recorded means ask — never a silent holder login", () => {
+  // The whole point of the change: login() used to sign as the holder here,
+  // unconditionally and with no signal, while the wallet told the operator
+  // that each site gets its own identity.
+  assert.deepEqual(decideSiteIdentity([], origin, false), { kind: "ask" });
+});
+
+test("another site's persona does not answer for this one", () => {
+  const other = entry("01A", [{ kind: "webOrigin", origin: "https://other.example" }]);
+  assert.deepEqual(decideSiteIdentity([other], origin, false), { kind: "ask" });
+  assert.deepEqual(decideSiteIdentity([other], origin, true), { kind: "holder" });
+});
+
+test("a look-alike origin's entry never satisfies the real one", () => {
+  const lookalike = entry("01A", [
+    { kind: "webOrigin", origin: "https://shop.example.evil.test" },
+  ]);
+  assert.deepEqual(decideSiteIdentity([lookalike], origin, false), { kind: "ask" });
 });
