@@ -23,7 +23,6 @@
 // (affinidi-webvh-service #171). Against one that does not, the challenge comes
 // back `unsupportedType` and the caller can fall back to `loginViaDidcomm`.
 
-import type { SigningIdentity } from "../siop/self-issued.js";
 import { authenticateSession, requestAuthChallenge } from "../vta/auth-tasks.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import type { Identity } from "../didcomm/index.js";
@@ -45,12 +44,19 @@ export interface TrustTaskLoginOptions {
   /** Any transport that can carry a Trust Task to the RP. A `VtaSession`
    *  built against the RP's control DID gives the full chain. */
   sender: TrustTaskSender;
-  /** The wallet's holder identity — the envelope `issuer`, and the VID the
-   *  RP's ACL is checked against. */
+  /** The wallet's holder identity — the transport identity, and the default
+   *  document `issuer`. */
   holder: Identity;
-  /** Signs the documents. Its DID MUST be the holder's: the proof is what
-   *  authenticates, so a signature by anything else authenticates nobody. */
-  signing: SigningIdentity;
+  /**
+   * DID to log in AS, when that is not the holder — a per-site persona.
+   *
+   * The RP checks the challenge subject against the DID that signed
+   * (`session.did != input.signer_did` in vti-common's `handle_authenticate`),
+   * so this has to be both: the challenge is requested for it, and the channel
+   * has to sign as it. Supplying one whose key the channel cannot sign with
+   * fails at `signOutboundTask`, locally, naming both DIDs.
+   */
+  subject?: string;
   /** The RP's control DID + keyAgreement — the envelope `recipient`. */
   service: RemoteDidcommEndpoint;
   /** Capability tags to request. The RP decides what it grants. */
@@ -71,29 +77,33 @@ export async function loginViaTrustTask(
   opts: TrustTaskLoginOptions,
 ): Promise<RpSession> {
   const { sender, holder, service } = opts;
+  // Who is signing in. The holder unless a persona was named — and the same
+  // value has to reach both steps, or the RP refuses on the signer check.
+  const subject = opts.subject ?? holder.did;
 
-  if (opts.signing.did !== holder.did) {
-    // Refused here rather than at the RP, because the failure the RP returns
-    // for this is `permissionDenied` with no hint that the cause is local.
-    throw new Error(
-      `rp-login: signing identity ${opts.signing.did} is not the holder ${holder.did}; ` +
-        "the document proof is what authenticates, so it must be the holder's",
-    );
-  }
+  // The guard that used to live here — "the signing identity must be the
+  // holder" — has moved to where it can actually be checked.
+  // `loginViaTrustTask` never signs; the channel does, and `signOutboundTask`
+  // compares the envelope's issuer against the signer's DID on every outbound
+  // document. Re-asserting it here would only have said the holder is the only
+  // possible signer, which stopped being true when a channel could sign as a
+  // persona whose key lives at the VTA.
 
   const challenge = await requestAuthChallenge(sender, {
     holder,
     service,
+    issuer: subject,
     // The RP binds the challenge to the identity it verified, so naming a
     // subject here cannot widen anything — it is a statement of intent that
     // lets the RP refuse early if it disagrees.
-    subject: holder.did,
+    subject,
     purpose: "login",
   });
 
   const authed = await authenticateSession(sender, {
     holder,
     service,
+    issuer: subject,
     challenge: challenge.challenge,
     sessionId: challenge.sessionId,
     ...(opts.scope && opts.scope.length > 0 ? { scope: opts.scope } : {}),

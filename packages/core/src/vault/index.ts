@@ -5,4 +5,5 @@ export * from "./delete.js";
 export * from "./release.js";
 export * from "./proxy-login.js";
 export * from "./sign-trust-task.js";
+export * from "./task-signer.js";
 export type { VtaAuthInputs } from "../vta/auth.js";

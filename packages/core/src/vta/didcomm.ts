@@ -16,6 +16,7 @@ import {
   type TrustTask,
 } from "./protocol.js";
 import { buildTrustTask, parseTrustTaskReply, signOutboundTask } from "./trust-task.js";
+import { asTaskSigner, type ChannelSigner, type TaskSigner } from "./trust-task.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
 import type { DidcommMessageBridge, VtaTransport } from "./transport.js";
@@ -44,7 +45,7 @@ export interface DidcommVtaTransportOptions {
    * path forwards whatever it is handed. The proof is what ties the payload to
    * the DID named in `issuer`.
    */
-  signing: SigningIdentity;
+  signing: ChannelSigner;
   /** Optional mediator. When set, every outbound message gets wrapped
    *  in a routing/2.0/forward envelope and anoncrypt'd to the mediator. */
   mediator?: RemoteDidcommEndpoint;
@@ -71,12 +72,12 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
   private readonly bridge: DidcommMessageBridge;
   private readonly holder: Identity;
   private readonly vta: RemoteDidcommEndpoint;
-  private readonly signing: SigningIdentity;
+  private readonly signer: TaskSigner;
   private readonly mediator?: RemoteDidcommEndpoint;
   private readonly timeoutMs: number;
 
   constructor(opts: DidcommVtaTransportOptions) {
-    this.signing = opts.signing;
+    this.signer = asTaskSigner(opts.signing);
     this.bridge = opts.bridge;
     this.holder = opts.holder;
     this.vta = opts.vta;
@@ -237,7 +238,7 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
     // Every outbound path — `send`, `notify`, and the passkey-VM convenience
     // surface — packs through here, which is why the proof is attached here
     // and not in each of them.
-    await signOutboundTask(envelope, this.signing);
+    await signOutboundTask(envelope, this.signer);
     const requestId = envelope.id;
     const message = {
       id: requestId,

@@ -1607,6 +1607,13 @@ export interface OffscreenOnboardConnectRequest {
 /** background → offscreen: run a DIDComm login. Reply is a
  *  [`RuntimeLoginResponse`] via `sendResponse`. */
 export interface OffscreenDidcommLoginRequest {
+  /** The vault entry whose persona signs the auth documents, when this origin
+   *  has one bound. Absent means the wallet's own identity. Resolved in the
+   *  background — see `OffscreenRestLoginRequest.entryId`. */
+  entryId?: string;
+  /** REST base for the VTA session the persona's signatures go through.
+   *  Unused for a holder login. */
+  restBaseUrl?: string;
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_DIDCOMM_LOGIN;
   /** Which VTA's holder identity to authenticate as. Multi-VTA: the

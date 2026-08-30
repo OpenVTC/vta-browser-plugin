@@ -1070,16 +1070,35 @@ async function handleLoginDidcomm(
     await pinOrigin(req.origin, req.params.controlDid);
   }
 
+  // Same question as the REST path, same answer: a per-site persona signs the
+  // auth documents when this origin has one. The transport stays the wallet's
+  // own — the RP reads the caller off the document's proof, not off who
+  // delivered it.
+  const identity = await resolveLoginIdentity(req.origin, req.params.controlDid, holderDid);
+  if (!identity.ok) return { ok: false, error: identity.error };
+
   await ensureOffscreenDocument();
-  const activeVtaDid = await readActiveVtaDid();
-  if (!activeVtaDid) return { ok: false, error: "no active VTA connection — connect first" };
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
   const offscreenRequest: OffscreenDidcommLoginRequest = {
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_DIDCOMM_LOGIN,
-    vtaDid: activeVtaDid,
+    vtaDid: active.conn.vtaDid,
     params: req.params,
+    ...(identity.entryId ? { entryId: identity.entryId } : {}),
+    ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}),
   };
-  return (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
+  const result = (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
+
+  if (!result.ok && identity.bound) {
+    return {
+      ok: false,
+      error:
+        `${result.error} — this was the first sign-in as ${identity.did}. ` +
+        `If ${req.origin ?? "the site"} refused it, that identity needs to be on its access list.`,
+    };
+  }
+  return result;
 }
 
 async function handleStepUpVta(
