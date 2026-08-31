@@ -48,10 +48,12 @@ test("adopts over a stored inbox nobody is on record choosing", () => {
   assert.equal(inboxToAdopt({ did: DEMO }, AGENT), AGENT);
 });
 
-test("the adoption happens once, not on every boot", () => {
-  // Stamped `agent` on the way in, so the next boot leaves it alone even
-  // though the active agent may since have changed.
-  assert.equal(inboxToAdopt({ did: AGENT, source: "agent" }, AGENT), undefined);
+test("the blank-filling adoption happens once, not on every boot", () => {
+  // Stamped `agent` on the way in, so the per-spin-up backfill leaves it
+  // alone. Moving an agent-sourced inbox when the agent moves its relay is
+  // `followAgentInbox`'s job — it re-resolves the DID document, where this
+  // function only ever reads a cached connection.
+  assert.equal(inboxToAdopt({ did: AGENT, source: "agent" }, OTHER), undefined);
 });
 
 // ─── No mediator may be baked into the source again ───

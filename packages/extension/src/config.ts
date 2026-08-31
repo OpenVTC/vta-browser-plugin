@@ -134,10 +134,11 @@ export interface WalletSettings {
  *    mediator cannot push to a wallet; an inbox invented here would be a
  *    relay nobody was ever asked about. Unset is the honest state and the
  *    self-test reports it.
- *  - Set, and someone is on record choosing it → leave it. Either an operator
- *    picked it (they run more than one relay) or an earlier onboarding adopted
- *    it — and the inbox is an *address* other parties already route to, so
- *    moving it silently would strand everyone who knows this wallet.
+ *  - Set, and someone is on record choosing it → leave it here. An operator
+ *    pin is final; an `agent`-sourced one is not frozen either, but moving it
+ *    is the job of `followAgentInbox` in `background.ts`, which re-resolves
+ *    the agent's DID document rather than guessing from a cached connection.
+ *    This function only ever fills a blank.
  *  - Otherwise → adopt the agent's. That covers an unset inbox and, once, the
  *    records written before provenance existed.
  *
