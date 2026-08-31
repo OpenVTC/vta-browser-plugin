@@ -2,6 +2,7 @@
 
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { releaseSelectAfterPointerChange } from "./select-wheel.js";
 import { collapseDid, splitDid, type DidPart } from "./did-display.js";
 import { HOLDER_IDENTITY } from "./site-identity.js";
 import { extractAgentNames, withoutScheme } from "./agent-name.js";
@@ -1327,6 +1328,11 @@ function TaskConsent() {
     </div>
   );
 }
+
+// Chromium leaves the wheel pointed at a focused <select>; without this,
+// picking an option kills scrolling over that control until the user
+// clicks elsewhere. See src/select-wheel.ts.
+releaseSelectAfterPointerChange(document);
 
 const root = document.getElementById("root");
 if (root) {
