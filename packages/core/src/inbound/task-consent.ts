@@ -206,27 +206,59 @@ export function parseTaskConsentOutcome(
 /**
  * Parse a VTA→requester `task-consent/granted` notice.
  *
- * The VTA sends it as a plaintext DIDComm message whose `type` is the granted
- * type and whose `body` carries the salted `payloadDigest` the requester already
- * holds. It is a **non-load-bearing nudge**: it only tells the requester to
- * re-submit now instead of polling, and the single-use grant check on that
- * re-submit is the real gate — so this needs no Data-Integrity proof. We still
- * accept it only from this device's enrolled VTA (the authcrypt sender), and the
- * page re-checks the digest against its outstanding approval before acting.
+ * The VTA sends a **full Trust Task document inside a DIDComm envelope**, the
+ * same binding {@link parseTaskConsentRequest} reads: the DIDComm `type` is
+ * {@link TRUST_TASK_ENVELOPE_TYPE}, `body` is the document, and the salted
+ * `payloadDigest` the requester already holds sits in `body.payload`.
+ *
+ * It is a **non-load-bearing nudge**: it only tells the requester to re-submit
+ * now instead of polling, and the single-use grant check on that re-submit is
+ * the real gate — so this needs no Data-Integrity proof. We still accept it only
+ * from this device's enrolled VTA (the authcrypt sender), and the page re-checks
+ * the digest against its outstanding approval before acting.
+ *
+ * # It used to read the pre-spec shape
+ *
+ * This matched `message.type` against the *task* type and read
+ * `message.body.payloadDigest` — the bare `{status, payloadDigest, taskType}`
+ * body the VTA sent before the notice gained its envelope. Both are wrong
+ * against the current wire, and either alone is fatal: the DIDComm `type` is the
+ * envelope type, so the first check never matched and this returned `null` on
+ * every notice ever sent.
+ *
+ * Nothing failed loudly. The requester's page listens for the resulting
+ * `consentgranted` event to replay its pinned re-submit, and deliberately runs
+ * no timer poll for re-submitting (a blind retry loop would reopen the wallet's
+ * un-skippable confirm on every tick). So a dropped notice is indistinguishable
+ * from an approver who has not answered yet: the page sat on "this will publish
+ * automatically the moment you approve" until the operator pressed the manual
+ * fallback button.
+ *
+ * The sibling request parser was migrated to the envelope; this was not. Build
+ * fixtures at the shape the peer actually emits — the tests that covered this
+ * asserted the pre-spec form, so they passed throughout.
  */
 export function parseTaskConsentGranted(
   message: Record<string, unknown>,
   expectedVtaDid: string,
 ): { payloadDigest: string } | null {
-  if (message.type !== TASK_CONSENT_GRANTED_TYPE) return null;
+  if (message.type !== TRUST_TASK_ENVELOPE_TYPE) return null;
   const from = typeof message.from === "string" ? message.from : null;
   // If the transport surfaced a sender, it must be our VTA; a missing sender
   // is tolerated (the page-side digest match is the ultimate guard).
   if (from && from !== expectedVtaDid) return null;
-  const body = (message.body ?? {}) as { payloadDigest?: unknown };
-  return typeof body.payloadDigest === "string"
-    ? { payloadDigest: body.payloadDigest }
-    : null;
+  const doc = (message.body ?? {}) as {
+    type?: unknown;
+    issuer?: unknown;
+    payload?: { payloadDigest?: unknown };
+  };
+  if (doc.type !== TASK_CONSENT_GRANTED_TYPE) return null;
+  // The in-band issuer gets the same treatment as the transport sender: checked
+  // when present, tolerated when absent. The notice is unsigned by design, so
+  // this is a cheap filter and not an authentication.
+  if (typeof doc.issuer === "string" && doc.issuer !== expectedVtaDid) return null;
+  const digest = doc.payload?.payloadDigest;
+  return typeof digest === "string" ? { payloadDigest: digest } : null;
 }
 
 /** SPEC §7.3 item 13 — the integrity effect of executing the task. */
