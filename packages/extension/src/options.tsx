@@ -9,7 +9,7 @@ import {
   mintApproverIdentity,
   rewrapHolderSecret,
 } from "@openvtc/pnm-core";
-import { DEFAULT_WALLET_MEDIATOR_DID, getSettings, setSettings } from "./config.js";
+import { getSettings, setSettings } from "./config.js";
 import { base64url } from "@openvtc/vti-didcomm-js";
 import { readActiveHolderDid, readActiveVtaDid } from "./active-vta.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";

@@ -34,6 +34,8 @@ import {
   unavailableTransports,
 } from "./transports.js";
 import { useTransportHealth } from "./use-transport-health.js";
+import { sendToBackground } from "./send-message.js";
+import { RUNTIME_RESTART_INBOX } from "./bridge-protocol.js";
 import { c, t } from "./theme.js";
 import { Button, Did, DidNamed, Note, Panel, Pill } from "./ui.js";
 
@@ -131,8 +133,10 @@ export function SetupPane() {
 
   const load = useCallback(async () => {
     const s = await getSettings();
-    setInbox(s.mediatorDid);
-    setSavedInbox(s.mediatorDid);
+    // Unset is a real state now — the inbox is written by onboarding from the
+    // agent, and there is no hardcoded fallback standing in for it.
+    setInbox(s.mediatorDid ?? "");
+    setSavedInbox(s.mediatorDid ?? "");
     setEncrypted(s.encryptHolderSecret === true);
     // preferTsp defaults on; only an explicit false pins away from TSP.
     setPreferTsp(s.preferTsp !== false);
@@ -178,7 +182,7 @@ export function SetupPane() {
   const agentMediator = connection?.mediatorDid;
   // Both the agent and its mediator get looked up: the mediator is a hosted
   // identity too and usually claims its own name (`…/@mediator`).
-  const agentNames = useAgentNames([connection?.vtaDid, agentMediator]);
+  const agentNames = useAgentNames([connection?.vtaDid, agentMediator, savedInbox || undefined]);
   const { health: transportHealth } = useTransportHealth(connection?.vtaDid);
   const transport = connection ? activeTransport(connection, preferTsp, transportHealth) : undefined;
   const observed = isObserved(transportHealth);
@@ -207,7 +211,12 @@ export function SetupPane() {
       setSavedInbox(inbox.trim());
       setRoutingOpen(false);
       setHolderDid((await readActiveHolderDid()) ?? "");
-      setStatus("Saved.");
+      // Reopen the inbound sessions against the mediator just written. Without
+      // this the wallet keeps listening on the old relay (or, from an unset
+      // inbox, on nothing at all) until the next browser restart — and the
+      // page would say "Saved." over a wallet that still cannot be reached.
+      await sendToBackground({ type: RUNTIME_RESTART_INBOX });
+      setStatus("Saved. Your wallet is now listening on the new relay.");
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     } finally {
@@ -365,17 +374,45 @@ export function SetupPane() {
             title="Message routing"
             last
           >
-            {/* Presented as done-and-closed, not as a question. It was a
-                blank-looking field labelled "Your inbox", which invited
-                editing — and editing it re-mints the wallet identity. The
-                only people who should touch it are running more than one
-                mediator, and they know it. */}
+            {/* Presented as done-and-closed, not as a question. The only
+                people who should touch it are running more than one mediator,
+                and they know it.
+
+                The relay is now NAMED rather than merely asserted. This said
+                "Set up automatically from your agent" while onboarding wrote
+                nothing and the setting fell back to a hardcoded demo mediator,
+                so a wallet could route its inbox through a host belonging to
+                no deployment in use and this sentence would cover for it. A
+                claim about where your messages go has to be checkable at the
+                place it is made (guide §0). */}
             <div style={{ fontSize: t.sm, color: connected ? c.muted : c.faint, maxWidth: "78ch" }}>
-              Set up automatically from your agent. One relay carries messages in both
+              Set up from your agent when you connected. One relay carries messages in both
               directions, which is what almost every deployment wants.
             </div>
             {connected && (
               <>
+                {savedInbox ? (
+                  <div style={{ fontSize: t.xs, color: c.muted, marginTop: 2 }}>
+                    Messages reach you via{" "}
+                    <DidNamed
+                      value={savedInbox}
+                      {...(agentNames[savedInbox] ? { agentName: agentNames[savedInbox] } : {})}
+                    />
+                    {agentMediator && savedInbox !== agentMediator && (
+                      <> — not your agent&apos;s own relay.</>
+                    )}
+                  </div>
+                ) : (
+                  // Reachable when the agent advertises no DIDComm mediator
+                  // (REST- or TSP-only), or when the setting was cleared by
+                  // hand. Said plainly, because the symptom otherwise is
+                  // approvals that simply never arrive.
+                  <Note tone="danger">
+                    <strong>Nothing can reach this wallet.</strong> No relay is set, so consent
+                    requests and approvals sent to you will never arrive. Reconnect to your
+                    agent to pick one up automatically, or set one below.
+                  </Note>
+                )}
                 {holderDid && (
                   <div style={{ fontSize: t.xs, color: c.muted, marginTop: 2 }}>
                     Your wallet address: <Did value={holderDid} size={t.xs} />
@@ -389,12 +426,20 @@ export function SetupPane() {
                   </div>
                 ) : (
                   <div style={{ display: "grid", gap: 8, marginTop: 4 }}>
-                    <Note tone="danger">
-                      <strong>Don&apos;t change this unless you run a multi-mediator setup and
-                      know exactly why you need to.</strong> Your inbox address is baked into
-                      your wallet identity: changing it mints a brand-new one, and every site
-                      and agent that knows your current address stops recognising you until you
-                      re-register the new one. There is no undo.
+                    {/* The old copy here warned that changing this "mints a
+                        brand-new identity" with "no undo". That described v3,
+                        where the holder was a did:peer:2 with the mediator
+                        encoded inline. A v4 holder is a did:key the agent
+                        mints and carries no mediator, and `saveInbox` mints
+                        nothing — so the scariest warning in Setup was guarding
+                        a consequence that no longer happens, and deterring
+                        people from fixing the routing it was describing. State
+                        what actually changes. */}
+                    <Note tone="warn">
+                      <strong>Only change this if you run more than one relay.</strong> Your
+                      wallet address stays the same, but it is where others send to: until you
+                      tell each agent and site that already routes to you, messages will keep
+                      going to the old relay and you won&apos;t see them.
                     </Note>
                     <input
                       value={inbox}
@@ -409,7 +454,7 @@ export function SetupPane() {
                         disabled={busy || !inboxChanged}
                         onClick={() => void saveInbox()}
                       >
-                        {busy ? "Working…" : "Change inbox & re-mint identity"}
+                        {busy ? "Working…" : "Change inbox"}
                       </Button>
                       <Button
                         kind="quiet"

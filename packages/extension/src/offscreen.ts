@@ -77,7 +77,7 @@ import {
   verifyDid,
 } from "@openvtc/pnm-core";
 import { base64url } from "@openvtc/vti-didcomm-js";
-import { getSettings } from "./config.js";
+import { getSettings, inboxToAdopt, setSettings } from "./config.js";
 import { getWalletMediatorDid, loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import type { Transport, TransportHealth, TransportObservation } from "./transports.js";
@@ -111,6 +111,7 @@ import {
   OFFSCREEN_REST_LOGIN,
   OFFSCREEN_SET_WAKE,
   OFFSCREEN_WALLET_LOCK_STATE,
+  INBOX_NOT_CONFIGURED,
   MEDIATOR_REQUIRED,
   type OnboardStage,
   RUNTIME_ONBOARD_PROGRESS,
@@ -605,7 +606,9 @@ async function transportHealthSnapshot(): Promise<TransportHealthResult> {
   for (const [vtaDid, health] of vtaTransportHealth) byVta[vtaDid] = health;
   // Which mediator is the wallet's own inbox decides whether a dead session
   // is "an outbound channel fell back" or "nothing can reach this wallet".
-  const inbox = await walletMediatorDid().catch(() => undefined);
+  const inbox = await walletMediatorDid();
+  // No inbox configured → no session is the inbox. `undefined` never matches a
+  // real mediator DID, which is the answer we want rather than an accident.
   const sessions = statusSnapshot().map((s) => ({ ...s, isInbox: s.mediatorDid === inbox }));
   return { byVta, sessions };
 }
@@ -855,8 +858,26 @@ async function runDiagnostics(vtaDid: string): Promise<DiagnosticsReport> {
   // The wallet's own inbox mediator, which is configurable and often is NOT
   // the agent's. This is the session whose death means consent prompts never
   // arrive, so it gets its own check rather than being folded into the above.
-  const inbox = await walletMediatorDid().catch(() => undefined);
-  if (inbox && !mediators.has(inbox)) {
+  const inbox = await walletMediatorDid();
+  if (!inbox) {
+    // The self-test's whole job is to answer "can this wallet be reached?"
+    // from the one place the answer is true. An unset inbox is the loudest
+    // possible No, and it used to be unreachable here because the setting
+    // fell back to a hardcoded mediator — so the report would go on to prove
+    // a demo host in another deployment was healthy and call that a pass.
+    checks.push({
+      id: "inbox.unset",
+      label: "Wallet inbox",
+      status: "fail",
+      detail:
+        "No inbox relay is configured, so nothing can be pushed to this wallet — " +
+        "consent requests and approvals will never arrive.",
+      remediation:
+        "Reconnect to your agent to adopt its relay automatically, or set one under " +
+        "Setup → Message routing. If your agent advertises no DIDComm mediator, it " +
+        "cannot push to a wallet at all and one must be configured by hand.",
+    });
+  } else if (!mediators.has(inbox)) {
     checks.push(...(await diagnoseMediator("inbox", inbox, fetchImpl, origin)));
   }
 
@@ -1785,6 +1806,35 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
   const holderInputs = holderInputsFromAdminReply(adminReply);
   await installVtaMintedHolder(store, holderInputs);
 
+  // Adopt the agent's mediator as this wallet's inbox.
+  //
+  // Setup has always told the operator the inbox is "set up automatically from
+  // your agent. One relay carries messages in both directions" — and nothing
+  // did it. The setting had a hardcoded fallback to a demo mediator on a
+  // domain no deployment here runs, and the only writer was the advanced
+  // routing field, so every wallet whose operator never opened that field ran
+  // its inbox through a third party's host regardless of which agent it had
+  // onboarded to. This is the line that makes the sentence true.
+  //
+  // Written only when unset, for two reasons. An operator who set a mediator
+  // by hand runs a multi-relay setup and meant it. And the inbox is an
+  // *address* other parties route to: a second onboarding silently moving it
+  // would leave everyone who already knows this wallet pushing at a relay it
+  // no longer listens on. First onboarding decides; changing it later is a
+  // deliberate act with its own confirmation.
+  //
+  // `services.didcomm` is the advertised mediator folded with the operator's
+  // answer to `MediatorRequiredError`, so an agent that publishes none but was
+  // onboarded with a supplied mediator adopts that one. An agent that
+  // advertises neither (REST- or TSP-only) leaves the inbox unset, which is
+  // the honest state: nothing can be pushed to this wallet, and `runDiagnostics`
+  // says so rather than pointing at a mediator that was never asked.
+  const inbox = inboxToAdopt((await getSettings()).mediatorDid, services.didcomm?.mediatorDid);
+  if (inbox) {
+    await setSettings({ mediatorDid: inbox });
+    console.info("[pnm onboard] inbox mediator set from agent:", inbox);
+  }
+
   await store.delete(ONBOARD_KEY);
   return { holderDid: adminReply.adminDid, role: "admin", secretEncrypted: false };
 }
@@ -1990,13 +2040,42 @@ const inboundBackoff = new Map<
   { delayMs: number; timer: ReturnType<typeof setTimeout> | undefined }
 >();
 
-// The wallet's inbox mediator DID is configurable; cache it once so the
-// per-session "is this our inbox mediator?" check stays synchronous in the
-// onClose closure.
-let _walletMediatorDid: string | undefined;
-async function walletMediatorDid(): Promise<string> {
-  if (!_walletMediatorDid) _walletMediatorDid = await getWalletMediatorDid();
-  return _walletMediatorDid;
+// The wallet's inbox mediator DID, read fresh each time.
+//
+// This was memoised, justified as keeping the per-session "is this our inbox
+// mediator?" check synchronous inside the `onClose` closure — but that check
+// is awaited into `isInbox` *before* the closure is built, so the cache bought
+// nothing and cost correctness: settings are written from the options page,
+// which is a different context to this document, so a cached copy went stale
+// the moment an operator changed their routing and stayed stale until the
+// offscreen document happened to be torn down. IndexedDB is shared across
+// contexts; reading it on the handful of paths that need this is cheap.
+//
+// `undefined` means the wallet has no inbox. Every caller below decides what
+// that means for it rather than substituting a mediator of its own.
+async function walletMediatorDid(): Promise<string | undefined> {
+  return getWalletMediatorDid();
+}
+
+/** The inbox mediator for a path that cannot proceed without one. Throws a
+ *  coded error rather than returning `undefined`, so a caller that must open a
+ *  session fails loudly instead of half-working. */
+export class NoInboxMediatorError extends Error {
+  readonly code = INBOX_NOT_CONFIGURED;
+  constructor() {
+    super(
+      "this wallet has no inbox mediator configured, so nothing can be " +
+        "pushed to it. Onboarding sets one from your agent; re-connect to " +
+        "your agent, or set one under Setup → Message routing.",
+    );
+    this.name = "NoInboxMediatorError";
+  }
+}
+
+async function requireInboxMediator(): Promise<string> {
+  const did = await walletMediatorDid();
+  if (!did) throw new NoInboxMediatorError();
+  return did;
 }
 
 /** Snapshot of every known mediator session's state, for the demo UI.
@@ -2144,6 +2223,9 @@ async function doApproverState(
   // Loaded identity alone is not enough: the inbox session is what receives
   // requests, so an open connection is the thing worth reporting.
   const mediatorDid = await walletMediatorDid();
+  // Minted but with nowhere to listen: report it as not running rather than
+  // inventing a mediator to key the pool by.
+  if (!mediatorDid) return { minted: true, running: false, approverDid: did };
   const pending = approverPool.get(approverPoolKey(mediatorDid, vtaDid));
   const conn = pending ? await pending.catch(() => null) : null;
   const running = approverIdentities.has(vtaDid) && Boolean(conn?.isOpen);
@@ -2171,7 +2253,7 @@ async function doUnlockApprover(
 }
 
 async function getApproverWarmSession(vtaDid: string): Promise<MediatorConnection> {
-  const mediatorDid = await walletMediatorDid();
+  const mediatorDid = await requireInboxMediator();
   const key = approverPoolKey(mediatorDid, vtaDid);
   const existing = approverPool.get(key);
   if (existing) {
@@ -2190,7 +2272,7 @@ async function getApproverWarmSession(vtaDid: string): Promise<MediatorConnectio
 async function createApproverWarmSession(vtaDid: string): Promise<MediatorConnection> {
   const approver = approverIdentities.get(vtaDid);
   if (!approver) throw new Error(`approver for ${vtaDid} is locked`);
-  const mediatorDid = await walletMediatorDid();
+  const mediatorDid = await requireInboxMediator();
   const key = approverPoolKey(mediatorDid, vtaDid);
   const conn = await connectMediatorSession({
     holder: approver.identity,
@@ -2258,7 +2340,7 @@ function lockApprovers(): void {
  *  subsequent reconcile will pick up the missed listener. */
 async function startInbound(vtaDid: string): Promise<boolean> {
   try {
-    const mediatorDid = await walletMediatorDid();
+    const mediatorDid = await requireInboxMediator();
     await getWarmSession(mediatorDid, vtaDid);
     console.info(
       "[pnm inbound] listening for confirm requests via",
@@ -2325,6 +2407,22 @@ function clearInboundBackoff(vtaDid: string): void {
 async function reconcileInbound(vtaDids: readonly string[]): Promise<void> {
   const mediatorDid = await walletMediatorDid();
   const wanted = new Set(vtaDids);
+
+  // No inbox, nothing to reconcile. Returning here rather than letting each
+  // VTA fail into `scheduleInboundReconnect` is deliberate: backoff exists to
+  // outlast a mediator outage, and retrying cannot fix an unset setting — it
+  // would just log the same failure forever at a growing interval and bury
+  // the one line that says what is actually wrong. Writing the setting
+  // (onboarding, or Setup → Message routing) re-runs this.
+  if (!mediatorDid) {
+    if (vtaDids.length > 0) {
+      console.warn(
+        "[pnm inbound] no inbox mediator configured — this wallet cannot " +
+          "receive consent requests. Re-connect to your agent to set one.",
+      );
+    }
+    return;
+  }
 
   // Open missing — concurrent across VTAs, individual failures stay
   // contained (loadHolder may throw for a locked wallet; the rest
@@ -2410,7 +2508,7 @@ async function drainPendingInbound(vtaDids: readonly string[]): Promise<void> {
           true,
         );
       } else {
-        const mediatorDid = await walletMediatorDid();
+        const mediatorDid = await requireInboxMediator();
         const conn = await getWarmSession(mediatorDid, entry.vtaDid);
         const { identity, signing } = await loadHolder(entry.vtaDid);
         console.info("[pnm inbound] re-driving interrupted message", entry.id);
