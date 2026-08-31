@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useActiveConnection } from "./store.js";
-import { getSettings, setSettings } from "./config.js";
+import { getSettings, inboxFor, setInbox as setInboxRecord } from "./config.js";
 import { readActiveHolderDid } from "./active-vta.js";
 import { encryptHolderSecretInPopup } from "./encrypt-holder.js";
 import { OnboardView } from "./onboard-view.js";
@@ -133,15 +133,17 @@ export function SetupPane() {
 
   const load = useCallback(async () => {
     const s = await getSettings();
-    // Unset is a real state now — the inbox is written by onboarding from the
-    // agent, and there is no hardcoded fallback standing in for it.
-    setInbox(s.mediatorDid ?? "");
-    setSavedInbox(s.mediatorDid ?? "");
+    // Per-agent now, and this pane edits the ACTIVE agent's relay. Unset is a
+    // real state — the inbox is written by onboarding from the agent, and
+    // there is no hardcoded fallback standing in for it.
+    const held = connection ? inboxFor(s, connection.vtaDid)?.did : undefined;
+    setInbox(held ?? "");
+    setSavedInbox(held ?? "");
     setEncrypted(s.encryptHolderSecret === true);
     // preferTsp defaults on; only an explicit false pins away from TSP.
     setPreferTsp(s.preferTsp !== false);
     setHolderDid((await readActiveHolderDid()) ?? "");
-  }, []);
+  }, [connection]);
 
   useEffect(() => {
     void load();
@@ -207,9 +209,12 @@ export function SetupPane() {
     setBusy(true);
     setStatus(null);
     try {
-      // Stamped as the operator's choice, which the boot backfill never
-      // overrides — this is the one place a person picks a relay.
-      await setSettings({ mediatorDid: inbox.trim(), mediatorDidSource: "operator" });
+      if (!connection) throw new Error("no active agent to set a relay for");
+      // Stamped as the operator's choice, which neither the boot adopt nor
+      // `followAgentInbox` overrides — this is the one place a person picks a
+      // relay. Scoped to the active agent: each agent has its own inbox, and
+      // writing one wallet-wide is what made every other agent unreachable.
+      await setInboxRecord(connection.vtaDid, { did: inbox.trim(), source: "operator" });
       setSavedInbox(inbox.trim());
       setRoutingOpen(false);
       setHolderDid((await readActiveHolderDid()) ?? "");
@@ -388,14 +393,14 @@ export function SetupPane() {
                 claim about where your messages go has to be checkable at the
                 place it is made (guide §0). */}
             <div style={{ fontSize: t.sm, color: connected ? c.muted : c.faint, maxWidth: "78ch" }}>
-              Set up from your agent when you connected. One relay carries messages in both
-              directions, which is what almost every deployment wants.
+              Set up from your agent when you connected — one relay per agent, carrying
+               messages in both directions, which is what almost every deployment wants.
             </div>
             {connected && (
               <>
                 {savedInbox ? (
                   <div style={{ fontSize: t.xs, color: c.muted, marginTop: 2 }}>
-                    Messages reach you via{" "}
+                    This agent reaches you via{" "}
                     <DidNamed
                       value={savedInbox}
                       {...(agentNames[savedInbox] ? { agentName: agentNames[savedInbox] } : {})}
@@ -410,9 +415,9 @@ export function SetupPane() {
                   // hand. Said plainly, because the symptom otherwise is
                   // approvals that simply never arrive.
                   <Note tone="danger">
-                    <strong>Nothing can reach this wallet.</strong> No relay is set, so consent
-                    requests and approvals sent to you will never arrive. Reconnect to your
-                    agent to pick one up automatically, or set one below.
+                    <strong>This agent can&apos;t reach you.</strong> No relay is set for it, so
+                    its consent requests and approvals will never arrive. Reconnect to it to
+                    pick one up automatically, or set one below.
                   </Note>
                 )}
                 {holderDid && (
@@ -438,10 +443,11 @@ export function SetupPane() {
                         people from fixing the routing it was describing. State
                         what actually changes. */}
                     <Note tone="warn">
-                      <strong>Only change this if you run more than one relay.</strong> Your
-                      wallet address stays the same, but it is where others send to: until you
-                      tell each agent and site that already routes to you, messages will keep
-                      going to the old relay and you won&apos;t see them.
+                      <strong>Only change this if you run more than one relay.</strong> This
+                      sets the relay for <em>this agent only</em> — your other agents keep
+                      theirs. Your wallet address stays the same, but an agent pushes through
+                      the relay it knows: point this somewhere the agent doesn&apos;t use and
+                      its messages will keep arriving where you aren&apos;t listening.
                     </Note>
                     <input
                       value={inbox}

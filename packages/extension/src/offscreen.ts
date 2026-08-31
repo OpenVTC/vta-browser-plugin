@@ -77,8 +77,8 @@ import {
   verifyDid,
 } from "@openvtc/pnm-core";
 import { base64url } from "@openvtc/vti-didcomm-js";
-import { getSettings, inboxToAdopt, setSettings } from "./config.js";
-import { getWalletMediatorDid, loadHolder } from "./holder.js";
+import { forgetInbox, getSettings, inboxFor, inboxToAdopt, setInbox } from "./config.js";
+import { loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import type { Transport, TransportHealth, TransportObservation } from "./transports.js";
 import {
@@ -604,12 +604,15 @@ function recordTransport(
 async function transportHealthSnapshot(): Promise<TransportHealthResult> {
   const byVta: TransportHealthResult["byVta"] = {};
   for (const [vtaDid, health] of vtaTransportHealth) byVta[vtaDid] = health;
-  // Which mediator is the wallet's own inbox decides whether a dead session
-  // is "an outbound channel fell back" or "nothing can reach this wallet".
-  const inbox = await walletMediatorDid();
-  // No inbox configured → no session is the inbox. `undefined` never matches a
-  // real mediator DID, which is the answer we want rather than an accident.
-  const sessions = statusSnapshot().map((s) => ({ ...s, isInbox: s.mediatorDid === inbox }));
+  // Whether a session is an inbox decides whether a dead one is "an outbound
+  // channel fell back" or "this agent can no longer reach us". Matched on the
+  // (agent, relay) PAIR: with one relay per agent, the same mediator DID can
+  // be one agent's inbox and another's outbound channel.
+  const inboxes = await allInboxes();
+  const sessions = statusSnapshot().map((s) => ({
+    ...s,
+    isInbox: inboxes.get(s.vtaDid) === s.mediatorDid,
+  }));
   return { byVta, sessions };
 }
 
@@ -855,27 +858,45 @@ async function runDiagnostics(vtaDid: string): Promise<DiagnosticsReport> {
     });
   }
 
-  // The wallet's own inbox mediator, which is configurable and often is NOT
-  // the agent's. This is the session whose death means consent prompts never
-  // arrive, so it gets its own check rather than being folded into the above.
-  const inbox = await walletMediatorDid();
+  // This agent's inbox — the session whose death means its consent prompts
+  // never arrive — checked separately from the transports above, which are
+  // about reaching the agent rather than being reached by it.
+  const inbox = await inboxMediatorFor(vtaDid);
   if (!inbox) {
     // The self-test's whole job is to answer "can this wallet be reached?"
-    // from the one place the answer is true. An unset inbox is the loudest
-    // possible No, and it used to be unreachable here because the setting
-    // fell back to a hardcoded mediator — so the report would go on to prove
-    // a demo host in another deployment was healthy and call that a pass.
+    // from the one place the answer is true. No inbox is the loudest possible
+    // No, and it used to be unreachable here because the setting fell back to
+    // a hardcoded relay — so the report would go on to prove a demo host in
+    // another deployment was healthy and call that a pass.
     checks.push({
       id: "inbox.unset",
-      label: "Wallet inbox",
+      label: "This agent's inbox",
       status: "fail",
       detail:
-        "No inbox relay is configured, so nothing can be pushed to this wallet — " +
-        "consent requests and approvals will never arrive.",
+        "No inbox relay is configured for this agent, so it cannot push to this " +
+        "wallet — its consent requests and approvals will never arrive.",
       remediation:
-        "Reconnect to your agent to adopt its relay automatically, or set one under " +
-        "Setup → Message routing. If your agent advertises no DIDComm mediator, it " +
+        "Reconnect to this agent to adopt its relay automatically, or set one under " +
+        "Setup → Message routing. If the agent advertises no DIDComm mediator, it " +
         "cannot push to a wallet at all and one must be configured by hand.",
+    });
+  } else if (services.didcomm && inbox !== services.didcomm.mediatorDid) {
+    // Reachable when an operator pinned a relay by hand. Worth saying plainly:
+    // the wallet publishes its inbox to nobody (a `did:key` holder carries no
+    // service endpoint), so an agent pushes through the relay IT knows. A
+    // wallet listening somewhere else is listening where nothing arrives.
+    checks.push(...(await diagnoseMediator("inbox", inbox, fetchImpl, origin)));
+    checks.push({
+      id: "inbox.mismatch",
+      label: "This agent's inbox is not the relay it pushes through",
+      status: "warn",
+      detail:
+        `This wallet listens for this agent at ${inbox}, but the agent advertises ` +
+        `${services.didcomm.mediatorDid}. Nothing tells it to use the first, so its ` +
+        "messages are handed to the second and never picked up.",
+      remediation:
+        "Clear the manual relay under Setup → Message routing so the wallet follows " +
+        "the agent, unless you know this relay reaches it.",
     });
   } else if (!mediators.has(inbox)) {
     checks.push(...(await diagnoseMediator("inbox", inbox, fetchImpl, origin)));
@@ -1806,37 +1827,31 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
   const holderInputs = holderInputsFromAdminReply(adminReply);
   await installVtaMintedHolder(store, holderInputs);
 
-  // Adopt the agent's mediator as this wallet's inbox.
+  // Record THIS agent's relay as its inbox.
   //
-  // Setup has always told the operator the inbox is "set up automatically from
-  // your agent. One relay carries messages in both directions" — and nothing
-  // did it. The setting had a hardcoded fallback to a demo mediator on a
-  // domain no deployment here runs, and the only writer was the advanced
-  // routing field, so every wallet whose operator never opened that field ran
-  // its inbox through a third party's host regardless of which agent it had
-  // onboarded to. This is the line that makes the sentence true.
+  // Keyed by agent, because that is what an inbox is. A v4 holder is a
+  // `did:key` with no service endpoint and the wallet publishes its relay to
+  // nobody, so an executor can only push through the mediator it already
+  // knows — its own. Onboarding at a second agent therefore adds an inbox; it
+  // does not move the first one, which would take the first agent's pushes
+  // with it. Setup has always claimed the relay was "set up automatically from
+  // your agent" while nothing wrote it and the setting fell back to a
+  // hardcoded demo host; this is the line that makes the sentence true.
   //
-  // Written only when unset, for two reasons. An operator who set a mediator
-  // by hand runs a multi-relay setup and meant it. And the inbox is an
-  // *address* other parties route to: a second onboarding silently moving it
-  // would leave everyone who already knows this wallet pushing at a relay it
-  // no longer listens on. First onboarding decides; changing it later is a
-  // deliberate act with its own confirmation.
+  // `services.didcomm` is the advertised mediator with the operator's answer
+  // to `MediatorRequiredError` folded in, so an agent that publishes none but
+  // was onboarded with a supplied relay records that one — as `operator`,
+  // because a person chose it and `followAgentInbox` must not later find the
+  // agent still advertising nothing and treat the pin as stale.
   //
-  // `services.didcomm` is the advertised mediator folded with the operator's
-  // answer to `MediatorRequiredError`, so an agent that publishes none but was
-  // onboarded with a supplied mediator adopts that one. An agent that
-  // advertises neither (REST- or TSP-only) leaves the inbox unset, which is
-  // the honest state: nothing can be pushed to this wallet, and `runDiagnostics`
-  // says so rather than pointing at a mediator that was never asked.
-  const onboardSettings = await getSettings();
-  const inbox = inboxToAdopt(
-    { did: onboardSettings.mediatorDid, source: onboardSettings.mediatorDidSource },
-    services.didcomm?.mediatorDid,
-  );
-  if (inbox) {
-    await setSettings({ mediatorDid: inbox, mediatorDidSource: "agent" });
-    console.info("[pnm onboard] inbox mediator set from agent:", inbox);
+  // An agent advertising neither leaves no entry, which is the honest state:
+  // it cannot push to this wallet, and the self-test says so rather than
+  // naming a relay nobody was asked about.
+  const advertisedInbox = services.didcomm?.mediatorDid;
+  if (advertisedInbox) {
+    const source = advertised.didcomm ? "agent" : "operator";
+    await setInbox(pending.vtaDid, { did: advertisedInbox, source });
+    console.info("[pnm onboard] inbox for", pending.vtaDid, "=", advertisedInbox, `(${source})`);
   }
 
   await store.delete(ONBOARD_KEY);
@@ -2044,41 +2059,51 @@ const inboundBackoff = new Map<
   { delayMs: number; timer: ReturnType<typeof setTimeout> | undefined }
 >();
 
-// The wallet's inbox mediator DID, read fresh each time.
+// The inbox mediator for ONE agent, read fresh each time.
 //
-// This was memoised, justified as keeping the per-session "is this our inbox
-// mediator?" check synchronous inside the `onClose` closure — but that check
-// is awaited into `isInbox` *before* the closure is built, so the cache bought
-// nothing and cost correctness: settings are written from the options page,
-// which is a different context to this document, so a cached copy went stale
-// the moment an operator changed their routing and stayed stale until the
-// offscreen document happened to be torn down. IndexedDB is shared across
-// contexts; reading it on the handful of paths that need this is cheap.
+// Per-agent, not per-wallet. A v4 holder is a `did:key` with no service
+// endpoint and the wallet publishes its relay to nobody, so an executor can
+// only push through a mediator it already knows — its own. A wallet onboarded
+// at two agents on different mediators has to listen at both, as each agent's
+// holder. This was a single wallet-wide DID: whichever agent it named was
+// reachable, and every other agent's pushes went nowhere, silently.
 //
-// `undefined` means the wallet has no inbox. Every caller below decides what
-// that means for it rather than substituting a mediator of its own.
-async function walletMediatorDid(): Promise<string | undefined> {
-  return getWalletMediatorDid();
+// Read rather than memoised. The previous cache was justified as keeping the
+// per-session "is this our inbox?" check synchronous inside `onClose`, but
+// that check is awaited into `isInbox` before the closure is built — it bought
+// nothing and went stale whenever settings were written from the options page,
+// a different context. IndexedDB is shared; these paths are not hot.
+//
+// `undefined` means this agent has no inbox and cannot reach the wallet. Every
+// caller decides what that means for it rather than substituting a relay.
+async function inboxMediatorFor(vtaDid: string): Promise<string | undefined> {
+  return inboxFor(await getSettings(), vtaDid)?.did;
 }
 
-/** The inbox mediator for a path that cannot proceed without one. Throws a
- *  coded error rather than returning `undefined`, so a caller that must open a
- *  session fails loudly instead of half-working. */
+/** Every (agent → relay) pair this wallet should be listening on. */
+async function allInboxes(): Promise<Map<string, string>> {
+  const settings = await getSettings();
+  return new Map(Object.entries(settings.inboxes ?? {}).map(([vta, rec]) => [vta, rec.did]));
+}
+
+/** The inbox for a path that cannot proceed without one. Throws a coded error
+ *  rather than returning `undefined`, so a caller that must open a session
+ *  fails loudly instead of half-working. */
 export class NoInboxMediatorError extends Error {
   readonly code = INBOX_NOT_CONFIGURED;
-  constructor() {
+  constructor(readonly vtaDid: string) {
     super(
-      "this wallet has no inbox mediator configured, so nothing can be " +
-        "pushed to it. Onboarding sets one from your agent; re-connect to " +
-        "your agent, or set one under Setup → Message routing.",
+      `no inbox relay is configured for ${vtaDid}, so that agent cannot push ` +
+        `to this wallet. Onboarding sets one from the agent; re-connect to it, ` +
+        `or set one under Setup → Message routing.`,
     );
     this.name = "NoInboxMediatorError";
   }
 }
 
-async function requireInboxMediator(): Promise<string> {
-  const did = await walletMediatorDid();
-  if (!did) throw new NoInboxMediatorError();
+async function requireInboxMediator(vtaDid: string): Promise<string> {
+  const did = await inboxMediatorFor(vtaDid);
+  if (!did) throw new NoInboxMediatorError(vtaDid);
   return did;
 }
 
@@ -2130,7 +2155,7 @@ async function createWarmSession(
   vtaDid: string,
 ): Promise<MediatorConnection> {
   const { identity, signing } = await loadHolder(vtaDid);
-  const isInbox = mediatorDid === (await walletMediatorDid());
+  const isInbox = mediatorDid === (await inboxMediatorFor(vtaDid));
   const key = poolKey(mediatorDid, vtaDid);
   const conn = await connectMediatorSession({
     holder: identity,
@@ -2151,8 +2176,8 @@ async function createWarmSession(
       if (isInbox) scheduleInboundReconnect(vtaDid);
     },
   });
-  // Attach the inbound confirm handler whenever this is the wallet's inbox
-  // mediator — regardless of which operation first opened the session.
+  // Attach the inbound confirm handler whenever this session is THIS agent's
+  // inbox — regardless of which operation first opened it.
   if (isInbox) {
     // Return the promise: the transport awaits it and acks only once the
     // message is durably recorded (R1.6).
@@ -2226,7 +2251,7 @@ async function doApproverState(
 
   // Loaded identity alone is not enough: the inbox session is what receives
   // requests, so an open connection is the thing worth reporting.
-  const mediatorDid = await walletMediatorDid();
+  const mediatorDid = await inboxMediatorFor(vtaDid);
   // Minted but with nowhere to listen: report it as not running rather than
   // inventing a mediator to key the pool by.
   if (!mediatorDid) return { minted: true, running: false, approverDid: did };
@@ -2257,7 +2282,7 @@ async function doUnlockApprover(
 }
 
 async function getApproverWarmSession(vtaDid: string): Promise<MediatorConnection> {
-  const mediatorDid = await requireInboxMediator();
+  const mediatorDid = await requireInboxMediator(vtaDid);
   const key = approverPoolKey(mediatorDid, vtaDid);
   const existing = approverPool.get(key);
   if (existing) {
@@ -2276,7 +2301,7 @@ async function getApproverWarmSession(vtaDid: string): Promise<MediatorConnectio
 async function createApproverWarmSession(vtaDid: string): Promise<MediatorConnection> {
   const approver = approverIdentities.get(vtaDid);
   if (!approver) throw new Error(`approver for ${vtaDid} is locked`);
-  const mediatorDid = await requireInboxMediator();
+  const mediatorDid = await requireInboxMediator(vtaDid);
   const key = approverPoolKey(mediatorDid, vtaDid);
   const conn = await connectMediatorSession({
     holder: approver.identity,
@@ -2333,7 +2358,7 @@ function lockApprovers(): void {
   }
 }
 
-/** Ensure the warm session to the wallet's inbox mediator is live for
+/** Ensure the warm session to this agent's inbox relay is live for
  *  a single holder identity (one VTA). Idempotent. Used by the
  *  re-arm-on-drop path in `createWarmSession.onClose` and by
  *  `reconcileInbound` for each VTA in the desired set.
@@ -2344,7 +2369,7 @@ function lockApprovers(): void {
  *  subsequent reconcile will pick up the missed listener. */
 async function startInbound(vtaDid: string): Promise<boolean> {
   try {
-    const mediatorDid = await requireInboxMediator();
+    const mediatorDid = await requireInboxMediator(vtaDid);
     await getWarmSession(mediatorDid, vtaDid);
     console.info(
       "[pnm inbound] listening for confirm requests via",
@@ -2409,51 +2434,54 @@ function clearInboundBackoff(vtaDid: string): void {
  *  authenticating identity). One mediator can host many holder
  *  sessions concurrently. */
 async function reconcileInbound(vtaDids: readonly string[]): Promise<void> {
-  const mediatorDid = await walletMediatorDid();
+  const inboxes = await allInboxes();
   const wanted = new Set(vtaDids);
 
-  // No inbox, nothing to reconcile. Returning here rather than letting each
-  // VTA fail into `scheduleInboundReconnect` is deliberate: backoff exists to
-  // outlast a mediator outage, and retrying cannot fix an unset setting — it
-  // would just log the same failure forever at a growing interval and bury
-  // the one line that says what is actually wrong. Writing the setting
-  // (onboarding, or Setup → Message routing) re-runs this.
-  if (!mediatorDid) {
-    if (vtaDids.length > 0) {
-      console.warn(
-        "[pnm inbound] no inbox mediator configured — this wallet cannot " +
-          "receive consent requests. Re-connect to your agent to set one.",
-      );
-    }
-    return;
-  }
-
-  // Open missing — concurrent across VTAs, individual failures stay
-  // contained (loadHolder may throw for a locked wallet; the rest
-  // still come up). A VTA that fails to come up (e.g. mediator still
-  // down, or wallet locked) is put on the backoff retry loop rather than
-  // left dead; one that comes up clears any prior backoff. `startInbound`
-  // never throws, so `Promise.all` is safe here.
+  // One session per (agent, that agent's relay). Concurrent across agents;
+  // individual failures stay contained (loadHolder throws for a locked
+  // wallet, one relay may be down) so the rest still come up. An agent that
+  // fails to come up goes on the backoff retry loop rather than being left
+  // dead; one that comes up clears any prior backoff. `startInbound` never
+  // throws, so `Promise.all` is safe.
+  //
+  // An agent with no relay is NOT put on backoff: backoff exists to outlast an
+  // outage, and retrying cannot fill in a setting. It would log the same
+  // failure forever at a growing interval and bury the one line saying what is
+  // actually wrong. Writing the inbox (onboarding, the boot adopt, or Setup →
+  // Message routing) re-runs this.
+  const unreachable: string[] = [];
   await Promise.all(
     vtaDids.map(async (vtaDid) => {
+      if (!inboxes.has(vtaDid)) {
+        unreachable.push(vtaDid);
+        return;
+      }
       if (await startInbound(vtaDid)) clearInboundBackoff(vtaDid);
       else scheduleInboundReconnect(vtaDid);
     }),
   );
+  if (unreachable.length > 0) {
+    console.warn(
+      "[pnm inbound] no inbox relay configured for",
+      unreachable.join(", "),
+      "— those agents cannot reach this wallet.",
+    );
+  }
 
   // Re-drive anything interrupted before it concluded. Done after the
   // sessions are up, because finishing an interaction means sending a signed
   // decision back over one.
   void drainPendingInbound(vtaDids);
 
-  // Close extras: any pool entry whose mediator matches our inbox AND
-  // whose vtaDid is no longer wanted (operator forgot it). The pool
-  // also holds outbound sessions to OTHER mediators (the VTA's
-  // mediator, not the wallet's) — those are filtered out by the
-  // mediator check.
+  // Close extras: any pool entry that is an INBOX session — its mediator is
+  // the one its own agent's inbox names — whose vtaDid is no longer wanted
+  // (operator forgot it). The pool also holds outbound sessions to other
+  // mediators; the pair check leaves those alone. Matching the pair rather
+  // than one wallet-wide DID matters now that each agent has its own relay:
+  // the same mediator can be one agent's inbox and another's outbound hop.
   for (const [key, sessionPromise] of warmPool) {
     const parsed = parsePoolKey(key);
-    if (parsed.mediatorDid !== mediatorDid) continue; // outbound; leave it
+    if (inboxes.get(parsed.vtaDid) !== parsed.mediatorDid) continue; // outbound; leave it
     if (wanted.has(parsed.vtaDid)) continue; // still wanted
     // No longer wanted. Cancel any pending reconnect for this holder
     // first, so a backoff timer that fired between drop and reconcile
@@ -2467,6 +2495,11 @@ async function reconcileInbound(vtaDids: readonly string[]): Promise<void> {
       (conn) => conn.close(),
       () => undefined, // already failed → nothing to close
     );
+    // Drop the inbox record only now, and only here. Deleting it where the
+    // operator forgets the agent would run BEFORE this reconcile, leaving the
+    // session unrecognisable as an inbox and therefore open forever. Closing
+    // first and forgetting second keeps the two in step.
+    void forgetInbox(parsed.vtaDid);
     console.info("[pnm inbound] closed listener for forgotten VTA", parsed.vtaDid);
   }
 }
@@ -2512,7 +2545,7 @@ async function drainPendingInbound(vtaDids: readonly string[]): Promise<void> {
           true,
         );
       } else {
-        const mediatorDid = await requireInboxMediator();
+        const mediatorDid = await requireInboxMediator(entry.vtaDid);
         const conn = await getWarmSession(mediatorDid, entry.vtaDid);
         const { identity, signing } = await loadHolder(entry.vtaDid);
         console.info("[pnm inbound] re-driving interrupted message", entry.id);

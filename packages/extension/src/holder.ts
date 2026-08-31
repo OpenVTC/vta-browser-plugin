@@ -7,26 +7,6 @@ import {
 import { getSettings } from "./config.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 
-/** The wallet's inbox mediator DID — the relay RPs and executors push to for
- *  inbound DIDComm (RP-initiated `confirm` requests, `task-consent/request`),
- *  and the one the wallet authenticates to for DIDComm login, so it is already
- *  a registered recipient there.
- *
- *  **`undefined` until onboarding writes it from the agent's advertised
- *  mediator**, and callers must treat that as "this wallet has no inbox"
- *  rather than substituting one. There was a hardcoded fallback here; it
- *  pointed at a demo host belonging to no deployment in use, and silently
- *  became the inbox of every wallet whose operator never opened the advanced
- *  routing field. See `config.ts`.
- *
- *  The old note about this being baked into the holder `did:peer:2` at first
- *  mint no longer applies — a v4 holder is a VTA-minted `did:key` and carries
- *  no mediator. Changing the inbox re-registers an address; it does not mint
- *  an identity. */
-export async function getWalletMediatorDid(): Promise<string | undefined> {
-  return (await getSettings()).mediatorDid;
-}
-
 /**
  * Build the secret wrap the load path should use, given the
  * current `encryptHolderSecret` setting. Returns `undefined`

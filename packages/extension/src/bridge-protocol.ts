@@ -555,8 +555,8 @@ export const MEDIATOR_REQUIRED = "wallet/mediator-required";
 /** Stable code meaning "this wallet has no inbox mediator configured, so
  *  nothing can be pushed to it". Distinct from `MEDIATOR_REQUIRED`, which is
  *  about the mediator an *onboarding* needs to route through: this one is
- *  about the wallet's own inbox, and it is reachable only through a wallet
- *  that was never onboarded or whose setting was cleared by hand. Matched on
+ *  about an agent's inbox on this wallet, and it is reachable only for an
+ *  agent that advertised no relay or whose entry was cleared by hand. Matched on
  *  directly, never by parsing the message (R3.7). */
 export const INBOX_NOT_CONFIGURED = "wallet/inbox-not-configured";
 
@@ -1584,11 +1584,12 @@ export interface OffscreenVerifyDidRequest {
 export interface OffscreenStartInboundRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_START_INBOUND;
-  /** Which VTAs' holders should be listening on the wallet's inbox
-   *  mediator. The offscreen reconciles: opens missing inbound
-   *  sessions for VTAs in this list, closes existing sessions for
-   *  VTAs no longer present (operator forgot them). Empty list closes
-   *  all inbound listeners — used on fresh-wipe / no-VTA state. */
+  /** Which VTAs should be listening. The offscreen reconciles, opening one
+   *  session per (agent, that agent's own relay) — the relay comes from the
+   *  per-agent inbox map in settings, which the offscreen reads directly, not
+   *  from this message. Closes sessions for VTAs no longer present (operator
+   *  forgot them). Empty list closes all inbound listeners — used on
+   *  fresh-wipe / no-VTA state. */
   vtaDids: string[];
 }
 
