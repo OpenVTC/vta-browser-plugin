@@ -19,6 +19,10 @@
 
 import { IndexedDBKVStore } from "@openvtc/pnm-core";
 
+/** Who put the inbox mediator there. Absent on records written before this
+ *  existed — treated as "nobody is on record", which is the truth. */
+export type InboxSource = "agent" | "operator";
+
 export interface WalletSettings {
   /**
    * The wallet's inbox: the mediator an RP or executor pushes to in order to
@@ -35,6 +39,12 @@ export interface WalletSettings {
    * it can only appear to work. (R5 — config absence is the restrictive case.)
    */
   mediatorDid?: string;
+
+  /** Provenance for `mediatorDid`: `agent` when onboarding (or the boot
+   *  backfill) adopted the agent's advertised relay, `operator` when a person
+   *  typed it into Setup → Message routing. Read by `inboxToAdopt`; see the
+   *  note there for why the value alone was not enough to go on. */
+  mediatorDidSource?: InboxSource;
   /** Optional default VTA DID prefilled into the step-up flow. */
   defaultStepUpVtaDid?: string;
   /** Optional default VTA mediator DID prefilled into the step-up flow. */
@@ -124,27 +134,62 @@ export interface WalletSettings {
  *    mediator cannot push to a wallet; an inbox invented here would be a
  *    relay nobody was ever asked about. Unset is the honest state and the
  *    self-test reports it.
- *  - Already set → leave it. Either an operator chose it deliberately (they
- *    run more than one relay), or a previous onboarding adopted it — and the
- *    inbox is an *address* other parties already route to, so a second
- *    onboarding silently moving it would strand everyone who knows this
- *    wallet. Changing it stays a deliberate act with its own confirmation.
- *  - Otherwise → adopt the agent's.
+ *  - Set, and someone is on record choosing it → leave it here. An operator
+ *    pin is final; an `agent`-sourced one is not frozen either, but moving it
+ *    is the job of `followAgentInbox` in `background.ts`, which re-resolves
+ *    the agent's DID document rather than guessing from a cached connection.
+ *    This function only ever fills a blank.
+ *  - Otherwise → adopt the agent's. That covers an unset inbox and, once, the
+ *    records written before provenance existed.
+ *
+ * **Why `source` had to exist.** The first cut of this keyed on "is anything
+ * set?", which read as sufficient and was not. `setSettings` merged the
+ * *defaulted* view of the settings and wrote it back, so under the old
+ * hardcoded default any unrelated write — turning on the passkey lock,
+ * toggling TSP preference — persisted the demo mediator DID into IndexedDB as
+ * though it had been chosen. Wallets therefore carry a stored inbox nobody
+ * picked, indistinguishable by value from a deliberate one, and the migration
+ * that was supposed to rescue them declined to touch it. (That write-back is
+ * fixed in `setSettings` below; this handles the records it already made.)
+ *
+ * The cost is stated rather than hidden: an operator who hand-set a mediator
+ * before provenance existed has it adopted over, once. With nothing deployed
+ * and the alternative being wallets stuck on a relay in someone else's
+ * deployment, that is the right side to err on — and the person affected is
+ * exactly the person who knows how to set it again.
  */
 export function inboxToAdopt(
-  current: string | undefined,
+  current: { did?: string | undefined; source?: InboxSource | undefined },
   advertised: string | undefined,
 ): string | undefined {
   if (!advertised) return undefined;
-  if (current) return undefined;
+  // A person chose this relay. Never overridden.
+  if (current.source === "operator") return undefined;
+  // Already adopted from an agent. Left alone even when the active agent
+  // changes: the inbox is an address others route to, and chasing the active
+  // VTA would move it out from under them.
+  if (current.did && current.source === "agent") return undefined;
+  // Either nothing is set, or something is set that no one recorded choosing —
+  // which is every record written before provenance existed. Adopt.
   return advertised;
 }
 
 const SETTINGS_KEY = "pnm/settings/v1";
 
 /** Read the current settings, falling back to defaults for unset fields. */
+/** The record as it is actually stored — no defaults applied.
+ *
+ *  Separate from `getSettings` because the two have genuinely different jobs,
+ *  and conflating them is what produced the inbox defect: `setSettings` merged
+ *  the *defaulted* view and wrote it back, so every read-modify-write turned
+ *  derived defaults into persisted values that later code could no longer tell
+ *  apart from choices. A write must merge onto what is on disk. */
+async function storedSettings(): Promise<Partial<WalletSettings>> {
+  return (await new IndexedDBKVStore().get<Partial<WalletSettings>>(SETTINGS_KEY)) ?? {};
+}
+
 export async function getSettings(): Promise<WalletSettings> {
-  const s = await new IndexedDBKVStore().get<Partial<WalletSettings>>(SETTINGS_KEY);
+  const s = await storedSettings();
   // `encryptHolderSecret` defaults to FALSE until the popup-driven
   // WebAuthn-enrol path lands — see the field's docblock for the
   // architectural constraint (offscreen + WebAuthn don't mix).
@@ -154,6 +199,9 @@ export async function getSettings(): Promise<WalletSettings> {
     typeof s?.encryptHolderSecret === "boolean" ? s.encryptHolderSecret : false;
   return {
     ...(s?.mediatorDid ? { mediatorDid: s.mediatorDid } : {}),
+    ...(s?.mediatorDidSource === "agent" || s?.mediatorDidSource === "operator"
+      ? { mediatorDidSource: s.mediatorDidSource }
+      : {}),
     ...(s?.defaultStepUpVtaDid ? { defaultStepUpVtaDid: s.defaultStepUpVtaDid } : {}),
     ...(s?.defaultStepUpVtaMediatorDid
       ? { defaultStepUpVtaMediatorDid: s.defaultStepUpVtaMediatorDid }
@@ -176,6 +224,7 @@ export async function getSettings(): Promise<WalletSettings> {
 
 /** Merge a partial update into the stored settings. */
 export async function setSettings(patch: Partial<WalletSettings>): Promise<void> {
-  const current = await getSettings();
-  await new IndexedDBKVStore().put(SETTINGS_KEY, { ...current, ...patch });
+  // Merged onto the STORED record, not the defaulted one. See `storedSettings`.
+  const stored = await storedSettings();
+  await new IndexedDBKVStore().put(SETTINGS_KEY, { ...stored, ...patch });
 }

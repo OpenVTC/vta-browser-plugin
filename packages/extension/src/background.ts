@@ -204,7 +204,10 @@ import {
 // it constantly and a missed event would otherwise persist until the next one.
 chrome.permissions.onAdded.addListener(() => void syncProviderRegistration());
 chrome.permissions.onRemoved.addListener(() => void syncProviderRegistration());
-chrome.runtime.onStartup.addListener(() => void syncProviderRegistration());
+chrome.runtime.onStartup.addListener(() => {
+  void syncProviderRegistration();
+  void followAgentInbox();
+});
 void syncProviderRegistration().then((matches) => {
   console.info(
     matches.length > 0
@@ -216,6 +219,9 @@ void syncProviderRegistration().then((matches) => {
 chrome.runtime.onInstalled.addListener((details) => {
   console.info("[pnm] extension installed:", details.reason);
   void ensurePushWake();
+  // An update is the other moment worth one DID-document read: it is when a
+  // deployment's pieces tend to move together.
+  void followAgentInbox();
 
   // Fresh install: open setup in a tab rather than leaving the user to find
   // it. The order of the steps there is load-bearing — the agent's address
@@ -480,10 +486,26 @@ async function startInboundListener(): Promise<void> {
   // it applies the same rule onboarding now applies, at the one place that
   // runs on every boot. `inboxToAdopt` declines when an inbox is already set,
   // so this never moves an address in use.
-  const adopt = inboxToAdopt((await getSettings()).mediatorDid, await readAgentMediatorDid());
+  const settings = await getSettings();
+  const adopt = inboxToAdopt(
+    { did: settings.mediatorDid, source: settings.mediatorDidSource },
+    await readAgentMediatorDid(),
+  );
   if (adopt) {
-    await setSettings({ mediatorDid: adopt });
-    console.info("[pnm inbound] inbox mediator backfilled from agent:", adopt);
+    await setSettings({ mediatorDid: adopt, mediatorDidSource: "agent" });
+    console.info("[pnm inbound] inbox mediator adopted from agent:", adopt);
+  } else if (!settings.mediatorDidSource && vtaDids.length > 0) {
+    // Nothing adopted and nothing on record choosing what is there: the
+    // persisted connection carries no mediator to adopt. Said out loud,
+    // because the alternative is a wallet that silently keeps whatever relay
+    // it had and a boot that looks like it did its job. Refreshing transports
+    // (Setup → the agent's transports) re-resolves the DID document and fills
+    // the connection in.
+    console.warn(
+      "[pnm inbound] inbox relay is unattributed and no onboarded agent " +
+        "advertises one to adopt — refresh the agent's transports, or set a " +
+        "relay under Setup → Message routing.",
+    );
   }
   // Seed _lastActiveVtaDid too — otherwise the first chrome.storage
   // onChanged callback would see _lastActiveVtaDid=null and emit a
@@ -1381,6 +1403,71 @@ async function handleWalletLockState(
     type: OFFSCREEN_WALLET_LOCK_STATE,
     ...(req.vtaDid ? { vtaDid: req.vtaDid } : {}),
   })) as RuntimeWalletLockStateResponse;
+}
+
+/**
+ * Follow the agent if it has moved its relay.
+ *
+ * Distinct from the adopt-when-blank backfill in `startInboundListener`, and
+ * for a reason that only shows up when you ask how inbound actually arrives:
+ * **a v4 holder is a `did:key`, which carries no service endpoint, and the
+ * wallet publishes its inbox to nobody.** There is no discovery path. So an
+ * executor pushing to this wallet can only hand the message to a mediator it
+ * already knows — its own — and the wallet hears it only if it is listening
+ * there. The inbox is not an independent address the wallet owns; it is
+ * "wherever my agent's relay is", and a wallet pinned to yesterday's mediator
+ * goes dark while every check still reports green.
+ *
+ * So an `agent`-sourced inbox FOLLOWS the agent's DID document. An
+ * `operator`-sourced one never moves: someone running more than one relay
+ * chose it, and this is exactly the override that has to survive.
+ *
+ * Run on browser startup and on update, not per worker spin-up. MV3 respawns
+ * the worker on almost any event, and a DID-document fetch on each of those
+ * would be a lot of network for a value that changes when an operator
+ * redeploys a mediator. The blank/unattributed backfill still runs every
+ * spin-up — it reads the persisted connection and costs nothing.
+ */
+async function followAgentInbox(): Promise<void> {
+  const settings = await getSettings();
+  if (settings.mediatorDidSource === "operator") return; // pinned, deliberately
+
+  const vtaDid = await readActiveVtaDid();
+  if (!vtaDid) return;
+
+  let live: string | undefined;
+  try {
+    const resp = await handleRefreshVtaTransports({
+      type: RUNTIME_REFRESH_VTA_TRANSPORTS,
+      vtaDid,
+    });
+    if (!resp.ok) throw new Error(resp.error);
+    live = resp.result.mediatorDid;
+  } catch (e) {
+    // A DID document we could not read says nothing about where the relay is,
+    // so it must not be read as "it moved to nowhere". Keep what we have.
+    console.warn("[pnm inbound] could not re-resolve the agent's relay:", e);
+    return;
+  }
+
+  if (!live) {
+    console.warn(
+      "[pnm inbound] the agent advertises no DIDComm relay — nothing can be " +
+        "pushed to this wallet through it.",
+    );
+    return;
+  }
+  if (live === settings.mediatorDid) return;
+
+  await setSettings({ mediatorDid: live, mediatorDidSource: "agent" });
+  console.info(
+    "[pnm inbound] the agent moved its relay:",
+    settings.mediatorDid ?? "(none)",
+    "→",
+    live,
+  );
+  // Re-open on the relay that can actually reach us.
+  await startInboundListener();
 }
 
 async function handleRefreshVtaTransports(

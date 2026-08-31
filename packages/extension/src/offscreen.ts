@@ -1829,9 +1829,13 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
   // advertises neither (REST- or TSP-only) leaves the inbox unset, which is
   // the honest state: nothing can be pushed to this wallet, and `runDiagnostics`
   // says so rather than pointing at a mediator that was never asked.
-  const inbox = inboxToAdopt((await getSettings()).mediatorDid, services.didcomm?.mediatorDid);
+  const onboardSettings = await getSettings();
+  const inbox = inboxToAdopt(
+    { did: onboardSettings.mediatorDid, source: onboardSettings.mediatorDidSource },
+    services.didcomm?.mediatorDid,
+  );
   if (inbox) {
-    await setSettings({ mediatorDid: inbox });
+    await setSettings({ mediatorDid: inbox, mediatorDidSource: "agent" });
     console.info("[pnm onboard] inbox mediator set from agent:", inbox);
   }
 
