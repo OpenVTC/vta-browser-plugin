@@ -1,7 +1,7 @@
 # CLAUDE.md — PNM Browser Plugin
 
 The MV3 browser-extension wallet: holds the user's DIDs/credentials, runs the
-mediator inbound session (offscreen document), and renders consent/step-up
+mediator inbound sessions — one per onboarded agent (offscreen document), and renders consent/step-up
 approvals for VTA-gated operations. Two facts dominate all design here:
 **MV3 tears down workers at any moment as normal operation**, and **consent
 prompts are security controls** — one silently lost prompt is a gated action
@@ -150,6 +150,53 @@ layer down. `unknown` is not a failure and never removes REST from selection.
 recording `up` on construction rather than on evidence; or adding a fourth
 transport without recording its outcome, which reads as "not observed" and
 silently restores the advertisement-only answer for that channel.
+
+## Every agent gets its own inbox, because nothing publishes one
+
+A v4 holder is a **`did:key` the VTA mints** (`store/holder-identity.ts`), and
+`did:key` has no service endpoint. The wallet publishes its relay to nobody —
+`device/set-wake`'s `suggestedTriggers` is advisory and never carries it. So
+**there is no discovery path**: an executor with something for this wallet can
+only hand it to a mediator it already knows, its own, and the wallet hears it
+only if it happens to be listening there.
+
+An inbox is therefore not one address the wallet owns. It is "wherever *that*
+agent's relay is", once per onboarded agent — `settings.inboxes` is
+`Record<vtaDid, { did, source }>`. It was a single wallet-wide `mediatorDid`,
+which meant whichever agent that value named was reachable and **every other
+agent's consent requests were lost without a trace**. The approver inbox is the
+same map, which is the sharper version: that session carries
+`task-consent/request`, so a wrong relay is a gated action that never got its
+human check (R7.2).
+
+**Sessions are keyed on the (agent, relay) PAIR**, not on a relay DID.
+`reconcileInbound` opens one per pair, and `isInbox`, the close-extras sweep
+and the transport-health snapshot all match that way, because with one relay
+per agent the same mediator can be one agent's inbox and another's outbound
+hop. A single-DID comparison mislabels sessions and closes the wrong ones.
+
+**`source` is provenance, and it is load-bearing.** `agent` follows that
+agent's DID document (`followAgentInbox`, on `onStartup`/`onInstalled` — not
+per worker spin-up); `operator` is pinned and never moved. It exists because
+`setSettings` used to merge the *defaulted* settings and write them back, so
+the old hardcoded relay became a **stored** value indistinguishable by content
+from a deliberate choice — and the migration meant to rescue those wallets
+declined to touch them. `setSettings` now merges onto the stored record; that
+class of bug was never mediator-specific.
+
+**Two orderings that look arbitrary and are not.** `setInbox`/`forgetInbox`
+own the read-modify-write of the map — handing `setSettings` a whole `inboxes`
+object drops every agent absent from the caller's copy, whose symptom is
+exactly the silent loss this map exists to end. And an entry is forgotten
+*inside* `reconcileInbound`, right after that session closes: deleting it where
+the operator forgets the agent runs **before** the reconcile, leaving the
+session unrecognisable as an inbox and so open forever.
+
+**What breaks it:** a wallet-wide inbox lookup (a string where the map belongs);
+comparing a bare relay DID instead of the pair; writing `inboxes` through
+`setSettings`; forgetting an entry outside the reconcile; or reintroducing a
+default relay — `tests/wallet-inbox.test.mts` fails on any DID literal with a
+real identifier body anywhere in `src/`, which is what a default becomes.
 
 ## A CORS refusal is unreadable, so it is inferred
 
