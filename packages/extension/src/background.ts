@@ -480,10 +480,26 @@ async function startInboundListener(): Promise<void> {
   // it applies the same rule onboarding now applies, at the one place that
   // runs on every boot. `inboxToAdopt` declines when an inbox is already set,
   // so this never moves an address in use.
-  const adopt = inboxToAdopt((await getSettings()).mediatorDid, await readAgentMediatorDid());
+  const settings = await getSettings();
+  const adopt = inboxToAdopt(
+    { did: settings.mediatorDid, source: settings.mediatorDidSource },
+    await readAgentMediatorDid(),
+  );
   if (adopt) {
-    await setSettings({ mediatorDid: adopt });
-    console.info("[pnm inbound] inbox mediator backfilled from agent:", adopt);
+    await setSettings({ mediatorDid: adopt, mediatorDidSource: "agent" });
+    console.info("[pnm inbound] inbox mediator adopted from agent:", adopt);
+  } else if (!settings.mediatorDidSource && vtaDids.length > 0) {
+    // Nothing adopted and nothing on record choosing what is there: the
+    // persisted connection carries no mediator to adopt. Said out loud,
+    // because the alternative is a wallet that silently keeps whatever relay
+    // it had and a boot that looks like it did its job. Refreshing transports
+    // (Setup → the agent's transports) re-resolves the DID document and fills
+    // the connection in.
+    console.warn(
+      "[pnm inbound] inbox relay is unattributed and no onboarded agent " +
+        "advertises one to adopt — refresh the agent's transports, or set a " +
+        "relay under Setup → Message routing.",
+    );
   }
   // Seed _lastActiveVtaDid too — otherwise the first chrome.storage
   // onChanged callback would see _lastActiveVtaDid=null and emit a

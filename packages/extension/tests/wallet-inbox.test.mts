@@ -19,23 +19,39 @@ const AGENT = "did:webvh:QmAgentMediator:agent.example:mediator";
 const OTHER = "did:webvh:QmOtherMediator:other.example:mediator";
 
 test("adopts the agent's relay when the wallet has none", () => {
-  assert.equal(inboxToAdopt(undefined, AGENT), AGENT);
+  assert.equal(inboxToAdopt({}, AGENT), AGENT);
 });
 
-test("leaves an inbox the operator already chose", () => {
+test("leaves an inbox the operator chose", () => {
   // The operator running two relays picked this one on purpose.
-  assert.equal(inboxToAdopt(OTHER, AGENT), undefined);
+  assert.equal(inboxToAdopt({ did: OTHER, source: "operator" }, AGENT), undefined);
 });
 
 test("a second onboarding does not move an address others already route to", () => {
-  assert.equal(inboxToAdopt(AGENT, OTHER), undefined);
+  assert.equal(inboxToAdopt({ did: AGENT, source: "agent" }, OTHER), undefined);
 });
 
 test("an agent advertising no mediator leaves the inbox unset, not invented", () => {
   // Unset is reported by the self-test as "nothing can reach this wallet".
   // Substituting anything here is what caused the original defect.
-  assert.equal(inboxToAdopt(undefined, undefined), undefined);
-  assert.equal(inboxToAdopt("", undefined), undefined);
+  assert.equal(inboxToAdopt({}, undefined), undefined);
+  assert.equal(inboxToAdopt({ did: "" }, undefined), undefined);
+});
+
+test("adopts over a stored inbox nobody is on record choosing", () => {
+  // The case that defeated the first migration. `setSettings` merged the
+  // DEFAULTED settings and wrote them back, so any unrelated write — the
+  // passkey lock, the TSP toggle — persisted the old hardcoded demo mediator
+  // as though it had been picked. By value it is indistinguishable from a
+  // deliberate choice; by provenance it is not.
+  const DEMO = "did:webvh:QmDemoRelay:demo.example:mediator";
+  assert.equal(inboxToAdopt({ did: DEMO }, AGENT), AGENT);
+});
+
+test("the adoption happens once, not on every boot", () => {
+  // Stamped `agent` on the way in, so the next boot leaves it alone even
+  // though the active agent may since have changed.
+  assert.equal(inboxToAdopt({ did: AGENT, source: "agent" }, AGENT), undefined);
 });
 
 // ─── No mediator may be baked into the source again ───

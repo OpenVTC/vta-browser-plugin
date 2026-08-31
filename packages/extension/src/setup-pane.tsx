@@ -207,7 +207,9 @@ export function SetupPane() {
     setBusy(true);
     setStatus(null);
     try {
-      await setSettings({ mediatorDid: inbox.trim() });
+      // Stamped as the operator's choice, which the boot backfill never
+      // overrides — this is the one place a person picks a relay.
+      await setSettings({ mediatorDid: inbox.trim(), mediatorDidSource: "operator" });
       setSavedInbox(inbox.trim());
       setRoutingOpen(false);
       setHolderDid((await readActiveHolderDid()) ?? "");
