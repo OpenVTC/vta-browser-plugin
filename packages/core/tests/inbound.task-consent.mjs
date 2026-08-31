@@ -236,32 +236,81 @@ test("a denial is an explicit decision, not an absent one", async () => {
 });
 
 // ── task-consent/granted (the pub/sub nudge) ──────────────────────────────
+//
+// Every fixture below is built the way `push_granted` on the VTA actually emits
+// the notice (vta-service `trust_tasks/consent_request.rs`): a DIDComm envelope
+// whose `body` is a full `task-consent/granted/0.1` Trust Task document, with
+// the salted digest under `payload`.
+//
+// That shape is the point of these tests. They previously asserted the pre-spec
+// form — the task type as the DIDComm `type`, and a bare
+// `{status, payloadDigest, taskType}` body — which the VTA stopped sending when
+// the notice gained its envelope. The parser matched the fixtures rather than
+// the wire, so it returned `null` for every real notice while these passed, and
+// the requester's page never auto-published.
 
-test("parseTaskConsentGranted accepts a granted notice from our VTA", () => {
+/** The notice exactly as the VTA puts it on the wire. */
+function grantedEnvelope({ digest = "zQmGrantedDigest", from = VTA.did, issuer = VTA.did } = {}) {
+  return {
+    ...(from ? { from } : {}),
+    type: TRUST_TASK_ENVELOPE_TYPE,
+    body: {
+      id: "urn:uuid:2b0f6a1e-64f2-4a1e-9a6e-1f0f4a0d7c31",
+      type: TASK_CONSENT_GRANTED_TYPE,
+      threadId: "urn:uuid:0d2f6b1a-1c3e-4f5a-8b7c-9e0d1a2b3c4d",
+      recipient: HOLDER,
+      ...(issuer ? { issuer } : {}),
+      issuedAt: "2026-08-31T14:00:00Z",
+      payload: { status: "granted", payloadDigest: digest, taskType: "t" },
+    },
+  };
+}
+
+test("parseTaskConsentGranted accepts the enveloped notice the VTA sends", () => {
+  assert.deepEqual(parseTaskConsentGranted(grantedEnvelope(), VTA.did), {
+    payloadDigest: "zQmGrantedDigest",
+  });
+});
+
+test("parseTaskConsentGranted ignores a non-envelope message type", () => {
+  const msg = { type: "other", from: VTA.did, body: { payloadDigest: "x" } };
+  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
+});
+
+test("parseTaskConsentGranted ignores an envelope carrying another task", () => {
+  const msg = grantedEnvelope();
+  msg.body.type = TASK_CONSENT_REQUEST_TYPE;
+  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
+});
+
+test("parseTaskConsentGranted rejects a sender that is not our VTA", () => {
+  assert.equal(parseTaskConsentGranted(grantedEnvelope({ from: IMPOSTOR.did }), VTA.did), null);
+});
+
+test("parseTaskConsentGranted rejects an in-band issuer that is not our VTA", () => {
+  const msg = grantedEnvelope({ from: null, issuer: IMPOSTOR.did });
+  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
+});
+
+test("parseTaskConsentGranted tolerates a missing sender (page re-checks the digest)", () => {
+  const msg = grantedEnvelope({ from: null, issuer: null });
+  assert.deepEqual(parseTaskConsentGranted(msg, VTA.did), { payloadDigest: "zQmGrantedDigest" });
+});
+
+test("parseTaskConsentGranted requires a string payloadDigest", () => {
+  const msg = grantedEnvelope();
+  delete msg.body.payload.payloadDigest;
+  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
+});
+
+// The regression, stated as the shape it was: a bare pre-spec body must not be
+// accepted. Keeping it pins the parser to one wire form, so a future edit cannot
+// quietly restore the dual-shape tolerance that hid the break.
+test("parseTaskConsentGranted rejects the pre-spec bare body", () => {
   const msg = {
     type: TASK_CONSENT_GRANTED_TYPE,
     from: VTA.did,
     body: { status: "granted", payloadDigest: "abc123", taskType: "t" },
   };
-  assert.deepEqual(parseTaskConsentGranted(msg, VTA.did), { payloadDigest: "abc123" });
-});
-
-test("parseTaskConsentGranted ignores a non-granted message type", () => {
-  const msg = { type: "other", from: VTA.did, body: { payloadDigest: "x" } };
-  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
-});
-
-test("parseTaskConsentGranted rejects a sender that is not our VTA", () => {
-  const msg = { type: TASK_CONSENT_GRANTED_TYPE, from: IMPOSTOR.did, body: { payloadDigest: "x" } };
-  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
-});
-
-test("parseTaskConsentGranted tolerates a missing sender (page re-checks the digest)", () => {
-  const msg = { type: TASK_CONSENT_GRANTED_TYPE, body: { payloadDigest: "x" } };
-  assert.deepEqual(parseTaskConsentGranted(msg, VTA.did), { payloadDigest: "x" });
-});
-
-test("parseTaskConsentGranted requires a string payloadDigest", () => {
-  const msg = { type: TASK_CONSENT_GRANTED_TYPE, from: VTA.did, body: {} };
   assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
 });
