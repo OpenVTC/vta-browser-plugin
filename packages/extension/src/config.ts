@@ -5,10 +5,11 @@
 // while IndexedDB is available in every extension context (and is already the
 // holder identity's backing store).
 //
-// The mediator DID is the wallet's inbox: the relay an RP or executor pushes
-// to when it needs to reach this wallet. It is written by onboarding from the
-// agent's own advertised DIDComm mediator, and only overridden by hand by an
-// operator running more than one relay.
+// An inbox is the relay an executor pushes to when it needs to reach this
+// wallet, and there is one PER ONBOARDED AGENT — see `inboxes` below for why
+// a single wallet-wide relay could only ever serve one agent. Each is written
+// by onboarding from that agent's advertised DIDComm mediator, and overridden
+// by hand only by an operator running more than one relay.
 //
 // It used to be described here as "baked into the holder's `did:peer:2`
 // service endpoint at first mint, so changing it mints a NEW wallet DID".
@@ -19,32 +20,44 @@
 
 import { IndexedDBKVStore } from "@openvtc/pnm-core";
 
-/** Who put the inbox mediator there. Absent on records written before this
+/** Who put an inbox mediator there. Absent on records written before this
  *  existed — treated as "nobody is on record", which is the truth. */
 export type InboxSource = "agent" | "operator";
 
+/** One agent's inbox, and who chose it. `agent` follows that agent's DID
+ *  document; `operator` is pinned and never moved for them. */
+export interface InboxRecord {
+  did: string;
+  source: InboxSource;
+}
+
 export interface WalletSettings {
   /**
-   * The wallet's inbox: the mediator an RP or executor pushes to in order to
-   * reach this wallet, and the relay the wallet authenticates to for DIDComm
-   * login.
+   * The wallet's inboxes, **one per onboarded agent**.
    *
-   * **Unset until onboarding writes it**, and unset is a real state, not a
-   * missing default. It previously fell back to a hardcoded demo mediator on
-   * a domain no deployment here runs, so every wallet that never touched the
-   * advanced routing field ran its inbox through a third party's host while
-   * Setup told the operator it had been "set up automatically from your
-   * agent". A default that is wrong everywhere but one workspace is worse
-   * than none: absent, the wallet can say the inbox is not configured; wrong,
-   * it can only appear to work. (R5 — config absence is the restrictive case.)
+   * An inbox is the mediator an executor pushes to in order to reach this
+   * wallet, and the relay that agent's holder authenticates to. It is keyed by
+   * VTA DID because it has to be: a v4 holder is a `did:key` with no service
+   * endpoint and the wallet publishes its relay to nobody, so an executor can
+   * only hand a message to a mediator it already knows — its own. A wallet
+   * onboarded at two agents on different mediators must therefore listen at
+   * both, as each agent's holder. This was a single `mediatorDid` for the
+   * whole wallet, which meant whichever agent the value happened to name was
+   * reachable and every other agent's pushes were silently lost.
+   *
+   * Absent or missing an entry is a real state, not a missing default: that
+   * agent cannot reach this wallet, and the self-test says so. The value that
+   * used to fill the gap was a hardcoded demo relay in someone else's
+   * deployment. (R5 — config absence is the restrictive case.)
    */
-  mediatorDid?: string;
+  inboxes?: Record<string, InboxRecord>;
 
-  /** Provenance for `mediatorDid`: `agent` when onboarding (or the boot
-   *  backfill) adopted the agent's advertised relay, `operator` when a person
-   *  typed it into Setup → Message routing. Read by `inboxToAdopt`; see the
-   *  note there for why the value alone was not enough to go on. */
+  /** @deprecated Superseded by {@link inboxes}. Read once by the boot
+   *  migration in `background.ts` and then cleared. Never write it. */
+  mediatorDid?: string;
+  /** @deprecated Superseded by {@link inboxes}. See {@link mediatorDid}. */
   mediatorDidSource?: InboxSource;
+
   /** Optional default VTA DID prefilled into the step-up flow. */
   defaultStepUpVtaDid?: string;
   /** Optional default VTA mediator DID prefilled into the step-up flow. */
@@ -165,9 +178,9 @@ export function inboxToAdopt(
   if (!advertised) return undefined;
   // A person chose this relay. Never overridden.
   if (current.source === "operator") return undefined;
-  // Already adopted from an agent. Left alone even when the active agent
-  // changes: the inbox is an address others route to, and chasing the active
-  // VTA would move it out from under them.
+  // Already adopted from this agent. Moving it when the agent moves its relay
+  // is `followAgentInbox`'s job in `background.ts`, which re-resolves the DID
+  // document; this function only ever fills a blank.
   if (current.did && current.source === "agent") return undefined;
   // Either nothing is set, or something is set that no one recorded choosing —
   // which is every record written before provenance existed. Adopt.
@@ -184,6 +197,18 @@ const SETTINGS_KEY = "pnm/settings/v1";
  *  the *defaulted* view and wrote it back, so every read-modify-write turned
  *  derived defaults into persisted values that later code could no longer tell
  *  apart from choices. A write must merge onto what is on disk. */
+/** Keep only the entries that are actually an `InboxRecord`. */
+function validInboxes(raw: Record<string, unknown>): Record<string, InboxRecord> {
+  const out: Record<string, InboxRecord> = {};
+  for (const [vtaDid, value] of Object.entries(raw)) {
+    const rec = value as Partial<InboxRecord> | null;
+    if (!rec || typeof rec.did !== "string" || !rec.did) continue;
+    if (rec.source !== "agent" && rec.source !== "operator") continue;
+    out[vtaDid] = { did: rec.did, source: rec.source };
+  }
+  return out;
+}
+
 async function storedSettings(): Promise<Partial<WalletSettings>> {
   return (await new IndexedDBKVStore().get<Partial<WalletSettings>>(SETTINGS_KEY)) ?? {};
 }
@@ -198,6 +223,10 @@ export async function getSettings(): Promise<WalletSettings> {
   const encryptHolderSecret =
     typeof s?.encryptHolderSecret === "boolean" ? s.encryptHolderSecret : false;
   return {
+    // Validated on read rather than trusted: a half-written record or one
+    // from another build must read as absent, not reach the session opener as
+    // a relay DID that is actually a number.
+    ...(s?.inboxes ? { inboxes: validInboxes(s.inboxes) } : {}),
     ...(s?.mediatorDid ? { mediatorDid: s.mediatorDid } : {}),
     ...(s?.mediatorDidSource === "agent" || s?.mediatorDidSource === "operator"
       ? { mediatorDidSource: s.mediatorDidSource }
@@ -227,4 +256,49 @@ export async function setSettings(patch: Partial<WalletSettings>): Promise<void>
   // Merged onto the STORED record, not the defaulted one. See `storedSettings`.
   const stored = await storedSettings();
   await new IndexedDBKVStore().put(SETTINGS_KEY, { ...stored, ...patch });
+}
+
+/** This agent's inbox, or `undefined` when it has none — meaning that agent
+ *  cannot reach this wallet. */
+export function inboxFor(settings: WalletSettings, vtaDid: string): InboxRecord | undefined {
+  return settings.inboxes?.[vtaDid];
+}
+
+/**
+ * Write one agent's inbox without disturbing the others.
+ *
+ * `setSettings` merges shallowly, so handing it a whole `inboxes` object would
+ * drop every agent absent from the copy the caller happened to be holding —
+ * and the symptom of that is another agent's pushes going quietly nowhere,
+ * which is the failure this map exists to end. Read-modify-write of the map
+ * belongs in one place.
+ */
+export async function setInbox(vtaDid: string, record: InboxRecord): Promise<void> {
+  const stored = await storedSettings();
+  await new IndexedDBKVStore().put(SETTINGS_KEY, {
+    ...stored,
+    inboxes: { ...(stored.inboxes ?? {}), [vtaDid]: record },
+  });
+}
+
+/** Remove the pre-per-agent `mediatorDid` / `mediatorDidSource` keys.
+ *
+ *  A dedicated deleter rather than `setSettings({ mediatorDid: undefined })`:
+ *  under `exactOptionalPropertyTypes` that is not even expressible, and a
+ *  shallow merge of `undefined` would write the key back as present-and-empty
+ *  rather than removing it — leaving the migration to run on every boot. */
+export async function clearLegacyInbox(): Promise<void> {
+  const stored = await storedSettings();
+  delete stored.mediatorDid;
+  delete stored.mediatorDidSource;
+  await new IndexedDBKVStore().put(SETTINGS_KEY, stored);
+}
+
+/** Drop an agent's inbox — used when the operator forgets that agent, so a
+ *  stale relay does not linger and get reported as reachable. */
+export async function forgetInbox(vtaDid: string): Promise<void> {
+  const stored = await storedSettings();
+  const inboxes = { ...(stored.inboxes ?? {}) };
+  delete inboxes[vtaDid];
+  await new IndexedDBKVStore().put(SETTINGS_KEY, { ...stored, inboxes });
 }

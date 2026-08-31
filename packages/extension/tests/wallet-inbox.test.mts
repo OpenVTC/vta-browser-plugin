@@ -1,62 +1,106 @@
-// The wallet's inbox mediator — see src/config.ts and doOnboardConnect.
+// The wallet's inboxes — see src/config.ts, doOnboardConnect, and the adopt /
+// follow passes in background.ts.
 //
-// Background: the inbox setting used to fall back to a hardcoded mediator DID
-// on a domain no deployment in use here runs. The only writer was the advanced
-// routing field in Setup, so every wallet whose operator never opened it sent
-// its inbound traffic through a third party's demo host — while Setup told
-// them the inbox had been "set up automatically from your agent". These pin
-// both halves of the fix: onboarding actually adopts the agent's relay, and no
-// mediator is baked into the source again.
+// Background, because the shape here is the product of three findings and
+// reads as over-built without them:
+//
+//  1. The inbox setting fell back to a hardcoded mediator DID on a domain no
+//     deployment in use here runs, and onboarding never wrote one — so wallets
+//     sent inbound traffic through a third party's demo host while Setup said
+//     the relay came from their agent.
+//  2. `setSettings` merged the DEFAULTED settings and wrote them back, so any
+//     unrelated write froze that default into a stored value nobody chose —
+//     which is why provenance, not just presence, decides whether to adopt.
+//  3. There was ONE inbox for the whole wallet. A v4 holder is a `did:key`
+//     with no service endpoint and the wallet publishes its relay to nobody,
+//     so an executor can only push through the mediator it already knows —
+//     its own. Whichever agent the single value named was reachable, and every
+//     other agent's pushes were silently lost.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { inboxToAdopt } from "../src/config.ts";
-import { parseAgentMediatorDid } from "../src/active-vta.ts";
+import { parseAgentMediatorDids } from "../src/active-vta.ts";
 
 const AGENT = "did:webvh:QmAgentMediator:agent.example:mediator";
 const OTHER = "did:webvh:QmOtherMediator:other.example:mediator";
+const VTA_A = "did:webvh:QmAgentOne:one.example:vta";
+const VTA_B = "did:webvh:QmAgentTwo:two.example:vta";
 
-test("adopts the agent's relay when the wallet has none", () => {
+// ─── Which relay to adopt, per agent ───
+
+test("adopts the agent's relay when that agent has none", () => {
   assert.equal(inboxToAdopt({}, AGENT), AGENT);
 });
 
-test("leaves an inbox the operator chose", () => {
+test("leaves a relay the operator chose", () => {
   // The operator running two relays picked this one on purpose.
   assert.equal(inboxToAdopt({ did: OTHER, source: "operator" }, AGENT), undefined);
 });
 
-test("a second onboarding does not move an address others already route to", () => {
-  assert.equal(inboxToAdopt({ did: AGENT, source: "agent" }, OTHER), undefined);
-});
-
-test("an agent advertising no mediator leaves the inbox unset, not invented", () => {
-  // Unset is reported by the self-test as "nothing can reach this wallet".
-  // Substituting anything here is what caused the original defect.
-  assert.equal(inboxToAdopt({}, undefined), undefined);
-  assert.equal(inboxToAdopt({ did: "" }, undefined), undefined);
-});
-
-test("adopts over a stored inbox nobody is on record choosing", () => {
-  // The case that defeated the first migration. `setSettings` merged the
-  // DEFAULTED settings and wrote them back, so any unrelated write — the
-  // passkey lock, the TSP toggle — persisted the old hardcoded demo mediator
-  // as though it had been picked. By value it is indistinguishable from a
-  // deliberate choice; by provenance it is not.
+test("adopts over a stored relay nobody is on record choosing", () => {
+  // The case that defeated the first migration. By value it is
+  // indistinguishable from a deliberate choice; by provenance it is not.
   const DEMO = "did:webvh:QmDemoRelay:demo.example:mediator";
   assert.equal(inboxToAdopt({ did: DEMO }, AGENT), AGENT);
 });
 
 test("the blank-filling adoption happens once, not on every boot", () => {
-  // Stamped `agent` on the way in, so the per-spin-up backfill leaves it
-  // alone. Moving an agent-sourced inbox when the agent moves its relay is
+  // Moving an agent-sourced relay when the agent moves it is
   // `followAgentInbox`'s job — it re-resolves the DID document, where this
-  // function only ever reads a cached connection.
+  // function only reads a cached connection.
   assert.equal(inboxToAdopt({ did: AGENT, source: "agent" }, OTHER), undefined);
 });
 
-// ─── No mediator may be baked into the source again ───
+test("an agent advertising no relay gets none invented for it", () => {
+  // Absent is reported by the self-test as "this agent cannot reach you".
+  // Substituting anything here is what caused the original defect.
+  assert.equal(inboxToAdopt({}, undefined), undefined);
+  assert.equal(inboxToAdopt({ did: "" }, undefined), undefined);
+});
+
+// ─── Reading each agent's advertised relay off the persisted connections ───
+//
+// Wallets onboarded before the inbox map ran on the removed hardcoded relay.
+// Re-onboarding to acquire one mints a fresh holder DID and invalidates every
+// RP ACL, so the answer is read off what is already on disk instead.
+
+const envelope = (connections: unknown) => JSON.stringify({ state: { connections }, version: 3 });
+
+test("every agent's relay is read, not just the active one", () => {
+  // The multi-VTA fix in one assertion: a wallet onboarded at two agents on
+  // two relays must listen at both.
+  const raw = envelope({
+    activeVtaDid: VTA_A,
+    vtas: { [VTA_A]: { mediatorDid: AGENT }, [VTA_B]: { mediatorDid: OTHER } },
+  });
+  assert.deepEqual(parseAgentMediatorDids(raw), { [VTA_A]: AGENT, [VTA_B]: OTHER });
+});
+
+test("an agent advertising no relay is absent, not present-and-empty", () => {
+  // Absent means "nothing to adopt". Present-and-empty would reach the session
+  // opener as a relay DID that is the empty string.
+  const raw = envelope({
+    activeVtaDid: VTA_A,
+    vtas: { [VTA_A]: {}, [VTA_B]: { mediatorDid: OTHER } },
+  });
+  assert.deepEqual(parseAgentMediatorDids(raw), { [VTA_B]: OTHER });
+});
+
+test("unreadable or absent storage yields nothing rather than guessing", () => {
+  assert.deepEqual(parseAgentMediatorDids(undefined), {});
+  assert.deepEqual(parseAgentMediatorDids("not json"), {});
+  assert.deepEqual(parseAgentMediatorDids(envelope(undefined)), {});
+  // A non-string relay (a half-written record) must read as absent.
+  assert.deepEqual(
+    parseAgentMediatorDids(envelope({ vtas: { [VTA_A]: { mediatorDid: 42 } } })),
+    {},
+  );
+});
+
+// ─── No relay may be baked into the source again ───
 
 const SRC = fileURLToPath(new URL("../src/", import.meta.url));
 
@@ -84,56 +128,4 @@ test("no hardcoded DID is shipped in src — a wallet's relay is configuration",
     "a DID literal in src is someone's mediator, agent or key becoming everyone's default:\n" +
       offenders.join("\n"),
   );
-});
-
-// ─── Backfill for wallets onboarded before onboarding wrote an inbox ───
-//
-// These ran on the removed hardcoded relay. Re-onboarding to acquire one
-// mints a fresh holder DID and invalidates every RP ACL, so the answer is
-// read off the connection already on disk instead.
-
-const envelope = (connections: unknown) => JSON.stringify({ state: { connections }, version: 3 });
-
-test("backfill prefers the active agent's mediator", () => {
-  const raw = envelope({
-    activeVtaDid: "did:webvh:QmActiveAgent:agent.example:vta",
-    vtas: {
-      "did:webvh:QmActiveAgent:agent.example:vta": { mediatorDid: AGENT },
-      "did:webvh:QmOtherAgent:other.example:vta": { mediatorDid: OTHER },
-    },
-  });
-  assert.equal(parseAgentMediatorDid(raw), AGENT);
-});
-
-test("backfill falls back to any agent that advertises one", () => {
-  // A single-agent wallet whose active pointer was never set still backfills.
-  const raw = envelope({
-    activeVtaDid: null,
-    vtas: { "did:webvh:QmOnlyAgent:only.example:vta": { mediatorDid: OTHER } },
-  });
-  assert.equal(parseAgentMediatorDid(raw), OTHER);
-});
-
-test("backfill skips an active agent that advertises none", () => {
-  const raw = envelope({
-    activeVtaDid: "did:webvh:QmRestOnly:rest.example:vta",
-    vtas: {
-      "did:webvh:QmRestOnly:rest.example:vta": {},
-      "did:webvh:QmOtherAgent:other.example:vta": { mediatorDid: OTHER },
-    },
-  });
-  assert.equal(parseAgentMediatorDid(raw), OTHER);
-});
-
-test("a REST-only wallet backfills nothing rather than guessing", () => {
-  const raw = envelope({ activeVtaDid: null, vtas: { "did:webvh:QmRestOnly:r.example:vta": {} } });
-  assert.equal(parseAgentMediatorDid(raw), undefined);
-});
-
-test("unreadable or absent storage backfills nothing", () => {
-  assert.equal(parseAgentMediatorDid(undefined), undefined);
-  assert.equal(parseAgentMediatorDid("not json"), undefined);
-  assert.equal(parseAgentMediatorDid(envelope(undefined)), undefined);
-  // A non-string mediator (a half-written record) must read as absent.
-  assert.equal(parseAgentMediatorDid(envelope({ vtas: { a: { mediatorDid: 42 } } })), undefined);
 });

@@ -226,7 +226,7 @@ export function NetworkPane() {
     // cannot approve on your behalf precisely because this key is local.
     positions["approver"] = { col: 0, row: APPROVER_ROW };
     // Requests originate at the agent and reach the approver through the
-    // wallet's own inbox mediator, so the arrow points inward, not outward.
+    // agent's inbox relay, so the arrow points inward, not outward.
     edges.push({
       from: mediator ? "mediator" : "agent",
       to: "approver",

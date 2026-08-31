@@ -14,7 +14,7 @@ import {
   parseAllVtaDids,
   readActiveHolderDid,
   readActiveVtaDid,
-  readAgentMediatorDid,
+  readAgentMediatorDids,
   readAllVtaDids,
 } from "./active-vta.js";
 import { checkOriginPin, pinOrigin } from "./origin-pin.js";
@@ -181,7 +181,7 @@ import {
   type RuntimeWalletDefaultsResponse,
   type VerifyRpDidResult,
 } from "./bridge-protocol.js";
-import { getSettings, inboxToAdopt, setSettings } from "./config.js";
+import { clearLegacyInbox, getSettings, inboxFor, inboxToAdopt, setInbox, setSettings } from "./config.js";
 import { providerMatches, syncProviderRegistration } from "./content-registration.js";
 import {
   AGENT_NAME_UNREADABLE,
@@ -470,6 +470,62 @@ async function ensurePushWake(): Promise<void> {
 let _lastInboundVtaDids: string[] = [];
 let _lastActiveVtaDid: string | null = null;
 
+/**
+ * Give every onboarded agent an inbox, for wallets that predate the map.
+ *
+ * Two sources, both already on disk, so this costs no network and can run on
+ * every worker spin-up:
+ *
+ *  - The **legacy single setting.** Before inboxes were per-agent there was
+ *    one `mediatorDid` for the whole wallet. An `operator` one was a person's
+ *    choice and is carried over to the ACTIVE agent — the one they were
+ *    looking at when they typed it. Anything else is dropped rather than
+ *    spread across every agent: it was most likely the removed hardcoded demo
+ *    relay, which `setSettings` used to persist as though it had been chosen
+ *    (it merged the *defaulted* settings and wrote them back, so any unrelated
+ *    write — the passkey lock, the TSP toggle — froze the default into a value
+ *    nobody picked).
+ *  - The **persisted connection**, which carries each agent's advertised
+ *    mediator from onboarding.
+ *
+ * `inboxToAdopt` decides per agent, so an operator pin is never overwritten
+ * and an agent-sourced entry is not re-adopted on every boot.
+ */
+async function adoptMissingInboxes(vtaDids: readonly string[]): Promise<void> {
+  const settings = await getSettings();
+  const advertised = await readAgentMediatorDids();
+
+  // One-time carry-over of the legacy wallet-wide setting.
+  if (settings.mediatorDid || settings.mediatorDidSource) {
+    const activeVtaDid = await readActiveVtaDid();
+    if (settings.mediatorDidSource === "operator" && settings.mediatorDid && activeVtaDid) {
+      await setInbox(activeVtaDid, { did: settings.mediatorDid, source: "operator" });
+      console.info("[pnm inbound] carried the pinned relay over to", activeVtaDid);
+    }
+    // Clear the legacy keys either way, so this runs once.
+    await clearLegacyInbox();
+  }
+
+  const current = await getSettings();
+  for (const vtaDid of vtaDids) {
+    const adopt = inboxToAdopt(inboxFor(current, vtaDid) ?? {}, advertised[vtaDid]);
+    if (adopt) {
+      await setInbox(vtaDid, { did: adopt, source: "agent" });
+      console.info("[pnm inbound] inbox adopted from agent:", vtaDid, "→", adopt);
+    } else if (!inboxFor(current, vtaDid) && !advertised[vtaDid]) {
+      // Neither an inbox nor anything to adopt: said out loud, because the
+      // alternative is an agent that silently cannot reach this wallet and a
+      // boot that looks like it did its job. Refreshing that agent's
+      // transports re-resolves its DID document and fills the connection in.
+      console.warn(
+        "[pnm inbound]",
+        vtaDid,
+        "has no inbox relay and advertises none to adopt — it cannot reach this wallet.",
+      );
+    }
+  }
+}
+
 async function startInboundListener(): Promise<void> {
   // Multi-VTA: ship the full list of onboarded VTAs. The offscreen
   // reconciles — one warm inbox session per holder identity. Empty
@@ -478,35 +534,8 @@ async function startInboundListener(): Promise<void> {
   const vtaDids = (await readAllVtaDids()).sort();
   _lastInboundVtaDids = vtaDids;
 
-  // Backfill the inbox for a wallet onboarded before onboarding wrote one.
-  // Those wallets ran on a hardcoded demo relay that has since been removed,
-  // so without this they come up with no inbox and the only documented route
-  // back — re-onboarding — mints a new holder DID and invalidates every RP
-  // ACL. The agent's mediator is already on the persisted connection; adopting
-  // it applies the same rule onboarding now applies, at the one place that
-  // runs on every boot. `inboxToAdopt` declines when an inbox is already set,
-  // so this never moves an address in use.
-  const settings = await getSettings();
-  const adopt = inboxToAdopt(
-    { did: settings.mediatorDid, source: settings.mediatorDidSource },
-    await readAgentMediatorDid(),
-  );
-  if (adopt) {
-    await setSettings({ mediatorDid: adopt, mediatorDidSource: "agent" });
-    console.info("[pnm inbound] inbox mediator adopted from agent:", adopt);
-  } else if (!settings.mediatorDidSource && vtaDids.length > 0) {
-    // Nothing adopted and nothing on record choosing what is there: the
-    // persisted connection carries no mediator to adopt. Said out loud,
-    // because the alternative is a wallet that silently keeps whatever relay
-    // it had and a boot that looks like it did its job. Refreshing transports
-    // (Setup → the agent's transports) re-resolves the DID document and fills
-    // the connection in.
-    console.warn(
-      "[pnm inbound] inbox relay is unattributed and no onboarded agent " +
-        "advertises one to adopt — refresh the agent's transports, or set a " +
-        "relay under Setup → Message routing.",
-    );
-  }
+  await adoptMissingInboxes(vtaDids);
+
   // Seed _lastActiveVtaDid too — otherwise the first chrome.storage
   // onChanged callback would see _lastActiveVtaDid=null and emit a
   // spurious connectionchanged.
@@ -1406,68 +1435,74 @@ async function handleWalletLockState(
 }
 
 /**
- * Follow the agent if it has moved its relay.
+ * Follow each agent that has moved its relay.
  *
- * Distinct from the adopt-when-blank backfill in `startInboundListener`, and
- * for a reason that only shows up when you ask how inbound actually arrives:
- * **a v4 holder is a `did:key`, which carries no service endpoint, and the
- * wallet publishes its inbox to nobody.** There is no discovery path. So an
- * executor pushing to this wallet can only hand the message to a mediator it
- * already knows — its own — and the wallet hears it only if it is listening
- * there. The inbox is not an independent address the wallet owns; it is
- * "wherever my agent's relay is", and a wallet pinned to yesterday's mediator
- * goes dark while every check still reports green.
+ * Distinct from the adopt-when-blank pass in `startInboundListener`, and for a
+ * reason that only shows up when you ask how inbound actually arrives: **a v4
+ * holder is a `did:key`, which carries no service endpoint, and the wallet
+ * publishes its inbox to nobody.** There is no discovery path. So an executor
+ * pushing to this wallet can only hand the message to a mediator it already
+ * knows — its own — and the wallet hears it only if it is listening there. An
+ * inbox is not an address the wallet owns; it is "wherever that agent's relay
+ * is", and an agent pinned to yesterday's mediator goes dark while every check
+ * still reports green.
  *
- * So an `agent`-sourced inbox FOLLOWS the agent's DID document. An
+ * So an `agent`-sourced inbox FOLLOWS its agent's DID document. An
  * `operator`-sourced one never moves: someone running more than one relay
- * chose it, and this is exactly the override that has to survive.
+ * chose it, and that override is the whole reason provenance exists.
  *
  * Run on browser startup and on update, not per worker spin-up. MV3 respawns
- * the worker on almost any event, and a DID-document fetch on each of those
- * would be a lot of network for a value that changes when an operator
- * redeploys a mediator. The blank/unattributed backfill still runs every
- * spin-up — it reads the persisted connection and costs nothing.
+ * the worker on almost any event, and a DID-document fetch per agent on each
+ * would be a lot of network for a value that changes when someone redeploys a
+ * mediator. The adopt-when-blank pass still runs every spin-up — it reads the
+ * persisted connection and costs nothing.
  */
 async function followAgentInbox(): Promise<void> {
+  const vtaDids = await readAllVtaDids();
+  if (vtaDids.length === 0) return;
   const settings = await getSettings();
-  if (settings.mediatorDidSource === "operator") return; // pinned, deliberately
+  let moved = false;
 
-  const vtaDid = await readActiveVtaDid();
-  if (!vtaDid) return;
+  for (const vtaDid of vtaDids) {
+    const held = inboxFor(settings, vtaDid);
+    if (held?.source === "operator") continue; // pinned, deliberately
 
-  let live: string | undefined;
-  try {
-    const resp = await handleRefreshVtaTransports({
-      type: RUNTIME_REFRESH_VTA_TRANSPORTS,
-      vtaDid,
-    });
-    if (!resp.ok) throw new Error(resp.error);
-    live = resp.result.mediatorDid;
-  } catch (e) {
-    // A DID document we could not read says nothing about where the relay is,
-    // so it must not be read as "it moved to nowhere". Keep what we have.
-    console.warn("[pnm inbound] could not re-resolve the agent's relay:", e);
-    return;
+    let live: string | undefined;
+    try {
+      const resp = await handleRefreshVtaTransports({
+        type: RUNTIME_REFRESH_VTA_TRANSPORTS,
+        vtaDid,
+      });
+      if (!resp.ok) throw new Error(resp.error);
+      live = resp.result.mediatorDid;
+    } catch (e) {
+      // A DID document we could not read says nothing about where the relay
+      // is, so it must not be read as "it moved to nowhere". Keep what we have
+      // — and keep going: one unreachable agent must not stop the others being
+      // checked.
+      console.warn("[pnm inbound] could not re-resolve the relay for", vtaDid, e);
+      continue;
+    }
+
+    if (!live) {
+      console.warn(
+        "[pnm inbound]",
+        vtaDid,
+        "advertises no DIDComm relay — nothing can be pushed to this wallet through it.",
+      );
+      continue;
+    }
+    if (live === held?.did) continue;
+
+    await setInbox(vtaDid, { did: live, source: "agent" });
+    moved = true;
+    console.info("[pnm inbound]", vtaDid, "moved its relay:", held?.did ?? "(none)", "→", live);
   }
 
-  if (!live) {
-    console.warn(
-      "[pnm inbound] the agent advertises no DIDComm relay — nothing can be " +
-        "pushed to this wallet through it.",
-    );
-    return;
-  }
-  if (live === settings.mediatorDid) return;
-
-  await setSettings({ mediatorDid: live, mediatorDidSource: "agent" });
-  console.info(
-    "[pnm inbound] the agent moved its relay:",
-    settings.mediatorDid ?? "(none)",
-    "→",
-    live,
-  );
-  // Re-open on the relay that can actually reach us.
-  await startInboundListener();
+  // One reconcile after the sweep, not one per agent: each call re-reads the
+  // whole map and reopens what is missing, so doing it inside the loop would
+  // repeat that work for every agent that moved.
+  if (moved) await startInboundListener();
 }
 
 async function handleRefreshVtaTransports(
