@@ -23,6 +23,7 @@ import {
 import { AppShell } from "./app-shell.js";
 import { sendToBackground } from "./send-message.js";
 import { VaultPanel } from "./vault-panel.js";
+import { releaseSelectAfterPointerChange } from "./select-wheel.js";
 import "./theme.css";
 
 const inputStyle: React.CSSProperties = {
@@ -622,6 +623,11 @@ function VaultPane() {
     </div>
   );
 }
+
+// Chromium leaves the wheel pointed at a focused <select>; without this,
+// picking an option kills scrolling over that control until the user
+// clicks elsewhere. See src/select-wheel.ts.
+releaseSelectAfterPointerChange(document);
 
 const root = document.getElementById("root");
 if (root) {

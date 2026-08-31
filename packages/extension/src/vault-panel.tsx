@@ -920,7 +920,35 @@ function AddEntryForm({
         <span style={{ color: "var(--w-muted)" }}>Notes (optional)</span>
         <input value={notes} onChange={(e) => setNotes(e.target.value)} />
       </label>
-      <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+      {/* Pinned to the bottom of the scrollport, not left at the end of the
+          form. A did-self-issued entry is eight fields tall and the popup's
+          viewport is capped near 600px, so Save sat below the fold — and the
+          only way to reach it was to scroll a document that Chromium will
+          sometimes refuse to scroll after a native <select> menu has been
+          used, until an unrelated click restores it. That is the browser's
+          bug and not ours to fix, but a form whose last step is only ever
+          reachable by scrolling is ours: the actions now travel with the
+          viewport, so the flow can always be completed (or abandoned)
+          wherever the form happens to be scrolled to. Sticky costs nothing
+          when the form already fits — it only engages once it doesn't. */}
+      <div
+        style={{
+          display: "flex",
+          gap: 6,
+          position: "sticky",
+          bottom: 0,
+          // Negative side/bottom margins span the container's 8px padding so
+          // scrolled content passes *behind* the bar rather than through the
+          // gap beside it.
+          margin: "4px -8px -8px",
+          padding: 8,
+          background: "var(--w-surface)",
+          borderTop: "1px solid var(--w-line-soft)",
+          // Follow the container's rounding, or the bar squares off the two
+          // bottom corners it now sits over.
+          borderRadius: "0 0 3px 3px",
+        }}
+      >
         <button
           onClick={() => void onSubmit(buildOutput())}
           disabled={!valid || busy}

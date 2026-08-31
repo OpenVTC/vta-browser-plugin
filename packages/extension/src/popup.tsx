@@ -8,6 +8,7 @@ import { c, t } from "./theme.js";
 import { encryptHolderSecretInPopup } from "./encrypt-holder.js";
 import { readActiveVtaDid } from "./active-vta.js";
 import { CopyButton, VaultPanel } from "./vault-panel.js";
+import { releaseSelectAfterPointerChange } from "./select-wheel.js";
 import {
   useActiveConnection,
   useConnectionStore,
@@ -989,6 +990,11 @@ function AffinidiFooter(): React.JSX.Element {
     </div>
   );
 }
+
+// Chromium leaves the wheel pointed at a focused <select>; without this,
+// picking an option kills scrolling over that control until the user
+// clicks elsewhere. See src/select-wheel.ts.
+releaseSelectAfterPointerChange(document);
 
 const root = document.getElementById("root");
 if (root) {
