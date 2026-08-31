@@ -54,6 +54,52 @@ export function parseAllVtaDids(raw: unknown): string[] {
   }
 }
 
+/** The DIDComm mediator advertised by an onboarded agent, for a wallet that
+ *  has no inbox of its own yet.
+ *
+ *  Onboarding records each agent's advertised mediator on its `Connection`
+ *  (`store.ts`) and, since the fix that removed the hardcoded default, writes
+ *  it to the wallet's inbox setting too. Wallets onboarded BEFORE that fix
+ *  have the connection but no setting — they were running on the hardcoded
+ *  demo relay — and re-onboarding to acquire one is not a fair ask: it mints
+ *  a fresh holder DID that every RP ACL must then be re-granted. So the
+ *  backfill reads the answer already on disk. This mirrors `tspMediatorDid`,
+ *  which the transport refresh backfills onto existing connections for the
+ *  same reason.
+ *
+ *  The active VTA's mediator wins; otherwise the first agent that advertises
+ *  one, so a single-agent wallet backfills whether or not the active pointer
+ *  has been set. Returns `undefined` when no agent advertises a mediator —
+ *  a REST- or TSP-only deployment, where there is genuinely nothing to adopt. */
+export async function readAgentMediatorDid(): Promise<string | undefined> {
+  const stored = await chrome.storage.local.get("pnm-connection/v3");
+  return parseAgentMediatorDid(stored["pnm-connection/v3"]);
+}
+
+export function parseAgentMediatorDid(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  try {
+    const parsed = JSON.parse(raw) as {
+      state?: {
+        connections?: {
+          activeVtaDid?: string | null;
+          vtas?: Record<string, { mediatorDid?: unknown }>;
+        };
+      };
+    };
+    const conns = parsed.state?.connections;
+    const vtas = conns?.vtas ?? {};
+    const active = conns?.activeVtaDid ? vtas[conns.activeVtaDid]?.mediatorDid : undefined;
+    if (typeof active === "string" && active) return active;
+    for (const entry of Object.values(vtas)) {
+      if (typeof entry?.mediatorDid === "string" && entry.mediatorDid) return entry.mediatorDid;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Read the active VTA's holder DID from the persisted connection
  *  store — without going through the holder loader. Returns `null`
  *  when no VTA is active.

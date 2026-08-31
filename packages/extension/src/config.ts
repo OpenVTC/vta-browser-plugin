@@ -5,22 +5,36 @@
 // while IndexedDB is available in every extension context (and is already the
 // holder identity's backing store).
 //
-// The mediator DID is the load-bearing setting: it's baked into the holder's
-// `did:peer:2` service endpoint at first mint, so changing it mints a NEW
-// wallet DID (which must be re-granted in every RP's ACL). The options page
-// is responsible for warning + forcing a re-mint when it changes; reading the
-// config here never re-mints on its own.
+// The mediator DID is the wallet's inbox: the relay an RP or executor pushes
+// to when it needs to reach this wallet. It is written by onboarding from the
+// agent's own advertised DIDComm mediator, and only overridden by hand by an
+// operator running more than one relay.
+//
+// It used to be described here as "baked into the holder's `did:peer:2`
+// service endpoint at first mint, so changing it mints a NEW wallet DID".
+// That stopped being true at the M2C migration: a v4 holder is a `did:key`
+// the VTA mints (`store/holder-identity.ts`), and the mediator is nowhere
+// inside it. Changing the inbox now means re-registering the address with
+// whoever routes to you — not a new identity.
 
 import { IndexedDBKVStore } from "@openvtc/pnm-core";
 
-/** The mediator the wallet uses for inbound + DIDComm login when unconfigured.
- *  The did-hosting demo mediator. A real deployment configures its own. */
-export const DEFAULT_WALLET_MEDIATOR_DID =
-  "did:webvh:QmTS3a3H9Dk4ZMPAZ8jNWGeyPbuKrPbrPZcSbg8CJ6yynD:webvh.storm.ws:mediator";
-
 export interface WalletSettings {
-  /** Mediator DID baked into the holder did:peer (inbox + DIDComm login). */
-  mediatorDid: string;
+  /**
+   * The wallet's inbox: the mediator an RP or executor pushes to in order to
+   * reach this wallet, and the relay the wallet authenticates to for DIDComm
+   * login.
+   *
+   * **Unset until onboarding writes it**, and unset is a real state, not a
+   * missing default. It previously fell back to a hardcoded demo mediator on
+   * a domain no deployment here runs, so every wallet that never touched the
+   * advanced routing field ran its inbox through a third party's host while
+   * Setup told the operator it had been "set up automatically from your
+   * agent". A default that is wrong everywhere but one workspace is worse
+   * than none: absent, the wallet can say the inbox is not configured; wrong,
+   * it can only appear to work. (R5 — config absence is the restrictive case.)
+   */
+  mediatorDid?: string;
   /** Optional default VTA DID prefilled into the step-up flow. */
   defaultStepUpVtaDid?: string;
   /** Optional default VTA mediator DID prefilled into the step-up flow. */
@@ -99,6 +113,33 @@ export interface WalletSettings {
   preferTsp?: boolean;
 }
 
+/**
+ * Which inbox to persist after onboarding at an agent.
+ *
+ * Returns the mediator to write, or `undefined` to leave the setting alone.
+ * The rule, in one place because it is easy to state and easy to get subtly
+ * wrong at a call site:
+ *
+ *  - Nothing advertised → write nothing. An agent that publishes no DIDComm
+ *    mediator cannot push to a wallet; an inbox invented here would be a
+ *    relay nobody was ever asked about. Unset is the honest state and the
+ *    self-test reports it.
+ *  - Already set → leave it. Either an operator chose it deliberately (they
+ *    run more than one relay), or a previous onboarding adopted it — and the
+ *    inbox is an *address* other parties already route to, so a second
+ *    onboarding silently moving it would strand everyone who knows this
+ *    wallet. Changing it stays a deliberate act with its own confirmation.
+ *  - Otherwise → adopt the agent's.
+ */
+export function inboxToAdopt(
+  current: string | undefined,
+  advertised: string | undefined,
+): string | undefined {
+  if (!advertised) return undefined;
+  if (current) return undefined;
+  return advertised;
+}
+
 const SETTINGS_KEY = "pnm/settings/v1";
 
 /** Read the current settings, falling back to defaults for unset fields. */
@@ -112,7 +153,7 @@ export async function getSettings(): Promise<WalletSettings> {
   const encryptHolderSecret =
     typeof s?.encryptHolderSecret === "boolean" ? s.encryptHolderSecret : false;
   return {
-    mediatorDid: s?.mediatorDid || DEFAULT_WALLET_MEDIATOR_DID,
+    ...(s?.mediatorDid ? { mediatorDid: s.mediatorDid } : {}),
     ...(s?.defaultStepUpVtaDid ? { defaultStepUpVtaDid: s.defaultStepUpVtaDid } : {}),
     ...(s?.defaultStepUpVtaMediatorDid
       ? { defaultStepUpVtaMediatorDid: s.defaultStepUpVtaMediatorDid }

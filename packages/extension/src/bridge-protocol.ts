@@ -552,6 +552,14 @@ export interface RuntimeOnboardConnectRequest {
  *  `mediatorDid`". Matched on directly, never by parsing the message (R3.7). */
 export const MEDIATOR_REQUIRED = "wallet/mediator-required";
 
+/** Stable code meaning "this wallet has no inbox mediator configured, so
+ *  nothing can be pushed to it". Distinct from `MEDIATOR_REQUIRED`, which is
+ *  about the mediator an *onboarding* needs to route through: this one is
+ *  about the wallet's own inbox, and it is reachable only through a wallet
+ *  that was never onboarded or whose setting was cleared by hand. Matched on
+ *  directly, never by parsing the message (R3.7). */
+export const INBOX_NOT_CONFIGURED = "wallet/inbox-not-configured";
+
 /** offscreen → any listener: onboarding reached a new phase.
  *
  *  Fire-and-forget, emitted while `OFFSCREEN_ONBOARD_CONNECT` is still
@@ -761,6 +769,21 @@ export interface RuntimeForgetHolderRecordRequest {
 export type RuntimeForgetHolderRecordResponse =
   | { ok: true }
   | { ok: false; error: string };
+
+/** popup/options → background: re-open the inbound mediator sessions.
+ *
+ *  Sent after the inbox mediator is changed by hand. The background's inbound
+ *  reconcile otherwise runs only on boot and on a connection-store change, so
+ *  a wallet whose operator moved its inbox would go on listening at the old
+ *  relay — or, from an unset inbox, at nothing — until the next browser
+ *  restart, with the settings page reporting success over it. */
+export const RUNTIME_RESTART_INBOX = "vta-wallet/restart-inbox" as const;
+
+export interface RuntimeRestartInboxRequest {
+  type: typeof RUNTIME_RESTART_INBOX;
+}
+
+export type RuntimeRestartInboxResponse = { ok: true } | { ok: false; error: string };
 
 export const RUNTIME_REFRESH_VTA_TRANSPORTS = "vta-wallet/refresh-vta-transports" as const;
 

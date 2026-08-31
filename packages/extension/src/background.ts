@@ -14,6 +14,7 @@ import {
   parseAllVtaDids,
   readActiveHolderDid,
   readActiveVtaDid,
+  readAgentMediatorDid,
   readAllVtaDids,
 } from "./active-vta.js";
 import { checkOriginPin, pinOrigin } from "./origin-pin.js";
@@ -94,6 +95,7 @@ import {
   RUNTIME_LIST_CONTEXTS,
   RUNTIME_LIST_DIDS,
   RUNTIME_FORGET_HOLDER_RECORD,
+  RUNTIME_RESTART_INBOX,
   RUNTIME_REFRESH_VTA_TRANSPORTS,
   RUNTIME_UNLOCK_PRF,
   RUNTIME_UNLOCK_APPROVER,
@@ -179,7 +181,7 @@ import {
   type RuntimeWalletDefaultsResponse,
   type VerifyRpDidResult,
 } from "./bridge-protocol.js";
-import { getSettings } from "./config.js";
+import { getSettings, inboxToAdopt, setSettings } from "./config.js";
 import { providerMatches, syncProviderRegistration } from "./content-registration.js";
 import {
   AGENT_NAME_UNREADABLE,
@@ -469,6 +471,20 @@ async function startInboundListener(): Promise<void> {
   // otherwise a no-op.
   const vtaDids = (await readAllVtaDids()).sort();
   _lastInboundVtaDids = vtaDids;
+
+  // Backfill the inbox for a wallet onboarded before onboarding wrote one.
+  // Those wallets ran on a hardcoded demo relay that has since been removed,
+  // so without this they come up with no inbox and the only documented route
+  // back — re-onboarding — mints a new holder DID and invalidates every RP
+  // ACL. The agent's mediator is already on the persisted connection; adopting
+  // it applies the same rule onboarding now applies, at the one place that
+  // runs on every boot. `inboxToAdopt` declines when an inbox is already set,
+  // so this never moves an address in use.
+  const adopt = inboxToAdopt((await getSettings()).mediatorDid, await readAgentMediatorDid());
+  if (adopt) {
+    await setSettings({ mediatorDid: adopt });
+    console.info("[pnm inbound] inbox mediator backfilled from agent:", adopt);
+  }
   // Seed _lastActiveVtaDid too — otherwise the first chrome.storage
   // onChanged callback would see _lastActiveVtaDid=null and emit a
   // spurious connectionchanged.
@@ -2415,6 +2431,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if ((message as { type?: string })?.type === RUNTIME_FORGET_HOLDER_RECORD) {
     handleForgetHolderRecord(message as RuntimeForgetHolderRecordRequest)
       .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_RESTART_INBOX) {
+    startInboundListener()
+      .then(() => sendResponse({ ok: true }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
