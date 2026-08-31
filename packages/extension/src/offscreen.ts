@@ -724,16 +724,19 @@ function extensionOrigin(): string | undefined {
  *  browser checks `Access-Control-Allow-Origin` on the actual response and a
  *  refusal surfaces exactly as it does on the real path. The **status does not
  *  matter** — a `405` from a POST-only auth route is a complete pass, because
- *  reading any status at all proves the origin was allowed. That is also why
- *  this cannot be replaced by hitting a health endpoint: it must be governed
+ *  reading any status at all proves the origin was allowed. It is therefore
+ *  not returned: nothing can do anything useful with it, and the one place it
+ *  was used put a `405` next to a green PASS in a security self-test, which
+ *  reads as a contradiction. That the status is irrelevant is also why this
+ *  cannot be replaced by hitting a health endpoint: the probe must be governed
  *  by the same policy as the request that fails. */
 async function checkCorsReachable(
   url: string,
   fetchImpl: typeof fetch,
-): Promise<{ ok: boolean; status?: number; error?: unknown }> {
+): Promise<{ ok: boolean; error?: unknown }> {
   try {
-    const res = await fetchImpl(url, { method: "GET", cache: "no-store" });
-    return { ok: true, status: res.status };
+    await fetchImpl(url, { method: "GET", cache: "no-store" });
+    return { ok: true };
   } catch (err: unknown) {
     return { ok: false, error: err };
   }
@@ -777,9 +780,18 @@ async function diagnoseMediator(
       id: `${idBase}.origin`,
       label: `${label} mediator accepts this wallet's origin`,
       status: "pass",
-      // Naming the status makes it obvious to a reader that a 4xx is expected
-      // and is not the thing being tested.
-      detail: `${host} answered (HTTP ${cors.status}) with this extension's origin on the request.`,
+      // No status code on a pass. It used to name one, reasoning that seeing
+      // the number would make it obvious a 4xx is expected and not the thing
+      // being tested. It did the opposite: a security self-test reporting
+      // "PASS … HTTP 405" reads as a contradiction, and the first person to
+      // look at it asked what was broken. Nothing is — a `GET` against the
+      // auth endpoint is answered 405 because it wants a `POST`, and ANY
+      // status is a pass here, since reading a status at all is what proves
+      // the origin was allowed (a CORS refusal has no status to read). The
+      // number answers a question nobody asked, in a place where an
+      // unexplained number reads as a fault. Failures still carry their
+      // detail and a `code`, which is where it is diagnostic.
+      detail: `${host} answered a request carrying this extension's origin.`,
     });
     return checks;
   }
@@ -910,7 +922,10 @@ async function runDiagnostics(vtaDid: string): Promise<DiagnosticsReport> {
         id: "vta.rest",
         label: "Trust agent REST accepts this wallet's origin",
         status: "pass",
-        detail: `${originOf(restUrl) ?? restUrl} answered (HTTP ${cors.status}).`,
+        // Same wording as the mediator check above, and for the same reason —
+        // this one also dropped the "with this extension's origin" clause, so
+        // it read as a bare status with nothing saying what had been proven.
+        detail: `${originOf(restUrl) ?? restUrl} answered a request carrying this extension's origin.`,
       });
     } else {
       const reachable = await probeReachable(restUrl, fetchImpl);
