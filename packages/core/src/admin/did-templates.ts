@@ -16,9 +16,7 @@
 // the operation to that context's templates; omitting it addresses the global
 // set. The two are different namespaces, and a name can exist in both.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import {
@@ -60,8 +58,8 @@ import {
 export type { DidTemplate, DidTemplateRecord };
 
 export interface DidTemplateCallerParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
   /** Scope the call to one context's templates. Omit for the global set —
    *  a different namespace, in which the same name may also exist. */
   contextId?: string;

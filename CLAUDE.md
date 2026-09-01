@@ -128,6 +128,67 @@ routing either through a channel would overwrite or duplicate a proof.
 document as the counterparty receives it — a signature copied from another
 document satisfies an "is there a `proof` member" check and fails this one.
 
+## The wallet ships no operator authority — the console does
+
+`@openvtc/pnm-core/admin` is operator surface: granting authority at an agent,
+revoking it, destroying contexts. It is deliberately absent from the package
+root barrel, and CI greps the built output for 17 of its task URIs.
+
+That guard used to read "banned anywhere in `dist/`", on the grounds that a
+wallet has no business shipping any of it. The **management console**
+(`manager.html`) makes that statement false on purpose — administering the agent
+is its whole job — so the guard was **narrowed, not deleted**: banned everywhere
+in `dist/` *except* `manager.js`. Every wallet surface (service worker, content
+and page-world scripts, popup, confirm, offscreen, options) keeps the property
+the guard was protecting.
+
+**The console is its own vite build** (`vite.config.manager.ts`,
+`codeSplitting: false`). That is what makes "exactly one file may contain admin"
+structural rather than a convention: the main build emits popup, options,
+confirm and offscreen *together*, and Rollup is free to hoist shared code into a
+common `assets/*.js` chunk that wallet surfaces load. Building the console alone
+means there is no other entry to share with. A second CI assertion fails if it
+ever emits more than one chunk, because the first guard names exactly one
+exception and an extra chunk is a file nothing checks.
+
+**The console holds no key material.** It composes typed documents with the
+`admin/*` helpers and the offscreen document signs them, so an XSS there cannot
+exfiltrate a key. This is why `admin/*` and `vta/contexts.ts` type their
+envelope parties as `TaskParty` (`vta/channel.ts`) — just a DID — rather than
+`Identity` and `RemoteDidcommEndpoint`: only `.did` was ever read, and a
+surface typed on `Identity` can only be called from somewhere holding a private
+key. The REST convenience wrappers (`vtaListContexts`, `vtaCreateContext`) still
+take the stricter pair, because they *build a channel*, and a channel signs.
+
+**Only `type` and `payload` cross the bridge.** `RUNTIME_MANAGER_TASK` carries
+those two members and nothing else; `carrier.ts` strips the envelope the admin
+helper built, and `offscreen.ts`'s existing `OFFSCREEN_REQUEST_TASK` mints the
+real one and signs it. `core/src/vta/request-task.ts` explains why the device
+must mint it, and that reasoning does not soften because the composer is an
+extension page: a wallet that counter-signs a document composed elsewhere
+attests to fields it never checked. Reusing that path also inherits transport
+selection, `TransportHealth`, and the same-browser approver ceremony for free —
+`offscreen.ts` needed no change at all.
+
+**The relay is gated on `sender.url`, not `sender.id`.** Every content script
+carries this extension's id, so `sender.id` cannot separate a page from an
+extension surface. `isExtensionPageSender` compares against
+`chrome.runtime.getURL("")`. Unlike the page-facing `RUNTIME_REQUEST_TASK`, this
+one does **not** prompt per call — the caller is the operator driving their own
+console, and twelve identical dialogs to render one screen is dismissal, not
+consent. What stands in its place: the agent's ACL, its policy engine (a
+`requireConsent` comes back as `ConsentRequiredError` and renders as a match-code
+ceremony, never as a red string), and preview-then-confirm on every irreversible
+action, showing the agent's own account of what would be destroyed.
+
+**What breaks it:** importing `admin` from the package root instead of the
+subpath; folding `manager.html` into `vite.config.ts` (a shared chunk then
+carries admin into wallet surfaces); losing `codeSplitting: false`; adding
+`RUNTIME_MANAGER_TASK` to `PAGE_FACING_RUNTIME_TYPES` or to `content.ts`'s
+dispatch table; gating on `sender.id`; or widening the carrier to pass the
+envelope through. `tests/manager-sender.test.mts`,
+`tests/manager-surface.test.mts` and the two CI assertions pin each of these.
+
 ## Advertisement is not availability
 
 A VTA's DID document says what it *offers*. `buildVtaSession` skips a channel

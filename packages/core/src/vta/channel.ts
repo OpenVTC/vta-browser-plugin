@@ -25,6 +25,26 @@ export interface TrustTaskSender {
   send<Res>(envelope: TrustTask<unknown>, opts?: SendOpts): Promise<Res>;
 }
 
+/**
+ * A party named on a Trust-Task envelope — the `issuer` or the `recipient`.
+ *
+ * Deliberately just the DID. Building an envelope needs nothing else: an
+ * `Identity` carries key material and a `RemoteDidcommEndpoint` carries a
+ * key-agreement JWK, and neither is read when the only question is "whose DID
+ * goes in this field". Both structurally satisfy this, so a caller that holds
+ * one passes it unchanged.
+ *
+ * Asking for more than this is not free. A surface typed on `Identity` can only
+ * be called from somewhere holding a private key, which forces key material
+ * into callers that compose documents without ever signing them — the
+ * management console being the case in point: it builds admin tasks and hands
+ * them to the device to mint and sign, and holds no key of its own. Typing the
+ * envelope's parties by what they actually are keeps that possible.
+ */
+export interface TaskParty {
+  did: string;
+}
+
 export interface SendOpts {
   /** Expected response document `type` (the `<request>#response` URI). When
    *  set, a reply whose `type` is neither this nor a trust-task-error is a

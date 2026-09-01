@@ -265,6 +265,33 @@ export function AppShell({ advanced, vault }: { advanced: React.ReactNode; vault
           );
         })}
 
+        {/* The management console — a separate surface, and a separate tab.
+            Not a pane here: these four are the *wallet's* settings, and
+            administering the agent (granting authority, destroying contexts) is
+            a different job with a different blast radius. It also ships as its
+            own bundle, which is what keeps `@openvtc/pnm-core/admin` out of
+            every wallet surface — see `vite.config.manager.ts`. */}
+        <button
+          onClick={() => void chrome.tabs.create({ url: chrome.runtime.getURL("manager.html") })}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            marginTop: 10,
+            padding: "7px 9px",
+            borderRadius: "var(--w-r-sm)",
+            border: `1px solid ${c.line}`,
+            background: "transparent",
+            color: c.muted,
+            fontSize: t.base,
+            textAlign: "left",
+            cursor: "pointer",
+            width: "100%",
+          }}
+        >
+          Manage agent&nbsp;↗
+        </button>
+
         {/* Both roles, always visible. The wallet's whole authority model is
             that these are two identities with different powers; showing only
             one of them made the split something you had to go and look for.

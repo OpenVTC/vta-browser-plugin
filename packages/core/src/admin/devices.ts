@@ -10,9 +10,7 @@
 // request missing either: a wipe with no recorded reason is an audit gap. That
 // is a deliberate obstacle, so this wrapper adds no default for either.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import {
@@ -41,8 +39,8 @@ export type { DeviceBinding };
 export type WipeScope = DeviceWipePayload["scope"];
 
 export interface DeviceCallerParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
 }
 
 export interface DeviceListParams extends DeviceCallerParams {

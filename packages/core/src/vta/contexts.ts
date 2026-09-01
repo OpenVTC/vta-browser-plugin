@@ -13,9 +13,7 @@
 // exposes a bespoke `GET/POST /contexts` REST route (now deprecated) — the
 // trust-task dispatcher form is the canonical one.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "./channel.js";
-import type { RemoteDidcommEndpoint } from "./didcomm.js";
+import type { TaskParty, TrustTaskSender } from "./channel.js";
 import { RestChannel, type RestChannelOptions } from "./rest-channel.js";
 import { buildTrustTask } from "./trust-task.js";
 
@@ -95,9 +93,9 @@ export interface ContextsListParams {
   /** Envelope `issuer` — the holder's DIDComm identity. Its DID must be in
    *  the VTA's ACL with any role (`contexts/list` is auth-gated, not
    *  admin-only; the VTA filters by `has_context_access`). */
-  holder: Identity;
+  holder: TaskParty;
   /** The VTA — envelope `recipient`. */
-  service: RemoteDidcommEndpoint;
+  service: TaskParty;
 }
 
 /** List the contexts the holder can access.
@@ -121,8 +119,8 @@ export async function contextsList(
 }
 
 export interface ContextsCreateParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
   /** Leaf segment when `parent` is set (full path = `<parent>/<id>`), else a
    *  top-level id. Must be unique; a conflict rejects. */
   id: string;
@@ -159,15 +157,22 @@ export async function contextsCreate(
 }
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer
- *  {@link contextsList} with a channel from a `VtaSession`. */
-export interface VtaListContextsOptions extends ContextsListParams, RestChannelOptions {}
+ *  {@link contextsList} with a channel from a `VtaSession`.
+ *
+ *  `holder` and `service` come from {@link RestChannelOptions}, not from
+ *  {@link ContextsListParams}: composing the envelope needs only the two DIDs, but this
+ *  wrapper also *builds the channel*, and a channel signs and encrypts. The
+ *  narrower pair is what the wire actually requires here. */
+export interface VtaListContextsOptions
+  extends Omit<ContextsListParams, "holder" | "service">,
+    RestChannelOptions {}
 
 /** @deprecated Use {@link contextsList} with a channel from a `VtaSession`.
  *  List over REST — builds a one-shot {@link RestChannel} (dispatches
  *  `contexts/list/1.0` over `/trust-tasks`, NOT the bespoke `/contexts`). */
 export interface ContextsGetParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
   /** Context id — the full path for a nested context. */
   id: string;
 }
@@ -198,8 +203,8 @@ export async function contextsGet(
 }
 
 export interface ContextsUpdateParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
   /** Context to update. The id itself cannot be changed. */
   id: string;
   /** New human-readable name. Omit to leave unchanged. */
@@ -239,8 +244,8 @@ export async function contextsUpdate(
 }
 
 export interface ContextsUpdateDidParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
   /** Context whose DID is being set. */
   id: string;
   /** The DID to associate with this context. */
@@ -269,8 +274,15 @@ export function vtaListContexts(opts: VtaListContextsOptions): Promise<ContextRe
 }
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer
- *  {@link contextsCreate} with a channel from a `VtaSession`. */
-export interface VtaCreateContextOptions extends ContextsCreateParams, RestChannelOptions {}
+ *  {@link contextsCreate} with a channel from a `VtaSession`.
+ *
+ *  `holder` and `service` come from {@link RestChannelOptions}, not from
+ *  {@link ContextsCreateParams}: composing the envelope needs only the two DIDs, but this
+ *  wrapper also *builds the channel*, and a channel signs and encrypts. The
+ *  narrower pair is what the wire actually requires here. */
+export interface VtaCreateContextOptions
+  extends Omit<ContextsCreateParams, "holder" | "service">,
+    RestChannelOptions {}
 
 /** @deprecated Use {@link contextsCreate} with a channel from a `VtaSession`.
  *  Create over REST — builds a one-shot {@link RestChannel}. */
