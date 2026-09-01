@@ -9,9 +9,7 @@
 // counterpart only in the sense that both name a key — the list is deliberately
 // a directory, so enumerating memory does not spill its contents.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import {
@@ -34,8 +32,8 @@ import {
 } from "@openvtc/trust-tasks/vta/memory/delete/0.1/payload";
 
 export interface MemoryCallerParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
   /** Required — memory has no global namespace. */
   contextId: string;
 }

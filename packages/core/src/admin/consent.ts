@@ -15,9 +15,7 @@
 // consent and carries a challenge the approver's decision is bound to. Most
 // consoles will use `consentList`, `consentDecision` and `consentRevoke`.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import {
@@ -63,8 +61,8 @@ import {
 export type { ConsentGrant, ConsentSubject, ApproverBinding };
 
 export interface ConsentCallerParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
 }
 
 export interface ConsentListParams extends ConsentCallerParams {

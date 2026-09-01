@@ -58,17 +58,18 @@ import {
   type Response as DidsRegisterWithServerResponse,
 } from "@openvtc/trust-tasks/vta/webvh/dids/register-with-server/1.0/payload";
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 export type { WebvhDidRecord, WebvhPathMode };
 
 /** Who is asking, and which agent is being asked. */
 export interface WebvhCall {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  /** Envelope `issuer`. Only the DID is read — see `TaskParty` in
+   *  `vta/channel.ts` for why this is not typed on `Identity`. */
+  holder: TaskParty;
+  /** Envelope `recipient`. */
+  service: TaskParty;
 }
 
 const send = <T>(

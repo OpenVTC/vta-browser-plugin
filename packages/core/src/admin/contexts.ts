@@ -10,9 +10,7 @@
 // snake_case. Both fields happen to be single words, which is exactly the kind
 // of coincidence that hides a casing bug until someone adds `dry_run`.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 const TASK_CONTEXTS_DELETE = "https://trusttasks.org/spec/vta/contexts/delete/1.0";
@@ -20,8 +18,8 @@ const TASK_CONTEXTS_PREVIEW_DELETE =
   "https://trusttasks.org/spec/vta/contexts/preview-delete/1.0";
 
 export interface ContextDeleteParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
   /** Context id (full path for a nested context). */
   id: string;
   /** Delete even when the context still holds keys or DIDs. Default false. */

@@ -66,19 +66,46 @@ jobs:
           echo "OK: $bundle is a single bundle with no dynamic import()"
 
       # `@openvtc/pnm-core/admin` is operator surface — granting authority at an
-      # agent, revoking it, destroying contexts. A wallet has no business
-      # shipping any of it, and the way it would arrive is someone importing it
-      # from the package root instead of the subpath. The task URIs are the
-      # tell: they only appear in a bundle that pulled the module in.
-      - name: Assert the wallet ships no agent-administration surface
+      # agent, revoking it, destroying contexts. The task URIs are the tell:
+      # they only appear in a bundle that pulled the module in.
+      #
+      # The management console (`manager.html`) administers the agent, so it
+      # imports the module deliberately. Every *wallet* surface — the service
+      # worker, the content and page-world scripts, the popup, the confirm
+      # window, the offscreen document, the options page — still must not, and
+      # the way it would arrive is someone importing from the package root
+      # instead of the subpath, or Rollup hoisting a shared chunk.
+      #
+      # Hence: banned everywhere in dist/ **except** `manager.js`. Phrased as an
+      # exclusion rather than a list of permitted files so it keeps holding as
+      # entries are added. `vite.config.manager.ts` builds the console alone
+      # with `codeSplitting: false`, which is what makes "exactly one file may
+      # contain this" a structural property rather than a convention.
+      - name: Assert agent-administration surface is confined to the console
         run: |
           for task in 'acl/grant/0.1' 'acl/revoke/0.1' 'acl/update/0.1' 'contexts/delete/1.0' 'keys/create/0.1' 'keys/sign/0.1' 'policy/upsert/0.2' 'device/wipe/0.1' 'config/patch/0.1' 'vta/did-templates/create/2.0' 'consent/approver-set/1.0' 'keys/import/0.1' 'did-management/did/delete/0.1' 'vta/services/enable/1.0' 'vta/services/disable/1.0' 'vta/credentials/issue/0.1' 'vta/credentials/revoke/0.1'; do
-            if grep -rlF "$task" packages/extension/dist/; then
-              echo "::error::the extension bundle contains $task — @openvtc/pnm-core/admin must not be reachable from the wallet (check for a root-barrel import)"
+            leaked=$(grep -rlF "$task" packages/extension/dist/ | grep -v '^packages/extension/dist/manager\.js$' || true)
+            if [ -n "$leaked" ]; then
+              echo "::error::$leaked contains $task — @openvtc/pnm-core/admin must not be reachable from any wallet surface (check for a root-barrel import, or a shared chunk)"
               exit 1
             fi
           done
-          echo "OK: no admin task URIs in the extension bundle"
+          echo "OK: admin task URIs appear only in manager.js"
+
+      # The console's isolation rests on it being one self-contained file: the
+      # guard above names exactly one exception, so a second chunk would be a
+      # file nothing checks. Losing `codeSplitting: false` in a future upgrade
+      # is silent otherwise.
+      - name: Assert the console is a single self-contained bundle
+        run: |
+          bundle=packages/extension/dist/manager.js
+          test -f "$bundle" || { echo "::error::$bundle was not emitted — did the manager build run?"; exit 1; }
+          extra=$(ls packages/extension/dist/manager-split-*.js 2>/dev/null || true)
+          if [ -n "$extra" ]; then
+            echo "::error::the console emitted extra chunks ($extra); codeSplitting: false was lost and the admin guard now has unchecked files"
+            exit 1
+          fi
+          echo "OK: manager.js is a single bundle"
 
       # Build the Chrome Web Store upload artefact from the dist/ that the
       # Build step just produced (scripts/package.mjs re-stages it; it does

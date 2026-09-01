@@ -11,9 +11,7 @@
 // two families version independently; a matching pair is a coincidence, not a
 // rule, so read the import paths rather than assuming.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import {
@@ -32,9 +30,9 @@ import {
 /** Both calls are issued by an operator identity, to an agent. */
 export interface CredentialIssuerCallerParams {
   /** Envelope `issuer` — needs an agent role that carries issuing authority. */
-  holder: Identity;
+  holder: TaskParty;
   /** The issuing agent — envelope `recipient`. */
-  service: RemoteDidcommEndpoint;
+  service: TaskParty;
 }
 
 export interface IssueCredentialParams extends CredentialIssuerCallerParams {

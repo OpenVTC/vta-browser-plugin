@@ -11,9 +11,7 @@
 // calls it off. A caller that treats `disable` as instantaneous will report an
 // agent as off while it is still answering.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import {
@@ -70,9 +68,9 @@ export type { ServiceState, ServiceKind };
 /** Every `vta/services/*` call is issued by an operator identity, to an agent. */
 export interface ServicesCallerParams {
   /** Envelope `issuer`. Needs an admin role — the whole family is manage-gated. */
-  holder: Identity;
+  holder: TaskParty;
   /** The agent — envelope `recipient`. */
-  service: RemoteDidcommEndpoint;
+  service: TaskParty;
 }
 
 /** Transport configuration. Which members apply depends on the `ServiceKind`. */
