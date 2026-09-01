@@ -178,21 +178,28 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
     [...REFERENCED.keys()].map(family).filter((f) => canonicalFamilies.has(f)),
   );
 
-  // 152 of 177 as of vta-sdk 0.29.0. It was 130 until the specced-but-
+  // 160 of 177 as of vta-sdk 0.29.0. It was 130 until the specced-but-
   // unimplemented gap was closed in one pass: `trust-task-discovery/0.1`,
   // `acl/update/0.1`, `vta/webvh/servers/retire-orphan/0.1`,
   // `vtc/members/removal-notice/0.1`, `vta/app-state/*` (6), `vta/services/*`
   // (8), `vta/credentials/{issue,revoke}/0.1`, and
   // `auth/passkey/login/{start,finish}/0.2`.
   //
-  // **All 25 still outstanding are unspecced** — no schema in the registry, so
-  // no binding in @openvtc/trust-tasks to implement against: `vault/*`'s
-  // archive/restore/purge/unarchive and its whole `credentials` sub-family,
-  // `vta/backup/*`, `vta/attestation/*`, `vta/seeds/*`,
-  // `vta/audit/*-retention`, and `vta/management/reload-services`. That makes
-  // this number, for the first time, a statement about upstream rather than
-  // about this repo: it moves when a spec lands, not when someone here finds
-  // time.
+  // 152 -> 160 is the whole `vault/credentials/*` sub-family — receive, query,
+  // get, archive, unarchive, delete, restore, purge — which moved here from
+  // the unspecced list rather than from a backlog. The agent had been
+  // dispatching all eight with no schema in the registry; specifying them
+  // (trustoverip/dtgwg-trust-tasks-tf#338, shipped in @openvtc/trust-tasks
+  // 0.16.4) is what produced bindings to implement against.
+  //
+  // **All 17 still outstanding are unspecced** — no schema in the registry, so
+  // no binding in @openvtc/trust-tasks to implement against: `vault/*`'s own
+  // archive/restore/purge/unarchive (the *secrets* lifecycle, distinct from
+  // the credential one above), `vta/backup/*`, `vta/attestation/*`,
+  // `vta/seeds/*`, `vta/audit/*-retention`, and
+  // `vta/management/reload-services`. That keeps this number a statement about
+  // upstream rather than about this repo: it moves when a spec lands, and the
+  // last eight moved because one did.
   //
   // **Nothing is behind any more.** Every implemented family names the newest
   // version `vta-sdk` publishes: `vault/{list,get,upsert}` and
@@ -203,7 +210,7 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // the agent does not name, rather than as a deprecation warning. That is the
   // expected shape of a cutover here: nothing is deployed, so neither side
   // keeps an old version alive.
-  const expected = 152;
+  const expected = 160;
   assert.equal(
     implemented.size,
     expected,

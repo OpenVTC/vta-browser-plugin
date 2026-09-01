@@ -14,18 +14,40 @@
 // the pane points at it.
 //
 // The holder side — the credentials this agent *holds* — lives in a different
-// family again (`vault/credentials/*`), which ships no TypeScript bindings in
-// `@openvtc/trust-tasks`. Writing those shapes by hand here is exactly the
-// copy-that-drifts this repo already removed once, so that half waits for the
-// bindings rather than being approximated.
+// family again (`vault/credentials/*`) and is in `HeldCredentials` below. It
+// waited on `trustoverip/dtgwg-trust-tasks-tf#338`, which specified that family
+// from the implementation that had been dispatching it unspecified; before that
+// there were no bindings and hand-transcribing the shapes would have been the
+// copy-that-drifts this repo has removed once already.
+//
+// Two things that surface carries which a list of credentials would otherwise
+// flatten. **Query refuses an unconstrained filter** — an empty one returns the
+// shape of the holder's whole life, so the pane requires a filter and says so
+// rather than firing a request it knows will be refused. And **validity and
+// lifecycle are orthogonal**: a credential can be `valid` and `archived`, or
+// `revoked` and `active`, so both are rendered and neither is derived from the
+// other.
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { issueCredential, revokeCredential } from "@openvtc/pnm-core/admin";
-import { Button, Did, Note, Panel } from "../../ui.js";
+import {
+  credVaultArchive,
+  credVaultDelete,
+  credVaultPurge,
+  credVaultQuery,
+  credVaultRestore,
+  credVaultUnarchive,
+  isRunnableCredentialQuery,
+  type CredentialDescriptor,
+  type CredentialFilter,
+} from "@openvtc/pnm-core";
+import { Button, Did, Note, Panel, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { ConsentRequiredError } from "../carrier.js";
-import { ConsentCeremony, runMutation } from "../destructive.js";
+import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
+import { Loading, LoadError, Table, type Column } from "../table.js";
+import { formatDate, isPast } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 
 const DAY = 86400;
@@ -339,6 +361,288 @@ function RevokeCredential({
   );
 }
 
+/** Validity and lifecycle are separate axes, so they get separate pills. A
+ *  single "status" column would have to pick one and would be wrong about the
+ *  other — a revoked-but-active credential and a valid-but-archived one are
+ *  both real, and mean opposite things. */
+function ValidityPill({ status }: { status: CredentialDescriptor["status"] }) {
+  const tone = status === "valid" ? "ok" : status === "unknown" ? "off" : "danger";
+  return <Pill tone={tone}>{status}</Pill>;
+}
+
+function LifecyclePill({ record }: { record: CredentialDescriptor }) {
+  const state = record.lifecycle ?? "active";
+  if (state === "active") return <Pill tone="ok">active</Pill>;
+  if (state === "archived") return <Pill tone="off">archived</Pill>;
+  // A tombstone's grace window is the whole reason to show this row: after it
+  // passes the agent has erased the credential and restore does nothing.
+  const expired = isPast(record.graceUntil);
+  return (
+    <div style={{ display: "grid", gap: 2 }}>
+      <Pill tone="danger">deleted</Pill>
+      <span style={{ fontSize: t.xs, color: expired ? c.faint : c.warn, whiteSpace: "nowrap" }}>
+        {record.graceUntil
+          ? expired
+            ? "grace expired"
+            : `restorable until ${formatDate(record.graceUntil)}`
+          : "not restorable"}
+      </span>
+    </div>
+  );
+}
+
+function HeldCredentials({
+  parties,
+  authority,
+}: {
+  parties: Parties;
+  authority: Authority | null;
+}) {
+  const [filter, setFilter] = useState<CredentialFilter>({});
+  const [applied, setApplied] = useState<CredentialFilter | null>(null);
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [includeDeleted, setIncludeDeleted] = useState(false);
+  const [rows, setRows] = useState<CredentialDescriptor[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // The agent refuses an unconstrained query, so the control is disabled rather
+  // than firing a request whose refusal the operator would have to interpret.
+  const runnable = isRunnableCredentialQuery(filter);
+
+  const search = useCallback(
+    async (f: CredentialFilter = filter, arch = includeArchived, del = includeDeleted) => {
+      if (!isRunnableCredentialQuery(f)) return;
+      setLoading(true);
+      setError(null);
+      try {
+        setRows(await credVaultQuery(managerSender, {
+          ...parties, ...f, includeArchived: arch, includeDeleted: del,
+        }));
+        setApplied(f);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [parties, filter, includeArchived, includeDeleted],
+  );
+
+  const reload = useCallback(() => {
+    if (applied) void search(applied, includeArchived, includeDeleted);
+  }, [applied, search, includeArchived, includeDeleted]);
+
+  const denied = authority && !hasRole(authority, "admin", "super-admin", "operator")
+    ? "Changing a stored credential needs an administrative role at this agent."
+    : null;
+
+  const set = (k: keyof CredentialFilter) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setFilter((prev) => {
+      const next = { ...prev };
+      if (e.target.value) (next as Record<string, string>)[k] = e.target.value;
+      else delete next[k];
+      return next;
+    });
+
+  const columns: Column<CredentialDescriptor>[] = useMemo(() => [
+    {
+      key: "types",
+      header: "Credential",
+      render: (r) => (
+        <div style={{ display: "grid", gap: 2 }}>
+          <span style={{ fontWeight: 600 }}>
+            {r.types.filter((x) => x !== "VerifiableCredential").join(", ") || "VerifiableCredential"}
+          </span>
+          <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.faint }}>{r.id}</span>
+        </div>
+      ),
+    },
+    {
+      key: "issuer",
+      header: "Issuer",
+      render: (r) => (r.issuerDid ? <Did value={r.issuerDid} size={t.xs} /> : <span style={{ color: c.faint }}>—</span>),
+    },
+    {
+      key: "purpose",
+      header: "Purpose",
+      render: (r) => <span style={{ color: c.muted }}>{r.purpose ?? "—"}</span>,
+    },
+    { key: "validity", header: "Validity", render: (r) => <ValidityPill status={r.status} /> },
+    { key: "lifecycle", header: "State", render: (r) => <LifecyclePill record={r} /> },
+    {
+      key: "until",
+      header: "Valid until",
+      render: (r) => (
+        <span style={{ color: c.muted, whiteSpace: "nowrap" }}>{formatDate(r.validUntil, "—")}</span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "",
+      render: (r) => {
+        const state = r.lifecycle ?? "active";
+        return (
+          <div style={{ display: "grid", gap: 8, minWidth: 200 }}>
+            {state === "active" && (
+              <Button
+                kind="quiet"
+                disabled={Boolean(denied)}
+                {...(denied ? { title: denied } : {})}
+                onClick={() => void credVaultArchive(managerSender, { ...parties, id: r.id }).then(reload)}
+              >
+                Archive
+              </Button>
+            )}
+            {state === "archived" && (
+              <Button
+                kind="quiet"
+                disabled={Boolean(denied)}
+                {...(denied ? { title: denied } : {})}
+                onClick={() => void credVaultUnarchive(managerSender, { ...parties, id: r.id }).then(reload)}
+              >
+                Unarchive
+              </Button>
+            )}
+            {state === "deleted" && !isPast(r.graceUntil) && (
+              <Button
+                kind="quiet"
+                disabled={Boolean(denied)}
+                {...(denied ? { title: denied } : {})}
+                onClick={() => void credVaultRestore(managerSender, { ...parties, id: r.id }).then(reload)}
+              >
+                Restore
+              </Button>
+            )}
+            {state !== "deleted" ? (
+              <Destructive<CredentialDescriptor>
+                label="Delete"
+                disabledReason={denied}
+                preview={async () => r}
+                renderPreview={(p) => (
+                  <>
+                    <strong>This moves the credential to the trash, recoverably.</strong>
+                    <span>
+                      It stops being presentable straight away. Your agent keeps it until its
+                      grace window passes, then erases it — after that, getting it back means
+                      going back to {p.issuerDid ? "the issuer" : "whoever issued it"}, which for
+                      an invitation or a one-time membership may not be possible at all.
+                    </span>
+                  </>
+                )}
+                commit={async () => {
+                  await credVaultDelete(managerSender, { ...parties, id: r.id });
+                }}
+                onDone={reload}
+              />
+            ) : (
+              <Destructive<CredentialDescriptor>
+                label="Purge"
+                disabledReason={denied}
+                preview={async () => r}
+                renderPreview={() => (
+                  <>
+                    <strong>Purging erases this now, and nothing can bring it back.</strong>
+                    <span>
+                      Not a faster delete — it skips the grace window entirely. Use it when the
+                      requirement is that the material stop existing.
+                    </span>
+                  </>
+                )}
+                commit={async () => {
+                  await credVaultPurge(managerSender, { ...parties, id: r.id });
+                }}
+                onDone={reload}
+              />
+            )}
+          </div>
+        );
+      },
+    },
+  ], [parties, denied, reload]);
+
+  return (
+    <Panel
+      title="Credentials this agent holds"
+      description="Invitations, memberships and roles issued to you and stored by your agent.
+        Searching returns metadata only — your agent never puts a credential's contents in a
+        search result."
+    >
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <label style={{ display: "grid", gap: 4, flex: "1 1 200px" }}>
+          <Label>Type</Label>
+          <input style={fieldStyle} value={filter.type ?? ""} onChange={set("type")}
+            placeholder="MembershipCredential" />
+        </label>
+        <label style={{ display: "grid", gap: 4, flex: "1 1 200px" }}>
+          <Label>Purpose</Label>
+          <input style={fieldStyle} value={filter.purpose ?? ""} onChange={set("purpose")}
+            placeholder="membership" />
+        </label>
+        <label style={{ display: "grid", gap: 4, flex: "1 1 240px" }}>
+          <Label>Issuer DID</Label>
+          <input style={{ ...fieldStyle, fontFamily: font.mono }} value={filter.issuerDid ?? ""}
+            onChange={set("issuerDid")} />
+        </label>
+        <label style={{ display: "grid", gap: 4 }}>
+          <Label>Validity</Label>
+          <select style={fieldStyle} value={filter.status ?? ""} onChange={set("status")}>
+            <option value="">any</option>
+            <option value="valid">valid</option>
+            <option value="expired">expired</option>
+            <option value="revoked">revoked</option>
+            <option value="unknown">unknown</option>
+          </select>
+        </label>
+        <div style={{ paddingBottom: 1 }}>
+          <Button
+            kind="primary"
+            disabled={!runnable || loading}
+            {...(!runnable ? { title: "Set at least one filter — see below." } : {})}
+            onClick={() => void search()}
+          >
+            {loading ? "Searching…" : "Search"}
+          </Button>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <label style={{ display: "flex", gap: 7, alignItems: "center", fontSize: t.sm }}>
+          <input type="checkbox" checked={includeArchived}
+            onChange={(e) => { setIncludeArchived(e.target.checked); if (applied) void search(applied, e.target.checked, includeDeleted); }} />
+          Include archived
+        </label>
+        <label style={{ display: "flex", gap: 7, alignItems: "center", fontSize: t.sm }}>
+          <input type="checkbox" checked={includeDeleted}
+            onChange={(e) => { setIncludeDeleted(e.target.checked); if (applied) void search(applied, includeArchived, e.target.checked); }} />
+          Include deleted (trash)
+        </label>
+      </div>
+
+      {!runnable && (
+        <Note tone="accent">
+          <strong>Set at least one filter.</strong> Your agent refuses a search that constrains
+          nothing, because the answer would be the shape of everything you hold — every community,
+          every role, every issuer. The two tick-boxes widen a search rather than narrowing one,
+          so they do not count on their own.
+        </Note>
+      )}
+
+      {error && <LoadError what="your stored credentials" error={error} />}
+      {loading && !rows && <Loading what="your stored credentials" />}
+
+      {rows && (
+        <Table
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.id}
+          empty="Nothing matches that filter. Your agent answered — this is not a failed search."
+        />
+      )}
+    </Panel>
+  );
+}
+
 export function CredentialsPane({
   parties,
   authority,
@@ -391,20 +695,7 @@ export function CredentialsPane({
       <IssueCredential parties={parties} authority={authority} />
       <RevokeCredential parties={parties} authority={authority} />
 
-      <Panel
-        title="Credentials this agent holds"
-        description="Not built yet, and deliberately not approximated."
-      >
-        <Note tone="accent">
-          The holder side lives in a different task family (
-          <code style={{ fontFamily: font.mono }}>vault/credentials/*</code>: query, get, receive,
-          archive, restore, purge), and that family ships no TypeScript bindings in{" "}
-          <code style={{ fontFamily: font.mono }}>@openvtc/trust-tasks</code>. Transcribing those
-          shapes by hand is a copy that drifts from the schemas the agent is generated from —
-          this repo removed one such copy already — so this half waits for the bindings rather
-          than guessing at them.
-        </Note>
-      </Panel>
+      <HeldCredentials parties={parties} authority={authority} />
     </div>
   );
 }
