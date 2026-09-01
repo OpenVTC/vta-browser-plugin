@@ -193,6 +193,12 @@ import {
   displayHostFor,
   hasOriginPermission,
 } from "./host-permissions.js";
+import { ConsentReplayLedger, replayKey } from "./consent-replay.js";
+
+/** Consent-gated requests awaiting their one exempt replay. In-memory by
+ *  design: a service-worker restart loses it, and losing it costs one extra
+ *  confirm rather than admitting anything. */
+const consentReplays = new ConsentReplayLedger();
 
 // Keep the provider registration in step with the grants.
 //
@@ -1633,15 +1639,24 @@ async function handleRequestTask(
   // mistaken for the approval step, and the WORKER banner on the confirm popup
   // reinforces it. Kept un-skippable on purpose: with policy enforcement off this
   // is the only thing between an arbitrary page and an arbitrary task.
-  const approved = await requestConsent({
-    origin: req.origin,
-    action: `send a "${taskLabel(req.params.type)}" request to your VTA`,
-    noRemember: true,
-  });
-  if (!approved.approved) return { ok: false, error: "user denied the request" };
+  //
+  // The one exemption is the replay that *completes* a consent ceremony: same
+  // origin, same params, already refused once with `consentRequired`, and a
+  // matching grant since relayed. The human approved that exact payload here and
+  // then again on the approving device — see `consent-replay.ts` for why asking
+  // a third time costs more than it buys.
+  const key = replayKey(req.origin, req.params);
+  if (!consentReplays.consumeIfArmed(key)) {
+    const approved = await requestConsent({
+      origin: req.origin,
+      action: `send a "${taskLabel(req.params.type)}" request to your VTA`,
+      noRemember: true,
+    });
+    if (!approved.approved) return { ok: false, error: "user denied the request" };
+  }
 
   await ensureOffscreenDocument();
-  return (await chrome.runtime.sendMessage({
+  const res = (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_REQUEST_TASK,
     vtaDid: active.conn.vtaDid,
@@ -1649,6 +1664,16 @@ async function handleRequestTask(
     origin: req.origin,
     params: req.params,
   })) as RuntimeRequestTaskResponse;
+
+  // A consent refusal is the only thing that arms a replay, and it carries the
+  // VTA's own salted digest — the same value its `task-consent/granted` notice
+  // will quote. Taking it from the wire rather than recomputing it is what keeps
+  // a second implementation of that hash from existing here to drift.
+  if (res.ok && res.result?.kind === "consentRequired") {
+    const digest = res.result.payloadDigest;
+    if (typeof digest === "string" && digest) consentReplays.recordConsentRequired(key, digest);
+  }
+  return res;
 }
 
 // Sign a Trust-Task envelope with the wallet's holder did:peer #key-2.
@@ -2492,6 +2517,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // broadcast a wallet event to pages (e.g. `consentgranted`). Fire-and-forget.
   if ((message as { type?: string })?.type === RUNTIME_EMIT_WALLET_EVENT) {
     const m = message as { event: WalletEventKind; detail?: Record<string, unknown> };
+    // A grant landed for a payload the approver signed off. Arm its one exempt
+    // replay before the page is told, so the re-submit this event triggers does
+    // not race the ledger. Only the offscreen inbound path emits this, and only
+    // for a notice it accepted from an enrolled VTA.
+    if (m.event === "consentgranted") {
+      const digest = m.detail?.payloadDigest;
+      if (typeof digest === "string" && digest) consentReplays.recordGranted(digest);
+    }
     void broadcastWalletEvent(m.event, m.detail);
     return false;
   }
