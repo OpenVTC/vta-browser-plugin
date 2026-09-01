@@ -207,7 +207,7 @@ export function Destructive<P>({
   const busy = phase.kind === "committing";
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gap: 12, maxWidth: 460 }}>
       <Note tone="danger">
         <div style={{ display: "grid", gap: 8 }}>{renderPreview(p)}</div>
       </Note>

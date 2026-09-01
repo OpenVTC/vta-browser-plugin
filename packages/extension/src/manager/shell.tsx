@@ -19,11 +19,28 @@ import { Note } from "../ui.js";
 import { ContextTree, type ContextSelection } from "./context-column.js";
 import { WhoamiBanner } from "./whoami-banner.js";
 import { ContextsPane } from "./panes/contexts.js";
+import { KeysPane } from "./panes/keys.js";
+import { DidsPane } from "./panes/dids.js";
+import { AccessPane } from "./panes/access.js";
+import { SessionsPane } from "./panes/sessions.js";
+import { ApprovalsPane } from "./panes/approvals.js";
+import { PolicyPane } from "./panes/policy.js";
+import { ServicesPane } from "./panes/services.js";
+import { AuditPane } from "./panes/audit.js";
 import { managerSender } from "./sender.js";
 import { useVta, type Parties } from "./use-vta.js";
 
 /** Section ids double as the URL hash. */
-export type SectionId = "contexts";
+export type SectionId =
+  | "contexts"
+  | "keys"
+  | "dids"
+  | "services"
+  | "audit"
+  | "access"
+  | "sessions"
+  | "approvals"
+  | "policy";
 
 interface Act {
   title: string;
@@ -40,7 +57,31 @@ const ACTS: Act[] = [
     title: "Identity & custody",
     colour: "var(--m-act-identity)",
     soft: "var(--m-act-identity-soft)",
-    sections: [{ id: "contexts", label: "Contexts" }],
+    sections: [
+      { id: "contexts", label: "Contexts" },
+      { id: "keys", label: "Keys" },
+      { id: "dids", label: "DIDs" },
+    ],
+  },
+  {
+    title: "Wire & execution",
+    colour: "var(--m-act-wire)",
+    soft: "var(--m-act-wire-soft)",
+    sections: [
+      { id: "services", label: "Transports" },
+      { id: "audit", label: "Audit" },
+    ],
+  },
+  {
+    title: "Authority & graph",
+    colour: "var(--m-act-graph)",
+    soft: "var(--m-act-graph-soft)",
+    sections: [
+      { id: "access", label: "Access" },
+      { id: "approvals", label: "Approvals" },
+      { id: "policy", label: "Policy" },
+      { id: "sessions", label: "Sessions" },
+    ],
   },
 ];
 
@@ -71,14 +112,17 @@ function ActRail({
       }}
     >
       {ACTS.map((act) => (
-        <div key={act.title} style={{ borderLeft: `3px solid ${act.colour}`, paddingLeft: 11 }}>
+        <div key={act.title} style={{ borderLeft: `4px solid ${act.colour}`, paddingLeft: 11 }}>
           <h2
             style={{
               margin: "0 0 5px",
               fontSize: t.xs,
               textTransform: "uppercase",
               letterSpacing: 0.5,
-              color: c.faint,
+              // The act's own colour, not a neutral. The rail is the only thing
+              // saying which of the three questions a section answers, and a
+              // 4px edge alone is too quiet to carry it.
+              color: act.colour,
               fontWeight: 640,
             }}
           >
@@ -182,6 +226,22 @@ export function ManagerShell() {
             onChanged={onChanged}
           />
         );
+      case "keys":
+        return <KeysPane parties={parties} authority={vta.authority} contextId={selected} />;
+      case "dids":
+        return <DidsPane parties={parties} authority={vta.authority} contextId={selected} />;
+      case "services":
+        return <ServicesPane parties={parties} authority={vta.authority} />;
+      case "audit":
+        return <AuditPane parties={parties} contextId={selected} />;
+      case "access":
+        return <AccessPane parties={parties} authority={vta.authority} contextId={selected} />;
+      case "approvals":
+        return <ApprovalsPane parties={parties} authority={vta.authority} contextId={selected} />;
+      case "policy":
+        return <PolicyPane parties={parties} authority={vta.authority} contextId={selected} />;
+      case "sessions":
+        return <SessionsPane parties={parties} authority={vta.authority} />;
     }
   }, [vta, parties, section, contexts.records, selected, onChanged]);
 

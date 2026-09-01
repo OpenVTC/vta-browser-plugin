@@ -49,7 +49,8 @@ function Row({
           padding: 0,
           cursor: hasChildren ? "pointer" : "default",
           color: c.faint,
-          fontSize: t.xs,
+          fontSize: t.sm,
+          lineHeight: 1,
           visibility: hasChildren ? "visible" : "hidden",
         }}
       >
