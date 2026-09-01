@@ -117,6 +117,23 @@ async function harness(onMessage) {
 
 const settle = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 
+// Wait for a condition, not for a fixed interval. `node --test tests/*.mjs` runs
+// this suite's files in parallel (concurrency = cores - 1), and the ack is an
+// authcrypt `pack`. Idle it lands 3-4 ms after the handler resolves; with the
+// rest of the suite cold-starting beside it, 14 ms was measured — most of a
+// 20 ms budget — and on a 24-core machine it once took longer, which the test
+// read as "the ack never came" (R1.6 regressed) when nothing had regressed.
+// GitHub's 4-core runners contend less, which is the only reason CI stayed
+// green. The deadline is generous because it only ever costs time when the
+// assertion is about to fail anyway.
+async function until(predicate, what, deadlineMs = 5000) {
+  const end = Date.now() + deadlineMs;
+  while (!predicate()) {
+    if (Date.now() > end) assert.fail(`timed out waiting for ${what}`);
+    await settle(5);
+  }
+}
+
 test("the ack waits for a promise-returning handler (the whole R1.6 premise)", async () => {
   const order = [];
   let release;
@@ -136,13 +153,17 @@ test("the ack waits for a promise-returning handler (the whole R1.6 premise)", a
     };
 
     ws.inject(jwe);
+    await until(() => order.length > 0, "the handler to be entered");
+    // This one IS a fixed wait, and has to be: "nothing happened" can only be
+    // established by giving it time to happen. Under load the window can only
+    // false-pass, never false-fail, so it does not share the flake above.
     await settle();
 
     assert.deepEqual(order, ["handler-start"], "no ack while the persist is in flight");
     assert.equal(ws.sent.length, 0, "the mediator must still hold its copy");
 
     release();
-    await settle();
+    await until(() => ws.sent.length > 0, "the ack, once the persist settled");
 
     assert.deepEqual(order, ["handler-start", "persisted", "ack"]);
     const ack = await readAck();
@@ -175,15 +196,13 @@ test("KNOWN GAP: a rejecting handler does NOT suppress the ack (0.6.2)", async (
 
   try {
     ws.inject(jwe);
-    await settle();
-
-    assert.equal(
-      ws.sent.length,
-      1,
-      "as of 0.6.2 the ack is sent even though the handler rejected — if this " +
-        "now reads 0, the library began honouring rejections: good news, but " +
+    await until(
+      () => ws.sent.length > 0,
+      "the ack — as of 0.6.2 it is sent even though the handler rejected. If " +
+        "this timed out, the library began honouring rejections: good news, but " +
         "update onInboundMessage's comment and this test together",
     );
+    assert.equal(ws.sent.length, 1);
   } finally {
     session.close();
   }
@@ -197,7 +216,7 @@ test("a synchronous handler still acks — nothing regressed for other callers",
 
   try {
     ws.inject(jwe);
-    await settle();
+    await until(() => ws.sent.length > 0, "the ack");
 
     assert.deepEqual(seen, ["urn:uuid:consent-1"]);
     assert.equal(ws.sent.length, 1);
