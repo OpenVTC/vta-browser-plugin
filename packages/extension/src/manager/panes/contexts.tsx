@@ -15,7 +15,7 @@ import { contextDelete, contextPreviewDelete } from "@openvtc/pnm-core/admin";
 import { Button, Did, Empty, Note, Panel } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
-import { ConsentRequiredError } from "../sender.js";
+import { ConsentRequiredError } from "../carrier.js";
 import { Destructive, ConsentCeremony, runMutation } from "../destructive.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 import type { ContextSelection } from "../context-column.js";

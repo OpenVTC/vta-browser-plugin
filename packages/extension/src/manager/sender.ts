@@ -17,8 +17,6 @@ import { RUNTIME_MANAGER_TASK, type RuntimeManagerTaskResponse } from "../bridge
 import { sendToBackground } from "../send-message.js";
 import { carrierParams, interpretOutcome } from "./carrier.js";
 
-export { ConsentRequiredError } from "./carrier.js";
-
 /**
  * A `TrustTaskSender` backed by the wallet's runtime bridge.
  *

@@ -26,7 +26,7 @@
 import { useCallback, useState, type ReactNode } from "react";
 import { Button, Note } from "../ui.js";
 import { c, t, font } from "../theme.js";
-import { ConsentRequiredError } from "./sender.js";
+import { ConsentRequiredError } from "./carrier.js";
 
 /** How much of the digest an operator compares across devices. The full value
  *  is unreadable aloud and nobody checks 64 characters; the prefix is what the
