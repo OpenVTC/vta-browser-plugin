@@ -27,6 +27,9 @@ import { ApprovalsPane } from "./panes/approvals.js";
 import { PolicyPane } from "./panes/policy.js";
 import { ServicesPane } from "./panes/services.js";
 import { AuditPane } from "./panes/audit.js";
+import { CredentialsPane } from "./panes/credentials.js";
+import { MemoryPane } from "./panes/memory.js";
+import { AppStatePane } from "./panes/app-state.js";
 import { managerSender } from "./sender.js";
 import { useVta, type Parties } from "./use-vta.js";
 import { contextHeading } from "./format.js";
@@ -36,6 +39,9 @@ export type SectionId =
   | "contexts"
   | "keys"
   | "dids"
+  | "credentials"
+  | "memory"
+  | "app-state"
   | "services"
   | "audit"
   | "access"
@@ -80,6 +86,23 @@ const ACTS: Act[] = [
       { id: "contexts", label: "Contexts", contextScoped: true },
       { id: "keys", label: "Keys", contextScoped: true },
       { id: "dids", label: "DIDs", contextScoped: true },
+    ],
+  },
+  {
+    // A fourth act, not in the deck. The three there answer "who am I", "how do
+    // bytes move" and "who may act"; none of them answers "what is stored
+    // here", which is the one question credentials, memory and app-state share.
+    title: "Data & credentials",
+    colour: "var(--m-act-data)",
+    soft: "var(--m-act-data-soft)",
+    sections: [
+      // Issuer-side only, and agent-wide: `vta/credentials` takes no context.
+      { id: "credentials", label: "Credentials", contextScoped: false },
+      // For both of these `contextId` is part of the record's address rather
+      // than a filter, so the pane refuses to answer agent-wide. The column is
+      // shown because the selection is required, not merely useful.
+      { id: "memory", label: "Memory", contextScoped: true },
+      { id: "app-state", label: "App state", contextScoped: true },
     ],
   },
   {
@@ -283,6 +306,32 @@ export function ManagerShell() {
             contextHeading={heading}
           />
         );
+      case "credentials":
+        return (
+          <CredentialsPane
+            parties={parties}
+            authority={vta.authority}
+            onOpenAudit={() => go("audit")}
+          />
+        );
+      case "memory":
+        return (
+          <MemoryPane
+            parties={parties}
+            authority={vta.authority}
+            contextId={selected}
+            contextHeading={heading}
+          />
+        );
+      case "app-state":
+        return (
+          <AppStatePane
+            parties={parties}
+            authority={vta.authority}
+            contextId={selected}
+            contextHeading={heading}
+          />
+        );
       case "services":
         return <ServicesPane parties={parties} authority={vta.authority} />;
       case "audit":
@@ -317,7 +366,7 @@ export function ManagerShell() {
       case "sessions":
         return <SessionsPane parties={parties} authority={vta.authority} />;
     }
-  }, [vta, parties, section, contexts.records, selected, heading, onChanged]);
+  }, [vta, parties, section, contexts.records, selected, heading, onChanged, go]);
 
   if (vta.status === "loading") {
     return <Centered>Reading your wallet's connection…</Centered>;

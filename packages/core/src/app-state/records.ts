@@ -15,9 +15,7 @@
 // is the isolation boundary** — not a filter, and not a convenience. Two
 // contexts holding the same namespace and key hold two unrelated records.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import {
@@ -63,9 +61,9 @@ export type { AppStateRecord };
 /** Every `vta/app-state/*` call is issued by an identity, to an agent. */
 export interface AppStateCallerParams {
   /** Envelope `issuer` — the caller's DIDComm identity. */
-  holder: Identity;
+  holder: TaskParty;
   /** The agent — envelope `recipient`. */
-  service: RemoteDidcommEndpoint;
+  service: TaskParty;
   /** The VTA context the record is scoped to. The isolation boundary: the same
    *  `(namespace, key)` in another context is a different record. */
   contextId: string;

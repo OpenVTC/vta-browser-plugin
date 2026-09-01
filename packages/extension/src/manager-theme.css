@@ -10,7 +10,8 @@
  * colour by act, and it works because the grouping is real — the three groups
  * answer three different questions:
  *
- *   identity  (purple)  who you are, and what you hold
+ *   identity  (purple)  who you are
+ *   data      (teal)    what is stored here, and who put it there
  *   wire      (lime)    how bytes get there, and whether they did
  *   graph     (gold)    who may act, and who has to agree
  *
@@ -33,6 +34,8 @@
   --m-act-wire-soft: #eef6e2;
   --m-act-graph: #8f6410;
   --m-act-graph-soft: #fbf2dc;
+  --m-act-data: #0e6f78;
+  --m-act-data-soft: #e2f2f4;
 
   /* The rail's own ground — a half-step off `--w-ground` so the three columns
    * read as three columns without a hard border doing the work. */
@@ -48,6 +51,8 @@
     --m-act-wire-soft: #182310;
     --m-act-graph: #e0b355;
     --m-act-graph-soft: #292010;
+    --m-act-data: #4dc4d0;
+    --m-act-data-soft: #0e2326;
 
     --m-rail: #0e131c;
     --m-tree: #10151f;
