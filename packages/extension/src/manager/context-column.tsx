@@ -9,6 +9,7 @@
 import { useMemo, useState } from "react";
 import { c, t, font } from "../theme.js";
 import { buildContextTree, flattenContextTree, type ContextNode } from "./context-tree.js";
+import { contextLabel } from "./format.js";
 import type { ContextRecord } from "@openvtc/pnm-core";
 
 /** `null` means "all contexts" — the filter cleared, not a context named null. */
@@ -36,6 +37,11 @@ function Row({
   // record behind it — nothing to scope a pane to, nothing to rename, nothing
   // to delete. So it is not selectable, and says why.
   const unreachable = !node.record;
+  // The id is what joins this tree to every table beside it, so it is shown
+  // whenever it differs from the label — never dropped in favour of the label.
+  const label = node.record
+    ? contextLabel(node.record)
+    : { primary: node.name, id: undefined };
 
   return (
     <div style={{ display: "flex", alignItems: "center", paddingLeft: 8 + depth * 14 }}>
@@ -81,11 +87,26 @@ function Row({
           fontWeight: selected ? 640 : 440,
           fontStyle: unreachable ? "italic" : "normal",
           overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
         }}
       >
-        {node.name}
+        <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {label.primary}
+        </span>
+        {label.id && (
+          <span
+            style={{
+              display: "block",
+              fontFamily: font.mono,
+              fontSize: t.xs,
+              fontWeight: 400,
+              color: selected ? "var(--m-act-identity)" : c.faint,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {label.id}
+          </span>
+        )}
       </button>
     </div>
   );

@@ -1743,7 +1743,23 @@ export interface OffscreenRequestTaskRequest {
   type: typeof OFFSCREEN_REQUEST_TASK;
   vtaDid: string;
   restBaseUrl: string;
-  origin: string;
+  /**
+   * The origin the browser attributed to the proposing page, when there is one.
+   *
+   * **Absent for the management console, deliberately.** `requestTask` stamps
+   * this into `payload.ext["openvtc.origin"]` so the origin a human approves is
+   * bound to the payload that executes — which is essential when a *page*
+   * proposed the task and meaningless when the operator is driving their own
+   * console. `requestTask`'s own contract says a caller with no attested origin
+   * should omit it rather than invent one, and inventing one here was not free:
+   * it put an `ext` member on every payload, and an agent whose struct has
+   * drifted from its schema rejects the whole request as malformed.
+   *
+   * The page path is unaffected — `background.ts` still refuses a page-facing
+   * message that carries no browser-attested origin, which is where that
+   * requirement is enforced.
+   */
+  origin?: string;
   params: RequestTaskParams;
 }
 

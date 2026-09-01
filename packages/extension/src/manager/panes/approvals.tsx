@@ -26,6 +26,7 @@ import { ConsentRequiredError } from "../carrier.js";
 import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
+import { formatDate } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 import type { ContextSelection } from "../context-column.js";
 
@@ -148,10 +149,14 @@ export function ApprovalsPane({
   parties,
   authority,
   contextId,
+  contextHeading,
 }: {
   parties: Parties;
   authority: Authority | null;
   contextId: ContextSelection;
+  /** How the selected context is named in the tree, so heading and navigation
+   *  agree. See `contextLabel` in `format.ts`. */
+  contextHeading?: string | undefined;
 }) {
   const approvers = useAsync(
     () =>
@@ -222,7 +227,7 @@ export function ApprovalsPane({
       header: "Granted",
       render: (g) => (
         <span style={{ color: c.muted, whiteSpace: "nowrap" }}>
-          {new Date(g.grantedAt).toLocaleDateString()}
+          {formatDate(g.grantedAt)}
         </span>
       ),
     },
@@ -232,7 +237,7 @@ export function ApprovalsPane({
       render: (g) =>
         g.expiresAt ? (
           <span style={{ color: c.muted, whiteSpace: "nowrap" }}>
-            {new Date(g.expiresAt).toLocaleDateString()}
+            {formatDate(g.expiresAt)}
           </span>
         ) : (
           <span style={{ color: c.warn }}>never</span>
@@ -270,7 +275,7 @@ export function ApprovalsPane({
   return (
     <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
       <Panel
-        title={contextId ? `Approvers for ${contextId}` : "Approvers"}
+        title={contextHeading ? `Approvers for ${contextHeading}` : "Approvers"}
         description="Who your agent asks when a task needs a human. Your wallet renders that
           request as a consent prompt — so a binding that points nowhere is silent, not noisy."
       >

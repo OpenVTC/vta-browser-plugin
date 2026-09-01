@@ -29,6 +29,7 @@ import { ConsentRequiredError } from "../carrier.js";
 import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
 import { Loading, LoadError, Redacted, Table, Truncated, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
+import { formatDate, isPast } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 import type { ContextSelection } from "../context-column.js";
 
@@ -48,11 +49,10 @@ function Expiry({ entry }: { entry: AclEntry }) {
     // decision worth reading as one.
     return <span style={{ color: c.warn }}>never</span>;
   }
-  const when = new Date(entry.expiresAt);
-  const past = when.getTime() < Date.now();
+  const past = isPast(entry.expiresAt);
   return (
     <span style={{ color: past ? c.faint : c.muted, whiteSpace: "nowrap" }}>
-      {when.toLocaleDateString()}
+      {formatDate(entry.expiresAt)}
       {past ? " (expired)" : ""}
     </span>
   );
@@ -258,10 +258,14 @@ export function AccessPane({
   parties,
   authority,
   contextId,
+  contextHeading,
 }: {
   parties: Parties;
   authority: Authority | null;
   contextId: ContextSelection;
+  /** How the selected context is named in the tree, so heading and navigation
+   *  agree. See `contextLabel` in `format.ts`. */
+  contextHeading?: string | undefined;
 }) {
   const list = useAsync(
     () => aclList(managerSender, { ...parties, ...(contextId ? { scope: contextId } : {}) }),
@@ -331,7 +335,7 @@ export function AccessPane({
   return (
     <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
       <Panel
-        title={contextId ? `Access to ${contextId}` : "Access to this agent"}
+        title={contextHeading ? `Access to ${contextHeading}` : "Access to this agent"}
         description="Who may act here, as what, and until when. This is the authority itself —
           the agent checks it on every task, including the ones this console sends."
       >

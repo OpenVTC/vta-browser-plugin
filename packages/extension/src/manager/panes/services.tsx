@@ -24,6 +24,7 @@ import { ConsentRequiredError } from "../carrier.js";
 import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
+import { formatInstant } from "../format.js";
 import { useTransportHealth } from "../../use-transport-health.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 import type { Transport, TransportObservation } from "../../transports.js";
@@ -164,7 +165,7 @@ export function ServicesPane({
       render: (s) =>
         s.drainsUntil ? (
           <span style={{ color: c.warn, whiteSpace: "nowrap" }}>
-            until {new Date(s.drainsUntil).toLocaleString()}
+            until {formatInstant(s.drainsUntil)}
           </span>
         ) : (
           <span style={{ color: c.faint }}>—</span>

@@ -107,3 +107,35 @@ test("the console's relay does not carry a page origin", () => {
       "waiting to be trusted.",
   );
 });
+
+test("the console does not invent an origin for the task it relays", () => {
+  // `requestTask` stamps `payload.ext["openvtc.origin"]` only when given an
+  // origin, and its contract says a caller without an attested one should omit
+  // it rather than invent one. The console has no proposing page.
+  //
+  // This is not stylistic. Stamping the extension's own origin put an `ext`
+  // member on every payload, and a live agent whose `acl/list` and
+  // `policy/list` structs have drifted from their schemas rejected the whole
+  // request — "unknown field `ext`" — taking out two panes entirely.
+  const handler = /async function handleManagerTask\([\s\S]*?\n\}/.exec(background);
+  assert.ok(handler, "handleManagerTask not found in background.ts");
+  assert.ok(
+    !/\borigin:/.test(handler[0]),
+    "handleManagerTask sets an `origin`. There is no proposing page to attest, and the " +
+      "stamp it produces lands in payload.ext, which some agent payload structs reject.",
+  );
+});
+
+test("the page-facing relay still carries its attested origin", () => {
+  // The guard above must not be read as "origin is optional now". The page
+  // path's whole security property is that the browser's origin travels with
+  // the proposal and ends up inside the payload digest a human approves.
+  const handler = /async function handleRequestTask\([\s\S]*?\n\}/.exec(background);
+  assert.ok(handler, "handleRequestTask not found in background.ts");
+  assert.match(
+    handler[0],
+    /origin: req\.origin/,
+    "handleRequestTask no longer forwards the attested origin — a page-proposed task would " +
+      "then be approved without the origin bound to its payload",
+  );
+});

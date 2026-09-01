@@ -17,11 +17,12 @@ import { managerSender } from "../sender.js";
 import { Destructive } from "../destructive.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
+import { formatInstant } from "../format.js";
 import type { Authority, Parties } from "../use-vta.js";
 
 function When({ iso }: { iso: string }) {
   return (
-    <span style={{ color: c.muted, whiteSpace: "nowrap" }}>{new Date(iso).toLocaleString()}</span>
+    <span style={{ color: c.muted, whiteSpace: "nowrap" }}>{formatInstant(iso)}</span>
   );
 }
 

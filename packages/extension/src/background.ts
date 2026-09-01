@@ -1731,12 +1731,16 @@ async function handleManagerTask(
   if (!active.ok) return { ok: false, error: active.error };
 
   await ensureOffscreenDocument();
+  // No `origin`. There is no proposing page — the operator is acting directly,
+  // the same position a CLI is in — and `requestTask` is explicit that a caller
+  // with no attested origin should omit it rather than invent one. Inventing
+  // this extension's own put an `ext` member on every payload, which some agent
+  // payload structs reject outright.
   return (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_REQUEST_TASK,
     vtaDid: active.conn.vtaDid,
     restBaseUrl: active.conn.restBaseUrl,
-    origin: new URL(chrome.runtime.getURL("")).origin,
     params: req.params,
   })) as RuntimeManagerTaskResponse;
 }

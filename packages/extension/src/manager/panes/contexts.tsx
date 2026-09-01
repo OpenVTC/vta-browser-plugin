@@ -18,6 +18,7 @@ import { managerSender } from "../sender.js";
 import { ConsentRequiredError } from "../carrier.js";
 import { Destructive, ConsentCeremony, runMutation } from "../destructive.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
+import { formatInstant } from "../format.js";
 import type { ContextSelection } from "../context-column.js";
 
 const fieldStyle: React.CSSProperties = {
@@ -222,9 +223,9 @@ function EditContext({
           {record.did ? <Did value={record.did} /> : <span style={{ color: c.faint }}>none bound</span>}
         </dd>
         <dt style={{ color: c.muted }}>Created</dt>
-        <dd style={{ margin: 0, color: c.muted }}>{new Date(record.createdAt).toLocaleString()}</dd>
+        <dd style={{ margin: 0, color: c.muted }}>{formatInstant(record.createdAt)}</dd>
         <dt style={{ color: c.muted }}>Updated</dt>
-        <dd style={{ margin: 0, color: c.muted }}>{new Date(record.updatedAt).toLocaleString()}</dd>
+        <dd style={{ margin: 0, color: c.muted }}>{formatInstant(record.updatedAt)}</dd>
       </dl>
 
       <div style={{ display: "grid", gap: 10, maxWidth: 520, marginTop: 6 }}>

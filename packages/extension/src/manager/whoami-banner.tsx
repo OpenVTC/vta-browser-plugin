@@ -9,6 +9,7 @@
 
 import { Did, Pill } from "../ui.js";
 import { c, t } from "../theme.js";
+import { formatInstant } from "./format.js";
 import type { Authority } from "./use-vta.js";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -75,7 +76,7 @@ export function WhoamiBanner({
           </Field>
           <Field label="Session expires">
             <span style={{ color: c.muted }}>
-              {new Date(authority.session.expiresAt).toLocaleString()}
+              {formatInstant(authority.session.expiresAt)}
             </span>
           </Field>
         </>

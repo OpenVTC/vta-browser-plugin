@@ -24,6 +24,7 @@ import { ConsentRequiredError } from "../carrier.js";
 import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
 import { Loading, LoadError, Table, Truncated, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
+import { formatDate } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 import type { ContextSelection } from "../context-column.js";
 
@@ -176,10 +177,14 @@ export function PolicyPane({
   parties,
   authority,
   contextId,
+  contextHeading,
 }: {
   parties: Parties;
   authority: Authority | null;
   contextId: ContextSelection;
+  /** How the selected context is named in the tree, so heading and navigation
+   *  agree. See `contextLabel` in `format.ts`. */
+  contextHeading?: string | undefined;
 }) {
   const [editing, setEditing] = useState<PolicyModule | null>(null);
   const [creating, setCreating] = useState(false);
@@ -237,7 +242,7 @@ export function PolicyPane({
       header: "Updated",
       render: (p) => (
         <span style={{ color: c.muted, whiteSpace: "nowrap" }}>
-          {new Date(p.updatedAt).toLocaleDateString()}
+          {formatDate(p.updatedAt)}
         </span>
       ),
     },
@@ -296,7 +301,7 @@ export function PolicyPane({
   return (
     <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
       <Panel
-        title={contextId ? `Policy in ${contextId}` : "Policy"}
+        title={contextHeading ? `Policy in ${contextHeading}` : "Policy"}
         description="Hand-authored Rego the agent evaluates before it acts. For the common case
           — which tasks need a human — the Approvals pane is the surface to use."
       >

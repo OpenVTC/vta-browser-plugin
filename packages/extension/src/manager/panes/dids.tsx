@@ -22,6 +22,7 @@ import { ConsentRequiredError } from "../carrier.js";
 import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
+import { formatDate } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 import type { ContextSelection } from "../context-column.js";
 
@@ -141,10 +142,14 @@ export function DidsPane({
   parties,
   authority,
   contextId,
+  contextHeading,
 }: {
   parties: Parties;
   authority: Authority | null;
   contextId: ContextSelection;
+  /** How the selected context is named in the tree, so heading and navigation
+   *  agree. See `contextLabel` in `format.ts`. */
+  contextHeading?: string | undefined;
 }) {
   const list = useAsync(
     () =>
@@ -186,7 +191,7 @@ export function DidsPane({
       header: "Created",
       render: (d) => (
         <span style={{ color: c.muted, whiteSpace: "nowrap" }}>
-          {new Date(d.createdAt).toLocaleDateString()}
+          {formatDate(d.createdAt)}
         </span>
       ),
     },
@@ -227,7 +232,7 @@ export function DidsPane({
   return (
     <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
       <Panel
-        title={contextId ? `DIDs in ${contextId}` : "DIDs in every context you can reach"}
+        title={contextHeading ? `DIDs in ${contextHeading}` : "DIDs in every context you can reach"}
         description="Published did:webvh identifiers. Each one's log is served by a hosting
           server and resolvable by anyone — these are the identities others see."
       >

@@ -27,6 +27,7 @@ import { ConsentRequiredError } from "../carrier.js";
 import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
 import { Loading, LoadError, Table, Truncated, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
+import { formatDate } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 import type { ContextSelection } from "../context-column.js";
 
@@ -249,10 +250,14 @@ export function KeysPane({
   parties,
   authority,
   contextId,
+  contextHeading,
 }: {
   parties: Parties;
   authority: Authority | null;
   contextId: ContextSelection;
+  /** How the selected context is named in the tree, so heading and navigation
+   *  agree. See `contextLabel` in `format.ts`. */
+  contextHeading?: string | undefined;
 }) {
   const [limit, setLimit] = useState(PAGE);
 
@@ -298,7 +303,7 @@ export function KeysPane({
       header: "Created",
       render: (k) => (
         <span style={{ color: c.muted, whiteSpace: "nowrap" }}>
-          {new Date(k.createdAt).toLocaleDateString()}
+          {formatDate(k.createdAt)}
         </span>
       ),
     },
@@ -341,7 +346,7 @@ export function KeysPane({
   return (
     <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
       <Panel
-        title={contextId ? `Keys in ${contextId}` : "Keys in every context you can reach"}
+        title={contextHeading ? `Keys in ${contextHeading}` : "Keys in every context you can reach"}
         description="Your agent holds every private half. This console never sees one, and never
           asks for a signature — that is use, not administration."
       >

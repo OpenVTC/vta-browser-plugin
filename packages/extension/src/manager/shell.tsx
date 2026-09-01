@@ -29,6 +29,7 @@ import { ServicesPane } from "./panes/services.js";
 import { AuditPane } from "./panes/audit.js";
 import { managerSender } from "./sender.js";
 import { useVta, type Parties } from "./use-vta.js";
+import { contextHeading } from "./format.js";
 
 /** Section ids double as the URL hash. */
 export type SectionId =
@@ -42,12 +43,30 @@ export type SectionId =
   | "approvals"
   | "policy";
 
+interface Section {
+  id: SectionId;
+  label: string;
+  /**
+   * Whether the selected context actually narrows what this pane asks.
+   *
+   * Declared per section rather than inferred, because getting it wrong is
+   * invisible: Transports and Sessions take no `contextId` at all, so with the
+   * tree always on screen an operator could pick a context, watch nothing
+   * change, and reasonably conclude the filter was broken — or worse, that the
+   * list they were reading *was* scoped when it never was. A filter that does
+   * not filter is not clutter, it is a false claim about what is on screen.
+   *
+   * A new pane has to answer this, which is the point.
+   */
+  contextScoped: boolean;
+}
+
 interface Act {
   title: string;
   /** CSS custom property holding this act's colour. */
   colour: string;
   soft: string;
-  sections: { id: SectionId; label: string }[];
+  sections: Section[];
 }
 
 // The deck's three acts. The grouping is not decorative — each answers a
@@ -58,9 +77,9 @@ const ACTS: Act[] = [
     colour: "var(--m-act-identity)",
     soft: "var(--m-act-identity-soft)",
     sections: [
-      { id: "contexts", label: "Contexts" },
-      { id: "keys", label: "Keys" },
-      { id: "dids", label: "DIDs" },
+      { id: "contexts", label: "Contexts", contextScoped: true },
+      { id: "keys", label: "Keys", contextScoped: true },
+      { id: "dids", label: "DIDs", contextScoped: true },
     ],
   },
   {
@@ -68,8 +87,10 @@ const ACTS: Act[] = [
     colour: "var(--m-act-wire)",
     soft: "var(--m-act-wire-soft)",
     sections: [
-      { id: "services", label: "Transports" },
-      { id: "audit", label: "Audit" },
+      // Transports are agent-wide: `servicesList` takes no context, because a
+      // transport is not owned by one.
+      { id: "services", label: "Transports", contextScoped: false },
+      { id: "audit", label: "Audit", contextScoped: true },
     ],
   },
   {
@@ -77,17 +98,26 @@ const ACTS: Act[] = [
     colour: "var(--m-act-graph)",
     soft: "var(--m-act-graph-soft)",
     sections: [
-      { id: "access", label: "Access" },
-      { id: "approvals", label: "Approvals" },
-      { id: "policy", label: "Policy" },
-      { id: "sessions", label: "Sessions" },
+      { id: "access", label: "Access", contextScoped: true },
+      { id: "approvals", label: "Approvals", contextScoped: true },
+      { id: "policy", label: "Policy", contextScoped: true },
+      // `sessionsList` returns the caller's sessions; a session is held at the
+      // agent, not inside a context.
+      { id: "sessions", label: "Sessions", contextScoped: false },
     ],
   },
 ];
 
+const SECTIONS: Section[] = ACTS.flatMap((a) => a.sections);
+
+/** Whether the context column belongs on screen for `section`. */
+function isContextScoped(section: SectionId): boolean {
+  return SECTIONS.find((s) => s.id === section)?.contextScoped ?? false;
+}
+
 function sectionFromHash(): SectionId {
   const raw = location.hash.replace(/^#/, "");
-  const known = ACTS.flatMap((a) => a.sections.map((s) => s.id));
+  const known = SECTIONS.map((s) => s.id);
   return (known as string[]).includes(raw) ? (raw as SectionId) : "contexts";
 }
 
@@ -213,6 +243,15 @@ export function ManagerShell() {
     void vta.refreshAuthority();
   }, [contexts, vta]);
 
+  // One name for the selected context, shared by every pane heading, so a
+  // heading can never disagree with the tree entry that produced it.
+  const heading = selected
+    ? contextHeading(
+        contexts.records.find((r) => r.id === selected),
+        selected,
+      )
+    : undefined;
+
   const body = useMemo(() => {
     if (vta.status !== "ready" || !parties) return null;
     switch (section) {
@@ -227,23 +266,58 @@ export function ManagerShell() {
           />
         );
       case "keys":
-        return <KeysPane parties={parties} authority={vta.authority} contextId={selected} />;
+        return (
+          <KeysPane
+            parties={parties}
+            authority={vta.authority}
+            contextId={selected}
+            contextHeading={heading}
+          />
+        );
       case "dids":
-        return <DidsPane parties={parties} authority={vta.authority} contextId={selected} />;
+        return (
+          <DidsPane
+            parties={parties}
+            authority={vta.authority}
+            contextId={selected}
+            contextHeading={heading}
+          />
+        );
       case "services":
         return <ServicesPane parties={parties} authority={vta.authority} />;
       case "audit":
-        return <AuditPane parties={parties} contextId={selected} />;
+        return <AuditPane parties={parties} contextId={selected} contextHeading={heading} />;
       case "access":
-        return <AccessPane parties={parties} authority={vta.authority} contextId={selected} />;
+        return (
+          <AccessPane
+            parties={parties}
+            authority={vta.authority}
+            contextId={selected}
+            contextHeading={heading}
+          />
+        );
       case "approvals":
-        return <ApprovalsPane parties={parties} authority={vta.authority} contextId={selected} />;
+        return (
+          <ApprovalsPane
+            parties={parties}
+            authority={vta.authority}
+            contextId={selected}
+            contextHeading={heading}
+          />
+        );
       case "policy":
-        return <PolicyPane parties={parties} authority={vta.authority} contextId={selected} />;
+        return (
+          <PolicyPane
+            parties={parties}
+            authority={vta.authority}
+            contextId={selected}
+            contextHeading={heading}
+          />
+        );
       case "sessions":
         return <SessionsPane parties={parties} authority={vta.authority} />;
     }
-  }, [vta, parties, section, contexts.records, selected, onChanged]);
+  }, [vta, parties, section, contexts.records, selected, heading, onChanged]);
 
   if (vta.status === "loading") {
     return <Centered>Reading your wallet's connection…</Centered>;
@@ -279,29 +353,38 @@ export function ManagerShell() {
     );
   }
 
+  // The context column appears only where the selection actually narrows the
+  // question. On Transports and Sessions it would be a filter that filters
+  // nothing — see `Section.contextScoped`.
+  const scoped = isContextScoped(section);
+
   return (
     <div
       style={{
         height: "100%",
         display: "grid",
-        gridTemplateColumns: "186px 244px minmax(0, 1fr)",
+        gridTemplateColumns: scoped ? "186px 244px minmax(0, 1fr)" : "186px minmax(0, 1fr)",
         gridTemplateRows: "auto minmax(0, 1fr)",
-        gridTemplateAreas: `"rail tree banner" "rail tree pane"`,
+        gridTemplateAreas: scoped
+          ? `"rail tree banner" "rail tree pane"`
+          : `"rail banner" "rail pane"`,
       }}
     >
       <div style={{ gridArea: "rail", minHeight: 0 }}>
         <ActRail section={section} onSelect={go} />
       </div>
 
-      <div style={{ gridArea: "tree", minHeight: 0, display: "grid" }}>
-        <ContextTree
-          records={contexts.records}
-          selected={selected}
-          onSelect={setSelected}
-          loading={contexts.loading}
-          error={contexts.error}
-        />
-      </div>
+      {scoped && (
+        <div style={{ gridArea: "tree", minHeight: 0, display: "grid" }}>
+          <ContextTree
+            records={contexts.records}
+            selected={selected}
+            onSelect={setSelected}
+            loading={contexts.loading}
+            error={contexts.error}
+          />
+        </div>
+      )}
 
       <div style={{ gridArea: "banner" }}>
         <WhoamiBanner
