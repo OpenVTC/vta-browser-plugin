@@ -13,7 +13,10 @@
 import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
-const TASK_CONTEXTS_DELETE = "https://trusttasks.org/spec/vta/contexts/delete/1.0";
+import {
+  TYPE_URI as TASK_CONTEXTS_DELETE,
+  type VTAContextsDeleteResponsePayload,
+} from "@openvtc/trust-tasks/vta/contexts/delete/1.0/payload";
 const TASK_CONTEXTS_PREVIEW_DELETE =
   "https://trusttasks.org/spec/vta/contexts/preview-delete/1.0";
 
@@ -26,10 +29,9 @@ export interface ContextDeleteParams {
   force?: boolean;
 }
 
-export interface ContextDeleteResult {
-  id: string;
-  deleted: boolean;
-}
+/** The delete response, from the binding. The hand-written copy omitted
+ *  `ext`, which SPEC §4.5.1 lets any agent send. */
+export type ContextDeleteResult = VTAContextsDeleteResponsePayload;
 
 /**
  * What deleting this context would destroy.

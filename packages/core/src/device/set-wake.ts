@@ -23,6 +23,7 @@ import {
   RESPONSE_TYPE_URI as TASK_DEVICE_SET_WAKE_RESPONSE,
   type WakeHandle,
   type WakeTriggerPolicy,
+  type DeviceSetWakeResponsePayload,
 } from "@openvtc/trust-tasks/device/set-wake/0.2/payload";
 
 /** Re-exported from the binding rather than restated here: both were declared
@@ -30,14 +31,10 @@ import {
  *  before a divergence nobody notices. */
 export type { WakeHandle, WakeTriggerPolicy };
 
+/** The set-wake response, from the binding. The hand-written copy omitted
+ *  `ext`, which SPEC §4.5.1 lets any agent send. */
+export type DeviceSetWakeResponse = DeviceSetWakeResponsePayload;
 
-
-export interface DeviceSetWakeResponse {
-  /** Whether the device now has a usable wake channel. */
-  pushCapable: boolean;
-  /** The effective allowlist the VTA computed + provisioned (absent on clear). */
-  triggerPolicy?: WakeTriggerPolicy;
-}
 
 export interface DeviceSetWakeParams {
   /** The wallet's holder DIDComm identity (envelope `issuer`). */

@@ -24,19 +24,29 @@ import { RestChannel } from "../vta/rest-channel.js";
 import type { DidcommMessageBridge } from "../vta/transport.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
-const ACL_SWAP_KEY = "https://trusttasks.org/spec/acl/swap-key/0.1";
-const ACL_SWAP_KEY_RESPONSE = "https://trusttasks.org/spec/acl/swap-key/0.1#response";
+import {
+  TYPE_URI as ACL_SWAP_KEY,
+  RESPONSE_TYPE_URI as ACL_SWAP_KEY_RESPONSE,
+  type ACLSwapKeyResponsePayload,
+  type AclEntry,
+} from "@openvtc/trust-tasks/acl/swap-key/0.1/payload";
 
-/** The ACL entry created for the new DID (the swap-key result body). */
-export interface AclSwapResult {
-  did: string;
-  role: string;
-  label?: string | null;
-  allowedContexts: string[];
-  createdAt: number;
-  createdBy: string;
-  expiresAt?: number | null;
-}
+/** The swap-key response, as the registry declares it: the realized ACL entry
+ *  plus the DID that was swapped out.
+ *
+ *  This was declared by hand as a FLAT entry — `did`, `role`, `allowedContexts`,
+ *  `createdAt: number` — and was wrong in three ways at once. The agent wraps
+ *  the entry (`{ entry, previousSubject }`, VTI #857), and the entry itself
+ *  names `subject` not `did`, `scopes` not `allowedContexts`, and dates as
+ *  RFC 3339 strings not numbers. Every field a caller read came back
+ *  `undefined`.
+ *
+ *  Nothing caught it because `sender.send<T>()` is an unchecked cast and the
+ *  only test built its fixture from this type rather than from the schema — so
+ *  the test asserted the drift and would have gone on doing so. */
+export type AclSwapResult = ACLSwapKeyResponsePayload;
+export type { AclEntry };
+
 
 export interface SwapAclParams {
   /** The OLD DID (operator-granted ephemeral). Its DID is `currentSubject` and
