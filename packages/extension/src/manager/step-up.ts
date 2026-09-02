@@ -81,8 +81,18 @@ export class StepUpError extends Error {
 export async function requirePresence(rpId: string, purpose: string): Promise<void> {
   void purpose;
 
-  const store = new IndexedDBKVStore();
-  const credentialIdB64u = await store.get<string>(CREDENTIAL_KEY);
+  // Which credential to name is an optimisation, so a failure to answer it
+  // must not become a failure to ask for presence. `IndexedDBKVStore.get`
+  // *throws* where IndexedDB is unavailable rather than returning nothing — a
+  // private window, or a browser set to block site data — and letting that
+  // propagate would turn "we could not look up your credential" into "you
+  // cannot approve this action", which is the wrong failure by a long way.
+  let credentialIdB64u: string | undefined;
+  try {
+    credentialIdB64u = await new IndexedDBKVStore().get<string>(CREDENTIAL_KEY);
+  } catch {
+    credentialIdB64u = undefined;
+  }
 
   // A fresh random challenge, every time.
   //
