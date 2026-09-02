@@ -22,3 +22,4 @@ export * from "./consent.js";
 export * from "./contexts.js";
 export * from "./services.js";
 export * from "./credentials.js";
+export * from "./backup.js";

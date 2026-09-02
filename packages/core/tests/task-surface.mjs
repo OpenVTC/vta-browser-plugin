@@ -201,14 +201,29 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // (trustoverip/dtgwg-trust-tasks-tf#338, shipped in @openvtc/trust-tasks
   // 0.16.4) is what produced bindings to implement against.
   //
-  // **All 17 still outstanding are unspecced** — no schema in the registry, so
+  // 161 -> 163 is `vta/backup/abort` and `vta/management/reload-services`,
+  // specced at trustoverip/dtgwg-trust-tasks-tf#347 and shipped in
+  // @openvtc/trust-tasks 0.16.8. Same shape as the eight before them: the
+  // agent was already dispatching both with no schema in the registry.
+  //
+  // **`vta/backup/*` is now specced in full and deliberately implemented in
+  // part**, which makes it the first family whose absence is a decision rather
+  // than a gap upstream. All five verbs have bindings; this library exposes
+  // `abort` alone. `initiate-export` and `finalize-import` carry a `password`
+  // — the key to a complete copy of the agent, travelling inbound — and a
+  // browser is the wrong place to collect it, for reasons `admin/backup.ts`
+  // sets out at length. Do not "finish" the family to make this number
+  // rounder; the four that are missing are missing on purpose.
+  //
+  // **The other 15 outstanding are unspecced** — no schema in the registry, so
   // no binding in @openvtc/trust-tasks to implement against: `vault/*`'s own
   // archive/restore/purge/unarchive (the *secrets* lifecycle, distinct from
-  // the credential one above), `vta/backup/*`, `vta/attestation/*`,
-  // `vta/seeds/*`, `vta/audit/*-retention`, and
-  // `vta/management/reload-services`. That keeps this number a statement about
-  // upstream rather than about this repo: it moves when a spec lands, and the
-  // last eight moved because one did.
+  // the credential one above), `vta/attestation/*`, `vta/seeds/*` and
+  // `vta/audit/*-retention`.
+  //
+  // `vta/seeds/*` is a third category again, and will never move: it returns
+  // key material, and CI bans its URIs from every extension bundle including
+  // the console. A spec landing upstream would not change that.
   //
   // **Nothing is behind any more.** Every implemented family names the newest
   // version `vta-sdk` publishes: `vault/{list,get,upsert}` and
@@ -219,7 +234,7 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // the agent does not name, rather than as a deprecation warning. That is the
   // expected shape of a cutover here: nothing is deployed, so neither side
   // keeps an old version alive.
-  const expected = 161;
+  const expected = 163;
   assert.equal(
     implemented.size,
     expected,

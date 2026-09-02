@@ -26,6 +26,7 @@ import { SessionsPane } from "./panes/sessions.js";
 import { ApprovalsPane } from "./panes/approvals.js";
 import { PolicyPane } from "./panes/policy.js";
 import { ServicesPane } from "./panes/services.js";
+import { BackupPane } from "./panes/backup.js";
 import { AuditPane } from "./panes/audit.js";
 import { CredentialsPane } from "./panes/credentials.js";
 import { MemoryPane } from "./panes/memory.js";
@@ -43,6 +44,7 @@ export type SectionId =
   | "memory"
   | "app-state"
   | "services"
+  | "backup"
   | "audit"
   | "access"
   | "sessions"
@@ -113,6 +115,9 @@ const ACTS: Act[] = [
       // Transports are agent-wide: `servicesList` takes no context, because a
       // transport is not owned by one.
       { id: "services", label: "Transports", contextScoped: false },
+      // Bundles belong to the agent and to the operator who minted them, not
+      // to a context — and there is no context member on any backup task.
+      { id: "backup", label: "Backup", contextScoped: false },
       { id: "audit", label: "Audit", contextScoped: true },
     ],
   },
@@ -334,6 +339,8 @@ export function ManagerShell() {
         );
       case "services":
         return <ServicesPane parties={parties} authority={vta.authority} />;
+      case "backup":
+        return <BackupPane parties={parties} authority={vta.authority} />;
       case "audit":
         return <AuditPane parties={parties} contextId={selected} contextHeading={heading} />;
       case "access":

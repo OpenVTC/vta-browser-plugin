@@ -28,6 +28,6 @@
     "esbuild": "^0.28.1"
   },
   "dependencies": {
-    "@openvtc/trust-tasks": "^0.16.6"
+    "@openvtc/trust-tasks": "^0.16.8"
   }
 }

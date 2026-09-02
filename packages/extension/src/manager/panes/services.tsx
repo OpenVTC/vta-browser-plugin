@@ -14,12 +14,13 @@
 // failure and must never be rendered as one; presenting it as a problem is how
 // an operator ends up chasing a transport that is working.
 
-import { servicesList, serviceDisable, serviceEnable, type ServiceState } from "@openvtc/pnm-core/admin";
+import { reloadServices, servicesList, serviceDisable, serviceEnable, type ServiceState } from "@openvtc/pnm-core/admin";
 import { agentPing } from "@openvtc/pnm-core/admin";
 import { useCallback, useState } from "react";
 import { Button, Did, Note, Panel, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
+import { requirePresence, StepUpError } from "../step-up.js";
 import { ConsentRequiredError } from "../carrier.js";
 import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
@@ -281,6 +282,105 @@ export function ServicesPane({
             including approval requests — until one is."
         />
       </Panel>
+
+      <ReloadServices parties={parties} denied={denied} />
     </div>
+  );
+}
+
+/**
+ * Re-read the agent's configuration and restart its transports.
+ *
+ * Behind the step-up despite creating, deleting and disclosing nothing — the
+ * cost here is measured in availability, and it falls on every counterparty of
+ * the agent rather than on the operator who clicked. That includes this
+ * wallet's own inbound sessions, which is the part an operator is most likely
+ * to be surprised by, so the copy says it rather than implying it.
+ */
+function ReloadServices({ parties, denied }: { parties: Parties; denied: string | null }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<ConsentRequiredError | null>(null);
+  const [done, setDone] = useState(false);
+
+  const reload = useCallback(async () => {
+    setError(null);
+    setPending(null);
+    setDone(false);
+
+    try {
+      await requirePresence(chrome.runtime.id, "restart this agent's transports");
+    } catch (e) {
+      // A dismissal is a decision. Say nothing and send nothing.
+      if (e instanceof StepUpError && e.reason === "cancelled") return;
+      setError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+
+    setBusy(true);
+    await runMutation(
+      async () => {
+        await reloadServices(managerSender, parties);
+        setDone(true);
+      },
+      {
+        onConsent: setPending,
+        onError: (message) => {
+          // A successful reload drops the transport the response would have
+          // travelled on, so a lost connection is the EXPECTED shape of
+          // success here, not a failure. Reporting it as an error would send
+          // an operator hunting for a fault that is the agent restarting, and
+          // — worse — invite a retry that restarts it again.
+          if (/network|connection|closed|timeout|aborted/i.test(message)) {
+            setDone(true);
+          } else {
+            setError(message);
+          }
+        },
+      },
+    );
+    setBusy(false);
+  }, [parties]);
+
+  return (
+    <Panel
+      title="Reload services"
+      description="Re-reads the agent's configuration and restarts its transports. Use this after
+        changing configuration elsewhere; it applies what is written down and takes no options of
+        its own."
+    >
+      <div style={{ display: "grid", gap: 12 }}>
+        <Note tone="warn">
+          <strong>Every open session drops, including this wallet's.</strong> Your inbound sessions
+          go down while the agent restarts, so anything pushed during that window — approval
+          requests included — waits at the mediator. Every other client of this agent is
+          disconnected at the same moment, and none of them asked.
+        </Note>
+
+        {error && <Note tone="danger">{error}</Note>}
+        {pending && <ConsentCeremony pending={pending} />}
+        {done && (
+          <Note tone="accent">
+            Restart requested. The agent may have dropped this connection to do it, which is normal
+            and not a reason to send it again — reconnect and see whether it answers. If it does not
+            come back, its configuration is the place to look.
+          </Note>
+        )}
+
+        <div>
+          <Button
+            kind="danger"
+            disabled={busy || Boolean(denied)}
+            {...(denied ? { title: denied } : {})}
+            onClick={() => void reload()}
+          >
+            {busy ? "Restarting…" : "Approve and reload services"}
+          </Button>
+        </div>
+        <span style={{ fontSize: t.xs, color: c.faint }}>
+          {denied ?? "Your passkey is checked before anything is sent."}
+        </span>
+      </div>
+    </Panel>
   );
 }
