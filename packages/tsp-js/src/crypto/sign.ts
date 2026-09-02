@@ -24,3 +24,18 @@ export function verify(data: Uint8Array, signature: Uint8Array, publicKey: Uint8
 export function ed25519PublicKey(privateKey: Uint8Array): Uint8Array {
   return ed25519.getPublicKey(privateKey);
 }
+
+/** A capability that can produce an Ed25519 signature without exposing the
+ *  private key — e.g. a hardware-backed signing oracle whose only primitive
+ *  is "sign this", never "give me the key". */
+export interface SigningKey {
+  publicKey: Uint8Array;
+  sign(message: Uint8Array): Promise<Uint8Array>;
+}
+
+/** `sign`, ported to a `SigningKey` capability — a direct passthrough, since
+ *  there is no DH-style custody problem here: a signing oracle already
+ *  returns just the signature, never the key. */
+export async function signWithSigningKey(data: Uint8Array, signingKey: SigningKey): Promise<Uint8Array> {
+  return signingKey.sign(data);
+}
