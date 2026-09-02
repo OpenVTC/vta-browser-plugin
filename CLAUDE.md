@@ -207,8 +207,15 @@ console, not the wallet, nowhere.
 **Why a guard rather than simply not building it.** Not building a seeds pane is
 indistinguishable from not having got round to one. Someone reasonable adds it
 next year, nothing objects, and the refusal was never recorded anywhere a person
-would look. The guard is what makes the decision legible; verified non-vacuous
-by importing a seeds URI into the console and watching it fail.
+would look. The guard is what makes the decision legible.
+
+**Verified non-vacuous — and the way it is verified matters.** A seeds URI
+merely *present* in console source is not enough: Rollup tree-shakes an
+unreferenced export, the string never reaches `dist/`, and the guard correctly
+stays silent. That is the guard being right, not weak — it asserts what
+*ships* — but it means a probe that adds an unused `export const` proves
+nothing and reads like a hole. To re-verify, put the URI somewhere the console
+actually renders (a nav `label`, say), rebuild, and watch `manager.js` trip it.
 
 `packages/core` has no seeds module and must not gain one. The guard catches
 that too — a core function would be bundled into `manager.js` and grep would
