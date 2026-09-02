@@ -53,12 +53,16 @@ import {
   type PayloadValidator,
 } from "../trust-tasks/validate.js";
 
-import { PAYLOAD_SCHEMA } from "@openvtc/trust-tasks/task-consent/request/0.1/payload";
+import {
+  PAYLOAD_SCHEMA,
+  TYPE_URI as TASK_CONSENT_REQUEST_TYPE_URI,
+  type Exposure,
+  type StatePin,
+} from "@openvtc/trust-tasks/task-consent/request/0.1/payload";
 import { RESPONSE_PAYLOAD_SCHEMA as DECISION_RESPONSE_SCHEMA } from "@openvtc/trust-tasks/task-consent/decision/0.1/payload";
 import type { SigningIdentity } from "../siop/self-issued.js";
 
-export const TASK_CONSENT_REQUEST_TYPE =
-  "https://trusttasks.org/spec/task-consent/request/0.1";
+export const TASK_CONSENT_REQUEST_TYPE = TASK_CONSENT_REQUEST_TYPE_URI;
 export const TASK_CONSENT_DECISION_TYPE =
   "https://trusttasks.org/spec/task-consent/decision/0.1";
 /** VTA → requester: an approval landed and a grant is ready — re-submit now. */
@@ -264,16 +268,13 @@ export function parseTaskConsentGranted(
 /** SPEC §7.3 item 13 — the integrity effect of executing the task. */
 export type SideEffectLevel = "none" | "mutating" | "destructive";
 
-/** SPEC §7.3 item 14 — what leaves the executor, and whose authority is used. */
-export interface Exposure {
-  discloses: "none" | "metadata" | "secret";
-  actsAsSubject: boolean;
-}
 
 /**
  * One consequence of executing the task, authored by the VTA by dry-running the
  * handler it is about to invoke.
  */
+export type { Exposure, StatePin };
+
 export interface ConsentEffect {
   /** Machine discriminator. The set is OPEN — handlers evolve faster than this
    *  type, so a surface MUST tolerate a kind it does not recognise. */
@@ -287,11 +288,6 @@ export interface ConsentEffect {
   detail?: Record<string, unknown>;
 }
 
-/** The prior state the effects were computed against. */
-export interface StatePin {
-  resource: string;
-  version: string;
-}
 
 /** Payload of an inbound `task-consent/request/0.1` (VTA → approver). */
 export interface TaskConsentRequestPayload {
