@@ -92,6 +92,38 @@ jobs:
           done
           echo "OK: admin task URIs appear only in manager.js"
 
+      # A second, stricter guard — and the difference from the one above is the
+      # point.
+      #
+      # That guard is about *authority*: `admin/*` grants and revokes it, and
+      # the console is deliberately the one surface that holds it, so it names
+      # `manager.js` as an exception.
+      #
+      # These tasks are about *material*. `vta/seeds/export-mnemonic/1.0`
+      # returns a BIP-39 mnemonic — the seed every derived key in the agent
+      # comes from — and `list`/`rotate` are the rest of that family's surface.
+      # There is no browser context that should be able to ask for them, so this
+      # guard has **no exception**: not the console, not the wallet, nowhere in
+      # `dist/`.
+      #
+      # It exists because the alternative is an omission, and an omission is
+      # indistinguishable from not having got to it yet. Someone reasonable
+      # could add a seeds pane next year and no one would know it was refused on
+      # purpose. This is what says so.
+      #
+      # `vault/release/0.1` is deliberately NOT here: it releases a secret to a
+      # site the human just approved, which is the wallet's whole job.
+      - name: Assert no key-material surface ships at all
+        run: |
+          for task in 'vta/seeds/list/1.0' 'vta/seeds/rotate/1.0' 'vta/seeds/export-mnemonic/1.0'; do
+            found=$(grep -rlF "$task" packages/extension/dist/ || true)
+            if [ -n "$found" ]; then
+              echo "::error::$found contains $task — this family returns key material and must not ship in any extension bundle, the console included. See CLAUDE.md."
+              exit 1
+            fi
+          done
+          echo "OK: no key-material task URIs anywhere in dist/"
+
       # The console's isolation rests on it being one self-contained file: the
       # guard above names exactly one exception, so a second chunk would be a
       # file nothing checks. Losing `codeSplitting: false` in a future upgrade

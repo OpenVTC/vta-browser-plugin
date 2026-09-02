@@ -189,6 +189,40 @@ dispatch table; gating on `sender.id`; or widening the carrier to pass the
 envelope through. `tests/manager-sender.test.mts`,
 `tests/manager-surface.test.mts` and the two CI assertions pin each of these.
 
+## Key material never reaches a browser, and that is enforced
+
+`vta/seeds/*` — `list`, `rotate`, `export-mnemonic` — is the one task family
+this extension refuses outright. `export-mnemonic` returns a BIP-39 mnemonic:
+the seed every derived key in the agent comes from, and the one secret whose
+disclosure loses everything at once. `list` and `rotate` are the rest of that
+family's surface.
+
+**A second CI guard bans all three from anywhere in `dist/`, with no
+exception.** That is the difference from the admin guard above, and the
+difference is the point: `admin/*` is *authority*, which the console is meant to
+hold, so that guard names `manager.js` as its one permitted file. These return
+*material*, and no browser context should be able to ask for them — not the
+console, not the wallet, nowhere.
+
+**Why a guard rather than simply not building it.** Not building a seeds pane is
+indistinguishable from not having got round to one. Someone reasonable adds it
+next year, nothing objects, and the refusal was never recorded anywhere a person
+would look. The guard is what makes the decision legible; verified non-vacuous
+by importing a seeds URI into the console and watching it fail.
+
+`packages/core` has no seeds module and must not gain one. The guard catches
+that too — a core function would be bundled into `manager.js` and grep would
+find it there.
+
+**`vault/release/0.1` is deliberately not on the list.** It releases a secret to
+a site the human has just approved, which is the wallet's entire job. The line
+is not "touches a secret"; it is "hands over material the holder cannot revoke,
+to a surface that cannot contain it".
+
+**What breaks it:** adding a seeds client to `packages/core`; relaxing the guard
+to allow `manager.js` "for symmetry" with the admin one; or reading this as
+advice rather than a refusal.
+
 ## Advertisement is not availability
 
 A VTA's DID document says what it *offers*. `buildVtaSession` skips a channel
