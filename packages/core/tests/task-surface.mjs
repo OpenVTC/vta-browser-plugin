@@ -178,12 +178,21 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
     [...REFERENCED.keys()].map(family).filter((f) => canonicalFamilies.has(f)),
   );
 
-  // 160 of 177 as of vta-sdk 0.29.0. It was 130 until the specced-but-
+  // 161 of 178 as of vta-sdk 0.32.3. It was 130 until the specced-but-
   // unimplemented gap was closed in one pass: `trust-task-discovery/0.1`,
   // `acl/update/0.1`, `vta/webvh/servers/retire-orphan/0.1`,
   // `vtc/members/removal-notice/0.1`, `vta/app-state/*` (6), `vta/services/*`
   // (8), `vta/credentials/{issue,revoke}/0.1`, and
   // `auth/passkey/login/{start,finish}/0.2`.
+  //
+  // 160 -> 161 is `vta/credentials/list/0.1`, and the canonical total moved
+  // with it (177 -> 178) because the task did not exist on either side before.
+  // Specified at trustoverip/dtgwg-trust-tasks-tf#342 and implemented at
+  // OpenVTC/verifiable-trust-infrastructure#1235, in response to a gap this
+  // console surfaced: `revoke` is keyed on a `credentialId` that `issue`
+  // returns exactly once, so an issuer that had not recorded it could not ask.
+  // Unlike the eight below, this is not a family that moved off the unspecced
+  // list — it is new.
   //
   // 152 -> 160 is the whole `vault/credentials/*` sub-family — receive, query,
   // get, archive, unarchive, delete, restore, purge — which moved here from
@@ -210,7 +219,7 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // the agent does not name, rather than as a deprecation warning. That is the
   // expected shape of a cutover here: nothing is deployed, so neither side
   // keeps an old version alive.
-  const expected = 160;
+  const expected = 161;
   assert.equal(
     implemented.size,
     expected,

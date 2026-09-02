@@ -1,17 +1,23 @@
 // Credentials — what this agent issues to others, and takes back.
 //
-// ## What this pane cannot do, and why it says so
+// ## What it took to show the issued list
 //
-// `vta/credentials` declares exactly two tasks: `issue` and `revoke`. There is
-// **no list**. So this console can mint a credential and revoke one by id, and
-// it genuinely cannot show you what has been issued — not because the pane is
-// unfinished, but because the agent exposes no way to ask.
+// `vta/credentials` declared `issue` and `revoke` and nothing else, so this
+// pane spent its first version saying so — "there is no list of issued
+// credentials, and this is not an empty one" — rather than rendering a blank
+// table, which would have read as "you have issued nothing" and been wrong the
+// moment anything had been.
 //
-// That is stated on the surface rather than hidden behind an empty table. A
-// blank list would read as "you have issued nothing", which is a claim this
-// console has no basis for and which would be wrong the moment anything had
-// been issued. The audit trail is the honest answer for "what happened", and
-// the pane points at it.
+// The task now exists: specified at trustoverip/dtgwg-trust-tasks-tf#342 and
+// implemented at OpenVTC/verifiable-trust-infrastructure#1235. `IssuedList`
+// below is what the notice became.
+//
+// Two things it renders that the shape makes easy to lose. `truncated` means
+// the agent stopped early, so a caller must not read the page as a complete
+// account of what was issued — it is surfaced above the table rather than
+// below it. And `status` is derived by the agent at read time with `revoked`
+// beating `expired`, so it is never cached and never recomputed here: a copy
+// of a fact about the clock is wrong from the first second after it is made.
 //
 // The holder side — the credentials this agent *holds* — lives in a different
 // family again (`vault/credentials/*`) and is in `HeldCredentials` below. It
@@ -28,8 +34,13 @@
 // `revoked` and `active`, so both are rendered and neither is derived from the
 // other.
 
-import { useCallback, useMemo, useState } from "react";
-import { issueCredential, revokeCredential } from "@openvtc/pnm-core/admin";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  issueCredential,
+  listCredentials,
+  revokeCredential,
+  type IssuedCredentialSummary,
+} from "@openvtc/pnm-core/admin";
 import {
   credVaultArchive,
   credVaultDelete,
@@ -47,6 +58,7 @@ import { managerSender } from "../sender.js";
 import { ConsentRequiredError } from "../carrier.js";
 import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
+import { useAsync } from "../use-async.js";
 import { formatDate, isPast } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 
@@ -247,9 +259,15 @@ function IssueCredential({
 function RevokeCredential({
   parties,
   authority,
+  prefillId,
+  onConsumed,
 }: {
   parties: Parties;
   authority: Authority | null;
+  /** A credential id picked from the list above, so an operator never copies an
+   *  opaque identifier by eye before an irreversible action. */
+  prefillId?: string | null;
+  onConsumed?: () => void;
 }) {
   const [credentialId, setCredentialId] = useState("");
   const [reason, setReason] = useState("");
@@ -262,6 +280,17 @@ function RevokeCredential({
   const denied = authority && !hasRole(authority, "admin", "super-admin")
     ? "Revoking a credential needs the admin role at this agent."
     : null;
+
+  // A pick from the list replaces whatever was typed, and clears any previous
+  // outcome — a stale "Revoked." beside a different id reads as a result for
+  // the one now in the field.
+  useEffect(() => {
+    if (!prefillId) return;
+    setCredentialId(prefillId);
+    setConfirming(false);
+    setDone(false);
+    setError(null);
+  }, [prefillId]);
 
   const submit = useCallback(async () => {
     setBusy(true);
@@ -283,15 +312,15 @@ function RevokeCredential({
       setConfirming(false);
       setCredentialId("");
       setReason("");
+      onConsumed?.();
     }
-  }, [parties, credentialId, reason]);
+  }, [parties, credentialId, reason, onConsumed]);
 
   return (
     <Panel
       title="Revoke a credential"
-      description="By id. There is no list to pick from — your agent exposes no way to enumerate
-        what it has issued, so the id has to come from wherever you recorded it, or from the
-        audit trail."
+      description="By id. Pick a row above and its id lands here — copying an opaque identifier
+        by eye before an irreversible action is how the wrong credential gets revoked."
     >
       <div style={{ display: "grid", gap: 10, maxWidth: 680 }}>
         <label style={{ display: "grid", gap: 4 }}>
@@ -322,15 +351,16 @@ function RevokeCredential({
           <>
             <Note tone="danger">
               <div style={{ display: "grid", gap: 6 }}>
-                <strong>Revoking cannot be undone, and cannot be previewed.</strong>
+                <strong>Revoking cannot be undone.</strong>
                 <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
                   {credentialId.trim()}
                 </span>
                 <span>
-                  Your agent offers no way to read a credential back, so this console cannot show
-                  you whose it is or what it says before you revoke it — check the id against
-                  your own records first. Whoever holds it stops being able to present it
-                  anywhere that checks revocation.
+                  Whoever holds this stops being able to present it anywhere that checks
+                  revocation. The list above shows who holds it and when it was issued; what it
+                  actually <em>claims</em> cannot be shown — there is no task that reads a
+                  credential body back — so if the claims are what you are deciding on, check
+                  your own records first.
                 </span>
               </div>
             </Note>
@@ -643,34 +673,164 @@ function HeldCredentials({
   );
 }
 
-export function CredentialsPane({
+/** Validity of an issued credential. Derived by the agent at read time — see
+ *  the header — so this only paints what it was told. */
+function IssuedStatus({ row }: { row: IssuedCredentialSummary }) {
+  if (row.status === "revoked") {
+    return (
+      <div style={{ display: "grid", gap: 2 }}>
+        <Pill tone="danger">revoked</Pill>
+        {row.revokedAt && (
+          <span style={{ fontSize: t.xs, color: c.muted, whiteSpace: "nowrap" }}>
+            {formatDate(row.revokedAt)}
+          </span>
+        )}
+        {row.revocationReason && (
+          <span style={{ fontSize: t.xs, color: c.faint, maxWidth: 200, lineHeight: 1.4 }}>
+            {row.revocationReason}
+          </span>
+        )}
+      </div>
+    );
+  }
+  return <Pill tone={row.status === "active" ? "ok" : "off"}>{row.status}</Pill>;
+}
+
+function IssuedList({
   parties,
   authority,
-  onOpenAudit,
+  onRevoke,
 }: {
   parties: Parties;
   authority: Authority | null;
-  /** Send the operator to the pane that *can* answer "what was issued". */
-  onOpenAudit: () => void;
+  /** Hand a credential id to the revoke form below, so an operator never has to
+   *  copy an opaque identifier by eye. */
+  onRevoke: (credentialId: string) => void;
 }) {
+  const [holderDid, setHolderDid] = useState("");
+  const [status, setStatus] = useState("");
+  const [applied, setApplied] = useState({ holderDid: "", status: "" });
+  const [pageSize, setPageSize] = useState(50);
+
+  const list = useAsync(
+    () =>
+      listCredentials(managerSender, {
+        ...parties,
+        pageSize,
+        ...(applied.holderDid ? { holderDid: applied.holderDid } : {}),
+        ...(applied.status
+          ? { status: applied.status as IssuedCredentialSummary["status"] }
+          : {}),
+      }),
+    [parties.holder.did, parties.service.did, applied.holderDid, applied.status, pageSize],
+  );
+
+  const denied = authority && !hasRole(authority, "admin", "super-admin", "operator")
+    ? "Reading the issuance log needs an administrative role at this agent."
+    : null;
+
+  const columns: Column<IssuedCredentialSummary>[] = [
+    {
+      key: "id",
+      header: "Credential",
+      render: (r) => (
+        <div style={{ display: "grid", gap: 2 }}>
+          <span style={{ fontWeight: 600 }}>{r.credentialType ?? "VerifiableCredential"}</span>
+          <span
+            style={{ fontFamily: font.mono, fontSize: t.xs, color: c.faint, wordBreak: "break-all" }}
+          >
+            {r.credentialId}
+          </span>
+        </div>
+      ),
+    },
+    { key: "holder", header: "Issued to", render: (r) => <Did value={r.holder} size={t.xs} /> },
+    { key: "status", header: "Status", render: (r) => <IssuedStatus row={r} /> },
+    {
+      key: "issued",
+      header: "Issued",
+      render: (r) => (
+        <span style={{ color: c.muted, whiteSpace: "nowrap" }}>{formatDate(r.issuedAt)}</span>
+      ),
+    },
+    {
+      key: "expires",
+      header: "Expires",
+      render: (r) => (
+        <span style={{ color: c.muted, whiteSpace: "nowrap" }}>{formatDate(r.expiresAt)}</span>
+      ),
+    },
+    {
+      key: "actions",
+      header: "",
+      render: (r) =>
+        r.status === "revoked" ? (
+          <span style={{ color: c.faint, fontSize: t.xs }}>revoked</span>
+        ) : (
+          <Button
+            kind="quiet"
+            disabled={Boolean(denied)}
+            {...(denied ? { title: denied } : {})}
+            onClick={() => onRevoke(r.credentialId)}
+          >
+            Revoke…
+          </Button>
+        ),
+    },
+  ];
+
   return (
-    <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
-      <Panel
-        title="Credentials this agent issues"
-        description="Your agent as an issuer: minting credentials for others, and taking them
-          back."
-      >
-        <Note tone="warn">
-          <div style={{ display: "grid", gap: 6 }}>
-            <strong>There is no list of issued credentials, and this is not an empty one.</strong>
-            <span>
-              The <code style={{ fontFamily: font.mono }}>vta/credentials</code> family declares
-              only <code style={{ fontFamily: font.mono }}>issue</code> and{" "}
-              <code style={{ fontFamily: font.mono }}>revoke</code> — your agent exposes no way
-              to ask what it has issued, so showing you a table here would mean inventing one.
-              The audit trail records every issuance and is the honest place to look.{" "}
+    <Panel
+      title="Credentials this agent has issued"
+      description="Metadata only — your agent returns no claim bodies here, and this console does
+        not ask for any. Status is computed when the list is read, so it is current rather than
+        remembered."
+    >
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <label style={{ display: "grid", gap: 4, flex: "1 1 300px" }}>
+          <Label>Holder DID</Label>
+          <input
+            style={{ ...fieldStyle, fontFamily: font.mono }}
+            value={holderDid}
+            onChange={(e) => setHolderDid(e.target.value)}
+            placeholder="all holders"
+          />
+        </label>
+        <label style={{ display: "grid", gap: 4 }}>
+          <Label>Status</Label>
+          <select style={fieldStyle} value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="">any</option>
+            <option value="active">active</option>
+            <option value="expired">expired</option>
+            <option value="revoked">revoked</option>
+          </select>
+        </label>
+        <div style={{ paddingBottom: 1 }}>
+          <Button
+            onClick={() => {
+              setPageSize(50);
+              setApplied({ holderDid: holderDid.trim(), status });
+            }}
+          >
+            Filter
+          </Button>
+        </div>
+      </div>
+
+      {list.error && <LoadError what="the issuance log" error={list.error} />}
+      {list.loading && !list.data && <Loading what="the issuance log" />}
+
+      {list.data && (
+        <>
+          {/* Above the table. A caution under a long list is one nobody reads,
+              and this one changes what the list *means*. */}
+          {list.data.truncated && (
+            <Note tone="warn">
+              <strong>This is not everything your agent has issued.</strong> It stopped early, so
+              anything you conclude from what is below — including that a credential was never
+              issued — may be wrong.{" "}
               <button
-                onClick={onOpenAudit}
+                onClick={() => setPageSize((n) => n + 50)}
                 style={{
                   border: "none",
                   background: "none",
@@ -681,19 +841,81 @@ export function CredentialsPane({
                   textDecoration: "underline",
                 }}
               >
-                Open the audit trail
+                Load more
               </button>
-              .
-            </span>
-          </div>
-        </Note>
+              , or narrow by holder.
+            </Note>
+          )}
+          <Table
+            columns={columns}
+            rows={list.data.credentials}
+            rowKey={(r) => r.credentialId}
+            empty={
+              applied.holderDid || applied.status
+                ? "Nothing matches those filters. Clear them to see the rest."
+                : "Your agent has issued nothing yet."
+            }
+          />
+        </>
+      )}
+    </Panel>
+  );
+}
+
+export function CredentialsPane({
+  parties,
+  authority,
+  onOpenAudit,
+}: {
+  parties: Parties;
+  authority: Authority | null;
+  /** The audit trail — still the place that answers "what happened", which the
+   *  issuance list deliberately does not: one is a record of events, the other
+   *  a view of current state. */
+  onOpenAudit: () => void;
+}) {
+  // Set by a row's "Revoke…", read by the revoke form. The id is opaque and
+  // long, and asking an operator to copy one by eye before an irreversible
+  // action is how the wrong credential gets revoked.
+  const [revokeId, setRevokeId] = useState<string | null>(null);
+
+  return (
+    <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
+      <Panel
+        title="Credentials this agent issues"
+        description="Your agent as an issuer: minting credentials for others, and taking them
+          back."
+      >
         <div style={{ fontSize: t.sm, color: c.muted, lineHeight: 1.55 }}>
-          Issuing as <Did value={parties.service.did} size={t.xs} />
+          Issuing as <Did value={parties.service.did} size={t.xs} />. For the history of
+          issuance and revocation events rather than what is current,{" "}
+          <button
+            onClick={onOpenAudit}
+            style={{
+              border: "none",
+              background: "none",
+              padding: 0,
+              color: c.accent,
+              cursor: "pointer",
+              font: "inherit",
+              textDecoration: "underline",
+            }}
+          >
+            open the audit trail
+          </button>
+          .
         </div>
       </Panel>
 
+      <IssuedList parties={parties} authority={authority} onRevoke={setRevokeId} />
+
       <IssueCredential parties={parties} authority={authority} />
-      <RevokeCredential parties={parties} authority={authority} />
+      <RevokeCredential
+        parties={parties}
+        authority={authority}
+        prefillId={revokeId}
+        onConsumed={() => setRevokeId(null)}
+      />
 
       <HeldCredentials parties={parties} authority={authority} />
     </div>
