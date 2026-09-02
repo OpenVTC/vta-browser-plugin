@@ -208,3 +208,82 @@ export async function openBase(
   const { key, baseNonce } = keySchedule(MODE_BASE, sharedSecret, info);
   return chacha20poly1305(key, baseNonce, aad).decrypt(ciphertext);
 }
+
+/**
+ * A capability that can compute the raw X25519 Diffie-Hellman shared secret
+ * with a peer's public key, without ever exposing the private key itself —
+ * e.g. a custody boundary (HSM, secure enclave, remote KMS) whose only DH
+ * primitive is "give me the shared secret", never "give me the key".
+ * `publicKey` is the identity's own public key; `agree` returns the RAW ECDH
+ * output, no KDF applied — this is exactly the static-key half of AuthEncap/
+ * AuthDecap's DH, nothing more.
+ */
+export interface KeyAgreement {
+  publicKey: Uint8Array;
+  agree(peerPublicKey: Uint8Array): Promise<Uint8Array>;
+}
+
+/**
+ * `authEncap`, ported to a `KeyAgreement` capability instead of a raw private
+ * key. The ephemeral half of the DH is still minted here directly (never
+ * custody-sensitive — freshly generated per call, discarded after); only the
+ * static-key half goes through `senderKeyAgreement.agree(...)`. Identical
+ * output to `authEncap(recipientPk, senderSk)` when `senderKeyAgreement`
+ * wraps `senderSk` directly.
+ */
+export async function authEncapWithKeyAgreement(
+  recipientPk: Uint8Array,
+  senderKeyAgreement: KeyAgreement,
+  unsafe?: UnsafeFixedEphemeral,
+): Promise<{ sharedSecret: Uint8Array; enc: Uint8Array }> {
+  const skE = unsafe?.__unsafeFixedEphemeralSk ?? x25519.utils.randomSecretKey();
+  const enc = x25519.getPublicKey(skE);
+  const staticDh = await senderKeyAgreement.agree(recipientPk);
+  const dhBytes = cat(dh(skE, recipientPk), staticDh);
+  const kemContext = cat(enc, recipientPk, senderKeyAgreement.publicKey);
+  return { sharedSecret: extractAndExpand(dhBytes, kemContext), enc };
+}
+
+/**
+ * `authDecap`, ported to a `KeyAgreement` capability. Both DH terms are the
+ * recipient's static key against a different peer public key each time, so
+ * both go through the capability — there is no non-custodial half here.
+ */
+export async function authDecapWithKeyAgreement(
+  enc: Uint8Array,
+  recipientKeyAgreement: KeyAgreement,
+  senderPk: Uint8Array,
+): Promise<Uint8Array> {
+  const dhWithEnc = await recipientKeyAgreement.agree(enc);
+  const dhWithSender = await recipientKeyAgreement.agree(senderPk);
+  const kemContext = cat(enc, recipientKeyAgreement.publicKey, senderPk);
+  return extractAndExpand(cat(dhWithEnc, dhWithSender), kemContext);
+}
+
+/** `seal`, ported — same contract as `seal`, minus the raw sender key. */
+export async function sealWithKeyAgreement(
+  plaintext: Uint8Array,
+  aad: Uint8Array,
+  senderKeyAgreement: KeyAgreement,
+  recipientPk: Uint8Array,
+  info: Uint8Array,
+  unsafe?: UnsafeFixedEphemeral,
+): Promise<SealResult> {
+  const { sharedSecret, enc } = await authEncapWithKeyAgreement(recipientPk, senderKeyAgreement, unsafe);
+  const { key, baseNonce } = keySchedule(MODE_AUTH, sharedSecret, info);
+  return { enc, ciphertext: chacha20poly1305(key, baseNonce, aad).encrypt(plaintext) };
+}
+
+/** `open`, ported. */
+export async function openWithKeyAgreement(
+  ciphertext: Uint8Array,
+  aad: Uint8Array,
+  enc: Uint8Array,
+  recipientKeyAgreement: KeyAgreement,
+  senderPk: Uint8Array,
+  info: Uint8Array,
+): Promise<Uint8Array> {
+  const sharedSecret = await authDecapWithKeyAgreement(enc, recipientKeyAgreement, senderPk);
+  const { key, baseNonce } = keySchedule(MODE_AUTH, sharedSecret, info);
+  return chacha20poly1305(key, baseNonce, aad).decrypt(ciphertext);
+}
