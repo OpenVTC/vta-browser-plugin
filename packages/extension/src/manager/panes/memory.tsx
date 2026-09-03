@@ -210,6 +210,7 @@ export function MemoryPane({
   if (editing) {
     return (
       <WriteMemory
+        key={editing.key}
         parties={parties}
         contextId={contextId}
         authority={authority}
@@ -321,6 +322,7 @@ export function MemoryPane({
 
       {creating && (
         <WriteMemory
+          key="new"
           parties={parties}
           contextId={contextId}
           authority={authority}

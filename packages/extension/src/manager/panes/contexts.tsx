@@ -360,7 +360,23 @@ export function ContextsPane({
 
       {record && (
         <>
+          {/* `key` is load-bearing, not decoration.
+              `EditContext` seeds its `name` and `description` fields with
+              `useState(record.name)`, which runs on mount and never again.
+              This panel is a single instance that swaps records as the
+              operator moves through the tree, so without a key React reuses
+              it — and every context showed the FIRST context's name in an
+              editable field sitting above the right id and DID. An operator
+              pressing Save would have renamed the context they were looking
+              at to the name of one they were not.
+
+              Keying on the record's id makes selecting a different context a
+              different component, which is what re-runs the initialisers.
+              The sibling editors in `keys.tsx` and `access.tsx` use the same
+              seeding pattern and are fine, because `Table` renders them per
+              row under `rowKey` — the key is already there. */}
           <EditContext
+            key={record.id}
             parties={parties}
             record={record}
             authority={authority}

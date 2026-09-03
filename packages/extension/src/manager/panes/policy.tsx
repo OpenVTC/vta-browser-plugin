@@ -289,6 +289,7 @@ export function PolicyPane({
   if (editing) {
     return (
       <PolicyEditor
+        key={editing.name}
         parties={parties}
         existing={editing}
         authority={authority}
@@ -328,6 +329,7 @@ export function PolicyPane({
 
       {creating && (
         <PolicyEditor
+          key="new"
           parties={parties}
           authority={authority}
           onSaved={done}

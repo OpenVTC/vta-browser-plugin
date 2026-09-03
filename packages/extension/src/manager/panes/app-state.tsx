@@ -317,6 +317,7 @@ export function AppStatePane({
   if (editing) {
     return (
       <WriteRecord
+        key={`${editing.namespace}/${editing.key}`}
         parties={parties}
         contextId={contextId}
         authority={authority}
@@ -471,6 +472,7 @@ export function AppStatePane({
 
       {creating && (
         <WriteRecord
+          key="new"
           parties={parties}
           contextId={contextId}
           authority={authority}
