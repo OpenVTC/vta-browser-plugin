@@ -45,12 +45,14 @@ import {
   credVaultArchive,
   credVaultDelete,
   credVaultPurge,
+  credVaultGet,
   credVaultQuery,
   credVaultRestore,
   credVaultUnarchive,
   isRunnableCredentialQuery,
   type CredentialDescriptor,
   type CredentialFilter,
+  type CredentialStatus,
 } from "@openvtc/pnm-core";
 import { Button, Did, Note, Panel, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
@@ -433,6 +435,7 @@ function HeldCredentials({
   const [includeArchived, setIncludeArchived] = useState(false);
   const [includeDeleted, setIncludeDeleted] = useState(false);
   const [rows, setRows] = useState<CredentialDescriptor[] | null>(null);
+  const [viewing, setViewing] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -514,6 +517,11 @@ function HeldCredentials({
         const state = r.lifecycle ?? "active";
         return (
           <div style={{ display: "grid", gap: 8, minWidth: 200 }}>
+            {/* Reading a credential is its own request. The search returned
+                metadata; this fetches the document by id. */}
+            <Button kind="quiet" onClick={() => setViewing(r.id)}>
+              View
+            </Button>
             {state === "active" && (
               <Button
                 kind="quiet"
@@ -651,10 +659,40 @@ function HeldCredentials({
 
       {!runnable && (
         <Note tone="accent">
-          <strong>Set at least one filter.</strong> Your agent refuses a search that constrains
-          nothing, because the answer would be the shape of everything you hold — every community,
-          every role, every issuer. The two tick-boxes widen a search rather than narrowing one,
-          so they do not count on their own.
+          <div style={{ display: "grid", gap: 8 }}>
+            <span>
+              <strong>Set at least one filter.</strong> Your agent refuses a search that constrains
+              nothing, because the answer would be the shape of everything you hold — every
+              community, every role, every issuer. The two tick-boxes widen a search rather than
+              narrowing one, so they do not count on their own.
+            </span>
+            {/* The refusal is the agent's, and it is reasonable — but "set a
+                filter" is a poor answer to "what do I have?", which is the
+                question almost everyone opens this pane with. Answering it
+                needed a `type` or an issuer DID the operator would have to
+                know in advance, so a wallet holding credentials looked
+                identical to one holding none.
+
+                `status` counts as a filter, so one click gets there. Not a way
+                round the rule — it is the rule satisfied with the narrowest
+                thing that still answers the question. Named for what it
+                returns, because `valid` excludes expired and revoked and the
+                button should not imply otherwise. */}
+            <div>
+              <Button
+                onClick={() => {
+                  const f = { ...filter, status: "valid" as CredentialStatus };
+                  setFilter(f);
+                  void search(f);
+                }}
+              >
+                Show what is currently valid
+              </Button>
+            </div>
+            <span style={{ fontSize: t.xs, color: c.faint }}>
+              Expired and revoked credentials are still held — pick their status above to see them.
+            </span>
+          </div>
         </Note>
       )}
 
@@ -669,6 +707,111 @@ function HeldCredentials({
           empty="Nothing matches that filter. Your agent answered — this is not a failed search."
         />
       )}
+
+      {viewing && (
+        <CredentialView
+          key={viewing}
+          parties={parties}
+          id={viewing}
+          onClose={() => setViewing(null)}
+        />
+      )}
+    </Panel>
+  );
+}
+
+
+/**
+ * Fetch and show one credential's contents.
+ *
+ * Separate from the search on purpose, and the panel says why: a query answers
+ * with metadata, and the contents only ever arrive because someone asked for
+ * this one credential by id. Rendering the whole document from a list would
+ * have quietly turned "show me what I hold" into "read everything I hold".
+ *
+ * The copy button hands over the exact bytes the agent returned, canonically
+ * formatted — this is the form a verifier expects, so it must not be a
+ * prettified approximation of it.
+ */
+function CredentialView({
+  parties,
+  id,
+  onClose,
+}: {
+  parties: Parties;
+  id: string;
+  onClose: () => void;
+}) {
+  const [doc, setDoc] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setDoc(null);
+    setError(null);
+    credVaultGet(managerSender, { ...parties, id })
+      .then((d) => live && setDoc(d))
+      .catch((e) => live && setError(e instanceof Error ? e.message : String(e)));
+    return () => {
+      live = false;
+    };
+  }, [parties, id]);
+
+  const text = doc ? JSON.stringify(doc, null, 2) : "";
+
+  return (
+    <Panel
+      title="Credential"
+      description={<code style={{ fontFamily: font.mono, fontSize: t.xs }}>{id}</code>}
+    >
+      <div style={{ display: "grid", gap: 10 }}>
+        {error && <LoadError what="this credential" error={error} />}
+        {!doc && !error && <Loading what="this credential" />}
+
+        {doc && (
+          <>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Button
+                onClick={() => {
+                  void navigator.clipboard.writeText(text).then(
+                    () => {
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 1500);
+                    },
+                    // Clipboard access can be refused — say so rather than
+                    // showing "Copied" over a clipboard that did not change.
+                    () => setError("The browser refused clipboard access."),
+                  );
+                }}
+              >
+                {copied ? "Copied" : "Copy JSON"}
+              </Button>
+              <Button kind="quiet" onClick={onClose}>
+                Close
+              </Button>
+            </div>
+            <pre
+              style={{
+                margin: 0,
+                padding: 12,
+                background: c.ground,
+                border: `1px solid ${c.line}`,
+                borderRadius: "var(--w-r-sm)",
+                fontFamily: font.mono,
+                fontSize: t.xs,
+                lineHeight: 1.5,
+                overflowX: "auto",
+                maxHeight: 460,
+                overflowY: "auto",
+                whiteSpace: "pre",
+              }}
+            >
+              {text}
+            </pre>
+          </>
+        )}
+      </div>
     </Panel>
   );
 }

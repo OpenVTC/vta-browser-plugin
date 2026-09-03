@@ -12,6 +12,9 @@ import { c, t } from "../theme.js";
 import { formatInstant } from "./format.js";
 import type { Authority } from "./use-vta.js";
 import { useAgentNames } from "../use-agent-names.js";
+import { displayAgentName, type AgentName } from "../agent-name.js";
+import { readAllVtaDids, setActiveVtaDid } from "../active-vta.js";
+import { useEffect, useState } from "react";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -21,6 +24,76 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       </span>
       <span style={{ fontSize: t.sm, color: c.text, minWidth: 0 }}>{children}</span>
     </div>
+  );
+}
+
+
+/**
+ * Switch the console to another onboarded agent.
+ *
+ * Only rendered where there is somewhere to switch *to* — one agent means no
+ * control, rather than a select with a single option that does nothing.
+ *
+ * **Switching reloads the page**, deliberately. Thirteen panes each hold their
+ * own fetched state, and propagating a change of agent through all of them is
+ * thirteen chances to leave one holding the previous agent's keys, credentials
+ * or ACL under the new agent's name in the header. That is not a stale-data
+ * annoyance — it is the console telling the operator something false about who
+ * they are administering, on the surface whose whole job is to answer that. A
+ * reload is provably clean and costs a second.
+ */
+function SwitchAgent({
+  current,
+  names,
+}: {
+  current: string;
+  names: Record<string, AgentName | undefined>;
+}) {
+  const [dids, setDids] = useState<string[]>([]);
+
+  useEffect(() => {
+    void readAllVtaDids().then(setDids);
+  }, []);
+
+  if (dids.length < 2) return null;
+
+  const label = (did: string) => {
+    const n = names[did];
+    if (n) return displayAgentName(n);
+    // No published name — the tail of a `did:webvh` is its host and label,
+    // which is the most recognisable part and is not a derived *name*: it is
+    // the identifier itself, shortened.
+    const tail = did.split(":").slice(-2).join(":");
+    return tail.length < did.length ? `…${tail}` : did;
+  };
+
+  return (
+    <select
+      value={current}
+      aria-label="Switch agent"
+      onChange={(e) => {
+        const next = e.target.value;
+        if (next === current) return;
+        void setActiveVtaDid(next).then((ok) => {
+          if (ok) window.location.reload();
+        });
+      }}
+      style={{
+        fontSize: t.xs,
+        color: c.muted,
+        background: c.ground,
+        border: `1px solid ${c.line}`,
+        borderRadius: "var(--w-r-sm)",
+        padding: "2px 6px",
+        maxWidth: 260,
+      }}
+    >
+      {dids.map((d) => (
+        <option key={d} value={d}>
+          {label(d)}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -56,11 +129,14 @@ export function WhoamiBanner({
             reads to check they are administering the agent they think they
             are. No claim, no name — the DID stands on its own, which is the
             honest fallback rather than an inferred one. */}
-        <DidNamed
-          value={agentDid}
-          verified
-          {...(agentNames[agentDid] ? { agentName: agentNames[agentDid] } : {})}
-        />
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+          <DidNamed
+            value={agentDid}
+            verified
+            {...(agentNames[agentDid] ? { agentName: agentNames[agentDid] } : {})}
+          />
+          <SwitchAgent current={agentDid} names={agentNames} />
+        </div>
       </Field>
 
       {authority ? (
