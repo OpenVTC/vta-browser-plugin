@@ -46,6 +46,36 @@ const fieldStyle: React.CSSProperties = {
 // not-found rather than as a refusal.
 const UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+
+// The CLI half of the answer.
+//
+// Telling an operator "use the CLI" and stopping there sends them to
+// `--help` to find out what this pane already knows. The commands are
+// short enough to print, and the two details worth knowing are not
+// discoverable from a flag list: `--preview` is a real rehearsal, and the
+// password is prompted rather than passed.
+function Cmd({ children, note }: { children: string; note: string }) {
+  return (
+    <div style={{ display: "grid", gap: 3 }}>
+      <code
+        style={{
+          fontFamily: font.mono,
+          fontSize: t.xs,
+          background: c.ground,
+          border: `1px solid ${c.line}`,
+          borderRadius: "var(--w-r-sm)",
+          padding: "6px 9px",
+          overflowX: "auto",
+          whiteSpace: "pre",
+        }}
+      >
+        {children}
+      </code>
+      <span style={{ fontSize: t.xs, color: c.faint }}>{note}</span>
+    </div>
+  );
+}
+
 function WhyExportIsAbsent() {
   return (
     <Panel
@@ -70,6 +100,31 @@ function WhyExportIsAbsent() {
           So the wallet does not ask for it at all. The CLI collects it in a terminal, which is not a
           perfect place either, but is a much smaller one.
         </p>
+        <div style={{ display: "grid", gap: 8, paddingTop: 2 }}>
+          <span style={{ fontSize: t.xs, color: c.muted, letterSpacing: 0.4 }}>
+            WHAT TO RUN
+          </span>
+          <Cmd note="Writes vta-backup-<timestamp>.vtabak. Add -o <path> to choose the file.">
+            pnm backup export
+          </Cmd>
+          <Cmd note="Adds the agent's audit trail — its dealings with counterparties who were never party to this export. Off by default.">
+            pnm backup export --include-audit
+          </Cmd>
+          <Cmd note="Rehearses: decrypts, validates, reports what it found, changes nothing. Worth doing first — the common mistake is the right password on the wrong bundle.">
+            pnm backup import &lt;file&gt; --preview
+          </Cmd>
+          <Cmd note="Applies it. Replaces this agent's keys, access and contexts with the bundle's.">
+            pnm backup import &lt;file&gt;
+          </Cmd>
+          <span style={{ fontSize: t.sm, color: c.muted, lineHeight: 1.55 }}>
+            The password is <strong>prompted, never passed as a flag</strong> — there is no
+            <code style={{ fontFamily: font.mono, fontSize: t.xs }}> --password</code> option to
+            find. That is the concrete reason the terminal is the smaller surface: it keeps the
+            password out of your shell history and out of the process list. Minimum 15
+            characters, and export asks twice.
+          </span>
+        </div>
+
         <Note tone="accent">
           <strong>Where the bundle goes.</strong> An export is fetched over HTTPS from an address the
           agent publishes, so an agent reachable only over DIDComm or TSP cannot produce one at all —
