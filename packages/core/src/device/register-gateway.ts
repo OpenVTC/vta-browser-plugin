@@ -19,19 +19,24 @@ import { withFetchTimeout } from "../http/timeout-fetch.js";
 // push/register/0.2 — the payload is field-identical to 0.1 (no enum values),
 // so this is a pure version-string bump. The gateway accepts both 0.1 and 0.2
 // and mirrors the request version into the `#response`.
-const TASK_PUSH_REGISTER = "https://trusttasks.org/spec/push/register/0.2";
-const TASK_PUSH_REGISTER_RESPONSE =
-  "https://trusttasks.org/spec/push/register/0.2#response";
+import {
+  TYPE_URI as TASK_PUSH_REGISTER,
+  RESPONSE_TYPE_URI as TASK_PUSH_REGISTER_RESPONSE,
+  type WebPush,
+} from "@openvtc/trust-tasks/push/register/0.2/payload";
 
 /** A device's platform push channel — tagged union over `platform`. Only the
  *  Web Push variant is wired today (self-hostable, no Apple/Google account). */
-export type PushRegistration = {
-  platform: "webpush";
-  /** RFC 8030 Web Push subscription endpoint. */
-  endpoint: string;
-  /** RFC 8291 encryption keys. */
-  keys: { p256dh: string; auth: string };
-};
+/** What this wallet registers: a Web Push subscription.
+ *
+ *  A deliberate NARROWING of the schema's `PushRegistration`, which is
+ *  `Apns | Fcm | WebPush` — a browser extension cannot produce the other two.
+ *  Taken as the generated `WebPush` variant rather than restated, so the
+ *  narrowing is the only thing this line says: the members still come from the
+ *  schema, and widening the union later does not silently leave this behind.
+ */
+export type PushRegistration = WebPush;
+
 
 export interface RegisterPushChannelOptions {
   /** Push gateway base URL (the HTTPS transport — `POST {gatewayUrl}/trust-tasks`). */

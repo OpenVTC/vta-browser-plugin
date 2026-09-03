@@ -87,12 +87,27 @@ test("the generated component list is real, so none of this passes vacuously", (
   assert.ok(generated.has("ContextRecord"), "components.d.ts does not look like the right file");
 });
 
+// `export type X = SomeIdentifier;` is the *fix* pattern, not the defect: it
+// aliases the generated type, so the shape still has one source. Only an inline
+// body — `= {`, `= "a" | "b"`, `= Foo[]` — restates it. This distinction was
+// missing when the test was first written, and it hid two: `KeyRecord` (a
+// correct alias) and `PushRegistration` (an inline restatement of a union the
+// schema declares as `Apns | Fcm | WebPush`).
+const ALIAS_TO_IDENTIFIER = /^\s*[A-Za-z0-9_.]+(<[^;]*>)?\s*;/;
+
 test("no schema component type is restated by hand", () => {
   const restated = [];
   for (const file of files(SRC)) {
     const rel = file.slice(SRC.length + 1);
-    for (const m of readFileSync(file, "utf8").matchAll(/export interface ([A-Za-z0-9_]+)/g)) {
+    const src = readFileSync(file, "utf8");
+
+    for (const m of src.matchAll(/export interface ([A-Za-z0-9_]+)/g)) {
       if (generated.has(m[1]) && !(m[1] in NARROWING)) restated.push(`${m[1]}  (${rel})`);
+    }
+    for (const m of src.matchAll(/export type ([A-Za-z0-9_]+)\s*=/g)) {
+      if (!generated.has(m[1]) || m[1] in NARROWING) continue;
+      const rhs = src.slice(m.index + m[0].length);
+      if (!ALIAS_TO_IDENTIFIER.test(rhs)) restated.push(`${m[1]}  (${rel})`);
     }
   }
 
@@ -102,8 +117,10 @@ test("no schema component type is restated by hand", () => {
     `these types are declared here and also generated from a published schema:\n  ` +
       `${restated.join("\n  ")}\n\n` +
       `Import the generated one instead — a hand-written copy drifts silently, ` +
-      `because nothing compares the two. If the local type deliberately NARROWS ` +
-      `the generated one for a browser caller, add it to NARROWING with the reason.`,
+      `because nothing compares the two. Aliasing it (\`export type X = Generated;\`) ` +
+      `is fine and is how the narrowing cases are written. If the local type ` +
+      `deliberately NARROWS the generated one for a browser caller, add it to ` +
+      `NARROWING with the reason.`,
   );
 });
 
