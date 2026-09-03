@@ -191,7 +191,16 @@ export function Destructive<P>({
 
   if (phase.kind === "error") {
     return (
-      <div style={{ display: "grid", gap: 10 }}>
+      // `maxWidth` because this often renders inside a table cell.
+      //
+      // The agent's refusals are prose, and some are long — a DID delete that
+      // is still depended on comes back naming the dependant and the command
+      // to fix it. Unconstrained, that text sets the column's width, the
+      // browser widens the cell to fit, and every other column in the table
+      // collapses: the DID column ends up a few characters wide, wrapping
+      // mid-identifier. The message is the most useful thing on screen at that
+      // moment, and it was wrecking the row that gave it context.
+      <div style={{ display: "grid", gap: 10, maxWidth: 480 }}>
         <Note tone="danger">{phase.message}</Note>
         <div>
           <Button kind="quiet" onClick={reset}>

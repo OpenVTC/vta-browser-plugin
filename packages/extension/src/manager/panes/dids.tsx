@@ -165,7 +165,17 @@ export function DidsPane({
     : null;
 
   const columns: Column<WebvhDidRecord>[] = [
-    { key: "did", header: "DID", render: (d) => <Did value={d.did} /> },
+    // A floor on the identifier column. A `did:webvh` has no natural break
+    // points, so when something else in the row demands width — a long refusal
+    // from the agent, say — the browser squeezes this one and the DID wraps
+    // every few characters, which is unreadable exactly when you most need to
+    // tell two of them apart.
+    {
+      key: "did",
+      header: "DID",
+      width: "26ch",
+      render: (d) => <Did value={d.did} />,
+    },
     {
       key: "context",
       header: "Context",

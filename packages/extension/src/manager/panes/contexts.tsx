@@ -9,6 +9,7 @@ import { useCallback, useState } from "react";
 import {
   contextsCreate,
   contextsUpdate,
+  contextsUpdateDid,
   type ContextRecord,
 } from "@openvtc/pnm-core";
 import { contextDelete, contextPreviewDelete } from "@openvtc/pnm-core/admin";
@@ -334,6 +335,121 @@ function DeleteContext({
   );
 }
 
+
+/**
+ * Assign, reassign or clear the DID a context acts as.
+ *
+ * This existed in `pnm-core` and nowhere in the console, which put the
+ * operator in an odd spot: deleting a DID that a context depends on fails
+ * with the agent's own instruction to `pnm contexts update <ctx> --did
+ * <new-did>` — an instruction the console could carry out and did not offer.
+ * Being told the fix and handed no way to apply it is worse than not being
+ * told.
+ *
+ * A separate panel from name/description on purpose. Those are labels; this
+ * changes which identity the context presents to every counterparty, and the
+ * agent refuses to delete a DID while a context still points at it. Same
+ * form, same Save button would have made a rename and an identity change look
+ * like one decision.
+ */
+function ContextDid({
+  parties,
+  record,
+  authority,
+  onChanged,
+}: {
+  parties: Parties;
+  record: ContextRecord;
+  authority: Authority | null;
+  onChanged: () => void;
+}) {
+  const [did, setDid] = useState(record.did ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<ConsentRequiredError | null>(null);
+
+  const denied =
+    authority && !hasRole(authority, "admin", "super-admin")
+      ? "Changing a context's DID needs the admin role at this agent."
+      : null;
+
+  const save = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    setPending(null);
+    const ok = await runMutation(
+      async () => {
+        await contextsUpdateDid(managerSender, {
+          ...parties,
+          id: record.id,
+          did: did.trim(),
+        });
+      },
+      { onConsent: setPending, onError: setError },
+    );
+    setBusy(false);
+    if (ok) onChanged();
+  }, [parties, record.id, did, onChanged]);
+
+  const unchanged = did.trim() === (record.did ?? "");
+
+  return (
+    <Panel
+      title="Identity"
+      description="The DID this context acts as. Counterparties see this one, so changing it changes
+        who the context presents itself as — not just what it is called."
+    >
+      <div style={{ display: "grid", gap: 10 }}>
+        {!record.did && (
+          <Note tone="accent">
+            This context has no DID of its own yet. That is a state, not a fault — it simply has no
+            identity to present until one is assigned.
+          </Note>
+        )}
+
+        <label style={{ display: "grid", gap: 4 }}>
+          <span style={{ fontSize: t.xs, color: c.muted }}>DID</span>
+          <input
+            style={{
+              boxSizing: "border-box",
+              padding: "6px 9px",
+              background: c.ground,
+              color: c.text,
+              border: `1px solid ${c.line}`,
+              borderRadius: "var(--w-r-sm)",
+              fontSize: t.sm,
+              fontFamily: font.mono,
+            }}
+            value={did}
+            onChange={(e) => setDid(e.target.value)}
+            placeholder="did:webvh:…"
+            spellCheck={false}
+          />
+        </label>
+        <span style={{ fontSize: t.xs, color: c.faint }}>
+          Create one under <b>DIDs</b> first, then paste it here. Clearing the field leaves the
+          context with no identity of its own.
+        </span>
+
+        {error && <Note tone="danger">{error}</Note>}
+        {pending && <ConsentCeremony pending={pending} />}
+
+        <div>
+          <Button
+            kind="primary"
+            disabled={busy || unchanged || Boolean(denied)}
+            {...(denied ? { title: denied } : {})}
+            onClick={() => void save()}
+          >
+            {busy ? "Saving…" : record.did ? "Reassign DID" : "Assign DID"}
+          </Button>
+        </div>
+        {denied && <span style={{ fontSize: t.sm, color: c.muted }}>{denied}</span>}
+      </div>
+    </Panel>
+  );
+}
+
 export function ContextsPane({
   parties,
   authority,
@@ -377,6 +493,13 @@ export function ContextsPane({
               row under `rowKey` — the key is already there. */}
           <EditContext
             key={record.id}
+            parties={parties}
+            record={record}
+            authority={authority}
+            onChanged={onChanged}
+          />
+          <ContextDid
+            key={`did:${record.id}`}
             parties={parties}
             record={record}
             authority={authority}

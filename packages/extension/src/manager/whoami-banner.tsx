@@ -7,10 +7,11 @@
 // top of every pane means an operator never has to wonder which identity a
 // change they are about to make will be attributed to.
 
-import { Did, Pill } from "../ui.js";
+import { Did, DidNamed, Pill } from "../ui.js";
 import { c, t } from "../theme.js";
 import { formatInstant } from "./format.js";
 import type { Authority } from "./use-vta.js";
+import { useAgentNames } from "../use-agent-names.js";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -32,6 +33,8 @@ export function WhoamiBanner({
   authority: Authority | null;
   error: string | null;
 }) {
+  const agentNames = useAgentNames([agentDid]);
+
   return (
     <header
       style={{
@@ -45,7 +48,19 @@ export function WhoamiBanner({
       }}
     >
       <Field label="Agent">
-        <Did value={agentDid} />
+        {/* A name, where the agent publishes one.
+            `useAgentNames` reads `alsoKnownAs` off the DID document and
+            verifies it — it never derives a name from the DID's host or path.
+            That distinction is the whole point: a derived name is a guess
+            dressed as an identity, and this banner is the line an operator
+            reads to check they are administering the agent they think they
+            are. No claim, no name — the DID stands on its own, which is the
+            honest fallback rather than an inferred one. */}
+        <DidNamed
+          value={agentDid}
+          verified
+          {...(agentNames[agentDid] ? { agentName: agentNames[agentDid] } : {})}
+        />
       </Field>
 
       {authority ? (
