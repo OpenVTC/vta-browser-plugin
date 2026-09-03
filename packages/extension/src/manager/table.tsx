@@ -8,7 +8,7 @@
 //
 // So the states are separated here, once, and each says something different.
 
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { c, t } from "../theme.js";
 import { Note } from "../ui.js";
 
@@ -24,11 +24,22 @@ export function Table<R>({
   columns,
   rows,
   rowKey,
+  expanded,
   empty,
 }: {
   columns: Column<R>[];
   rows: R[];
   rowKey: (row: R) => string;
+  /**
+   * Detail to show directly beneath a row, or `null` for rows that have none.
+   *
+   * A detail panel rendered *after* the table is a detail panel the operator
+   * does not notice: they click View on the third row, the content appears
+   * below the fold, and the table looks like it did nothing. Putting it in the
+   * flow under the row it belongs to is the difference between an answer and a
+   * thing that happened somewhere else.
+   */
+  expanded?: (row: R) => ReactNode | null;
   /** What would appear here. An empty state is a chance to explain, so this is
    *  required rather than defaulting to "None". */
   empty: ReactNode;
@@ -80,22 +91,43 @@ export function Table<R>({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr key={rowKey(row)}>
-              {columns.map((col) => (
-                <td
-                  key={col.key}
-                  style={{
-                    padding: "7px 12px 7px 0",
-                    borderBottom: `1px solid ${c.lineSoft}`,
-                    verticalAlign: "top",
-                  }}
-                >
-                  {col.render(row)}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {rows.map((row) => {
+            const detail = expanded?.(row) ?? null;
+            return (
+              <Fragment key={rowKey(row)}>
+                <tr>
+                  {columns.map((col) => (
+                    <td
+                      key={col.key}
+                      style={{
+                        padding: "7px 12px 7px 0",
+                        // No bottom rule when a detail follows: the row and its
+                        // detail are one thing, and a line between them reads
+                        // as two.
+                        ...(detail ? {} : { borderBottom: `1px solid ${c.lineSoft}` }),
+                        verticalAlign: "top",
+                      }}
+                    >
+                      {col.render(row)}
+                    </td>
+                  ))}
+                </tr>
+                {detail && (
+                  <tr>
+                    <td
+                      colSpan={columns.length}
+                      style={{
+                        padding: "0 12px 14px 0",
+                        borderBottom: `1px solid ${c.lineSoft}`,
+                      }}
+                    >
+                      {detail}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>

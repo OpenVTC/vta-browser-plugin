@@ -519,8 +519,11 @@ function HeldCredentials({
           <div style={{ display: "grid", gap: 8, minWidth: 200 }}>
             {/* Reading a credential is its own request. The search returned
                 metadata; this fetches the document by id. */}
-            <Button kind="quiet" onClick={() => setViewing(r.id)}>
-              View
+            <Button
+              kind="quiet"
+              onClick={() => setViewing((cur) => (cur === r.id ? null : r.id))}
+            >
+              {viewing === r.id ? "Hide" : "View"}
             </Button>
             {state === "active" && (
               <Button
@@ -704,16 +707,18 @@ function HeldCredentials({
           columns={columns}
           rows={rows}
           rowKey={(r) => r.id}
+          // Under the row it belongs to, not after the table. See `Table`.
+          expanded={(r) =>
+            viewing === r.id ? (
+              <CredentialView
+                key={r.id}
+                parties={parties}
+                id={r.id}
+                onClose={() => setViewing(null)}
+              />
+            ) : null
+          }
           empty="Nothing matches that filter. Your agent answered — this is not a failed search."
-        />
-      )}
-
-      {viewing && (
-        <CredentialView
-          key={viewing}
-          parties={parties}
-          id={viewing}
-          onClose={() => setViewing(null)}
         />
       )}
     </Panel>
