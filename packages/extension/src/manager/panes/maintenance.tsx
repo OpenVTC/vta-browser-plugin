@@ -1,25 +1,43 @@
-// Backup — one control, and an honest account of the four that are missing.
+// Maintenance — operations whose subject is the agent itself.
 //
-// The agent dispatches five backup verbs. This pane offers `abort`. The rest of
-// the surface is a written explanation of why export and import are not here,
-// because an empty pane is indistinguishable from an unfinished one, and the
-// next person to open this file should find a decision rather than a gap.
+// Everything else in this console acts on something the agent *holds*: a
+// context, a key, a credential, an ACL entry. These two act on the agent. That
+// is the whole reason they share a pane, and it is why neither belongs where it
+// first landed.
 //
-// The short version: `initiate-export` and `finalize-import` carry a `password`
-// member — the key that protects, or unlocks, a complete copy of the agent. It
-// travels inbound, typed by the operator. A browser form is reachable by
-// autofill, by a password manager, by any other extension with host access, and
-// by screen capture, and a passkey step-up does not help: it proves a human is
-// present for the *action*, and says nothing about a field that was filled in
+// Reload-services sat under Transports because restarting transports is what
+// you observe. But the task is `vta/management/reload-services` — it re-reads
+// the agent's entire configuration, and the transports going down is a
+// consequence rather than the subject. Transports is per-transport CRUD:
+// enable this one, drain that one. An agent-wide restart in that pane reads as
+// another row in the same list, which is exactly what it is not.
+//
+// Backup was under Wire & execution for want of anywhere better, and was never
+// really "wire" at all.
+//
+// The grouping also happens to be the step-up boundary: these are the two
+// controls in the console gated on proof of presence, because they are the two
+// that act on the whole agent. That is not a coincidence to design around, it
+// is the same fact stated twice.
+//
+// ## What is here, and what is deliberately not
+//
+// Backup offers `abort` alone. `initiate-export` and `finalize-import` both
+// carry a `password` — the key that protects, or unlocks, a complete copy of
+// the agent. It travels inbound, typed by the operator, and a browser form is
+// reachable by autofill, by a password manager, by any other extension with
+// host access, and by anything recording the screen. A step-up does not help:
+// it proves a human is present for the action, and the password was typed
 // before the prompt appeared.
 //
-// Abort carries no secret and is the only way to close a window that is
-// otherwise open until it expires. So it is here, behind the step-up, and the
-// step-up is about deliberateness rather than secrecy — see `step-up.ts` for
-// what that ceremony does and does not prove.
+// So the wallet does not ask for it. The CLI does, in a terminal, where it is
+// prompted rather than passed as a flag and so never enters shell history or
+// the process list. The pane says all of this on screen, because an empty
+// panel is indistinguishable from an unfinished one and someone would
+// reasonably "complete" the family later.
 
 import { useCallback, useState } from "react";
-import { backupAbort, type BackupAbortResult } from "@openvtc/pnm-core/admin";
+import { backupAbort, reloadServices, type BackupAbortResult } from "@openvtc/pnm-core/admin";
 import { Button, Note, Panel } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
@@ -137,7 +155,7 @@ function WhyExportIsAbsent() {
   );
 }
 
-export function BackupPane({
+export function MaintenancePane({
   parties,
   authority,
 }: {
@@ -252,7 +270,113 @@ export function BackupPane({
         </div>
       </Panel>
 
+      <ReloadServices
+        parties={parties}
+        denied={
+          authority && !hasRole(authority, "admin", "super-admin")
+            ? "Restarting this agent needs the admin role."
+            : null
+        }
+      />
+
       <WhyExportIsAbsent />
     </div>
+  );
+}
+
+/**
+ * Re-read the agent's configuration and restart its transports.
+ *
+ * Behind the step-up despite creating, deleting and disclosing nothing — the
+ * cost here is measured in availability, and it falls on every counterparty of
+ * the agent rather than on the operator who clicked. That includes this
+ * wallet's own inbound sessions, which is the part an operator is most likely
+ * to be surprised by, so the copy says it rather than implying it.
+ */
+function ReloadServices({ parties, denied }: { parties: Parties; denied: string | null }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<ConsentRequiredError | null>(null);
+  const [done, setDone] = useState(false);
+
+  const reload = useCallback(async () => {
+    setError(null);
+    setPending(null);
+    setDone(false);
+
+    try {
+      await requirePresence(chrome.runtime.id, "restart this agent's transports");
+    } catch (e) {
+      // A dismissal is a decision. Say nothing and send nothing.
+      if (e instanceof StepUpError && e.reason === "cancelled") return;
+      setError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+
+    setBusy(true);
+    await runMutation(
+      async () => {
+        await reloadServices(managerSender, parties);
+        setDone(true);
+      },
+      {
+        onConsent: setPending,
+        onError: (message) => {
+          // A successful reload drops the transport the response would have
+          // travelled on, so a lost connection is the EXPECTED shape of
+          // success here, not a failure. Reporting it as an error would send
+          // an operator hunting for a fault that is the agent restarting, and
+          // — worse — invite a retry that restarts it again.
+          if (/network|connection|closed|timeout|aborted/i.test(message)) {
+            setDone(true);
+          } else {
+            setError(message);
+          }
+        },
+      },
+    );
+    setBusy(false);
+  }, [parties]);
+
+  return (
+    <Panel
+      title="Reload services"
+      description="Re-reads the agent's configuration and restarts its transports. Use this after
+        changing configuration elsewhere; it applies what is written down and takes no options of
+        its own."
+    >
+      <div style={{ display: "grid", gap: 12 }}>
+        <Note tone="warn">
+          <strong>Every open session drops, including this wallet's.</strong> Your inbound sessions
+          go down while the agent restarts, so anything pushed during that window — approval
+          requests included — waits at the mediator. Every other client of this agent is
+          disconnected at the same moment, and none of them asked.
+        </Note>
+
+        {error && <Note tone="danger">{error}</Note>}
+        {pending && <ConsentCeremony pending={pending} />}
+        {done && (
+          <Note tone="accent">
+            Restart requested. The agent may have dropped this connection to do it, which is normal
+            and not a reason to send it again — reconnect and see whether it answers. If it does not
+            come back, its configuration is the place to look.
+          </Note>
+        )}
+
+        <div>
+          <Button
+            kind="danger"
+            disabled={busy || Boolean(denied)}
+            {...(denied ? { title: denied } : {})}
+            onClick={() => void reload()}
+          >
+            {busy ? "Restarting…" : "Approve and reload services"}
+          </Button>
+        </div>
+        <span style={{ fontSize: t.xs, color: c.faint }}>
+          {denied ?? "Your passkey is checked before anything is sent."}
+        </span>
+      </div>
+    </Panel>
   );
 }
