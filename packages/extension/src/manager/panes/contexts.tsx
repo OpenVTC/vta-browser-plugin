@@ -14,8 +14,14 @@ import {
 } from "@openvtc/pnm-core";
 import { contextDelete, contextPreviewDelete } from "@openvtc/pnm-core/admin";
 import { Button, Did, Empty, Note, Panel } from "../../ui.js";
+import { LoadError } from "../table.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
+// `webvhDidList`, not `vtaListDids`. The latter is typed on `Identity` —
+// it wants key material — and this console deliberately holds none; that
+// type is the guard, not an inconvenience (see CLAUDE.md on `TaskParty`).
+import { webvhDidList } from "@openvtc/pnm-core/webvh";
+import { useAsync } from "../use-async.js";
 import { ConsentRequiredError } from "../carrier.js";
 import { Destructive, ConsentCeremony, runMutation } from "../destructive.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
@@ -364,6 +370,21 @@ function ContextDid({
   onChanged: () => void;
 }) {
   const [did, setDid] = useState(record.did ?? "");
+
+  const dids = useAsync(
+    () => webvhDidList(managerSender, { ...parties, contextId: record.id }),
+    [parties.holder.did, parties.service.did, record.id],
+  );
+
+  // The current DID is always offered, even if the agent no longer lists it
+  // under this context — otherwise selecting nothing would silently look like
+  // a deliberate change.
+  const options = Array.from(
+    new Set([
+      ...(dids.data?.dids ?? []).map((d) => d.did),
+      ...(record.did ? [record.did] : []),
+    ]),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<ConsentRequiredError | null>(null);
@@ -407,9 +428,19 @@ function ContextDid({
           </Note>
         )}
 
+        {/* A list, not a paste box.
+            The console already knows which DIDs exist — asking an operator to
+            copy a `did:webvh:Qm…` out of another pane and paste it here made
+            them do the lookup by hand, and a mistyped identifier is not
+            something they could spot by reading it back.
+
+            Scoped to this context's own DIDs, which is what a context acts as.
+            The current value is added to the list even when it is not among
+            them, so a DID assigned from elsewhere is never silently dropped
+            from the options and replaced by whatever happened to be first. */}
         <label style={{ display: "grid", gap: 4 }}>
           <span style={{ fontSize: t.xs, color: c.muted }}>DID</span>
-          <input
+          <select
             style={{
               boxSizing: "border-box",
               padding: "6px 9px",
@@ -422,13 +453,24 @@ function ContextDid({
             }}
             value={did}
             onChange={(e) => setDid(e.target.value)}
-            placeholder="did:webvh:…"
-            spellCheck={false}
-          />
+            disabled={dids.loading && !dids.data}
+          >
+            <option value="">— none —</option>
+            {options.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
         </label>
+        {dids.error && <LoadError what="this context's DIDs" error={dids.error} />}
+        {dids.data && options.length === 0 && (
+          <span style={{ fontSize: t.xs, color: c.faint }}>
+            This context holds no DIDs yet. Create one under <b>DIDs</b> and it will appear here.
+          </span>
+        )}
         <span style={{ fontSize: t.xs, color: c.faint }}>
-          Create one under <b>DIDs</b> first, then paste it here. Clearing the field leaves the
-          context with no identity of its own.
+          Choosing <b>none</b> leaves the context with no identity of its own.
         </span>
 
         {error && <Note tone="danger">{error}</Note>}
