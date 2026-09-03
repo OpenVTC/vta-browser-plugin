@@ -8,6 +8,76 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-03
+
+### Migration
+
+- **`AclSwapResult` changed shape entirely.** `swapAcl` typed its reply as a
+  flat ACL entry — `did`, `role`, `allowedContexts`, `createdAt: number`. The
+  agent has not sent that since VTI #857: it responds
+  `{ entry, previousSubject }`, and the entry names `subject` not `did`,
+  `scopes` not `allowedContexts`, and dates as RFC 3339 strings not numbers.
+  Every field a caller read came back `undefined`. Read `res.entry.subject`
+  and `res.entry.scopes`; `res.previousSubject` is the DID that was swapped
+  out. No caller existed in this repo, so nothing here broke — but any code
+  reading the old shape was already getting nothing.
+- **`ContextRecord.did` and `.description` are now optional, not nullable.**
+  They were typed `string | null`; the published schema makes them OPTIONAL,
+  so a conforming agent omits them. Code testing `=== null` never matched and
+  never will — test for absence instead.
+- **`WebvhDidRecord` gained seven members and made two required.** `serverId`
+  and `portable` were optional here and are required by the schema;
+  `mnemonic`, `scid`, `logEntryCount`, `preRotationCount`, `nextFragmentId`,
+  `createdAt` and `updatedAt` were omitted entirely and are now available.
+- **`PushRegistration` is the generated `WebPush` variant.** The schema
+  declares `Apns | Fcm | WebPush`; this library narrows to the one a browser
+  can produce, taken from the binding rather than restated.
+
+### BREAKING
+
+- The four types above now come from `@openvtc/trust-tasks` rather than being
+  declared here. Structurally compatible code needs no change; anything that
+  relied on the drifted shapes does.
+
+### Fixed
+
+- `swapAcl` returns what the agent actually sends (see Migration). Latent
+  rather than live — nothing called it — and its one test built its fixture
+  from the wrong type and never read it, so the drift was asserted rather
+  than caught.
+
+### Removed
+
+- **Two compatibility folds, for peers that do not exist.** `contextsList`
+  folded `base_path`/`created_at`/`updated_at`, and `vtaListDids` folded
+  `context_id`/`server_id`, both justified as "agents migrate later". Nothing
+  is deployed, and `ContextRecord`/`WebvhDidRecord` in `vta-sdk` both carry
+  `#[serde(rename_all = "camelCase")]` — the agent emits the canonical
+  spelling. Their `alias` attributes are deserialize-only and govern only
+  what the agent *accepts*. The exported `fold()` helper is gone.
+
+### Added
+
+- `vault/credentials/*` client — `credVaultQuery`, `credVaultGet`,
+  `credVaultReceive` and the five lifecycle verbs, with
+  `isRunnableCredentialQuery` so a caller can check the at-least-one-filter
+  rule locally rather than discovering it from a rejection.
+- `admin/backup.ts` — `backupAbort` only. Export and import carry a password
+  inbound and are deliberately absent; see the module header.
+- `reloadServices` in `admin/services.ts`.
+- `contextsUpdateDid` is now reachable from the console (it already existed
+  here and was surfaced nowhere).
+- `setActiveVtaDid` in the extension, alongside the existing readers.
+
+### Changed
+
+- Every task URI in `packages/core/src` now comes from
+  `@openvtc/trust-tasks` rather than a hand-written string. The three
+  `trust-task-error` constants stay written out on purpose — they are
+  historical markers, matching is by slug across every `0.x`, and the current
+  version is re-exported from the package runtime.
+
+
 ## [0.6.0] - 2026-08-28
 
 ### Migration
