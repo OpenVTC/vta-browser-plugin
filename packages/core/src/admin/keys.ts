@@ -23,9 +23,7 @@
 // the parameter type enforces it here; the cleartext warning cannot be
 // enforced by any type and is stated where a caller will read it.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import {
@@ -103,9 +101,9 @@ export type KeyRecord = SpecKeyRecord;
 
 export interface KeysCallerParams {
   /** Envelope `issuer` — the caller's DIDComm identity. */
-  holder: Identity;
+  holder: TaskParty;
   /** The agent — envelope `recipient`. */
-  service: RemoteDidcommEndpoint;
+  service: TaskParty;
 }
 
 export interface KeysCreateParams extends KeysCallerParams {

@@ -76,13 +76,13 @@ test("vaultSignTrustTask forwards the unsigned envelope and returns signedEnvelo
 });
 
 test("vtaListDids scopes by context and unwraps dids[]", async () => {
-  const ch = captureChannel({ dids: [{ did: "did:webvh:a", context_id: "work" }] });
+  const ch = captureChannel({ dids: [{ did: "did:webvh:a", contextId: "work" }] });
   const res = await vtaListDids(ch, { holder, service, contextId: "work" });
   assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/vta/webvh/dids/list/1.0");
-  // camelCase: the schema names `contextId` and sets additionalProperties:false,
-  // so `context_id` was malformed rather than an accepted synonym. This
-  // assertion pinned the drift in place — the reply is still snake_case above,
-  // because the READ path deliberately folds both while agents migrate.
+  // camelCase both ways: the schema names `contextId` and sets
+  // additionalProperties:false, so `context_id` was malformed rather than an
+  // accepted synonym — and the agent emits the canonical spelling too, so the
+  // read path no longer folds.
   assert.deepEqual(ch.sent[0].envelope.payload, { contextId: "work" });
   assert.deepEqual(res, [{ did: "did:webvh:a", contextId: "work" }]);
 });
@@ -108,12 +108,21 @@ test("contextsCreate defaults name to id and forwards description/parent", async
 
 test("swapAcl sends acl/swap-key with currentSubject/newSubject/linkProof (ephemeral issuer)", async () => {
   const holderSigning = generateSigningIdentity();
+  // The response shape the AGENT sends (VTI #857): the realized entry wrapped,
+  // plus the DID swapped out. This fixture used to be a flat entry with `did`,
+  // `allowedContexts` and a numeric `createdAt` — built from the client's own
+  // hand-written type rather than from the schema, so it agreed with the drift
+  // instead of catching it. Nothing read it either, which is how a response
+  // type can be wrong in three ways and stay green.
   const ch = captureChannel({
-    did: holderSigning.did,
-    role: "admin",
-    allowedContexts: [],
-    createdAt: 1,
-    createdBy: "did:web:vta.example",
+    entry: {
+      subject: holderSigning.did,
+      role: "admin",
+      scopes: [],
+      createdAt: "2026-01-01T00:00:00Z",
+      createdBy: "did:web:vta.example",
+    },
+    previousSubject: "did:key:zEphemeral",
   });
   const res = await swapAcl(ch, {
     ephemeralDid: "did:key:zEphemeral",
@@ -126,12 +135,18 @@ test("swapAcl sends acl/swap-key with currentSubject/newSubject/linkProof (ephem
   assert.equal(envelope.recipient, "did:web:vta.example");
   assert.equal(envelope.payload.currentSubject, "did:key:zEphemeral");
   assert.equal(envelope.payload.newSubject, holderSigning.did);
+
+  // Assert the RESPONSE too. The absence of this is what let the return type
+  // drift: `sender.send<T>()` is an unchecked cast, so a wrong `T` costs
+  // nothing until a caller reads a field and gets `undefined`.
+  assert.equal(res.entry.subject, holderSigning.did);
+  assert.equal(res.entry.role, "admin");
+  assert.equal(res.previousSubject, "did:key:zEphemeral");
   assert.ok(
     typeof envelope.payload.linkProof === "string" && envelope.payload.linkProof.length > 0,
     "linkProof VP-JWT is present",
   );
   assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/acl/swap-key/0.1#response");
-  assert.equal(res.did, holderSigning.did);
 });
 
 test("ops accept a VtaSession (not just a raw channel) and route through it", async () => {
@@ -152,30 +167,6 @@ test("setDeviceWake sets the handle; omitting it clears", async () => {
   const ch2 = captureChannel({ pushCapable: false });
   await setDeviceWake(ch2, { holder, service });
   assert.deepEqual(ch2.sent[0].envelope.payload, {}); // clear
-});
-
-test("a context record still arrives from an agent that predates the casing fold", async () => {
-  // SPEC §4.10 makes lowerCamelCase the wire contract and the VTA now emits it,
-  // but this library talks to agents it does not control. The old spelling is
-  // accepted on read and normalised away — a caller never sees both.
-  const ch = captureChannel({
-    contexts: [
-      { id: "work", name: "Work", base_path: "/work", created_at: "t1", updated_at: "t2" },
-    ],
-  });
-  const [ctx] = await contextsList(ch, { holder, service });
-  assert.equal(ctx.basePath, "/work");
-  assert.equal(ctx.createdAt, "t1");
-  assert.equal(ctx.updatedAt, "t2");
-  assert.ok(!("base_path" in ctx), "the pre-fold spelling must not survive into the result");
-});
-
-test("a webvh DID record likewise", async () => {
-  const ch = captureChannel({ dids: [{ did: "did:webvh:a", context_id: "work", server_id: "prod" }] });
-  const [d] = await vtaListDids(ch, { holder, service });
-  assert.equal(d.contextId, "work");
-  assert.equal(d.serverId, "prod");
-  assert.ok(!("context_id" in d));
 });
 
 test("the canonical spelling is passed through untouched", async () => {

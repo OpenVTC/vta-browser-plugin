@@ -106,6 +106,7 @@ import {
   RUNTIME_ONBOARD_PREPARE,
   PAGE_FACING_RUNTIME_TYPES,
   RUNTIME_REQUEST_TASK,
+  RUNTIME_MANAGER_TASK,
   RUNTIME_SIGN_TRUST_TASK,
   RUNTIME_TASK_CONSENT,
   CONSENT_KEEPALIVE_PORT,
@@ -153,6 +154,8 @@ import {
   OFFSCREEN_REQUEST_TASK,
   type RuntimeRequestTaskRequest,
   type RuntimeRequestTaskResponse,
+  type RuntimeManagerTaskRequest,
+  type RuntimeManagerTaskResponse,
   type RuntimeSignTrustTaskRequest,
   type RuntimeSignTrustTaskResponse,
   type RuntimeStepUpConsentRequest,
@@ -1676,6 +1679,72 @@ async function handleRequestTask(
   return res;
 }
 
+/**
+ * True when this message came from one of the extension's own pages.
+ *
+ * `sender.id === chrome.runtime.id` — already checked for every message — does
+ * NOT answer this: a content script is our script, injected into someone else's
+ * page, and passes it. `sender.url` is set by the browser from the context the
+ * message actually left, so an extension page reads
+ * `chrome-extension://<id>/manager.html` while a content script reads the page
+ * it is running in. That is the whole distinction, and it is not forgeable from
+ * page content.
+ *
+ * Used to gate the management console's relay, which — unlike the page-facing
+ * one — does not stop to ask a human before each task.
+ */
+function isExtensionPageSender(sender: chrome.runtime.MessageSender): boolean {
+  const base = chrome.runtime.getURL("");
+  return typeof sender.url === "string" && sender.url.startsWith(base);
+}
+
+/**
+ * Run one administration task proposed by the management console.
+ *
+ * ## Why this does not prompt, when `handleRequestTask` always does
+ *
+ * That prompt exists because an arbitrary web page is proposing an arbitrary
+ * task, and under a generic relay a remembered grant would mean "this site may
+ * ask my agent to do anything at all". Neither half is true here: the caller is
+ * an extension page the operator opened themselves, and there is no origin to
+ * remember or to be wrong about. Prompting per call would also make the surface
+ * unusable — a console reads a dozen lists to draw one screen, and a human who
+ * clicks through twelve identical dialogs to see a page is not consenting to
+ * anything, they are dismissing an obstacle.
+ *
+ * What still stands between the console and a destructive change: the agent's
+ * own policy engine, which answers `requireConsent` as a `consentRequired`
+ * outcome that the console renders as an approval ceremony rather than an
+ * error; the agent's ACL, which is the only authority that decides whether this
+ * caller may act at all; and the console's own preview-then-confirm on every
+ * irreversible action, which shows the agent's account of what would be
+ * destroyed rather than a generic "are you sure".
+ *
+ * The origin stamped into the task is this extension's own. That is the honest
+ * answer — the console really is the caller — and it is what the agent's audit
+ * trail will record.
+ */
+async function handleManagerTask(
+  req: RuntimeManagerTaskRequest,
+): Promise<RuntimeManagerTaskResponse> {
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
+
+  await ensureOffscreenDocument();
+  // No `origin`. There is no proposing page — the operator is acting directly,
+  // the same position a CLI is in — and `requestTask` is explicit that a caller
+  // with no attested origin should omit it rather than invent one. Inventing
+  // this extension's own put an `ext` member on every payload, which some agent
+  // payload structs reject outright.
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_REQUEST_TASK,
+    vtaDid: active.conn.vtaDid,
+    restBaseUrl: active.conn.restBaseUrl,
+    params: req.params,
+  })) as RuntimeManagerTaskResponse;
+}
+
 // Sign a Trust-Task envelope with the wallet's holder did:peer #key-2.
 // Forward to the offscreen which loads the holder identity + calls the core
 // `signTrustTask` helper.
@@ -2660,6 +2729,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Any failure to raise or resolve the prompt is a denial — silence is
       // not agreement, here as everywhere else in this file.
       .catch(() => sendResponse({ approved: false } satisfies RuntimeStepUpConsentResponse));
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_MANAGER_TASK) {
+    // Extension pages only. A content script carries our extension id but not
+    // our URL, and this relay does not stop to ask a human — so the gate is the
+    // whole security boundary for the console's authority.
+    if (!isExtensionPageSender(sender)) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[background] rejecting ${RUNTIME_MANAGER_TASK} from non-extension sender url=${sender.url}`,
+      );
+      sendResponse({ ok: false, error: "manager surface is not page-reachable" });
+      return false;
+    }
+    handleManagerTask(message as RuntimeManagerTaskRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
     return true; // async sendResponse
   }
 

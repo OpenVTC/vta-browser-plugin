@@ -1,0 +1,73 @@
+/* Act colours — the console's only addition to the wallet's design tokens.
+ *
+ * `theme.css` stays the base: ground, surface, line, text, and the semantic
+ * ok/warn/danger triple are shared with the popup, options and confirm
+ * surfaces, so the console reads as the same product and there is exactly one
+ * palette to keep correct across light and dark.
+ *
+ * What the console needs *on top* is a way to say which act of the stack a
+ * section belongs to. The workshop deck does this with a left rail that changes
+ * colour by act, and it works because the grouping is real — the three groups
+ * answer three different questions:
+ *
+ *   identity  (purple)  who you are
+ *   data      (teal)    what is stored here, and who put it there
+ *   wire      (lime)    how bytes get there, and whether they did
+ *   graph     (gold)    who may act, and who has to agree
+ *
+ * These are navigation colours and nothing else. They never encode state: a
+ * section is not "more purple" when something is wrong. `--w-ok` / `--w-warn` /
+ * `--w-danger` remain the only colours that mean anything, which is the reason
+ * the accent was kept separate from the semantics in the first place — "this is
+ * actionable" and "this verified" must stay visually separable in a security
+ * UI, and adding three more meaningful colours would undo that.
+ *
+ * Light values are darkened well past their names (a literal lime is unreadable
+ * on a near-white ground); dark values are lifted. Both are checked against
+ * `--w-surface`, not against white.
+ */
+
+:root {
+  --m-act-identity: #6b3fd4;
+  --m-act-identity-soft: #f0ebfd;
+  --m-act-wire: #4b7d16;
+  --m-act-wire-soft: #eef6e2;
+  --m-act-graph: #8f6410;
+  --m-act-graph-soft: #fbf2dc;
+  --m-act-data: #0e6f78;
+  --m-act-data-soft: #e2f2f4;
+
+  /* The rail's own ground — a half-step off `--w-ground` so the three columns
+   * read as three columns without a hard border doing the work. */
+  --m-rail: #f2f4f8;
+  --m-tree: #fafbfd;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --m-act-identity: #a98bff;
+    --m-act-identity-soft: #1d1733;
+    --m-act-wire: #a4d552;
+    --m-act-wire-soft: #182310;
+    --m-act-graph: #e0b355;
+    --m-act-graph-soft: #292010;
+    --m-act-data: #4dc4d0;
+    --m-act-data-soft: #0e2326;
+
+    --m-rail: #0e131c;
+    --m-tree: #10151f;
+  }
+}
+
+/* The console is a full-page surface and owns the viewport. The wallet's other
+ * surfaces are sized by their container (a popup, an options frame), so this
+ * belongs here rather than in `theme.css`. */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+}

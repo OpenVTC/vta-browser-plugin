@@ -18,29 +18,23 @@ import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { RestChannel, type RestChannelOptions } from "../vta/rest-channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
-const TASK_DEVICE_SET_WAKE = "https://trusttasks.org/spec/device/set-wake/0.2";
-const TASK_DEVICE_SET_WAKE_RESPONSE =
-  "https://trusttasks.org/spec/device/set-wake/0.2#response";
+import {
+  TYPE_URI as TASK_DEVICE_SET_WAKE,
+  RESPONSE_TYPE_URI as TASK_DEVICE_SET_WAKE_RESPONSE,
+  type WakeHandle,
+  type WakeTriggerPolicy,
+  type DeviceSetWakeResponsePayload,
+} from "@openvtc/trust-tasks/device/set-wake/0.2/payload";
 
-/** The opaque gateway-issued handle — gateway address + handle, no token. */
-export interface WakeHandle {
-  /** Gateway that issued + acts on this handle (DID or https URL). */
-  gateway: string;
-  /** Opaque gateway-issued channel identifier (reveals no token). */
-  handle: string;
-}
+/** Re-exported from the binding rather than restated here: both were declared
+ *  by hand and were byte-identical to the schema's, which is the state just
+ *  before a divergence nobody notices. */
+export type { WakeHandle, WakeTriggerPolicy };
 
-/** The VTA's effective allowlist, as provisioned to the gateway. */
-export interface WakeTriggerPolicy {
-  allowedTriggers: string[];
-}
+/** The set-wake response, from the binding. The hand-written copy omitted
+ *  `ext`, which SPEC §4.5.1 lets any agent send. */
+export type DeviceSetWakeResponse = DeviceSetWakeResponsePayload;
 
-export interface DeviceSetWakeResponse {
-  /** Whether the device now has a usable wake channel. */
-  pushCapable: boolean;
-  /** The effective allowlist the VTA computed + provisioned (absent on clear). */
-  triggerPolicy?: WakeTriggerPolicy;
-}
 
 export interface DeviceSetWakeParams {
   /** The wallet's holder DIDComm identity (envelope `issuer`). */

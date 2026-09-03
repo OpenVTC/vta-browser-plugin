@@ -15,7 +15,8 @@ interaction code:
 - **`vti-stack-development-guide.md`** — binding rules (R-numbers below);
   paste its pre-merge checklist into PRs.
 - **`vti-networking-remediation-plan.md`** — deliverable **D8** covers this
-  repo (with vti-didcomm-js and pnm-relay).
+  repo (with vti-didcomm-js; `pnm-relay` was the third and no longer exists —
+  see R4.1).
 - **`vti-architectural-direction.md`** — design-level rationale.
 
 Rules that bite hardest here:
@@ -54,9 +55,22 @@ Rules that bite hardest here:
   network helper here takes an optional `fetch` for testability, so a literal
   `grep "fetch("` finds almost nothing — the real calls are spelled `f(...)`,
   `fetchFn(...)`, `this.fetchImpl(...)`.
-- **R4.1 — shared code with pnm-relay and vti-didcomm-js is a liability until
-  extracted**: the relay never received this repo's body-first error-parsing
-  fix. Land contract/transport fixes in all three or extract the shared core.
+- **R4.1 — the shared core is extracted; keep it that way.** This rule used to
+  read "shared code with pnm-relay and vti-didcomm-js is a liability until
+  extracted: the relay never received this repo's body-first error-parsing
+  fix". That is done and the note had gone stale: **`pnm-relay` no longer
+  exists.** Its `rest-channel.ts` / `request-task.ts` were consolidated into
+  `@openvtc/pnm-core` — the copy `pnm-extension` and `pnm-pwa` both consume,
+  which carries the body-first parse (`decodeTrustTaskHttpAck` reads the body,
+  then builds with `errorFromBody`; `errorFromResponse` appears nowhere) and the
+  `ConsentRequired` union. Nothing depends on `@openvtc/pnm-relay`, and
+  `rp-sdk-js` is a separate server-side SIOPv2 verifier, not its successor.
+  (`vti-networking-remediation-plan.md` F5, resolved by consolidation.)
+
+  What survives is the *rule*, not the defect: `vti-didcomm-js` is still a
+  separate implementation of the same wire contract, so a transport or
+  error-shape fix has to land in both. A third copy is what R4.1 exists to
+  prevent — do not reintroduce one.
 
 ## How persist-before-ack is held (R1.6)
 
@@ -127,6 +141,108 @@ routing either through a channel would overwrite or duplicate a proof.
 `tests/vta.outbound-signing.mjs` pins it, running the real verifier over the
 document as the counterparty receives it — a signature copied from another
 document satisfies an "is there a `proof` member" check and fails this one.
+
+## The wallet ships no operator authority — the console does
+
+`@openvtc/pnm-core/admin` is operator surface: granting authority at an agent,
+revoking it, destroying contexts. It is deliberately absent from the package
+root barrel, and CI greps the built output for 17 of its task URIs.
+
+That guard used to read "banned anywhere in `dist/`", on the grounds that a
+wallet has no business shipping any of it. The **management console**
+(`manager.html`) makes that statement false on purpose — administering the agent
+is its whole job — so the guard was **narrowed, not deleted**: banned everywhere
+in `dist/` *except* `manager.js`. Every wallet surface (service worker, content
+and page-world scripts, popup, confirm, offscreen, options) keeps the property
+the guard was protecting.
+
+**The console is its own vite build** (`vite.config.manager.ts`,
+`codeSplitting: false`). That is what makes "exactly one file may contain admin"
+structural rather than a convention: the main build emits popup, options,
+confirm and offscreen *together*, and Rollup is free to hoist shared code into a
+common `assets/*.js` chunk that wallet surfaces load. Building the console alone
+means there is no other entry to share with. A second CI assertion fails if it
+ever emits more than one chunk, because the first guard names exactly one
+exception and an extra chunk is a file nothing checks.
+
+**The console holds no key material.** It composes typed documents with the
+`admin/*` helpers and the offscreen document signs them, so an XSS there cannot
+exfiltrate a key. This is why `admin/*` and `vta/contexts.ts` type their
+envelope parties as `TaskParty` (`vta/channel.ts`) — just a DID — rather than
+`Identity` and `RemoteDidcommEndpoint`: only `.did` was ever read, and a
+surface typed on `Identity` can only be called from somewhere holding a private
+key. The REST convenience wrappers (`vtaListContexts`, `vtaCreateContext`) still
+take the stricter pair, because they *build a channel*, and a channel signs.
+
+**Only `type` and `payload` cross the bridge.** `RUNTIME_MANAGER_TASK` carries
+those two members and nothing else; `carrier.ts` strips the envelope the admin
+helper built, and `offscreen.ts`'s existing `OFFSCREEN_REQUEST_TASK` mints the
+real one and signs it. `core/src/vta/request-task.ts` explains why the device
+must mint it, and that reasoning does not soften because the composer is an
+extension page: a wallet that counter-signs a document composed elsewhere
+attests to fields it never checked. Reusing that path also inherits transport
+selection, `TransportHealth`, and the same-browser approver ceremony for free —
+`offscreen.ts` needed no change at all.
+
+**The relay is gated on `sender.url`, not `sender.id`.** Every content script
+carries this extension's id, so `sender.id` cannot separate a page from an
+extension surface. `isExtensionPageSender` compares against
+`chrome.runtime.getURL("")`. Unlike the page-facing `RUNTIME_REQUEST_TASK`, this
+one does **not** prompt per call — the caller is the operator driving their own
+console, and twelve identical dialogs to render one screen is dismissal, not
+consent. What stands in its place: the agent's ACL, its policy engine (a
+`requireConsent` comes back as `ConsentRequiredError` and renders as a match-code
+ceremony, never as a red string), and preview-then-confirm on every irreversible
+action, showing the agent's own account of what would be destroyed.
+
+**What breaks it:** importing `admin` from the package root instead of the
+subpath; folding `manager.html` into `vite.config.ts` (a shared chunk then
+carries admin into wallet surfaces); losing `codeSplitting: false`; adding
+`RUNTIME_MANAGER_TASK` to `PAGE_FACING_RUNTIME_TYPES` or to `content.ts`'s
+dispatch table; gating on `sender.id`; or widening the carrier to pass the
+envelope through. `tests/manager-sender.test.mts`,
+`tests/manager-surface.test.mts` and the two CI assertions pin each of these.
+
+## Key material never reaches a browser, and that is enforced
+
+`vta/seeds/*` — `list`, `rotate`, `export-mnemonic` — is the one task family
+this extension refuses outright. `export-mnemonic` returns a BIP-39 mnemonic:
+the seed every derived key in the agent comes from, and the one secret whose
+disclosure loses everything at once. `list` and `rotate` are the rest of that
+family's surface.
+
+**A second CI guard bans all three from anywhere in `dist/`, with no
+exception.** That is the difference from the admin guard above, and the
+difference is the point: `admin/*` is *authority*, which the console is meant to
+hold, so that guard names `manager.js` as its one permitted file. These return
+*material*, and no browser context should be able to ask for them — not the
+console, not the wallet, nowhere.
+
+**Why a guard rather than simply not building it.** Not building a seeds pane is
+indistinguishable from not having got round to one. Someone reasonable adds it
+next year, nothing objects, and the refusal was never recorded anywhere a person
+would look. The guard is what makes the decision legible.
+
+**Verified non-vacuous — and the way it is verified matters.** A seeds URI
+merely *present* in console source is not enough: Rollup tree-shakes an
+unreferenced export, the string never reaches `dist/`, and the guard correctly
+stays silent. That is the guard being right, not weak — it asserts what
+*ships* — but it means a probe that adds an unused `export const` proves
+nothing and reads like a hole. To re-verify, put the URI somewhere the console
+actually renders (a nav `label`, say), rebuild, and watch `manager.js` trip it.
+
+`packages/core` has no seeds module and must not gain one. The guard catches
+that too — a core function would be bundled into `manager.js` and grep would
+find it there.
+
+**`vault/release/0.1` is deliberately not on the list.** It releases a secret to
+a site the human has just approved, which is the wallet's entire job. The line
+is not "touches a secret"; it is "hands over material the holder cannot revoke,
+to a surface that cannot contain it".
+
+**What breaks it:** adding a seeds client to `packages/core`; relaxing the guard
+to allow `manager.js` "for symmetry" with the admin one; or reading this as
+advice rather than a refusal.
 
 ## Advertisement is not availability
 

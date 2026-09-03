@@ -32,6 +32,44 @@ export function parseActiveVtaDid(raw: unknown): string | null {
   }
 }
 
+/**
+ * Make `vtaDid` the active agent, if the wallet has onboarded it.
+ *
+ * Writes the same `pnm-connection/v3` envelope the readers above parse, which
+ * is zustand's persisted blob. Read-modify-write rather than a blind set: the
+ * envelope carries the whole connection map, and replacing it wholesale from a
+ * partial view would forget every other VTA — the same class of bug the
+ * per-agent inbox map exists to prevent (see CLAUDE.md).
+ *
+ * Refuses a DID the wallet does not hold, matching `activateVta` in the store:
+ * activating an agent that was never onboarded would leave the console pointed
+ * at something it has no holder identity for.
+ *
+ * Returns whether the switch happened, so a caller can tell "done" from "that
+ * agent is not on this device" without inspecting storage itself.
+ */
+export async function setActiveVtaDid(vtaDid: string): Promise<boolean> {
+  const KEY = "pnm-connection/v3";
+  const stored = await chrome.storage.local.get(KEY);
+  const raw = stored[KEY];
+  if (typeof raw !== "string") return false;
+
+  let parsed: { state?: { connections?: { activeVtaDid?: string | null; vtas?: Record<string, unknown> } } };
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+
+  const connections = parsed.state?.connections;
+  if (!connections?.vtas || !(vtaDid in connections.vtas)) return false;
+  if (connections.activeVtaDid === vtaDid) return true;
+
+  connections.activeVtaDid = vtaDid;
+  await chrome.storage.local.set({ [KEY]: JSON.stringify(parsed) });
+  return true;
+}
+
 /** Enumerate every VTA the wallet has onboarded — keys of the
  *  persisted `vtas` map regardless of which one is active. Background
  *  uses this to drive the multi-listener inbound reconcile. Returns

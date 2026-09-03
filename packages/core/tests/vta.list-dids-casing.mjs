@@ -47,12 +47,14 @@ test("no filter sends an empty payload rather than an absent key set to undefine
   assert.deepEqual(ch.sent[0].envelope.payload, {});
 });
 
-test("the read path still folds a legacy record, because agents migrate later", async () => {
-  // Emitting the canonical spelling and accepting both are separate moves. An
-  // agent that has not taken the fold still answers `context_id`, and dropping
-  // the fold here would leave `contextId` undefined against it.
+test("the read path passes the canonical spelling straight through", async () => {
+  // The fold this replaced accepted `context_id`/`server_id` too, justified by
+  // "an agent that has not taken the fold". No such agent exists: nothing is
+  // deployed, and `WebvhDidRecord` in `vta-sdk` is `rename_all = "camelCase"`,
+  // so the agent emits the canonical spelling. Its `alias` attributes are
+  // deserialize-only — they govern what it accepts, not what it sends.
   const ch = recorder({
-    dids: [{ did: "did:webvh:QmA:h.example", context_id: "personal", server_id: "prod" }],
+    dids: [{ did: "did:webvh:QmA:h.example", contextId: "personal", serverId: "prod" }],
   });
   const [rec] = await vtaListDids(ch, { holder: HOLDER, service: SERVICE });
   assert.equal(rec.contextId, "personal");

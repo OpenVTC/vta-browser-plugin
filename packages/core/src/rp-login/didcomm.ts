@@ -27,8 +27,10 @@ import type { DidcommMessageBridge } from "../vta/transport.js";
 //
 // Matched with `===` against the spelling the RP declares today; no
 // both-spellings fold, per this repo's rule on compatibility arms.
-const MSG_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
-const MSG_AUTH_RESPONSE = "https://trusttasks.org/spec/auth/authenticate/0.1#response";
+import {
+  TYPE_URI as MSG_AUTHENTICATE,
+  RESPONSE_TYPE_URI as MSG_AUTH_RESPONSE,
+} from "@openvtc/trust-tasks/auth/authenticate/0.1/payload";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 

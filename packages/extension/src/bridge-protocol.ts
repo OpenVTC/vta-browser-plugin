@@ -1743,9 +1743,56 @@ export interface OffscreenRequestTaskRequest {
   type: typeof OFFSCREEN_REQUEST_TASK;
   vtaDid: string;
   restBaseUrl: string;
-  origin: string;
+  /**
+   * The origin the browser attributed to the proposing page, when there is one.
+   *
+   * **Absent for the management console, deliberately.** `requestTask` stamps
+   * this into `payload.ext["openvtc.origin"]` so the origin a human approves is
+   * bound to the payload that executes — which is essential when a *page*
+   * proposed the task and meaningless when the operator is driving their own
+   * console. `requestTask`'s own contract says a caller with no attested origin
+   * should omit it rather than invent one, and inventing one here was not free:
+   * it put an `ext` member on every payload, and an agent whose struct has
+   * drifted from its schema rejects the whole request as malformed.
+   *
+   * The page path is unaffected — `background.ts` still refuses a page-facing
+   * message that carries no browser-attested origin, which is where that
+   * requirement is enforced.
+   */
+  origin?: string;
   params: RequestTaskParams;
 }
+
+/** manager console → background: run one administration task at the agent.
+ *
+ *  **Deliberately NOT in {@link PAGE_FACING_RUNTIME_TYPES}, and deliberately
+ *  absent from `content.ts`'s dispatch table.** Granting authority at an agent,
+ *  revoking it and destroying contexts is operator surface; a web page has no
+ *  business proposing any of it, and the relay it *is* allowed to use
+ *  ({@link RUNTIME_REQUEST_TASK}) prompts a human for every single call.
+ *
+ *  `sender.id === chrome.runtime.id` does not separate the two — a content
+ *  script passes it. The discriminator is `sender.url`, which the browser sets
+ *  and a page cannot influence: an extension page's is under
+ *  `chrome.runtime.getURL("")`, a content script's is the page it was injected
+ *  into. `background.ts` gates on exactly that.
+ *
+ *  Carries `params` and nothing else. The console composes a typed envelope
+ *  with the `@openvtc/pnm-core/admin` helpers, but only its `type` and
+ *  `payload` cross this boundary — the device mints `id`, `issuedAt`, `issuer`
+ *  and `recipient` inside its own trust boundary and the channel signs the
+ *  result, exactly as it does for a page-proposed task. See
+ *  `core/src/vta/request-task.ts` for why that division is not negotiable. */
+export const RUNTIME_MANAGER_TASK = "vta-wallet/manager-task" as const;
+
+export interface RuntimeManagerTaskRequest {
+  type: typeof RUNTIME_MANAGER_TASK;
+  params: RequestTaskParams;
+}
+
+export type RuntimeManagerTaskResponse =
+  | { ok: true; result: RequestTaskResult }
+  | { ok: false; error: string };
 
 /**
  * Every runtime message type a *web page* can originate through the content

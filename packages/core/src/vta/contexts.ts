@@ -1,103 +1,79 @@
-// Contexts — list + create, as dispatcher trust-tasks.
+// Contexts — the `vta/contexts/*` family, as dispatcher trust-tasks.
 //
 // The popup's AddEntryForm fetches the operator's accessible contexts (to
 // populate the context picker) and can create a new context inline. Both run
 // as canonical trust-tasks over a TrustTaskChannel/VtaSession, so they work on
 // a DIDComm-only VTA as well as REST.
 //
-//   list   → https://trusttasks.org/spec/vta/contexts/list/1.0    (payload {})
-//   create → https://trusttasks.org/spec/vta/contexts/create/1.0  (super-admin)
-//
-// Wire shapes mirror `vta-sdk::protocols::context_management::{list,create}`:
-// snake_case fields, `CreateContextResultBody` as the record. The VTA also
-// exposes a bespoke `GET/POST /contexts` REST route (now deprecated) — the
-// trust-task dispatcher form is the canonical one.
+// **Every URI and the record shape come from `@openvtc/trust-tasks`.** They
+// used to be hand-written here, alongside a hand-declared `ContextRecord` and a
+// header claiming the wire was snake_case. None of that was true any more, and
+// two of them were wrong in a way nothing would have caught: the hand-written
+// record typed `did` and `description` as `string | null`, where the published
+// schema makes them OPTIONAL — an agent omits them, so a caller testing
+// `=== null` never matches, and TypeScript agrees with the caller. Taking the
+// type from the binding means the schema is the only place that shape is
+// stated.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "./channel.js";
-import type { RemoteDidcommEndpoint } from "./didcomm.js";
+import type { TaskParty, TrustTaskSender } from "./channel.js";
 import { RestChannel, type RestChannelOptions } from "./rest-channel.js";
 import { buildTrustTask } from "./trust-task.js";
 
-const TASK_CONTEXTS_LIST = "https://trusttasks.org/spec/vta/contexts/list/1.0";
-const TASK_CONTEXTS_LIST_RESPONSE = `${TASK_CONTEXTS_LIST}#response`;
-const TASK_CONTEXTS_CREATE = "https://trusttasks.org/spec/vta/contexts/create/1.0";
-const TASK_CONTEXTS_GET = "https://trusttasks.org/spec/vta/contexts/get/1.0";
-const TASK_CONTEXTS_GET_RESPONSE = `${TASK_CONTEXTS_GET}#response`;
-const TASK_CONTEXTS_UPDATE = "https://trusttasks.org/spec/vta/contexts/update/1.0";
-const TASK_CONTEXTS_UPDATE_RESPONSE = `${TASK_CONTEXTS_UPDATE}#response`;
-const TASK_CONTEXTS_UPDATE_DID = "https://trusttasks.org/spec/vta/contexts/update-did/1.0";
-const TASK_CONTEXTS_UPDATE_DID_RESPONSE = `${TASK_CONTEXTS_UPDATE_DID}#response`;
-const TASK_CONTEXTS_CREATE_RESPONSE = `${TASK_CONTEXTS_CREATE}#response`;
+import {
+  TYPE_URI as TASK_CONTEXTS_LIST,
+  RESPONSE_TYPE_URI as TASK_CONTEXTS_LIST_RESPONSE,
+  type ContextRecord,
+} from "@openvtc/trust-tasks/vta/contexts/list/1.0/payload";
+import {
+  TYPE_URI as TASK_CONTEXTS_CREATE,
+  RESPONSE_TYPE_URI as TASK_CONTEXTS_CREATE_RESPONSE,
+} from "@openvtc/trust-tasks/vta/contexts/create/1.0/payload";
+import {
+  TYPE_URI as TASK_CONTEXTS_GET,
+  RESPONSE_TYPE_URI as TASK_CONTEXTS_GET_RESPONSE,
+} from "@openvtc/trust-tasks/vta/contexts/get/1.0/payload";
+import {
+  TYPE_URI as TASK_CONTEXTS_UPDATE,
+  RESPONSE_TYPE_URI as TASK_CONTEXTS_UPDATE_RESPONSE,
+} from "@openvtc/trust-tasks/vta/contexts/update/1.0/payload";
+import {
+  TYPE_URI as TASK_CONTEXTS_UPDATE_DID,
+  RESPONSE_TYPE_URI as TASK_CONTEXTS_UPDATE_DID_RESPONSE,
+} from "@openvtc/trust-tasks/vta/contexts/update-did/1.0/payload";
 
-/** One context record — mirrors `CreateContextResultBody` (the shape returned
- *  by both list and create). snake_case on the wire. */
-export interface ContextRecord {
-  id: string;
-  name: string;
-  did: string | null;
-  description: string | null;
-  /** Parent context id, or absent for a top-level context. */
-  parent?: string;
-  /** Resolved path from the root context — derived by the VTA, not settable. */
-  basePath: string;
-  createdAt: string;
-  updatedAt: string;
-}
+/** One context record, as the registry declares it. Re-exported so callers
+ *  need not know which task's binding it happens to live under. */
+export type { ContextRecord };
 
 
-/**
- * Read a member that the agent may still spell in snake_case.
- *
- * SPEC §4.10 makes lowerCamelCase the wire contract, and the VTA now emits it —
- * but an agent that has not taken that change yet still sends the old spelling,
- * and this library talks to agents it does not control. Accepting both on read
- * is Postel's other half; this library emits only the canonical form.
- *
- * Delete once no supported agent predates the fold.
- */
-export function fold(
-  raw: Record<string, unknown>,
-  pairs: readonly (readonly [string, string])[],
-): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...raw };
-  for (const [camel, snake] of pairs) {
-    if (snake in out) {
-      if (!(camel in out)) out[camel] = out[snake];
-      delete out[snake];
-    }
-  }
-  return out;
-}
 
 /**
- * Accept either spelling of the record's members; hand back the canonical one.
+ * A context record as the agent sends it.
  *
- * Only rewrites what is present: a record that carries neither spelling of a
- * member keeps not carrying it, rather than gaining the key with `undefined`.
+ * This used to fold `base_path`/`created_at`/`updated_at` into the canonical
+ * spelling, on the reasoning that the library "talks to agents it does not
+ * control". That reasoning does not hold here and the fold was dead code:
+ * nothing is deployed, the wallet has never been published, and `ContextRecord`
+ * in `vta-sdk` carries `#[serde(rename_all = "camelCase")]` — so the agent
+ * *emits* camelCase and has done since the casing change. Its `alias`
+ * attributes are deserialize-only; they let it keep *accepting* the old
+ * spelling, which says nothing about what it sends.
+ *
+ * A fold kept past its cause is worse than none: it reads as a live constraint,
+ * and the next person maintaining this file has to work out whether some peer
+ * still needs it. SPEC §4.10 names one spelling — match it with `===`.
  */
-function normalizeContext(raw: Record<string, unknown>): ContextRecord {
-  const out: Record<string, unknown> = { ...raw };
-  for (const [camel, snake] of [
-    ["basePath", "base_path"],
-    ["createdAt", "created_at"],
-    ["updatedAt", "updated_at"],
-  ] as const) {
-    if (snake in out) {
-      if (!(camel in out)) out[camel] = out[snake];
-      delete out[snake];
-    }
-  }
-  return out as unknown as ContextRecord;
+function asContextRecord(raw: Record<string, unknown>): ContextRecord {
+  return raw as unknown as ContextRecord;
 }
 
 export interface ContextsListParams {
   /** Envelope `issuer` — the holder's DIDComm identity. Its DID must be in
    *  the VTA's ACL with any role (`contexts/list` is auth-gated, not
    *  admin-only; the VTA filters by `has_context_access`). */
-  holder: Identity;
+  holder: TaskParty;
   /** The VTA — envelope `recipient`. */
-  service: RemoteDidcommEndpoint;
+  service: TaskParty;
 }
 
 /** List the contexts the holder can access.
@@ -117,12 +93,12 @@ export async function contextsList(
     expectedResponseType: TASK_CONTEXTS_LIST_RESPONSE,
     operationLabel: "contexts/list/1.0",
   });
-  return (payload.contexts ?? []).map(normalizeContext);
+  return (payload.contexts ?? []).map(asContextRecord);
 }
 
 export interface ContextsCreateParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
   /** Leaf segment when `parent` is set (full path = `<parent>/<id>`), else a
    *  top-level id. Must be unique; a conflict rejects. */
   id: string;
@@ -155,19 +131,26 @@ export async function contextsCreate(
     expectedResponseType: TASK_CONTEXTS_CREATE_RESPONSE,
     operationLabel: "contexts/create/1.0",
   });
-  return normalizeContext(created);
+  return asContextRecord(created);
 }
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer
- *  {@link contextsList} with a channel from a `VtaSession`. */
-export interface VtaListContextsOptions extends ContextsListParams, RestChannelOptions {}
+ *  {@link contextsList} with a channel from a `VtaSession`.
+ *
+ *  `holder` and `service` come from {@link RestChannelOptions}, not from
+ *  {@link ContextsListParams}: composing the envelope needs only the two DIDs, but this
+ *  wrapper also *builds the channel*, and a channel signs and encrypts. The
+ *  narrower pair is what the wire actually requires here. */
+export interface VtaListContextsOptions
+  extends Omit<ContextsListParams, "holder" | "service">,
+    RestChannelOptions {}
 
 /** @deprecated Use {@link contextsList} with a channel from a `VtaSession`.
  *  List over REST — builds a one-shot {@link RestChannel} (dispatches
  *  `contexts/list/1.0` over `/trust-tasks`, NOT the bespoke `/contexts`). */
 export interface ContextsGetParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
   /** Context id — the full path for a nested context. */
   id: string;
 }
@@ -194,12 +177,12 @@ export async function contextsGet(
     expectedResponseType: TASK_CONTEXTS_GET_RESPONSE,
     operationLabel: "vta/contexts/get/1.0",
   });
-  return normalizeContext(payload);
+  return asContextRecord(payload);
 }
 
 export interface ContextsUpdateParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
   /** Context to update. The id itself cannot be changed. */
   id: string;
   /** New human-readable name. Omit to leave unchanged. */
@@ -235,12 +218,12 @@ export async function contextsUpdate(
     expectedResponseType: TASK_CONTEXTS_UPDATE_RESPONSE,
     operationLabel: "vta/contexts/update/1.0",
   });
-  return normalizeContext(payload);
+  return asContextRecord(payload);
 }
 
 export interface ContextsUpdateDidParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
   /** Context whose DID is being set. */
   id: string;
   /** The DID to associate with this context. */
@@ -261,7 +244,7 @@ export async function contextsUpdateDid(
     expectedResponseType: TASK_CONTEXTS_UPDATE_DID_RESPONSE,
     operationLabel: "vta/contexts/update-did/1.0",
   });
-  return normalizeContext(payload);
+  return asContextRecord(payload);
 }
 
 export function vtaListContexts(opts: VtaListContextsOptions): Promise<ContextRecord[]> {
@@ -269,8 +252,15 @@ export function vtaListContexts(opts: VtaListContextsOptions): Promise<ContextRe
 }
 
 /** @deprecated REST-transport options. Kept for existing call sites; prefer
- *  {@link contextsCreate} with a channel from a `VtaSession`. */
-export interface VtaCreateContextOptions extends ContextsCreateParams, RestChannelOptions {}
+ *  {@link contextsCreate} with a channel from a `VtaSession`.
+ *
+ *  `holder` and `service` come from {@link RestChannelOptions}, not from
+ *  {@link ContextsCreateParams}: composing the envelope needs only the two DIDs, but this
+ *  wrapper also *builds the channel*, and a channel signs and encrypts. The
+ *  narrower pair is what the wire actually requires here. */
+export interface VtaCreateContextOptions
+  extends Omit<ContextsCreateParams, "holder" | "service">,
+    RestChannelOptions {}
 
 /** @deprecated Use {@link contextsCreate} with a channel from a `VtaSession`.
  *  Create over REST — builds a one-shot {@link RestChannel}. */

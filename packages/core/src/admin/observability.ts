@@ -5,9 +5,7 @@
 // "under what settings", and `config/patch` is the one write, kept in the same
 // file because you should never be looking at the second without the first.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import {
@@ -40,8 +38,8 @@ import {
 export type { AuditEnvelope, ConfigField };
 
 export interface ObservabilityCallerParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  holder: TaskParty;
+  service: TaskParty;
 }
 
 export interface AuditListParams extends ObservabilityCallerParams {

@@ -30,7 +30,7 @@ import { packAuthcrypt, type Identity } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";
 import { withFetchTimeout } from "../http/timeout-fetch.js";
 
-const VTA_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
+import { TYPE_URI as VTA_AUTHENTICATE } from "@openvtc/trust-tasks/auth/authenticate/0.1/payload";
 
 /** Reuse window — kept well under the server's ~15-minute token TTL so a
  *  cached token can't be served past expiry (clock-skew safety margin). */

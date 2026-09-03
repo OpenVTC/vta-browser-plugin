@@ -1152,7 +1152,10 @@ async function doRequestTask(req: OffscreenRequestTaskRequest) {
     payload: req.params.payload,
     holderDid: holder.did,
     vtaDid: req.vtaDid,
-    origin: req.origin,
+    // Spread rather than passing `undefined`: `requestTask` stamps
+    // `payload.ext` only when an origin is present, and the management console
+    // deliberately supplies none. See `OffscreenRequestTaskRequest.origin`.
+    ...(req.origin ? { origin: req.origin } : {}),
   });
   // Same-browser approver: if this VTA has a local approver identity, surface
   // the ceremony right here on the rejection and relay the signed decision over

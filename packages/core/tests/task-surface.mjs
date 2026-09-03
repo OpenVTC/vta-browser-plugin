@@ -178,21 +178,52 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
     [...REFERENCED.keys()].map(family).filter((f) => canonicalFamilies.has(f)),
   );
 
-  // 152 of 177 as of vta-sdk 0.29.0. It was 130 until the specced-but-
+  // 161 of 178 as of vta-sdk 0.32.3. It was 130 until the specced-but-
   // unimplemented gap was closed in one pass: `trust-task-discovery/0.1`,
   // `acl/update/0.1`, `vta/webvh/servers/retire-orphan/0.1`,
   // `vtc/members/removal-notice/0.1`, `vta/app-state/*` (6), `vta/services/*`
   // (8), `vta/credentials/{issue,revoke}/0.1`, and
   // `auth/passkey/login/{start,finish}/0.2`.
   //
-  // **All 25 still outstanding are unspecced** — no schema in the registry, so
-  // no binding in @openvtc/trust-tasks to implement against: `vault/*`'s
-  // archive/restore/purge/unarchive and its whole `credentials` sub-family,
-  // `vta/backup/*`, `vta/attestation/*`, `vta/seeds/*`,
-  // `vta/audit/*-retention`, and `vta/management/reload-services`. That makes
-  // this number, for the first time, a statement about upstream rather than
-  // about this repo: it moves when a spec lands, not when someone here finds
-  // time.
+  // 160 -> 161 is `vta/credentials/list/0.1`, and the canonical total moved
+  // with it (177 -> 178) because the task did not exist on either side before.
+  // Specified at trustoverip/dtgwg-trust-tasks-tf#342 and implemented at
+  // OpenVTC/verifiable-trust-infrastructure#1235, in response to a gap this
+  // console surfaced: `revoke` is keyed on a `credentialId` that `issue`
+  // returns exactly once, so an issuer that had not recorded it could not ask.
+  // Unlike the eight below, this is not a family that moved off the unspecced
+  // list — it is new.
+  //
+  // 152 -> 160 is the whole `vault/credentials/*` sub-family — receive, query,
+  // get, archive, unarchive, delete, restore, purge — which moved here from
+  // the unspecced list rather than from a backlog. The agent had been
+  // dispatching all eight with no schema in the registry; specifying them
+  // (trustoverip/dtgwg-trust-tasks-tf#338, shipped in @openvtc/trust-tasks
+  // 0.16.4) is what produced bindings to implement against.
+  //
+  // 161 -> 163 is `vta/backup/abort` and `vta/management/reload-services`,
+  // specced at trustoverip/dtgwg-trust-tasks-tf#347 and shipped in
+  // @openvtc/trust-tasks 0.16.8. Same shape as the eight before them: the
+  // agent was already dispatching both with no schema in the registry.
+  //
+  // **`vta/backup/*` is now specced in full and deliberately implemented in
+  // part**, which makes it the first family whose absence is a decision rather
+  // than a gap upstream. All five verbs have bindings; this library exposes
+  // `abort` alone. `initiate-export` and `finalize-import` carry a `password`
+  // — the key to a complete copy of the agent, travelling inbound — and a
+  // browser is the wrong place to collect it, for reasons `admin/backup.ts`
+  // sets out at length. Do not "finish" the family to make this number
+  // rounder; the four that are missing are missing on purpose.
+  //
+  // **The other 15 outstanding are unspecced** — no schema in the registry, so
+  // no binding in @openvtc/trust-tasks to implement against: `vault/*`'s own
+  // archive/restore/purge/unarchive (the *secrets* lifecycle, distinct from
+  // the credential one above), `vta/attestation/*`, `vta/seeds/*` and
+  // `vta/audit/*-retention`.
+  //
+  // `vta/seeds/*` is a third category again, and will never move: it returns
+  // key material, and CI bans its URIs from every extension bundle including
+  // the console. A spec landing upstream would not change that.
   //
   // **Nothing is behind any more.** Every implemented family names the newest
   // version `vta-sdk` publishes: `vault/{list,get,upsert}` and
@@ -203,7 +234,7 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // the agent does not name, rather than as a deprecation warning. That is the
   // expected shape of a cutover here: nothing is deployed, so neither side
   // keeps an old version alive.
-  const expected = 152;
+  const expected = 163;
   assert.equal(
     implemented.size,
     expected,

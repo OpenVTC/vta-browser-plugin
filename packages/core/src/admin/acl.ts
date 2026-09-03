@@ -12,9 +12,7 @@
 // from the Rust structs, which is a copy that drifts, and got the nullability of
 // `acl/show`'s response wrong in the process.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import {
@@ -73,9 +71,9 @@ export type { AclEntry };
 export interface AclCallerParams {
   /** Envelope `issuer` — the caller's DIDComm identity. Its DID needs a role
    *  the agent accepts for this task; the whole family is manage-gated. */
-  holder: Identity;
+  holder: TaskParty;
   /** The agent — envelope `recipient`. */
-  service: RemoteDidcommEndpoint;
+  service: TaskParty;
 }
 
 export interface AclGrantParams extends AclCallerParams {

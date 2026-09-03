@@ -433,6 +433,36 @@ function ConnectedView({
         Role: <b>{connection.role}</b> &nbsp;·&nbsp; Transports: <b>{transports || "—"}</b>
       </div>
 
+      {/* The management console, for the VTA this popup is connected to.
+          It already had an entry point on the options page and none here,
+          which is the wrong way round: this is the surface that tells you
+          which agent you are talking to, so it is where "and now go
+          administer it" belongs.
+
+          A tab, not a pane. Opening it closes the popup — which is the
+          point rather than a cost: the console is a working surface with a
+          context tree and thirteen panes, and a 400px popup that vanishes
+          when it loses focus is no place to destroy a context from.
+
+          Deliberately not role-gated. Several panes are readable at any
+          role, and the console already refuses what the caller may not do,
+          with the reason on the control rather than by hiding it. Gating
+          here would hide the readable half from everyone else.
+
+          This adds no admin code to the popup bundle — it opens a URL. The
+          CI guard that keeps `pnm-core/admin` out of every wallet surface
+          is unaffected, and still passes. */}
+      <button
+        onClick={() => void chrome.tabs.create({ url: chrome.runtime.getURL("manager.html") })}
+        style={{ marginTop: 8 }}
+      >
+        Manage this agent ↗
+      </button>
+      <small style={{ color: "var(--w-muted)" }}>
+        Opens the management console in a new tab — contexts, keys, credentials,
+        access and audit for this VTA.
+      </small>
+
       {encryptOn && (
         <>
           <button onClick={() => void lockWallet()} disabled={lockBusy} style={{ marginTop: 8 }}>

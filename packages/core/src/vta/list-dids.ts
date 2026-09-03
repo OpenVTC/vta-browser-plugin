@@ -20,27 +20,23 @@ import type { TrustTaskSender } from "./channel.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";
 import { RestChannel, type RestChannelOptions } from "./rest-channel.js";
 import { buildTrustTask } from "./trust-task.js";
-import { fold } from "./contexts.js";
 
-const TASK_WEBVH_DIDS_LIST_1_0 = "https://trusttasks.org/spec/vta/webvh/dids/list/1.0";
+import {
+  TYPE_URI as TASK_WEBVH_DIDS_LIST_1_0,
+  type WebvhDidRecord,
+} from "@openvtc/trust-tasks/vta/webvh/dids/list/1.0/payload";
 const TASK_WEBVH_DIDS_LIST_1_0_RESPONSE = `${TASK_WEBVH_DIDS_LIST_1_0}#response`;
 
-/** One webvh DID record as returned by `vta/webvh/dids/list/1.0`.
- *  Mirrors `vta-sdk::webvh::WebvhDidRecord` — **snake_case** on the
- *  wire. Only the fields the wallet consumes are typed; the VTA also
- *  sends `mnemonic`, `scid`, `log_entry_count`, timestamps, etc. which
- *  we ignore here. */
-export interface WebvhDidRecord {
-  /** The hosted DID (`did:webvh:…`). The persona a did-self-issued
-   *  entry acts AS — becomes the SIOP `iss`/`sub`. */
-  did: string;
-  /** Context this DID belongs to (matches a `ContextRecord.id`). */
-  contextId: string;
-  /** Hosting server the DID is registered with. */
-  serverId?: string;
-  /** Whether the DID is portable across hosting servers. */
-  portable?: boolean;
-}
+/** A hosted DID as the registry declares it.
+ *
+ *  Taken from the binding rather than declared here. The hand-written version
+ *  this replaces had drifted in both directions at once: it marked `serverId`
+ *  and `portable` OPTIONAL where the schema makes them required, and it omitted
+ *  seven members the agent actually sends (`mnemonic`, `scid`, `logEntryCount`,
+ *  `preRotationCount`, `nextFragmentId`, `createdAt`, `updatedAt`). Neither
+ *  kind of drift announces itself: the first invites guards that can never
+ *  fire, the second hides data a caller would have used. */
+export type { WebvhDidRecord };
 
 interface ListDidsResultBody {
   dids?: WebvhDidRecord[];
@@ -84,16 +80,13 @@ export async function vtaListDids(
     expectedResponseType: TASK_WEBVH_DIDS_LIST_1_0_RESPONSE,
     operationLabel: "webvh/dids/list",
   });
-  // Accept either spelling while agents migrate to the canonical casing
-  // (SPEC §4.10). Changing the type alone would leave `contextId` undefined
-  // against an agent that has not taken the fold.
-  return (result.dids ?? []).map(
-    (d) =>
-      fold(d as unknown as Record<string, unknown>, [
-        ["contextId", "context_id"],
-        ["serverId", "server_id"],
-      ]) as unknown as WebvhDidRecord,
-  );
+  // No casing fold. `WebvhDidRecord` in `vta-sdk` carries
+  // `#[serde(rename_all = "camelCase")]`, so the agent emits `contextId` and
+  // `serverId`; its `alias` attributes are deserialize-only and say nothing
+  // about what it sends. Nothing is deployed, so "an agent that has not taken
+  // the fold" names no peer that exists — and a fold kept past its cause reads
+  // as a live constraint to whoever maintains this next.
+  return (result.dids ?? []) as unknown as WebvhDidRecord[];
 }
 
 /** @deprecated Use {@link vtaListDids} with a channel from a `VtaSession`.

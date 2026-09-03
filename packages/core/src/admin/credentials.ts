@@ -11,10 +11,16 @@
 // two families version independently; a matching pair is a coincidence, not a
 // rule, so read the import paths rather than assuming.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
+
+import {
+  TYPE_URI as CREDENTIALS_LIST,
+  RESPONSE_TYPE_URI as CREDENTIALS_LIST_RESPONSE,
+  type VTACredentialsListResponsePayload,
+  type IssuedCredentialSummary,
+  type IssuedCredentialStatus,
+} from "@openvtc/trust-tasks/vta/credentials/list/0.1/payload";
 
 import {
   TYPE_URI as CREDENTIALS_ISSUE,
@@ -32,9 +38,9 @@ import {
 /** Both calls are issued by an operator identity, to an agent. */
 export interface CredentialIssuerCallerParams {
   /** Envelope `issuer` — needs an agent role that carries issuing authority. */
-  holder: Identity;
+  holder: TaskParty;
   /** The issuing agent — envelope `recipient`. */
-  service: RemoteDidcommEndpoint;
+  service: TaskParty;
 }
 
 export interface IssueCredentialParams extends CredentialIssuerCallerParams {
@@ -127,4 +133,83 @@ export async function revokeCredential(
     expectedResponseType: CREDENTIALS_REVOKE_RESPONSE,
     operationLabel: "vta/credentials/revoke/0.1",
   });
+}
+
+export type { IssuedCredentialSummary, IssuedCredentialStatus };
+
+export interface ListCredentialsParams extends CredentialIssuerCallerParams {
+  /**
+   * Only credentials issued to this DID.
+   *
+   * Named `holderDid` rather than `holder` — matching {@link issueCredential} —
+   * because `holder` on the caller params is the envelope's *issuer*, this
+   * library's own identity. Two different parties would otherwise share one
+   * member name on the same object.
+   */
+  holderDid?: string;
+  /** Only credentials carrying this type tag beyond `VerifiableCredential`. */
+  credentialType?: string;
+  /** Only credentials in this state. */
+  status?: IssuedCredentialStatus;
+  /** Maximum records to return. The agent caps this. */
+  pageSize?: number;
+  /** Continue a previous page. Opaque — never construct or parse one. */
+  cursor?: string;
+}
+
+export interface ListCredentialsResult {
+  credentials: IssuedCredentialSummary[];
+  /** The agent stopped early. **Check this before drawing conclusions** — a
+   *  truncated page is not a complete account of what was issued, and reading
+   *  "nothing else was issued" off one is the mistake the member exists to
+   *  prevent. */
+  truncated: boolean;
+  /** Pass as `cursor` to continue. Absent on the last page, so a caller stops
+   *  on its absence rather than needing an empty page to learn it is done. */
+  cursor?: string;
+}
+
+/**
+ * What this agent has issued, as metadata.
+ *
+ * **No credential bodies.** `vault/list/0.1` states the rule this family
+ * follows — list enumerates, release uses — and an issuer that needs a body
+ * minted it and got it back from {@link issueCredential}. A caller reaching for
+ * this to populate claim data has mistaken it for a read of the credentials
+ * themselves; there is no such task.
+ *
+ * `status` is derived by the agent when it answers, never stored, and
+ * `revoked` takes precedence over `expired` — a credential revoked before its
+ * window closed is revoked, and reading it as merely expired hides that
+ * somebody acted. Do not cache the result: a cached page reports a credential
+ * as active after it has been revoked.
+ *
+ * Unlike the holder-side `credVaultQuery`, an unfiltered call is answered. The
+ * caller here is the issuer reading a record of its own past actions rather
+ * than a delegate reading someone's private store.
+ */
+export async function listCredentials(
+  sender: TrustTaskSender,
+  params: ListCredentialsParams,
+): Promise<ListCredentialsResult> {
+  const envelope = buildTrustTask(
+    CREDENTIALS_LIST,
+    {
+      ...(params.holderDid ? { holder: params.holderDid } : {}),
+      ...(params.credentialType ? { credentialType: params.credentialType } : {}),
+      ...(params.status ? { status: params.status } : {}),
+      ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+      ...(params.cursor ? { cursor: params.cursor } : {}),
+    },
+    { issuer: params.holder.did, recipient: params.service.did },
+  );
+  const res = await sender.send<VTACredentialsListResponsePayload>(envelope, {
+    expectedResponseType: CREDENTIALS_LIST_RESPONSE,
+    operationLabel: "vta/credentials/list/0.1",
+  });
+  return {
+    credentials: res.credentials ?? [],
+    truncated: res.truncated ?? false,
+    ...(res.cursor ? { cursor: res.cursor } : {}),
+  };
 }

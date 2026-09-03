@@ -11,9 +11,7 @@
 // calls it off. A caller that treats `disable` as instantaneous will report an
 // agent as off while it is still answering.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import {
@@ -64,15 +62,21 @@ import {
   type VTAServicesDrainCancelPayload,
   type VTAServicesDrainCancelResponsePayload,
 } from "@openvtc/trust-tasks/vta/services/drain/cancel/1.0/payload";
+import {
+  TYPE_URI as MANAGEMENT_RELOAD,
+  RESPONSE_TYPE_URI as MANAGEMENT_RELOAD_RESPONSE,
+  type VTAManagementReloadServicesPayload,
+  type VTAManagementReloadServicesResponsePayload,
+} from "@openvtc/trust-tasks/vta/management/reload-services/1.0/payload";
 
 export type { ServiceState, ServiceKind };
 
 /** Every `vta/services/*` call is issued by an operator identity, to an agent. */
 export interface ServicesCallerParams {
   /** Envelope `issuer`. Needs an admin role — the whole family is manage-gated. */
-  holder: Identity;
+  holder: TaskParty;
   /** The agent — envelope `recipient`. */
-  service: RemoteDidcommEndpoint;
+  service: TaskParty;
 }
 
 /** Transport configuration. Which members apply depends on the `ServiceKind`. */
@@ -262,4 +266,58 @@ export async function serviceDrainCancel(
   const payload: VTAServicesDrainCancelPayload = { mediatorDid: params.mediatorDid };
   return call(sender, params, SERVICES_DRAIN_CANCEL, SERVICES_DRAIN_CANCEL_RESPONSE,
     "vta/services/drain/cancel/1.0", payload);
+}
+
+/**
+ * Re-read the agent's service configuration and restart its transports.
+ *
+ * Takes no parameters, and the specification argues for the emptiness rather
+ * than leaving it to look unfinished: every member this could carry — a list of
+ * services to reload selectively, inline configuration, a flag to skip
+ * validation — turns "apply what is written down" into "apply what this
+ * document says", which would let a caller put an agent into a state its own
+ * configuration does not describe. So a reload is all-or-nothing, and the
+ * agent's config stays the single account of how the agent runs.
+ *
+ * ## Two outcomes that are not failures
+ *
+ * **No response.** A successful reload drops the very transport the response
+ * would travel on, so the connection may simply close. That is not an error and
+ * **must not be retried as one** — the reload has very likely succeeded. The
+ * reliable check is external to the call: reconnect and see whether the agent
+ * answers.
+ *
+ * **`reloadFailed`.** The agent read its configuration and could not bring
+ * services up on it. What state it is left in is implementation-specific, and
+ * the code deliberately does not assert one: it may hold the previous config
+ * and stay up, come up partially, or not come up at all. Do not report to an
+ * operator that the agent is still serving.
+ *
+ * ## What it costs
+ *
+ * Every open session drops, including this wallet's own inbound sessions. The
+ * cost falls on every counterparty of the agent, none of whom asked — which is
+ * why the console puts it behind a step-up even though the task creates,
+ * deletes and discloses nothing.
+ */
+export async function reloadServices(
+  sender: TrustTaskSender,
+  params: ServicesCallerParams,
+): Promise<{ status: string }> {
+  const payload: VTAManagementReloadServicesPayload = {};
+  const res = await call<
+    VTAManagementReloadServicesPayload,
+    VTAManagementReloadServicesResponsePayload
+  >(
+    sender,
+    params,
+    MANAGEMENT_RELOAD,
+    MANAGEMENT_RELOAD_RESPONSE,
+    "vta/management/reload-services/1.0",
+    payload,
+  );
+  // Advisory free text — shown to a human, never branched on. The reliable
+  // signal is whether the agent answers afterwards, not what it said before
+  // restarting.
+  return { status: res.status };
 }
