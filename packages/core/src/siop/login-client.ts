@@ -11,7 +11,7 @@ import { withFetchTimeout } from "../http/timeout-fetch.js";
 
 /** The canonical authenticate Trust-Task type from trusttasks-tf.
  *  did-hosting + VTA + VTC all dispatch on this same URI. */
-const TASK_AUTH_AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
+import { TYPE_URI as TASK_AUTH_AUTHENTICATE } from "@openvtc/trust-tasks/auth/authenticate/0.1/payload";
 
 export interface SiopLoginResult {
   accessToken: string;

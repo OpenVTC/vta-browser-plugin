@@ -59,15 +59,17 @@ import {
   type Exposure,
   type StatePin,
 } from "@openvtc/trust-tasks/task-consent/request/0.1/payload";
-import { RESPONSE_PAYLOAD_SCHEMA as DECISION_RESPONSE_SCHEMA } from "@openvtc/trust-tasks/task-consent/decision/0.1/payload";
+import {
+  RESPONSE_PAYLOAD_SCHEMA as DECISION_RESPONSE_SCHEMA,
+  TYPE_URI as TASK_CONSENT_DECISION_TYPE_URI,
+} from "@openvtc/trust-tasks/task-consent/decision/0.1/payload";
+import { TYPE_URI as TASK_CONSENT_GRANTED_TYPE_URI } from "@openvtc/trust-tasks/task-consent/granted/0.1/payload";
 import type { SigningIdentity } from "../siop/self-issued.js";
 
 export const TASK_CONSENT_REQUEST_TYPE = TASK_CONSENT_REQUEST_TYPE_URI;
-export const TASK_CONSENT_DECISION_TYPE =
-  "https://trusttasks.org/spec/task-consent/decision/0.1";
+export const TASK_CONSENT_DECISION_TYPE = TASK_CONSENT_DECISION_TYPE_URI;
 /** VTA → requester: an approval landed and a grant is ready — re-submit now. */
-export const TASK_CONSENT_GRANTED_TYPE =
-  "https://trusttasks.org/spec/task-consent/granted/0.1";
+export const TASK_CONSENT_GRANTED_TYPE = TASK_CONSENT_GRANTED_TYPE_URI;
 /** The executor's acknowledgement of a decision this device sent. */
 export const TASK_CONSENT_DECISION_RESPONSE_TYPE = `${TASK_CONSENT_DECISION_TYPE}#response`;
 

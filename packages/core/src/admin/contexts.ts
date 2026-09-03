@@ -17,8 +17,7 @@ import {
   TYPE_URI as TASK_CONTEXTS_DELETE,
   type VTAContextsDeleteResponsePayload,
 } from "@openvtc/trust-tasks/vta/contexts/delete/1.0/payload";
-const TASK_CONTEXTS_PREVIEW_DELETE =
-  "https://trusttasks.org/spec/vta/contexts/preview-delete/1.0";
+import { TYPE_URI as TASK_CONTEXTS_PREVIEW_DELETE } from "@openvtc/trust-tasks/vta/contexts/preview-delete/1.0/payload";
 
 export interface ContextDeleteParams {
   holder: TaskParty;

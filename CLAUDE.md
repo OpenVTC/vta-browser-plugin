@@ -15,7 +15,8 @@ interaction code:
 - **`vti-stack-development-guide.md`** — binding rules (R-numbers below);
   paste its pre-merge checklist into PRs.
 - **`vti-networking-remediation-plan.md`** — deliverable **D8** covers this
-  repo (with vti-didcomm-js and pnm-relay).
+  repo (with vti-didcomm-js; `pnm-relay` was the third and no longer exists —
+  see R4.1).
 - **`vti-architectural-direction.md`** — design-level rationale.
 
 Rules that bite hardest here:
@@ -54,9 +55,22 @@ Rules that bite hardest here:
   network helper here takes an optional `fetch` for testability, so a literal
   `grep "fetch("` finds almost nothing — the real calls are spelled `f(...)`,
   `fetchFn(...)`, `this.fetchImpl(...)`.
-- **R4.1 — shared code with pnm-relay and vti-didcomm-js is a liability until
-  extracted**: the relay never received this repo's body-first error-parsing
-  fix. Land contract/transport fixes in all three or extract the shared core.
+- **R4.1 — the shared core is extracted; keep it that way.** This rule used to
+  read "shared code with pnm-relay and vti-didcomm-js is a liability until
+  extracted: the relay never received this repo's body-first error-parsing
+  fix". That is done and the note had gone stale: **`pnm-relay` no longer
+  exists.** Its `rest-channel.ts` / `request-task.ts` were consolidated into
+  `@openvtc/pnm-core` — the copy `pnm-extension` and `pnm-pwa` both consume,
+  which carries the body-first parse (`decodeTrustTaskHttpAck` reads the body,
+  then builds with `errorFromBody`; `errorFromResponse` appears nowhere) and the
+  `ConsentRequired` union. Nothing depends on `@openvtc/pnm-relay`, and
+  `rp-sdk-js` is a separate server-side SIOPv2 verifier, not its successor.
+  (`vti-networking-remediation-plan.md` F5, resolved by consolidation.)
+
+  What survives is the *rule*, not the defect: `vti-didcomm-js` is still a
+  separate implementation of the same wire contract, so a transport or
+  error-shape fix has to land in both. A third copy is what R4.1 exists to
+  prevent — do not reintroduce one.
 
 ## How persist-before-ack is held (R1.6)
 

@@ -25,13 +25,15 @@ import { withFetchTimeout } from "../http/timeout-fetch.js";
 
 // Canonical step-up approval spec from trusttasks-tf. The proof on the
 // approve-response is what the RP verifies to elevate the session's acr.
-const MSG_APPROVE_RESPONSE = "https://trusttasks.org/spec/auth/step-up/approve-response/0.2";
+import { TYPE_URI as MSG_APPROVE_RESPONSE } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.2/payload";
+import { TYPE_URI as APPROVE_REQUEST_0_2 } from "@openvtc/trust-tasks/auth/step-up/approve-request/0.2/payload";
+import { TYPE_URI as APPROVE_REQUEST_0_1 } from "@openvtc/trust-tasks/auth/step-up/approve-request/0.1/payload";
 /** The RP→approver request halves this wallet accepts. 0.2 is what the
  *  did-hosting control plane mints on `start`; 0.1 is the VTA-pushed flavor
  *  (same required payload members) — both are gated identically. */
 export const STEP_UP_APPROVE_REQUEST_TYPES = [
-  "https://trusttasks.org/spec/auth/step-up/approve-request/0.2",
-  "https://trusttasks.org/spec/auth/step-up/approve-request/0.1",
+  APPROVE_REQUEST_0_2,
+  APPROVE_REQUEST_0_1,
 ] as const;
 
 /** The RP's `approve-request/0.2` payload, verified out of the signed
