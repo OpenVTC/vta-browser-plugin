@@ -212,8 +212,12 @@ export async function openBase(
 /**
  * A capability that can compute the raw X25519 Diffie-Hellman shared secret
  * with a peer's public key, without ever exposing the private key itself —
- * e.g. a custody boundary (HSM, secure enclave, remote KMS) whose only DH
- * primitive is "give me the shared secret", never "give me the key".
+ * e.g. non-exporting software custody (an Askar-backed KMS) whose only DH
+ * primitive is "give me the shared secret", never "give me the key". Note
+ * this is NOT an enclave/HSM claim: Secure Enclave, StrongBox, and mainstream
+ * cloud KMS ECDH (AWS `DeriveSharedSecret`, GCP raw ECDH) are NIST-curve-only
+ * and cannot perform X25519 ECDH, so none of them can satisfy this interface
+ * on the KEM this suite pins.
  * `publicKey` is the identity's own public key; `agree` returns the RAW ECDH
  * output, no KDF applied — this is exactly the static-key half of AuthEncap/
  * AuthDecap's DH, nothing more.
