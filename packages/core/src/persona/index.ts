@@ -39,6 +39,7 @@
 // read to a context-scoped caller.
 
 export * from "./disclosure.js";
+export * from "./consent-view.js";
 export * from "./renderers.js";
 export * from "./bindings.js";
 export * from "./contacts.js";
