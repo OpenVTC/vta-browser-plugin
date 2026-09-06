@@ -124,6 +124,40 @@ jobs:
           done
           echo "OK: no key-material task URIs anywhere in dist/"
 
+      # A third guard, and the narrowest reason of the three.
+      #
+      # The `persona/*` family has two halves. The attribute pool and the
+      # profiles over it are AGENT-scoped: they sit above every trust context,
+      # and the agent gates them on an unscoped holder credential — Admin with
+      # unrestricted scope. `@openvtc/pnm-core/persona` deliberately implements
+      # only the context-scoped half, because this wallet's holder identity is
+      # scoped to a context and every one of these ten would come back
+      # forbidden.
+      #
+      # So this is not about authority leaking (guard one) or key material
+      # shipping (guard two). It is about the ONE-WAY BOUNDARY the family is
+      # built around: a context never reads the holder's pool, it is handed a
+      # materialised copy. A wallet bundle that named one of these URIs would
+      # be a context-scoped surface reaching upwards, which is the exact shape
+      # the design exists to prevent.
+      #
+      # Unlike the seeds family, these may legitimately ship one day — a
+      # persona-management pane belongs beside the console's other holder-scoped
+      # panes, not in the wallet. That is why this guard has no exception yet
+      # rather than never: whoever builds that pane has to change this line, and
+      # the change is the review. An omission here would be indistinguishable
+      # from nobody having got to it.
+      - name: Assert the holder-scoped half of persona ships nowhere
+        run: |
+          for task in 'persona/attribute/put/1.0' 'persona/attribute/list/1.0' 'persona/attribute/delete/1.0' 'persona/profile/put/1.0' 'persona/profile/get/1.0' 'persona/profile/list/1.0' 'persona/profile/delete/1.0' 'persona/binding/set/1.0' 'persona/correlation/analyze/1.0' 'persona/disclosure/history/1.0'; do
+            found=$(grep -rlF "$task" packages/extension/dist/ || true)
+            if [ -n "$found" ]; then
+              echo "::error::$found contains $task — this half of persona/* reads or writes the holder's attribute pool, which sits above every trust context. A context-scoped bundle naming it is the boundary being crossed the wrong way. See packages/core/src/persona/index.ts."
+              exit 1
+            fi
+          done
+          echo "OK: no holder-scoped persona task URIs anywhere in dist/"
+
       # The console's isolation rests on it being one self-contained file: the
       # guard above names exactly one exception, so a second chunk would be a
       # file nothing checks. Losing `codeSplitting: false` in a future upgrade
