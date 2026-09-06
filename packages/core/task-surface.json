@@ -389,6 +389,78 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/persona/attribute/delete/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/attribute/list/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/attribute/put/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/binding/get/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/binding/list/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/binding/set/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/contact/delete/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/contact/get/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/contact/list/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/contact/put/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/correlation/analyze/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/disclosure/history/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/disclosure/present/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/disclosure/preview/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/local/binding/set/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/local/profile/delete/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/local/profile/get/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/local/profile/list/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/local/profile/put/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/profile/delete/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/profile/get/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/profile/list/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/profile/put/1.0"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/renderers/list/1.0"
+    },
+    {
       "uri": "https://trusttasks.org/spec/policy/delete/0.1",
       "consts": [
         "TASK_POLICY_DELETE_0_1"
@@ -429,6 +501,33 @@
     },
     {
       "uri": "https://trusttasks.org/spec/push/wake/0.2"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/keys/commit/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_COMMIT_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/keys/key-package/0.1"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/keys/open/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_OPEN_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/keys/present/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_PRESENT_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/keys/welcome/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_WELCOME_0_1"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/task-consent/decision/0.1"

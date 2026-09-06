@@ -42,7 +42,7 @@ const LAYERS = [
   // loosening it — `trust-tasks` may no longer reach for a channel.
   ["trust-tasks"], //            3 — Trust-Task documents: sign, verify, validate
   ["vta"], //                    4 — the VTA protocol: channels, envelopes, auth
-  ["store", "app-state", "vault", "device", "provision", "rp-login", "onboarding", "admin", "credentials", "vtc", "did-hosting", "webvh"], // 5
+  ["store", "app-state", "persona", "vault", "device", "provision", "rp-login", "onboarding", "admin", "credentials", "vtc", "did-hosting", "webvh"], // 5
   ["inbound"], //                6 — the running session, on top of everything
 ];
 

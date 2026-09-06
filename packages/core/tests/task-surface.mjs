@@ -225,6 +225,34 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // key material, and CI bans its URIs from every extension bundle including
   // the console. A spec landing upstream would not change that.
   //
+  // 163 -> 177 is the `persona/*` family: the holder's own identity, specced
+  // at trustoverip/dtgwg-trust-tasks-tf#360 and implemented at
+  // OpenVTC/verifiable-trust-infrastructure#1255. The canonical total moved
+  // 178 -> 207, which is 24 persona families plus the five `rooms/keys/*` this
+  // library does not implement.
+  //
+  // **Fourteen of the twenty-four are here and the other ten cannot be**, which
+  // makes persona the second family whose absence is a decision — and unlike
+  // `vta/backup/*`, not this library's decision. The family has two halves.
+  // `persona/attribute/*`, `persona/profile/*`, `persona/binding/set`,
+  // `persona/correlation/analyze` and `persona/disclosure/history` read or
+  // write the agent-scoped attribute pool, which sits above every trust
+  // context; the agent gates all ten on an *unscoped holder* credential. This
+  // wallet's holder identity is scoped to a context, so every one of those
+  // calls would come back `e.p.msg.forbidden`. Implementing them would add ten
+  // functions that cannot succeed. Authoring a persona is `pnm`'s job, which
+  // holds the credential that can.
+  //
+  // The fourteen that are here are the context-scoped half plus
+  // `persona/renderers/list` — disclosure's two-call gate, contacts, read-only
+  // bindings, and the context-local profiles a wallet may author because
+  // nothing crosses the boundary to build one. That is the whole of what a
+  // wallet is for here: showing a human what is about to be disclosed, and
+  // sending it only once they have seen it.
+  //
+  // Do not "finish" this family either. The ten missing are missing because
+  // the boundary they sit behind is the design.
+  //
   // **Nothing is behind any more.** Every implemented family names the newest
   // version `vta-sdk` publishes: `vault/{list,get,upsert}` and
   // `provision/integration` at 0.3 (both the hex-digest -> `digestMultibase`
@@ -234,7 +262,7 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // the agent does not name, rather than as a deprecation warning. That is the
   // expected shape of a cutover here: nothing is deployed, so neither side
   // keeps an old version alive.
-  const expected = 163;
+  const expected = 177;
   assert.equal(
     implemented.size,
     expected,
