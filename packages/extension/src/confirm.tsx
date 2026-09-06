@@ -25,6 +25,7 @@ import {
 } from "@openvtc/pnm-core";
 import { base64url } from "@openvtc/vti-didcomm-js";
 import { runApproverUnlockCeremony } from "./webauthn-prf-unlock.js";
+import { DisclosureConsent } from "./disclosure-consent.js";
 
 // Consent prompt shown in a popup window before the wallet logs into an RP.
 // The background opens it with the request details as query params and
@@ -40,6 +41,12 @@ const consentId = params.get("cid") ?? "";
 // `kind=task` selects the task-execution consent surface, which renders
 // VTA-authored effects rather than an RP-authored reason.
 const isTaskConsent = params.get("kind") === "task";
+// `kind=disclosure` selects the persona-disclosure surface. It is its own
+// surface rather than a variant of the login prompt because what it authorizes
+// is different in kind: the login prompt says "let this site sign you in", and
+// this one says "let this verifier keep these facts about you". Sharing a
+// component would mean one screen trying to word both.
+const isDisclosureConsent = params.get("kind") === "disclosure";
 // The biometric-gated approver surface: Approve must run a fresh WebAuthn
 // gesture bound to this decision's payloadDigest before it signs.
 const isApproverConsent = params.get("approver") === "1";
@@ -1337,6 +1344,14 @@ releaseSelectAfterPointerChange(document);
 const root = document.getElementById("root");
 if (root) {
   createRoot(root).render(
-    <StrictMode>{isTaskConsent ? <TaskConsent /> : <Confirm />}</StrictMode>,
+    <StrictMode>
+      {isDisclosureConsent ? (
+        <DisclosureConsent consentId={consentId} decide={(ok) => decide(ok)} />
+      ) : isTaskConsent ? (
+        <TaskConsent />
+      ) : (
+        <Confirm />
+      )}
+    </StrictMode>,
   );
 }
