@@ -18,7 +18,7 @@ import { Button, Note, Panel } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { contextHeading } from "../format.js";
 import type { Authority, Parties } from "../use-vta.js";
-import { AttributeEditor, BindingForm, ProfileEditor, formatValue } from "./persona-editors.js";
+import { AttributeEditor, BindingForm, FactValue, ProfileEditor } from "./persona-editors.js";
 import { holderGate } from "../holder-gate.js";
 import { reachableStep } from "../persona-flow.js";
 
@@ -98,7 +98,11 @@ function StrangerCard({ facts, faceName }: { facts: PoolAttribute[]; faceName: s
         ) : (
           <>
             <div style={{ display: "grid" }}>
-              <span style={{ fontSize: t.md, fontWeight: 640 }}>{name ? formatValue(name.value).text : "—"}</span>
+              {name ? (
+                <FactValue type={name.type} value={name.value} style={{ fontSize: t.md, fontWeight: 640 }} />
+              ) : (
+                <span style={{ fontSize: t.md, fontWeight: 640 }}>—</span>
+              )}
               <span style={{ fontSize: t.xs, color: c.faint }}>{faceName || "unnamed face"}</span>
             </div>
             {rest.length > 0 && <div style={{ height: 1, background: c.lineSoft }} />}
@@ -106,7 +110,7 @@ function StrangerCard({ facts, faceName }: { facts: PoolAttribute[]; faceName: s
               {rest.map((f) => (
                 <span key={f.attributeId} style={{ display: "contents" }}>
                   <span style={{ color: c.faint, fontFamily: font.mono, fontSize: t.xs }}>{f.label ?? f.type}</span>
-                  <span>{formatValue(f.value).text}</span>
+                  <FactValue type={f.type} value={f.value} />
                 </span>
               ))}
             </div>
@@ -189,7 +193,7 @@ export function GuidedSetup({
                   {attributes.map((a) => (
                     <div key={a.attributeId} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: t.sm }}>
                       <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted, minWidth: 120 }}>{a.type}</span>
-                      <span>{formatValue(a.value).text}</span>
+                      <FactValue type={a.type} value={a.value} />
                     </div>
                   ))}
                 </div>

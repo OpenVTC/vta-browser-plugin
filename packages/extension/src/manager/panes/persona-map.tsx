@@ -48,12 +48,13 @@ import {
   AttributeEditor,
   BindingForm,
   DeleteProfile,
+  FactValue,
   PersonaClaims,
   ProfileEditor,
   ResolvedProfile,
-  formatValue,
 } from "./persona-editors.js";
 import { holderGate } from "../holder-gate.js";
+import { isSensitive } from "../claim-sensitivity.js";
 
 // ── Words for what the agent knows ──────────────────────────────────────────
 
@@ -455,7 +456,6 @@ export function IdentityMap({
               const selected = selection?.kind === "fact" && selection.id === f.id;
               const prov = provenanceWords(f.provenance);
               const linked = valueLinked.get(f.id);
-              const { text, withheld } = formatValue(f.value);
               return (
                 <div
                   key={f.id}
@@ -467,8 +467,20 @@ export function IdentityMap({
                     <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted }}>{f.type}</span>
                     {f.stale && <Pill tone="warn">{staleWords(f.staleReason)}</Pill>}
                   </div>
-                  <div style={{ fontSize: t.base, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: withheld ? c.faint : c.text }}>
-                    {f.label ? `${f.label} · ` : ""}{text}
+                  {/* The label and the value are two spans rather than one
+                      string, because the value now carries a control of its
+                      own — and a *Show* that scrolled out of a card clipped to
+                      one line would be a control nobody could press. */}
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, minWidth: 0, fontSize: t.base, fontWeight: 600 }}>
+                    {f.label && (
+                      <span style={{ color: c.muted, whiteSpace: "nowrap", flexShrink: 0 }}>{f.label} ·</span>
+                    )}
+                    <FactValue
+                      type={f.type}
+                      value={f.value}
+                      style={{ minWidth: 0, overflow: "hidden" }}
+                      textStyle={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                    />
                   </div>
                   <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                     <Pill tone={prov.tone}>{prov.text}</Pill>
@@ -791,17 +803,31 @@ function DetailStrip({
     const reach = factReach(graph, fact.id);
     const linkedFaces = reach.faces.filter((f) => graph.links.some((l) => l.faceId === f.id));
     const prov = provenanceWords(fact.provenance);
-    const { text } = formatValue(fact.value);
     return strip(
       <>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 260px) minmax(0, 1fr) minmax(0, 1fr)", gap: 18 }}>
           <div style={{ display: "grid", gap: 3 }}>
             <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted }}>{fact.type}</span>
-            <span style={{ fontSize: t.md, fontWeight: 640, wordBreak: "break-word" }}>{text}</span>
+            <FactValue
+              type={fact.type}
+              value={fact.value}
+              style={{ fontSize: t.md, fontWeight: 640 }}
+              textStyle={{ wordBreak: "break-word" }}
+            />
             <span style={{ fontSize: t.sm, color: c.faint }}>
               {fact.label ? `${fact.label} · ` : ""}{prov.text}
               {fact.provenance.kind === "credentialBacked" ? " — provable, and the same signature to everyone who sees it" : fact.provenance.kind === "selfAsserted" ? " — passed on, never proven" : ""}
             </span>
+            {/* The one place with room to say what the mask is and is not. A
+                *Show* button with no explanation invites the reading that a
+                hidden value is one the console does not hold, and this console
+                holds every value it draws. */}
+            {isSensitive(fact.type) && (
+              <span style={{ fontSize: t.sm, color: c.faint }}>
+                Hidden until you press Show — that is about who can see your screen. Your agent has
+                already sent this value here.
+              </span>
+            )}
             {fact.stale && <span style={{ fontSize: t.sm, color: c.warn }}>Can no longer be proven ({fact.staleReason ?? "stale"}).</span>}
           </div>
           {col("Reach", reach.faces.length === 0 ? (

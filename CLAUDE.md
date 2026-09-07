@@ -256,6 +256,39 @@ per `design-docs/persona-vocabulary.md`; the spec's words (`attribute`,
 `profile`, `binding`, `materialise`) stay in code and off the screen. Add copy
 in those words, or change the document first.
 
+**Sensitive values are hidden from the screen, and that is all it is.**
+`manager/claim-sensitivity.ts` carries a **vendored** copy of the claim-type
+registry's masking data — sensitivity and mask style per token, from
+`specs/persona/_shared/0.1/claim-types.json` at `registryVersion` 0.1 — because
+the agent does not serve that table: `persona/claim-types/list` is an open
+question in `CLAIM-TYPES.md` §6, deferred until the first extension type ships.
+An unregistered or `x:` token resolves to the conservative default
+(`high`/`full`) per §4 rule 3, and there is deliberately **no prefix walk**: the
+JSON declares only leaves, so inventing a `payment.*` family rule locally would
+make an unknown member of that family show *more* than the registry asks.
+
+**It is not a security control and must not be described as one.** The value was
+fetched before any of it ran, so masking changes what is drawn and never what
+the page holds. It defends against a shoulder, a screenshot and a screen share,
+which is the whole scope. The control that would matter is a read-path one —
+`includeSensitive` on `persona/attribute/list`, so a listing that did not ask is
+answered without the values — and it does not exist yet.
+
+**Reveal lives in `FactValue`'s own state**, per value, and nowhere else. Lifted
+to the pane and keyed by fact id it would be a store of "things unhidden" that
+outlives the card the person was looking at and is one refactor from a *Show
+all*. Component state cannot become that: it dies with the element, so leaving
+the pane re-hides everything — `persona-pane.render.test.mts` mounts twice to
+pin exactly that, since every sticky implementation passes a single-mount test.
+
+**What breaks it:** a surface that formats a value itself instead of rendering
+`FactValue` (the second surface is always the one added later, and a value
+masked on the card and printed in the strip is masked nowhere); greying a mask
+with `c.faint`, which is this pane's word for "the agent sent no value" and so
+makes a fact the holder has look like one they do not; adding a prefix fallback
+to the vendored table; or letting a UI string imply the console does not hold
+what it hides.
+
 **The console's components are rendered in tests, and this is how.**
 `tests/harness/` holds module hooks and a DOM so `node --test` can mount a
 pane. Two things it does that are not obvious: it resolves a `./thing.js`

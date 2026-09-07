@@ -40,6 +40,7 @@ import { useAsync } from "../use-async.js";
 import { contextHeading, formatInstant } from "../format.js";
 import { type Authority, type Parties } from "../use-vta.js";
 import { holderGate } from "../holder-gate.js";
+import { maskedFact } from "../claim-sensitivity.js";
 import { composeEntries, lockedRefs, preservedEntries, tickedFrom } from "../profile-entries.js";
 import { personaCandidates } from "../persona-candidates.js";
 
@@ -68,8 +69,13 @@ export function Label({ children }: { children: React.ReactNode }) {
  * the one case that is. `undefined` is the answer to a metadata-only listing
  * and says so, rather than rendering as an empty cell that reads like a fact
  * with no value.
+ *
+ * **Not exported, and that is the enforcement.** Every value this pane draws
+ * goes through `FactValue` below, which is where a sensitive one is hidden. A
+ * surface that could reach the raw rendering would be one mask away from
+ * printing a passport number in full, and it would look like ordinary code.
  */
-export function formatValue(value: unknown): { text: string; withheld: boolean } {
+function formatValue(value: unknown): { text: string; withheld: boolean } {
   if (value === undefined) return { text: "not requested", withheld: true };
   if (value === null) return { text: "null", withheld: false };
   if (typeof value === "string") return { text: value, withheld: false };
@@ -77,6 +83,97 @@ export function formatValue(value: unknown): { text: string; withheld: boolean }
     return { text: String(value), withheld: false };
   }
   return { text: JSON.stringify(value), withheld: false };
+}
+
+/**
+ * A fact's value, hidden if its type says it should be, with a *Show* beside
+ * it when it is.
+ *
+ * Every place this pane draws a value goes through here, because "wherever it
+ * appears" is the whole property: a card that hides a passport number while the
+ * strip below it prints the same number in full has hidden nothing, and the
+ * second surface is always the one added later. Which types are hidden, and how
+ * much of each survives the mask, is `claim-sensitivity.ts`'s answer — this
+ * decides nothing, it only draws.
+ *
+ * **It hides a value from the screen, never from the page.** The agent already
+ * answered; the string is in this tree either way. `claim-sensitivity.ts` opens
+ * with the full version of that caveat and it is not repeated here, but do not
+ * let a UI string in this component imply otherwise.
+ *
+ * **Reveal is per value and lives in this component.** Not lifted to the pane
+ * keyed by fact id, which would be a store of "things the operator has
+ * unhidden" — one that survives selection changes, outlives the card the person
+ * was looking at, and is one refactor away from a *Show all*. Local state
+ * cannot become that: it dies with the element, so leaving the pane, reloading
+ * the console or navigating anywhere re-hides everything, and revealing the
+ * same fact in two places is two deliberate acts rather than one.
+ */
+export function FactValue({
+  type,
+  value,
+  style,
+  textStyle,
+}: {
+  type: string;
+  value: unknown;
+  /** Typography for the row — applied to the wrapper, so the control inherits it. */
+  style?: React.CSSProperties;
+  /** Wrapping or truncation for the value itself, which differs per surface. */
+  textStyle?: React.CSSProperties;
+}) {
+  const [shown, setShown] = useState(false);
+  const { text, withheld } = formatValue(value);
+  const { text: hidden, masked } = maskedFact(type, text);
+
+  return (
+    <span style={{ display: "inline-flex", alignItems: "baseline", gap: 7, minWidth: 0, ...style }}>
+      <span
+        style={{
+          // A masked value is drawn at full strength; `c.faint` is this pane's
+          // word for "the agent did not send one". Greying the mask too would
+          // make a fact the holder has look exactly like a fact they do not,
+          // and the difference is the one thing a hidden value must still say.
+          color: withheld ? c.faint : c.text,
+          ...(masked && !shown ? { fontFamily: font.mono, letterSpacing: 0.5 } : {}),
+          ...textStyle,
+        }}
+      >
+        {masked && !shown ? hidden : text}
+      </span>
+      {masked && (
+        <button
+          // The fact card underneath is itself a click target — it selects the
+          // fact. Without this, revealing a value also moves the selection, and
+          // the strip the operator was reading changes under them.
+          onClick={(e) => {
+            e.stopPropagation();
+            setShown((s) => !s);
+          }}
+          title={
+            shown
+              ? "Hide it again."
+              : "Hidden because this kind of fact is sensitive. Showing it changes what is on your " +
+                "screen, not what this page holds — your agent has already sent the value here."
+          }
+          style={{
+            flexShrink: 0,
+            border: `1px solid ${c.line}`,
+            background: "transparent",
+            color: c.muted,
+            borderRadius: 999,
+            padding: "1px 8px",
+            fontSize: t.xs,
+            fontWeight: 600,
+            fontFamily: "inherit",
+            cursor: "pointer",
+          }}
+        >
+          {shown ? "Hide" : "Show"}
+        </button>
+      )}
+    </span>
+  );
 }
 
 
@@ -808,7 +905,6 @@ export function ResolvedProfile({
         What someone would receive
       </span>
       {claims.map((claim, i) => {
-        const { text, withheld } = formatValue(claim.value);
         // Absent on all three counts is the inline case, and it is worth
         // naming: the value is not in the pool, so nothing else references it
         // and editing the pool will never change it.
@@ -819,7 +915,7 @@ export function ResolvedProfile({
             style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}
           >
             <span style={{ fontFamily: font.mono, fontSize: t.xs, minWidth: 150 }}>{claim.type}</span>
-            <span style={{ color: withheld ? c.faint : c.text, wordBreak: "break-word" }}>{text}</span>
+            <FactValue type={claim.type} value={claim.value} textStyle={{ wordBreak: "break-word" }} />
             {inline && <Pill tone="accent">only in this face</Pill>}
             {claim.stale && <Pill tone="warn">stale</Pill>}
           </div>
