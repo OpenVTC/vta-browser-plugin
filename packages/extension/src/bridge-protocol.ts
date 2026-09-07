@@ -32,7 +32,8 @@ export type BridgeMethod =
   | "proxyLogin"
   | "walletProfile"
   | "vaultList"
-  | "requestTask";
+  | "requestTask"
+  | "disclose";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
 export interface LoginParams {
@@ -266,6 +267,54 @@ export const RUNTIME_SIGN_TRUST_TASK = "vta-wallet/sign-trust-task" as const;
  *  only a type URI and a payload — the device mints the envelope and stamps the
  *  attested origin, so the wallet never attests to a document the page wrote. */
 export const RUNTIME_REQUEST_TASK = "vta-wallet/request-task" as const;
+
+/** page → background: a site asks the holder to share identity attributes.
+ *
+ *  The counterpart to `requestTask`, which refuses the persona family outright
+ *  — a generic "send a request to your VTA" prompt cannot tell a holder what a
+ *  disclosure would reveal, and `requestTask` hands the VTA's reply to the page.
+ *
+ *  **What the site supplies and what it does not is the security property.**
+ *  A site says who it is, why, and which claim types it wants. It does NOT say
+ *  which of the holder's personas answers, or in which context — the wallet
+ *  takes both from the profile entry it already holds for this origin, the same
+ *  one `walletProfile` resolves. A site that could name the persona could ask a
+ *  gaming site's page for the holder's work face.
+ *
+ *  The page never receives the preview. It receives the presentation the holder
+ *  approved, or an error. */
+export const RUNTIME_DISCLOSE = "vta-wallet/disclose" as const;
+
+/** Parameters for `window.vtaWallet.disclose(...)`. */
+export interface DiscloseParams {
+  /** Who is asking. Becomes the disclosure's recipient and is shown to the
+   *  holder. */
+  verifierDid: string;
+  /** Why, in the site's own words. Carried into the preview and the disclosure
+   *  record, and shown to the holder — a request with a stated reason is a
+   *  decision, one without is a list of fields. */
+  purpose?: string;
+  /** Claim types the site wants, e.g. `["name.legal", "person.birthDate"]`.
+   *  Omit to ask for everything the bound profile would present, which a holder
+   *  is correspondingly more likely to refuse. */
+  requestedClaims?: string[];
+  /** Preferred output format. The holder is shown what it discards before
+   *  deciding. */
+  renderer?: string;
+}
+
+/** What the holder approved — the presentation, never the underlying values. */
+export type DiscloseResult = Record<string, unknown>;
+
+export interface RuntimeDiscloseRequest {
+  type: typeof RUNTIME_DISCLOSE;
+  params: DiscloseParams;
+  origin: string;
+}
+
+export type RuntimeDiscloseResponse =
+  | { ok: true; result: DiscloseResult }
+  | { ok: false; error: string };
 
 /** page → background: which persona this site knows the user as.
  *
@@ -1823,5 +1872,6 @@ export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_WALLET_PROFILE,
   RUNTIME_VAULT_LIST_PAGE,
   RUNTIME_REQUEST_TASK,
+  RUNTIME_DISCLOSE,
 ] as const;
 
