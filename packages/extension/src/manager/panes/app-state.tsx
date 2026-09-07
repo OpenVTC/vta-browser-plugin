@@ -26,6 +26,41 @@
 // whatever arrived since. And deletes are **soft**: `includeDeleted` reveals
 // tombstones, which is the difference between "no application ever wrote this"
 // and "something deleted it".
+//
+// ## Why the counter column is not headed "Version"
+//
+// `version` is ONE COUNTER PER `(contextId, namespace)`, not one per record.
+// The shared schema says it outright — "a value of the namespace's monotonic
+// write counter … a record's `version` is the counter value its most recent
+// write took" — and then spells out the consequence: "a record's version can
+// jump by any amount between two writes, because writes to its neighbours
+// consumed the intervening values."
+//
+// It has to be namespace-wide, because one number does two jobs: it is the
+// optimistic-concurrency token `expectedVersion` is compared against, and it is
+// the watermark `sinceVersion` is compared against. A per-record counter could
+// do the first but not the second — two records' counters are not comparable to
+// each other, so no single number could mean "everything changed after this
+// point".
+//
+// So a record written exactly once can read 7, and a column headed "Version"
+// says it has been edited seven times. That is the persona pane's bug in a
+// quieter register: there it was `v2 · 07/09/2026, 10:48:44` under a column
+// headed "Updated", and it was reported within minutes of the pane going live
+// by someone who reasonably read it as an edit count. See
+// `tests/manager-version-display.test.mts`, which turned that fix into a rule
+// covering this family too.
+//
+// The number is kept here, where persona's was dropped, because this is the
+// pane where the operator resolves a write conflict: it is the exact value the
+// editor and the delete both compare-and-swap against, and an operator who has
+// just been refused a save wants to see what the agent now holds without
+// opening the editor to find out. What was missing was not the number but its
+// name. The guard's rule permits a version "shown under its own name, next to
+// an explanation" — and a bare column heading is the name *without* the
+// explanation, which is the half that was doing the lying. So the heading now
+// says what the number counts, and the footnote under the table says whose
+// counter it is.
 
 import { useCallback, useState } from "react";
 import {
@@ -344,7 +379,10 @@ export function AppStatePane({
     { key: "value", header: "Value", render: (r) => <Value record={r} /> },
     {
       key: "version",
-      header: "Version",
+      // "Write counter", not "Version": the word that stops the number reading
+      // as this record's revision. Explained under the table, and at length in
+      // the block at the top of this file.
+      header: "Write counter",
       render: (r) => <span style={{ color: c.muted }}>{r.version}</span>,
     },
     {
@@ -460,6 +498,22 @@ export function AppStatePane({
               }
             />
             {list.data.cursor && <Truncated what="this context's records" />}
+            {records.length > 0 && (
+              // The half of the disclosure the column heading cannot carry.
+              // "Write counter" stops the number reading as a revision; only
+              // this says whose counter it is, and a reader who never wonders
+              // costs nothing to tell. Rendered only with rows, because a
+              // legend for a column nobody can see is noise.
+              <div style={{ fontSize: t.xs, color: c.faint, lineHeight: 1.55 }}>
+                <strong>Write counter</strong> counts writes to the whole
+                namespace, not edits to one record. Every write anywhere in a
+                namespace takes the next value, so a record written once can read
+                7 because six of its neighbours were written first — and a
+                record's own number can jump by any amount between two of its
+                edits. It is the value a save or a delete here is
+                compare-and-swapped against, which is what it is for.
+              </div>
+            )}
           </>
         )}
 
