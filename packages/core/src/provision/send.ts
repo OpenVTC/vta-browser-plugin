@@ -114,14 +114,6 @@ export function provisionRefusalOf(e: unknown): ProvisionRefusal | undefined {
  */
 export type ProvisionIntegrationRequestBody = Omit<ProvisionIntegrationPayload, "request"> & {
   request: BootstrapRequestVp;
-  /** How wide the ACL entry the VTA writes for the minted admin should be.
-   *
-   *  Declared here rather than taken from the generated binding because the
-   *  registry release carrying it is newer than the `@openvtc/trust-tasks`
-   *  this package pins; the spelling is the registry's, verbatim, and this
-   *  member disappears the moment the binding catches up. It is not a
-   *  compatibility fold — there is one spelling, and it is this one. */
-  adminScope?: AdminScope;
 };
 
 /**
@@ -140,8 +132,13 @@ export type ProvisionIntegrationRequestBody = Omit<ProvisionIntegrationPayload, 
  * `"unrestricted"` is refused unless the ephemeral's own grant is
  * unrestricted — no admin confers authority it does not hold — so the grant
  * command the operator runs has to match the choice made here.
+ *
+ * **Derived from the generated binding, not written out.** A hand-kept union
+ * would be a second declaration of a registry-owned vocabulary, free to drift
+ * from it silently; this one cannot. The alias exists only so surfaces that
+ * never touch the payload type can still name the concept.
  */
-export type AdminScope = "context" | "unrestricted";
+export type AdminScope = NonNullable<ProvisionIntegrationPayload["adminScope"]>;
 
 /**
  * Body of the `provision/integration/0.3#response` reply.
@@ -156,30 +153,7 @@ export type AdminScope = "context" | "unrestricted";
  * canonicalization — re-armoring the same ciphertext need not reproduce the same
  * bytes, so re-deriving it from a round-tripped bundle can legitimately disagree.
  */
-export type ProvisionIntegrationResponseBody = Omit<
-  ProvisionIntegrationResponsePayload,
-  "summary"
-> & {
-  summary: ProvisionSummary & {
-    /** The context the admin was actually provisioned into — sent or, for a
-     *  caller that omitted `context`, inferred by the VTA.
-     *
-     *  Absent from agents that predate the member. A wallet that named the
-     *  context can fall back to what it asked for; one that did not has no
-     *  honest answer and must not invent one. */
-    context?: string;
-    /** The scope of the ACL entry the VTA actually wrote.
-     *
-     *  Read rather than assumed: an agent that does not implement
-     *  `adminScope` ignores an `"unrestricted"` ask and writes a
-     *  context-scoped entry, and its success reply is otherwise
-     *  indistinguishable from one that honoured it. **Absent means
-     *  `"context"`** — the wallet did not get what it asked for, and a
-     *  surface that displayed the ask instead would claim authority the
-     *  holder does not have. */
-    adminScope?: AdminScope;
-  };
-};
+export type ProvisionIntegrationResponseBody = ProvisionIntegrationResponsePayload;
 
 export type { ProvisionSummary };
 

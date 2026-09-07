@@ -167,9 +167,18 @@ what an ACL reads as a super-admin. Before it existed the VTA wrote
 out of provisioning as anything but a context admin** and the console had no
 way to be granted what it needs. The ephemeral relayer's own super-admin-ness
 was never inherited; it only ever affected context inference and inline context
-creation. Floor: the registry release carrying `adminScope`, and a VTA past
-`trust-tasks-rs` with that schema — below it, `validate_payload` rejects the
-member at the dispatch spine before any handler sees it.
+creation.
+
+**Two floors, and both are correctness constraints rather than version
+preferences.** `@openvtc/trust-tasks` **0.17.4** is the first binding declaring
+`adminScope` and the `context` / `adminScope` summary members; below it this
+package cannot name them. `trust-tasks-rs` **0.18.3** is the first schema the
+VTA can carry them under, and the VTA pins it as a floor for a reason worth
+knowing here: its dispatch spine validates **outgoing** responses against that
+embedded schema, not just inbound payloads. Against 0.18.2 the members are
+emitted and then rejected by the agent's own guard, so a provisioning that
+fully succeeded comes back `500 responseSchemaViolation` — not a dormant
+feature, a broken one.
 
 **The order of the two questions differs by scope, and that is forced.** The
 grant command has to match the scope and only the operator can run it:
