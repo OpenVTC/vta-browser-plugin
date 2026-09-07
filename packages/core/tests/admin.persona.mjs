@@ -270,3 +270,45 @@ test("resolve is opt-in on profile/get", async () => {
   await personaProfileGet(resolved, { ...PARTIES, profileId: "01P", resolve: true });
   assert.deepEqual(resolved.sent[0].envelope.payload, { profileId: "01P", resolve: true });
 });
+
+test("a resolved profile entry is typed as a projection, not as a pool record", async () => {
+  // Keys on the generated schema rather than on this library's behaviour.
+  //
+  // The distinction matters because the console renders an `inline` claim —
+  // "held only here" — by testing `claim.attributeId === undefined`, and until
+  // `@openvtc/trust-tasks` 0.17.0 the response typed `resolved` as the pool
+  // `Attribute`, whose `attributeId`, `version` and `updatedAt` are all
+  // REQUIRED. That branch was unreachable by construction: the schema said the
+  // member is always there, so a conforming agent could not describe a profile
+  // holding an inline value at all (dtgwg-trust-tasks-tf#370).
+  //
+  // A test asserting the console's own rendering would have passed against
+  // either version, which is the shape VTI#1258 got wrong — it asserted
+  // behaviour this side controls instead of the constraint it was waiting on.
+  // So this asserts the constraint: the three pool members are optional here,
+  // and a downgrade of the dependency fails rather than silently restoring a
+  // branch nothing can reach.
+  const { RESPONSE_PAYLOAD_SCHEMA } = await import(
+    "@openvtc/trust-tasks/persona/profile/get/1.0/payload"
+  );
+
+  const response = RESPONSE_PAYLOAD_SCHEMA.$defs.Response;
+  const items = response.properties.resolved.items;
+  assert.equal(
+    items.$ref,
+    "#/$defs/ResolvedClaim",
+    "`resolved` must project a ResolvedClaim; the pool Attribute cannot describe an inline entry",
+  );
+
+  const claim = RESPONSE_PAYLOAD_SCHEMA.$defs.ResolvedClaim;
+  for (const member of ["attributeId", "version", "updatedAt"]) {
+    assert.ok(
+      claim.properties[member],
+      `ResolvedClaim should still carry ${member} — its presence is what says the value is pooled`,
+    );
+    assert.ok(
+      !claim.required.includes(member),
+      `${member} must be OPTIONAL on ResolvedClaim: an inline value has no pool record to have one`,
+    );
+  }
+});

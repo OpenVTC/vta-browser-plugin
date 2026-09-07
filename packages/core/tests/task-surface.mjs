@@ -178,8 +178,15 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
     [...REFERENCED.keys()].map(family).filter((f) => canonicalFamilies.has(f)),
   );
 
-  // 161 of 178 as of vta-sdk 0.32.3. It was 130 until the specced-but-
-  // unimplemented gap was closed in one pass: `trust-task-discovery/0.1`,
+  // 187 of 207 as of vta-sdk 0.33.0. The steps below are in the order they
+  // happened. The 0.32.3 -> 0.33.0 resync moved no task: the surface is the
+  // same 226 URIs, and VTI's breaking ACL change in that window
+  // (OpenVTC/verifiable-trust-infrastructure#1279) narrows what an entry may
+  // do without adding a task or a schema member — an entry's capabilities
+  // travel in `ext` as `org.openvtc.capabilities`, which this check cannot
+  // see and this library does not yet set.
+  //
+  // It was 130 until the specced-but-unimplemented gap was closed in one pass: `trust-task-discovery/0.1`,
   // `acl/update/0.1`, `vta/webvh/servers/retire-orphan/0.1`,
   // `vtc/members/removal-notice/0.1`, `vta/app-state/*` (6), `vta/services/*`
   // (8), `vta/credentials/{issue,revoke}/0.1`, and
