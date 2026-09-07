@@ -20,6 +20,9 @@ export * from "./did-templates.js";
 export * from "./memory.js";
 export * from "./consent.js";
 export * from "./contexts.js";
+// The holder-scoped half of `persona/*`. Deliberately NOT in the `./persona`
+// subpath, which is the wallet's half — see the header of `./persona.ts`.
+export * from "./persona.js";
 export * from "./services.js";
 export * from "./credentials.js";
 export * from "./backup.js";

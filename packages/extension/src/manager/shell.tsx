@@ -30,6 +30,7 @@ import { MaintenancePane } from "./panes/maintenance.js";
 import { AuditPane } from "./panes/audit.js";
 import { CredentialsPane } from "./panes/credentials.js";
 import { MemoryPane } from "./panes/memory.js";
+import { PersonaPane } from "./panes/persona.js";
 import { AppStatePane } from "./panes/app-state.js";
 import { managerSender } from "./sender.js";
 import { useVta, type Parties } from "./use-vta.js";
@@ -41,6 +42,7 @@ export type SectionId =
   | "keys"
   | "dids"
   | "credentials"
+  | "persona"
   | "memory"
   | "app-state"
   | "services"
@@ -100,6 +102,14 @@ const ACTS: Act[] = [
     sections: [
       // Issuer-side only, and agent-wide: `vta/credentials` takes no context.
       { id: "credentials", label: "Credentials", contextScoped: false },
+      // The holder's own identity, and the one pane that is agent-wide because
+      // its records sit ABOVE every context rather than outside them. The tree
+      // would be a filter that filters nothing — worse here than elsewhere,
+      // because a context column beside the attribute pool would suggest the
+      // pool has compartments, which is the exact misreading the family's
+      // one-way boundary exists to prevent. `persona/binding/set` names a
+      // context, and takes it as an argument to the write.
+      { id: "persona", label: "Persona", contextScoped: false },
       // For both of these `contextId` is part of the record's address rather
       // than a filter, so the pane refuses to answer agent-wide. The column is
       // shown because the selection is required, not merely useful.
@@ -317,6 +327,14 @@ export function ManagerShell() {
             parties={parties}
             authority={vta.authority}
             onOpenAudit={() => go("audit")}
+          />
+        );
+      case "persona":
+        return (
+          <PersonaPane
+            parties={parties}
+            authority={vta.authority}
+            records={contexts.records}
           />
         );
       case "memory":
