@@ -340,6 +340,43 @@ which is the whole scope. The control that would matter is a read-path one —
 `includeSensitive` on `persona/attribute/list`, so a listing that did not ask is
 answered without the values — and it does not exist yet.
 
+**A `release: stepUp` disclosure is refused, and the refusal is returned rather
+than thrown.** `payment.*` and `gov.*` resolve to `release: stepUp` in the
+registry, so the agent refuses `persona/disclosure/present` until it holds a
+fresh approval **bound to that `previewId`** — bound to the session, "each
+time" would mean "once per login". `presentDisclosure` therefore returns
+`Disclosed | DisclosureStepUpRequired` rather than a `Disclosure`, on the same
+reasoning as `ConsentRequired` in `vta/request-task.ts`: a refusal carrying
+what the holder must act on is the worst thing to let propagate as an error.
+The union landed **before** any surface drove a disclosure, which is the cheap
+moment — after N callers exist it is a breaking change to each.
+
+**Match it on the top-level `code`, not `details.reason`.** This is the one
+asymmetry with the consent refusal next door, and the reason
+`persona/step-up.ts` says so twice: `ConsentRequired` rides in `details`
+because the VTA rejects it as the standard `taskFailed`, while
+`persona/disclosure/present/1.0` declares its own extended code and the agent
+emits it at the top level. Looking in `details` for this one finds nothing and
+the flow dies silently — exactly the defect the consent path already shipped
+once.
+
+**Everything the holder is shown comes out of the signature.** The refusal
+carries an agent-signed approve-request whose `ext` names the verifier, the
+claim types and the purpose; the unsigned half of the refusal carries no
+authority. `verifyDisclosureStepUp` adds the check
+`verifyStepUpApproveRequest` cannot know to make: **the `previewId` inside the
+signature must equal the one the refusal named**, or the holder read a prompt
+describing one disclosure and authorised whichever the signed document meant.
+
+**The verify/sign half of the step-up ceremony lives in `vta/step-up.ts`, not
+`rp-login/`.** Two unrelated callers need it — the did-hosting RP gets its
+approve-request from a REST `start`, `persona/` gets one inside a Trust-Task
+refusal — and `rp-login/` and `persona/` are the same layer, so neither can
+import the other. It moved *down* rather than earning a boundary exception or
+a second copy. `rp-login/step-up.ts` re-exports every name, and
+`tests/rp-login.step-up.mjs` passes unchanged, which is what says the move was
+non-breaking.
+
 **Reveal lives in `FactValue`'s own state**, per value, and nowhere else. Lifted
 to the pane and keyed by fact id it would be a store of "things unhidden" that
 outlives the card the person was looking at and is one refactor from a *Show
@@ -347,7 +384,12 @@ all*. Component state cannot become that: it dies with the element, so leaving
 the pane re-hides everything — `persona-pane.render.test.mts` mounts twice to
 pin exactly that, since every sticky implementation passes a single-mount test.
 
-**What breaks it:** a surface that formats a value itself instead of rendering
+**What breaks it:** reading `presentDisclosure` as returning a `Disclosure`
+again, or catching the refusal and rethrowing it; matching the step-up code in
+`details.reason`; rendering the verifier or claim types from
+`unverifiedApproveRequest` instead of the verified `context`; dropping the
+`previewId` cross-check; moving the verify/sign half back up beside the RP
+flow; a surface that formats a value itself instead of rendering
 `FactValue` (the second surface is always the one added later, and a value
 masked on the card and printed in the strip is masked nowhere); greying a mask
 with `c.faint`, which is this pane's word for "the agent sent no value" and so
