@@ -193,23 +193,20 @@ export function GuidedSetup({
 
       {step === 2 && (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)", gap: 16 }}>
-          {/* The editor owns the ticks; the preview mirrors them by watching the
-              same attribute list. Rather than thread state out of ProfileEditor,
-              the preview reads which facts exist and which the user has ticked
-              through a tiny observer: onTick is called as the editor changes. */}
-          <ProfileEditorWithPreview
+          <ProfileEditor
+            key="setup"
             parties={parties}
             authority={authority}
             attributes={attributes}
-            onTick={(ids, name) => {
-              setTicked(new Set(ids));
-              setFaceName(name);
+            onPreview={(selection) => {
+              setTicked(new Set(selection.ids));
+              setFaceName(selection.name);
             }}
             onDone={() => {
               onChanged();
               setStep(3);
             }}
-            onBack={() => setStep(1)}
+            onCancel={() => setStep(1)}
           />
           <StrangerCard facts={preview} faceName={faceName} />
         </div>
@@ -259,49 +256,6 @@ export function GuidedSetup({
           </Panel>
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * `ProfileEditor` with its ticks mirrored out, so the stranger card beside it
- * can update as the holder ticks.
- *
- * The editor is not modified for this: it is wrapped, and the wrapper watches
- * the DOM checkboxes it renders. That keeps one editor for the map and the
- * setup rather than a second, "previewable" one that drifts.
- */
-function ProfileEditorWithPreview({
-  parties,
-  authority,
-  attributes,
-  onTick,
-  onDone,
-  onBack,
-}: {
-  parties: Parties;
-  authority: Authority | null;
-  attributes: PoolAttribute[];
-  onTick: (ids: string[], name: string) => void;
-  onDone: () => void;
-  onBack: () => void;
-}) {
-  const read = (root: HTMLElement) => {
-    const boxes = [...root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
-    const name = root.querySelector<HTMLInputElement>('input[type="text"], input:not([type])')?.value ?? "";
-    // Checkboxes render in `attributes` order — the editor maps the same list.
-    const ids = attributes.filter((_, i) => boxes[i]?.checked).map((a) => a.attributeId);
-    onTick(ids, name);
-  };
-  return (
-    <div
-      onChange={(e) => read(e.currentTarget)}
-      onInput={(e) => read(e.currentTarget)}
-      ref={(el) => {
-        if (el) read(el);
-      }}
-    >
-      <ProfileEditor key="setup" parties={parties} authority={authority} attributes={attributes} onDone={onDone} onCancel={onBack} />
     </div>
   );
 }
