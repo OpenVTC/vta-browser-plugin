@@ -10,7 +10,7 @@
 // face, a context, and a persona that wears a face. The code keeps the spec's
 // names (`attribute`, `profile`, `binding`) where they name wire records.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   personaAttributePut,
   personaBindingSet,
@@ -382,6 +382,7 @@ export function ProfileEditor({
   authority,
   attributes,
   existing,
+  onPreview,
   onDone,
   onCancel,
 }: {
@@ -389,6 +390,17 @@ export function ProfileEditor({
   authority: Authority | null;
   attributes: PoolAttribute[];
   existing?: PoolProfile;
+  /**
+   * The current name and ticks, reported as they change, so a caller can show
+   * what this face would hand over. The guided setup renders its card from it.
+   *
+   * An explicit prop rather than a caller reading the DOM: the first version of
+   * the setup wrapped this editor in a div and scraped its checkboxes from a
+   * `ref` callback, which React re-invokes on every commit — so the scrape set
+   * state, the state re-rendered, and the re-render scraped again. React error
+   * #185, a blank screen, and no clue in it that a preview was the cause.
+   */
+  onPreview?: ((selection: { ids: string[]; name: string }) => void) | undefined;
   onDone: () => void;
   onCancel: () => void;
 }) {
@@ -437,6 +449,17 @@ export function ProfileEditor({
     setBusy(false);
     if (ok) onDone();
   }, [parties, name, selected, existing, onDone]);
+
+  // Reported from a ref, not from the dependency list. `onPreview` is nearly
+  // always an inline arrow, so keying the effect on it would fire on every
+  // render — and every fire sets the caller's state, which renders again. The
+  // effect fires only when the selection itself moves; `selected`'s identity
+  // changes in `toggle` and nowhere else, which is what makes that true.
+  const previewRef = useRef(onPreview);
+  previewRef.current = onPreview;
+  useEffect(() => {
+    previewRef.current?.({ ids: [...selected], name });
+  }, [selected, name]);
 
   const toggle = (id: string) =>
     setSelected((s) => {
