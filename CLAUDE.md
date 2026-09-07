@@ -203,6 +203,56 @@ dispatch table; gating on `sender.id`; or widening the carrier to pass the
 envelope through. `tests/manager-sender.test.mts`,
 `tests/manager-surface.test.mts` and the two CI assertions pin each of these.
 
+## The holder's own identity crosses the boundary one way, downwards
+
+`persona/*` is two families wearing one prefix, and which half a task belongs to
+decides which surface may hold it.
+
+**The pool and the profiles over it are agent-scoped.** One person, one set of
+facts about themselves, sitting *above* every trust context. **Bindings,
+contacts and disclosure records are context-scoped**, because a persona lives in
+a context and so do its counterparties. Nothing inside a context may read the
+pool: the holder pushes a materialised projection down, and a context never
+pulls. That is a rule about *direction*, not a permission — an access-control
+failure over a readable pool discloses everything, while a pool no context can
+address has nothing to disclose.
+
+**The two halves live at two subpaths, and that is what makes the rule
+checkable.** `@openvtc/pnm-core/persona` is the wallet's half: disclosure's
+two-call gate, contacts, read-only bindings, renderers, and context-local
+profiles. `@openvtc/pnm-core/admin`'s `persona.ts` is the holder's half — the
+attribute pool, profiles, `binding/set`, `correlation/analyze`,
+`disclosure/history` — and the agent gates all ten on
+**`require_super_admin`**: `Admin` *and* unrestricted scope. A guard reading
+"is this an administrator" passes for one scoped to a single context, who would
+then be reading identity data belonging to every *other* context. The console's
+`isUnscopedHolder` mirrors that test and exists so a pane can *explain* the
+refusal; it never decides.
+
+**Only `manager.js` may carry the holder's half.** CI greps `dist/` for those
+ten URIs with `manager.js` excluded, exactly as it does for `admin/*`. The
+console administers the agent and its operator can hold the credential these
+tasks need; every wallet surface acts as a party inside a context and cannot.
+A **second** assertion checks the console still *has* them, because narrowing
+the guard gave a leak two shapes: a wallet gaining them, and the console losing
+them to a dropped import or a tree-shake — the second being a persona pane whose
+buttons do nothing, behind a smaller bundle and a green build.
+
+**A page may not drive any of it, either half.** `page-task-policy.ts` refuses
+the whole `persona/` prefix with a reason that names the route that does exist.
+A page is a verifier, and `requestTask` hands the VTA's reply straight back to
+the caller — so one vague prompt would otherwise buy a site the holder's name,
+address and phone number without showing them any of it.
+
+**What breaks it:** putting a pool task in `core/src/persona/` or the root
+barrel; importing `@openvtc/pnm-core/admin` from a wallet entry; testing
+`hasRole(authority, "admin")` where a persona task is concerned; relaxing the
+guard to allow more than `manager.js`; or deleting the presence assertion
+because it "duplicates" the exclusion one. `packages/core/tests/admin.persona.mjs`
+pins the client shapes, including the two the wire depends on: a `value` is sent
+as the JSON it is rather than wrapped in an object, and a `profileId` of `null`
+is an unbind rather than an omission.
+
 ## Key material never reaches a browser, and that is enforced
 
 `vta/seeds/*` — `list`, `rotate`, `export-mnemonic` — is the one task family

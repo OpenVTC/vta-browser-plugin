@@ -129,10 +129,10 @@ jobs:
       # The `persona/*` family has two halves. The attribute pool and the
       # profiles over it are AGENT-scoped: they sit above every trust context,
       # and the agent gates them on an unscoped holder credential — Admin with
-      # unrestricted scope. `@openvtc/pnm-core/persona` deliberately implements
-      # only the context-scoped half, because this wallet's holder identity is
-      # scoped to a context and every one of these ten would come back
-      # forbidden.
+      # unrestricted scope, `require_super_admin` and deliberately not
+      # `role == Admin`. `@openvtc/pnm-core/persona` implements only the
+      # context-scoped half, because a *wallet's* holder identity is scoped to a
+      # context and every one of these ten would come back forbidden there.
       #
       # So this is not about authority leaking (guard one) or key material
       # shipping (guard two). It is about the ONE-WAY BOUNDARY the family is
@@ -141,22 +141,60 @@ jobs:
       # be a context-scoped surface reaching upwards, which is the exact shape
       # the design exists to prevent.
       #
-      # Unlike the seeds family, these may legitimately ship one day — a
-      # persona-management pane belongs beside the console's other holder-scoped
-      # panes, not in the wallet. That is why this guard has no exception yet
-      # rather than never: whoever builds that pane has to change this line, and
-      # the change is the review. An omission here would be indistinguishable
-      # from nobody having got to it.
-      - name: Assert the holder-scoped half of persona ships nowhere
+      # **This guard used to have no exception, and the comment here said why:**
+      # a persona-management pane belongs beside the console's other
+      # holder-scoped panes, so the refusal was recorded as "not yet" rather
+      # than "never", and whoever built that pane would have to change this line
+      # — the change being the review. That pane now exists
+      # (`src/manager/panes/persona.tsx`, backed by
+      # `@openvtc/pnm-core/admin`'s `persona.ts`), so the guard is **narrowed,
+      # not deleted**, in the same shape as the admin one above: banned
+      # everywhere in `dist/` *except* `manager.js`.
+      #
+      # The console may hold this and a wallet may not, because the two are not
+      # the same kind of caller. The console administers the agent — its
+      # operator can hold the unscoped holder credential these tasks require —
+      # while every wallet surface acts as a party *inside* a context. That is
+      # the same distinction the `admin/*` guard rests on, and the reason both
+      # can name exactly one permitted file rather than being relaxed.
+      #
+      # `codeSplitting: false` on the console build is what makes "exactly one
+      # file" structural; the assertion below fails if it is ever lost.
+      - name: Assert the holder-scoped half of persona is confined to the console
         run: |
           for task in 'persona/attribute/put/1.0' 'persona/attribute/list/1.0' 'persona/attribute/delete/1.0' 'persona/profile/put/1.0' 'persona/profile/get/1.0' 'persona/profile/list/1.0' 'persona/profile/delete/1.0' 'persona/binding/set/1.0' 'persona/correlation/analyze/1.0' 'persona/disclosure/history/1.0'; do
-            found=$(grep -rlF "$task" packages/extension/dist/ || true)
-            if [ -n "$found" ]; then
-              echo "::error::$found contains $task — this half of persona/* reads or writes the holder's attribute pool, which sits above every trust context. A context-scoped bundle naming it is the boundary being crossed the wrong way. See packages/core/src/persona/index.ts."
+            leaked=$(grep -rlF "$task" packages/extension/dist/ | grep -v '^packages/extension/dist/manager\.js$' || true)
+            if [ -n "$leaked" ]; then
+              echo "::error::$leaked contains $task — this half of persona/* reads or writes the holder's attribute pool, which sits above every trust context. A wallet surface naming it is the boundary being crossed the wrong way; only the console may. Check for an import of @openvtc/pnm-core/admin from a wallet entry, or a shared chunk. See packages/core/src/admin/persona.ts."
               exit 1
             fi
           done
-          echo "OK: no holder-scoped persona task URIs anywhere in dist/"
+          echo "OK: holder-scoped persona task URIs appear only in manager.js"
+
+      # …and the other direction, which the guard above cannot see.
+      #
+      # Narrowing it to "except manager.js" means a leak now has two shapes, not
+      # one. The first is a wallet surface gaining these URIs, which is what
+      # that guard catches. The second is the console *losing* them — an import
+      # dropped in a refactor, a pane deleted, a tree-shake that takes the
+      # module out because nothing references it any more. The result is a
+      # persona pane whose buttons do nothing, and it is silent: a smaller
+      # bundle and a green build.
+      #
+      # This is the same non-vacuity problem the seeds guard documents from the
+      # other side — there, an unreferenced export never reaches `dist/` and the
+      # guard correctly stays quiet. Here that behaviour is the failure, so the
+      # presence is asserted rather than assumed.
+      - name: Assert the console still carries the persona surface it is the exception for
+        run: |
+          bundle=packages/extension/dist/manager.js
+          for task in 'persona/attribute/put/1.0' 'persona/attribute/list/1.0' 'persona/attribute/delete/1.0' 'persona/profile/put/1.0' 'persona/profile/get/1.0' 'persona/profile/list/1.0' 'persona/profile/delete/1.0' 'persona/binding/set/1.0' 'persona/correlation/analyze/1.0' 'persona/disclosure/history/1.0'; do
+            if ! grep -qF "$task" "$bundle"; then
+              echo "::error::$bundle no longer contains $task. The guard above permits it here precisely because the console's persona pane calls it; a build without it is a pane that cannot do what it offers. If the pane genuinely dropped this task, remove it from BOTH lists in the same change."
+              exit 1
+            fi
+          done
+          echo "OK: the console carries all ten holder-scoped persona tasks"
 
       # The console's isolation rests on it being one self-contained file: the
       # guard above names exactly one exception, so a second chunk would be a

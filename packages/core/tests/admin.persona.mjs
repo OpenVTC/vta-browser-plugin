@@ -1,0 +1,272 @@
+// `persona/*` — the holder-scoped half, the one the console speaks.
+//
+// The wallet's half is covered by `persona.consent-view.mjs` and
+// `persona.preview-ranking.mjs`. This file covers the ten tasks that read or
+// write the attribute pool, and it is written against the lesson VTI#1268
+// taught the other side of this family: **a suite that only asserts refusals
+// proves nothing.** An implementation that sent an empty payload for every task
+// would pass a file full of "does not send a contextId" assertions, so every
+// structural claim here is paired with one that the call actually carries what
+// it is for.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  personaAttributeList,
+  personaAttributePut,
+  personaAttributeDelete,
+  personaProfileList,
+  personaProfileGet,
+  personaProfilePut,
+  personaProfileDelete,
+  personaBindingSet,
+  personaCorrelationAnalyze,
+  personaDisclosureHistory,
+} from "../dist/admin/index.js";
+
+const HOLDER = { did: "did:key:zHolder" };
+const SERVICE = { did: "did:webvh:QmAgent:agent.example" };
+const PARTIES = { holder: HOLDER, service: SERVICE };
+
+function recorder(reply) {
+  const sent = [];
+  return {
+    sent,
+    send(envelope, opts) {
+      sent.push({ envelope, opts });
+      return Promise.resolve(reply);
+    },
+  };
+}
+
+const SPEC = "https://trusttasks.org/spec";
+
+// ── Versions ────────────────────────────────────────────────────────────────
+//
+// The whole family is 1.0 and every one of these compiles fine against the
+// wrong version — only the agent would object, and it would object by refusing.
+
+test("every task names its 1.0 URI, request and response", async () => {
+  const cases = [
+    [personaAttributeList, { ...PARTIES }, "persona/attribute/list/1.0", { attributes: [] }],
+    [
+      personaAttributePut,
+      { ...PARTIES, type: "email", valueType: "string", value: "a@b.c", provenance: { kind: "selfAsserted" } },
+      "persona/attribute/put/1.0",
+      { attributeId: "01J", version: 1, created: true, updatedAt: "2026-09-07T00:00:00Z" },
+    ],
+    [
+      personaAttributeDelete,
+      { ...PARTIES, attributeId: "01J" },
+      "persona/attribute/delete/1.0",
+      { attributeId: "01J", existed: true },
+    ],
+    [personaProfileList, { ...PARTIES }, "persona/profile/list/1.0", { profiles: [] }],
+    [
+      personaProfileGet,
+      { ...PARTIES, profileId: "01P" },
+      "persona/profile/get/1.0",
+      { profile: { profileId: "01P", name: "work", entries: [], version: 1, updatedAt: "x" } },
+    ],
+    [
+      personaProfilePut,
+      { ...PARTIES, name: "work", entries: [] },
+      "persona/profile/put/1.0",
+      { profileId: "01P", version: 1, created: true, updatedAt: "x" },
+    ],
+    [
+      personaProfileDelete,
+      { ...PARTIES, profileId: "01P" },
+      "persona/profile/delete/1.0",
+      { profileId: "01P", existed: true },
+    ],
+    [
+      personaBindingSet,
+      { ...PARTIES, contextId: "demo", personaDid: "did:key:zP" },
+      "persona/binding/set/1.0",
+      { contextId: "demo", personaDid: "did:key:zP", version: 1, boundAt: "x" },
+    ],
+    [personaCorrelationAnalyze, { ...PARTIES }, "persona/correlation/analyze/1.0", { findings: [] }],
+    [
+      personaDisclosureHistory,
+      { ...PARTIES },
+      "persona/disclosure/history/1.0",
+      { disclosures: [] },
+    ],
+  ];
+
+  for (const [fn, params, slug, reply] of cases) {
+    const channel = recorder(reply);
+    await fn(channel, params);
+    const { envelope, opts } = channel.sent[0];
+    assert.equal(envelope.type, `${SPEC}/${slug}`, `${fn.name} sends the wrong task URI`);
+    assert.equal(
+      opts.expectedResponseType,
+      `${SPEC}/${slug}#response`,
+      `${fn.name} expects the wrong response URI`,
+    );
+    assert.equal(envelope.from ?? envelope.issuer, HOLDER.did);
+  }
+});
+
+// ── The boundary, from the client side ──────────────────────────────────────
+
+test("the pool and profile tasks carry no contextId — they have no compartment", async () => {
+  const noContext = [
+    [personaAttributeList, { ...PARTIES }, { attributes: [] }],
+    [personaProfileList, { ...PARTIES }, { profiles: [] }],
+    [personaProfileGet, { ...PARTIES, profileId: "01P" }, { profile: {} }],
+    [personaCorrelationAnalyze, { ...PARTIES }, { findings: [] }],
+  ];
+  for (const [fn, params, reply] of noContext) {
+    const channel = recorder(reply);
+    await fn(channel, params);
+    assert.ok(
+      !("contextId" in channel.sent[0].envelope.payload),
+      `${fn.name} sent a contextId. These tasks sit ABOVE every context; a member here ` +
+        `would be this library inventing a compartment the pool does not have.`,
+    );
+  }
+});
+
+test("binding/set carries the context it pushes a copy into", async () => {
+  // The paired positive. Without it the assertion above is satisfied by a
+  // client that never sends a contextId anywhere, including where it is the
+  // entire point of the call.
+  const channel = recorder({ contextId: "demo", personaDid: "did:key:zP", version: 1, boundAt: "x" });
+  await personaBindingSet(channel, {
+    ...PARTIES,
+    contextId: "demo",
+    personaDid: "did:key:zP",
+    profileId: "01P",
+  });
+  assert.deepEqual(channel.sent[0].envelope.payload, {
+    contextId: "demo",
+    personaDid: "did:key:zP",
+    profileId: "01P",
+  });
+});
+
+test("disclosure/history omits contextId to read across every context", async () => {
+  const all = recorder({ disclosures: [] });
+  await personaDisclosureHistory(all, { ...PARTIES });
+  assert.deepEqual(all.sent[0].envelope.payload, {});
+
+  const one = recorder({ disclosures: [] });
+  await personaDisclosureHistory(one, { ...PARTIES, contextId: "demo" });
+  assert.deepEqual(one.sent[0].envelope.payload, { contextId: "demo" });
+});
+
+// ── Values ──────────────────────────────────────────────────────────────────
+
+test("a string value is sent as a string, not wrapped in an object", async () => {
+  // The generated payload type renders `value` as an index signature, because
+  // the schema places no type constraint on it. That is a codegen artifact —
+  // `vta-sdk` types the same member `Value` — and the cast in `attributePut` is
+  // what keeps this library from making callers invent an object. If someone
+  // "fixes" the cast by wrapping, every string attribute this console writes
+  // starts disagreeing with its own `valueType` and the agent refuses it.
+  const channel = recorder({ attributeId: "01J", version: 1, created: true, updatedAt: "x" });
+  await personaAttributePut(channel, {
+    ...PARTIES,
+    type: "email",
+    valueType: "string",
+    value: "glenn@example.com",
+    provenance: { kind: "selfAsserted" },
+  });
+  assert.equal(channel.sent[0].envelope.payload.value, "glenn@example.com");
+});
+
+test("values are withheld unless asked for", async () => {
+  const bare = recorder({ attributes: [] });
+  await personaAttributeList(bare, { ...PARTIES });
+  assert.deepEqual(
+    bare.sent[0].envelope.payload,
+    {},
+    "an unfiltered list must send an empty payload — not `includeValues: false`, and " +
+      "certainly not nulls, which every optional member in this family refuses",
+  );
+
+  const asked = recorder({ attributes: [] });
+  await personaAttributeList(asked, { ...PARTIES, includeValues: true, typePrefix: "phone" });
+  assert.deepEqual(asked.sent[0].envelope.payload, { includeValues: true, typePrefix: "phone" });
+});
+
+// ── Unbinding is a value, not an absence ────────────────────────────────────
+
+test("profileId null unbinds; omitting it leaves the binding alone", async () => {
+  const reply = { contextId: "demo", personaDid: "did:key:zP", version: 2, boundAt: "x" };
+
+  const unbind = recorder(reply);
+  await personaBindingSet(unbind, {
+    ...PARTIES,
+    contextId: "demo",
+    personaDid: "did:key:zP",
+    profileId: null,
+  });
+  assert.equal(
+    unbind.sent[0].envelope.payload.profileId,
+    null,
+    "an explicit null is how a persona stops presenting anything; dropping it because it " +
+      "is falsy turns an unbind into a no-op the operator believes worked",
+  );
+
+  const untouched = recorder(reply);
+  await personaBindingSet(untouched, {
+    ...PARTIES,
+    contextId: "demo",
+    personaDid: "did:key:zP",
+    publicEntries: ["01E"],
+  });
+  assert.ok(!("profileId" in untouched.sent[0].envelope.payload));
+});
+
+test("deleting a profile does not unbind unless asked", async () => {
+  const bare = recorder({ profileId: "01P", existed: true });
+  await personaProfileDelete(bare, { ...PARTIES, profileId: "01P" });
+  assert.deepEqual(bare.sent[0].envelope.payload, { profileId: "01P" });
+
+  const forced = recorder({ profileId: "01P", existed: true });
+  await personaProfileDelete(forced, { ...PARTIES, profileId: "01P", unbind: true });
+  assert.deepEqual(forced.sent[0].envelope.payload, { profileId: "01P", unbind: true });
+});
+
+test("cascade is what removes an attribute from the profiles naming it", async () => {
+  const channel = recorder({ attributeId: "01J", existed: true, removedFromProfiles: ["01P"] });
+  const res = await personaAttributeDelete(channel, {
+    ...PARTIES,
+    attributeId: "01J",
+    cascade: true,
+  });
+  assert.deepEqual(channel.sent[0].envelope.payload, { attributeId: "01J", cascade: true });
+  assert.deepEqual(res.removedFromProfiles, ["01P"]);
+});
+
+// ── Empty answers ───────────────────────────────────────────────────────────
+
+test("a list returns [] rather than undefined when the pool holds nothing", async () => {
+  assert.deepEqual(await personaAttributeList(recorder({}), { ...PARTIES }), []);
+  assert.deepEqual(await personaProfileList(recorder({}), { ...PARTIES }), []);
+  assert.deepEqual(await personaCorrelationAnalyze(recorder({}), { ...PARTIES }), []);
+});
+
+test("disclosure history returns the whole response, so nextCursor survives", async () => {
+  // Returning just the array would erase the difference between "that is all of
+  // it" and "the agent stopped early", which is the one misreading a disclosure
+  // history exists to prevent.
+  const res = await personaDisclosureHistory(recorder({ disclosures: [], nextCursor: "c2" }), {
+    ...PARTIES,
+  });
+  assert.equal(res.nextCursor, "c2");
+});
+
+test("resolve is opt-in on profile/get", async () => {
+  const bare = recorder({ profile: {} });
+  await personaProfileGet(bare, { ...PARTIES, profileId: "01P" });
+  assert.deepEqual(bare.sent[0].envelope.payload, { profileId: "01P" });
+
+  const resolved = recorder({ profile: {}, resolved: [] });
+  await personaProfileGet(resolved, { ...PARTIES, profileId: "01P", resolve: true });
+  assert.deepEqual(resolved.sent[0].envelope.payload, { profileId: "01P", resolve: true });
+});

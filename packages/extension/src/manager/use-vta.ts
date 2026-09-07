@@ -106,3 +106,28 @@ export function hasRole(authority: Authority | null, ...roles: string[]): boolea
   if (!authority) return false;
   return roles.some((r) => authority.roles.includes(r));
 }
+
+/**
+ * Whether the agent would treat this caller as an **unscoped holder** — `Admin`
+ * with no context restriction.
+ *
+ * This is not "an administrator". The `persona/*` pool sits above every trust
+ * context, and the agent gates it on `require_super_admin`, deliberately not on
+ * `role == Admin`: an administrator scoped to a single context who could read
+ * the pool would be reading identity data belonging to every *other* context.
+ * `hasRole(authority, "admin")` is exactly the check that gets that wrong.
+ *
+ * **The emptiness of `scopes` means opposite things depending on the role.**
+ * `vti-common`'s own `act_scope` warns about this from the other side: an empty
+ * context list is *unrestricted* for an admin and *nothing at all* for every
+ * other role. So the role test is not redundant with the scope test — reading
+ * `scopes.length === 0` alone would promote a monitor with no scopes to the most
+ * privileged caller there is.
+ *
+ * Advisory, like `hasRole`: it disables and explains. The agent decides again on
+ * every task regardless of what this returns.
+ */
+export function isUnscopedHolder(authority: Authority | null): boolean {
+  if (!authority) return false;
+  return authority.roles.includes("admin") && authority.scopes.length === 0;
+}

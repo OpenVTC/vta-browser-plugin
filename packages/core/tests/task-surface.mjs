@@ -231,27 +231,37 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // 178 -> 207, which is 24 persona families plus the five `rooms/keys/*` this
   // library does not implement.
   //
-  // **Fourteen of the twenty-four are here and the other ten cannot be**, which
-  // makes persona the second family whose absence is a decision — and unlike
-  // `vta/backup/*`, not this library's decision. The family has two halves.
+  // **All twenty-four are here now, and the split between them is the whole
+  // design.** The family has two halves, and until the console gained a persona
+  // pane only one of them was implementable.
+  //
   // `persona/attribute/*`, `persona/profile/*`, `persona/binding/set`,
   // `persona/correlation/analyze` and `persona/disclosure/history` read or
   // write the agent-scoped attribute pool, which sits above every trust
-  // context; the agent gates all ten on an *unscoped holder* credential. This
-  // wallet's holder identity is scoped to a context, so every one of those
-  // calls would come back `e.p.msg.forbidden`. Implementing them would add ten
-  // functions that cannot succeed. Authoring a persona is `pnm`'s job, which
-  // holds the credential that can.
+  // context; the agent gates all ten on an *unscoped holder* credential —
+  // `Admin` AND unrestricted scope, not merely an administrative role. This
+  // note used to say those ten "cannot be" here, on the grounds that a wallet's
+  // holder identity is scoped to a context and every call would come back
+  // `e.p.msg.forbidden`. That was true of the wallet and wrong about the
+  // library: `@openvtc/pnm-core` also backs the **management console**, which
+  // administers an agent rather than acting as one inside it, and whose
+  // operator can hold exactly that credential.
   //
-  // The fourteen that are here are the context-scoped half plus
+  // So 177 -> 187 is those ten, in `admin/persona.ts` — the `admin` subpath,
+  // never the root barrel and never `./persona`, so a wallet surface cannot
+  // reach them by accident. CI greps the built bundles for their URIs and
+  // permits exactly one file, `manager.js`, the same way it does for `admin/*`.
+  //
+  // The other fourteen are the context-scoped half plus
   // `persona/renderers/list` — disclosure's two-call gate, contacts, read-only
   // bindings, and the context-local profiles a wallet may author because
-  // nothing crosses the boundary to build one. That is the whole of what a
-  // wallet is for here: showing a human what is about to be disclosed, and
-  // sending it only once they have seen it.
+  // nothing crosses the boundary to build one. They live in `./persona`, which
+  // stays wallet-safe.
   //
-  // Do not "finish" this family either. The ten missing are missing because
-  // the boundary they sit behind is the design.
+  // The two subpaths are not a filing convention. A single module holding both
+  // halves would be one root-barrel import away from putting the pool's URIs
+  // into the service worker, and the boundary would then be a comment rather
+  // than something a grep can check.
   //
   // **Nothing is behind any more.** Every implemented family names the newest
   // version `vta-sdk` publishes: `vault/{list,get,upsert}` and
@@ -262,7 +272,7 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // the agent does not name, rather than as a deprecation warning. That is the
   // expected shape of a cutover here: nothing is deployed, so neither side
   // keeps an old version alive.
-  const expected = 177;
+  const expected = 187;
   assert.equal(
     implemented.size,
     expected,
