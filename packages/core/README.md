@@ -109,6 +109,23 @@ Refresh the snapshot against a local checkout:
 npm run tasks:sync -- /path/to/vta-sdk
 ```
 
+A second snapshot, `acl-capabilities.json`, covers the one part of the ACL
+surface that has no binding to generate from. `AclEntry.role` is specified as
+"an opaque role identifier interpreted by the ACL maintainer", so roles — and
+the capabilities they imply — are ecosystem-local and live in `ext` under
+`org.openvtc.capabilities`. `src/admin/acl-capabilities.ts` therefore keeps a
+copy of the agent's tables, and the snapshot is what stops the copy drifting:
+
+```sh
+npm run acl:sync -- /path/to/vti-common
+```
+
+The failure it guards is asymmetric and worth naming. A role whose derived set
+grows at the agent and not here makes the console **under-report** what an
+entry can do — an operator reading a narrowing believes it holds less than it
+holds, which is the misreading the agent's capability enforcement was added to
+end.
+
 
 This package is byte-compatible with:
 
