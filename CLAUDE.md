@@ -244,6 +244,18 @@ A page is a verifier, and `requestTask` hands the VTA's reply straight back to
 the caller — so one vague prompt would otherwise buy a site the holder's name,
 address and phone number without showing them any of it.
 
+**The pane is a picture, and its words are fixed.** `panes/persona.tsx` loads
+the pool, the faces and every context's bindings, builds `identity-graph.ts`'s
+model, and shows either the guided setup (`persona-setup.tsx`, while the holder
+has no face) or the identity map (`persona-map.tsx`). What lights up when
+something is selected — a fact's reach runs *down* to the contexts it goes to,
+a context's runs *up* to the facts it holds — is computed in
+`identity-graph.ts` and tested; the component only draws. The on-screen words
+are a **fact**, a **face**, a **context** and a persona that **wears** a face,
+per `design-docs/persona-vocabulary.md`; the spec's words (`attribute`,
+`profile`, `binding`, `materialise`) stay in code and off the screen. Add copy
+in those words, or change the document first.
+
 **What breaks it:** putting a pool task in `core/src/persona/` or the root
 barrel; importing `@openvtc/pnm-core/admin` from a wallet entry; testing
 `hasRole(authority, "admin")` where a persona task is concerned; relaxing the
