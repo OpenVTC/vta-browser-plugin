@@ -39,6 +39,10 @@ import {
 } from "@openvtc/trust-tasks/persona/disclosure/present/1.0/payload";
 
 import { call, type PersonaCallerParams } from "./call.js";
+import {
+  disclosureStepUpRequiredFrom,
+  type DisclosureStepUpRequired,
+} from "./step-up.js";
 
 export type DisclosurePreview = PersonaDisclosurePreviewResponsePayload;
 export type PreviewClaim = DisclosurePreview["claims"][number];
@@ -117,6 +121,23 @@ export interface PresentDisclosureParams extends PersonaCallerParams {
   mint?: PersonaDisclosurePresentPayload["mint"];
 }
 
+/** The disclosure happened. */
+export interface Disclosed {
+  kind: "disclosed";
+  disclosure: Disclosure;
+}
+
+/**
+ * What `present` can answer.
+ *
+ * A union rather than a `Disclosure`, so a caller cannot reach the disclosure
+ * without saying what it does about a `release: stepUp` refusal — the same
+ * reasoning as `RequestTaskOutcome` in `vta/request-task.ts`, where letting
+ * such a refusal propagate as an error discards the very flow it exists to
+ * start. See `persona/step-up.ts`.
+ */
+export type PresentDisclosureOutcome = Disclosed | DisclosureStepUpRequired;
+
 /**
  * Hand over what the preview showed.
  *
@@ -124,25 +145,37 @@ export interface PresentDisclosureParams extends PersonaCallerParams {
  * can check that they did — the gate is the `previewId`, and the reason it is
  * a gate at all is that the only way to obtain one is to have produced the
  * summary.
+ *
+ * **A step-up refusal comes back as an outcome, not an exception.** The agent
+ * did not consume the preview when it refused, so the caller obtains the
+ * approval the refusal carries and calls this again with the *same*
+ * `previewId`. Every other failure still throws.
  */
 export async function presentDisclosure(
   sender: TrustTaskSender,
   params: PresentDisclosureParams,
-): Promise<Disclosure> {
+): Promise<PresentDisclosureOutcome> {
   const payload: PersonaDisclosurePresentPayload = {
     contextId: params.contextId,
     previewId: params.previewId,
     ...(params.challenge !== undefined ? { challenge: params.challenge } : {}),
     ...(params.mint !== undefined ? { mint: params.mint } : {}),
   };
-  return call<PersonaDisclosurePresentPayload, Disclosure>(
-    sender,
-    params,
-    DISCLOSURE_PRESENT,
-    DISCLOSURE_PRESENT_RESPONSE,
-    "persona/disclosure/present",
-    payload,
-  );
+  try {
+    const disclosure = await call<PersonaDisclosurePresentPayload, Disclosure>(
+      sender,
+      params,
+      DISCLOSURE_PRESENT,
+      DISCLOSURE_PRESENT_RESPONSE,
+      "persona/disclosure/present",
+      payload,
+    );
+    return { kind: "disclosed", disclosure };
+  } catch (e) {
+    const stepUp = disclosureStepUpRequiredFrom(e);
+    if (stepUp) return stepUp;
+    throw e;
+  }
 }
 
 // ── Making a preview readable ──────────────────────────────────────────────
