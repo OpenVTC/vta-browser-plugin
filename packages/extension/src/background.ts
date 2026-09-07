@@ -8,6 +8,7 @@
 // REST flow: content → RUNTIME_LOGIN → consent → offscreen REST login → tokens.
 // DIDComm flow: content → RUNTIME_LOGIN_DIDCOMM → consent → offscreen doc.
 
+import { pageTaskRefusal } from "./page-task-policy.js";
 import { IndexedDBKVStore, listPendingInbound } from "@openvtc/pnm-core";
 import {
   parseActiveVtaDid,
@@ -1648,6 +1649,12 @@ async function handleRequestTask(
   // matching grant since relayed. The human approved that exact payload here and
   // then again on the approving device — see `consent-replay.ts` for why asking
   // a third time costs more than it buys.
+  // Refused before anything else, including before the consent prompt: the
+  // prompt is what makes this reachable, not what makes it safe. See
+  // `page-task-policy.ts` for why the persona family is not a page's to drive.
+  const refusal = pageTaskRefusal(req.params.type);
+  if (refusal !== null) return { ok: false, error: refusal };
+
   const key = replayKey(req.origin, req.params);
   if (!consentReplays.consumeIfArmed(key)) {
     const approved = await requestConsent({
