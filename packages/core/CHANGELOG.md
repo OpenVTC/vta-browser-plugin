@@ -8,6 +8,25 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-07
+
+### Migration
+
+- **`personaProfileGet`'s `resolved` entries lost three required members.**
+  A caller reading `res.resolved[i].attributeId`, `.version` or `.updatedAt`
+  as a `string`/`number` now gets `| undefined` and will not compile under
+  `strictNullChecks`. That is the fix arriving, not a regression: the members
+  are absent on an `inline` entry, and code that assumed them was assuming a
+  profile cannot hold one. Guard on `attributeId === undefined` — that test is
+  what identifies an inline claim.
+
+  **Minor rather than patch, and no source in this package changed.** The type
+  is re-exported from `@openvtc/trust-tasks`, so bumping the dependency moved
+  this package's own public API — `personaProfileGet` returns
+  `PersonaProfileGetResponsePayload` and the emitted `.d.ts` imports it
+  straight from the binding. A build staying green says nothing about whether
+  the API held when the API belongs to a dependency.
+
 ### Changed
 
 - **`@openvtc/trust-tasks` 0.16.11 -> 0.17.1.** Carries the persona family's
