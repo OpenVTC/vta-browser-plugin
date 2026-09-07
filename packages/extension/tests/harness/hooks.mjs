@@ -17,12 +17,22 @@
 //   because its own imports are written the other way. So a `.js` specifier
 //   that does not exist is retried as `.tsx` and then `.ts`.
 //
-//   **load** — `.tsx` goes through esbuild, which the build already depends on
-//   and which strips types and JSX in one pass. Not `typescript`: this repo is
-//   on TypeScript 7, whose JS API is the native port's small surface —
-//   `transpileModule` and the `JsxEmit` enum are simply not on it, and a hook
-//   written against the 5.x compiler API fails at load with an undefined enum
-//   rather than anything that names the cause.
+//   **load** — `.tsx` and `.ts` go through esbuild, which the build already
+//   depends on and which strips types and JSX in one pass. Not `typescript`:
+//   this repo is on TypeScript 7, whose JS API is the native port's small
+//   surface — `transpileModule` and the `JsxEmit` enum are simply not on it,
+//   and a hook written against the 5.x compiler API fails at load with an
+//   undefined enum rather than anything that names the cause.
+//
+//   `.ts` is here even though Node strips those itself, because Node's mode is
+//   *strip-only*: it refuses any syntax that would need code emitted, and a
+//   constructor parameter property (`constructor(private readonly rpId: string)`
+//   in `webauthn-prf-wrap.ts`) is exactly that. The failure surfaces at the
+//   first module that transitively imports one — for the onboarding view, four
+//   hops away — as a parse error in a file the test never mentions. esbuild
+//   emits, so the whole graph loads. Local sources only: a `.ts` under
+//   `node_modules` is a published package's business, and `.mts` stays with
+//   Node, which is what the test files themselves are.
 //
 // Deliberately NOT a general test bundler. It resolves and transforms; it does
 // not bundle, mock, or rewrite anything else. A test that needs an agent stubs
@@ -60,11 +70,13 @@ export async function resolve(specifier, context, nextResolve) {
 }
 
 export async function load(url, context, nextLoad) {
-  if (!url.endsWith(".tsx")) return nextLoad(url, context);
+  const isTsx = url.endsWith(".tsx");
+  const isTs = url.endsWith(".ts") && !url.includes("/node_modules/");
+  if (!isTsx && !isTs) return nextLoad(url, context);
   const path = fileURLToPath(url);
   const source = await readFile(path, "utf8");
   const { code } = esbuild.transformSync(source, {
-    loader: "tsx",
+    loader: isTsx ? "tsx" : "ts",
     // The automatic runtime, matching `tsconfig.base.json`'s `jsx: react-jsx`,
     // so a component needs no React import here that it does not need there.
     jsx: "automatic",

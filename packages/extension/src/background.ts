@@ -58,6 +58,7 @@ import {
   OFFSCREEN_WALLET_LOCK_STATE,
   OFFSCREEN_APPROVER_STATE,
   OFFSCREEN_ONBOARD_CONNECT,
+  OFFSCREEN_ONBOARD_CONTEXTS,
   OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_SIGN_TRUST_TASK,
   OFFSCREEN_START_INBOUND,
@@ -104,6 +105,7 @@ import {
   type RuntimeUnlockApproverResponse,
   RUNTIME_WALLET_LOCK_STATE,
   RUNTIME_ONBOARD_CONNECT,
+  RUNTIME_ONBOARD_CONTEXTS,
   RUNTIME_ONBOARD_PREPARE,
   PAGE_FACING_RUNTIME_TYPES,
   RUNTIME_REQUEST_TASK,
@@ -154,6 +156,7 @@ import {
   type RuntimeOnboardConnectResponse,
   type RuntimeOnboardConnectRequest,
   type RuntimeOnboardPrepareRequest,
+  type RuntimeOnboardContextsResponse,
   type RuntimeOnboardPrepareResponse,
   OFFSCREEN_REQUEST_TASK,
   type OffscreenRequestTaskResponse,
@@ -1538,7 +1541,20 @@ async function handleOnboardPrepare(
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_ONBOARD_PREPARE,
     vtaDid: req.vtaDid,
+    adminScope: req.adminScope,
+    ...(req.context ? { context: req.context } : {}),
   })) as RuntimeOnboardPrepareResponse;
+}
+
+/** Relay the onboarding context listing. Speaks as the pending ephemeral, so
+ *  it is only answerable between `prepare` and `connect` — the offscreen
+ *  handler says so rather than inventing an empty list. */
+async function handleOnboardContexts(): Promise<RuntimeOnboardContextsResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_ONBOARD_CONTEXTS,
+  })) as RuntimeOnboardContextsResponse;
 }
 
 async function handleOnboardConnect(
@@ -1548,10 +1564,11 @@ async function handleOnboardConnect(
   return (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_ONBOARD_CONNECT,
-    // Both `context` and `createIfMissing` are optional — only forward
-    // when the popup actually sent them, so the offscreen handler can
-    // tell "not provided" from "provided as empty string".
-    ...(req.context ? { context: req.context } : {}),
+    // `context` and `adminScope` are required and always forwarded: the
+    // wallet names where it lives and how far it reaches, and a hop that
+    // dropped either would have the offscreen document decide for it.
+    context: req.context,
+    adminScope: req.adminScope,
     ...(req.createIfMissing ? { createIfMissing: true } : {}),
     ...(req.mediatorDid ? { mediatorDid: req.mediatorDid } : {}),
   })) as RuntimeOnboardConnectResponse;
@@ -2793,6 +2810,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_ONBOARD_PREPARE) {
     handleOnboardPrepare(message as RuntimeOnboardPrepareRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_ONBOARD_CONTEXTS) {
+    handleOnboardContexts()
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

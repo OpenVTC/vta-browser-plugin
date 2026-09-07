@@ -8,15 +8,46 @@
 // host-permission grant and the WebAuthn PRF ceremony. A tab is immune to that
 // teardown, which is the whole reason for the move.
 //
-// The provisioning sequence itself is unchanged; only its container and its
-// colours are.
+// ## The two questions this asks, and why they are two
+//
+// **What will this wallet do here** decides the ACL entry the agent writes:
+// `"context"` — a party inside one context — or `"unrestricted"`, the shape an
+// ACL reads as a super-admin, which is what the management console needs to
+// administer the agent at all.
+//
+// **Where does it keep its settings** decides the context the admin DID is
+// minted in and the wallet's own configuration lives in. It is asked in *both*
+// cases, and that is the point: an unrestricted wallet reaches every context
+// and still keeps its state in exactly one. Expressing scope by leaving the
+// context blank would have left the console with nowhere to put it.
+//
+// Neither is a preference the wallet can infer. The agent used to be allowed
+// to pick the context (`payload.context` omitted, inference rules run) and its
+// reply did not have to say which it picked, so a wallet could finish
+// onboarding without knowing where its own configuration had landed. Both are
+// now always named, which also makes `provision/integration:contextRequired`
+// unreachable — inference never runs — and the picker that used to recover
+// from it is gone rather than kept for a case that cannot arise.
+//
+// ## Why the order differs between the two
+//
+// The grant command has to match the scope, and only the operator can run it:
+//
+//   * `"unrestricted"` → `pnm acl create … --role admin` with **no**
+//     `--contexts`. The command needs no context, so the home context is
+//     chosen *after* the grant, from the list the now-authorised ephemeral can
+//     actually read (`vta/contexts/list`). A picker of real contexts beats a
+//     slug typed from memory.
+//   * `"context"` → the command carries `--contexts <id>`, so the context has
+//     to be known *before* it is printed. It is asked as a text field, which
+//     is not a downgrade: the operator is about to type the same string into
+//     their own terminal.
+//
+// The provisioning sequence itself is otherwise unchanged.
 
 import { useEffect, useState } from "react";
 import { useConnectionStore } from "./store.js";
-import {
-  didWebvhDomain,
-  PROVISION_CONTEXT_REQUIRED,
-} from "@openvtc/pnm-core";
+import { didWebvhDomain, type AdminScope } from "@openvtc/pnm-core";
 import {
   looksLikeAgentName,
   parseAgentName,
@@ -25,13 +56,16 @@ import {
   MEDIATOR_REQUIRED,
   ONBOARD_STAGES,
   RUNTIME_ONBOARD_CONNECT,
+  RUNTIME_ONBOARD_CONTEXTS,
   RUNTIME_ONBOARD_PROGRESS,
   RUNTIME_ONBOARD_PREPARE,
   RUNTIME_RESOLVE_AGENT_NAME,
+  type ContextRecordView,
   type OnboardPrepareResult,
   type OnboardStage,
   type RuntimeOnboardProgressMessage,
   type RuntimeOnboardConnectResponse,
+  type RuntimeOnboardContextsResponse,
   type RuntimeOnboardPrepareResponse,
   type RuntimeResolveAgentNameResponse,
 } from "./bridge-protocol.js";
@@ -71,25 +105,26 @@ export function OnboardView({
   const setConnection = useConnectionStore((s) => s.setConnection);
 
   const [vtaDid, setVtaDid] = useState("");
-  // Context selection. Default is "vta-derived" — the wallet omits
-  // `context` from the wire body and the VTA infers (single-context
-  // grant → that context; super-admin + single-context VTA → that
-  // context). Operators with multi-context VTAs flip to "override"
-  // to specify a context explicitly.
-  const [contextMode, setContextMode] = useState<"vta-derived" | "override">(
-    "vta-derived",
-  );
-  const [contextOverride, setContextOverride] = useState("");
+  // What this wallet is being set up to do at the agent. Defaults to the
+  // narrower answer: a wallet that turns out to need the whole agent can be
+  // set up again, where one that was silently granted it cannot be un-granted
+  // without an operator noticing there was something to notice.
+  const [adminScope, setAdminScope] = useState<AdminScope>("context");
+  // The home context. For a context-scoped grant it is typed before the
+  // command (the command needs it); for an unrestricted one it is picked
+  // afterwards, from `contexts` below.
+  const [homeContext, setHomeContext] = useState("");
   const [createIfMissing, setCreateIfMissing] = useState(false);
   const [prep, setPrep] = useState<OnboardPrepareResult | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // When the VTA returns `provision/integration:contextRequired`
-  // (multi-context VTA where inference can't auto-pick), we surface
-  // the candidates as a picker so the operator can choose without
-  // re-typing. The ephemeral grant is still valid — picking one
-  // immediately retries Connect with that context.
-  const [contextCandidates, setContextCandidates] = useState<string[] | null>(null);
+  // The agent's own contexts, read as the granted ephemeral after `prepare`.
+  // `null` while unasked or unavailable — distinct from `[]`, which is an
+  // agent that answered and holds none. The unrestricted path shows a picker
+  // when this is a non-empty list and a text field otherwise, because an agent
+  // that cannot list its contexts can still provision into one that is named.
+  const [contexts, setContexts] = useState<ContextRecordView[] | null>(null);
+  const [contextsError, setContextsError] = useState<string | null>(null);
   // Whether the grant command has been copied. Collapses the command block
   // so the screen stops re-presenting a step the operator has finished.
   const [commandCopied, setCommandCopied] = useState(false);
@@ -114,6 +149,10 @@ export function OnboardView({
     vtaDid: string;
     holderDid: string;
     role: string;
+    /** What the agent said it did, carried through to the stored connection
+     *  unchanged. Never the ask — see `OnboardConnectResult`. */
+    homeContext: string;
+    agentScope: AdminScope;
     restBaseUrl?: string;
     mediatorDid?: string;
     connectedAt: number;
@@ -127,17 +166,18 @@ export function OnboardView({
   const [encryptBusy, setEncryptBusy] = useState(false);
   const [encryptError, setEncryptError] = useState<string | null>(null);
 
-  // The effective context to send on the wire. `undefined` means "let
-  // the VTA infer". A trimmed non-empty string overrides.
-  const effectiveContext =
-    contextMode === "override" && contextOverride.trim().length > 0
-      ? contextOverride.trim()
-      : undefined;
-  // Create-if-missing only applies when an override context is set.
-  // Picking VTA-derived and asking to also create makes no sense (no
-  // context name to create) and would force a super-admin grant the
-  // operator doesn't need.
-  const allowCreate = contextMode === "override" && createIfMissing;
+  const effectiveContext = homeContext.trim();
+  // Creating a context inline needs an unrestricted grant — the agent's
+  // context-create gate refuses everything below — so it is only offered
+  // where the grant already is one. A context-scoped operator who needs a new
+  // context makes it themselves, which is the same ceremony they used to make
+  // the one they are scoping to.
+  const allowCreate = adminScope === "unrestricted" && createIfMissing;
+  /** The home context must be known before the grant command can be printed
+   *  for a context-scoped wallet, because the command carries it. An
+   *  unrestricted grant names no context, so the question waits until the
+   *  ephemeral can read the real list. */
+  const contextNeededBeforeGrant = adminScope === "context";
 
   // Resume an onboarding that a permission dialog interrupted.
   //
@@ -261,9 +301,18 @@ export function OnboardView({
       const res = (await chrome.runtime.sendMessage({
         type: RUNTIME_ONBOARD_PREPARE,
         vtaDid: did,
+        adminScope,
+        // Only carried for the scope whose command names it. Sending it for an
+        // unrestricted grant would be sending a value the command must not
+        // contain, which is the "too narrow" failure in `grant-command.ts`.
+        ...(contextNeededBeforeGrant && effectiveContext ? { context: effectiveContext } : {}),
       })) as RuntimeOnboardPrepareResponse;
       if (!res.ok) throw new Error(res.error);
       setPrep(res.result);
+      // The ephemeral now exists but is not yet granted, so this will fail
+      // until the operator runs the command. Asked again from the grant
+      // screen's Refresh, which is where the answer is actually needed.
+      if (adminScope === "unrestricted") void loadContexts();
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
     } finally {
@@ -271,14 +320,51 @@ export function OnboardView({
     }
   }
 
-  /** Connect with the currently-selected context, or with an explicit
-   *  override (used by the recovery picker — it passes the candidate
-   *  the operator just clicked, bypassing React state's async commit). */
+  /** Ask the agent which contexts this grant can reach.
+   *
+   *  Speaks as the ephemeral, so it only answers once the operator has run the
+   *  grant command — before that the agent refuses it, which is why the
+   *  failure is shown as a hint next to Refresh rather than as an error. A
+   *  wallet can still be onboarded with the list unavailable: the picker falls
+   *  back to a text field, and the agent is the one that decides either way. */
+  async function loadContexts() {
+    setContextsError(null);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: RUNTIME_ONBOARD_CONTEXTS,
+      })) as RuntimeOnboardContextsResponse;
+      if (!res.ok) {
+        setContextsError(res.error);
+        return;
+      }
+      setContexts(res.result.contexts);
+      // Pre-select only when there is no ambiguity to resolve. With several,
+      // choosing for the operator would make the most consequential field on
+      // the screen the one they never looked at.
+      if (res.result.contexts.length === 1 && !homeContext) {
+        setHomeContext(res.result.contexts[0]!.id);
+      }
+    } catch (e) {
+      setContextsError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /** Connect with the chosen home context.
+   *
+   *  `forceContext` exists for the picker, which passes the context the
+   *  operator just clicked rather than waiting for React state to commit. */
   async function connect(forceContext?: string) {
     setBusy(true);
     setStatus(null);
-    setContextCandidates(null);
     const ctx = forceContext ?? effectiveContext;
+    if (!ctx) {
+      // Unreachable from the UI, which disables the button — but the wire
+      // member is required and a silent omission would put the agent back in
+      // charge of choosing, which is the whole thing this flow ended.
+      setBusy(false);
+      setStatus("Pick where this wallet should keep its settings first.");
+      return;
+    }
     const mediatorOverride = fallbackMediator.trim();
     // Seed the first phase locally. The offscreen document's own report for
     // it may not arrive before the round trip starts, and an empty checklist
@@ -287,7 +373,8 @@ export function OnboardView({
     try {
       const res = (await chrome.runtime.sendMessage({
         type: RUNTIME_ONBOARD_CONNECT,
-        ...(ctx ? { context: ctx } : {}),
+        context: ctx,
+        adminScope,
         ...(allowCreate ? { createIfMissing: true } : {}),
         // Only sent when the operator has answered the mediator prompt; the
         // VTA's own published mediator wins over this whenever there is one.
@@ -302,23 +389,10 @@ export function OnboardView({
           setStatus(null);
           return;
         }
-        // Recoverable: VTA can't auto-pick a context. Surface the
-        // candidates as a picker rather than bouncing the operator
-        // back to a re-prepare cycle. The ephemeral grant is still
-        // valid for its 1h TTL so picking immediately retries.
-        //
-        // `===` against the registry's current spelling. This used to fold
-        // the pre-#279 snake_case spelling in as well; every agent now emits
-        // the lowerCamelCase one, so the fold was removed rather than left
-        // to be wondered about.
-        if (
-          res.code === PROVISION_CONTEXT_REQUIRED &&
-          res.candidates &&
-          res.candidates.length > 0
-        ) {
-          setContextCandidates(res.candidates);
-          return;
-        }
+        // No `contextRequired` branch. The wallet always names its context,
+        // so the agent's inference rules never run and that refusal cannot
+        // arrive — a recovery path for it would be code no test could reach
+        // and no deployment could produce.
         throw new Error(res.error);
       }
       // Stash the connection info but don't commit to ConnectedView
@@ -334,6 +408,11 @@ export function OnboardView({
         vtaDid: vtaDid.trim(),
         holderDid: res.result.holderDid,
         role: res.result.role,
+        // Straight from the agent's reply. Not `ctx` and not `adminScope`:
+        // those are what we asked for, and an agent that ignored an
+        // `unrestricted` ask replies success either way.
+        homeContext: res.result.context,
+        agentScope: res.result.adminScope,
         ...(prep?.restBaseUrl ? { restBaseUrl: prep.restBaseUrl } : {}),
         ...(prep?.mediatorDid ? { mediatorDid: prep.mediatorDid } : {}),
         connectedAt: Date.now(),
@@ -360,8 +439,13 @@ export function OnboardView({
    *  block and its button so both click targets behave identically. */
   function copyCommand() {
     if (!prep) return;
-    const cmd = allowCreate ? prep.command.replace("--role admin", "--role super-admin") : prep.command;
-    void navigator.clipboard.writeText(cmd);
+    // Copied verbatim. This used to rewrite `--role admin` into `--role
+    // super-admin` when the operator asked to create a context inline — a
+    // role `pnm acl create` does not have, so the command it printed could
+    // not run. The scope is now expressed the way the CLI expresses it
+    // (`--contexts`, present or absent) and decided once, in
+    // `grant-command.ts`, where a test can see it.
+    void navigator.clipboard.writeText(prep.command);
     setCommandCopied(true);
   }
 
@@ -371,6 +455,8 @@ export function OnboardView({
       vtaDid: pc.vtaDid,
       holderDid: pc.holderDid,
       role: pc.role,
+      homeContext: pc.homeContext,
+      agentScope: pc.agentScope,
       ...(pc.restBaseUrl ? { restBaseUrl: pc.restBaseUrl } : {}),
       ...(pc.mediatorDid ? { mediatorDid: pc.mediatorDid } : {}),
       connectedAt: pc.connectedAt,
@@ -488,59 +574,31 @@ export function OnboardView({
     );
   }
 
-  if (prep && contextCandidates) {
-    // VTA returned context_required after the operator clicked Connect.
-    // The ephemeral grant is still valid; the operator just needs to
-    // pick one of these contexts and the wallet retries.
-    return (
-      <div style={box}>
-        <h3 style={{ margin: 0 }}>Pick a context</h3>
-        <small>
-          This VTA has multiple contexts and couldn&apos;t auto-pick where to put your wallet&apos;s
-          admin identity. Choose one:
-        </small>
-        <div style={{ display: "grid", gap: 4 }}>
-          {contextCandidates.map((ctx) => (
-            <button
-              key={ctx}
-              onClick={() => void connect(ctx)}
-              disabled={busy}
-              style={{ textAlign: "left", ...mono }}
-            >
-              {ctx}
-            </button>
-          ))}
-        </div>
-        <button onClick={() => setContextCandidates(null)} disabled={busy} style={button()}>
-          Cancel
-        </button>
-        {status && <small style={{ color: "var(--w-danger)" }}>{status}</small>}
-      </div>
-    );
-  }
-
   if (prep) {
-    // When the operator chose to create the override context inline,
-    // the ephemeral grant needs super-admin (not plain admin) — the
-    // VTA's context-create gate refuses everything below. Rewrite
-    // the printed command so the operator runs the right thing.
-    const commandToShow = allowCreate
-      ? prep.command.replace("--role admin", "--role super-admin")
-      : prep.command;
+    const commandToShow = prep.command;
     return (
       <div style={box}>
         <h3 style={{ margin: 0 }}>Grant this wallet</h3>
         <small>
-          Context:{" "}
-          {effectiveContext ? (
+          {adminScope === "unrestricted" ? (
             <>
-              <code style={mono}>{effectiveContext}</code>
-              {allowCreate ? " (will be created inline)" : " (override)"}
+              This grants the wallet <strong>the whole agent</strong> — it will be able to
+              administer every context, including ones made later.
             </>
           ) : (
-            <em>VTA-derived</em>
+            <>
+              This grants the wallet <strong>one context</strong>:{" "}
+              <code style={mono}>{effectiveContext}</code>. It won&apos;t be able to see the
+              others.
+            </>
           )}
         </small>
+        {adminScope === "unrestricted" && (
+          <small style={{ color: c.muted }}>
+            You&apos;ll need to be running this as someone who already has the whole agent —
+            an admin scoped to one context can&apos;t hand out more than they hold.
+          </small>
+        )}
         {/* Once the command has been copied it collapses to a single line.
             Leaving the block and its Copy button in place made the screen
             shift under the operator after they had already run it, which
@@ -597,12 +655,6 @@ export function OnboardView({
             </div>
           </>
         )}
-        {allowCreate && (
-          <small style={{ color: "var(--w-warn)" }}>
-            Note: <code style={mono}>--role super-admin</code> is required because the wallet will
-            ask the VTA to create the context inline.
-          </small>
-        )}
         <small>
           Transport:{" "}
           {prep.mediatorDid ? "DIDComm (authcrypt)" : prep.restBaseUrl ? "REST" : "none"}
@@ -633,6 +685,89 @@ export function OnboardView({
             />
           </div>
         )}
+        {/* The home context, for the scope that could not be asked earlier.
+            The grant is run by now, so the ephemeral can read the agent's
+            real context list — a picker of what exists, rather than a slug
+            typed from memory into the most consequential field here. */}
+        {adminScope === "unrestricted" && (
+          <div
+            style={{
+              display: "grid",
+              gap: 7,
+              padding: 11,
+              borderLeft: `2px solid ${c.accent}`,
+              background: c.accentSoft,
+              borderRadius: "0 var(--w-r-sm) var(--w-r-sm) 0",
+            }}
+          >
+            <strong style={{ fontSize: t.sm }}>Where should this wallet keep its settings?</strong>
+            <small style={{ color: c.muted, lineHeight: 1.5 }}>
+              Even managing the whole agent, the wallet&apos;s own identity and settings live in
+              one context. Everything it stores for itself goes here.
+            </small>
+            {contexts && contexts.length > 0 ? (
+              <div style={{ display: "grid", gap: 4 }}>
+                {contexts.map((ctx) => (
+                  <button
+                    key={ctx.id}
+                    onClick={() => setHomeContext(ctx.id)}
+                    style={{
+                      textAlign: "left",
+                      ...(homeContext === ctx.id
+                        ? { borderColor: c.accent, background: c.raised }
+                        : {}),
+                    }}
+                  >
+                    <span style={mono}>{ctx.id}</span>
+                    {ctx.name && ctx.name !== ctx.id && (
+                      <span style={{ color: c.muted }}> — {ctx.name}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <>
+                {/* Reachable two ways, and the copy has to cover both: the
+                    grant has not been run yet (the agent refuses a listing
+                    from an unauthorised ephemeral), or the agent answered and
+                    holds nothing this grant can reach. Typing still works in
+                    both — with "create it" ticked, the second becomes the
+                    first context. */}
+                <input
+                  placeholder="ctx_… (e.g. work, alpha)"
+                  value={homeContext}
+                  onChange={(e) => setHomeContext(e.target.value)}
+                  aria-label="Home context"
+                  style={{ ...mono, width: "100%" }}
+                />
+                <small style={{ color: c.muted }}>
+                  {contexts?.length === 0
+                    ? "This agent has no contexts yet — name one and tick below to create it."
+                    : "Run the command above first, then Refresh to pick from the agent's own list."}
+                </small>
+              </>
+            )}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button onClick={() => void loadContexts()} style={button("quiet")}>
+                Refresh list
+              </button>
+              <label style={{ fontSize: t.xs, display: "flex", gap: 6, alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={createIfMissing}
+                  onChange={(e) => setCreateIfMissing(e.target.checked)}
+                  style={{ width: "auto", padding: 0 }}
+                />
+                Create it if it doesn&apos;t exist
+              </label>
+            </div>
+            {contextsError && (
+              <small style={{ color: c.muted }}>
+                Couldn&apos;t read the agent&apos;s contexts: {contextsError}
+              </small>
+            )}
+          </div>
+        )}
         {/* Emphasis follows the sequence rather than sitting on both buttons
             at once. Until the command is copied, connecting is premature —
             the grant does not exist yet — so Copy holds the primary style and
@@ -640,10 +775,16 @@ export function OnboardView({
             have meant neither read as the next thing to do. */}
         <button
           onClick={() => void connect()}
-          disabled={busy || (needsMediator && fallbackMediator.trim() === "")}
+          disabled={
+            busy ||
+            !effectiveContext ||
+            (needsMediator && fallbackMediator.trim() === "")
+          }
           style={{
             ...button(commandCopied ? "primary" : "default"),
-            ...(busy || (needsMediator && fallbackMediator.trim() === "")
+            ...(busy ||
+            !effectiveContext ||
+            (needsMediator && fallbackMediator.trim() === "")
               ? { opacity: 0.5, cursor: "default" }
               : {}),
           }}
@@ -699,6 +840,7 @@ export function OnboardView({
           placeholder="webvh.storm.ws/@your-agent"
           value={vtaDid}
           onChange={(e) => setVtaDid(e.target.value)}
+          aria-label="Agent address"
           style={{ ...mono, width: "100%" }}
         />
         {/* Classification is a local string test, so this updates as you type
@@ -741,69 +883,86 @@ export function OnboardView({
       )}
 
       <div style={{ display: "grid", gap: 8 }}>
-        <span style={{ ...microLabel }}>Workspace</span>
-        <label style={{ fontSize: t.sm, display: "flex", gap: 8, alignItems: "center" }}>
+        <span style={{ ...microLabel }}>What this wallet will do</span>
+        {/* Two answers, and they are not a preference — they decide the ACL
+            entry the agent writes and therefore the grant command below.
+            Named for what the person gets, not for the ACL shape: an operator
+            reading "unrestricted scope" has to already know what an empty
+            context list means. */}
+        <label style={{ fontSize: t.sm, display: "flex", gap: 8, alignItems: "flex-start" }}>
           <input
             type="radio"
-            name="ctx-mode"
-            checked={contextMode === "vta-derived"}
+            name="admin-scope"
+            checked={adminScope === "context"}
             onChange={() => {
-              setContextMode("vta-derived");
+              setAdminScope("context");
               setCreateIfMissing(false);
             }}
-            style={{ width: "auto", padding: 0 }}
+            style={{ width: "auto", padding: 0, marginTop: 3 }}
           />
-          Let the agent choose{" "}
-          <span style={{ color: c.muted }}>— right unless you&apos;re told otherwise</span>
+          <span>
+            Work inside one context
+            <span style={{ color: c.muted }}>
+              {" "}— act as yourself in a single context. It can&apos;t see the others.
+            </span>
+          </span>
         </label>
-        <label style={{ fontSize: t.sm, display: "flex", gap: 8, alignItems: "center" }}>
+        <label style={{ fontSize: t.sm, display: "flex", gap: 8, alignItems: "flex-start" }}>
           <input
             type="radio"
-            name="ctx-mode"
-            checked={contextMode === "override"}
-            onChange={() => setContextMode("override")}
-            style={{ width: "auto", padding: 0 }}
+            name="admin-scope"
+            checked={adminScope === "unrestricted"}
+            onChange={() => setAdminScope("unrestricted")}
+            style={{ width: "auto", padding: 0, marginTop: 3 }}
           />
-          Name one myself
+          <span>
+            Manage the whole agent
+            <span style={{ color: c.muted }}>
+              {" "}— administer every context from the management console. Needs someone who
+              already has the whole agent to grant it.
+            </span>
+          </span>
         </label>
-        {contextMode === "override" && (
-          <div
-            style={{ display: "grid", gap: 6, paddingLeft: 22, marginTop: 2 }}
-          >
+
+        {/* Asked here only for the scope whose grant command carries it.
+            The other half asks after the grant, from the agent's real list —
+            see the header comment on why the order differs. */}
+        {contextNeededBeforeGrant ? (
+          <label style={{ display: "grid", gap: 5, marginTop: 4 }}>
+            <span style={{ fontSize: t.sm, fontWeight: 600 }}>Which context?</span>
+            <span style={{ fontSize: t.xs, color: c.muted }}>
+              Where this wallet acts, and where it keeps its own settings. You&apos;ll name the
+              same one in the command on the next screen.
+            </span>
             <input
               placeholder="ctx_… (e.g. work, alpha)"
-              value={contextOverride}
-              onChange={(e) => setContextOverride(e.target.value)}
+              value={homeContext}
+              onChange={(e) => setHomeContext(e.target.value)}
+              aria-label="Home context"
               style={{ ...mono, width: "100%" }}
             />
-            <label style={{ fontSize: t.xs, display: "flex", gap: 8, alignItems: "center" }}>
-              <input
-                type="checkbox"
-                checked={createIfMissing}
-                onChange={(e) => setCreateIfMissing(e.target.checked)}
-                style={{ width: "auto", padding: 0 }}
-              />
-              Create it on the agent if it doesn&apos;t exist (needs a super-admin grant)
-            </label>
-          </div>
+          </label>
+        ) : (
+          <small style={{ color: c.faint, marginTop: 2 }}>
+            You&apos;ll pick where the wallet keeps its own settings on the next screen, from
+            this agent&apos;s own list of contexts.
+          </small>
         )}
       </div>
 
       <div>
         <button
           onClick={() => void prepare()}
+          // A context-scoped grant cannot be prepared without its context:
+          // the command would come out naming none, which is the
+          // whole-agent grant. `grantCommand` refuses it too — this is so
+          // the operator sees why rather than an error after a click.
           disabled={
-            !vtaDid.trim() ||
-            busy ||
-            // When overriding, require a non-empty name. VTA-derived
-            // imposes no extra precondition.
-            (contextMode === "override" && contextOverride.trim().length === 0)
+            !vtaDid.trim() || busy || (contextNeededBeforeGrant && !effectiveContext)
           }
           style={{
             ...button("primary"),
-            ...(!vtaDid.trim() ||
-            busy ||
-            (contextMode === "override" && contextOverride.trim().length === 0)
+            ...(!vtaDid.trim() || busy || (contextNeededBeforeGrant && !effectiveContext)
               ? { opacity: 0.5, cursor: "default" }
               : {}),
           }}

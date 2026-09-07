@@ -114,7 +114,34 @@ export function provisionRefusalOf(e: unknown): ProvisionRefusal | undefined {
  */
 export type ProvisionIntegrationRequestBody = Omit<ProvisionIntegrationPayload, "request"> & {
   request: BootstrapRequestVp;
+  /** How wide the ACL entry the VTA writes for the minted admin should be.
+   *
+   *  Declared here rather than taken from the generated binding because the
+   *  registry release carrying it is newer than the `@openvtc/trust-tasks`
+   *  this package pins; the spelling is the registry's, verbatim, and this
+   *  member disappears the moment the binding catches up. It is not a
+   *  compatibility fold — there is one spelling, and it is this one. */
+  adminScope?: AdminScope;
 };
+
+/**
+ * How far the admin the VTA mints for this wallet may reach.
+ *
+ * `"context"` binds it to the target context alone — the shape a wallet acting
+ * as a party inside one context wants, and the default. `"unrestricted"` binds
+ * it to no context, which is what an ACL reads as a super-admin: the console
+ * can administer every context this agent holds, including ones created later.
+ *
+ * **It does not replace `context`, which is required either way.** The target
+ * context is where the admin DID is minted and where this wallet keeps its own
+ * configuration; the scope is only how far the resulting grant reaches. An
+ * operator console needs both, which is exactly why they are two fields.
+ *
+ * `"unrestricted"` is refused unless the ephemeral's own grant is
+ * unrestricted — no admin confers authority it does not hold — so the grant
+ * command the operator runs has to match the choice made here.
+ */
+export type AdminScope = "context" | "unrestricted";
 
 /**
  * Body of the `provision/integration/0.3#response` reply.
@@ -129,7 +156,30 @@ export type ProvisionIntegrationRequestBody = Omit<ProvisionIntegrationPayload, 
  * canonicalization — re-armoring the same ciphertext need not reproduce the same
  * bytes, so re-deriving it from a round-tripped bundle can legitimately disagree.
  */
-export type ProvisionIntegrationResponseBody = ProvisionIntegrationResponsePayload;
+export type ProvisionIntegrationResponseBody = Omit<
+  ProvisionIntegrationResponsePayload,
+  "summary"
+> & {
+  summary: ProvisionSummary & {
+    /** The context the admin was actually provisioned into — sent or, for a
+     *  caller that omitted `context`, inferred by the VTA.
+     *
+     *  Absent from agents that predate the member. A wallet that named the
+     *  context can fall back to what it asked for; one that did not has no
+     *  honest answer and must not invent one. */
+    context?: string;
+    /** The scope of the ACL entry the VTA actually wrote.
+     *
+     *  Read rather than assumed: an agent that does not implement
+     *  `adminScope` ignores an `"unrestricted"` ask and writes a
+     *  context-scoped entry, and its success reply is otherwise
+     *  indistinguishable from one that honoured it. **Absent means
+     *  `"context"`** — the wallet did not get what it asked for, and a
+     *  surface that displayed the ask instead would claim authority the
+     *  holder does not have. */
+    adminScope?: AdminScope;
+  };
+};
 
 export type { ProvisionSummary };
 

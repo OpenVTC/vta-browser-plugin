@@ -30,7 +30,54 @@
 
 import { Window } from "happy-dom";
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
+
+/** Globals a happy-dom window has to stand in for, installed on `globalThis`.
+ *
+ *  By descriptor rather than assignment: Node defines `navigator` as a
+ *  getter-only global, and `globalThis.navigator = …` throws instead of
+ *  shadowing it. */
+function installGlobals(window) {
+  const { document } = window;
+  const define = (name, value) =>
+    Object.defineProperty(globalThis, name, { value, writable: true, configurable: true });
+  for (const name of ["window", "document", "navigator", "HTMLElement", "HTMLInputElement", "HTMLTextAreaElement", "Element", "Node", "Event", "InputEvent", "MouseEvent", "CustomEvent", "DocumentFragment"]) {
+    define(name, name === "window" ? window : name === "document" ? document : window[name]);
+  }
+  define("getComputedStyle", window.getComputedStyle.bind(window));
+  define("requestAnimationFrame", (fn) => setTimeout(() => fn(Date.now()), 0));
+  define("cancelAnimationFrame", (id) => clearTimeout(id));
+  // The map measures cards to draw its edges. happy-dom has no layout, so every
+  // box reads zero; the component already treats that as "not measured yet".
+  define("ResizeObserver", class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  });
+  define("IS_REACT_ACT_ENVIRONMENT", true);
+  return define;
+}
+
+// ── react-dom is imported *after* a DOM exists, and that ordering is load
+// bearing ──
+//
+// `react-dom` decides two things at module scope and never revisits them:
+// `canUseDOM` (is there a `window.document.createElement`) and, from it,
+// `isInputEventSupported` — a live probe of whether this environment fires
+// `input` events. Imported before a window exists, both come out false, and
+// React's change plugin silently falls back to its **input-event polyfill**:
+// it stops listening for `input` on text fields and infers edits from
+// keydown/keypress/keyup around a focus instead.
+//
+// Nothing about that fails loudly. Clicks keep working, so buttons, radios and
+// checkboxes all behave; only typing goes quiet. A test that fills a field sees
+// the DOM value change, the component's state stay empty, and its assertion
+// fail several screens later — which is exactly how long it took to find.
+//
+// So: a throwaway window first, then the import. Every `render()` swaps in its
+// own fresh window afterwards; what React captured here is a pair of booleans
+// about the environment, not a reference to this document.
+installGlobals(new Window({ url: "https://localhost/" }));
+const { createRoot } = await import("react-dom/client");
 
 /**
  * Make an element.
@@ -86,25 +133,7 @@ export function agent(answers = {}) {
 export async function render(element, { chrome: chromeStub } = {}) {
   const window = new Window({ url: "https://localhost/" });
   const { document } = window;
-
-  // Assigned by descriptor: Node defines `navigator` as a getter-only global,
-  // and a plain assignment throws rather than shadowing it.
-  const define = (name, value) =>
-    Object.defineProperty(globalThis, name, { value, writable: true, configurable: true });
-  for (const name of ["window", "document", "navigator", "HTMLElement", "HTMLInputElement", "Element", "Node", "Event", "MouseEvent", "CustomEvent", "DocumentFragment"]) {
-    define(name, name === "window" ? window : name === "document" ? document : window[name]);
-  }
-  define("getComputedStyle", window.getComputedStyle.bind(window));
-  define("requestAnimationFrame", (fn) => setTimeout(() => fn(Date.now()), 0));
-  define("cancelAnimationFrame", (id) => clearTimeout(id));
-  // The map measures cards to draw its edges. happy-dom has no layout, so every
-  // box reads zero; the component already treats that as "not measured yet".
-  define("ResizeObserver", class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  });
-  define("IS_REACT_ACT_ENVIRONMENT", true);
+  const define = installGlobals(window);
   define("chrome", chromeStub ?? { runtime: { sendMessage: async () => ({ ok: false, error: "no agent" }) } });
 
   const container = document.createElement("div");
@@ -151,11 +180,26 @@ export async function render(element, { chrome: chromeStub } = {}) {
         el.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
       });
     },
-    /** Type into an input or textarea, the way React hears it. */
+    /**
+     * Type into an input or textarea, the way React hears it.
+     *
+     * The tracker reset is the load-bearing line. React keeps a `_valueTracker`
+     * on the node holding the last value it saw, and drops a change event whose
+     * value equals it — the de-duplication that stops a controlled input firing
+     * `onChange` for its own re-render. A test that only assigns `value` and
+     * dispatches `input` therefore updates the DOM and nothing else: the field
+     * shows the text, the component's state stays empty, and the assertion that
+     * follows fails somewhere far away with a screen that looks right.
+     * Clearing the tracker's cached value makes the dispatch read as a real
+     * edit.
+     */
     type: async (el, value) => {
       await act(async () => {
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+        const proto =
+          el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement : window.HTMLInputElement;
+        const setter = Object.getOwnPropertyDescriptor(proto.prototype, "value")?.set;
         setter ? setter.call(el, value) : (el.value = value);
+        el._valueTracker?.setValue("");
         el.dispatchEvent(new window.Event("input", { bubbles: true }));
         el.dispatchEvent(new window.Event("change", { bubbles: true }));
       });
