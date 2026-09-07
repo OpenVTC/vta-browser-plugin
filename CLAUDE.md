@@ -142,6 +142,72 @@ routing either through a channel would overwrite or duplicate a proof.
 document as the counterparty receives it — a signature copied from another
 document satisfies an "is there a `proof` member" check and fails this one.
 
+## Setup asks two questions, and they are not the same question
+
+**How far this wallet's authority reaches** and **which context it keeps its
+own settings in** are separate, and collapsing them is the mistake the flow is
+shaped to prevent. A management console needs authority over every context
+*and* one ordinary context to store its state in; expressing "everywhere" by
+leaving the context blank would leave it nowhere to put that.
+
+So `onboard-view.tsx` asks both, always. The old flow asked neither properly:
+it offered "let the agent choose" (omit `payload.context`, let the inference
+rules run) and the reply does not have to name what they picked — so a wallet
+could finish onboarding without knowing where its own configuration had landed.
+`context` is now a **required** input to `runProvisionIntegration`, which also
+makes `provision/integration:contextRequired` unreachable: inference never
+runs. The picker that recovered from it was deleted rather than kept for a case
+that cannot arise.
+
+**The scope is a wire field, and it is new.** `adminScope: "context" |
+"unrestricted"` on `provision/integration/0.3` — `context` (default) binds the
+minted admin to the target context, `unrestricted` binds it to none, which is
+what an ACL reads as a super-admin. Before it existed the VTA wrote
+`allowed_contexts: vec![context]` unconditionally, so **a wallet could not come
+out of provisioning as anything but a context admin** and the console had no
+way to be granted what it needs. The ephemeral relayer's own super-admin-ness
+was never inherited; it only ever affected context inference and inline context
+creation. Floor: the registry release carrying `adminScope`, and a VTA past
+`trust-tasks-rs` with that schema — below it, `validate_payload` rejects the
+member at the dispatch spine before any handler sees it.
+
+**The order of the two questions differs by scope, and that is forced.** The
+grant command has to match the scope and only the operator can run it:
+`unrestricted` prints `pnm acl create … --role admin` with **no** `--contexts`,
+so the home context is asked *after* the grant, from the list the now-authorised
+ephemeral reads (`OFFSCREEN_ONBOARD_CONTEXTS`, speaking as the ephemeral —
+distinct from `OFFSCREEN_LIST_CONTEXTS`, which speaks as a holder that does not
+exist yet). `context` scope prints `--contexts <id>`, so it must be asked
+*before*, as a text field.
+
+**`grant-command.ts` is a `.ts` module with tests because a printed string is a
+security decision here.** Both ways of getting it wrong are silent: omit
+`--contexts` and the operator grants the whole agent while the screen says one
+context; include it for an unrestricted wallet and the provisioning is refused
+after they ran a command they were told was right. It also ended a live bug —
+the flow printed `--role super-admin`, which `pnm acl create` does not accept
+(the roles are `admin`, `initiator`, `application`, `reader`; super-admin is the
+*shape* of an admin grant, not a role name).
+
+**What is stored is what the agent said, never what was asked.**
+`Connection.homeContext` and `Connection.agentScope` come from
+`summary.context` and `summary.adminScope` on the reply. An agent that does not
+implement `adminScope` ignores an `unrestricted` ask and writes a
+context-scoped entry *while replying success* — indistinguishable from having
+honoured it, except by the echo. Absent reads as `"context"`. On a connection
+made before any of this, both are absent, and `WalletStanding` in
+`setup-pane.tsx` says "not recorded" rather than guessing.
+
+**What breaks it:** making `context` optional again anywhere on the path;
+reading `adminScope` back from the request instead of the reply (`?? "context"`
+is the fallback, never `?? opts.adminScope`); building the grant command
+anywhere but `grant-command.ts`; offering inline context creation on the
+context-scoped path (the agent's context-create gate is super-admin-only, so it
+could only ever fail); or sending a context on an unrestricted `prepare`, which
+would render as `--contexts` and scope the very ephemeral that then has to
+confer an unrestricted admin. `tests/grant-command.test.mts` and
+`tests/onboard-scope.render.test.mts` pin each of these.
+
 ## The wallet ships no operator authority — the console does
 
 `@openvtc/pnm-core/admin` is operator surface: granting authority at an agent,
@@ -298,6 +364,19 @@ Node does not implement) and transforms JSX with **esbuild** — not
 `transpileModule` on it. Tests are `.mts` and cannot contain JSX, so compose
 with `h(Component, props)`; calling a component runs its hooks outside React
 and dies on the first `useState`.
+
+Three sharp edges in the harness itself, each of which failed silently before
+it was fixed. **`.ts` goes through esbuild too**, not Node's own stripping:
+Node's mode is *strip-only* and refuses a constructor parameter property
+(`webauthn-prf-wrap.ts` has one), which surfaces as a parse error in a file the
+failing test never mentions. **`react-dom` is imported after a DOM exists** —
+it decides `canUseDOM` and probes `isEventSupported("input")` at module scope,
+and with those false its change plugin falls back to an input-event polyfill
+that infers edits from keystrokes. Clicks keep working, so buttons, radios and
+checkboxes are all fine and only *typing* goes quiet: the field shows the text
+and the component's state stays empty. **`type()` clears React's
+`_valueTracker`** for the same reason a hand-set `checked` does not work on a
+checkbox — React drops a change event whose value matches what it last saw.
 
 The fake agent answers **by task URI** and *throws* on a task the test did not
 name, because a pane asking something unexpected is the thing worth noticing.

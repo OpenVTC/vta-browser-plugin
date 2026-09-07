@@ -1,6 +1,7 @@
 /// <reference types="chrome" />
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
+import type { AdminScope } from "@openvtc/pnm-core";
 
 /** A VTA the wallet has been authorized at via the onboarding swap. Populated
  *  by the popup's onboarding flow on successful `swap-acl`. */
@@ -11,6 +12,28 @@ export interface Connection {
   holderDid: string;
   /** Role inherited from the operator-granted ephemeral (typically `admin`). */
   role: string;
+  /** The context this wallet lives in at that agent — where its admin DID was
+   *  minted and where its own configuration belongs.
+   *
+   *  Set from what the **agent reported** at onboarding, not from what the
+   *  operator asked for. Absent on connections made before the setup flow
+   *  started asking, which is a real state and not a default to invent: the
+   *  agent inferred a context those wallets were never told the name of.
+   *  Surfaces are expected to say "not recorded" rather than guess. */
+  homeContext?: string;
+  /** How far this wallet's authority reaches at that agent.
+   *
+   *  `"context"` — a party inside {@link homeContext}, which is every wallet
+   *  surface's shape. `"unrestricted"` — the management console can
+   *  administer every context this agent holds, including ones created later.
+   *
+   *  The agent's account of the ACL entry it wrote, never the ask: an agent
+   *  that predates the member ignores an `"unrestricted"` request and writes a
+   *  context-scoped entry while replying success. Absent, like
+   *  {@link homeContext}, on connections made before this was recorded —
+   *  which reads as unknown, not as `"context"`, because those wallets may
+   *  genuinely be either. */
+  agentScope?: AdminScope;
   /** REST base URL from `#vta-rest`, if advertised at onboarding time. */
   restBaseUrl?: string;
   /** Mediator DID from `#vta-didcomm`, if advertised at onboarding time. */

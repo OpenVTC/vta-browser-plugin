@@ -15,7 +15,7 @@
 // half-configured, and this flow already has enough ways to be interrupted.
 
 import { useCallback, useEffect, useState } from "react";
-import { useActiveConnection } from "./store.js";
+import { useActiveConnection, type Connection } from "./store.js";
 import { getSettings, inboxFor, setInbox as setInboxRecord } from "./config.js";
 import { readActiveHolderDid } from "./active-vta.js";
 import { encryptHolderSecretInPopup } from "./encrypt-holder.js";
@@ -271,6 +271,7 @@ export function SetupPane() {
                   verified
                   {...(agentNames[connection.vtaDid] ? { agentName: agentNames[connection.vtaDid] } : {})}
                 />
+                <WalletStanding connection={connection} />
               </>
             ) : (
               <div style={{ fontSize: t.sm, color: c.muted, maxWidth: "78ch" }}>
@@ -498,6 +499,53 @@ export function SetupPane() {
       ) : (
         <AddAnother />
       )}
+    </div>
+  );
+}
+
+/**
+ * What this wallet *is* at its agent: how far its authority reaches, and the
+ * one context it keeps its own settings in.
+ *
+ * Both are answered at onboarding and neither is visible anywhere else, which
+ * made two ordinary confusions unanswerable: why the management console
+ * refuses a context the operator can see in their terminal, and where the
+ * wallet's own vault entries and personas are landing.
+ *
+ * **Reports the agent's answer, and says so when it has none.** These come off
+ * the connection record, which stores what the agent replied rather than what
+ * onboarding asked for. A wallet onboarded before the flow asked has neither,
+ * and that renders as "not recorded" — not as the narrow default. Those
+ * wallets let the agent infer a context and were never told which; guessing on
+ * their behalf here would put a specific context name on screen that nothing
+ * ever checked.
+ */
+function WalletStanding({ connection }: { connection: Connection }) {
+  const scope = connection.agentScope;
+  const home = connection.homeContext;
+  if (!scope && !home) {
+    return (
+      <div style={{ fontSize: t.xs, color: c.faint }}>
+        Reach and home context weren&apos;t recorded when this wallet connected. Reconnecting
+        to this agent records them.
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+      {scope && (
+        <Pill tone={scope === "unrestricted" ? "warn" : "ok"}>
+          {scope === "unrestricted" ? "Manages the whole agent" : "Works in one context"}
+        </Pill>
+      )}
+      <span style={{ fontSize: t.xs, color: c.muted }}>
+        Settings kept in{" "}
+        {home ? (
+          <code style={{ fontFamily: "var(--w-mono)" }}>{home}</code>
+        ) : (
+          <em>a context this wallet wasn&apos;t told the name of</em>
+        )}
+      </span>
     </div>
   );
 }

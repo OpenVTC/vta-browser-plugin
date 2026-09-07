@@ -11,6 +11,8 @@
 // page's unrelated `postMessage` traffic. Each request carries a `id`
 // the provider uses to correlate the eventual response.
 
+import type { AdminScope } from "@openvtc/pnm-core";
+
 /** `source` on messages the injected provider posts toward the content script. */
 export const INPAGE_SOURCE = "vta-wallet/inpage" as const;
 /** `source` on messages the content script posts back toward the provider. */
@@ -543,6 +545,18 @@ export const RUNTIME_HOLDER_STATE = "vta-wallet/holder-state" as const;
 export interface RuntimeOnboardPrepareRequest {
   type: typeof RUNTIME_ONBOARD_PREPARE;
   vtaDid: string;
+  /** What this wallet is being set up to do at the agent, which decides the
+   *  grant command `prepare` prints. `"unrestricted"` omits `--contexts` (an
+   *  admin with an empty context list *is* the super-admin shape);
+   *  `"context"` names {@link context}. See `grant-command.ts` for why the
+   *  two are one decision. */
+  adminScope: AdminScope;
+  /** The context a `"context"`-scoped grant is scoped to.
+   *
+   *  Required for that scope and unused for `"unrestricted"`, where the grant
+   *  names no context and the wallet's home context is chosen afterwards —
+   *  from the list the authorised ephemeral can then read. */
+  context?: string;
 }
 
 export interface OnboardPrepareResult {
@@ -565,19 +579,26 @@ export type RuntimeOnboardPrepareResponse =
  *  wallet's v4 holder identity. */
 export interface RuntimeOnboardConnectRequest {
   type: typeof RUNTIME_ONBOARD_CONNECT;
-  /** Maintainer context override. **Optional** — when omitted (the
-   *  default popup path: "Use VTA-derived context"), the wallet sends
-   *  no `context` field on the wire and the VTA infers the target
-   *  context from the relayer's ACL grant or its own contexts state.
-   *  Operators with multi-context VTAs can override via the popup's
-   *  "Specify context" toggle. */
-  context?: string;
-  /** When `true`, the wallet asks the VTA to provision the override
-   *  context inline if it doesn't yet exist. Only meaningful when
-   *  `context` is also set (auto-create against an inferred default
-   *  doesn't make sense). Requires the ephemeral's grant to carry
-   *  super-admin role; the popup hints this in its UI. */
+  /** The context this wallet will live in — where the VTA mints its admin
+   *  DID and where the wallet keeps its own configuration.
+   *
+   *  **Required**, in both admin scopes. It used to be optional, so the
+   *  wallet could let the VTA's inference rules pick; the reply does not have
+   *  to name what they picked, so onboarding could finish without the wallet
+   *  knowing where its own configuration had landed. Naming it also makes
+   *  `provision/integration:contextRequired` unreachable — inference never
+   *  runs — which is why the picker that recovered from it is gone. */
+  context: string;
+  /** When `true`, the wallet asks the VTA to create {@link context} inline if
+   *  it does not yet exist. Requires the ephemeral's grant to be
+   *  unrestricted; the VTA's context-create gate refuses everything below. */
   createIfMissing?: boolean;
+  /** How wide the ACL entry the VTA writes for the minted admin should be.
+   *
+   *  Must match the grant the operator ran — an ephemeral scoped to one
+   *  context cannot confer an unrestricted admin, and the VTA refuses with
+   *  `forbidden` rather than narrowing it. */
+  adminScope: AdminScope;
   /**
    * Operator-supplied mediator, used only when the VTA published none of its
    * own.
@@ -595,6 +616,24 @@ export interface RuntimeOnboardConnectRequest {
    */
   mediatorDid?: string;
 }
+
+/** popup → background: list the contexts the pending onboarding's ephemeral
+ *  can see, so the operator picks the wallet's home context from what is
+ *  actually there rather than typing a slug.
+ *
+ *  Only meaningful between `prepare` and `connect`: it speaks as the ephemeral
+ *  the operator has just granted. Failure is not fatal — the view falls back
+ *  to a text field, because an agent that cannot list its contexts can still
+ *  provision into one the operator names. */
+export const RUNTIME_ONBOARD_CONTEXTS = "vta-wallet/onboard-contexts" as const;
+
+export interface RuntimeOnboardContextsRequest {
+  type: typeof RUNTIME_ONBOARD_CONTEXTS;
+}
+
+export type RuntimeOnboardContextsResponse =
+  | { ok: true; result: { contexts: ContextRecordView[] } }
+  | { ok: false; error: string };
 
 /** Stable code on a failed onboard-connect meaning "no mediator is known and
  *  the VTA didn't publish one — ask the operator, then retry with
@@ -650,6 +689,16 @@ export interface OnboardConnectResult {
   holderDid: string;
   /** The role the new entry carries (inherited from the ephemeral grant). */
   role: string;
+  /** The context the admin was provisioned into, as the **agent reported it**
+   *  — the wallet's home context from here on. */
+  context: string;
+  /** The scope of the ACL entry the agent actually wrote.
+   *
+   *  What was done, not what was asked for: an agent that predates
+   *  `adminScope` ignores an `"unrestricted"` ask and writes a
+   *  context-scoped entry while replying success. A wallet that stored its
+   *  own request would then show a console the holder cannot drive. */
+  adminScope: AdminScope;
   /** `true` when the holder Ed25519 seed was persisted under PRF-derived
    *  AES-GCM (the new default for fresh installs). `false` when the
    *  wallet fell back to plaintext storage — either because the
@@ -1662,19 +1711,45 @@ export interface OffscreenOnboardPrepareRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_ONBOARD_PREPARE;
   vtaDid: string;
+  /** Mirrors `RuntimeOnboardPrepareRequest.adminScope`. */
+  adminScope: AdminScope;
+  /** Mirrors `RuntimeOnboardPrepareRequest.context`. */
+  context?: string;
 }
 
 export interface OffscreenOnboardConnectRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_ONBOARD_CONNECT;
-  /** Mirrors `RuntimeOnboardConnectRequest.context` — optional override.
-   *  Omit to let the VTA infer the target context. */
-  context?: string;
+  /** Mirrors `RuntimeOnboardConnectRequest.context` — required. */
+  context: string;
   /** Mirrors `RuntimeOnboardConnectRequest.createIfMissing`. */
   createIfMissing?: boolean;
+  /** Mirrors `RuntimeOnboardConnectRequest.adminScope`. */
+  adminScope: AdminScope;
   /** Mirrors `RuntimeOnboardConnectRequest.mediatorDid` — the operator's
    *  answer when the VTA published no mediator of its own. */
   mediatorDid?: string;
+}
+
+/** background → offscreen: list the contexts the **pending onboarding's
+ *  ephemeral** can see at the agent.
+ *
+ *  Distinct from `OFFSCREEN_LIST_CONTEXTS`, and the difference is which
+ *  identity asks. That one speaks as the wallet's holder, which does not exist
+ *  yet during onboarding. This one speaks as the operator-granted ephemeral,
+ *  so it can only run between `prepare` and `connect` — which is exactly the
+ *  window where the operator has to choose a home context and has nothing to
+ *  choose from.
+ *
+ *  `vta/contexts/list` filters by what the caller may reach, so an
+ *  unrestricted grant sees every context and a scoped one sees its own. The
+ *  wallet does not filter again; the agent's answer *is* the list of places
+ *  this grant could put the wallet. */
+export const OFFSCREEN_ONBOARD_CONTEXTS = "offscreen/onboard-contexts" as const;
+
+export interface OffscreenOnboardContextsRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_ONBOARD_CONTEXTS;
 }
 
 /** background → offscreen: run a DIDComm login. Reply is a

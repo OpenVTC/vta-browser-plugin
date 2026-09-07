@@ -18,7 +18,7 @@ import type { TrustTaskSender } from "../vta/channel.js";
 
 import { openAdminRotationBundle } from "./open.js";
 import { buildBootstrapRequest, type BootstrapAsk } from "./request.js";
-import { sendProvisionIntegration, type ProvisionSummary } from "./send.js";
+import { sendProvisionIntegration, type AdminScope, type ProvisionSummary } from "./send.js";
 import type { AdminRotationPayload } from "./types.js";
 
 export interface RunProvisionIntegrationOptions {
@@ -33,13 +33,21 @@ export interface RunProvisionIntegrationOptions {
   ephemeralSigning: SigningIdentity;
   /** The VTA's DID — the envelope `recipient`. */
   vtaDid: string;
-  /** The maintainer context to provision the admin DID into. **Optional**
-   *  per the canonical Trust Task spec — when omitted, the VTA infers
-   *  from the relayer's ACL grant or its own contexts state (single-
-   *  context grant → that context; super-admin + single-context VTA →
-   *  that context; ambiguous → error). Wallet-class callers SHOULD
-   *  omit; integration-class callers SHOULD specify. */
-  context?: string;
+  /** The maintainer context to provision the admin DID into.
+   *
+   *  **Required here, though the wire member is OPTIONAL.** The spec lets a
+   *  caller omit it and lets the VTA infer, and this package deliberately
+   *  does not take that option: inference resolves to a context the reply
+   *  does not have to name, so a wallet that omitted it could finish
+   *  provisioning without knowing where its own configuration now lives. The
+   *  reply's `summary.context` closes that on agents new enough to echo it,
+   *  which is not a floor this package can assume — and naming it costs one
+   *  question the operator can answer.
+   *
+   *  It is required in **both** admin scopes. An unrestricted admin reaches
+   *  every context, and still keeps its configuration in exactly one; see
+   *  {@link adminScope}. */
+  context: string;
   /** Admin template the VTA renders. Default `vta-admin` — the built-in
    *  no-frills `did:key` admin template every VTA ships with. Override if
    *  the operator has uploaded a custom admin template. */
@@ -53,6 +61,16 @@ export interface RunProvisionIntegrationOptions {
    *  `provision/integration:forbidden`. Defaults to `false`; callers
    *  that target an established context leave this off. */
   createContext?: boolean;
+  /** How wide the ACL entry the VTA writes for the minted admin should be.
+   *
+   *  Default `"context"` — the admin acts in {@link context} and nowhere
+   *  else, which is what a wallet operating as a party inside one context
+   *  wants. `"unrestricted"` is what an operator console asks for.
+   *
+   *  Orthogonal to {@link context}, which is still where the admin DID is
+   *  minted and where this wallet keeps its own configuration. See
+   *  {@link AdminScope}. */
+  adminScope?: AdminScope;
   /** Send-side timeout. Default 60s (sendProvisionIntegration). */
   timeoutMs?: number;
 }
@@ -82,6 +100,22 @@ export interface MinimalAdminReply {
   vtaUrl?: string;
   /** Bundle metadata for audit / debug. */
   summary: ProvisionSummary;
+  /** The context the admin was actually provisioned into, as the VTA reported
+   *  it — or, from an agent that does not echo it, the one this call named.
+   *
+   *  Never `undefined`: this package requires {@link
+   *  RunProvisionIntegrationOptions.context}, so there is always an answer,
+   *  and the echo is preferred because it is the agent's account rather than
+   *  ours. */
+  context: string;
+  /** The scope of the ACL entry the VTA actually wrote — **not** the one this
+   *  call asked for.
+   *
+   *  An agent that does not implement `adminScope` ignores the ask and writes
+   *  a context-scoped entry while replying success, so a wallet that recorded
+   *  its own request would show the holder authority they do not have. Absent
+   *  from the reply therefore reads as `"context"`. */
+  adminScope: AdminScope;
 }
 
 /** Drive the full provision-integration round-trip and return the minimal
@@ -95,10 +129,11 @@ export async function runProvisionIntegration(
   //    mediator / did-hosting integrations consume.
   const ask: BootstrapAsk = {
     type: "adminRotation",
-    // contextHint is just a hint embedded in the VP — only meaningful
-    // when the caller actually knows the context. When omitted, the
-    // VTA's authoritative context resolution runs (inference rules).
-    ...(opts.context ? { contextHint: opts.context } : {}),
+    // contextHint is a hint embedded in the signed VP; the wire
+    // `payload.context` below is what the VTA acts on. Both are sent and both
+    // say the same thing, which is the point — the VTA cross-checks them and
+    // refuses a disagreement rather than silently normalising one away.
+    contextHint: opts.context,
     adminTemplate: { name: opts.adminTemplateName ?? "vta-admin", vars: {} },
     ...(opts.note ? { note: opts.note } : {}),
   };
@@ -115,13 +150,18 @@ export async function runProvisionIntegration(
     vtaDid: opts.vtaDid,
     body: {
       request: vp,
-      // context is optional on the wire. When omitted, the VTA's
-      // inference rules pick the target context (single-context grant
-      // → use it; super-admin + single-context VTA → use it; ambiguous →
-      // `provision/integration:contextRequired`, whose candidates
-      // `provisionRefusalOf` reads off the error). Wallet-class callers
-      // typically omit; integration-class callers send explicitly.
-      ...(opts.context ? { context: opts.context } : {}),
+      // Always sent, so the VTA's inference rules never run and
+      // `provision/integration:contextRequired` is unreachable from here. The
+      // caller has already decided where this wallet lives; letting the agent
+      // pick would mean finishing onboarding without being told which context
+      // that was.
+      context: opts.context,
+      // Omitted when it is the default, so the common request stays the
+      // minimal document — and so an agent that predates the member sees no
+      // difference for the ask it can actually satisfy.
+      ...(opts.adminScope && opts.adminScope !== "context"
+        ? { adminScope: opts.adminScope }
+        : {}),
       // `createContext` defaults to false on the wire; only emit it when the
       // caller actually asked for an inline create, so the common request
       // stays the minimal document.
@@ -179,6 +219,14 @@ export async function runProvisionIntegration(
     vtaDid: opened.payload.vta_trust?.vta_did ?? opts.vtaDid,
     ...(opened.payload.vta_url ? { vtaUrl: opened.payload.vta_url } : {}),
     summary: reply.summary,
+    // The agent's account of what it did, preferred over ours. They agree on
+    // every current agent; where they cannot both be had, what the agent says
+    // it wrote is the thing the holder's authority actually depends on.
+    context: reply.summary.context ?? opts.context,
+    // Absent reads as "context" — see `MinimalAdminReply.adminScope`. Not
+    // `?? opts.adminScope`: that would echo the ask back and call it the
+    // outcome, which is the one mistake this member exists to prevent.
+    adminScope: reply.summary.adminScope ?? "context",
   };
 }
 

@@ -21,6 +21,7 @@ export {
   sendProvisionIntegration,
   provisionRefusalOf,
   PROVISION_CONTEXT_REQUIRED,
+  type AdminScope,
   type ProvisionRefusal,
   type ProvisionIntegrationRequestBody,
   type ProvisionIntegrationResponseBody,

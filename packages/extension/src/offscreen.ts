@@ -53,6 +53,7 @@ import {
   MediatorSessionTspTransport,
   tspHolderIdentityFromSecret,
   setDeviceWake,
+  type AdminScope,
   type SigningIdentity,
   signingIdentityFromSecret,
   signTrustTask,
@@ -77,6 +78,7 @@ import {
   verifyDid,
 } from "@openvtc/pnm-core";
 import { base64url } from "@openvtc/vti-didcomm-js";
+import { grantCommand } from "./grant-command.js";
 import { forgetInbox, getSettings, inboxFor, inboxToAdopt, setInbox } from "./config.js";
 import { loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
@@ -116,6 +118,7 @@ import {
   type OnboardStage,
   RUNTIME_ONBOARD_PROGRESS,
   OFFSCREEN_ONBOARD_CONNECT,
+  OFFSCREEN_ONBOARD_CONTEXTS,
   OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_SIGN_TRUST_TASK,
   OFFSCREEN_START_INBOUND,
@@ -271,7 +274,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false; // fire-and-forget
   }
   if (msg.type === OFFSCREEN_ONBOARD_PREPARE) {
-    doOnboardPrepare((message as OffscreenOnboardPrepareRequest).vtaDid)
+    const req = message as OffscreenOnboardPrepareRequest;
+    doOnboardPrepare(req.vtaDid, req.adminScope, req.context)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_ONBOARD_CONTEXTS) {
+    doOnboardContexts()
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -281,7 +293,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (msg.type === OFFSCREEN_ONBOARD_CONNECT) {
     const req = message as OffscreenOnboardConnectRequest;
     doOnboardConnect({
-      ...(req.context ? { context: req.context } : {}),
+      context: req.context,
+      adminScope: req.adminScope,
       createIfMissing: req.createIfMissing ?? false,
       ...(req.mediatorDid ? { mediatorDid: req.mediatorDid } : {}),
     })
@@ -1658,7 +1671,11 @@ interface PendingOnboard {
   restBaseUrl?: string;
 }
 
-async function doOnboardPrepare(vtaDid: string): Promise<OnboardPrepareResult> {
+async function doOnboardPrepare(
+  vtaDid: string,
+  adminScope: AdminScope,
+  context: string | undefined,
+): Promise<OnboardPrepareResult> {
   const services = await resolveVtaServices(vtaDid);
   if (!services.didcomm && !services.rest) {
     throw new Error(`${vtaDid} advertises no #vta-didcomm or #vta-rest service`);
@@ -1674,29 +1691,27 @@ async function doOnboardPrepare(vtaDid: string): Promise<OnboardPrepareResult> {
   await store.put(ONBOARD_KEY, pending);
   return {
     ephemeralDid: eph.did,
-    // `--expires 1h` so an abandoned onboarding (user prepares but never
-    // connects) doesn't leave a permanent admin grant for the ephemeral
-    // did:key. On successful connect, swap-acl deletes the row regardless
-    // of expiry; if the user takes >1h between Prepare and Connect they
-    // re-run Prepare to mint a fresh ephemeral. The acl_sweeper prunes
-    // the expired row on its background pass.
-    command: `pnm acl create --did ${eph.did} --role admin --expires 1h`,
+    // Built from the scope, in one tested place. The command grants exactly
+    // the authority the wallet is about to inherit, and both ways of getting
+    // it wrong are silent from here — see `grant-command.ts`.
+    command: grantCommand({
+      ephemeralDid: eph.did,
+      adminScope,
+      ...(context ? { context } : {}),
+    }),
     ...(services.didcomm ? { mediatorDid: services.didcomm.mediatorDid } : {}),
     ...(services.rest ? { restBaseUrl: services.rest.baseUrl } : {}),
   };
 }
 
 interface OnboardConnectParams {
-  /** Optional maintainer context override. When omitted, the VTA's
-   *  context inference rules pick the target context (single-context
-   *  grant → that context; super-admin + single-context VTA → that
-   *  context). Operators with multi-context VTAs override via the
-   *  popup's "Specify context" toggle. */
-  context?: string;
-  /** When `true`, asks the VTA to provision the override context inline
-   *  if it doesn't yet exist. Only meaningful when `context` is set;
-   *  the wallet does not auto-create against an inferred context.
-   *  Requires the ephemeral's grant to be super-admin. */
+  /** The context this wallet will live in — always named, never inferred.
+   *  See `RuntimeOnboardConnectRequest.context`. */
+  context: string;
+  /** How wide the ACL entry the VTA writes for the minted admin should be. */
+  adminScope: AdminScope;
+  /** When `true`, asks the VTA to create {@link context} inline if it does
+   *  not yet exist. Requires the ephemeral's grant to be unrestricted. */
   createIfMissing: boolean;
   /** Operator-supplied mediator, used only when the VTA published none.
    *  See the resolution note in `doOnboardConnect`. */
@@ -1819,7 +1834,8 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
       sender: session,
       ephemeralSigning: ephSigning,
       vtaDid: pending.vtaDid,
-      ...(params.context ? { context: params.context } : {}),
+      context: params.context,
+      adminScope: params.adminScope,
       ...(params.createIfMissing ? { createContext: true } : {}),
       note: "browser-plugin onboarding",
     });
@@ -1882,7 +1898,76 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
   }
 
   await store.delete(ONBOARD_KEY);
-  return { holderDid: adminReply.adminDid, role: "admin", secretEncrypted: false };
+  return {
+    holderDid: adminReply.adminDid,
+    role: "admin",
+    // The agent's account of what it wrote, not this wallet's of what it
+    // asked for. `runProvisionIntegration` reads both off the reply's summary
+    // and falls back honestly when an agent does not echo them.
+    context: adminReply.context,
+    adminScope: adminReply.adminScope,
+    secretEncrypted: false,
+  };
+}
+
+/**
+ * The contexts the pending onboarding's ephemeral can see at the agent.
+ *
+ * Runs between `prepare` and `connect`, as the **ephemeral** — the wallet has
+ * no holder identity yet, which is what the whole provisioning is about, so
+ * the warm session pool (`getVtaSession`, authenticating as the holder) is not
+ * available and would be the wrong identity anyway.
+ *
+ * Read-only and cheap, and every connection it opens is closed before it
+ * returns: unlike `doOnboardConnect` this can be called more than once — the
+ * operator may go back and forth over the picker — and a leaked mediator
+ * socket per visit is a real cost for a screen someone is reading.
+ */
+async function doOnboardContexts(): Promise<{ contexts: Array<{ id: string; name: string }> }> {
+  const store = new IndexedDBKVStore();
+  const pending = await store.get<PendingOnboard>(ONBOARD_KEY);
+  if (!pending) throw new Error("no pending onboarding — prepare first");
+
+  const ephSigning = signingIdentityFromSecret(new Uint8Array(pending.ephemeralSecret));
+  const ka = didcommKeyAgreementFromSigning(ephSigning);
+  const ephemeral = Identity.fromSecretJwk({
+    did: ephSigning.did,
+    kid: ka.keyAgreementKid,
+    jwk: ka.secretJwk,
+  });
+
+  const advertised = await resolveVtaServices(pending.vtaDid).catch(() => ({}) as VtaServices);
+  const services: VtaServices = {
+    ...advertised,
+    ...(advertised.didcomm || !pending.mediatorDid
+      ? {}
+      : { didcomm: { mediatorDid: pending.mediatorDid } }),
+  };
+
+  const conns = new Map<string, Promise<MediatorConnection>>();
+  const connect: MediatorConnector = (m) => {
+    let c = conns.get(m);
+    if (!c) {
+      c = connectMediatorSession({ holder: ephemeral, mediatorDid: m, vtaDid: pending.vtaDid });
+      conns.set(m, c);
+    }
+    return c;
+  };
+  try {
+    const { session } = await buildVtaSession(
+      pending.vtaDid,
+      { holder: ephemeral, signing: ephSigning },
+      connect,
+      { didcommFirst: true, services },
+    );
+    const contexts = await contextsList(session, {
+      holder: { did: ephSigning.did },
+      service: { did: pending.vtaDid },
+    });
+    return { contexts: contexts.map((c) => ({ id: c.id, name: c.name })) };
+  } finally {
+    for (const c of conns.values()) await c.then((x) => x.close()).catch(() => {});
+  }
 }
 
 /** Inspect the persisted holder identity without unwrapping the secret. The
