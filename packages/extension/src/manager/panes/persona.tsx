@@ -72,6 +72,7 @@ import { Loading, LoadError, Table, Truncated, type Column } from "../table.js";
 import { useAsync, type Async } from "../use-async.js";
 import { contextHeading, formatInstant } from "../format.js";
 import { isUnscopedHolder, type Authority, type Parties } from "../use-vta.js";
+import { scanForProfile } from "../profile-bindings.js";
 import {
   composeEntries,
   lockedRefs,
@@ -975,14 +976,23 @@ function DeleteProfile({
  * what says the value lives only in this profile — so it is rendered as a
  * statement rather than as three empty cells.
  */
-function ResolvedProfile({ parties, profile }: { parties: Parties; profile: PoolProfile }) {
+function ResolvedProfile({
+  parties,
+  profileId,
+  name,
+}: {
+  parties: Parties;
+  profileId: string;
+  /** How to name it while loading and when it holds nothing. */
+  name: string;
+}) {
   const resolved = useAsync(
-    async () => personaProfileGet(managerSender, { ...parties, profileId: profile.profileId, resolve: true }),
-    [parties.holder.did, parties.service.did, profile.profileId],
+    async () => personaProfileGet(managerSender, { ...parties, profileId, resolve: true }),
+    [parties.holder.did, parties.service.did, profileId],
   );
 
-  if (resolved.error) return <LoadError what={`what ${profile.name} presents`} error={resolved.error} />;
-  if (!resolved.data) return <Loading what={`what ${profile.name} presents`} />;
+  if (resolved.error) return <LoadError what={`what ${name} presents`} error={resolved.error} />;
+  if (!resolved.data) return <Loading what={`what ${name} presents`} />;
 
   const claims = resolved.data.resolved ?? [];
   if (claims.length === 0) {
@@ -1006,7 +1016,7 @@ function ResolvedProfile({ parties, profile }: { parties: Parties; profile: Pool
         const inline = claim.attributeId === undefined;
         return (
           <div
-            key={`${profile.profileId}-claim-${i}`}
+            key={`${profileId}-claim-${i}`}
             style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}
           >
             <span style={{ fontFamily: font.mono, fontSize: t.xs, minWidth: 150 }}>{claim.type}</span>
@@ -1020,28 +1030,126 @@ function ResolvedProfile({ parties, profile }: { parties: Parties; profile: Pool
   );
 }
 
+/**
+ * Which personas present a profile, and where.
+ *
+ * The question a holder actually asks of a profile — "who knows me by this?" —
+ * and the console has to assemble it, because no single task answers it. The
+ * assembly, and the soundness argument that makes it exact, live in
+ * `profile-bindings.ts`; this renders the result.
+ *
+ * **A click, not a column.** Even bounded, it is a fan-out across every
+ * context, and the answer is the holder's linkage map — the artifact this
+ * family exists to keep from being assembled casually. A column would run it on
+ * every page load for every profile and leave the map on screen whether or not
+ * anyone asked.
+ */
+function ProfileBindings({
+  parties,
+  profile,
+  records,
+}: {
+  parties: Parties;
+  profile: PoolProfile;
+  records: ContextRecord[];
+}) {
+  const found = useAsync(
+    async () =>
+      scanForProfile(
+        records.map((r) => r.id),
+        { profileId: profile.profileId, name: profile.name },
+        {
+          list: (contextId) => listBindings(managerSender, { ...parties, contextId }),
+          get: (contextId, personaDid) =>
+            getBinding(managerSender, { ...parties, contextId, personaDid }),
+        },
+      ),
+    [parties.holder.did, parties.service.did, profile.profileId, profile.name, records.length],
+  );
+
+  if (found.error) return <LoadError what={`who presents ${profile.name}`} error={found.error} />;
+  if (!found.data) return <Loading what={`who presents ${profile.name}`} />;
+
+  const { rows, unreadable } = found.data;
+
+  return (
+    <div style={{ display: "grid", gap: 6, padding: "4px 0 6px" }}>
+      <span style={{ fontSize: t.xs, color: c.faint, textTransform: "uppercase", letterSpacing: 0.4 }}>
+        Presented by
+      </span>
+      {rows.length === 0 ? (
+        <span style={{ fontSize: t.sm, color: c.faint }}>
+          No persona presents this profile. Nothing discloses it, in any context.
+        </span>
+      ) : (
+        rows.map((row) => (
+          <div
+            key={`${row.contextId}-${row.personaDid}`}
+            style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}
+          >
+            <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
+              {row.personaDid}
+            </span>
+            <span style={{ color: c.muted, fontSize: t.sm }}>
+              in {contextHeading(records.find((r) => r.id === row.contextId), row.contextId)} ·{" "}
+              {row.claimCount} claim(s)
+            </span>
+          </div>
+        ))
+      )}
+      {rows.length > 1 && (
+        // The whole reason a holder asks. Two personas presenting one profile
+        // present identical values, so anyone who sees both knows they are the
+        // same person — and no later narrowing undoes it for someone who
+        // already saw them.
+        <Note tone="warn">
+          {rows.length} personas present this profile. They disclose the same values, so anyone
+          who sees two of them knows they are the same person — permanently.
+        </Note>
+      )}
+      {unreadable.length > 0 && (
+        <Note tone="warn">
+          This answer is incomplete: your agent would not answer for {unreadable.join(", ")}. A
+          persona there could be presenting this profile without appearing above.
+        </Note>
+      )}
+    </div>
+  );
+}
+
 function ProfilesPanel({
   parties,
   authority,
   attributes,
   profiles,
+  records,
   onChanged,
 }: {
   parties: Parties;
   authority: Authority | null;
   attributes: PoolAttribute[];
   profiles: Async<PoolProfile[]>;
+  /** The contexts to look in when asked who presents a profile. */
+  records: ContextRecord[];
   onChanged: () => void;
 }) {
   const [editing, setEditing] = useState<PoolProfile | null>(null);
   const [creating, setCreating] = useState(false);
-  const [resolving, setResolving] = useState<string | null>(null);
+  /** Which row is expanded, and which of its two questions it is answering.
+   *  One state rather than two, so opening either closes the other — a row
+   *  showing both at once reads as one list. */
+  const [open, setOpen] = useState<{ profileId: string; view: "claims" | "where" } | null>(null);
   const denied = holderGate(authority);
 
   const byId = useMemo(
     () => new Map(attributes.map((a) => [a.attributeId, a])),
     [attributes],
   );
+
+  const toggle = (profileId: string, view: "claims" | "where") =>
+    setOpen((current) =>
+      current?.profileId === profileId && current.view === view ? null : { profileId, view },
+    );
 
   if (editing) {
     return (
@@ -1098,9 +1206,17 @@ function ProfilesPanel({
             kind="quiet"
             disabled={Boolean(denied)}
             {...(denied ? { title: denied } : {})}
-            onClick={() => setResolving((id) => (id === p.profileId ? null : p.profileId))}
+            onClick={() => toggle(p.profileId, "claims")}
           >
-            {resolving === p.profileId ? "Hide" : "What it presents"}
+            {open?.profileId === p.profileId && open.view === "claims" ? "Hide" : "What it presents"}
+          </Button>
+          <Button
+            kind="quiet"
+            disabled={Boolean(denied)}
+            {...(denied ? { title: denied } : {})}
+            onClick={() => toggle(p.profileId, "where")}
+          >
+            {open?.profileId === p.profileId && open.view === "where" ? "Hide" : "Who presents it"}
           </Button>
           <Button kind="quiet" onClick={() => setEditing(p)}>
             Edit
@@ -1130,9 +1246,14 @@ function ProfilesPanel({
             columns={columns}
             rows={profiles.data}
             rowKey={(p) => p.profileId}
-            expanded={(p) =>
-              resolving === p.profileId ? <ResolvedProfile parties={parties} profile={p} /> : null
-            }
+            expanded={(p) => {
+              if (open?.profileId !== p.profileId) return null;
+              return open.view === "claims" ? (
+                <ResolvedProfile parties={parties} profileId={p.profileId} name={p.name} />
+              ) : (
+                <ProfileBindings parties={parties} profile={p} records={records} />
+              );
+            }}
             empty="No profiles yet. Until there is one, no persona has anything to present."
           />
         )}
@@ -1172,6 +1293,60 @@ function ProfilesPanel({
  *  whether bound, the profile's label, a claim count. Never the contents. */
 type BindingRow = Awaited<ReturnType<typeof listBindings>>["personas"][number];
 
+/**
+ * What one persona actually presents in one context.
+ *
+ * Two calls, and the first is not avoidable: `binding/list` gives a profile
+ * *name* and a count, never a `profileId` and never contents — thin by
+ * construction, because a binding read that returned values would make the
+ * disclosure gate decorative. So `binding/get` resolves the id, and
+ * `profile/get?resolve=true` resolves what it projects.
+ *
+ * **This is a truthful answer only because a pool edit now pushes.** The
+ * resolved profile is what the agent last materialised into the context; until
+ * VTI#1281 nothing called `rematerialise`, so the two could disagree and this
+ * view would have shown a holder values their verifiers were never given.
+ * Reading the profile is the right source *because* the push exists — not a
+ * convenient stand-in for the copy.
+ */
+function PersonaClaims({
+  parties,
+  contextId,
+  personaDid,
+  profileName,
+}: {
+  parties: Parties;
+  contextId: string;
+  personaDid: string;
+  profileName: string;
+}) {
+  const bound = useAsync(
+    async () => getBinding(managerSender, { ...parties, contextId, personaDid }),
+    [parties.holder.did, parties.service.did, contextId, personaDid],
+  );
+
+  if (bound.error) return <LoadError what={`what ${profileName} presents`} error={bound.error} />;
+  if (!bound.data) return <Loading what={`what ${profileName} presents`} />;
+  if (!bound.data.profileId) {
+    // `bound` was true a moment ago and the profile is gone now, or the agent
+    // withheld the id. Either way, say that rather than render an empty list
+    // that reads as "presents nothing".
+    return (
+      <div style={{ fontSize: t.sm, color: c.faint, padding: "6px 0" }}>
+        Your agent did not name the profile behind this binding, so there is nothing to resolve.
+      </div>
+    );
+  }
+
+  return (
+    <ResolvedProfile
+      parties={parties}
+      profileId={bound.data.profileId}
+      name={bound.data.profileName ?? profileName}
+    />
+  );
+}
+
 function BindingsPanel({
   parties,
   authority,
@@ -1184,6 +1359,7 @@ function BindingsPanel({
   records: ContextRecord[];
 }) {
   const [contextId, setContextId] = useState<string>("");
+  const [showing, setShowing] = useState<string | null>(null);
   const [personaDid, setPersonaDid] = useState("");
   const [profileId, setProfileId] = useState<string>("");
   const [busy, setBusy] = useState(false);
@@ -1342,12 +1518,18 @@ function BindingsPanel({
       key: "presents",
       header: "Presents",
       width: "220px",
+      // The profile name and a count are all `binding/list` returns — thin by
+      // construction at the agent, which never sends claim contents on this
+      // path. So the count is a link rather than an answer: it says how much
+      // there is, and clicking asks what it is.
       render: (b) =>
         b.bound ? (
-          <span>
-            {b.profileName ?? "a profile"}
-            <span style={{ color: c.muted }}> · {b.claimCount ?? 0} claim(s)</span>
-          </span>
+          <Button
+            kind="quiet"
+            onClick={() => setShowing((did) => (did === b.personaDid ? null : b.personaDid))}
+          >
+            {b.profileName ?? "a profile"} · {b.claimCount ?? 0} claim(s)
+          </Button>
         ) : (
           <Pill tone="off">nothing</Pill>
         ),
@@ -1407,6 +1589,16 @@ function BindingsPanel({
                   columns={columns}
                   rows={bindings.data.personas}
                   rowKey={(b) => b.personaDid}
+                  expanded={(b) =>
+                    showing === b.personaDid && b.bound ? (
+                      <PersonaClaims
+                        parties={parties}
+                        contextId={contextId}
+                        personaDid={b.personaDid}
+                        profileName={b.profileName ?? "this profile"}
+                      />
+                    ) : null
+                  }
                   empty="No persona has ever been bound in this context. Name one below to start."
                 />
                 {bindings.data.nextCursor && <Truncated what="the personas in this context" />}
@@ -1795,6 +1987,7 @@ export function PersonaPane({
         authority={authority}
         attributes={attributes.data ?? []}
         profiles={profiles}
+        records={records}
         onChanged={reloadAll}
       />
 
