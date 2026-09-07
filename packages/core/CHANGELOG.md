@@ -8,6 +8,37 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-07
+
+### Fixed
+
+- **0.9.0 shipped a partial build; this is the same source, published whole.**
+  The tarball carried `dist/admin/acl-capabilities.js` but a stale
+  `dist/admin/index.js` that did not re-export it and a stale
+  `dist/admin/acl.js` with no `capabilitiesIntoExt` import. Two consequences
+  for anyone installing 0.9.0 from the registry, the second much worse than the
+  first:
+
+  - the capability helpers were unreachable — `./admin` is the only exported
+    subpath and its barrel did not name the module;
+  - **`aclUpdate({ capabilities })` silently dropped the narrowing.** The call
+    succeeded and no `ext` member went out, so an operator was told an entry
+    was narrowed while it held everything its role allows — precisely the
+    failure the feature was written to prevent.
+
+  Nothing in this repo was affected: the extension and pwa build from source
+  through project references, not from the tarball.
+
+### Changed
+
+- **`prepack` now cleans before it builds**, in this package and in
+  `@openvtc/vti-tsp-js`. `files` is `["dist"]` with no build step bound to
+  publishing, so `npm publish` shipped whatever `dist` happened to contain —
+  and this package had no `prepack` at all, where its sibling did. `clean &&
+  build` rather than `tsc -b`: an incremental build trusts `.tsbuildinfo` and
+  can no-op over a stale `dist` (the trap CLAUDE.md warns about), and only a
+  clean also drops files whose sources have been deleted.
+
 ## [0.9.0] - 2026-09-07
 
 ### Added
