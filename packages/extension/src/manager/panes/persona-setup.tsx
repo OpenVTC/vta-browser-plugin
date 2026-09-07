@@ -19,10 +19,11 @@ import { c, t, font } from "../../theme.js";
 import { contextHeading } from "../format.js";
 import type { Authority, Parties } from "../use-vta.js";
 import { AttributeEditor, BindingForm, ProfileEditor, formatValue, holderGate } from "./persona-editors.js";
+import { reachableStep } from "../persona-flow.js";
 
 type Step = 1 | 2 | 3;
 
-function Stepper({ step }: { step: Step }) {
+function Stepper({ step, reachable, onGo }: { step: Step; reachable: (s: Step) => boolean; onGo: (s: Step) => void }) {
   const items: [Step, string][] = [
     [1, "Add a fact or two"],
     [2, "Make a face"],
@@ -32,9 +33,20 @@ function Stepper({ step }: { step: Step }) {
     <div style={{ display: "flex", alignItems: "center", background: c.surface, border: `1px solid ${c.line}`, borderRadius: "var(--w-r-md)", padding: "12px 18px" }}>
       {items.map(([n, title], i) => {
         const state = n < step ? "done" : n === step ? "now" : "todo";
+        // A step you could be on is a way to get there. The ticked circle is
+        // the affordance a person reaches for first, and until it did anything
+        // the only route back was a button labelled "Cancel".
+        const go = reachable(n) && n !== step;
         return (
           <div key={n} style={{ display: "flex", alignItems: "center", flex: i < items.length - 1 ? 1 : "0 0 auto" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div
+              role={go ? "button" : undefined}
+              tabIndex={go ? 0 : undefined}
+              onClick={go ? () => onGo(n) : undefined}
+              onKeyDown={go ? (e) => { if (e.key === "Enter" || e.key === " ") onGo(n); } : undefined}
+              title={go ? `Back to “${title}”` : undefined}
+              style={{ display: "flex", alignItems: "center", gap: 10, cursor: go ? "pointer" : "default", borderRadius: "var(--w-r-sm)", padding: "2px 6px", margin: "-2px -6px" }}
+            >
               <span
                 style={{
                   width: 22,
@@ -155,12 +167,21 @@ export function GuidedSetup({
         <Button kind="quiet" onClick={onSkip}>Skip — I'll build it myself</Button>
       </div>
       {denied && <Note tone="warn">{denied}</Note>}
-      <Stepper step={step} />
+      <Stepper
+        step={step}
+        reachable={(s) => reachableStep(s, { facts: attributes.length, faces: profiles.length })}
+        onGo={setStep}
+      />
 
       {step === 1 && (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)", gap: 16 }}>
           <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
-            <AttributeEditor key={`new-${attributes.length}`} parties={parties} authority={authority} onDone={onChanged} onCancel={onSkip} />
+            <AttributeEditor
+              key={`new-${attributes.length}`}
+              parties={parties}
+              authority={authority}
+              onDone={onChanged}
+            />
             {attributes.length > 0 && (
               <Panel title={`${attributes.length} fact${attributes.length === 1 ? "" : "s"} so far`}>
                 <div style={{ display: "grid", gap: 6 }}>
@@ -194,10 +215,11 @@ export function GuidedSetup({
       {step === 2 && (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)", gap: 16 }}>
           <ProfileEditor
-            key="setup"
+            key={face?.profileId ?? "new"}
             parties={parties}
             authority={authority}
             attributes={attributes}
+            {...(face ? { existing: face } : {})}
             onPreview={(selection) => {
               setTicked(new Set(selection.ids));
               setFaceName(selection.name);
@@ -207,6 +229,7 @@ export function GuidedSetup({
               setStep(3);
             }}
             onCancel={() => setStep(1)}
+            cancelLabel="Back — add more facts"
           />
           <StrangerCard facts={preview} faceName={faceName} />
         </div>
@@ -236,7 +259,8 @@ export function GuidedSetup({
                 contextLabel={contextHeading(records.find((r) => r.id === contextId), contextId)}
                 profiles={profiles}
                 onDone={onFinished}
-                onCancel={onSkip}
+                onCancel={() => setStep(2)}
+                cancelLabel="Back — change the face"
               />
             ) : (
               <Note tone="warn">
