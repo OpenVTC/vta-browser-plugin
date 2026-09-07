@@ -329,6 +329,10 @@ export function IdentityMap({
   const select = (next: Selection) =>
     setSelection((cur) => (cur && JSON.stringify(cur) === JSON.stringify(next) ? null : next));
 
+  /** The persona selected in this context, if the selection is one. */
+  const selectedPersonaIn = (contextId: string): string | null =>
+    selection?.kind === "persona" && selection.contextId === contextId ? selection.did : null;
+
   const done = useCallback(() => {
     setEditing(null);
     onChanged();
@@ -604,13 +608,28 @@ export function IdentityMap({
                     </div>
                   )}
                   <div>
+                    {/* A persona selected in this context is the one the
+                        holder is asking about, so the button acts on it rather
+                        than opening an empty form beside a highlighted row —
+                        which read as the selection having been ignored. The
+                        label changes with it: "be known as" and "change what
+                        this one wears" are different acts, and only one of them
+                        is what a selected persona invites. */}
                     <Button
                       kind="quiet"
                       disabled={Boolean(denied) || graph.faces.length === 0}
                       {...(denied ? { title: denied } : graph.faces.length === 0 ? { title: "Make a face first." } : {})}
-                      onClick={() => setEditing({ kind: "bind", contextId: ctx.id })}
+                      onClick={() =>
+                        setEditing({
+                          kind: "bind",
+                          contextId: ctx.id,
+                          ...(selectedPersonaIn(ctx.id) ? { personaDid: selectedPersonaIn(ctx.id)! } : {}),
+                        })
+                      }
                     >
-                      Be known here as…
+                      {selectedPersonaIn(ctx.id)
+                        ? `Change what ${personaLabel(selectedPersonaIn(ctx.id)!)} wears`
+                        : "Be known here as…"}
                     </Button>
                   </div>
                 </div>

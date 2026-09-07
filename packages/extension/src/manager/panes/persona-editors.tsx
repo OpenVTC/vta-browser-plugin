@@ -40,6 +40,7 @@ import { useAsync } from "../use-async.js";
 import { contextHeading, formatInstant } from "../format.js";
 import { isUnscopedHolder, type Authority, type Parties } from "../use-vta.js";
 import { composeEntries, lockedRefs, preservedEntries, tickedFrom } from "../profile-entries.js";
+import { personaCandidates } from "../persona-candidates.js";
 
 export const fieldStyle: React.CSSProperties = {
   boxSizing: "border-box",
@@ -1073,14 +1074,14 @@ function useDidSuggestions(parties: Parties, contextId: string) {
     async () => (contextId ? listBindings(managerSender, { ...parties, contextId }) : null),
     [parties.holder.did, parties.service.did, contextId],
   );
-  const suggestions = useMemo(() => {
-    const out = new Map<string, string>();
-    for (const d of published.data?.dids ?? []) out.set(d.did, `published in ${d.contextId}`);
-    for (const b of known.data?.personas ?? []) {
-      out.set(b.personaDid, b.bound ? `wears ${b.profileName ?? "a face"}` : "known here, wearing nothing");
-    }
-    return [...out].map(([did, note]) => ({ did, note }));
-  }, [published.data, known.data]);
+  // Filtered again here, not because the agent does not filter — it does — but
+  // because "the agent promises" and "this list cannot contain one" are
+  // different claims, and only the second has a test. See
+  // `persona-candidates.ts`.
+  const suggestions = useMemo(
+    () => personaCandidates(contextId, published.data?.dids ?? [], known.data?.personas ?? []),
+    [contextId, published.data, known.data],
+  );
   const reload = useCallback(() => {
     published.reload();
     known.reload();
