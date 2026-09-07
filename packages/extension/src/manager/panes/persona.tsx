@@ -177,6 +177,27 @@ function severityTone(severity: string): "danger" | "warn" | "off" {
 
 const VALUE_TYPES: AttributeValueType[] = ["string", "number", "boolean", "date", "object"];
 
+/**
+ * Row actions, side by side rather than stacked.
+ *
+ * Stacking them made every row as tall as its tallest column plus a second
+ * button — two lines of chrome for one line of content, so a pool of four
+ * attributes filled the viewport. The pool is a list a holder scans, and a list
+ * you cannot see at once is a worse answer to "what do I hold about myself".
+ *
+ * `flexWrap` is what makes the row form safe rather than merely shorter:
+ * `Destructive` replaces its button with a preview panel in place, and without
+ * wrapping that panel would sit beside "Edit" and squeeze it. Wrapped, the
+ * panel drops to its own line under the buttons and the row grows only while
+ * the confirmation is open.
+ */
+const ROW_ACTIONS: React.CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+  alignItems: "flex-start",
+};
+
 /** One datalist, one id. Only one binding form exists on the page. */
 const DID_SUGGESTIONS = "persona-did-suggestions";
 
@@ -535,7 +556,7 @@ function AttributesPanel({
       key: "actions",
       header: "",
       render: (a) => (
-        <div style={{ display: "grid", gap: 8, minWidth: 190 }}>
+        <div style={ROW_ACTIONS}>
           <Button kind="quiet" onClick={() => setEditing(a)}>
             Edit
           </Button>
@@ -1072,7 +1093,7 @@ function ProfilesPanel({
       key: "actions",
       header: "",
       render: (p) => (
-        <div style={{ display: "grid", gap: 8, minWidth: 190 }}>
+        <div style={ROW_ACTIONS}>
           <Button
             kind="quiet"
             disabled={Boolean(denied)}
