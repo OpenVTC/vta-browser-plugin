@@ -18,7 +18,8 @@ import { Button, Note, Panel } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { contextHeading } from "../format.js";
 import type { Authority, Parties } from "../use-vta.js";
-import { AttributeEditor, BindingForm, ProfileEditor, formatValue, holderGate } from "./persona-editors.js";
+import { AttributeEditor, BindingForm, ProfileEditor, formatValue } from "./persona-editors.js";
+import { holderGate } from "../holder-gate.js";
 import { reachableStep } from "../persona-flow.js";
 
 type Step = 1 | 2 | 3;
