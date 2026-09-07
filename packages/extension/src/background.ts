@@ -156,6 +156,7 @@ import {
   type RuntimeOnboardPrepareRequest,
   type RuntimeOnboardPrepareResponse,
   OFFSCREEN_REQUEST_TASK,
+  type OffscreenRequestTaskResponse,
   type RuntimeRequestTaskRequest,
   type RuntimeRequestTaskResponse,
   type RuntimeManagerTaskRequest,
@@ -188,6 +189,7 @@ import {
   type RuntimeWalletDefaultsResponse,
   type VerifyRpDidResult,
 } from "./bridge-protocol.js";
+import { relayFailure } from "./relay-failure.js";
 import { clearLegacyInbox, getSettings, inboxFor, inboxToAdopt, setInbox, setSettings } from "./config.js";
 import { providerMatches, syncProviderRegistration } from "./content-registration.js";
 import {
@@ -1840,7 +1842,7 @@ async function handleRequestTask(
     restBaseUrl: active.conn.restBaseUrl,
     origin: req.origin,
     params: req.params,
-  })) as RuntimeRequestTaskResponse;
+  })) as OffscreenRequestTaskResponse;
 
   // A consent refusal is the only thing that arms a replay, and it carries the
   // VTA's own salted digest — the same value its `task-consent/granted` notice
@@ -1850,7 +1852,19 @@ async function handleRequestTask(
     const digest = res.result.payloadDigest;
     if (typeof digest === "string" && digest) consentReplays.recordConsentRequired(key, digest);
   }
-  return res;
+  // Rebuilt, not returned. The offscreen document answers the console and the
+  // page from the same branch, and its failure now carries the agent's own
+  // `code` and `details`. A page gets neither: it proposed a task and is
+  // entitled to know it was refused, not to read the agent's internal account
+  // of why — a details object naming other personas, other contexts or an ACL's
+  // contents is a disclosure, and it would arrive at any site that called
+  // `requestTask` and caught the error.
+  //
+  // Written as an explicit reconstruction rather than a cast, because a cast is
+  // how the extra members would travel anyway: `as RuntimeRequestTaskResponse`
+  // narrows the *type* and copies the object whole.
+  if (res.ok) return res;
+  return { ok: false, error: res.error };
 }
 
 /**
@@ -1910,13 +1924,18 @@ async function handleManagerTask(
   // with no attested origin should omit it rather than invent one. Inventing
   // this extension's own put an `ext` member on every payload, which some agent
   // payload structs reject outright.
+  //
+  // Passed through whole, failure members and all. The console is the
+  // operator's own program and a refusal's `code`/`details` are exactly what it
+  // needs to render one (R3.7) — see `RelayTaskFailure` in `bridge-protocol.ts`.
+  // The page path takes the opposite decision a few functions down.
   return (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_REQUEST_TASK,
     vtaDid: active.conn.vtaDid,
     restBaseUrl: active.conn.restBaseUrl,
     params: req.params,
-  })) as RuntimeManagerTaskResponse;
+  })) as OffscreenRequestTaskResponse;
 }
 
 // Sign a Trust-Task envelope with the wallet's holder did:peer #key-2.
@@ -2920,9 +2939,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     handleManagerTask(message as RuntimeManagerTaskRequest)
       .then(sendResponse)
-      .catch((e: unknown) =>
-        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
-      );
+      // Same reply shape whichever hop failed. A rejection here is usually the
+      // worker's own (no offscreen document, a dead sendMessage) and carries no
+      // agent code, but the console should not have to care *where* a failure
+      // came from to know how to read it.
+      .catch((e: unknown) => sendResponse(relayFailure(e)));
     return true; // async sendResponse
   }
 

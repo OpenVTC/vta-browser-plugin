@@ -82,10 +82,63 @@ export class ConsentRequiredError extends Error {
   }
 }
 
+/**
+ * The task failed, and here is the machine-readable reason.
+ *
+ * The sibling of {@link ConsentRequiredError}, and for the same reason: a pane
+ * that can only catch `Error` can only print a sentence. Before this class the
+ * relay collapsed every rejection to prose — `${label} failed: ${message}` —
+ * so a pane wanting to behave differently for one particular refusal had to
+ * match on the message text, which R3.7 forbids: the agent may reword a message
+ * whenever it likes and may not change a code.
+ *
+ * `code` and `details` are both optional and usually absent. Most failures are
+ * a dead connection or a timeout, and a pane that assumed a code would find
+ * `undefined` — so the shape a pane should write is "switch on the code when
+ * there is one, render {@link Error.message} either way". The message is
+ * unchanged from what the bare `Error` carried, so nothing that already renders
+ * it needs touching.
+ *
+ * Deliberately NOT thrown for a `consentRequired` outcome. That is not a
+ * failure at all; it is a ceremony, and it keeps its own class.
+ */
+export class RelayTaskError extends Error {
+  /**
+   * The agent's own stable code, when it sent one — a SPEC §8.3 standard code
+   * (`permissionDenied`) or a §8.5 extended one
+   * (`persona/profile/delete:profileInUse`) — or the client's `VtaErrorCode`
+   * (`e.client.timeout`) when the failure never reached the agent. Compare with
+   * `===`; never parse it.
+   */
+  readonly code?: string;
+  /** The agent's structured context for this refusal, e.g. the `personaDids`
+   *  blocking a profile deletion. Plain JSON — the relay round-trips it — so a
+   *  pane may read members off it, but it is unvalidated wire data and every
+   *  member has to be checked before it is used. */
+  readonly details?: unknown;
+  /** The task type the operator was attempting. */
+  readonly taskType: string;
+
+  constructor(taskType: string, message: string, failure: RelayFailureFields) {
+    super(message);
+    this.name = "RelayTaskError";
+    this.taskType = taskType;
+    if (failure.code !== undefined) this.code = failure.code;
+    if (failure.details !== undefined) this.details = failure.details;
+  }
+}
+
+/** The machine-readable half of a failed reply. Mirrors `RelayTaskFailure` in
+ *  `bridge-protocol.ts`. */
+export interface RelayFailureFields {
+  code?: string;
+  details?: unknown;
+}
+
 /** The bridge's reply, structurally. Kept here rather than imported so this
  *  module stays free of relative imports; `sender.ts` passes the real typed
  *  value, and a drift between the two breaks its build. */
-export interface RelayReply {
+export interface RelayReply extends RelayFailureFields {
   ok: boolean;
   error?: string;
   result?: Record<string, unknown>;
@@ -100,13 +153,22 @@ export interface RelayReply {
  * this file. That last case must be loud — returning it would hand a pane an
  * object whose members all read `undefined`, which renders as a convincing
  * empty result.
+ *
+ * A refused reply is the fourth, and it throws {@link RelayTaskError} carrying
+ * whatever machine-readable code and structured details survived the bridge.
  */
 export function interpretOutcome<Res>(
   taskType: string,
   label: string,
   reply: RelayReply,
 ): Res {
-  if (!reply.ok) throw new Error(`${label} failed: ${reply.error ?? "unknown error"}`);
+  if (!reply.ok) {
+    // Typed, and carrying whatever the agent said. The prose is byte-identical
+    // to what the bare `Error` produced — a pane that renders `.message` sees
+    // no change — but a pane that wants to *act* on one refusal now has a code
+    // to compare instead of a sentence to match (R3.7).
+    throw new RelayTaskError(taskType, `${label} failed: ${reply.error ?? "unknown error"}`, reply);
+  }
 
   const outcome = reply.result;
   if (outcome?.kind === "consentRequired") {

@@ -158,6 +158,7 @@ import {
   type SignTrustTaskResult,
   type VerifyRpDidResult,
 } from "./bridge-protocol.js";
+import { relayFailure } from "./relay-failure.js";
 
 // Request durable IndexedDB on offscreen-document load. The wallet's
 // irreplaceable key material (the v4 holder records) lives in
@@ -468,11 +469,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_REQUEST_TASK) {
+    // `relayFailure`, not the `e.message` collapse every other branch here
+    // uses. This is the one branch whose caller may be the management console,
+    // and the console is a program: it needs the agent's stable code and its
+    // structured details to tell one refusal from another (R3.7). The other
+    // branches answer wallet UI that only ever renders prose, so widening them
+    // would buy nothing and put more of the agent's internal reasoning on
+    // surfaces that have no use for it.
+    //
+    // The page path shares this reply and must NOT keep the extra members —
+    // `handleRequestTask` in `background.ts` narrows them off on the way out.
     doRequestTask(message as OffscreenRequestTaskRequest)
       .then((result) => sendResponse({ ok: true, result }))
-      .catch((e: unknown) =>
-        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
-      );
+      .catch((e: unknown) => sendResponse(relayFailure(e)));
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_VAULT_LIST) {

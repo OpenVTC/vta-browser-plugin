@@ -1777,12 +1777,79 @@ export interface RequestTaskParams {
  *  consent flow at the last hop, so it is returned as a result. */
 export type RequestTaskResult = Record<string, unknown>;
 
+/**
+ * A refusal, with the machine-readable half kept.
+ *
+ * Every handler on this bridge used to collapse a rejection to
+ * `e instanceof Error ? e.message : String(e)`, and the console's
+ * `interpretOutcome` then re-wrapped that string in a fresh `Error`. By the
+ * time a pane saw the failure, the agent's stable code and its structured
+ * context were gone and only prose remained — so a pane wanting to *act* on a
+ * particular refusal had one option left, matching on the message text, which
+ * is exactly what R3.7 forbids. The concrete case that forced this: the holder
+ * deleting a profile that personas are still bound to is refused with an
+ * extended code and a `details.personaDids` naming them, and the console could
+ * render neither the reason nor the list.
+ *
+ * **The human string stays REQUIRED.** Most failures have no code worth
+ * switching on — a dead connection, a transport timeout — and a pane must
+ * always have something to show. `code` and `details` are what a pane branches
+ * on *when they are there*; `error` is what it renders regardless.
+ *
+ * **`details` is plain JSON, and that is not a style note.**
+ * `chrome.runtime.sendMessage` serializes, so an `Error` instance (or anything
+ * else with behaviour) arrives as `{}` — a details object that looks present
+ * and says nothing. `relayFailure` in `relay-failure.ts` is the one place that
+ * builds this, and it round-trips the value through JSON so the shape a pane
+ * receives is the shape the sender saw.
+ *
+ * **Console relay only.** {@link RuntimeRequestTaskResponse} — the page-facing
+ * one — deliberately does not use this: `requestTask` hands a page whatever the
+ * VTA said, and the agent's internal reason for refusing is not a site's to
+ * read. `handleRequestTask` narrows back to prose on the way out.
+ */
+export interface RelayTaskFailure {
+  ok: false;
+  /** Human-readable prose. Always present; it is what a pane renders when it
+   *  has nothing better. */
+  error: string;
+  /**
+   * The stable machine-readable code, when the failure carried one.
+   *
+   * Two namespaces arrive here, and both are stable enough to match on with
+   * `===`. A Trust-Task refusal carries the code the *agent* emitted, verbatim
+   * off the `trust-task-error` document — a SPEC §8.3 standard code
+   * (`permissionDenied`, `taskFailed`) or a §8.5 extended one
+   * (`persona/profile/delete:profileInUse`). Anything else carries the client's
+   * own `VtaErrorCode`, which is `e.`-prefixed (`e.client.timeout`) and so
+   * cannot be confused with an agent's.
+   *
+   * The agent's code is preferred over the `VtaErrorCode` the client coerced it
+   * to, because that coercion is lossy by design: `coerceTrustTaskCode` buckets
+   * every extended code it does not recognise into `e.p.msg.bad_request`, and
+   * its own doc comment says a caller that needs the actual meaning must read
+   * the raw code. This is that caller.
+   */
+  code?: string;
+  /**
+   * The task-specific structured context the agent sent with its refusal —
+   * `TrustTaskErrorPayload.details`, e.g. `{ personaDids: [...] }`.
+   *
+   * Absent rather than `{}` when there was none: an empty object reads as
+   * "there is context and it is empty", which sends a pane looking for a
+   * member that was never sent.
+   */
+  details?: unknown;
+}
+
 export interface RuntimeRequestTaskRequest {
   type: typeof RUNTIME_REQUEST_TASK;
   params: RequestTaskParams;
   origin: string;
 }
 
+/** What a *page* is told. Prose on failure, and deliberately nothing more —
+ *  see {@link RelayTaskFailure} for why the console's shape stops here. */
 export type RuntimeRequestTaskResponse =
   | { ok: true; result: RequestTaskResult }
   | { ok: false; error: string };
@@ -1812,6 +1879,21 @@ export interface OffscreenRequestTaskRequest {
   params: RequestTaskParams;
 }
 
+/**
+ * What the offscreen document answers, for both callers of this one message.
+ *
+ * The offscreen half serves the page relay and the console relay alike — that
+ * reuse is the point of `OFFSCREEN_REQUEST_TASK` — so it answers with the
+ * richer shape and the *background* decides who is entitled to see it. The
+ * console path passes it through; `handleRequestTask` narrows it to prose
+ * before it reaches a page. Answering the page with the whole thing would widen
+ * the page-facing surface by accident, which is the sort of change nothing
+ * fails on.
+ */
+export type OffscreenRequestTaskResponse =
+  | { ok: true; result: RequestTaskResult }
+  | RelayTaskFailure;
+
 /** manager console → background: run one administration task at the agent.
  *
  *  **Deliberately NOT in {@link PAGE_FACING_RUNTIME_TYPES}, and deliberately
@@ -1839,9 +1921,12 @@ export interface RuntimeManagerTaskRequest {
   params: RequestTaskParams;
 }
 
+/** What the console is told. A failure keeps its code and details — the console
+ *  is the operator's own surface, and a pane that cannot tell one refusal from
+ *  another can only print the prose and stop. See {@link RelayTaskFailure}. */
 export type RuntimeManagerTaskResponse =
   | { ok: true; result: RequestTaskResult }
-  | { ok: false; error: string };
+  | RelayTaskFailure;
 
 /**
  * Every runtime message type a *web page* can originate through the content
