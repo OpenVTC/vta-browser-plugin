@@ -80,6 +80,16 @@ export const UNREGISTERED: ClaimTreatment = { sensitivity: "high", mask: "full" 
  * line for line, which is the maintenance operation this table actually gets.
  */
 const REGISTERED: Readonly<Record<string, ClaimTreatment>> = {
+  // Family entries — matched as a prefix by `treatmentOf`, and the reason a
+  // token invented under a gated family cannot escape it.
+  payment: { sensitivity: "high", mask: "full" },
+  gov: { sensitivity: "high", mask: "full" },
+
+  // Both an exact token and a family prefix: a pool that keeps one
+  // undifferentiated name is using `name`, and without an entry it would mask
+  // in full.
+  name: { sensitivity: "normal", mask: "none" },
+
   "name.legal": { sensitivity: "normal", mask: "none" },
   "name.given": { sensitivity: "normal", mask: "none" },
   "name.family": { sensitivity: "normal", mask: "none" },
@@ -117,8 +127,8 @@ const REGISTERED: Readonly<Record<string, ClaimTreatment>> = {
 };
 
 /**
- * How this type's values are treated — the three-rule resolution of §4, minus
- * the rule this console cannot take part in.
+ * How this type's values are treated — `CLAIM-TYPES.md` §4, minus the rule
+ * this console cannot take part in.
  *
  * §4's first rule is a per-attribute override the holder set explicitly, which
  * wins over the registry. No field carries one on the wire yet, so nothing here
@@ -126,28 +136,74 @@ const REGISTERED: Readonly<Record<string, ClaimTreatment>> = {
  * because "the holder decided" and "the registry says" are different facts and
  * a UI that wants to explain the difference needs both.
  *
- * **There is no prefix fallback, and its absence is the registry's, not a
- * shortcut here.** `CLAIM-TYPES.md` §2 argues the token is hierarchical so that
- * `payment.*` "classifies as one family without enumerating its members" — but
- * `claim-types.json` contains only leaves, declares no family entry, and §4's
- * three rules never consult a prefix. Inventing the walk locally would make
- * this console *less* careful than the registry asks: an unregistered
- * `payment.giftCard` would pick up `last4` from a family rule instead of the
- * `full` that rule 3 gives it. So it falls to `UNREGISTERED`, and the gap is
- * reported upstream rather than patched here.
+ * **The prefix walk is rule 3, and it only ever tightens.** An unregistered
+ * token takes the *more protective* of its longest registered prefix and the
+ * unregistered floor, per axis — never the prefix outright. That direction is
+ * the whole point: `payment.giftCard` inherits `payment`'s treatment because a
+ * gated family must not be leavable by inventing a token, while `name.somethingNew`
+ * does **not** inherit `name`'s `none` and stays masked, because a family entry
+ * cannot make an unknown token visible.
+ *
+ * This console reported the walk's absence when it first vendored this table;
+ * the registry gained it in trust-tasks#377, and this is that rule.
  */
 export function treatmentOf(type: string): ClaimTreatment {
   // `x:` is the open extension namespace (`ClaimType` in
-  // `persona-record.schema.json`), and §4 rule 3 names it alongside an
-  // unregistered token. Tested before the lookup rather than after, so an
-  // `x:`-prefixed spelling of a core token cannot borrow that token's entry.
+  // `persona-record.schema.json`), and §4's last rule names it alongside an
+  // unregistered token. Tested before anything else so an `x:`-prefixed
+  // spelling of a core token cannot borrow that token's entry — nor, now,
+  // its family's.
   if (type.startsWith("x:")) return UNREGISTERED;
-  return REGISTERED[type] ?? UNREGISTERED;
+
+  const exact = REGISTERED[type];
+  if (exact) return exact;
+
+  // Longest registered prefix, on dot boundaries only: `payment.card` is under
+  // `payment`, but a token merely *starting with* those characters is not.
+  let prefix: ClaimTreatment | undefined;
+  const segments = type.split(".");
+  for (let i = segments.length - 1; i > 0; i--) {
+    const candidate = REGISTERED[segments.slice(0, i).join(".")];
+    if (candidate) {
+      prefix = candidate;
+      break;
+    }
+  }
+  if (!prefix) return UNREGISTERED;
+
+  return {
+    sensitivity: stricter(SENSITIVITY_ORDER, prefix.sensitivity, UNREGISTERED.sensitivity),
+    mask: stricter(MASK_ORDER, prefix.mask, UNREGISTERED.mask),
+  };
 }
 
-/** Whether a value of this type is hidden until asked for. */
+/** `strictness` in `claim-types.json`, most protective first. Kept as arrays
+ *  rather than comparisons so the ordering is diffable against the registry. */
+const SENSITIVITY_ORDER: readonly Sensitivity[] = ["high", "normal"];
+const MASK_ORDER: readonly MaskStyle[] = ["full", "last2", "last4", "emailLocal", "none"];
+
+/** The more protective of two values on one axis. A value the order does not
+ *  know is treated as least protective, so an unrecognised entry can never win
+ *  and quietly loosen a treatment. */
+function stricter<T>(order: readonly T[], a: T, b: T): T {
+  const rank = (v: T) => {
+    const i = order.indexOf(v);
+    return i === -1 ? order.length : i;
+  };
+  return rank(a) <= rank(b) ? a : b;
+}
+
+/** Whether a value of this type is hidden until asked for.
+ *
+ *  Masking no longer requires `sensitivity: high` — §3.3 made the two
+ *  independent, because they are two strengths of protection rather than one.
+ *  `high` means *withheld from a listing that did not ask*; a mask style means
+ *  *not shown in the clear*. An email address is worth hiding from the person
+ *  behind you without being worth withholding from every listing, and until the
+ *  two were separated there was no way to say so — `email.*` carried a style no
+ *  rule could ever apply. */
 export function isSensitive(type: string): boolean {
-  return treatmentOf(type).sensitivity === "high";
+  return treatmentOf(type).mask !== "none";
 }
 
 /** The character a mask is drawn with. One glyph, everywhere, so a masked value

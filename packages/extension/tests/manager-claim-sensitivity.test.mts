@@ -134,3 +134,66 @@ test("a hidden value is not an empty one", () => {
   // pane offers no control that would do nothing.
   assert.equal(maskedFact("org.name", "OpenVTC").masked, false);
 });
+
+// ── The prefix walk (trust-tasks#377) ───────────────────────────────────────
+//
+// This console reported the walk's absence when it first vendored the table.
+// The registry gained it, and these pin the direction it works in — which is
+// the whole of what makes it safe.
+
+test("a token invented under a gated family cannot escape the family", () => {
+  // The hole this rule closed: `payment.giftCard` used to fall to the
+  // unregistered default, and on the release axis that default is *weaker*
+  // than every registered member of `payment`.
+  const t = treatmentOf("payment.giftCard");
+  assert.equal(t.sensitivity, "high");
+  assert.equal(t.mask, "full");
+  assert.ok(isSensitive("payment.giftCard"));
+});
+
+test("a family entry can tighten but never loosen", () => {
+  // `name` is normal/none, but an unregistered member of the family does NOT
+  // inherit that and become visible. A family entry that could loosen would
+  // turn "invent a token under a friendly prefix" into a way to unmask.
+  const t = treatmentOf("name.somethingNobodyRegistered");
+  assert.equal(t.sensitivity, "high", "the floor wins where it is stricter");
+  assert.equal(t.mask, "full");
+});
+
+test("an exact entry is used as written, not compared against its family", () => {
+  // `payment.card` is `last4` even though its family is `full`. Rule 2 stops
+  // before rule 3, or every registered member of a strict family would be
+  // flattened to the family's own treatment and the table would say nothing.
+  assert.equal(treatmentOf("payment.card").mask, "last4");
+});
+
+test("an x: token cannot borrow a family, any more than an entry", () => {
+  // The extension namespace is unregistered by construction. Borrowing here
+  // would let `x:payment.card` pick up `last4` — a *looser* mask than the
+  // floor — by spelling a core token with a prefix.
+  assert.deepEqual(treatmentOf("x:payment.card"), UNREGISTERED);
+});
+
+test("a bare name is a token, not just a prefix", () => {
+  // A pool keeping one undifferentiated name would otherwise mask it in full.
+  assert.equal(treatmentOf("name").mask, "none");
+  assert.ok(!isSensitive("name"));
+});
+
+// ── Masking is independent of sensitivity (§3.3) ────────────────────────────
+
+test("a normal value can still be masked", () => {
+  // The two were one axis until the registry separated them, which left
+  // `email.*` carrying a style no rule could apply. `high` means withheld from
+  // a listing; a mask style means not shown in the clear. An email address is
+  // worth hiding from the person behind you without being worth withholding.
+  const t = treatmentOf("email.work");
+  assert.equal(t.sensitivity, "normal");
+  assert.equal(t.mask, "emailLocal");
+  assert.ok(isSensitive("email.work"), "masked despite being normal");
+});
+
+test("a value with no mask style is not hidden", () => {
+  assert.ok(!isSensitive("account.handle"));
+  assert.ok(!isSensitive("name.display"));
+});
