@@ -25,7 +25,9 @@
   },
   "overrides": {
     "uuid": "^11.1.1",
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.1",
+    "@swc/core": "~1.15.47",
+    "@swc/wasm": "~1.15.47"
   },
   "dependencies": {
     "@openvtc/trust-tasks": "^0.17.1"

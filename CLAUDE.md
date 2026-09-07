@@ -483,6 +483,20 @@ would test a different policy than the one that breaks.
   stages 2 and 3 still have to pass — so don't shortcut it into a trusted
   answer. Node's `fetch` does expose `Location`, which is why the unit tests
   cover both shapes.
+- **`@swc/core` and `@swc/wasm` are pinned below 1.16, and the pin is load
+  bearing.** `vite-plugin-top-level-await` (1.6.0, its latest) hands swc a
+  hand-built AST node and calls `printSync`; swc 1.16 tightened AST validation
+  and rejects it with `missing field \`type\``, taking out the `pwa` and
+  `extension` vite builds. The plugin declares `@swc/core: ^1.12.14`, so a
+  caret happily resolves the version that breaks it — which is why this is a
+  root `overrides` entry (`~1.15.47`) rather than anything a workspace can
+  express. Both packages are pinned, not just `core`: the plugin falls back to
+  `@swc/wasm` where there is no native binding, so pinning one leaves the same
+  break waiting on a different platform. **Verified 1.16.0 and 1.16.2 both
+  fail**, so this is the 1.16 line rather than one bad patch. Lift it only when
+  the plugin ships a fix — and re-run `npm run build`, because `npm test`
+  passes either way (the failure is in the bundler, not the type checker).
+
 - **Stub `Response` objects with a real `Response`**, not an `{ ok, json }`
   literal. A hand-rolled stub only implements whatever the code happened to
   call when it was written, and stops representing a Response the moment the
