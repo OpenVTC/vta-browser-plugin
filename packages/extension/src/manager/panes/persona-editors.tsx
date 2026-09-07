@@ -38,7 +38,8 @@ import { ConsentCeremony, runMutation } from "../destructive.js";
 import { Loading, LoadError, Table, Truncated, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
 import { contextHeading, formatInstant } from "../format.js";
-import { isUnscopedHolder, type Authority, type Parties } from "../use-vta.js";
+import { type Authority, type Parties } from "../use-vta.js";
+import { holderGate } from "../holder-gate.js";
 import { composeEntries, lockedRefs, preservedEntries, tickedFrom } from "../profile-entries.js";
 import { personaCandidates } from "../persona-candidates.js";
 
@@ -56,17 +57,6 @@ export function Label({ children }: { children: React.ReactNode }) {
   return <span style={{ fontSize: t.xs, color: c.muted }}>{children}</span>;
 }
 
-/** The refusal every task on this page shares, phrased as the agent phrases it.
- *  Null when the caller holds what it takes. */
-export function holderGate(authority: Authority | null): string | null {
-  if (!authority) return null;
-  if (isUnscopedHolder(authority)) return null;
-  return (
-    "Your identity sits above every trust context, so this needs an unscoped holder " +
-    "credential — Admin at this agent with no context restriction. An administrator scoped " +
-    "to one context is refused here exactly as an application would be."
-  );
-}
 
 // ── Reading what the agent sent, without adding to it ───────────────────────
 
@@ -366,7 +356,7 @@ export function AttributeEditor({
         <div style={{ display: "flex", gap: 8 }}>
           <Button
             kind="primary"
-            disabled={busy || !type.trim() || Boolean(denied) || Boolean(correlation)}
+            disabled={busy || !type.trim() || Boolean(correlation)}
             {...(denied ? { title: denied } : {})}
             onClick={() => void save()}
           >
@@ -564,7 +554,7 @@ export function ProfileEditor({
         <div style={{ display: "flex", gap: 8 }}>
           <Button
             kind="primary"
-            disabled={busy || !name.trim() || Boolean(denied)}
+            disabled={busy || !name.trim()}
             {...(denied ? { title: denied } : {})}
             onClick={() => void save()}
           >
@@ -608,12 +598,10 @@ export function ProfileEditor({
 export function DeleteProfile({
   parties,
   profile,
-  disabledReason,
   onDone,
 }: {
   parties: Parties;
   profile: PoolProfile;
-  disabledReason: string | null;
   onDone: () => void;
 }) {
   type Phase =
@@ -664,8 +652,6 @@ export function DeleteProfile({
     return (
       <Button
         kind="danger"
-        disabled={Boolean(disabledReason)}
-        {...(disabledReason ? { title: disabledReason } : {})}
         onClick={() => setPhase({ kind: "confirm" })}
       >
         Delete

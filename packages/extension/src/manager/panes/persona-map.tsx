@@ -52,8 +52,8 @@ import {
   ProfileEditor,
   ResolvedProfile,
   formatValue,
-  holderGate,
 } from "./persona-editors.js";
+import { holderGate } from "../holder-gate.js";
 
 // ── Words for what the agent knows ──────────────────────────────────────────
 
@@ -413,7 +413,7 @@ export function IdentityMap({
           </label>
           <Button
             kind="quiet"
-            disabled={Boolean(denied) || checking === "Asking your agent…"}
+            disabled={checking === "Asking your agent…"}
             {...(denied ? { title: denied } : {})}
             onClick={() => void checkValues()}
           >
@@ -477,7 +477,7 @@ export function IdentityMap({
                 </div>
               );
             })}
-            <AddTile label="+ Add a fact" onClick={() => setEditing({ kind: "fact" })} disabled={denied} />
+            <AddTile label="+ Add a fact" onClick={() => setEditing({ kind: "fact" })} disabled={null} />
           </div>
         </section>
 
@@ -524,7 +524,7 @@ export function IdentityMap({
                 </div>
               );
             })}
-            <AddTile label="+ New face" onClick={() => setEditing({ kind: "face" })} disabled={denied ?? (graph.facts.length === 0 ? "Add a fact first — a face is a selection over facts." : null)} />
+            <AddTile label="+ New face" onClick={() => setEditing({ kind: "face" })} disabled={graph.facts.length === 0 ? "Add a fact first — a face is a selection over facts." : null} />
           </div>
         </section>
 
@@ -617,8 +617,8 @@ export function IdentityMap({
                         is what a selected persona invites. */}
                     <Button
                       kind="quiet"
-                      disabled={Boolean(denied) || graph.faces.length === 0}
-                      {...(denied ? { title: denied } : graph.faces.length === 0 ? { title: "Make a face first." } : {})}
+                      disabled={graph.faces.length === 0}
+                      {...(graph.faces.length === 0 ? { title: "Make a face first." } : denied ? { title: denied } : {})}
                       onClick={() =>
                         setEditing({
                           kind: "bind",
@@ -644,8 +644,8 @@ export function IdentityMap({
               <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
                 <Button
                   kind="default"
-                  disabled={Boolean(denied) || graph.faces.length === 0}
-                  {...(denied ? { title: denied } : graph.faces.length === 0 ? { title: "Make a face first." } : {})}
+                  disabled={graph.faces.length === 0}
+                  {...(graph.faces.length === 0 ? { title: "Make a face first." } : denied ? { title: denied } : {})}
                   onClick={() => setEditing({ kind: "bind", contextId: null })}
                 >
                   Be known somewhere else…
@@ -825,7 +825,6 @@ function DetailStrip({
           <Button kind="quiet" onClick={() => onEdit({ kind: "fact", existing: raw })}>Edit</Button>
           <Destructive<PoolProfile[]>
             label="Delete"
-            disabledReason={denied}
             preview={async () => {
               // Asked again rather than read off the map, so the answer is
               // current at the moment of the decision.
@@ -897,7 +896,7 @@ function DetailStrip({
             {showing === "claims" ? "Hide" : "What it shows"}
           </Button>
           <Button kind="quiet" onClick={() => onEdit({ kind: "face", existing: raw })}>Edit</Button>
-          <DeleteProfile parties={parties} profile={raw} disabledReason={denied} onDone={onChanged} />
+          <DeleteProfile parties={parties} profile={raw} onDone={onChanged} />
         </div>
         {showing === "claims" && <ResolvedProfile parties={parties} profileId={face.id} name={face.name} />}
       </>,
