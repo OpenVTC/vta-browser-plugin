@@ -256,6 +256,29 @@ per `design-docs/persona-vocabulary.md`; the spec's words (`attribute`,
 `profile`, `binding`, `materialise`) stay in code and off the screen. Add copy
 in those words, or change the document first.
 
+**The console's components are rendered in tests, and this is how.**
+`tests/harness/` holds module hooks and a DOM so `node --test` can mount a
+pane. Two things it does that are not obvious: it resolves a `./thing.js`
+import to `thing.tsx` (the sources use TypeScript's `Bundler` resolution, which
+Node does not implement) and transforms JSX with **esbuild** — not
+`typescript`, whose 7.x JS API is the native port's small surface with no
+`transpileModule` on it. Tests are `.mts` and cannot contain JSX, so compose
+with `h(Component, props)`; calling a component runs its hooks outside React
+and dies on the first `useState`.
+
+The fake agent answers **by task URI** and *throws* on a task the test did not
+name, because a pane asking something unexpected is the thing worth noticing.
+It returns the relay's real envelope (`{ok, result: {kind: "accepted", …}}`),
+so a pane that mishandles a real response cannot pass. Drive checkboxes with a
+click rather than assigning `checked` — React reads the click, and a hand-set
+value looks like a tick to the test and like nothing to the component.
+
+Every test in `persona-pane.render.test.mts` is a bug that reached the live
+console and was invisible to both the type checker and the tested models
+beneath it: a `ref` that looped the renderer, a form that opened empty, a
+picker offering another context's identifiers. Add a rendered test when a bug
+is one a person would see and a model would not.
+
 **What breaks it:** putting a pool task in `core/src/persona/` or the root
 barrel; importing `@openvtc/pnm-core/admin` from a wallet entry; testing
 `hasRole(authority, "admin")` where a persona task is concerned; relaxing the
