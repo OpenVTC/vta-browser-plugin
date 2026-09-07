@@ -44,7 +44,13 @@ const context = (id: string, name: string) => ({
   createdAt: "2026-09-07T09:00:00Z",
 });
 
-const FACTS = [fact("f1", "name", "Glenn Gore"), fact("f2", "phone.mobile", "+65 8262 2325")];
+// `name.legal` rather than a bare `name`: the claim-type registry has no
+// entry for the latter, so it resolves to the conservative default and every
+// assertion below that reads a name off the screen would be reading a mask.
+// The fixture is a registered token because these tests are about something
+// else; the masking of an unregistered one is asserted deliberately further
+// down.
+const FACTS = [fact("f1", "name.legal", "Glenn Gore"), fact("f2", "phone.mobile", "+65 8262 2325")];
 const CONTEXTS = [context("openvtc", "OpenVTC"), context("vta", "Verifiable Trust Agent")];
 
 // ── The blank pane (#179) ───────────────────────────────────────────────────
@@ -320,4 +326,104 @@ test("a context the agent would not answer for is not folded away as empty", asy
   assert.match(ui.text(), /would not say who is known here/);
   assert.match(ui.text(), /Not known in 1 other context\b/, "only the genuinely empty one folds");
   await ui.unmount();
+});
+
+// ── Values a shoulder should not collect (#185) ─────────────────────────────
+//
+// The console draws the holder's own facts, so a passport number sits on screen
+// for as long as the pane is open — through a screen share, a screenshot, and
+// anyone walking past. Hiding it is worth doing and is worth being precise
+// about what it is: the value was fetched before any of this ran, so this
+// defends the *screen*. The read-path control that would defend the page
+// (`includeSensitive` on `attribute/list`) does not exist yet.
+//
+// These are rendered rather than left to `manager-claim-sensitivity.test.mts`
+// because the model being right is not the property — a masked model printed in
+// full one surface over is the bug this whole change exists to prevent, and
+// only a render sees it.
+
+const SECRETS = [
+  fact("f1", "name.legal", "Glenn Gore"),
+  fact("f2", "phone.mobile", "+65 8262 2325"),
+  fact("f3", "gov.id.passport", "X1234567"),
+  fact("f4", "x:acme.badge", "BADGE-99"),
+];
+
+/** The map, mounted over `SECRETS` with nothing selected. */
+const mapOverSecrets = async () =>
+  render(
+    h(IdentityMap, {
+      parties: PARTIES,
+      authority: HOLDER,
+      graph: buildGraph(SECRETS, [], [{ id: "openvtc", label: "OpenVTC", bindings: { ok: true, personas: [] } }]),
+      attributes: SECRETS,
+      profiles: [],
+      records: CONTEXTS,
+      history: [],
+      onChanged: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: agent({}).sendMessage } } },
+  );
+
+/** The reveal controls, by exact label — `Show links` and `Show them` are
+ *  neighbours on this screen and a substring match collects them. */
+const shows = (ui: Awaited<ReturnType<typeof mapOverSecrets>>) =>
+  ui.all("button").filter((b) => (b.textContent ?? "").trim() === "Show");
+
+test("a sensitive value is not on the map until it is asked for", async () => {
+  const ui = await mapOverSecrets();
+  const screen = ui.text();
+
+  assert.doesNotMatch(screen, /8262 2325/, "a mobile number must not be drawn in full");
+  assert.doesNotMatch(screen, /X1234567/, "a passport number must not be drawn in full");
+  // An `x:` token is one nobody has classified, which is the reason to hide it
+  // rather than a reason to show it.
+  assert.doesNotMatch(screen, /BADGE-99/, "an extension token resolves to the conservative default");
+  // And the paired negative, which is the half that keeps this usable: a type
+  // the registry calls normal is still a value on screen.
+  assert.match(screen, /Glenn Gore/, "a legal name is not a sensitive value and must not be hidden");
+
+  // A hidden value is drawn, not omitted. Rendering nothing — or rendering the
+  // pane's phrase for a value the agent did not send — would say the holder
+  // does not have a fact they do have.
+  assert.match(screen, /••••/, "a hidden value still occupies its row");
+  assert.doesNotMatch(screen, /not requested/, "hidden is not the same state as absent");
+  assert.match(screen, /•••• 25/, "the tail the holder recognises their own number by survives");
+
+  await ui.unmount();
+});
+
+test("Show reveals one value, and only the one that was pressed", async () => {
+  const ui = await mapOverSecrets();
+  const controls = shows(ui);
+  assert.equal(controls.length, 3, "one control per hidden fact, and never a single global one");
+
+  await ui.click(controls[0]!);
+  const screen = ui.text();
+  assert.match(screen, /8262 2325/, "the pressed control reveals its own value");
+  assert.doesNotMatch(screen, /X1234567/, "and reveals nothing else");
+  assert.doesNotMatch(screen, /BADGE-99/);
+
+  // The card underneath is a click target — it selects the fact and opens the
+  // strip below the map. Revealing a value must not do that too: the operator
+  // pressed Show, and the screen they were reading changing under them is the
+  // symptom of a missing `stopPropagation`.
+  assert.doesNotMatch(screen, /Last left/, "revealing a value must not also select the fact");
+
+  await ui.unmount();
+});
+
+test("a revealed value does not survive leaving the pane", async () => {
+  const first = await mapOverSecrets();
+  await first.click(shows(first)[1]!);
+  assert.match(first.text(), /X1234567/);
+  await first.unmount();
+
+  // A fresh mount is what navigating away and back does. This passes trivially
+  // for component state and fails for every way of making reveal "sticky" —
+  // a module-level set, `localStorage`, a store the pane outlives — which is
+  // the whole reason it is asserted rather than assumed.
+  const second = await mapOverSecrets();
+  assert.doesNotMatch(second.text(), /X1234567/, "coming back must not come back revealed");
+  await second.unmount();
 });
