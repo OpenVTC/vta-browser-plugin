@@ -28,7 +28,7 @@ import {
   type PoolProfileEntry,
 } from "@openvtc/pnm-core/admin";
 import { getBinding, listBindings } from "@openvtc/pnm-core/persona";
-import { webvhDidList } from "@openvtc/pnm-core/webvh";
+import { webvhDidCreate, webvhDidList, webvhServerList } from "@openvtc/pnm-core/webvh";
 import type { ContextRecord } from "@openvtc/pnm-core";
 import { Button, Note, Panel, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
@@ -116,8 +116,6 @@ export function formatValue(value: unknown): { text: string; withheld: boolean }
 export const VALUE_TYPES: AttributeValueType[] = ["string", "number", "boolean", "date", "object"];
 
 
-/** One datalist, one id. Only one binding form exists on the page. */
-export const DID_SUGGESTIONS = "persona-did-suggestions";
 
 /**
  * Turn what was typed into the value the agent stores.
@@ -1083,7 +1081,183 @@ function useDidSuggestions(parties: Parties, contextId: string) {
     }
     return [...out].map(([did, note]) => ({ did, note }));
   }, [published.data, known.data]);
-  return { suggestions, loading: published.loading, error: published.error, known: known.data };
+  const reload = useCallback(() => {
+    published.reload();
+    known.reload();
+  }, [published, known]);
+  return { suggestions, loading: published.loading, error: published.error, known: known.data, reload };
+}
+
+/**
+ * Choosing which persona this context knows you by.
+ *
+ * **A dropdown, with a way out.** #165 made this a free-text field with a
+ * `datalist`, on the reasoning that a persona DID need not be one of the
+ * context's published `did:webvh` identifiers — a v4 holder is a `did:key` the
+ * VTA mints, peers are `did:peer` — and a `<select>` would refuse all of those.
+ * That reasoning still holds, and it was still the wrong control: in a context
+ * publishing nothing the field is an empty box asking a first-time holder to
+ * type a DID they do not have, which is where the guided setup dead-ended.
+ *
+ * So the list leads and the free-text field is one option inside it. The
+ * unusual identifiers stay reachable; they stop being the default question.
+ *
+ * **And when a context has none, the answer is to make one**, not to send the
+ * holder to another pane mid-flow. `serverId` is what that needs: omitting it
+ * means *serverless* — the caller serves the log itself at a `url` — so this
+ * asks the agent which hosting servers it can publish through and uses the one
+ * when there is one. No server registered is the one case that really does
+ * belong in the DIDs pane, and it says so.
+ */
+function PersonaPicker({
+  parties,
+  authority,
+  contextId,
+  contextLabel,
+  suggestions,
+  loading,
+  error,
+  value,
+  onChange,
+  onCreated,
+}: {
+  parties: Parties;
+  authority: Authority | null;
+  contextId: string;
+  contextLabel: string;
+  suggestions: { did: string; note: string }[];
+  loading: boolean;
+  error: string | null;
+  value: string;
+  onChange: (did: string) => void;
+  onCreated: () => void;
+}) {
+  const OTHER = "\u0000other";
+  const [typing, setTyping] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const denied = holderGate(authority);
+
+  const servers = useAsync(
+    async () => webvhServerList(managerSender, parties),
+    [parties.holder.did, parties.service.did],
+  );
+  const server = servers.data?.servers?.[0];
+
+  const create = useCallback(async () => {
+    if (!server) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const made = await webvhDidCreate(managerSender, { ...parties, contextId, serverId: server.id });
+      onChange(made.did);
+      setTyping(false);
+      onCreated();
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreating(false);
+    }
+  }, [parties, contextId, server, onChange, onCreated]);
+
+  return (
+    <div style={{ display: "grid", gap: 4 }}>
+      <Label>PERSONA</Label>
+      {suggestions.length > 0 && !typing ? (
+        <select
+          style={fieldStyle}
+          value={suggestions.some((s) => s.did === value) ? value : ""}
+          onChange={(e) => {
+            if (e.target.value === OTHER) {
+              setTyping(true);
+              onChange("");
+            } else {
+              onChange(e.target.value);
+            }
+          }}
+        >
+          <option value="">Choose one…</option>
+          {suggestions.map((option) => (
+            <option key={option.did} value={option.did}>
+              {personaOptionLabel(option)}
+            </option>
+          ))}
+          <option value={OTHER}>— another DID, typed —</option>
+        </select>
+      ) : (
+        <input
+          style={{ ...fieldStyle, fontFamily: font.mono }}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="did:webvh:…"
+        />
+      )}
+
+      <span style={{ fontSize: t.xs, color: c.faint, lineHeight: 1.5 }}>
+        The identifier {contextLabel} knows you by.{" "}
+        {loading
+          ? "Looking for identifiers this context publishes…"
+          : suggestions.length > 0
+            ? typing
+              ? "Any DID works — a persona need not be one this context published."
+              : `${suggestions.length} to choose from.`
+            : "This context publishes none yet."}
+      </span>
+
+      {suggestions.length > 0 && typing && (
+        <div>
+          <Button kind="quiet" onClick={() => { setTyping(false); onChange(""); }}>
+            Back to the list
+          </Button>
+        </div>
+      )}
+
+      {/* No identifier to pick is the case that dead-ended the guide. */}
+      {!loading && suggestions.length === 0 && !typing && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", paddingTop: 2 }}>
+          {server ? (
+            <>
+              <Button
+                kind="primary"
+                disabled={creating || Boolean(denied)}
+                {...(denied ? { title: denied } : {})}
+                onClick={() => void create()}
+              >
+                {creating ? "Creating…" : "Create one here"}
+              </Button>
+              <span style={{ fontSize: t.xs, color: c.faint }}>
+                Published through {server.label ?? server.id}, and not portable — it lives where it is
+                published. The DIDs pane is where to choose otherwise.
+              </span>
+            </>
+          ) : servers.loading ? (
+            <span style={{ fontSize: t.xs, color: c.faint }}>Checking where your agent can publish…</span>
+          ) : (
+            <Note tone="warn">
+              Your agent has no hosting server registered, so it cannot mint an identifier here.
+              Register one in the DIDs pane, then come back — or type a DID you already hold.
+            </Note>
+          )}
+          <Button kind="quiet" onClick={() => setTyping(true)}>Type one instead</Button>
+        </div>
+      )}
+
+      {createError && <Note tone="danger">Your agent would not create one — {createError}</Note>}
+      {error && (
+        <span style={{ fontSize: t.xs, color: c.warn }}>
+          The list is unavailable — {error}. Typing a DID still works.
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** A persona reads as its own last path segment, with what it wears beside it.
+ *  The full DID is the value; this is only how the option reads. */
+function personaOptionLabel(option: { did: string; note: string }): string {
+  const segments = option.did.split(":");
+  const tail = segments[segments.length - 1] ?? option.did;
+  return `${tail} — ${option.note}`;
 }
 
 /**
@@ -1122,7 +1296,7 @@ export function BindingForm({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<ConsentRequiredError | null>(null);
   const denied = holderGate(authority);
-  const { suggestions, loading, error: suggestError, known } = useDidSuggestions(parties, contextId);
+  const { suggestions, loading, error: suggestError, known, reload: reloadSuggestions } = useDidSuggestions(parties, contextId);
 
   // Prefill what the persona wears now, so opening the form to change a face
   // never lands on "take it off". `binding/list` returns a name, not an id, so
@@ -1179,35 +1353,27 @@ export function BindingForm({
         the context; the context never reaches back up."
     >
       <div style={{ display: "grid", gap: 10, maxWidth: 560 }}>
-        <label style={{ display: "grid", gap: 4 }}>
-          <Label>PERSONA</Label>
-          <input
-            style={{ ...fieldStyle, fontFamily: font.mono }}
-            value={personaDid}
-            onChange={(e) => setPersonaDid(e.target.value)}
-            placeholder="did:webvh:…"
-            list={DID_SUGGESTIONS}
-            disabled={Boolean(initialDid)}
-          />
-          <datalist id={DID_SUGGESTIONS}>
-            {suggestions.map((option) => (
-              <option key={option.did} value={option.did} label={option.note} />
-            ))}
-          </datalist>
-          <span style={{ fontSize: t.xs, color: c.faint, lineHeight: 1.5 }}>
-            The identifier this context knows you by.{" "}
-            {loading
-              ? "Loading the DIDs this context publishes…"
-              : suggestions.length > 0
-                ? `${suggestions.length} to choose from — or type any DID; a persona need not be one this context published.`
-                : "Type any DID, or create one in the DIDs pane first."}
-          </span>
-          {suggestError && (
-            <span style={{ fontSize: t.xs, color: c.warn }}>
-              Suggestions unavailable — {suggestError}. Typing a DID still works.
+        {initialDid ? (
+          <div style={{ display: "grid", gap: 4 }}>
+            <Label>PERSONA</Label>
+            <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all", padding: "6px 0" }}>
+              {initialDid}
             </span>
-          )}
-        </label>
+          </div>
+        ) : (
+          <PersonaPicker
+            parties={parties}
+            authority={authority}
+            contextId={contextId}
+            contextLabel={contextLabel}
+            suggestions={suggestions}
+            loading={loading}
+            error={suggestError}
+            value={personaDid}
+            onChange={setPersonaDid}
+            onCreated={reloadSuggestions}
+          />
+        )}
 
         <label style={{ display: "grid", gap: 4 }}>
           <Label>WEARS</Label>
