@@ -61,6 +61,7 @@ import type { Authority, Parties } from "../use-vta.js";
 import { buildGraph, type ContextInput } from "../identity-graph.js";
 import { IdentityMap } from "./persona-map.js";
 import { GuidedSetup } from "./persona-setup.js";
+import { showsGuide } from "../persona-flow.js";
 import { DisclosureHistoryPanel } from "./persona-editors.js";
 
 /**
@@ -148,15 +149,28 @@ export function PersonaPane({
     history.reload();
   }, [attributes, profiles, contexts, history]);
 
-  // Decided once, when the data first arrives, and changed only by the guide
-  // itself. Deriving it from `profiles.length === 0` on every render would
-  // switch to the map the instant step two created a face — before step three,
-  // which is the step the whole guide leads to.
-  const [mode, setMode] = useState<"undecided" | "guide" | "map">("undecided");
+  // Guide or map — derived, with two flags that each fix a different way the
+  // naive version is wrong.
+  //
+  // **Derived**, because "no face" is the state the guide exists for, and the
+  // holder can arrive at it at any time — most obviously by deleting their last
+  // face, which is how anyone explores what this pane does. Deciding once on
+  // first load left them on an empty map with no way back but a reload.
+  //
+  // **`guiding`** holds the guide open once it is showing. Without it, step two
+  // creating a face flips straight to the map — past step three, which is the
+  // step the whole guide leads to.
+  //
+  // **`skipped`** is sticky for the session: a holder who said they would build
+  // it themselves must not be put back in the guide by deleting their last
+  // face, which is a thing they might well do next.
+  const [guiding, setGuiding] = useState(false);
+  const [skipped, setSkipped] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
+  const showGuide = showsGuide({ faces: profiles.data?.length ?? null, guiding, skipped });
   useEffect(() => {
-    if (mode === "undecided" && profiles.data) setMode(profiles.data.length === 0 ? "guide" : "map");
-  }, [mode, profiles.data]);
+    if (showGuide) setGuiding(true);
+  }, [showGuide]);
 
   const graph = useMemo(
     () => buildGraph(attributes.data ?? [], profiles.data ?? [], contexts.data ?? []),
@@ -177,11 +191,9 @@ export function PersonaPane({
   }
   if (!attributes.data || !profiles.data) return <Loading what="your identity" />;
 
-  // The first-run rule: no face yet means nothing for the map to draw. A holder
-  // with facts and no face lands on step two; one with nothing on step one.
-  if (mode === "undecided") return <Loading what="your identity" />;
-
-  if (mode === "guide") {
+  // No face means nothing for the map to draw. A holder with facts and no face
+  // lands on step two; one with nothing on step one.
+  if (showGuide) {
     return (
       <GuidedSetup
         parties={parties}
@@ -192,10 +204,13 @@ export function PersonaPane({
         onChanged={reloadAll}
         onFinished={(outcome) => {
           setBanner(outcome);
-          setMode("map");
+          setGuiding(false);
           reloadAll();
         }}
-        onSkip={() => setMode("map")}
+        onSkip={() => {
+          setGuiding(false);
+          setSkipped(true);
+        }}
       />
     );
   }
