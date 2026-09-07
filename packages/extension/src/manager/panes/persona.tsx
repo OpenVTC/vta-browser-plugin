@@ -60,7 +60,8 @@ import {
   type PoolProfile,
   type PoolProfileEntry,
 } from "@openvtc/pnm-core/admin";
-import { listBindings } from "@openvtc/pnm-core/persona";
+import { getBinding, listBindings } from "@openvtc/pnm-core/persona";
+import { webvhDidList } from "@openvtc/pnm-core/webvh";
 import type { ContextRecord } from "@openvtc/pnm-core";
 import { Button, Note, Panel, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
@@ -175,6 +176,9 @@ function severityTone(severity: string): "danger" | "warn" | "off" {
 // ── The pool ────────────────────────────────────────────────────────────────
 
 const VALUE_TYPES: AttributeValueType[] = ["string", "number", "boolean", "date", "object"];
+
+/** One datalist, one id. Only one binding form exists on the page. */
+const DID_SUGGESTIONS = "persona-did-suggestions";
 
 /**
  * Turn what was typed into the value the agent stores.
@@ -1174,6 +1178,47 @@ function BindingsPanel({
     [parties.holder.did, parties.service.did, contextId],
   );
 
+  // The identifiers this context publishes — the same read the DIDs pane makes.
+  // Loaded separately from the bindings, and allowed to fail on its own: this
+  // is a convenience, and a picker that could not load must not take the field
+  // down with it.
+  const published = useAsync(
+    async () => (contextId ? webvhDidList(managerSender, { ...parties, contextId }) : null),
+    [parties.holder.did, parties.service.did, contextId],
+  );
+
+  /**
+   * What to offer in the picker, and why it is a `datalist` rather than a
+   * `<select>`.
+   *
+   * **A persona DID is not necessarily one of the context's published
+   * `did:webvh` identifiers.** A v4 holder is a `did:key` the VTA mints, peers
+   * are reached at `did:peer`, and a binding names whichever identifier this
+   * context knows the holder by. A select would refuse every one of those —
+   * turning a convenience into a constraint, and a wrong one.
+   *
+   * So the two sources are suggestions over a field that still takes anything:
+   * the DIDs this context publishes, and the personas already bound here (which
+   * the first list does not contain when the persona is not a webvh DID —
+   * exactly the case a picker built only from published DIDs would hide).
+   */
+  const suggestions = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const d of published.data?.dids ?? []) {
+      out.set(d.did, `published in ${d.contextId}`);
+    }
+    for (const b of bindings.data?.personas ?? []) {
+      // Already-bound wins the label: "presents work" says more than "published
+      // here", and it is the line an operator is looking for when they came to
+      // change a binding.
+      out.set(
+        b.personaDid,
+        b.bound ? `already presents ${b.profileName ?? "a profile"}` : "bound here, presenting nothing",
+      );
+    }
+    return [...out].map(([did, note]) => ({ did, note }));
+  }, [published.data, bindings.data]);
+
   const bind = useCallback(async () => {
     setBusy(true);
     setError(null);
@@ -1207,6 +1252,61 @@ function BindingsPanel({
     if (ok) bindings.reload();
   }, [parties, contextId, personaDid, profileId, bindings]);
 
+  /**
+   * Load what a persona currently presents, and preselect it.
+   *
+   * Without this, "Change…" filled in the DID and left PRESENTS on its first
+   * option — which is *unbind*. The button relabels itself to "Unbind", so
+   * nothing was silently destructive, but an affordance called "Change…" that
+   * arms a removal is a trap laid for the one operator who does not read the
+   * button. It costs one call: `binding/list` returns `profileName` and not
+   * `profileId`, so the row on screen cannot answer this and `binding/get` has
+   * to be asked.
+   */
+  const loadCurrent = useCallback(
+    async (did: string) => {
+      setPersonaDid(did);
+      setOutcome(null);
+      setError(null);
+      if (!contextId) return;
+      try {
+        const current = await getBinding(managerSender, { ...parties, contextId, personaDid: did });
+        setProfileId(current.profileId ?? "");
+      } catch (e) {
+        // Leave the selection alone rather than defaulting it. Falling back to
+        // "" would put the form on "unbind" precisely when we failed to find
+        // out what it was — the one case where guessing is worst.
+        setError(
+          `Loaded the persona, but your agent would not say what it presents — ` +
+            `${e instanceof Error ? e.message : String(e)}. Check the row above before saving.`,
+        );
+      }
+    },
+    [parties, contextId],
+  );
+
+  /**
+   * Why the submit is unavailable, or null when it is.
+   *
+   * The second clause is the interesting one. `profileId === ""` means unbind,
+   * and unbinding a persona that presents nothing is a call that changes
+   * nothing — so a fresh form, whose profile select starts on its first option,
+   * offered a button labelled "Unbind" as the default action for a persona that
+   * had never been bound. Harmless to press and confusing to read: the operator
+   * came to bind, and the console named the opposite.
+   *
+   * Only applied when the bindings actually loaded. Not knowing whether a
+   * persona is bound is not the same as knowing it is not, and disabling on a
+   * failed read would refuse a legitimate unbind because a *different* call
+   * failed.
+   */
+  const known = bindings.data?.personas.find((b) => b.personaDid === personaDid.trim());
+  const submitRefusal =
+    denied ??
+    (bindings.data && profileId === "" && !known?.bound
+      ? "This persona presents nothing already — choose a profile to bind it to."
+      : null);
+
   const columns: Column<BindingRow>[] = [
     {
       key: "persona",
@@ -1236,13 +1336,7 @@ function BindingsPanel({
       header: "",
       width: "120px",
       render: (b) => (
-        <Button
-          kind="quiet"
-          onClick={() => {
-            setPersonaDid(b.personaDid);
-            setOutcome(null);
-          }}
-        >
+        <Button kind="quiet" onClick={() => void loadCurrent(b.personaDid)}>
           Change…
         </Button>
       ),
@@ -1306,11 +1400,30 @@ function BindingsPanel({
                   value={personaDid}
                   onChange={(e) => setPersonaDid(e.target.value)}
                   placeholder="did:webvh:…"
+                  list={DID_SUGGESTIONS}
                 />
-                <span style={{ fontSize: t.xs, color: c.faint }}>
-                  The identifier this context knows you by. Pick one from the DIDs pane, or use
-                  “Change…” on a row above.
+                <datalist id={DID_SUGGESTIONS}>
+                  {suggestions.map((option) => (
+                    <option key={option.did} value={option.did} label={option.note} />
+                  ))}
+                </datalist>
+                <span style={{ fontSize: t.xs, color: c.faint, lineHeight: 1.5 }}>
+                  The identifier this context knows you by.{" "}
+                  {published.loading
+                    ? "Loading the DIDs this context publishes…"
+                    : suggestions.length > 0
+                      ? `${suggestions.length} to choose from — or type any DID, since a persona ` +
+                        "need not be one this context published."
+                      : "Type any DID. Create one in the DIDs pane if this context has none yet."}
                 </span>
+                {published.error && (
+                  // Not a `LoadError`: nothing here failed that stops the
+                  // operator binding. Saying "your agent would not return the
+                  // DIDs" beside a working field reads as a broken form.
+                  <span style={{ fontSize: t.xs, color: c.warn }}>
+                    Suggestions unavailable — {published.error}. Typing a DID still works.
+                  </span>
+                )}
               </label>
 
               <label style={{ display: "grid", gap: 4 }}>
@@ -1320,7 +1433,7 @@ function BindingsPanel({
                   value={profileId}
                   onChange={(e) => setProfileId(e.target.value)}
                 >
-                  <option value="">nothing — unbind this persona</option>
+                  <option value="">— nothing (unbind) —</option>
                   {profiles.map((p) => (
                     <option key={p.profileId} value={p.profileId}>
                       {p.name} ({p.entries.length} attribute(s))
@@ -1336,14 +1449,16 @@ function BindingsPanel({
               <div>
                 <Button
                   kind="primary"
-                  disabled={busy || !personaDid.trim() || Boolean(denied)}
-                  {...(denied ? { title: denied } : {})}
+                  disabled={busy || !personaDid.trim() || Boolean(submitRefusal)}
+                  {...(submitRefusal ? { title: submitRefusal } : {})}
                   onClick={() => void bind()}
                 >
                   {busy ? "Working…" : profileId === "" ? "Unbind" : "Bind"}
                 </Button>
               </div>
-              {denied && <span style={{ fontSize: t.sm, color: c.muted }}>{denied}</span>}
+              {submitRefusal && personaDid.trim() && (
+                <span style={{ fontSize: t.sm, color: c.muted }}>{submitRefusal}</span>
+              )}
             </div>
           </>
         )}
