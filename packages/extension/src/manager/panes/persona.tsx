@@ -145,6 +145,27 @@ function describeEntry(entry: PoolProfileEntry, byId: Map<string, PoolAttribute>
   return name;
 }
 
+// ## Why no `version` appears anywhere in this pane's tables
+//
+// The persona store keeps ONE MONOTONIC COUNTER FOR THE WHOLE STORE, and a
+// record's `version` is the counter value its most recent write took. The
+// schema says so outright: "a value of the store's monotonic write counter".
+// It is an optimistic-concurrency token and a change-feed watermark at once —
+// which per-record counters could not be, because two records' counters would
+// not be comparable to each other.
+//
+// So it is **not an edit count**, and rendering it as `v2` beside a timestamp
+// said that it was. Add a second attribute to an empty pool and it arrives as
+// `v2` having never been edited: the console was reporting the pool's write
+// history as the record's own. Same failure `format.ts` exists for — a value
+// the console did not have, rendered as a confident wrong one — and worse here,
+// because the number is plausible and nothing on screen distinguishes it from
+// the revision count it looks like.
+//
+// The version is still read and still matters: every edit sends it back as
+// `expectedVersion`, which is what an opaque concurrency token is for. It is a
+// value to carry, not a value to show.
+
 function severityTone(severity: string): "danger" | "warn" | "off" {
   if (severity === "high") return "danger";
   if (severity === "low") return "warn";
@@ -502,11 +523,9 @@ function AttributesPanel({
       key: "updated",
       header: "Updated",
       width: "160px",
-      render: (a) => (
-        <span style={{ color: c.muted }}>
-          v{a.version} · {formatInstant(a.updatedAt)}
-        </span>
-      ),
+      // The timestamp alone: `version` is deliberately not shown. See the
+      // block above `severityTone`.
+      render: (a) => <span style={{ color: c.muted }}>{formatInstant(a.updatedAt)}</span>,
     },
     {
       key: "actions",
@@ -1043,11 +1062,7 @@ function ProfilesPanel({
       key: "updated",
       header: "Updated",
       width: "160px",
-      render: (p) => (
-        <span style={{ color: c.muted }}>
-          v{p.version} · {formatInstant(p.updatedAt)}
-        </span>
-      ),
+      render: (p) => <span style={{ color: c.muted }}>{formatInstant(p.updatedAt)}</span>,
     },
     {
       key: "actions",
