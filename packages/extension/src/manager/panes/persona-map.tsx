@@ -234,12 +234,46 @@ function AddTile({ label, onClick, disabled }: { label: string; onClick: () => v
   );
 }
 
+/** Which context, when "Be known somewhere else…" was pressed rather than a
+ *  card's own button. Offers the empty ones first: that is what the row it
+ *  came from was about. */
+function ChooseContext({
+  contexts,
+  onChoose,
+  onCancel,
+}: {
+  contexts: IdentityGraph["contexts"];
+  onChoose: (contextId: string) => void;
+  onCancel: () => void;
+}) {
+  const [chosen, setChosen] = useState(contexts[0]?.id ?? "");
+  return (
+    <div style={{ background: c.surface, border: `1px solid ${c.line}`, borderRadius: "var(--w-r-md)", padding: "16px 18px", display: "grid", gap: 10, maxWidth: 560 }}>
+      <span style={{ fontSize: t.md, fontWeight: 640 }}>Where?</span>
+      <select
+        value={chosen}
+        onChange={(e) => setChosen(e.target.value)}
+        style={{ boxSizing: "border-box", padding: "6px 9px", background: c.ground, color: c.text, border: `1px solid ${c.line}`, borderRadius: "var(--w-r-sm)", fontSize: t.sm }}
+      >
+        {contexts.map((ctx) => (
+          <option key={ctx.id} value={ctx.id}>{ctx.label}</option>
+        ))}
+      </select>
+      <div style={{ display: "flex", gap: 8 }}>
+        <Button kind="primary" disabled={!chosen} onClick={() => onChoose(chosen)}>Next</Button>
+        <Button kind="quiet" onClick={onCancel}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
 // ── The map ─────────────────────────────────────────────────────────────────
 
 type Editing =
   | { kind: "fact"; existing?: PoolAttribute }
   | { kind: "face"; existing?: PoolProfile }
-  | { kind: "bind"; contextId: string; personaDid?: string };
+  /** `contextId: null` means "somewhere" — the form asks which context first. */
+  | { kind: "bind"; contextId: string | null; personaDid?: string };
 
 export function IdentityMap({
   parties,
@@ -271,7 +305,18 @@ export function IdentityMap({
   const [showing, setShowing] = useState<"claims" | null>(null);
   const [findings, setFindings] = useState<CorrelationFinding[] | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
+  const [showEmpty, setShowEmpty] = useState(false);
   const denied = holderGate(authority);
+
+  // The band promises "where you are known". A context where nobody is known
+  // is not that, and on an agent with a dozen contexts eleven cards saying
+  // "nobody" drown the one that matters. So the empty ones fold into a single
+  // row unless asked for — but a context the agent would not answer for stays
+  // visible, because "could not ask" is not "nobody is known here".
+  const isKnown = (ctx: (typeof graph.contexts)[number]) => ctx.personas.length > 0 || ctx.unreadable !== undefined;
+  const knownContexts = graph.contexts.filter(isKnown);
+  const emptyContexts = graph.contexts.filter((ctx) => !isKnown(ctx));
+  const shownContexts = showEmpty ? graph.contexts : knownContexts;
 
   const stage = useRef<HTMLDivElement | null>(null);
   const { boxes, size, register } = useBoxes(stage, [graph, editing, selection?.kind]);
@@ -489,9 +534,24 @@ export function IdentityMap({
 
         {/* ── Contexts ── */}
         <section style={{ display: "grid", gap: 10 }}>
-          <BandLabel text="Contexts" sub="where you are known, and as whom" />
+          <BandLabel
+            text="Contexts"
+            sub="where you are known, and as whom"
+            action={
+              emptyContexts.length > 0 && showEmpty ? (
+                <Button kind="quiet" onClick={() => setShowEmpty(false)}>
+                  Hide the {emptyContexts.length} where nobody knows you
+                </Button>
+              ) : undefined
+            }
+          />
+          {knownContexts.length === 0 && !showEmpty && (
+            <div style={{ fontSize: t.sm, color: c.faint, lineHeight: 1.55, padding: "6px 0" }}>
+              You are not known anywhere yet. Nothing below the line holds a copy of anything.
+            </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
-            {graph.contexts.map((ctx) => {
+            {shownContexts.map((ctx) => {
               const selected = selection?.kind === "context" && selection.id === ctx.id;
               return (
                 <div
@@ -557,6 +617,26 @@ export function IdentityMap({
               );
             })}
           </div>
+          {emptyContexts.length > 0 && !showEmpty && (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "10px 14px", border: `1px dashed ${c.line}`, borderRadius: "var(--w-r-md)", fontSize: t.sm, color: c.muted }}>
+              <span>
+                Not known in <strong style={{ color: c.text }}>{emptyContexts.length}</strong> other context{emptyContexts.length === 1 ? "" : "s"}. They hold nothing about you.
+              </span>
+              <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
+                <Button
+                  kind="default"
+                  disabled={Boolean(denied) || graph.faces.length === 0}
+                  {...(denied ? { title: denied } : graph.faces.length === 0 ? { title: "Make a face first." } : {})}
+                  onClick={() => setEditing({ kind: "bind", contextId: null })}
+                >
+                  Be known somewhere else…
+                </Button>
+                <Button kind="quiet" onClick={() => setShowEmpty(true)}>
+                  Show them
+                </Button>
+              </div>
+            </div>
+          )}
         </section>
       </div>
 
@@ -604,7 +684,14 @@ export function IdentityMap({
           onCancel={() => setEditing(null)}
         />
       )}
-      {editing?.kind === "bind" && (
+      {editing?.kind === "bind" && editing.contextId === null && (
+        <ChooseContext
+          contexts={emptyContexts.length > 0 ? emptyContexts : graph.contexts}
+          onChoose={(contextId) => setEditing({ kind: "bind", contextId })}
+          onCancel={() => setEditing(null)}
+        />
+      )}
+      {editing?.kind === "bind" && editing.contextId !== null && (
         <BindingForm
           key={`${editing.contextId}:${editing.personaDid ?? "new"}`}
           parties={parties}
