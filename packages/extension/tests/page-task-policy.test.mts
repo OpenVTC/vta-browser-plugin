@@ -62,3 +62,33 @@ test("the refusal names the route that exists instead", () => {
   assert.match(why, /shows the holder/);
   assert.match(why, /returns the presentation rather than the underlying values/);
 });
+
+// ── The route that exists instead ──────────────────────────────────────────
+//
+// `disclose` is what the refusal above points at, and the reason it is safe
+// where `requestTask` was not is entirely in its parameters: a site says who it
+// is and what it wants, and cannot say which of the holder's faces answers.
+
+import { PAGE_FACING_RUNTIME_TYPES, RUNTIME_DISCLOSE } from "../src/bridge-protocol.ts";
+import type { DiscloseParams } from "../src/bridge-protocol.ts";
+
+test("disclose is reachable from a page", () => {
+  assert.ok(
+    (PAGE_FACING_RUNTIME_TYPES as readonly string[]).includes(RUNTIME_DISCLOSE),
+    "the refusal points at a route the page cannot actually call",
+  );
+});
+
+// A site naming the persona could ask, from a gaming page, for the holder's
+// work identity. The type is what stops it — asserted here so a later edit
+// that "helpfully" widens the params has to delete this line and say why.
+test("a site cannot choose which face answers", () => {
+  const params: DiscloseParams = { verifierDid: "did:key:zVerifier" };
+  const keys = new Set(Object.keys(params as Record<string, unknown>));
+  // @ts-expect-error — personaDid is not part of the contract, deliberately.
+  params.personaDid = "did:key:zSomeoneElsesFace";
+  // @ts-expect-error — nor is contextId; the wallet takes both from its own
+  // profile entry for this origin.
+  params.contextId = "ctx-of-my-choosing";
+  assert.ok(!keys.has("personaDid") && !keys.has("contextId"));
+});

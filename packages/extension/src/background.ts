@@ -107,6 +107,9 @@ import {
   RUNTIME_ONBOARD_PREPARE,
   PAGE_FACING_RUNTIME_TYPES,
   RUNTIME_REQUEST_TASK,
+  RUNTIME_DISCLOSE,
+  type RuntimeDiscloseRequest,
+  type RuntimeDiscloseResponse,
   RUNTIME_MANAGER_TASK,
   RUNTIME_SIGN_TRUST_TASK,
   RUNTIME_TASK_CONSENT,
@@ -845,6 +848,170 @@ async function requestConsent(args: {
         }
       };
       chrome.windows.onRemoved.addListener(onClosed);
+    });
+  });
+}
+
+// ── Persona disclosure ───────────────────────────────────────────────────────
+
+const DISCLOSURE_CONSENT_PREFIX = "disclosure-consent:";
+const PERSONA_PREVIEW = "https://trusttasks.org/spec/persona/disclosure/preview/1.0";
+const PERSONA_PRESENT = "https://trusttasks.org/spec/persona/disclosure/present/1.0";
+
+/** Run one persona task as the wallet, not as the page. */
+async function runPersonaTask(
+  active: { vtaDid: string; restBaseUrl?: string },
+  origin: string,
+  type: string,
+  payload: Record<string, unknown>,
+): Promise<RuntimeRequestTaskResponse> {
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_REQUEST_TASK,
+    vtaDid: active.vtaDid,
+    restBaseUrl: active.restBaseUrl,
+    origin,
+    params: { type, payload },
+  })) as RuntimeRequestTaskResponse;
+}
+
+/**
+ * A site asks the holder to share identity attributes.
+ *
+ * The route `requestTask` refuses. Three properties make it different from
+ * running the same two tasks directly, and each is the reason this exists
+ * rather than a relaxation of that refusal:
+ *
+ *   - **The site does not choose the face.** `verifierDid`, `purpose` and
+ *     `requestedClaims` come from the page; the persona and the context come
+ *     from the profile entry this wallet already holds for this origin. A site
+ *     that could name the persona could ask, from a gaming page, for the
+ *     holder's work identity.
+ *   - **The preview never reaches the page.** It carries the claim VALUES, and
+ *     handing them over before the holder has approved anything is the whole
+ *     defect that closed `requestTask` to this family. The page receives the
+ *     presentation the holder approved, or an error.
+ *   - **The two calls are one operation here.** The gate lives between the
+ *     wallet and the VTA — `present` consumes a token only `preview` mints —
+ *     and letting the page hold that token would put it on the page's side of
+ *     the gate. From the site's view there is one question: "may I have these
+ *     claims".
+ */
+async function handleDisclose(req: RuntimeDiscloseRequest): Promise<RuntimeDiscloseResponse> {
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
+
+  // Which of the holder's faces this site knows, and the context it lives in.
+  // Same resolution `walletProfile` performs, so a site that has signed in
+  // discloses as the identity it already signed in as — and a first-time site
+  // reaches the identity chooser rather than being answered silently.
+  const resolved = await resolveProfileEntry(req.origin);
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+  if (!resolved.entryId) {
+    return {
+      ok: false,
+      error:
+        "this site has no identity for you yet — call walletProfile() first so the " +
+        "holder can choose which persona it knows them as",
+    };
+  }
+  const binding = await personaBindingFor(req.origin, resolved.entryId);
+  if (!binding.ok) return { ok: false, error: binding.error };
+
+  const previewed = await runPersonaTask(active.conn, req.origin, PERSONA_PREVIEW, {
+    contextId: binding.contextId,
+    personaDid: binding.did,
+    verifierDid: req.params.verifierDid,
+    ...(req.params.purpose !== undefined ? { purpose: req.params.purpose } : {}),
+    ...(req.params.requestedClaims?.length
+      ? { requestedClaims: req.params.requestedClaims }
+      : {}),
+    ...(req.params.renderer !== undefined ? { renderer: req.params.renderer } : {}),
+  });
+  if (!previewed.ok) return { ok: false, error: previewed.error };
+
+  const preview = previewed.result as { previewId?: unknown } | undefined;
+  if (typeof preview?.previewId !== "string") {
+    // No preview means no summary, and no summary means there is nothing a
+    // human could have been shown. Fail rather than fall through to `present`.
+    return { ok: false, error: "the agent returned no preview; refusing to disclose" };
+  }
+
+  const consentId = crypto.randomUUID();
+  await chrome.storage.session.set({
+    [`${DISCLOSURE_CONSENT_PREFIX}${consentId}`]: {
+      preview,
+      verifierDid: req.params.verifierDid,
+      ...(req.params.purpose !== undefined ? { purpose: req.params.purpose } : {}),
+      contextId: binding.contextId,
+      personaDid: binding.did,
+    },
+  });
+
+  const approved = await raiseDisclosureConsent(consentId);
+  if (!approved) return { ok: false, error: "user declined the disclosure" };
+
+  const presented = await runPersonaTask(active.conn, req.origin, PERSONA_PRESENT, {
+    contextId: binding.contextId,
+    previewId: preview.previewId,
+  });
+  if (!presented.ok) return { ok: false, error: presented.error };
+  return { ok: true, result: presented.result ?? {} };
+}
+
+/** The persona and context this origin's stored profile entry names. */
+async function personaBindingFor(
+  origin: string,
+  entryId: string,
+): Promise<{ ok: true; did: string; contextId: string } | { ok: false; error: string }> {
+  const listed = await handleVaultList({
+    type: RUNTIME_VAULT_LIST,
+    filter: { secretKind: PROFILE_SECRET_KIND, targetOriginPrefix: origin },
+  });
+  if (!listed.ok) return { ok: false, error: listed.error };
+  const entry = listed.result.entries.find((e) => e.id === entryId);
+  if (!entry?.principalDid) {
+    return { ok: false, error: `vault entry ${entryId} names no persona DID` };
+  }
+  if (!entry.contextId) {
+    return { ok: false, error: `vault entry ${entryId} names no context` };
+  }
+  return { ok: true, did: entry.principalDid, contextId: entry.contextId };
+}
+
+/**
+ * Show the holder what would be disclosed, and wait.
+ *
+ * Mirrors `requestTaskConsent`, including the part that matters most: a window
+ * that could not be opened settles as a DENIAL. A prompt the holder never saw
+ * must not become an approval, least of all on the surface that decides who
+ * learns their name.
+ */
+async function raiseDisclosureConsent(consentId: string): Promise<boolean> {
+  const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=disclosure`;
+  const bounds = await consentWindowBounds(680);
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const settle = (approved: boolean) => {
+      if (settled) return;
+      settled = true;
+      pendingConsents.delete(consentId);
+      void chrome.storage.session.remove(`${DISCLOSURE_CONSENT_PREFIX}${consentId}`);
+      resolve(approved);
+    };
+    pendingConsents.set(consentId, (approved: boolean) => settle(approved));
+
+    chrome.windows.create({ url, type: "popup", ...bounds }, (win) => {
+      if (win?.id === undefined) {
+        const why = chrome.runtime.lastError?.message ?? "no window was created";
+        console.error(
+          "[pnm disclose] could not open the disclosure window — treating as a denial:",
+          why,
+        );
+        settle(false);
+      }
     });
   });
 }
@@ -2752,6 +2919,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
     handleManagerTask(message as RuntimeManagerTaskRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_DISCLOSE) {
+    handleDisclose(message as RuntimeDiscloseRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
