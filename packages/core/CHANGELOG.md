@@ -8,6 +8,44 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-07
+
+### Added
+
+- **`admin/acl-capabilities` — the capability narrowing on an ACL entry.**
+  VTI #1279 made `AclEntry.capabilities` enforced: the agent now re-reads the
+  entry on every gated call, so an entry may hold *less* than its role implies.
+  Nothing in this library could read or write that, so a console showed an
+  entry as holding everything its role allows whether or not it did.
+
+  New exports: `ACL_CAPABILITIES`, `ACL_ROLES`, `DERIVED_CAPABILITIES`,
+  `CAPABILITIES_EXT_MEMBER`, `isAclCapability`, `isAclRole`,
+  `capabilitiesFromExt`, `capabilitiesIntoExt`, `entryNarrowing`,
+  `effectiveCapabilities`, `checkNarrowing`. `AclUpdateParams` gains an
+  optional `capabilities`.
+
+  Three things worth knowing before using it:
+
+  - **A narrowing only ever subtracts.** The effective set is the role's
+    derived set intersected with the entry's own, so `role` stays a true upper
+    bound and this cannot hand a reader an admin's authority.
+  - **Absent, `[]` and populated are three different instructions** on the
+    write path — leave alone, clear, narrow. `capabilitiesIntoExt` therefore
+    *writes* an empty array rather than omitting it, which is the one place it
+    deliberately differs from the agent's own helper of the same name (that one
+    serves the response path, where absent is the only spelling for "not
+    narrowed").
+  - **An unknown role returns `undefined`, not an empty set.** The two would
+    render identically as "holds nothing", and one of them is a lie about an
+    entry that may hold everything.
+
+  This is the only `acl/*` surface written by hand rather than generated, and
+  it has to be: `AclEntry.role` is specified as an opaque identifier, so roles
+  and capabilities are ecosystem-local and ride `ext` under
+  `org.openvtc.capabilities`. `acl-capabilities.json` — a committed snapshot
+  refreshed by `npm run acl:sync`, same pattern as `task-surface.json` — is
+  what stops the copy drifting.
+
 ## [0.8.0] - 2026-09-07
 
 ### Migration

@@ -11,6 +11,7 @@
 // module, so the separation is enforced rather than remembered.
 
 export * from "./acl.js";
+export * from "./acl-capabilities.js";
 export * from "./keys.js";
 export * from "./policy.js";
 export * from "./sessions.js";

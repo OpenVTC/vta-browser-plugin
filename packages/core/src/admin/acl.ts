@@ -13,6 +13,7 @@
 // `acl/show`'s response wrong in the process.
 
 import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
+import { capabilitiesIntoExt } from "./acl-capabilities.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import {
@@ -312,6 +313,33 @@ export interface AclUpdateParams extends AclCallerParams {
    * itself authorize. Agents gate it more strictly than the rest.
    */
   approve?: ACLUpdatePayload["approve"];
+  /**
+   * Replacement capability narrowing — what the subject may do **within** the
+   * role it already holds, as kebab-case capability names.
+   *
+   * Three meanings, kept distinct because conflating the first two is a silent
+   * privilege increase:
+   *
+   * - **omitted** — leave the stored narrowing alone;
+   * - **`[]`** — clear it, so the entry holds everything its role implies. A
+   *   privilege *increase*, and the spelling `pnm acl update --capabilities-all`
+   *   sends;
+   * - **populated** — narrow to the intersection with the role's derived set.
+   *
+   * An explicit set can only ever subtract: the role stays a true upper bound,
+   * so this cannot be used to hand a reader an admin's authority. The agent
+   * refuses a name it does not know, and a capability the role does not carry,
+   * rather than dropping either — see `checkNarrowing` to reproduce both checks
+   * before sending.
+   *
+   * Unlike every other member here, this one travels in `ext` rather than as a
+   * member of its own: roles and capabilities are ecosystem-local and the
+   * framework's schema is `additionalProperties: false`. `acl/grant` does NOT
+   * accept it — the agent refuses a grant carrying one and names this call
+   * instead, because a grant that took the member and dropped it would hand
+   * back an entry the operator believes is narrowed.
+   */
+  capabilities?: readonly string[];
   /** Rationale, recorded with the change. */
   reason?: string;
 }
@@ -341,6 +369,12 @@ export async function aclUpdate(
     ...(params.stepUp !== undefined ? { stepUp: params.stepUp } : {}),
     ...(params.approve !== undefined ? { approve: params.approve } : {}),
     ...(params.reason !== undefined ? { reason: params.reason } : {}),
+    // `[]` is written into `ext`, not omitted — it is the instruction to clear
+    // a narrowing, and the agent distinguishes it from an absent member. The
+    // `!== undefined` guard above is what keeps the two apart.
+    ...(params.capabilities !== undefined
+      ? { ext: capabilitiesIntoExt(undefined, params.capabilities) }
+      : {}),
   };
   const envelope = buildTrustTask(ACL_UPDATE, payload, {
     issuer: params.holder.did,
