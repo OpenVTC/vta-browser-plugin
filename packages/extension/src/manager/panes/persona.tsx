@@ -52,6 +52,8 @@ import {
   personaProfileGet,
   personaProfileList,
   personaProfilePut,
+  personasBlockingDelete,
+  PROFILE_DELETE_BOUND,
   type AttributeProvenance,
   type AttributeValueType,
   type CorrelationFinding,
@@ -66,7 +68,7 @@ import type { ContextRecord } from "@openvtc/pnm-core";
 import { Button, Note, Panel, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
-import { ConsentRequiredError } from "../carrier.js";
+import { ConsentRequiredError, RelayTaskError } from "../carrier.js";
 import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
 import { Loading, LoadError, Table, Truncated, type Column } from "../table.js";
 import { useAsync, type Async } from "../use-async.js";
@@ -840,21 +842,28 @@ function ProfileEditor({
 }
 
 /**
- * Deleting a profile, which is deliberately **not** a `Destructive`.
+ * Deleting a profile: the agent's refusal is the preview.
  *
  * Everything else irreversible in this console previews by asking the agent
- * what the change would cost. There is no read that answers it here: "which
+ * what the change would cost. There is no read that answers it here — "which
  * personas present this profile" spans every context, and the only code that
- * computes it is inside `persona/profile/delete` itself. The agent's design is
- * to refuse the delete while anything is bound and name what it found, so the
- * cost arrives *with the refusal* rather than before it.
+ * computes it agent-side lives inside `persona/profile/delete` itself, where it
+ * runs in order to *refuse*.
  *
- * `Destructive`'s force tick is the wrong shape for that: it disables the
- * confirm button until ticked, which would make every operator authorise an
- * unbind for the ordinary case where nothing is bound. So the choice is
- * offered as an ordinary option, defaulted off, and the agent's refusal is what
- * tells the operator to turn it on — with its own count, which is the number
- * that matters.
+ * So the refusal is the preview, and it is a better one than a question would
+ * have been: it is computed at the moment of the delete rather than a moment
+ * before it, so nothing can bind in between.
+ *
+ * **This shape needs the refusal's code and details to survive the bridge**,
+ * which they did not until the relay was widened. Before that the console had
+ * only prose, matching on which R3.7 forbids, so the unbind was offered up
+ * front as a checkbox the operator had to reason about with no idea whether it
+ * applied. Now the first attempt is the question and the answer names the
+ * personas.
+ *
+ * `Destructive`'s force tick is still the wrong shape for this: it disables the
+ * confirm until ticked, which would make every operator authorise an unbind for
+ * the ordinary case where nothing is bound.
  */
 function DeleteProfile({
   parties,
@@ -867,47 +876,135 @@ function DeleteProfile({
   disabledReason: string | null;
   onDone: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [unbind, setUnbind] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<ConsentRequiredError | null>(null);
+  type Phase =
+    | { kind: "idle" }
+    | { kind: "confirm" }
+    | { kind: "working" }
+    /** The agent refused and named what is in the way. `personas` is null when
+     *  it refused without saying — see `personasBlockingDelete`. */
+    | { kind: "blocked"; personas: string[] | null; message: string }
+    | { kind: "consent"; pending: ConsentRequiredError }
+    | { kind: "error"; message: string };
 
-  const run = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    setPending(null);
-    const ok = await runMutation(
-      async () => {
+  const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+
+  const run = useCallback(
+    async (unbind: boolean) => {
+      setPhase({ kind: "working" });
+      try {
         await personaProfileDelete(managerSender, {
           ...parties,
           profileId: profile.profileId,
           unbind,
         });
-      },
-      { onConsent: setPending, onError: setError },
-    );
-    setBusy(false);
-    if (ok) {
-      setOpen(false);
-      setUnbind(false);
-      onDone();
-    }
-  }, [parties, profile.profileId, unbind, onDone]);
+        setPhase({ kind: "idle" });
+        onDone();
+      } catch (e) {
+        if (e instanceof ConsentRequiredError) {
+          setPhase({ kind: "consent", pending: e });
+          return;
+        }
+        // The one refusal this flow is built around. Matched on the code the
+        // agent sent, never on its prose.
+        if (e instanceof RelayTaskError && e.code === PROFILE_DELETE_BOUND) {
+          setPhase({
+            kind: "blocked",
+            personas: personasBlockingDelete(e.details),
+            message: e.message,
+          });
+          return;
+        }
+        setPhase({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [parties, profile.profileId, onDone],
+  );
 
-  if (!open) {
+  if (phase.kind === "idle") {
     return (
       <Button
         kind="danger"
         disabled={Boolean(disabledReason)}
         {...(disabledReason ? { title: disabledReason } : {})}
-        onClick={() => setOpen(true)}
+        onClick={() => setPhase({ kind: "confirm" })}
       >
         Delete
       </Button>
     );
   }
 
+  if (phase.kind === "consent") {
+    return (
+      <div style={{ display: "grid", gap: 10, maxWidth: 460 }}>
+        <ConsentCeremony pending={phase.pending} />
+        <div>
+          <Button kind="quiet" onClick={() => setPhase({ kind: "idle" })}>
+            Close
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase.kind === "error") {
+    return (
+      <div style={{ display: "grid", gap: 10, maxWidth: 480 }}>
+        <Note tone="danger">{phase.message}</Note>
+        <div>
+          <Button kind="quiet" onClick={() => setPhase({ kind: "idle" })}>
+            Back
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase.kind === "blocked") {
+    return (
+      <div style={{ display: "grid", gap: 12, maxWidth: 480 }}>
+        <Note tone="danger">
+          <div style={{ display: "grid", gap: 8 }}>
+            <strong>Your agent refused: personas are still presenting this profile.</strong>
+            {phase.personas === null ? (
+              // It refused without naming them, so say that rather than render
+              // an empty list — "no personas" over a refusal caused by personas
+              // is the one reading that must not be possible here.
+              <span>
+                It did not say which. Deleting anyway will leave them presenting nothing, and
+                this console cannot tell you how many that is — {phase.message}
+              </span>
+            ) : (
+              <>
+                <span>
+                  {phase.personas.length} persona(s) present it and would be left presenting
+                  nothing:
+                </span>
+                {phase.personas.map((did) => (
+                  <span key={did} style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
+                    {did}
+                  </span>
+                ))}
+              </>
+            )}
+            <span>
+              That is a legal state, and one you will not be warned about again. Nothing already
+              disclosed is affected — that has left.
+            </span>
+          </div>
+        </Note>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Button kind="danger" onClick={() => void run(true)}>
+            Unbind {phase.personas === null ? "them" : `${phase.personas.length}`} and delete
+          </Button>
+          <Button kind="quiet" onClick={() => setPhase({ kind: "idle" })}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const busy = phase.kind === "working";
   return (
     <div style={{ display: "grid", gap: 12, maxWidth: 460 }}>
       <Note tone="danger">
@@ -918,41 +1015,16 @@ function DeleteProfile({
             untouched — a profile is a view over them, not a copy.
           </span>
           <span>
-            Your agent refuses this while any persona is still presenting the profile, and says
-            how many. Nothing already disclosed is affected.
+            If any persona is still presenting it, your agent will refuse and name them, and you
+            can decide then.
           </span>
         </div>
       </Note>
-
-      <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: t.sm }}>
-        <input
-          type="checkbox"
-          checked={unbind}
-          onChange={(e) => setUnbind(e.target.checked)}
-          style={{ marginTop: 2 }}
-        />
-        <span>
-          Unbind any persona presenting it first, in every context. Those personas are left
-          presenting <em>nothing</em> — a legal state, and one you will not be told about again.
-        </span>
-      </label>
-
-      {error && <Note tone="danger">{error}</Note>}
-      {pending && <ConsentCeremony pending={pending} />}
-
       <div style={{ display: "flex", gap: 8 }}>
-        <Button kind="danger" disabled={busy} onClick={() => void run()}>
-          {busy ? "Working…" : unbind ? "Unbind and delete" : "Delete profile"}
+        <Button kind="danger" disabled={busy} onClick={() => void run(false)}>
+          {busy ? "Working…" : "Delete profile"}
         </Button>
-        <Button
-          kind="quiet"
-          disabled={busy}
-          onClick={() => {
-            setOpen(false);
-            setUnbind(false);
-            setError(null);
-          }}
-        >
+        <Button kind="quiet" disabled={busy} onClick={() => setPhase({ kind: "idle" })}>
           Cancel
         </Button>
       </div>
@@ -1030,6 +1102,20 @@ function ResolvedProfile({
   );
 }
 
+/**
+ * Which personas present a profile, and where.
+ *
+ * The question a holder actually asks of a profile — "who knows me by this?" —
+ * and the console has to assemble it, because no single task answers it. The
+ * assembly, and the soundness argument that makes it exact, live in
+ * `profile-bindings.ts`; this renders the result.
+ *
+ * **A click, not a column.** Even bounded, it is a fan-out across every
+ * context, and the answer is the holder's linkage map — the artifact this
+ * family exists to keep from being assembled casually. A column would run it on
+ * every page load for every profile and leave the map on screen whether or not
+ * anyone asked.
+ */
 /**
  * Which personas present a profile, and where.
  *

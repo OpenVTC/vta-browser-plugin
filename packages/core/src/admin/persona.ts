@@ -409,6 +409,36 @@ export interface ProfileDeleteParams extends PersonaHolderParams {
   expectedVersion?: number;
 }
 
+/**
+ * The code the agent rejects a profile deletion with while personas still
+ * present it — SPEC §8.5 extended form, `<slug>:<local>`.
+ *
+ * Declared beside the call that provokes it, because the wire contract is one
+ * thing and a caller matching on a string it assembled itself is two. Compare
+ * with `===`; never parse it, and never match on the message (R3.7 — the prose
+ * is for a human and is free to change).
+ */
+export const PROFILE_DELETE_BOUND = "persona/profile/delete:bound";
+
+/**
+ * The personas blocking a deletion, read out of that refusal's `details`.
+ *
+ * **Unvalidated wire data**, so this checks rather than casts. It returns
+ * `null` for "the agent did not tell us", which a caller must not collapse into
+ * the empty array: an empty list means *nothing is bound* — which would be a
+ * refusal contradicting itself — while `null` means the refusal arrived without
+ * its context and the caller has to say so rather than render "0 personas".
+ */
+export function personasBlockingDelete(details: unknown): string[] | null {
+  if (typeof details !== "object" || details === null) return null;
+  const dids = (details as { personaDids?: unknown }).personaDids;
+  if (!Array.isArray(dids)) return null;
+  // A mixed array is the agent sending something this build does not
+  // understand. Keeping the strings and dropping the rest would under-report
+  // the blockers, so the whole thing is refused instead.
+  return dids.every((d) => typeof d === "string") ? (dids as string[]) : null;
+}
+
 /** Delete a profile. */
 export async function personaProfileDelete(
   sender: TrustTaskSender,

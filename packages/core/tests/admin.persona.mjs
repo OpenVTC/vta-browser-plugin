@@ -23,6 +23,8 @@ import {
   personaBindingSet,
   personaCorrelationAnalyze,
   personaDisclosureHistory,
+  personasBlockingDelete,
+  PROFILE_DELETE_BOUND,
 } from "../dist/admin/index.js";
 
 const HOLDER = { did: "did:key:zHolder" };
@@ -311,4 +313,49 @@ test("a resolved profile entry is typed as a projection, not as a pool record", 
       `${member} must be OPTIONAL on ResolvedClaim: an inline value has no pool record to have one`,
     );
   }
+});
+
+// ── The refusal a profile deletion has to be able to read ───────────────────
+//
+// `personasBlockingDelete` parses unvalidated wire data, which is the one place
+// a client is entitled to be paranoid. Its `null` is load-bearing and easy to
+// erase: a caller that collapsed it into `[]` would render "0 personas are
+// bound" over a refusal that exists precisely because some are.
+
+test("the bound code is the extended form the agent actually sends", () => {
+  // Assembled by the agent as `TrustTaskCode::new_extended(slug, "bound")`,
+  // where the slug is the task URI minus the spec prefix and the version. A
+  // constant here rather than a string at the call site, because a caller
+  // matching on a code it built itself is matching on its own assumption.
+  assert.equal(PROFILE_DELETE_BOUND, "persona/profile/delete:bound");
+});
+
+test("the personas blocking a deletion are read out of the refusal", () => {
+  assert.deepEqual(
+    personasBlockingDelete({ personaDids: ["did:key:zA", "did:key:zB"] }),
+    ["did:key:zA", "did:key:zB"],
+  );
+});
+
+test("an absent or unreadable details is null, never an empty list", () => {
+  // Each of these means "the agent did not tell us", and every one of them
+  // would render as "nothing is bound" if it came back as [] — over a refusal
+  // whose whole cause is that something is.
+  for (const bad of [undefined, null, "personaDids", 42, {}, { personaDids: "did:key:zA" }]) {
+    assert.equal(personasBlockingDelete(bad), null, `${JSON.stringify(bad)} should be null`);
+  }
+});
+
+test("a mixed array is refused rather than filtered", () => {
+  // Keeping the strings and dropping the rest would under-report the blockers,
+  // and the operator would unbind what they were shown while something they
+  // were not shown kept the profile alive.
+  assert.equal(personasBlockingDelete({ personaDids: ["did:key:zA", 7] }), null);
+});
+
+test("an empty list is a real answer and is not null", () => {
+  // The paired positive for the null tests. `[]` from the agent means it named
+  // no blockers — a refusal that contradicts itself, which a pane should be
+  // able to notice and say rather than have flattened into "we don't know".
+  assert.deepEqual(personasBlockingDelete({ personaDids: [] }), []);
 });
