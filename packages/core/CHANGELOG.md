@@ -8,6 +8,29 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+### Changed
+
+- **`@openvtc/trust-tasks` 0.16.11 -> 0.17.1.** Carries the persona family's
+  two projection fixes. The one that reaches a caller is
+  `persona/profile/get`'s `resolved` array, now typed `ResolvedClaim` rather
+  than the pool `Attribute` (dtgwg-trust-tasks-tf#370): `attributeId`,
+  `version` and `updatedAt` are OPTIONAL on a resolved entry, and their
+  absence is what says the value is `inline` — held in one profile with no
+  pool record behind it. Under the old type all three were required, so a
+  conforming agent could not describe such a profile at all, and the console's
+  "held only here" branch was unreachable by construction. No source change
+  was needed: `personaProfileGet` returns the generated response type, and the
+  console was already written against the corrected shape.
+  `tests/admin.persona.mjs` now pins it, keyed on the generated schema
+  rather than on this library's behaviour, so a downgrade fails rather than silently
+  restoring a branch nothing can reach.
+- **`task-surface.json` resynced to vta-sdk 0.33.0** (was 0.32.3). The surface
+  did not move — the same 226 task URIs, 24 of them `persona/*`, all 24
+  implemented here. VTI's breaking ACL change in that window
+  (verifiable-trust-infrastructure#1279) narrows what an entry may do without
+  adding a task or a schema member: an entry's capabilities travel in `ext` as
+  `org.openvtc.capabilities`, which this library does not yet set.
+
 ## [0.7.0] - 2026-09-03
 
 ### Migration
