@@ -59,3 +59,36 @@ test("skipping is sticky, even when the last face goes", () => {
   // …and it beats `guiding`, so a skip mid-guide is honoured immediately.
   assert.equal(s(0, true, true), false);
 });
+
+// ── Stepping back ───────────────────────────────────────────────────────────
+//
+// "Be good to go back a step to add more attributes" — and the affordance a
+// person reaches for is the ticked circle in the stepper. Before it answered
+// clicks, the only route back was a button labelled "Cancel", which reads as
+// abandoning setup rather than stepping back one.
+
+import { reachableStep } from "../src/manager/persona-flow.ts";
+
+const reach = (step: 1 | 2 | 3, facts: number, faces: number) => reachableStep(step, { facts, faces });
+
+test("step one is always reachable, including from a standing start", () => {
+  assert.equal(reach(1, 0, 0), true);
+  assert.equal(reach(1, 3, 1), true);
+});
+
+test("a face cannot be composed out of no facts", () => {
+  assert.equal(reach(2, 0, 0), false);
+  // The pair: one fact is enough to have something to tick.
+  assert.equal(reach(2, 1, 0), true);
+});
+
+test("a persona cannot wear a face that does not exist", () => {
+  assert.equal(reach(3, 4, 0), false);
+  assert.equal(reach(3, 4, 1), true);
+});
+
+test("an unreachable step is refused rather than shown empty", () => {
+  // Reaching a step with nothing to work on presents a form whose every
+  // control refuses — a worse answer than not offering the step at all.
+  assert.equal(reach(2, 0, 1), false, "facts, not faces, are what step two needs");
+});

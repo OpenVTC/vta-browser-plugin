@@ -170,12 +170,19 @@ export function AttributeEditor({
   existing,
   onDone,
   onCancel,
+  cancelLabel = "Cancel",
 }: {
   parties: Parties;
   authority: Authority | null;
   existing?: PoolAttribute;
+  /** Omit where there is nothing to go back to — the guided setup's first step
+   *  has no earlier state, and a "Cancel" that abandons the whole flow is not
+   *  what a person reads it as. */
+  onCancel?: (() => void) | undefined;
+  /** "Cancel" unless the caller says otherwise. The guide says "Back", because
+   *  that is where its button goes. */
+  cancelLabel?: string | undefined;
   onDone: () => void;
-  onCancel: () => void;
 }) {
   const [type, setType] = useState(existing?.type ?? "");
   const [label, setLabel] = useState(existing?.label ?? "");
@@ -366,9 +373,11 @@ export function AttributeEditor({
           >
             {busy ? "Saving…" : existing ? "Save" : "Add fact"}
           </Button>
-          <Button kind="quiet" disabled={busy} onClick={onCancel}>
-            Cancel
-          </Button>
+          {onCancel && (
+            <Button kind="quiet" disabled={busy} onClick={onCancel}>
+              {cancelLabel}
+            </Button>
+          )}
         </div>
         {denied && <span style={{ fontSize: t.sm, color: c.muted }}>{denied}</span>}
       </div>
@@ -385,6 +394,7 @@ export function ProfileEditor({
   onPreview,
   onDone,
   onCancel,
+  cancelLabel = "Cancel",
 }: {
   parties: Parties;
   authority: Authority | null;
@@ -403,6 +413,7 @@ export function ProfileEditor({
   onPreview?: ((selection: { ids: string[]; name: string }) => void) | undefined;
   onDone: () => void;
   onCancel: () => void;
+  cancelLabel?: string | undefined;
 }) {
   const [name, setName] = useState(existing?.name ?? "");
   const [selected, setSelected] = useState<Set<string>>(
@@ -561,7 +572,7 @@ export function ProfileEditor({
             {busy ? "Saving…" : existing ? "Save" : "Create face"}
           </Button>
           <Button kind="quiet" disabled={busy} onClick={onCancel}>
-            Cancel
+            {cancelLabel}
           </Button>
         </div>
         {denied && <span style={{ fontSize: t.sm, color: c.muted }}>{denied}</span>}
@@ -1092,6 +1103,7 @@ export function BindingForm({
   personaDid: initialDid,
   onDone,
   onCancel,
+  cancelLabel = "Cancel",
 }: {
   parties: Parties;
   authority: Authority | null;
@@ -1102,6 +1114,7 @@ export function BindingForm({
   personaDid?: string | undefined;
   onDone: (outcome: string) => void;
   onCancel?: (() => void) | undefined;
+  cancelLabel?: string | undefined;
 }) {
   const [personaDid, setPersonaDid] = useState(initialDid ?? "");
   const [profileId, setProfileId] = useState<string>(profiles[0]?.profileId ?? "");
@@ -1222,7 +1235,7 @@ export function BindingForm({
           </Button>
           {onCancel && (
             <Button kind="quiet" disabled={busy} onClick={onCancel}>
-              Cancel
+              {cancelLabel}
             </Button>
           )}
         </div>
