@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { GuidedSetup } from "../src/manager/panes/persona-setup.js";
 import { IdentityMap } from "../src/manager/panes/persona-map.js";
-import { AttributeEditor, BindingForm } from "../src/manager/panes/persona-editors.js";
+import { AttributeEditor, BindingForm, ResolvedProfile } from "../src/manager/panes/persona-editors.js";
 import { buildGraph } from "../src/manager/identity-graph.js";
 
 const HOLDER = { session: { id: "s" }, roles: ["admin"], scopes: [] };
@@ -848,4 +848,130 @@ test("with no table yet, every value is masked and nothing is coloured", async (
   assert.doesNotMatch(screen, /Glenn Gore/, "a name the registry would show is still masked, because the registry has not spoken");
   assert.doesNotMatch(screen, /8262 2325/);
   assert.match(screen, /••••/, "the floor is a mask, not a blank");
+});
+
+// ── An editor must never write a value it never held ────────────────────────
+//
+// The console lists without `includeSensitive`, so a sensitive attribute
+// arrives with no value — that is the point of it. `rawValue(undefined)` is
+// `""`, the form field opens blank, and `persona/attribute/put` REPLACES the
+// record. Opening a withheld attribute to change its label, or its visibility,
+// therefore wrote an empty string over a value the console had never seen.
+// Silently, and unrecoverably: there is no `attribute/get`, no version history,
+// nothing to restore from.
+
+const WITHHELD_ATTR = {
+  attributeId: "a9",
+  type: "profile.github",
+  valueType: "string",
+  // No value: exactly what a `sensitivity: high` listing returns.
+  provenance: { kind: "selfAsserted" },
+  version: 3,
+  updatedAt: "x",
+};
+
+const editorFor = (existing: Record<string, unknown>) =>
+  h(AttributeEditor, {
+    parties: PARTIES,
+    authority: HOLDER,
+    registry: REGISTRY,
+    existing,
+    onDone: () => {},
+    onCancel: () => {},
+  });
+
+test("opening a withheld attribute asks the agent for its value first", async () => {
+  const a = agent({
+    "persona/attribute/list/1.0": { attributes: [{ ...WITHHELD_ATTR, value: "octocat" }] },
+    "persona/attribute/put/1.0": { attributeId: "a9", version: 4, created: false, updatedAt: "x" },
+  });
+  const ui = await render(editorFor(WITHHELD_ATTR), { chrome: { runtime: { sendMessage: a.sendMessage } } });
+  await ui.settle();
+  await ui.click(ui.button("Save"));
+  const payload = a.of("attribute/put")[0]!.payload as Record<string, unknown>;
+  assert.equal(payload.value, "octocat", "the save carries the value that was there, not an empty string");
+  await ui.unmount();
+});
+
+test("a refused fetch blocks the save rather than blanking the record", async () => {
+  // The guard is deliberately separate from the fetch: if the value cannot be
+  // read, a save that would replace it is refused outright. No put at all —
+  // "it wrote something wrong" and "it wrote nothing" are very different
+  // outcomes for a value with no way back.
+  const a = agent({
+    "persona/attribute/list/1.0": { attributes: [WITHHELD_ATTR] },
+    "persona/attribute/put/1.0": { attributeId: "a9", version: 4, created: false, updatedAt: "x" },
+  });
+  const ui = await render(editorFor(WITHHELD_ATTR), { chrome: { runtime: { sendMessage: a.sendMessage } } });
+  await ui.settle();
+  await ui.click(ui.button("Save"));
+  assert.equal(a.of("attribute/put").length, 0, "nothing was written");
+  assert.match(ui.text(), /replace it with an empty one/);
+  await ui.unmount();
+});
+
+test("typing the value yourself is the deliberate overwrite the guard allows", async () => {
+  const a = agent({
+    "persona/attribute/list/1.0": { attributes: [WITHHELD_ATTR] },
+    "persona/attribute/put/1.0": { attributeId: "a9", version: 4, created: false, updatedAt: "x" },
+  });
+  const ui = await render(editorFor(WITHHELD_ATTR), { chrome: { runtime: { sendMessage: a.sendMessage } } });
+  await ui.settle();
+  const value = ui.all("input")[2];
+  await ui.type(value!, "octocat");
+  await ui.click(ui.button("Save"));
+  const payload = a.of("attribute/put")[0]!.payload as Record<string, unknown>;
+  assert.equal(payload.value, "octocat");
+  await ui.unmount();
+});
+
+// ── The holder's decision reaches the copy, not just the original ───────────
+//
+// "What someone would receive" renders claims read from a face or a binding.
+// A claim is a COPY and carries no `sensitivity` — the decision lives on the
+// pool attribute it was materialised from. So the console masked a value the
+// holder had just marked *show it*, one panel away from the card that showed it
+// in the clear: same person, same value, two answers.
+
+const RESOLVED = {
+  "persona/profile/get/1.0": {
+    profileId: "p1",
+    name: "OSS Developer",
+    version: 1,
+    updatedAt: "x",
+    resolved: [
+      { type: "name.legal", value: "Glenn Gore", attributeId: "f1" },
+      { type: "profile.github", value: "octocat", attributeId: "f9" },
+      // Inline: no pool ancestor, so nothing decided it — the registry answers.
+      { type: "profile.signal", value: "+65 8262 2325" },
+    ],
+  },
+};
+
+test("a claim is drawn under the decision made about the attribute behind it", async () => {
+  const pool = [
+    attribute("f1", "name.legal", "Glenn Gore"),
+    { ...attribute("f9", "profile.github", "octocat"), sensitivity: "normal" },
+  ];
+  const a = agent(RESOLVED);
+  const ui = await render(
+    h(ResolvedProfile, { parties: PARTIES, registry: REGISTRY, profileId: "p1", name: "OSS Developer", pool }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.settle();
+  assert.match(ui.text(), /octocat/, "the holder said show it, and this is the same value");
+  assert.doesNotMatch(ui.text(), /8262/, "the inline claim has no pool ancestor, so the registry still answers");
+  await ui.unmount();
+});
+
+test("without the pool the claim falls back to the registry, which is weaker and never wrong", async () => {
+  const a = agent(RESOLVED);
+  const ui = await render(
+    h(ResolvedProfile, { parties: PARTIES, registry: REGISTRY, profileId: "p1", name: "OSS Developer" }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.settle();
+  assert.doesNotMatch(ui.text(), /octocat/);
+  assert.match(ui.text(), /Glenn Gore/, "a registered normal type is unaffected either way");
+  await ui.unmount();
 });

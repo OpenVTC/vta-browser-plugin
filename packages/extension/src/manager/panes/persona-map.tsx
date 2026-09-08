@@ -1127,7 +1127,9 @@ function DetailStrip({
           <Button kind="quiet" onClick={() => onEdit({ kind: "face", existing: raw })}>Edit</Button>
           <DeleteProfile parties={parties} profile={raw} onDone={onChanged} />
         </div>
-        {showing === "claims" && <ResolvedProfile registry={registry} parties={parties} profileId={face.id} name={face.name} />}
+        {showing === "claims" && (
+          <ResolvedProfile registry={registry} parties={parties} profileId={face.id} name={face.name} pool={attributes} />
+        )}
       </>,
     );
   }
@@ -1213,7 +1215,14 @@ function DetailStrip({
         </Button>
       </div>
       {showing === "claims" && p.faceId && (
-        <PersonaClaims registry={registry} parties={parties} contextId={ctx.id} personaDid={p.did} profileName={p.faceName ?? "this face"} />
+        <PersonaClaims
+          registry={registry}
+          parties={parties}
+          contextId={ctx.id}
+          personaDid={p.did}
+          profileName={p.faceName ?? "this face"}
+          pool={attributes}
+        />
       )}
     </>,
   );

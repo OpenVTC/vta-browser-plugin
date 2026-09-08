@@ -44,6 +44,7 @@ import { type Authority, type Parties } from "../use-vta.js";
 import { holderGate } from "../holder-gate.js";
 import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 import { maskedFact, treatmentFor, type Sensitivity } from "../claim-sensitivity.js";
+import { revealAttributeValue } from "../reveal-value.js";
 import { composeEntries, lockedRefs, preservedEntries, tickedFrom } from "../profile-entries.js";
 import { personaCandidates } from "../persona-candidates.js";
 
@@ -319,6 +320,29 @@ export function parseValue(
 
 /** The raw form of a stored value, for editing. The inverse of `parseValue`
  *  for every type it round-trips, and JSON for the one it does not. */
+/**
+ * The holder's decision about the attribute a claim came from.
+ *
+ * A claim inside a face or a binding is a **copy**, and the copy carries no
+ * `sensitivity` — the decision lives on the pool attribute it was materialised
+ * from, above the boundary these screens sit below. Without this lookup the
+ * console showed the holder four bullets on a value they had just marked
+ * *show it*, one panel away from the card that showed it in the clear: the same
+ * person, the same value, two answers.
+ *
+ * Matched on `attributeId`, which a resolved claim carries when it came from
+ * the pool. An **inline** claim has none — it exists only inside that face and
+ * has no pool ancestor to have decided anything about — so it falls to the
+ * registry, which is the right answer for it rather than a gap in this one.
+ */
+export function decidedSensitivity(
+  pool: readonly PoolAttribute[] | undefined,
+  attributeId: string | undefined,
+): Sensitivity | undefined {
+  if (!pool || attributeId === undefined) return undefined;
+  return pool.find((a) => a.attributeId === attributeId)?.sensitivity;
+}
+
 export function rawValue(value: unknown): string {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return value;
@@ -390,6 +414,30 @@ export function AttributeEditor({
   const [label, setLabel] = useState(existing?.label ?? "");
   const [valueType, setValueType] = useState<AttributeValueType>(existing?.valueType ?? "string");
   const [raw, setRaw] = useState(rawValue(existing?.value));
+  /**
+   * Whether this editor is holding the value it is about to write.
+   *
+   * **A put REPLACES the record, so a form field is a loaded gun.** The pane
+   * lists without `includeSensitive`, which is the whole point — the plaintext
+   * of a sensitive attribute is not in the page until someone asks for it — so
+   * an existing attribute arrives here with `value: undefined`, `rawValue`
+   * turns that into `""`, the field opens blank, and *Save* writes an empty
+   * string over a value the console never saw. Every `sensitivity: high`
+   * attribute, which is every unregistered one, silently emptied by an edit
+   * that meant to change a label.
+   *
+   * So the value is fetched before the form can be trusted, and until it is
+   * here — or the person types one themselves — this editor refuses to write.
+   * `held` is the only state in which a save may carry `raw` for an existing
+   * attribute.
+   */
+  const [valueState, setValueState] = useState<"held" | "loading" | "failed">(
+    !existing || existing.value !== undefined ? "held" : "loading",
+  );
+  const [valueRefused, setValueRefused] = useState<string | null>(null);
+  /** Set the moment a person edits the field, which is the other way the
+   *  editor comes to hold a value: they typed it. */
+  const [typed, setTyped] = useState(false);
   // Both start from the record, so an edit that touches neither sends back what
   // was there. A put REPLACES the attribute, so an editor that simply never
   // mentioned these cleared the holder's decision on every save — silently,
@@ -402,6 +450,42 @@ export function AttributeEditor({
   const [correlation, setCorrelation] = useState<string | null>(null);
 
   const denied = holderGate(authority);
+
+  /** Every control that edits the value goes through here. A control that set
+   *  `raw` directly would leave `typed` false, and the guard below would refuse
+   *  a save the person had every right to make — or, worse, a later edit to the
+   *  guard could read that as "we hold the value" and write the blank. */
+  const editValue = useCallback((next: string) => {
+    setRaw(next);
+    setTyped(true);
+  }, []);
+
+  // Asked once, on open, and only where the record came without its value.
+  // This is the same request *Show* makes on the map — one attribute, by type
+  // and id — and it is made here because an editor that cannot see the value
+  // cannot safely write the record that holds it.
+  useEffect(() => {
+    if (!existing || existing.value !== undefined) return;
+    let live = true;
+    void (async () => {
+      try {
+        const value = await revealAttributeValue(managerSender, parties, {
+          attributeId: existing.attributeId,
+          type: existing.type,
+        });
+        if (!live) return;
+        setRaw(rawValue(value));
+        setValueState("held");
+      } catch (e) {
+        if (!live) return;
+        setValueRefused(e instanceof Error ? e.message : String(e));
+        setValueState("failed");
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [existing, parties]);
 
   // An existing attribute keeps the provenance it was created with, verbatim.
   //
@@ -416,6 +500,20 @@ export function AttributeEditor({
   const derived = provenance.kind === "credentialBacked";
 
   const save = useCallback(async () => {
+    // The guard, and it is deliberately separate from the fetch above: a save
+    // that would replace a value this editor never held is refused even if
+    // every other path here changes. The fetch is the convenience; this is the
+    // property.
+    if (valueState !== "held" && !typed) {
+      setError(
+        valueState === "loading"
+          ? "Still asking your agent for the current value — saving now would replace it with an empty one."
+          : `Your agent did not hand over the current value (${valueRefused ?? "no reason given"}), so this ` +
+            `page is not holding it. Saving would replace it with an empty one. Type the value in yourself ` +
+            `to overwrite it deliberately, or close this and try again.`,
+      );
+      return;
+    }
     const parsed = parseValue(raw, valueType);
     if (!parsed.ok) {
       setError(parsed.why);
@@ -465,7 +563,7 @@ export function AttributeEditor({
     );
     setBusy(false);
     if (ok && linked === null) onDone();
-  }, [parties, type, label, valueType, raw, provenance, sensitivity, release, existing, onDone]);
+  }, [parties, type, label, valueType, raw, provenance, sensitivity, release, existing, valueState, typed, valueRefused, onDone]);
 
   return (
     <Panel
@@ -529,7 +627,7 @@ export function AttributeEditor({
         <label style={{ display: "grid", gap: 4 }}>
           <Label>VALUE</Label>
           {valueType === "boolean" ? (
-            <select style={fieldStyle} value={raw} onChange={(e) => setRaw(e.target.value)}>
+            <select style={fieldStyle} value={raw} onChange={(e) => editValue(e.target.value)}>
               <option value="true">true</option>
               <option value="false">false</option>
             </select>
@@ -537,14 +635,14 @@ export function AttributeEditor({
             <textarea
               style={{ ...fieldStyle, minHeight: 110, fontFamily: font.mono, resize: "vertical" }}
               value={raw}
-              onChange={(e) => setRaw(e.target.value)}
+              onChange={(e) => editValue(e.target.value)}
               placeholder='{"street": "…"}'
             />
           ) : (
             <input
               style={fieldStyle}
               value={raw}
-              onChange={(e) => setRaw(e.target.value)}
+              onChange={(e) => editValue(e.target.value)}
               placeholder={valueType === "date" ? "1978-04-02" : ""}
             />
           )}
@@ -1053,6 +1151,7 @@ export function ResolvedProfile({
   profileId,
   name,
   registry,
+  pool,
 }: {
   parties: Parties;
   profileId: string;
@@ -1061,6 +1160,11 @@ export function ResolvedProfile({
   /** The agent's claim-type table, or `null` while it loads. A caller must not
    *  substitute a compiled-in one — that is the copy this replaced. */
   registry: ClaimTypeRegistry | null;
+  /** The holder's attributes, so a claim can be shown under the decision they
+   *  made about it rather than under the registry's default — see
+   *  `decidedSensitivity`. Optional: a caller without the pool gets the
+   *  registry's answer, which is a weaker answer and never a wrong one. */
+  pool?: readonly PoolAttribute[] | undefined;
 }) {
   const resolved = useAsync(
     async () => personaProfileGet(managerSender, { ...parties, profileId, resolve: true }),
@@ -1095,7 +1199,13 @@ export function ResolvedProfile({
             style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}
           >
             <span style={{ fontFamily: font.mono, fontSize: t.xs, minWidth: 150 }}>{claim.type}</span>
-            <FactValue registry={registry} type={claim.type} value={claim.value} textStyle={{ wordBreak: "break-word" }} />
+            <FactValue
+              registry={registry}
+              type={claim.type}
+              value={claim.value}
+              sensitivity={decidedSensitivity(pool, claim.attributeId)}
+              textStyle={{ wordBreak: "break-word" }}
+            />
             {inline && <Pill tone="accent">only in this face</Pill>}
             {claim.stale && <Pill tone="warn">stale</Pill>}
           </div>
@@ -1140,6 +1250,7 @@ export function PersonaClaims({
   personaDid,
   profileName,
   registry,
+  pool,
 }: {
   parties: Parties;
   contextId: string;
@@ -1148,6 +1259,9 @@ export function PersonaClaims({
   /** The agent's claim-type table, or `null` while it loads. A caller must not
    *  substitute a compiled-in one — that is the copy this replaced. */
   registry: ClaimTypeRegistry | null;
+  /** Threaded through to `ResolvedProfile` — the copy in a context knows
+   *  nothing about what the holder decided upstream of it. */
+  pool?: readonly PoolAttribute[] | undefined;
 }) {
   const bound = useAsync(
     async () => getBinding(managerSender, { ...parties, contextId, personaDid }),
@@ -1172,6 +1286,7 @@ export function PersonaClaims({
       parties={parties}
       profileId={bound.data.profileId}
       name={bound.data.profileName ?? profileName}
+      {...(pool ? { pool } : {})}
     />
   );
 }

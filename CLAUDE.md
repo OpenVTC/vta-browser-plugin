@@ -461,7 +461,29 @@ per §3.3; `maskedFact` gated on `high` anyway, so `email.*` (`normal` /
 `emailLocal`) was called hidden by `isSensitive` and drawn in full by the
 renderer — a promised *Show* button that never appeared.
 
-**What breaks it:** writing a resolved default into `sensitivity` or `release`;
+**An editor may not write a value it never held.** The pane lists without
+`includeSensitive` — the point of #194 — so an existing sensitive attribute
+reaches the editor with `value: undefined`, `rawValue` turns that into `""`, and
+`attribute/put` **replaces**. Opening a withheld attribute to change its label
+or its visibility therefore wrote an empty string over a value the console had
+never seen, silently and unrecoverably: there is no `attribute/get`, no version
+history, nothing to restore from. `AttributeEditor` now fetches the value on
+open (the same one-attribute request *Show* makes) and, separately, refuses to
+save while it is neither loaded nor typed. Two mechanisms on purpose — the fetch
+is the convenience, the refusal is the property.
+
+**The holder's decision has to reach the copy, not just the original.** A claim
+inside a face or a binding carries no `sensitivity`; the decision lives on the
+pool attribute it was materialised from, above the boundary those panels sit
+below. `decidedSensitivity` matches a resolved claim's `attributeId` back to the
+pool, so "what someone would receive" answers the way the card does. An
+**inline** claim has no `attributeId` and no pool ancestor, so the registry
+answers for it — the right answer, not a gap.
+
+**What breaks it:** a control that writes `raw` without going through
+`editValue` (the guard then reads a typed value as one nobody typed); dropping
+either half of the editor's protection; rendering a claim without the pool where
+one is in hand; writing a resolved default into `sensitivity` or `release`;
 an editor that omits them and so clears them; treating absent as `normal`
 (`treatmentFor`'s `source` is the difference); extending the unregistered-mask
 rule to declared tokens; or gating a mask on `sensitivity` again.
