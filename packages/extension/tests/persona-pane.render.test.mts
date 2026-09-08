@@ -528,3 +528,116 @@ test("attributes are grouped under the family their claim type comes from", asyn
   assert.doesNotMatch(text, /Not in the registry/, "no unregistered attribute here, so no heading for one");
   await ui.unmount();
 });
+
+// ── A value the agent never sent (the "not requested" report) ───────────────
+//
+// `persona/attribute/list` withholds the plaintext of every attribute
+// resolving to `sensitivity: high` unless the caller sets `includeSensitive`,
+// which the console never did. So the pane received metadata, and drew a mask
+// over the placeholder standing in for the missing value: a card reading
+// `••••` beside a *Show* that revealed "not requested", under a line promising
+// that the agent "has already sent this value here".
+//
+// Two states had become one shape on screen. These tests keep them apart, in
+// the direction that matters: a value that is here and covered, and a value
+// that is not here at all.
+
+const WITHHELD = [
+  attribute("f1", "name.legal", "Glenn Gore"),
+  // No value — exactly what the agent returns for an unregistered type, which
+  // resolves to the conservative `high`/`full`.
+  { ...attribute("f9", "profile.github", ""), value: undefined },
+];
+
+const withheldMap = (extra: Record<string, unknown> = {}) =>
+  h(IdentityMap, {
+    parties: PARTIES,
+    authority: HOLDER,
+    graph: buildGraph(WITHHELD, [], []),
+    attributes: WITHHELD,
+    profiles: [],
+    records: CONTEXTS,
+    history: [],
+    onReveal: async () => "octocat",
+    onChanged: () => {},
+    ...extra,
+  });
+
+test("a value the agent withheld is said to be missing, not masked", async () => {
+  const a = agent({});
+  const ui = await render(withheldMap(), { chrome: { runtime: { sendMessage: a.sendMessage } } });
+  const text = ui.text();
+  assert.match(text, /not on this page/, "the card says where the value is: with the agent");
+  assert.doesNotMatch(text, /•/, "a mask over a value nobody sent claims one is being held back");
+  await ui.unmount();
+});
+
+test("Show fetches the one withheld value and displays it", async () => {
+  const asked: unknown[] = [];
+  const a = agent({});
+  const ui = await render(
+    withheldMap({
+      onReveal: async (target: unknown) => {
+        asked.push(target);
+        return "octocat";
+      },
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.click(ui.button("Show"));
+  assert.match(ui.text(), /octocat/, "the value arrives only because it was asked for");
+  assert.deepEqual(asked, [{ attributeId: "f9", type: "profile.github" }], "one attribute, not the pool");
+  await ui.unmount();
+});
+
+test("Hide drops a fetched value rather than covering it over", async () => {
+  // The whole point of asking on a press is that the plaintext is not in the
+  // page until then. Covering it again would put it back where it was.
+  const a = agent({});
+  const ui = await render(withheldMap(), { chrome: { runtime: { sendMessage: a.sendMessage } } });
+  await ui.click(ui.button("Show"));
+  assert.match(ui.text(), /octocat/);
+  await ui.click(ui.button("Hide"));
+  assert.doesNotMatch(ui.text(), /octocat/, "hidden means gone from the page, not greyed");
+  assert.match(ui.text(), /not on this page/);
+  await ui.unmount();
+});
+
+test("an agent that refuses says why, in place, and does not blank the card", async () => {
+  const a = agent({});
+  const ui = await render(
+    withheldMap({ onReveal: async () => { throw new Error("your agent held the value back"); } }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.click(ui.button("Show"));
+  assert.match(ui.text(), /held the value back/);
+  assert.match(ui.text(), /not on this page/, "the card still says what it knows");
+  await ui.unmount();
+});
+
+test("a value the agent did send is still covered locally, with no second question", async () => {
+  // `phone.mobile` is registered `high`/`last2`, so this is the case where the
+  // console legitimately holds the value and hides it from the room. Pressing
+  // Show must not turn into a request.
+  const held = [attribute("f2", "phone.mobile", "+65 8262 2325")];
+  let asked = 0;
+  const a = agent({});
+  const ui = await render(
+    h(IdentityMap, {
+      parties: PARTIES,
+      authority: HOLDER,
+      graph: buildGraph(held, [], []),
+      attributes: held,
+      profiles: [],
+      records: CONTEXTS,
+      history: [],
+      onReveal: async () => { asked += 1; return "nope"; },
+      onChanged: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.click(ui.button("Show"));
+  assert.match(ui.text(), /8262 2325/);
+  assert.equal(asked, 0, "it was already here — asking again would be a second disclosure for nothing");
+  await ui.unmount();
+});
