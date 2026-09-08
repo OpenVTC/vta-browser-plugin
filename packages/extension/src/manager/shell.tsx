@@ -363,7 +363,7 @@ export function ManagerShell() {
           />
         );
       case "rooms":
-        return <RoomsPane parties={parties} />;
+        return <RoomsPane parties={parties} contexts={contexts.records} />;
       case "services":
         return <ServicesPane parties={parties} authority={vta.authority} />;
       case "maintenance":

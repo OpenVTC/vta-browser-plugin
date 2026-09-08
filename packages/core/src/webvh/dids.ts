@@ -99,6 +99,36 @@ export interface WebvhDidCreateParams extends WebvhCall {
   pathMode?: WebvhPathMode;
   /** Allow the DID to move location later. Cannot be added afterwards. */
   portable?: boolean;
+  /**
+   * Render the document from a stored or built-in DID template.
+   *
+   * The reason a caller reaches for this rather than composing a document: a
+   * template already encodes the method, the service endpoints and the key
+   * shapes for a *kind* of thing, so "mint a room" is a template name instead
+   * of a document a surface has to get right. `room` is the built-in for a
+   * data room's own identity.
+   */
+  template?: string;
+  /**
+   * Context whose templates to resolve `template` against.
+   *
+   * Absent means the global scope, which is a **different namespace** — it may
+   * hold a different template under the same name.
+   */
+  templateContext?: string;
+  /**
+   * Values for the template's placeholders.
+   *
+   * The agent injects the ambient ones itself (`DID`, `SIGNING_KEY_MB`,
+   * `KA_KEY_MB`, `VTA_DID`, `VTA_URL`, `CONTEXT_ID`, `CONTEXT_DID`, `NOW`), so
+   * these are the template's own. **Every one of its `requiredVars` must be
+   * here or the render fails**, including any the document never substitutes:
+   * `room` requires `WEBVH_SERVER` and nothing in its document reads it, so a
+   * caller publishing through a server passes the id twice — once as
+   * `serverId`, which is what actually decides hosting, and once here, which
+   * only satisfies the check.
+   */
+  templateVars?: Record<string, string>;
 }
 
 /**
@@ -121,6 +151,9 @@ export async function webvhDidCreate(
     ...(rest.url ? { url: rest.url } : {}),
     ...(rest.pathMode ? { pathMode: rest.pathMode } : {}),
     ...(rest.portable !== undefined ? { portable: rest.portable } : {}),
+    ...(rest.template ? { template: rest.template } : {}),
+    ...(rest.templateContext ? { templateContext: rest.templateContext } : {}),
+    ...(rest.templateVars ? { templateVars: rest.templateVars } : {}),
   };
   return send(sender, { holder, service }, DIDS_CREATE, DIDS_CREATE_RESPONSE,
     "vta/webvh/dids/create/1.0", payload);

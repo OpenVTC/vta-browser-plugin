@@ -25,9 +25,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { roomsKeysList, type HeldRoom } from "@openvtc/pnm-core/rooms";
 import { Note, Panel } from "../../ui.js";
+import { CreateRoom } from "./rooms-create.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
+import type { ContextRecord } from "@openvtc/pnm-core";
 import type { Parties } from "../use-vta.js";
 
 /** What the two epochs mean together, in the words a member needs. */
@@ -57,7 +59,13 @@ function standing(room: HeldRoom): { label: string; tone: string; why: string } 
   };
 }
 
-export function RoomsPane({ parties }: { parties: Parties }) {
+export function RoomsPane({
+  parties,
+  contexts,
+}: {
+  parties: Parties;
+  contexts: ContextRecord[];
+}) {
   const [rooms, setRooms] = useState<HeldRoom[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -102,7 +110,7 @@ export function RoomsPane({ parties }: { parties: Parties }) {
     },
   ];
 
-  return (
+  const list = (
     <Panel
       title="Data rooms"
       description="Shared spaces this agent holds keys for. Listed by what it can open — which is
@@ -142,5 +150,12 @@ export function RoomsPane({ parties }: { parties: Parties }) {
         </>
       )}
     </Panel>
+  );
+
+  return (
+    <>
+      {list}
+      <CreateRoom parties={parties} contexts={contexts} onCreated={() => void load()} />
+    </>
   );
 }

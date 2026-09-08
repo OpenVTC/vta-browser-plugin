@@ -28,13 +28,23 @@ const room = (roomId: string, epoch: number, earliestReadableEpoch: number) => (
   earliestReadableEpoch,
 });
 
+// The pane also carries the create form, which reads the agent's hosting
+// servers on mount. Named here so the fake agent answers it rather than
+// throwing — these tests are about the listing, and `rooms-create.render`
+// covers the form.
+const SERVERS = "vta/webvh/servers/list/1.0";
+
 const mount = async (rooms: unknown[]) => {
-  const a = agent({ [LIST]: { rooms } });
-  const screen = await render(h(RoomsPane, { parties: PARTIES } as never), {
+  const a = agent({ [LIST]: { rooms }, [SERVERS]: { servers: [] } });
+  const screen = await render(h(RoomsPane, { parties: PARTIES, contexts: [] } as never), {
     chrome: { runtime: { sendMessage: a.sendMessage } },
   });
   return { a, screen };
 };
+
+/** Calls to the rooms family, which is what these tests are about. */
+const roomsCalls = (a: { calls: { type: string }[] }) =>
+  a.calls.filter((call) => call.type.includes("/rooms/"));
 
 // ── The three standings ─────────────────────────────────────────────────────
 
@@ -101,16 +111,17 @@ test("an empty list says what else it could mean", async () => {
 // serves everything else and must never see this. A pane that sent it to the
 // host would be asking a party that cannot answer to enumerate the member's
 // rooms.
-test("the listing goes to the agent, with no other task alongside it", async () => {
+test("the listing goes to the agent, and asks the rooms family nothing else", async () => {
   const { a } = await mount([room("did:webvh:example.com:rooms:northwind", 2, 1)]);
-  assert.equal(a.calls.length, 1, `expected one call, got: ${a.calls.map((c) => c.type).join(", ")}`);
-  assert.match(a.calls[0]!.type, /rooms\/keys\/list\/0\.1$/);
+  const calls = roomsCalls(a);
+  assert.equal(calls.length, 1, `expected one rooms call, got: ${calls.map((c) => c.type).join(", ")}`);
+  assert.match(calls[0]!.type, /rooms\/keys\/list\/0\.1$/);
 });
 
 // A failed listing must not render as an empty one — "this agent holds keys to
 // no rooms" is a claim, and an agent that did not answer has made none.
 test("a listing that failed is not drawn as a listing that was empty", async () => {
-  const screen = await render(h(RoomsPane, { parties: PARTIES } as never), {
+  const screen = await render(h(RoomsPane, { parties: PARTIES, contexts: [] } as never), {
     chrome: { runtime: { sendMessage: async () => ({ ok: false, error: "agent unreachable" }) } },
   });
   assert.doesNotMatch(screen.text(), /before an invitation has been accepted/);
