@@ -48,7 +48,14 @@ function payload(over = {}) {
   };
 }
 
-/** A signed, correctly-addressed inbound request from `as` (default: the VTA). */
+/**
+ * A signed, correctly-addressed inbound request from `as` (default: the VTA).
+ *
+ * `recipient: null` omits the member entirely, and omits it *before* signing —
+ * deleting it afterwards would break the proof, and the request would then be
+ * refused for tampering rather than for being unaddressed, which is a different
+ * test that already exists.
+ */
 async function inbound({ as = VTA, over = {}, drop = [], recipient = HOLDER, unsigned = false } = {}) {
   const p = payload(over);
   for (const k of drop) delete p[k];
@@ -56,7 +63,7 @@ async function inbound({ as = VTA, over = {}, drop = [], recipient = HOLDER, uns
     id: "urn:uuid:00000000-0000-0000-0000-000000000001",
     type: TASK_CONSENT_REQUEST_TYPE,
     issuer: as.did,
-    recipient,
+    ...(recipient === null ? {} : { recipient }),
     issuedAt: new Date().toISOString(),
     payload: p,
   };
@@ -115,6 +122,22 @@ test("a request addressed to another device is refused", async () => {
   assert.equal(res.ok, false);
   assert.equal(res.reason, "untrusted_issuer");
   assert.match(res.detail, /another device/);
+});
+
+test("a request naming no recipient is refused, not waved through", async () => {
+  // The check read `typeof recipient === "string" && recipient !== holderDid`,
+  // so leaving the member out skipped it — the addressing gate defeated by
+  // omission rather than by naming someone else.
+  //
+  // The proof stops an attacker stripping it from a signed document; what this
+  // catches is an *enrolled executor* sending one unaddressed, which every
+  // approver enrolled with it would then accept, each seeing a request that
+  // looks addressed to them. `task-consent/request/0.1` declares
+  // `isRecipientRequired: true` and nothing else on this path enforces it.
+  const res = await parseTaskConsentRequest(await inbound({ recipient: null }), opts);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "untrusted_issuer");
+  assert.match(res.detail, /names no recipient/);
 });
 
 test("a lapsed request is refused rather than shown", async () => {

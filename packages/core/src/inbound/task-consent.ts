@@ -426,7 +426,27 @@ export async function parseTaskConsentRequest(
   // Addressed to *this* device. A request addressed to another approver, replayed
   // here, is otherwise indistinguishable — and approving it would cast a vote the
   // VTA attributes to us.
-  if (typeof doc.recipient === "string" && doc.recipient !== opts.holderDid) {
+  //
+  // **Absence is a refusal, not a pass.** This read `typeof doc.recipient ===
+  // "string" && doc.recipient !== holderDid`, so a document with no `recipient`
+  // skipped the check entirely — and the addressing gate is defeated by leaving
+  // the field out just as well as by naming someone else. The proof stops an
+  // attacker stripping the member from a signed document, but it is an enrolled
+  // executor whose mistake this catches: one unaddressed prompt is accepted by
+  // *every* approver enrolled with that executor, each of whom sees a request
+  // that looks addressed to them. `task-consent/request/0.1` declares
+  // `isRecipientRequired: true`, and nothing else on this path enforces it —
+  // this is not a hand-rolled §7.2 spine, it is these three checks.
+  //
+  // `vta-mobile-core`'s `parse_consent_request` refuses an absent recipient the
+  // same way, for the same reason, on the sibling document.
+  if (typeof doc.recipient !== "string") {
+    return reject(
+      "untrusted_issuer",
+      "request names no recipient, so it cannot be shown to be addressed to this device",
+    );
+  }
+  if (doc.recipient !== opts.holderDid) {
     return reject("untrusted_issuer", "request is addressed to another device");
   }
 
