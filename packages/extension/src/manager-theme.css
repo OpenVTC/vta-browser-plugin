@@ -37,6 +37,28 @@
   --m-act-data: #0e6f78;
   --m-act-data-soft: #e2f2f4;
 
+  /* Family colours — the second categorical set, and the only other one.
+   *
+   * The identity map groups a holder's attributes by the family their claim
+   * type comes from (`attribute-family.ts`), and carries that colour onto the
+   * type chips of every face, so a composition can be read without opening it.
+   * Like the act colours these are *categorical*: they say which vocabulary a
+   * token belongs to and never whether anything is wrong. `--m-fam-gated`
+   * names the one family the registry marks `release: stepUp` — an agent
+   * behaviour, not a warning — and is deliberately a plum rather than anything
+   * near `--w-danger`, which would read as an alarm on a value that is
+   * perfectly healthy.
+   *
+   * Held at lower chroma than both the act and the semantic sets on purpose:
+   * they appear as a 3px stripe and a 6px dot beside a card whose border is
+   * already carrying selection and reach, and a saturated stripe would win a
+   * competition it is not in. */
+  --m-fam-identity: #7a58c9;
+  --m-fam-contact: #3f6ea8;
+  --m-fam-public: #4f7d5e;
+  --m-fam-gated: #a15381;
+  --m-fam-unregistered: #8a92a3;
+
   /* The rail's own ground — a half-step off `--w-ground` so the three columns
    * read as three columns without a hard border doing the work. */
   --m-rail: #f2f4f8;
@@ -53,6 +75,12 @@
     --m-act-graph-soft: #292010;
     --m-act-data: #4dc4d0;
     --m-act-data-soft: #0e2326;
+
+    --m-fam-identity: #a48ce0;
+    --m-fam-contact: #7aa6d8;
+    --m-fam-public: #85b795;
+    --m-fam-gated: #d18cb2;
+    --m-fam-unregistered: #6f7a8c;
 
     --m-rail: #0e131c;
     --m-tree: #10151f;

@@ -331,6 +331,41 @@ per `design-docs/persona-vocabulary.md`; the spec's words (`attribute`,
 `profile`, `binding`, `materialise`) stay in code and off the screen. Add copy
 in those words, or change the document first.
 
+**Colour on the map carries three things, in three channels that never
+overlap.** The **border** is selection and reach; the **inset stripe** on an
+attribute card and the dot on a face's chips are its claim-type family; the
+**pills** are status. Reach is drawn in two hues rather than one because
+`reachOf` was always asymmetric and the single accent hid it: down is a copy
+**leaving** the holder (`--m-act-data`, borrowed from the contexts band it ends
+in), up is what a context **holds** of them (the accent). `Flow` is computed in
+`identity-graph.ts` with the rest of the model, so the component still only
+draws. The family hues (`--m-fam-*`, `manager/attribute-family.ts`) are
+**categorical**, the same species as the act colours in `manager-theme.css` and
+bound by that file's rule: `--w-ok` / `--w-warn` / `--w-danger` stay the only
+colours that mean anything. `familyOf` groups **only** roots the vendored
+registry declares — `profile.*` and `employer` are `unregistered`, not a
+"profile" family invented here — and no family's words may claim the colour
+protects anything, which `manager-attribute-family.test.mts` asserts directly.
+
+**A context is one of four things, decided once.** `standingOf` /
+`tallyContexts` (`identity-graph.ts`) answer `known` (a persona wears a face),
+`identified` (a persona is present wearing nothing), `unreadable`, `absent`.
+`identified` is a real state, not a rounding error: `persona/binding/list/1.0`
+enumerates the personas *present* in a context and carries `bound` separately,
+so unbinding a face leaves the persona — that context still knows an identifier
+of the holder's and can address it, while holding none of their attributes. The
+header, the band and the fold row all read this one predicate. They used to use
+three different tests, which is how the live console came to say "known in 1 of
+12" above two cards with ten folded away — and the state itself had no words on
+screen at all.
+
+**What breaks it:** counting contexts anywhere but `tallyContexts` (the numbers
+stop closing, and the one that is wrong is the one nobody re-checks); folding
+`identified` in with `absent` (an identifier the holder has out there,
+disappeared); painting reach in one hue again; putting a family hue on a card
+border or in a pill; adding a `--m-fam-*` for something that is *state*; or
+giving `familyOf` a prefix rule the registry has not declared.
+
 **Sensitive values are hidden from the screen, and that is all it is.**
 `manager/claim-sensitivity.ts` carries a **vendored** copy of the claim-type
 registry's masking data — sensitivity and mask style per token, from

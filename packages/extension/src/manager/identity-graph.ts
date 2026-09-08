@@ -169,16 +169,51 @@ export function buildGraph(
   return { attributes: attributeNodes, faces, contexts: contextNodes, links };
 }
 
+/**
+ * Which way the light travelled to reach a node.
+ *
+ * The map paints these two directions in two different colours, and that is
+ * the whole reason the flow is carried here rather than inferred while
+ * drawing: `down` is a copy **leaving** the holder, `up` is what a context
+ * **holds** of them. A component that only knew "lit" would have to re-derive
+ * the asymmetry `reachOf` already computed, in a file with no tests.
+ */
+export type Flow = "self" | "down" | "up";
+
+/** The four things a selection can light. */
+export type NodeKind = "attribute" | "face" | "persona" | "context";
+
+/** One key across all four kinds, so a single map can carry every flow. An
+ *  attribute id and a face id are both opaque strings and could collide. */
+export function flowKey(kind: NodeKind, id: string): string {
+  return `${kind} ${id}`;
+}
+
 /** Everything a selection reaches, in every direction it can reach. */
 export interface Reach {
   attributeIds: Set<string>;
   faceIds: Set<string>;
   personaKeys: Set<string>;
   contextIds: Set<string>;
+  /** How each lit node was reached, keyed by {@link flowKey}. A persona's id
+   *  here is its {@link personaKey}. */
+  flow: Map<string, Flow>;
 }
 
 function empty(): Reach {
-  return { attributeIds: new Set(), faceIds: new Set(), personaKeys: new Set(), contextIds: new Set() };
+  return {
+    attributeIds: new Set(),
+    faceIds: new Set(),
+    personaKeys: new Set(),
+    contextIds: new Set(),
+    flow: new Map(),
+  };
+}
+
+/** Read a node's flow, or `null` when it is not lit at all. Saves every caller
+ *  spelling the key and re-deciding what an absent entry means. */
+export function flowOf(reach: Reach, kind: NodeKind, id: string): Flow | null {
+  return reach.flow.get(flowKey(kind, id)) ?? null;
 }
 
 /**
@@ -199,37 +234,57 @@ export function reachOf(graph: IdentityGraph, selection: Selection | null): Reac
   const out = empty();
   if (!selection) return out;
 
+  // The selected node's own flow is written first and never overwritten, so a
+  // node cannot be reported as travelled-to when it is the thing travelled
+  // from. Everything after it keeps the first direction it was reached by,
+  // which is the direction a reader followed with their eye.
+  const mark = (kind: NodeKind, id: string, flow: Flow) => {
+    const key = flowKey(kind, id);
+    if (!out.flow.has(key)) out.flow.set(key, flow);
+  };
+
   const facesWithAttribute = (attributeId: string) => graph.faces.filter((f) => f.attributeIds.includes(attributeId));
   const wearersOf = (faceId: string) =>
     graph.contexts.flatMap((c) => c.personas.filter((p) => p.faceId === faceId));
 
   const lightFaceDown = (faceId: string) => {
     out.faceIds.add(faceId);
+    mark("face", faceId, "down");
     for (const p of wearersOf(faceId)) {
       out.personaKeys.add(personaKey(p.contextId, p.did));
       out.contextIds.add(p.contextId);
+      mark("persona", personaKey(p.contextId, p.did), "down");
+      mark("context", p.contextId, "down");
     }
   };
   const lightFaceUp = (faceId: string) => {
     out.faceIds.add(faceId);
+    mark("face", faceId, "up");
     const face = graph.faces.find((f) => f.id === faceId);
-    for (const id of face?.attributeIds ?? []) out.attributeIds.add(id);
+    for (const id of face?.attributeIds ?? []) {
+      out.attributeIds.add(id);
+      mark("attribute", id, "up");
+    }
   };
 
   switch (selection.kind) {
     case "attribute":
       out.attributeIds.add(selection.id);
+      mark("attribute", selection.id, "self");
       for (const face of facesWithAttribute(selection.id)) lightFaceDown(face.id);
       break;
     case "face":
+      mark("face", selection.id, "self");
       lightFaceUp(selection.id);
       lightFaceDown(selection.id);
       break;
     case "context": {
       out.contextIds.add(selection.id);
+      mark("context", selection.id, "self");
       const ctx = graph.contexts.find((c) => c.id === selection.id);
       for (const p of ctx?.personas ?? []) {
         out.personaKeys.add(personaKey(p.contextId, p.did));
+        mark("persona", personaKey(p.contextId, p.did), "up");
         if (p.faceId) lightFaceUp(p.faceId);
       }
       break;
@@ -237,6 +292,8 @@ export function reachOf(graph: IdentityGraph, selection: Selection | null): Reac
     case "persona": {
       out.contextIds.add(selection.contextId);
       out.personaKeys.add(personaKey(selection.contextId, selection.did));
+      mark("persona", personaKey(selection.contextId, selection.did), "self");
+      mark("context", selection.contextId, "up");
       const ctx = graph.contexts.find((c) => c.id === selection.contextId);
       const p = ctx?.personas.find((x) => x.did === selection.did);
       if (p?.faceId) lightFaceUp(p.faceId);
@@ -257,4 +314,46 @@ export function attributeReach(
     c.personas.filter((p) => p.faceId !== null && faces.some((f) => f.id === p.faceId)),
   );
   return { faces, contextIds: [...new Set(wearers.map((w) => w.contextId))], wearers };
+}
+/**
+ * What a context is to this holder — the one predicate, computed once.
+ *
+ * The map used to answer this question twice with two different tests: the
+ * header counted contexts where a persona *wears a face*, the band drew a card
+ * for every context holding a persona *record*, and the fold counted whatever
+ * the band left over. A context holding an unbound persona fell between them,
+ * so the three numbers did not add up to the number of contexts — the header
+ * denied a card the band was drawing.
+ *
+ * `identified` is the state that was missing, and it is not a rounding error.
+ * `persona/binding/list/1.0` enumerates the personas *present* in a context and
+ * carries `bound` separately, so removing a face leaves the persona: that
+ * context still knows an identifier of the holder's, and can address it, while
+ * holding none of their attributes. "Known" overstates it and "absent"
+ * understates it, and only one of those two errors is visible.
+ */
+export type ContextStanding = "known" | "identified" | "absent" | "unreadable";
+
+export function standingOf(ctx: ContextNode): ContextStanding {
+  if (ctx.unreadable !== undefined) return "unreadable";
+  if (ctx.personas.some((p) => p.faceId !== null)) return "known";
+  if (ctx.personas.length > 0) return "identified";
+  return "absent";
+}
+
+/** Every context counted once, under exactly one standing. `known +
+ *  identified + unreadable + absent === total` is the property the header was
+ *  getting wrong, and `manager-identity-graph.test.mts` pins it. */
+export interface ContextTally {
+  known: number;
+  identified: number;
+  absent: number;
+  unreadable: number;
+  total: number;
+}
+
+export function tallyContexts(graph: IdentityGraph): ContextTally {
+  const out: ContextTally = { known: 0, identified: 0, absent: 0, unreadable: 0, total: graph.contexts.length };
+  for (const ctx of graph.contexts) out[standingOf(ctx)] += 1;
+  return out;
 }
