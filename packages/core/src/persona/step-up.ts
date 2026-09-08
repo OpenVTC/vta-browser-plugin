@@ -144,15 +144,33 @@ export type VerifyDisclosureStepUpResult =
  */
 export function disclosureStepUpRequiredFrom(e: unknown): DisclosureStepUpRequired | null {
   if (!(e instanceof VtaClientError)) return null;
-
   const body = e.details as
     | { code?: unknown; details?: Record<string, unknown> }
     | undefined;
-  if (body?.code !== DISCLOSURE_STEP_UP_REQUIRED_CODE) return null;
+  return disclosureStepUpFrom(body?.code, body?.details);
+}
 
-  const d = body.details ?? {};
+/**
+ * The same recognition, from a refusal that was **not** thrown.
+ *
+ * A wallet that dispatches the task itself gets the agent's `code` and
+ * `details` as fields rather than inside an exception — the relay shape the
+ * console and the background use. One rule, two entry points: a second
+ * implementation would be the same three checks written twice, and the pair
+ * would drift on the third change rather than the first.
+ */
+export function disclosureStepUpFrom(
+  code: unknown,
+  details: unknown,
+): DisclosureStepUpRequired | null {
+  if (code !== DISCLOSURE_STEP_UP_REQUIRED_CODE) return null;
+
+  const d = (details ?? {}) as Record<string, unknown>;
   const previewId = typeof d.previewId === "string" ? d.previewId : "";
   const req = d.approveRequest;
+  // Without a previewId there is nothing to present again; without an
+  // approve-request there is nothing for the holder to approve. Either way this
+  // is an error like any other and is better surfaced as one than half-handled.
   if (!previewId || !req || typeof req !== "object") return null;
 
   return {
@@ -162,6 +180,47 @@ export function disclosureStepUpRequiredFrom(e: unknown): DisclosureStepUpRequir
     unverifiedApproveRequest: req as Record<string, unknown>,
   };
 }
+
+/** Payload of the `approve-response/0.3` that answers a disclosure step-up. */
+export interface DisclosureApprovalPayload {
+  subject: string;
+  sessionId: string;
+  challenge: string;
+  decision: "approved" | "denied";
+  grantedAcr: string;
+}
+
+/**
+ * The approve-response payload for a verified disclosure step-up.
+ *
+ * Deliberately **not** a signed document. `buildStepUpApproval` exists for the
+ * did-hosting RP, which is answered outside the channels and so must carry its
+ * own proof. A disclosure step-up is answered by dispatching an ordinary Trust
+ * Task to the agent, and the channel signs every outbound document as the
+ * holder with `proofPurpose: "assertionMethod"` — which is exactly the gate the
+ * approve-response requires. Building a second proof here would duplicate or
+ * overwrite that one, which is the reason `provision/integration` is called out
+ * in this repo's guide as the case that must bypass a channel.
+ *
+ * Every echoed field comes from the **verified** request.
+ */
+export function disclosureApprovalPayload(
+  request: StepUpApproveRequest,
+  approved: boolean,
+): DisclosureApprovalPayload {
+  return {
+    subject: request.subject,
+    sessionId: request.sessionId,
+    challenge: request.challenge,
+    decision: approved ? "approved" : "denied",
+    grantedAcr: "aal2",
+  };
+}
+
+/** `auth/step-up/approve-response/0.3` — the version that can be answered
+ *  `recorded`, which is what a bound disclosure approval must be. */
+export const DISCLOSURE_APPROVE_RESPONSE_TYPE =
+  "https://trusttasks.org/spec/auth/step-up/approve-response/0.3";
 
 export interface VerifyDisclosureStepUpOptions {
   /** The executors this wallet is enrolled with — its agent's DID. The
