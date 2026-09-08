@@ -234,3 +234,35 @@ test("a context for some other operation is not read as a disclosure", async () 
   assert.equal(res.ok, false, "a share ask was accepted as a disclosure approval");
   assert.match(res.reason, /not a disclosure/);
 });
+
+test("an action of another kind under the same context type is refused", async () => {
+  // `type` and `kind` answer different questions — which producer's vocabulary,
+  // and which action within it. A second `kind` added under the persona type is
+  // the case this exists for: without the check it would be read as a
+  // disclosure, its fields mined for claim types it never had, and shown to the
+  // holder in a disclosure's words.
+  const doc = await approveRequest({
+    ctx: {
+      action: { kind: "revoke", previewId: PREVIEW, claimTypes: ["payment.card"] },
+    },
+  });
+  const seen = disclosureStepUpRequiredFrom(
+    refusal({ previewId: PREVIEW, previewRetained: true, approveRequest: doc }),
+  );
+  const res = await verifyDisclosureStepUp(seen, enrolled);
+  assert.equal(res.ok, false, "an action of another kind was approved as a disclosure");
+  assert.match(res.reason, /not a disclosure/);
+});
+
+test("an action with no kind at all is refused", async () => {
+  // The shape a producer that forgot the discriminator emits. Absence is not
+  // permission.
+  const doc = await approveRequest({
+    ctx: { action: { previewId: PREVIEW, claimTypes: ["payment.card"] } },
+  });
+  const seen = disclosureStepUpRequiredFrom(
+    refusal({ previewId: PREVIEW, previewRetained: true, approveRequest: doc }),
+  );
+  const res = await verifyDisclosureStepUp(seen, enrolled);
+  assert.equal(res.ok, false, "an action with no kind was approved as a disclosure");
+});

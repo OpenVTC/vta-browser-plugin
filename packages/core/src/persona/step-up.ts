@@ -67,6 +67,20 @@ const AUTHZ_CONTEXT_EXT_KEY = "org.openvtc.authorization-context";
  */
 const DISCLOSURE_AUTHZ_CONTEXT_TYPE = "https://openvtc.org/persona/authorization-context/0.1";
 
+/**
+ * The `action.kind` a disclosure carries.
+ *
+ * Checked as well as `type`, because they answer different questions. `type`
+ * says which *producer's* vocabulary the context speaks; `kind` says which
+ * action within it. The persona context type carries only `disclose` today, so
+ * this rejects nothing yet — it is here for the second `kind` added under this
+ * type, which would otherwise be read as a disclosure, have its fields mined
+ * for `claimTypes` it never had, and be shown to the holder in a disclosure's
+ * words. Naming `kind` as the discriminator and then not checking it is how
+ * that arrives unnoticed.
+ */
+const DISCLOSURE_ACTION_KIND = "disclose";
+
 /** The agent needs a fresh approval before it will release this preview. */
 export interface DisclosureStepUpRequired {
   kind: "stepUpRequired";
@@ -192,6 +206,13 @@ export async function verifyDisclosureStepUp(
   // The specifics live under `action`, keyed by `kind` — the shape every
   // authorization context uses, so one renderer serves all of them.
   const action = (ctx.action ?? {}) as Record<string, unknown>;
+
+  if (action.kind !== DISCLOSURE_ACTION_KIND) {
+    return {
+      ok: false,
+      reason: `authorization context action is ${String(action.kind)}, not a disclosure`,
+    };
+  }
 
   if (action.previewId !== refusal.previewId) {
     return {
