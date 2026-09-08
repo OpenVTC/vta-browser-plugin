@@ -20,6 +20,8 @@ import {
   maskText,
   maskedFact,
   treatmentOf,
+  treatmentFor,
+  isSensitiveFor,
 } from "../src/manager/claim-sensitivity.ts";
 
 // ── The registry's own answers ──────────────────────────────────────────────
@@ -196,4 +198,78 @@ test("a normal value can still be masked", () => {
 test("a value with no mask style is not hidden", () => {
   assert.ok(!isSensitive("account.handle"));
   assert.ok(!isSensitive("name.display"));
+});
+
+// ── The holder's own decision (§4 rule 1) ───────────────────────────────────
+//
+// `sensitivity` on an attribute record is present only where the holder chose.
+// Absent is not a third value — it says the registry answers — and the two must
+// stay distinguishable all the way to the screen, because "you decided" and
+// "your agent's table says" are different claims to put in front of someone
+// about their own data.
+
+test("no decision leaves the registry answering, and says so", () => {
+  const { treatment, source } = treatmentFor("phone.mobile");
+  assert.deepEqual(treatment, treatmentOf("phone.mobile"));
+  assert.equal(source, "registry");
+});
+
+test("a decision wins over the registry, and says whose it is", () => {
+  const { treatment, source } = treatmentFor("phone.mobile", "normal");
+  assert.equal(treatment.sensitivity, "normal", "the holder outranks the table");
+  assert.equal(source, "holder");
+});
+
+test("a declared token keeps the registry's mask, whatever the holder decided", () => {
+  // §3.3: the axes are independent. The registry has an opinion about how a
+  // phone number is drawn, and this console does not overrule it — deciding it
+  // is not worth withholding is not the same as deciding it should be legible
+  // over a shoulder.
+  assert.equal(treatmentFor("phone.mobile", "normal").treatment.mask, "last2");
+  assert.equal(treatmentFor("name.legal", "high").treatment.mask, "none");
+});
+
+test("an unregistered token's mask follows the holder, because the floor was standing in for them", () => {
+  // `UNREGISTERED` is one conservative answer covering both axes, chosen
+  // because nobody had reasoned about the token (§4 rule 3's own words). The
+  // holder deciding is the decision it stood in for. Without this, someone who
+  // marked their own `profile.github` as not sensitive would still be shown
+  // four bullets by a rule justified only by nobody having looked.
+  assert.equal(treatmentFor("profile.github").treatment.mask, "full");
+  assert.equal(treatmentFor("profile.github", "normal").treatment.mask, "none");
+  assert.equal(treatmentFor("profile.github", "high").treatment.mask, "full");
+  assert.equal(maskedFact("profile.github", "octocat", "normal").text, "octocat");
+  assert.equal(maskedFact("profile.github", "octocat", "normal").masked, false);
+  assert.equal(maskedFact("profile.github", "octocat").masked, true);
+});
+
+test("an x: token is unregistered here too, so the same rule reaches it", () => {
+  assert.equal(treatmentFor("x:payment.card", "normal").treatment.mask, "none");
+  // …but it does not become a registered token: no override, no change.
+  assert.equal(treatmentFor("x:payment.card").treatment.mask, "full");
+});
+
+test("a family member invented under a gated family keeps the family's mask", () => {
+  // `payment.giftCard` walks up to `payment`, which the registry declares. A
+  // holder deciding it is not worth withholding does not make a gated family's
+  // mask disappear.
+  assert.equal(treatmentFor("payment.giftCard", "normal").treatment.mask, "full");
+});
+
+// ── The mask style decides, not the sensitivity ─────────────────────────────
+
+test("an email is masked, which is what the registry asked for all along", () => {
+  // `email.*` is `normal`/`emailLocal`: worth hiding from the person behind
+  // you, not worth withholding from every listing. `maskedFact` used to gate on
+  // `high` and drew it in full, while `isSensitive` called it hidden — so the
+  // strip promised a Show button that was never rendered.
+  const { text, masked } = maskedFact("email.personal", "glenn.gore@example.com");
+  assert.equal(text, "g•••@example.com");
+  assert.equal(masked, true);
+  assert.equal(isSensitiveFor("email.personal"), true, "the two answers agree now");
+});
+
+test("a type with no mask style is drawn plainly and offers no control", () => {
+  assert.equal(maskedFact("name.legal", "Glenn Gore").masked, false);
+  assert.equal(isSensitiveFor("name.legal"), false);
 });

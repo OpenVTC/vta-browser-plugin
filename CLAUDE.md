@@ -412,6 +412,39 @@ version with extra steps); masking a withheld placeholder, which claims a value
 is being held back when none arrived; matching a reveal by position rather than
 `attributeId`; or a *Hide* that only covers what a press fetched.
 
+**The holder outranks the registry, and "not decided" is a state.**
+`sensitivity` and `release` are per-attribute members that are present **only**
+where the holder chose one; absent means the claim-type registry answers.
+`treatmentFor` applies the first over the second and reports which spoke, so a
+pane can say *you decided* without ever putting the registry's answer in the
+holder's mouth. The editor offers three options per question, and *let your
+agent decide* writes the member **absent** — never the resolved default, because
+`persona/attribute/put` is a **replace** and freezing today's answer means a
+later tightening of the registry protects every new attribute and leaves this
+one exposed. The same replace semantics are why an editor must send back the
+decisions it loaded: omitting them silently cleared the holder's gate on every
+save, and nothing in the response said so.
+
+**One narrow exception, and it is the reason the feature works at all.** A
+holder's `sensitivity` moves that axis only — a declared token keeps the
+registry's mask (§3.3: the axes are independent, and `phone.mobile` stays
+`•• 25` however the holder marks it). For an **unregistered** token there is no
+such statement to respect: `UNREGISTERED` is one conservative answer covering
+both axes precisely because nobody had reasoned about the token, so the holder
+deciding is the decision it stood in for, and the mask follows them. Without it,
+marking your own `profile.github` as showable still drew four bullets, by a rule
+justified only by nobody having looked.
+
+**Masking follows the mask style, not the sensitivity.** They are independent
+per §3.3; `maskedFact` gated on `high` anyway, so `email.*` (`normal` /
+`emailLocal`) was called hidden by `isSensitive` and drawn in full by the
+renderer — a promised *Show* button that never appeared.
+
+**What breaks it:** writing a resolved default into `sensitivity` or `release`;
+an editor that omits them and so clears them; treating absent as `normal`
+(`treatmentFor`'s `source` is the difference); extending the unregistered-mask
+rule to declared tokens; or gating a mask on `sensitivity` again.
+
 **A `release: stepUp` disclosure is refused, and the refusal is returned rather
 than thrown.** `payment.*` and `gov.*` resolve to `release: stepUp` in the
 registry, so the agent refuses `persona/disclosure/present` until it holds a

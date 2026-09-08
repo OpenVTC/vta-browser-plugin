@@ -60,7 +60,7 @@ import {
   ResolvedProfile,
 } from "./persona-editors.js";
 import { holderGate } from "../holder-gate.js";
-import { isSensitive } from "../claim-sensitivity.js";
+import { isSensitiveFor } from "../claim-sensitivity.js";
 import type { RevealTarget } from "../reveal-value.js";
 
 // ── Words for what the agent knows ──────────────────────────────────────────
@@ -612,6 +612,7 @@ export function IdentityMap({
                             <FactValue
                               type={f.type}
                               value={f.value}
+                              sensitivity={f.sensitivity}
                               reveal={() => onReveal({ attributeId: f.id, type: f.type })}
                               style={{ minWidth: 0, overflow: "hidden" }}
                               textStyle={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
@@ -975,6 +976,7 @@ function DetailStrip({
             <FactValue
               type={attribute.type}
               value={attribute.value}
+              sensitivity={attribute.sensitivity}
               reveal={() => onReveal({ attributeId: attribute.id, type: attribute.type })}
               style={{ fontSize: t.md, fontWeight: 640 }}
               textStyle={{ wordBreak: "break-word" }}
@@ -989,11 +991,33 @@ function DetailStrip({
                 withheld is not in this page at all, and *Show* is the request
                 for it. Saying the first about the second is what the strip did
                 before, and it was the one claim it must never make wrongly. */}
-            {isSensitive(attribute.type) && (
+            {isSensitiveFor(attribute.type, attribute.sensitivity) && (
               <span style={{ fontSize: t.sm, color: c.faint }}>
                 {attribute.value === undefined
                   ? "Your agent has not sent this value to this page. Show asks it for this one."
                   : "Hidden until you press Show — that is about who can see your screen. Your agent has already sent this value here."}
+              </span>
+            )}
+            {/* Whose answer this is. Absent means the registry's, and saying
+                "you decided" over the registry's answer would be the console
+                putting words in the holder's mouth about their own data. */}
+            {(attribute.sensitivity || attribute.release) && (
+              <span style={{ fontSize: t.sm, color: c.muted }}>
+                You decided:{" "}
+                {[
+                  attribute.sensitivity === "high"
+                    ? "kept back until you ask"
+                    : attribute.sensitivity === "normal"
+                      ? "shown"
+                      : null,
+                  attribute.release === "stepUp"
+                    ? "approved again every time it leaves"
+                    : attribute.release === "consent"
+                      ? "approved once before it leaves"
+                      : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
               </span>
             )}
             {attribute.stale && <span style={{ fontSize: t.sm, color: c.warn }}>Can no longer be proven ({attribute.staleReason ?? "stale"}).</span>}

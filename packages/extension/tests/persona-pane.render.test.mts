@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { GuidedSetup } from "../src/manager/panes/persona-setup.js";
 import { IdentityMap } from "../src/manager/panes/persona-map.js";
-import { BindingForm } from "../src/manager/panes/persona-editors.js";
+import { AttributeEditor, BindingForm } from "../src/manager/panes/persona-editors.js";
 import { buildGraph } from "../src/manager/identity-graph.js";
 
 const HOLDER = { session: { id: "s" }, roles: ["admin"], scopes: [] };
@@ -639,5 +639,138 @@ test("a value the agent did send is still covered locally, with no second questi
   await ui.click(ui.button("Show"));
   assert.match(ui.text(), /8262 2325/);
   assert.equal(asked, 0, "it was already here — asking again would be a second disclosure for nothing");
+  await ui.unmount();
+});
+
+// ── Deciding what happens to a value ────────────────────────────────────────
+//
+// `sensitivity` and `release` are the holder's own answers, and absent means
+// they gave none — the claim-type registry answers instead. Three states, not
+// two, and the third is the one every naive implementation loses: a put
+// REPLACES the attribute, so an editor that never mentions these clears them on
+// every save, and the response says nothing about what was dropped.
+
+const PUT_OK = { "persona/attribute/put/1.0": { attributeId: "a1", version: 2, created: false, updatedAt: "x" } };
+
+const editor = (existing?: Record<string, unknown>) =>
+  h(AttributeEditor, {
+    parties: PARTIES,
+    authority: HOLDER,
+    ...(existing ? { existing } : {}),
+    onDone: () => {},
+    onCancel: () => {},
+  });
+
+const putPayload = (a: ReturnType<typeof agent>) => a.of("attribute/put")[0]!.payload as Record<string, unknown>;
+
+/** The `<select>` under a given heading. By heading rather than by index: a
+ *  string attribute has no value picker and a boolean one does, so positions
+ *  move with the form. */
+const decision = (ui: { byText: (sel: string, text: string) => Element | undefined }, heading: string) => {
+  const field = ui.byText("label", heading);
+  const control = field?.querySelector("select");
+  assert.ok(control, `no control under ${heading}`);
+  return control as HTMLSelectElement;
+};
+
+test("both decisions start with the agent's own answer, and name it", async () => {
+  const a = agent(PUT_OK);
+  const ui = await render(editor(), { chrome: { runtime: { sendMessage: a.sendMessage } } });
+  const text = ui.text();
+  assert.match(text, /SHOWING IT TO YOU/);
+  assert.match(text, /LETTING IT LEAVE/);
+  assert.match(text, /Let your agent decide/, "not deciding is an option, and the default one");
+  await ui.unmount();
+});
+
+test("a decision the holder makes is sent", async () => {
+  const a = agent(PUT_OK);
+  const ui = await render(editor(), { chrome: { runtime: { sendMessage: a.sendMessage } } });
+  const [type, label] = ui.all("input");
+  await ui.type(type!, "profile.github");
+  await ui.type(label!, "GitHub");
+  await ui.select(decision(ui, "SHOWING IT TO YOU"), "normal");
+  await ui.select(decision(ui, "LETTING IT LEAVE"), "stepUp");
+  await ui.click(ui.button("Add attribute"));
+  const payload = putPayload(a);
+  assert.equal(payload.sensitivity, "normal");
+  assert.equal(payload.release, "stepUp");
+  await ui.unmount();
+});
+
+test("an edit that touches neither sends both back, rather than wiping them", async () => {
+  // The silent one. A put replaces the record, so a save that omits these
+  // returns the attribute to the registry's answer — and the holder finds out
+  // when a value they had gated leaves without asking them.
+  const a = agent(PUT_OK);
+  const ui = await render(
+    editor({
+      attributeId: "a1",
+      type: "gov.id.passport",
+      valueType: "string",
+      value: "X1234567",
+      sensitivity: "high",
+      release: "stepUp",
+      provenance: { kind: "selfAsserted" },
+      version: 1,
+      updatedAt: "x",
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.click(ui.button("Save"));
+  const payload = putPayload(a);
+  assert.equal(payload.sensitivity, "high");
+  assert.equal(payload.release, "stepUp");
+  await ui.unmount();
+});
+
+test("handing a decision back to the agent omits the member, rather than freezing today's answer", async () => {
+  // Sending the *resolved* default would pin the attribute to today's registry:
+  // a later tightening would then protect every new attribute and leave this
+  // one exposed. The spec says so in as many words, so absence is the write.
+  const a = agent(PUT_OK);
+  const ui = await render(
+    editor({
+      attributeId: "a1",
+      type: "phone.mobile",
+      valueType: "string",
+      value: "+65 8262 2325",
+      sensitivity: "high",
+      provenance: { kind: "selfAsserted" },
+      version: 1,
+      updatedAt: "x",
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.select(decision(ui, "SHOWING IT TO YOU"), "");
+  await ui.click(ui.button("Save"));
+  const payload = putPayload(a);
+  assert.ok(!("sensitivity" in payload), `cleared means absent, not resolved: ${JSON.stringify(payload)}`);
+  await ui.unmount();
+});
+
+test("a value the holder said to show is drawn on the map, not bulleted", async () => {
+  // The end of the road for the reported bug: an unregistered token is masked
+  // because nobody has reasoned about it, and this is the holder reasoning
+  // about it. Registry-declared tokens are unaffected — see
+  // `manager-claim-sensitivity.test.mts`.
+  const shown = [{ ...attribute("f9", "profile.github", "octocat"), sensitivity: "normal" }];
+  const a = agent({});
+  const ui = await render(
+    h(IdentityMap, {
+      parties: PARTIES,
+      authority: HOLDER,
+      graph: buildGraph(shown, [], []),
+      attributes: shown,
+      profiles: [],
+      records: CONTEXTS,
+      history: [],
+      onReveal: async () => "never asked",
+      onChanged: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  assert.match(ui.text(), /octocat/);
+  assert.doesNotMatch(ui.text(), /•/, "the holder decided; the floor no longer applies to this one");
   await ui.unmount();
 });

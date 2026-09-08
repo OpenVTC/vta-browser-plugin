@@ -142,14 +142,14 @@ export const REGISTERED_ROOTS: ReadonlySet<string> = new Set(
 );
 
 /**
- * How this type's values are treated — `CLAIM-TYPES.md` §4, minus the rule
- * this console cannot take part in.
+ * How this **type's** values are treated — `CLAIM-TYPES.md` §4, minus rule 1,
+ * which is about one attribute rather than a type.
  *
  * §4's first rule is a per-attribute override the holder set explicitly, which
- * wins over the registry. No field carries one on the wire yet, so nothing here
- * can read it; when one exists it belongs *above* this call, not inside it,
- * because "the holder decided" and "the registry says" are different attributes and
- * a UI that wants to explain the difference needs both.
+ * wins over the registry. It stays *above* this call, in `treatmentFor` below —
+ * "the holder decided" and "the registry says" are two different claims about
+ * one value, and a UI that wants to explain the difference needs both. This
+ * function is only ever the second of them.
  *
  * **The prefix walk is rule 3, and it only ever tightens.** An unregistered
  * token takes the *more protective* of its longest registered prefix and the
@@ -293,16 +293,97 @@ function emailLocal(text: string): string {
  *
  * `masked` is the caller's cue for two separate things and both matter: a
  * reveal control, and a rendering distinct from an absent value. A pane that
- * greys a mask the way it greys "not requested" has told the operator that a
- * attribute they hold is an attribute they do not.
+ * greys a mask the way it greys a value the agent never sent has told the
+ * operator that an attribute they hold is an attribute they do not.
+ *
+ * **The mask style decides, not the sensitivity.** §3.3 made the two axes
+ * independent — `high` means *withheld from a listing that did not ask*, a mask
+ * style means *not shown in the clear* — and this function used to gate on
+ * `high` anyway. `email.*` is the case that showed it: `normal`/`emailLocal`,
+ * so `isSensitive` called it hidden and the strip promised it was "hidden until
+ * you press Show", while the address sat on screen in full with no button to
+ * press. Two functions, one question, two answers.
+ *
+ * `override` is the holder's own `sensitivity`, where they set one — see
+ * `treatmentFor`, which is where that decision is applied and where the reason
+ * an unregistered token's mask follows it is written down.
  */
-export function maskedFact(type: string, text: string): { text: string; masked: boolean } {
-  const treatment = treatmentOf(type);
-  if (treatment.sensitivity !== "high") return { text, masked: false };
+export function maskedFact(
+  type: string,
+  text: string,
+  override?: Sensitivity | undefined,
+): { text: string; masked: boolean } {
+  const { treatment } = treatmentFor(type, override);
+  if (treatment.mask === "none") return { text, masked: false };
   const masked = maskText(text, treatment.mask);
-  // A style of `none` on a `high` type would mask nothing while claiming to.
-  // No such entry exists; if one is added, the honest answer is to draw the
-  // value plainly and offer no control, rather than a *Show* button that
-  // changes nothing.
+  // A mask that changed nothing would claim to hide while hiding nothing — the
+  // honest answer is to draw the value plainly and offer no control, rather
+  // than a *Show* button that does not change what is on screen.
   return { text: masked, masked: masked !== text };
+}
+
+/**
+ * How this attribute's value is treated, with the holder's own decision applied
+ * over the registry's — `CLAIM-TYPES.md` §4 rule 1.
+ *
+ * `sensitivity` on an attribute record is present **only** where the holder
+ * chose; absent means they chose nothing and the registry answers, which is why
+ * this takes the override rather than a resolved value. The two are kept apart
+ * all the way to the screen: `source` says which is speaking, so a pane can say
+ * "you decided" instead of presenting the registry's answer as the holder's.
+ *
+ * **Only the axis the holder decided moves — with one exception, and it is the
+ * one worth reading.** For a token the registry *declares*, the mask is a
+ * separate statement it has made (§3.3: the axes are independent — an email is
+ * worth hiding from the person behind you without being worth withholding from
+ * every listing), so deciding sensitivity leaves it alone. A holder who marks
+ * `phone.mobile` unsensitive gets the value delivered and still sees `•• 25`
+ * until they press Show.
+ *
+ * For an **unregistered** token there is no such statement. `UNREGISTERED` is
+ * one conservative answer standing in for a decision nobody made — §4 rule 3's
+ * own reasoning, "a vocabulary the registry has never seen is exactly the one
+ * nobody has reasoned about" — so when the holder decides, the thing it stood
+ * in for has arrived and the mask follows their answer instead of the floor.
+ * Without this, someone who marked their own `profile.github` as not sensitive
+ * would still be shown four bullets and told to press a button, by a rule whose
+ * only justification was that nobody had looked at it yet.
+ *
+ * The narrowness is the point: a *declared* token's mask never moves, because
+ * there the registry has an opinion and this console does not overrule it.
+ */
+export function treatmentFor(
+  type: string,
+  override?: Sensitivity | undefined,
+): { treatment: ClaimTreatment; source: "holder" | "registry" } {
+  const registry = treatmentOf(type);
+  if (override === undefined) return { treatment: registry, source: "registry" };
+  return {
+    treatment: {
+      sensitivity: override,
+      mask: isRegistered(type) ? registry.mask : override === "high" ? "full" : "none",
+    },
+    source: "holder",
+  };
+}
+
+/** Whether the registry declares this token, or a family it belongs to — the
+ *  same walk `treatmentOf` performs, asked as a question. An `x:` token is
+ *  never registered, per §4's last rule. */
+function isRegistered(type: string): boolean {
+  if (type.startsWith("x:")) return false;
+  if (REGISTERED[type]) return true;
+  const segments = type.split(".");
+  for (let i = segments.length - 1; i > 0; i--) {
+    if (REGISTERED[segments.slice(0, i).join(".")]) return true;
+  }
+  return false;
+}
+
+/** Whether this attribute's value is hidden until asked for, the holder's own
+ *  decision included. The `type`-only {@link isSensitive} is the registry's
+ *  answer alone and stays that way — a call site holding a whole attribute
+ *  should use this one. */
+export function isSensitiveFor(type: string, override?: Sensitivity | undefined): boolean {
+  return treatmentFor(type, override).treatment.mask !== "none";
 }
