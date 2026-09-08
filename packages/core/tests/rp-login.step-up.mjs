@@ -26,7 +26,7 @@ test("buildStepUpApproval: signed approved response echoes the request and verif
   const rpDid = "did:web:rp.example";
   const request = { subject: holder.did, sessionId: "sess-1", challenge: "c".repeat(64) };
 
-  const doc = await buildStepUpApproval({ signing: holder, rpDid, request, approved: true });
+  const doc = await buildStepUpApproval({ signing: holder, rpDid, request, approved: true, responseVersion: "0.2" });
 
   assert.equal(doc.type, APPROVE_RESPONSE_TYPE);
   assert.equal(doc.issuer, holder.did);
@@ -49,6 +49,7 @@ test("buildStepUpApproval: denied response carries a signed deniedReason", async
   const request = { subject: holder.did, sessionId: "sess-2", challenge: "d".repeat(64) };
 
   const doc = await buildStepUpApproval({
+    responseVersion: "0.2",
     signing: holder,
     rpDid: "did:web:rp.example",
     request,
@@ -65,7 +66,7 @@ test("buildStepUpApproval: denied response carries a signed deniedReason", async
 test("buildStepUpApproval: tampering the signed challenge breaks verification", async () => {
   const holder = generateSigningIdentity();
   const request = { subject: holder.did, sessionId: "sess-3", challenge: "e".repeat(64) };
-  const doc = await buildStepUpApproval({ signing: holder, rpDid: "did:web:rp.example", request, approved: true });
+  const doc = await buildStepUpApproval({ signing: holder, rpDid: "did:web:rp.example", request, approved: true, responseVersion: "0.2" });
   doc.payload.challenge = "f".repeat(64); // flip after signing
 
   const result = await verifyTrustTaskProof(doc);

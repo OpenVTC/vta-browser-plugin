@@ -247,6 +247,17 @@ export async function verifyDisclosureStepUp(
  * only so a caller handling a disclosure never has to reach into `rp-login/`
  * for it. `request` must come from {@link verifyDisclosureStepUp}, never from
  * the refusal directly.
+ *
+ * **Minted as `0.3`, which is the whole point of this call existing.** The
+ * approval is bound to one `previewId`, so the honest acknowledgement is
+ * `recorded` — applied to that disclosure, elevating nothing. An approval sent
+ * as 0.2 is answered `elevated`, and the session then satisfies unrelated
+ * step-up gates for its window on the strength of a decision the holder made
+ * about a card number.
+ *
+ * The agent has accepted 0.3 since VTI #1316; it had to, before this could
+ * send it. Nothing else in this wallet mints 0.3 — `rp-login` answers a
+ * different relying party and stays on 0.2.
  */
 export async function approveDisclosureStepUp(args: {
   signing: SigningIdentity;
@@ -261,6 +272,7 @@ export async function approveDisclosureStepUp(args: {
     rpDid: args.agentDid,
     request: args.request,
     approved: args.approved,
+    responseVersion: "0.3",
     ...(args.deniedReason !== undefined ? { deniedReason: args.deniedReason } : {}),
   });
 }
