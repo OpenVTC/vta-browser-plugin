@@ -1,8 +1,8 @@
 // The identity map's reach — what lights up, and in which direction.
 //
-// A fact's reach is where it goes; a context's reach is what it holds. Get the
-// direction wrong and the picture claims a context holds a fact it was never
-// given, or that a fact reaches a context it does not — the second being the
+// An attribute's reach is where it goes; a context's reach is what it holds. Get the
+// direction wrong and the picture claims a context holds an attribute it was never
+// given, or that an attribute reaches a context it does not — the second being the
 // holder concluding no linkage exists when one does. Every case here has a
 // paired positive, because a reach function that lights nothing satisfies every
 // "does not light" assertion there is.
@@ -11,7 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildGraph,
-  factReach,
+  attributeReach,
   personaKey,
   reachOf,
   type ContextInput,
@@ -54,10 +54,10 @@ const CTXS = [
 ];
 const G = buildGraph(ATTRS, FACES, CTXS);
 
-test("a face's fact ids are its live references only", () => {
+test("a face's attribute ids are its live references only", () => {
   // A pinned entry still reaches a context, but it does not draw to the live
-  // card — that card would then read as "changes when the fact does".
-  assert.deepEqual(G.faces.find((f) => f.id === "F-pub")?.factIds, ["f-name"]);
+  // card — that card would then read as "changes when the attribute does".
+  assert.deepEqual(G.faces.find((f) => f.id === "F-pub")?.attributeIds, ["f-name"]);
   assert.equal(G.faces.find((f) => f.id === "F-pub")?.preserved, 1);
 });
 
@@ -69,8 +69,8 @@ test("a face worn by two personas is a link; a face worn by one is not", () => {
   );
 });
 
-test("a fact reaches down: its faces, their wearers, their contexts", () => {
-  const r = reachOf(G, { kind: "fact", id: "f-phone" });
+test("an attribute reaches down: its faces, their wearers, their contexts", () => {
+  const r = reachOf(G, { kind: "attribute", id: "f-phone" });
   assert.deepEqual([...r.faceIds], ["F-dev"]);
   assert.deepEqual([...r.contextIds].sort(), ["openvtc", "vta"]);
   assert.ok(r.personaKeys.has(personaKey("openvtc", "did:a")));
@@ -79,33 +79,33 @@ test("a fact reaches down: its faces, their wearers, their contexts", () => {
   assert.ok(!r.personaKeys.has(personaKey("vta", "did:c")));
 });
 
-test("a fact in two faces reaches through both", () => {
-  const r = reachOf(G, { kind: "fact", id: "f-name" });
+test("an attribute in two faces reaches through both", () => {
+  const r = reachOf(G, { kind: "attribute", id: "f-name" });
   assert.deepEqual([...r.faceIds].sort(), ["F-dev", "F-pub"]);
 });
 
-test("a fact only pinned, in a face nobody wears, reaches nowhere", () => {
-  const r = reachOf(G, { kind: "fact", id: "f-signal" });
+test("an attribute only pinned, in a face nobody wears, reaches nowhere", () => {
+  const r = reachOf(G, { kind: "attribute", id: "f-signal" });
   assert.equal(r.faceIds.size, 0);
   assert.equal(r.contextIds.size, 0);
 });
 
-test("a context reaches up: its personas' faces and those faces' facts — not every fact", () => {
+test("a context reaches up: its personas' faces and those faces' attributes — not every attribute", () => {
   const r = reachOf(G, { kind: "context", id: "openvtc" });
   assert.deepEqual([...r.faceIds], ["F-dev"]);
-  assert.deepEqual([...r.factIds].sort(), ["f-name", "f-phone"]);
-  assert.ok(!r.factIds.has("f-signal"), "a context must not light a fact it was never given");
+  assert.deepEqual([...r.attributeIds].sort(), ["f-name", "f-phone"]);
+  assert.ok(!r.attributeIds.has("f-signal"), "a context must not light an attribute it was never given");
 });
 
 test("a context where nobody is known lights only itself", () => {
   const r = reachOf(G, { kind: "context", id: "webvh" });
   assert.deepEqual([...r.contextIds], ["webvh"]);
-  assert.equal(r.faceIds.size + r.factIds.size + r.personaKeys.size, 0);
+  assert.equal(r.faceIds.size + r.attributeIds.size + r.personaKeys.size, 0);
 });
 
 test("a face reaches both ways", () => {
   const r = reachOf(G, { kind: "face", id: "F-dev" });
-  assert.deepEqual([...r.factIds].sort(), ["f-name", "f-phone"]);
+  assert.deepEqual([...r.attributeIds].sort(), ["f-name", "f-phone"]);
   assert.deepEqual([...r.contextIds].sort(), ["openvtc", "vta"]);
 });
 
@@ -121,7 +121,7 @@ test("a persona lights its own context and face, not its neighbours'", () => {
 
 test("no selection lights nothing", () => {
   const r = reachOf(G, null);
-  assert.equal(r.factIds.size + r.faceIds.size + r.contextIds.size + r.personaKeys.size, 0);
+  assert.equal(r.attributeIds.size + r.faceIds.size + r.contextIds.size + r.personaKeys.size, 0);
 });
 
 test("an unreadable context is carried as unreadable, not as empty", () => {
@@ -132,8 +132,8 @@ test("an unreadable context is carried as unreadable, not as empty", () => {
   assert.equal(g.contexts[0]?.personas.length, 0);
 });
 
-test("factReach says where a fact goes in the words the strip uses", () => {
-  const r = factReach(G, "f-phone");
+test("attributeReach says where an attribute goes in the words the strip uses", () => {
+  const r = attributeReach(G, "f-phone");
   assert.deepEqual(r.faces.map((f) => f.name), ["Developer"]);
   assert.deepEqual(r.contextIds.sort(), ["openvtc", "vta"]);
   assert.equal(r.wearers.length, 2);

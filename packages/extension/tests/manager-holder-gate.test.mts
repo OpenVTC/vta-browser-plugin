@@ -36,7 +36,11 @@ test("a context-scoped admin is cautioned, not refused", () => {
 
 test("the caution speaks the agreed vocabulary", () => {
   const note = holderGate(authority(["application"], ["work"]))!;
-  for (const banned of ["attribute", "profile", "binding", "disclosure", "provenance"]) {
+  // `attribute` came *off* this list: the table now uses the spec word on
+  // screen too, because the word it used to translate to — `fact` — asserted
+  // a truth the model cannot promise and already meant a verified policy input
+  // in `vtc-service`. See "Why not 'fact'" in the vocabulary guide.
+  for (const banned of ["fact", "profile", "binding", "disclosure", "provenance"]) {
     assert.ok(
       !note.toLowerCase().includes(banned),
       `"${banned}" is kept off the screen (design-docs/persona-vocabulary.md): ${note}`,

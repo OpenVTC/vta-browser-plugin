@@ -16,7 +16,7 @@
 //   - **Withheld rows are drawn as warnings, not as claims.** They are the only
 //     rows whose presence makes the disclosure smaller than it looks.
 //   - **A predicate is drawn in the positive colour.** It is the strongest
-//     outcome on the screen — the verifier learns a fact and receives no value
+//     outcome on the screen — the verifier learns something and receives no value
 //     — and drawing it in the same ink as an ordinary disclosure would hide the
 //     one row where the holder gave away least.
 //   - **Linkability leads when it is not `none`.** It sits above the claim list

@@ -44,7 +44,7 @@ const isTaskConsent = params.get("kind") === "task";
 // `kind=disclosure` selects the persona-disclosure surface. It is its own
 // surface rather than a variant of the login prompt because what it authorizes
 // is different in kind: the login prompt says "let this site sign you in", and
-// this one says "let this verifier keep these facts about you". Sharing a
+// this one says "let this verifier keep these attributes about you". Sharing a
 // component would mean one screen trying to word both.
 const isDisclosureConsent = params.get("kind") === "disclosure";
 // The biometric-gated approver surface: Approve must run a fresh WebAuthn

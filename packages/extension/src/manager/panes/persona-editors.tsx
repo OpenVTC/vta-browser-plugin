@@ -6,9 +6,11 @@
 // (`persona-setup.tsx`) compose the same forms rather than two drifting copies.
 // The pane (`persona.tsx`) decides which of the two to show.
 //
-// Copy follows `design-docs/persona-vocabulary.md`: on screen it is a fact, a
-// face, a context, and a persona that wears a face. The code keeps the spec's
-// names (`attribute`, `profile`, `binding`) where they name wire records.
+// Copy follows `design-docs/persona-vocabulary.md`: on screen it is an
+// attribute, a face, a context, and a persona that wears a face. `attribute`
+// is the one term the table does not translate — the screen says what the wire
+// says — because the friendlier word it used to carry, `fact`, claimed a truth
+// self-asserted values do not have. `profile` and `binding` still translate.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -67,7 +69,7 @@ export function Label({ children }: { children: React.ReactNode }) {
  * `value` really is arbitrary JSON — a string attribute's value is a string —
  * so this must not assume an object, and must not print `[object Object]` for
  * the one case that is. `undefined` is the answer to a metadata-only listing
- * and says so, rather than rendering as an empty cell that reads like a fact
+ * and says so, rather than rendering as an empty cell that reads like an attribute
  * with no value.
  *
  * **Not exported, and that is the enforcement.** Every value this pane draws
@@ -86,7 +88,7 @@ function formatValue(value: unknown): { text: string; withheld: boolean } {
 }
 
 /**
- * A fact's value, hidden if its type says it should be, with a *Show* beside
+ * An attribute's value, hidden if its type says it should be, with a *Show* beside
  * it when it is.
  *
  * Every place this pane draws a value goes through here, because "wherever it
@@ -102,12 +104,12 @@ function formatValue(value: unknown): { text: string; withheld: boolean } {
  * let a UI string in this component imply otherwise.
  *
  * **Reveal is per value and lives in this component.** Not lifted to the pane
- * keyed by fact id, which would be a store of "things the operator has
+ * keyed by attribute id, which would be a store of "things the operator has
  * unhidden" — one that survives selection changes, outlives the card the person
  * was looking at, and is one refactor away from a *Show all*. Local state
  * cannot become that: it dies with the element, so leaving the pane, reloading
  * the console or navigating anywhere re-hides everything, and revealing the
- * same fact in two places is two deliberate acts rather than one.
+ * same attribute in two places is two deliberate acts rather than one.
  */
 export function FactValue({
   type,
@@ -132,7 +134,7 @@ export function FactValue({
         style={{
           // A masked value is drawn at full strength; `c.faint` is this pane's
           // word for "the agent did not send one". Greying the mask too would
-          // make a fact the holder has look exactly like a fact they do not,
+          // make an attribute the holder has look exactly like an attribute they do not,
           // and the difference is the one thing a hidden value must still say.
           color: withheld ? c.faint : c.text,
           ...(masked && !shown ? { fontFamily: font.mono, letterSpacing: 0.5 } : {}),
@@ -143,8 +145,8 @@ export function FactValue({
       </span>
       {masked && (
         <button
-          // The fact card underneath is itself a click target — it selects the
-          // fact. Without this, revealing a value also moves the selection, and
+          // The attribute card underneath is itself a click target — it selects the
+          // attribute. Without this, revealing a value also moves the selection, and
           // the strip the operator was reading changes under them.
           onClick={(e) => {
             e.stopPropagation();
@@ -153,7 +155,7 @@ export function FactValue({
           title={
             shown
               ? "Hide it again."
-              : "Hidden because this kind of fact is sensitive. Showing it changes what is on your " +
+              : "Hidden because this kind of attribute is sensitive. Showing it changes what is on your " +
                 "screen, not what this page holds — your agent has already sent the value here."
           }
           style={{
@@ -329,7 +331,7 @@ export function AttributeEditor({
         const shared = res.correlation?.sharedWithProfileCount ?? 0;
         if (res.correlation?.severity === "high" || shared > 0) {
           linked =
-            `Saved. ${shared} other fact(s) hold this exact value — anyone who sees both ` +
+            `Saved. ${shared} other attribute(s) hold this exact value — anyone who sees both ` +
             `knows they are the same person, permanently.`;
           setCorrelation(linked);
         }
@@ -342,13 +344,13 @@ export function AttributeEditor({
 
   return (
     <Panel
-      title={existing ? `Edit ${existing.label ?? existing.type}` : "Add a fact"}
+      title={existing ? `Edit ${existing.label ?? existing.type}` : "Add an attribute"}
       description={
         existing
-          ? "Editing writes a new version. A face that shows this fact live picks the change up " +
+          ? "Editing writes a new version. A face that shows this attribute live picks the change up " +
             "everywhere it is worn — which is the point of selecting rather than copying, and " +
             "worth remembering before changing a value rather than adding one."
-          : "A fact about you, held once. Faces select it; a context receives a copy only when " +
+          : "Something you say about yourself, held once. Faces select it; a context receives a copy only when " +
             "a persona there wears one of them."
       }
     >
@@ -428,8 +430,8 @@ export function AttributeEditor({
 
         {derived && (
           <Note tone="warn">
-            This fact is backed by a <strong>credential</strong>, and that is kept as it stands —
-            nothing here can turn a fact you can prove into one you merely said.
+            This attribute is backed by a <strong>credential</strong>, and that is kept as it stands —
+            nothing here can turn an attribute you can prove into one you merely said.
             The value is a display cache: the agent re-derives it from the credential and may
             overwrite what you type.
           </Note>
@@ -457,7 +459,7 @@ export function AttributeEditor({
             {...(denied ? { title: denied } : {})}
             onClick={() => void save()}
           >
-            {busy ? "Saving…" : existing ? "Save" : "Add fact"}
+            {busy ? "Saving…" : existing ? "Save" : "Add attribute"}
           </Button>
           {onCancel && (
             <Button kind="quiet" disabled={busy} onClick={onCancel}>
@@ -569,8 +571,8 @@ export function ProfileEditor({
   return (
     <Panel
       title={existing ? `Edit ${existing.name}` : "New face"}
-      description="A face is the set of facts you show together. What you leave unticked stays
-        out — including facts you add later, which is the whole reason it works that way round."
+      description="A face is the set of attributes you show together. What you leave unticked stays
+        out — including attributes you add later, which is the whole reason it works that way round."
     >
       <div style={{ display: "grid", gap: 12 }}>
         <label style={{ display: "grid", gap: 4 }}>
@@ -590,7 +592,7 @@ export function ProfileEditor({
           <Label>SHOWS</Label>
           {attributes.length === 0 ? (
             <span style={{ fontSize: t.sm, color: c.faint }}>
-              No facts to show yet. Add one first.
+              No attributes to show yet. Add one first.
             </span>
           ) : (
             <div style={{ display: "grid", gap: 6 }}>
@@ -623,7 +625,7 @@ export function ProfileEditor({
             </div>
           )}
           <span style={{ fontSize: t.xs, color: c.faint, lineHeight: 1.5 }}>
-            Ticked facts are <em>live</em>: change a phone number once and every face that shows
+            Ticked attributes are <em>live</em>: change a phone number once and every face that shows
             it changes with it.
           </span>
         </div>
@@ -834,7 +836,7 @@ export function DeleteProfile({
         <div style={{ display: "grid", gap: 8 }}>
           <strong>Deleting “{profile.name}” cannot be undone.</strong>
           <span>
-            It shows {profile.entries.length} fact(s). The facts themselves are untouched — a
+            It shows {profile.entries.length} attribute(s). The attributes themselves are untouched — a
             face is a selection over them, not a copy.
           </span>
           <span>
@@ -894,7 +896,7 @@ export function ResolvedProfile({
   if (claims.length === 0) {
     return (
       <div style={{ fontSize: t.sm, color: c.faint, padding: "6px 0" }}>
-        This face shows nothing. A persona wearing it hands over no facts.
+        This face shows nothing. A persona wearing it hands over no attributes.
       </div>
     );
   }
@@ -1418,7 +1420,7 @@ export function BindingForm({
         outcome =
           profileId === ""
             ? "Taken off. That persona now shows nothing here."
-            : `Done. ${res.materialisedClaimCount ?? 0} fact(s) were copied into ${contextLabel}.` +
+            : `Done. ${res.materialisedClaimCount ?? 0} attribute(s) were copied into ${contextLabel}.` +
               (also > 0
                 ? ` ${also} other persona(s) already wear this face — anyone who sees two of them knows they are the same person, and no later change undoes that.`
                 : "");
@@ -1432,7 +1434,7 @@ export function BindingForm({
   return (
     <Panel
       title={initialDid ? `Change face in ${contextLabel}` : `Be known in ${contextLabel} as…`}
-      description="A persona wears a face inside one context. Your agent copies the face's facts down into
+      description="A persona wears a face inside one context. Your agent copies the face's attributes down into
         the context; the context never reaches back up."
     >
       <div style={{ display: "grid", gap: 10, maxWidth: 560 }}>
@@ -1464,7 +1466,7 @@ export function BindingForm({
             <option value="">— nothing (take it off) —</option>
             {profiles.map((p) => (
               <option key={p.profileId} value={p.profileId}>
-                {p.name} ({p.entries.length} fact(s))
+                {p.name} ({p.entries.length} attribute(s))
               </option>
             ))}
           </select>

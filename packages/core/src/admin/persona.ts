@@ -209,7 +209,7 @@ export interface AttributePutParams extends PersonaHolderParams {
   type: string;
   valueType: AttributeValueType;
   /**
-   * The fact itself. Must agree with `valueType`; the agent refuses a document
+   * The value itself. Must agree with `valueType`; the agent refuses a document
    * where it does not.
    *
    * Typed `unknown` deliberately. The published schema places no type

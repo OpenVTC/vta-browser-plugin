@@ -102,7 +102,7 @@ export interface DisclosureStepUpRequired {
    * Named for what it is. Nothing in it may be shown to a human or signed over
    * until {@link verifyDisclosureStepUp} has passed — the spec rule is that a
    * consumer verifies the proof *before* surfacing the reason, and here the
-   * reason includes the list of facts about to leave.
+   * reason includes the list of attributes about to leave.
    */
   unverifiedApproveRequest: Record<string, unknown>;
 }

@@ -1,13 +1,13 @@
-// The identity map — one picture of facts, faces and contexts.
+// The identity map — one picture of attributes, faces and contexts.
 //
-// Three bands, top to bottom: the facts you hold, the faces that select among
+// Three bands, top to bottom: the attributes you hold, the faces that select among
 // them, the contexts where a persona wears one. Between the second and third
 // runs the line the whole family is built around, drawn rather than described:
 // copies go down, nothing reads up.
 //
 // Select anything and everything it reaches lights up — see `reachOf` in
 // `identity-graph.ts` for what "reaches" means in each direction, and why a
-// fact's reach is where it *goes* while a context's is what it *holds*. The
+// attribute's reach is where it *goes* while a context's is what it *holds*. The
 // two red arrows from one face to two personas ARE a link: every wearer shows
 // the same values, so anyone who sees two of them knows they are one person.
 // That is shown where it happens, not reported at the bottom.
@@ -36,10 +36,10 @@ import { Destructive } from "../destructive.js";
 import { formatInstant } from "../format.js";
 import type { Authority, Parties } from "../use-vta.js";
 import {
-  factReach,
+  attributeReach,
   personaKey,
   reachOf,
-  type FactNode,
+  type AttributeNode,
   type IdentityGraph,
   type PersonaNode,
   type Selection,
@@ -59,7 +59,7 @@ import { isSensitive } from "../claim-sensitivity.js";
 // ── Words for what the agent knows ──────────────────────────────────────────
 
 /** Provenance as a trust level in plain words — `design-docs/persona-vocabulary.md`. */
-function provenanceWords(p: FactNode["provenance"]): { text: string; tone: "off" | "accent" | "ok" } {
+function provenanceWords(p: AttributeNode["provenance"]): { text: string; tone: "off" | "accent" | "ok" } {
   switch (p.kind) {
     case "credentialBacked": {
       const issuer = p.issuerDid ? issuerLabel(p.issuerDid) : null;
@@ -81,7 +81,7 @@ function issuerLabel(did: string): string {
  * How a persona is labelled on a card.
  *
  * The last path segment of a `did:webvh` (`…:webvh.storm.ws:opinion-emotion`)
- * is the name the holder gave it, and it is a *segment of the DID* — a fact
+ * is the name the holder gave it, and it is a *segment of the DID* — an attribute
  * about the identifier, shown as such. This is not an agent name: those come
  * only from a resolved document's `alsoKnownAs` (see `agent-name.ts`), and
  * nothing here pretends otherwise. The full DID is always rendered beneath.
@@ -271,7 +271,7 @@ function ChooseContext({
 // ── The map ─────────────────────────────────────────────────────────────────
 
 type Editing =
-  | { kind: "fact"; existing?: PoolAttribute }
+  | { kind: "attribute"; existing?: PoolAttribute }
   | { kind: "face"; existing?: PoolProfile }
   /** `contextId: null` means "somewhere" — the form asks which context first. */
   | { kind: "bind"; contextId: string | null; personaDid?: string };
@@ -293,7 +293,7 @@ export function IdentityMap({
   attributes: PoolAttribute[];
   profiles: PoolProfile[];
   records: ContextRecord[];
-  /** Everything that has left, for "last left" on a selected fact. Null while
+  /** Everything that has left, for "last left" on a selected attribute. Null while
    *  loading or refused — the strip then says nothing rather than "never". */
   history: DisclosureRecord[] | null;
   onChanged: () => void;
@@ -355,17 +355,17 @@ export function IdentityMap({
 
   // ── edges ──
   const edges = useMemo(() => {
-    const out: { d: string; kind: "fact" | "wear" | "link"; lit: boolean }[] = [];
+    const out: { d: string; kind: "attribute" | "wear" | "link"; lit: boolean }[] = [];
     for (const face of graph.faces) {
       const fb = boxes.get(`face:${face.id}`);
       if (!fb) continue;
-      for (const factId of face.factIds) {
-        const ab = boxes.get(`fact:${factId}`);
+      for (const attributeId of face.attributeIds) {
+        const ab = boxes.get(`attribute:${attributeId}`);
         if (!ab) continue;
         out.push({
           d: curve(ab, fb),
-          kind: "fact",
-          lit: reach.factIds.has(factId) && reach.faceIds.has(face.id),
+          kind: "attribute",
+          lit: reach.attributeIds.has(attributeId) && reach.faceIds.has(face.id),
         });
       }
       for (const ctx of graph.contexts) {
@@ -396,11 +396,11 @@ export function IdentityMap({
         <div style={{ display: "grid", gap: 3 }}>
           <h1 style={{ margin: 0, fontSize: t.lg, fontWeight: 640 }}>Your identity</h1>
           <span style={{ fontSize: t.sm, color: c.muted }}>
-            Facts above the line are yours alone. A context only ever gets a copy.
+            Attributes above the line are yours alone. A context only ever gets a copy.
           </span>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <Pill tone="off">{graph.facts.length} fact{graph.facts.length === 1 ? "" : "s"}</Pill>
+          <Pill tone="off">{graph.attributes.length} attribute{graph.attributes.length === 1 ? "" : "s"}</Pill>
           <Pill tone="off">{graph.faces.length} face{graph.faces.length === 1 ? "" : "s"}</Pill>
           <Pill tone={known > 0 ? "accent" : "off"}>
             known in {known} of {graph.contexts.length} context{graph.contexts.length === 1 ? "" : "s"}
@@ -424,7 +424,7 @@ export function IdentityMap({
       </div>
       {checking && checking !== "Asking your agent…" && <Note tone="danger">{checking}</Note>}
       {findings && findings.length === 0 && (
-        <Note tone="accent">Your agent finds no two facts holding the same value. That is an answer, not an empty result.</Note>
+        <Note tone="accent">Your agent finds no two attributes holding the same value. That is an answer, not an empty result.</Note>
       )}
       {denied && <Note tone="warn">{denied}</Note>}
 
@@ -448,20 +448,20 @@ export function IdentityMap({
           ))}
         </svg>
 
-        {/* ── Facts ── */}
+        {/* ── Attributes ── */}
         <section style={{ display: "grid", gap: 10 }}>
-          <BandLabel text="Facts" sub="yours alone — nothing below can read these" />
+          <BandLabel text="Attributes" sub="yours alone — nothing below can read these" />
           <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
-            {graph.facts.map((f) => {
-              const selected = selection?.kind === "fact" && selection.id === f.id;
+            {graph.attributes.map((f) => {
+              const selected = selection?.kind === "attribute" && selection.id === f.id;
               const prov = provenanceWords(f.provenance);
               const linked = valueLinked.get(f.id);
               return (
                 <div
                   key={f.id}
-                  ref={register(`fact:${f.id}`)}
-                  onClick={() => select({ kind: "fact", id: f.id })}
-                  style={cardStyle(moodOf(selected, reach.factIds.has(f.id), any), { width: 222, ...(f.stale ? { opacity: any && !reach.factIds.has(f.id) && !selected ? 0.35 : 0.72 } : {}) })}
+                  ref={register(`attribute:${f.id}`)}
+                  onClick={() => select({ kind: "attribute", id: f.id })}
+                  style={cardStyle(moodOf(selected, reach.attributeIds.has(f.id), any), { width: 222, ...(f.stale ? { opacity: any && !reach.attributeIds.has(f.id) && !selected ? 0.35 : 0.72 } : {}) })}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                     <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted }}>{f.type}</span>
@@ -489,13 +489,13 @@ export function IdentityMap({
                 </div>
               );
             })}
-            <AddTile label="+ Add a fact" onClick={() => setEditing({ kind: "fact" })} disabled={null} />
+            <AddTile label="+ Add an attribute" onClick={() => setEditing({ kind: "attribute" })} disabled={null} />
           </div>
         </section>
 
         {/* ── Faces ── */}
         <section style={{ display: "grid", gap: 10 }}>
-          <BandLabel text="Faces" sub="which facts you show together" />
+          <BandLabel text="Faces" sub="which attributes you show together" />
           <div style={{ display: "flex", flexWrap: "wrap", gap: 14, justifyContent: "center" }}>
             {graph.faces.map((face) => {
               const selected = selection?.kind === "face" && selection.id === face.id;
@@ -513,12 +513,12 @@ export function IdentityMap({
                     {linked && showLinks && <Pill tone="danger">links {wearers.length} personas</Pill>}
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {face.factIds.map((id) => {
-                      const fact = graph.facts.find((f) => f.id === id);
-                      const lit = reach.factIds.has(id) && reach.faceIds.has(face.id);
+                    {face.attributeIds.map((id) => {
+                      const attribute = graph.attributes.find((f) => f.id === id);
+                      const lit = reach.attributeIds.has(id) && reach.faceIds.has(face.id);
                       return (
                         <span key={id} style={{ fontFamily: font.mono, fontSize: t.xs, padding: "3px 8px", borderRadius: "var(--w-r-sm)", background: lit ? c.accentSoft : c.raised, color: lit ? c.accent : c.text, border: `1px solid ${lit ? c.accentSoft : c.line}` }}>
-                          {fact?.type ?? id}
+                          {attribute?.type ?? id}
                         </span>
                       );
                     })}
@@ -536,7 +536,7 @@ export function IdentityMap({
                 </div>
               );
             })}
-            <AddTile label="+ New face" onClick={() => setEditing({ kind: "face" })} disabled={graph.facts.length === 0 ? "Add a fact first — a face is a selection over facts." : null} />
+            <AddTile label="+ New face" onClick={() => setEditing({ kind: "face" })} disabled={graph.attributes.length === 0 ? "Add an attribute first — a face is a selection over attributes." : null} />
           </div>
         </section>
 
@@ -607,7 +607,7 @@ export function IdentityMap({
                             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                               <span style={{ fontSize: t.sm, fontWeight: 640 }}>{personaLabel(p.did)}</span>
                               {p.faceId ? (
-                                <span style={{ fontSize: t.sm, color: c.muted }}>wears <strong style={{ color: c.text }}>{p.faceName ?? "a face"}</strong> · {p.claimCount} fact{p.claimCount === 1 ? "" : "s"}</span>
+                                <span style={{ fontSize: t.sm, color: c.muted }}>wears <strong style={{ color: c.text }}>{p.faceName ?? "a face"}</strong> · {p.claimCount} attribute{p.claimCount === 1 ? "" : "s"}</span>
                               ) : (
                                 <Pill tone="off">wears nothing</Pill>
                               )}
@@ -682,7 +682,7 @@ export function IdentityMap({
           profiles={profiles}
           records={records}
           history={history}
-          finding={selection.kind === "fact" ? (valueLinked.get(selection.id) ?? null) : null}
+          finding={selection.kind === "attribute" ? (valueLinked.get(selection.id) ?? null) : null}
           showing={showing}
           onShow={setShowing}
           onEdit={setEditing}
@@ -694,7 +694,7 @@ export function IdentityMap({
       )}
 
       {/* ── Editors ── */}
-      {editing?.kind === "fact" && (
+      {editing?.kind === "attribute" && (
         <AttributeEditor
           key={editing.existing?.attributeId ?? "new"}
           parties={parties}
@@ -796,39 +796,39 @@ function DetailStrip({
     );
   };
 
-  if (selection.kind === "fact") {
-    const fact = graph.facts.find((f) => f.id === selection.id);
+  if (selection.kind === "attribute") {
+    const attribute = graph.attributes.find((f) => f.id === selection.id);
     const raw = attributes.find((a) => a.attributeId === selection.id);
-    if (!fact || !raw) return null;
-    const reach = factReach(graph, fact.id);
+    if (!attribute || !raw) return null;
+    const reach = attributeReach(graph, attribute.id);
     const linkedFaces = reach.faces.filter((f) => graph.links.some((l) => l.faceId === f.id));
-    const prov = provenanceWords(fact.provenance);
+    const prov = provenanceWords(attribute.provenance);
     return strip(
       <>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 260px) minmax(0, 1fr) minmax(0, 1fr)", gap: 18 }}>
           <div style={{ display: "grid", gap: 3 }}>
-            <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted }}>{fact.type}</span>
+            <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted }}>{attribute.type}</span>
             <FactValue
-              type={fact.type}
-              value={fact.value}
+              type={attribute.type}
+              value={attribute.value}
               style={{ fontSize: t.md, fontWeight: 640 }}
               textStyle={{ wordBreak: "break-word" }}
             />
             <span style={{ fontSize: t.sm, color: c.faint }}>
-              {fact.label ? `${fact.label} · ` : ""}{prov.text}
-              {fact.provenance.kind === "credentialBacked" ? " — provable, and the same signature to everyone who sees it" : fact.provenance.kind === "selfAsserted" ? " — passed on, never proven" : ""}
+              {attribute.label ? `${attribute.label} · ` : ""}{prov.text}
+              {attribute.provenance.kind === "credentialBacked" ? " — provable, and the same signature to everyone who sees it" : attribute.provenance.kind === "selfAsserted" ? " — passed on, never proven" : ""}
             </span>
             {/* The one place with room to say what the mask is and is not. A
                 *Show* button with no explanation invites the reading that a
                 hidden value is one the console does not hold, and this console
                 holds every value it draws. */}
-            {isSensitive(fact.type) && (
+            {isSensitive(attribute.type) && (
               <span style={{ fontSize: t.sm, color: c.faint }}>
                 Hidden until you press Show — that is about who can see your screen. Your agent has
                 already sent this value here.
               </span>
             )}
-            {fact.stale && <span style={{ fontSize: t.sm, color: c.warn }}>Can no longer be proven ({fact.staleReason ?? "stale"}).</span>}
+            {attribute.stale && <span style={{ fontSize: t.sm, color: c.warn }}>Can no longer be proven ({attribute.staleReason ?? "stale"}).</span>}
           </div>
           {col("Reach", reach.faces.length === 0 ? (
             <span>No face shows it. It reaches nowhere.</span>
@@ -845,28 +845,28 @@ function DetailStrip({
               {finding && <span style={{ color: c.danger }}>{finding.why}</span>}
             </>
           ))}
-          {col("Last left", lastLeft((d) => d.claimTypes.includes(fact.type)))}
+          {col("Last left", lastLeft((d) => d.claimTypes.includes(attribute.type)))}
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <Button kind="quiet" onClick={() => onEdit({ kind: "fact", existing: raw })}>Edit</Button>
+          <Button kind="quiet" onClick={() => onEdit({ kind: "attribute", existing: raw })}>Edit</Button>
           <Destructive<PoolProfile[]>
             label="Delete"
             preview={async () => {
               // Asked again rather than read off the map, so the answer is
               // current at the moment of the decision.
               const current = await personaProfileList(managerSender, parties);
-              return current.filter((p) => p.entries.some((e) => "ref" in e && e.ref === fact.id));
+              return current.filter((p) => p.entries.some((e) => "ref" in e && e.ref === attribute.id));
             }}
             renderPreview={(faces) => (
               <>
-                <strong>Deleting a fact cannot be undone.</strong>
-                <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{fact.type}</span>
+                <strong>Deleting an attribute cannot be undone.</strong>
+                <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{attribute.type}</span>
                 {faces.length === 0 ? (
                   <span>No face shows it, so nothing stops showing anything.</span>
                 ) : (
                   <>
                     <span>{faces.length} face(s) show it and will stop: {faces.map((f) => f.name).join(", ")}</span>
-                    <span>Every persona wearing one of those shows one fact fewer from the next hand-over onwards. Nothing already shared is affected — that has left.</span>
+                    <span>Every persona wearing one of those shows one attribute fewer from the next hand-over onwards. Nothing already shared is affected — that has left.</span>
                   </>
                 )}
               </>
@@ -874,7 +874,7 @@ function DetailStrip({
             needsForce={(faces) => faces.length > 0}
             forceLabel="Remove it from those faces too"
             commit={async (force) => {
-              await personaAttributeDelete(managerSender, { ...parties, attributeId: fact.id, cascade: force });
+              await personaAttributeDelete(managerSender, { ...parties, attributeId: attribute.id, cascade: force });
             }}
             onDone={onChanged}
           />
@@ -896,11 +896,11 @@ function DetailStrip({
             <span style={{ fontSize: t.xs, color: c.faint, textTransform: "uppercase", letterSpacing: 0.4 }}>Face</span>
             <span style={{ fontSize: t.md, fontWeight: 640 }}>{face.name}</span>
             <span style={{ fontSize: t.sm, color: c.faint }}>
-              shows {face.entries.length} fact{face.entries.length === 1 ? "" : "s"}{face.preserved > 0 ? ` (${face.preserved} pinned, shown differently, or only here)` : ""}
+              shows {face.entries.length} attribute{face.entries.length === 1 ? "" : "s"}{face.preserved > 0 ? ` (${face.preserved} pinned, shown differently, or only here)` : ""}
             </span>
           </div>
           {col("Worn by", wearers.length === 0 ? (
-            <span>Nobody yet. No context receives these facts.</span>
+            <span>Nobody yet. No context receives these attributes.</span>
           ) : (
             <>
               {wearers.map((w) => (
@@ -947,7 +947,7 @@ function DetailStrip({
           ) : (
             ctx.personas.filter((p) => p.faceId).map((p) => (
               <span key={p.did}>
-                a copy of <strong style={{ color: c.text }}>{p.faceName ?? "a face"}</strong>, worn by {personaLabel(p.did)} · {p.claimCount} fact{p.claimCount === 1 ? "" : "s"}
+                a copy of <strong style={{ color: c.text }}>{p.faceName ?? "a face"}</strong>, worn by {personaLabel(p.did)} · {p.claimCount} attribute{p.claimCount === 1 ? "" : "s"}
               </span>
             ))
           ))}
@@ -982,7 +982,7 @@ function DetailStrip({
         </div>
         {col("Wears", p.faceId ? (
           <>
-            <span><strong style={{ color: c.text }}>{p.faceName ?? "a face"}</strong> · {p.claimCount} fact{p.claimCount === 1 ? "" : "s"} copied into this context</span>
+            <span><strong style={{ color: c.text }}>{p.faceName ?? "a face"}</strong> · {p.claimCount} attribute{p.claimCount === 1 ? "" : "s"} copied into this context</span>
             {link && (
               <span style={{ color: c.danger }}>
                 {link.wearers.filter((w) => !(w.did === p.did && w.contextId === p.contextId)).map((w) => `${personaLabel(w.did)} in ${labelOf(w.contextId)}`).join(", ")} wear{link.wearers.length === 2 ? "s" : ""} the same face — same person to anyone who sees both.
@@ -990,7 +990,7 @@ function DetailStrip({
             )}
           </>
         ) : (
-          <span>Nothing. This persona is known here but shows no facts.</span>
+          <span>Nothing. This persona is known here but shows no attributes.</span>
         ))}
         {col("Last left", lastLeft((d) => d.personaDid === p.did && d.contextId === ctx.id))}
       </div>
