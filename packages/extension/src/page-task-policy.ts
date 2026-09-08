@@ -30,9 +30,47 @@
 // instead. This is the same reasoning the bundle guards use for `admin/*` —
 // origin trust is not capability trust — applied to a surface where the
 // authority being borrowed is the holder's own identity.
+//
+// **`rooms/*` is the second family, for the same reason at three different
+// strengths.** `rooms/keys/open` returns the PLAINTEXT of a sealed record —
+// the room's whole design keeps that from the host, and handing it to a web
+// page behind one prompt gives it away to a party with less standing than the
+// host. `rooms/keys/list` is the room's membership seen from the holder's side,
+// which on a `private` room is the single fact the tier exists to withhold.
+// And `rooms/owner/*` mints credentials in the ROOM's name: a page that got an
+// owner past one generic prompt could issue itself membership, or authority to
+// admin the room, and the room would be right to honour it.
+//
+// The refusal is the family, not those three, because the boundary is "a page
+// is not a member" rather than a judgement about particular verbs.
 
-/** The Trust Task family a page may never drive directly. */
-const PERSONA_PREFIX = "https://trusttasks.org/spec/persona/";
+/**
+ * The task families a page may never drive directly, with what to say instead.
+ *
+ * A list rather than a chain of `if`s: a family added here needs a reason
+ * written down beside it, and the reason is what the developer reads.
+ */
+const REFUSED: { prefix: string; why: string }[] = [
+  {
+    prefix: "https://trusttasks.org/spec/persona/",
+    why:
+      "The persona family carries the holder's own identity, and a generic task " +
+      "prompt cannot tell them what a disclosure would reveal. Ask for a " +
+      "disclosure through the wallet's disclosure flow, which shows the holder " +
+      "exactly what would be sent, to whom, and what it would let you link — and " +
+      "returns the presentation rather than the underlying values.",
+  },
+  {
+    prefix: "https://trusttasks.org/spec/rooms/",
+    why:
+      "A data room is governed by credentials the room itself issued, and a page " +
+      "holds none of them. Reading a record returns plaintext the room withholds " +
+      "even from its host; listing keys discloses what the holder is a member of; " +
+      "and the owner verbs mint credentials in the room's name, which is authority " +
+      "to admit or promote. A member drives their rooms from their own wallet, " +
+      "where the screen can say which room, which epoch, and what is being given.",
+  },
+];
 
 /**
  * Why a page may not run `type_uri`, or `null` when it may.
@@ -42,13 +80,6 @@ const PERSONA_PREFIX = "https://trusttasks.org/spec/persona/";
  * workaround is usually worse than the thing that was refused.
  */
 export function pageTaskRefusal(typeUri: string): string | null {
-  if (!typeUri.startsWith(PERSONA_PREFIX)) return null;
-  return (
-    `${typeUri} cannot be requested by a page. The persona family carries the ` +
-    "holder's own identity, and a generic task prompt cannot tell them what a " +
-    "disclosure would reveal. Ask for a disclosure through the wallet's " +
-    "disclosure flow, which shows the holder exactly what would be sent, to " +
-    "whom, and what it would let you link — and returns the presentation " +
-    "rather than the underlying values."
-  );
+  const hit = REFUSED.find((r) => typeUri.startsWith(r.prefix));
+  return hit ? `${typeUri} cannot be requested by a page. ${hit.why}` : null;
 }

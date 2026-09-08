@@ -69,16 +69,30 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/auth/passkey/login/finish/0.1"
+      "uri": "https://trusttasks.org/spec/auth/passkey/login/finish/0.1",
+      "consts": [
+        "TASK_AUTH_PASSKEY_LOGIN_FINISH_0_1"
+      ],
+      "deprecated": "0.1 is superseded by the 0.2 wire form. The VTA still accepts 0.1 during the migration window but it will be removed in a future release — prefer TASK_AUTH_PASSKEY_LOGIN_FINISH_0_2."
     },
     {
-      "uri": "https://trusttasks.org/spec/auth/passkey/login/finish/0.2"
+      "uri": "https://trusttasks.org/spec/auth/passkey/login/finish/0.2",
+      "consts": [
+        "TASK_AUTH_PASSKEY_LOGIN_FINISH_0_2"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/auth/passkey/login/start/0.1"
+      "uri": "https://trusttasks.org/spec/auth/passkey/login/start/0.1",
+      "consts": [
+        "TASK_AUTH_PASSKEY_LOGIN_START_0_1"
+      ],
+      "deprecated": "0.1 is superseded by the 0.2 wire form (the `purpose` enum uses the camelCase `stepUp` value). The VTA still accepts 0.1 during the migration window but it will be removed in a future release — prefer TASK_AUTH_PASSKEY_LOGIN_START_0_2."
     },
     {
-      "uri": "https://trusttasks.org/spec/auth/passkey/login/start/0.2"
+      "uri": "https://trusttasks.org/spec/auth/passkey/login/start/0.2",
+      "consts": [
+        "TASK_AUTH_PASSKEY_LOGIN_START_0_2"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/auth/refresh/0.1",
@@ -87,7 +101,10 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/auth/revoke-session/0.1"
+      "uri": "https://trusttasks.org/spec/auth/revoke-session/0.1",
+      "consts": [
+        "TASK_AUTH_REVOKE_SESSION_0_1"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/auth/sessions/list/0.1",
@@ -96,13 +113,23 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/auth/step-up/approve-response/0.1"
+      "uri": "https://trusttasks.org/spec/auth/step-up/approve-response/0.1",
+      "consts": [
+        "TASK_AUTH_STEP_UP_APPROVE_RESPONSE_0_1"
+      ],
+      "deprecated": "0.1 is superseded by the 0.2 wire form (the evidence enum uses the camelCase `didSigned` value). The VTA still accepts 0.1 during the migration window but it will be removed in a future release — prefer TASK_AUTH_STEP_UP_APPROVE_RESPONSE_0_2."
     },
     {
-      "uri": "https://trusttasks.org/spec/auth/step-up/approve-response/0.2"
+      "uri": "https://trusttasks.org/spec/auth/step-up/approve-response/0.2",
+      "consts": [
+        "TASK_AUTH_STEP_UP_APPROVE_RESPONSE_0_2"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/auth/step-up/approve-response/0.3"
+      "uri": "https://trusttasks.org/spec/auth/step-up/approve-response/0.3",
+      "consts": [
+        "TASK_AUTH_STEP_UP_APPROVE_RESPONSE_0_3"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/auth/whoami/0.1",
@@ -123,10 +150,16 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/consent/approver-list/1.0"
+      "uri": "https://trusttasks.org/spec/consent/approver-list/1.0",
+      "consts": [
+        "TASK_CONSENT_APPROVER_LIST_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/consent/approver-set/1.0"
+      "uri": "https://trusttasks.org/spec/consent/approver-set/1.0",
+      "consts": [
+        "TASK_CONSENT_APPROVER_SET_1_0"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/consent/decision/1.0",
@@ -165,7 +198,10 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/credential-exchange/pending/approve/0.1"
+      "uri": "https://trusttasks.org/spec/credential-exchange/pending/approve/0.1",
+      "consts": [
+        "PENDING_APPROVE"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/credential-exchange/pending/deny/0.1",
@@ -269,73 +305,142 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/did/change-owner/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/did/change-owner/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DID_CHANGE_OWNER_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/did/check-name/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/did/check-name/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DID_CHECK_NAME_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/did/delete/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/did/delete/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DID_DELETE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/did/disable/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/did/disable/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DID_DISABLE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/did/enable/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/did/enable/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DID_ENABLE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/did/info/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/did/info/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DID_INFO_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/did/list/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/did/list/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DID_LIST_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/did/problem-report/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/did/problem-report/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DID_PROBLEM_REPORT_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/did/publish/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/did/publish/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DID_PUBLISH_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/did/register/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/did/register/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DID_REGISTER_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/did/rollback/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/did/rollback/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DID_ROLLBACK_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/domain/assign/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/domain/assign/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DOMAIN_ASSIGN_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/domain/create/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/domain/create/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DOMAIN_CREATE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/domain/disable/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/domain/disable/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DOMAIN_DISABLE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/domain/purge/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/domain/purge/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DOMAIN_PURGE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/domain/set-default/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/domain/set-default/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DOMAIN_SET_DEFAULT_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/domain/unassign/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/domain/unassign/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DOMAIN_UNASSIGN_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/domain/update/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/domain/update/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_DOMAIN_UPDATE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/registry/admin-register/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/registry/admin-register/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_REGISTRY_ADMIN_REGISTER_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/registry/deregister/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/registry/deregister/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_REGISTRY_DEREGISTER_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/server/health/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/server/health/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_SERVER_HEALTH_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/server/register/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/server/register/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_SERVER_REGISTER_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/did-management/server/stats-sync/0.1"
+      "uri": "https://trusttasks.org/spec/did-management/server/stats-sync/0.1",
+      "consts": [
+        "TASK_DID_MANAGEMENT_SERVER_STATS_SYNC_0_1"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/keys/create/0.1",
@@ -344,10 +449,16 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/keys/derive-and-sign-document/0.1"
+      "uri": "https://trusttasks.org/spec/keys/derive-and-sign-document/0.1",
+      "consts": [
+        "TASK_KEYS_DERIVE_AND_SIGN_DOCUMENT_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/keys/derive-and-sign/0.1"
+      "uri": "https://trusttasks.org/spec/keys/derive-and-sign/0.1",
+      "consts": [
+        "TASK_KEYS_DERIVE_AND_SIGN_0_1"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/keys/import/0.1",
@@ -392,79 +503,154 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/attribute/delete/1.0"
+      "uri": "https://trusttasks.org/spec/persona/attribute/delete/1.0",
+      "consts": [
+        "TASK_PERSONA_ATTRIBUTE_DELETE_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/attribute/list/1.0"
+      "uri": "https://trusttasks.org/spec/persona/attribute/list/1.0",
+      "consts": [
+        "TASK_PERSONA_ATTRIBUTE_LIST_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/attribute/put/1.0"
+      "uri": "https://trusttasks.org/spec/persona/attribute/put/1.0",
+      "consts": [
+        "TASK_PERSONA_ATTRIBUTE_PUT_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/binding/get/1.0"
+      "uri": "https://trusttasks.org/spec/persona/binding/get/1.0",
+      "consts": [
+        "TASK_PERSONA_BINDING_GET_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/binding/list/1.0"
+      "uri": "https://trusttasks.org/spec/persona/binding/list/1.0",
+      "consts": [
+        "TASK_PERSONA_BINDING_LIST_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/binding/set/1.0"
+      "uri": "https://trusttasks.org/spec/persona/binding/set/1.0",
+      "consts": [
+        "TASK_PERSONA_BINDING_SET_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/claim-types/list/1.0"
+      "uri": "https://trusttasks.org/spec/persona/claim-types/list/1.0",
+      "consts": [
+        "TASK_PERSONA_CLAIM_TYPES_LIST_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/contact/delete/1.0"
+      "uri": "https://trusttasks.org/spec/persona/contact/delete/1.0",
+      "consts": [
+        "TASK_PERSONA_CONTACT_DELETE_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/contact/get/1.0"
+      "uri": "https://trusttasks.org/spec/persona/contact/get/1.0",
+      "consts": [
+        "TASK_PERSONA_CONTACT_GET_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/contact/list/1.0"
+      "uri": "https://trusttasks.org/spec/persona/contact/list/1.0",
+      "consts": [
+        "TASK_PERSONA_CONTACT_LIST_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/contact/put/1.0"
+      "uri": "https://trusttasks.org/spec/persona/contact/put/1.0",
+      "consts": [
+        "TASK_PERSONA_CONTACT_PUT_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/correlation/analyze/1.0"
+      "uri": "https://trusttasks.org/spec/persona/correlation/analyze/1.0",
+      "consts": [
+        "TASK_PERSONA_CORRELATION_ANALYZE_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/disclosure/history/1.0"
+      "uri": "https://trusttasks.org/spec/persona/disclosure/history/1.0",
+      "consts": [
+        "TASK_PERSONA_DISCLOSURE_HISTORY_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/disclosure/present/1.0"
+      "uri": "https://trusttasks.org/spec/persona/disclosure/present/1.0",
+      "consts": [
+        "TASK_PERSONA_DISCLOSURE_PRESENT_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/disclosure/preview/1.0"
+      "uri": "https://trusttasks.org/spec/persona/disclosure/preview/1.0",
+      "consts": [
+        "TASK_PERSONA_DISCLOSURE_PREVIEW_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/local/binding/set/1.0"
+      "uri": "https://trusttasks.org/spec/persona/local/binding/set/1.0",
+      "consts": [
+        "TASK_PERSONA_LOCAL_BINDING_SET_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/local/profile/delete/1.0"
+      "uri": "https://trusttasks.org/spec/persona/local/profile/delete/1.0",
+      "consts": [
+        "TASK_PERSONA_LOCAL_PROFILE_DELETE_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/local/profile/get/1.0"
+      "uri": "https://trusttasks.org/spec/persona/local/profile/get/1.0",
+      "consts": [
+        "TASK_PERSONA_LOCAL_PROFILE_GET_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/local/profile/list/1.0"
+      "uri": "https://trusttasks.org/spec/persona/local/profile/list/1.0",
+      "consts": [
+        "TASK_PERSONA_LOCAL_PROFILE_LIST_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/local/profile/put/1.0"
+      "uri": "https://trusttasks.org/spec/persona/local/profile/put/1.0",
+      "consts": [
+        "TASK_PERSONA_LOCAL_PROFILE_PUT_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/profile/delete/1.0"
+      "uri": "https://trusttasks.org/spec/persona/profile/delete/1.0",
+      "consts": [
+        "TASK_PERSONA_PROFILE_DELETE_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/profile/get/1.0"
+      "uri": "https://trusttasks.org/spec/persona/profile/get/1.0",
+      "consts": [
+        "TASK_PERSONA_PROFILE_GET_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/profile/list/1.0"
+      "uri": "https://trusttasks.org/spec/persona/profile/list/1.0",
+      "consts": [
+        "TASK_PERSONA_PROFILE_LIST_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/profile/put/1.0"
+      "uri": "https://trusttasks.org/spec/persona/profile/put/1.0",
+      "consts": [
+        "TASK_PERSONA_PROFILE_PUT_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/persona/renderers/list/1.0"
+      "uri": "https://trusttasks.org/spec/persona/renderers/list/1.0",
+      "consts": [
+        "TASK_PERSONA_RENDERERS_LIST_1_0"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/policy/delete/0.1",
@@ -491,22 +677,37 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/provision/integration/0.1"
+      "uri": "https://trusttasks.org/spec/provision/integration/0.1",
+      "consts": [
+        "CANONICAL_PROVISION_INTEGRATION",
+        "CANONICAL_PROVISION_INTEGRATION_RESULT"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/provision/integration/0.2",
       "consts": [
+        "CANONICAL_PROVISION_INTEGRATION_0_2",
+        "CANONICAL_PROVISION_INTEGRATION_0_2_RESULT",
         "V0_2"
       ]
     },
     {
       "uri": "https://trusttasks.org/spec/provision/integration/0.3",
       "consts": [
+        "CANONICAL_PROVISION_INTEGRATION_0_3",
+        "CANONICAL_PROVISION_INTEGRATION_0_3_RESULT",
+        "TASK_PROVISION_INTEGRATION_0_3",
         "V0_3"
       ]
     },
     {
       "uri": "https://trusttasks.org/spec/push/wake/0.2"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/keys/chain/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_CHAIN_0_1"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/rooms/keys/commit/0.1",
@@ -515,7 +716,16 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/rooms/keys/key-package/0.1"
+      "uri": "https://trusttasks.org/spec/rooms/keys/key-package/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_KEY_PACKAGE_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/keys/list/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_LIST_0_1"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/rooms/keys/open/0.1",
@@ -530,19 +740,49 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/rooms/keys/seal/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_SEAL_0_1"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/rooms/keys/welcome/0.1",
       "consts": [
         "TASK_ROOMS_KEYS_WELCOME_0_1"
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/task-consent/decision/0.1"
+      "uri": "https://trusttasks.org/spec/rooms/owner/invite/0.1",
+      "consts": [
+        "TASK_ROOMS_OWNER_INVITE_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/owner/issue-authority/0.1",
+      "consts": [
+        "TASK_ROOMS_OWNER_ISSUE_AUTHORITY_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/owner/issue-membership/0.1",
+      "consts": [
+        "TASK_ROOMS_OWNER_ISSUE_MEMBERSHIP_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/task-consent/decision/0.1",
+      "consts": [
+        "TASK_TASK_CONSENT_DECISION_0_1"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/task-consent/request/0.1"
     },
     {
-      "uri": "https://trusttasks.org/spec/trust-task-discovery/0.1"
+      "uri": "https://trusttasks.org/spec/trust-task-discovery/0.1",
+      "consts": [
+        "TASK_TRUST_TASK_DISCOVERY_0_1"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vault/archive/0.1",
@@ -551,28 +791,52 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vault/credentials/archive/0.1"
+      "uri": "https://trusttasks.org/spec/vault/credentials/archive/0.1",
+      "consts": [
+        "TASK_VAULT_CREDENTIALS_ARCHIVE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vault/credentials/delete/0.1"
+      "uri": "https://trusttasks.org/spec/vault/credentials/delete/0.1",
+      "consts": [
+        "TASK_VAULT_CREDENTIALS_DELETE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vault/credentials/get/0.1"
+      "uri": "https://trusttasks.org/spec/vault/credentials/get/0.1",
+      "consts": [
+        "TASK_VAULT_CREDENTIALS_GET_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vault/credentials/purge/0.1"
+      "uri": "https://trusttasks.org/spec/vault/credentials/purge/0.1",
+      "consts": [
+        "TASK_VAULT_CREDENTIALS_PURGE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vault/credentials/query/0.1"
+      "uri": "https://trusttasks.org/spec/vault/credentials/query/0.1",
+      "consts": [
+        "TASK_VAULT_CREDENTIALS_QUERY_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vault/credentials/receive/0.1"
+      "uri": "https://trusttasks.org/spec/vault/credentials/receive/0.1",
+      "consts": [
+        "TASK_VAULT_CREDENTIALS_RECEIVE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vault/credentials/restore/0.1"
+      "uri": "https://trusttasks.org/spec/vault/credentials/restore/0.1",
+      "consts": [
+        "TASK_VAULT_CREDENTIALS_RESTORE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vault/credentials/unarchive/0.1"
+      "uri": "https://trusttasks.org/spec/vault/credentials/unarchive/0.1",
+      "consts": [
+        "TASK_VAULT_CREDENTIALS_UNARCHIVE_0_1"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vault/delete/0.1",
@@ -657,10 +921,17 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vault/sign-trust-task/0.1"
+      "uri": "https://trusttasks.org/spec/vault/sign-trust-task/0.1",
+      "consts": [
+        "TASK_VAULT_SIGN_TRUST_TASK_0_1"
+      ],
+      "deprecated": "0.1 is superseded by the 0.2 wire form (step-up-proof enums use camelCase values). The VTA still accepts 0.1 during the migration window but it will be removed in a future release — prefer TASK_VAULT_SIGN_TRUST_TASK_0_2."
     },
     {
-      "uri": "https://trusttasks.org/spec/vault/sign-trust-task/0.2"
+      "uri": "https://trusttasks.org/spec/vault/sign-trust-task/0.2",
+      "consts": [
+        "TASK_VAULT_SIGN_TRUST_TASK_0_2"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vault/unarchive/0.1",
@@ -688,10 +959,16 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/app-state/delete/1.0"
+      "uri": "https://trusttasks.org/spec/vta/app-state/delete/1.0",
+      "consts": [
+        "TASK_VTA_APP_STATE_DELETE_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/app-state/get-many/1.0"
+      "uri": "https://trusttasks.org/spec/vta/app-state/get-many/1.0",
+      "consts": [
+        "TASK_VTA_APP_STATE_GET_MANY_1_0"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vta/app-state/get/1.0",
@@ -706,7 +983,10 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/app-state/put-many/1.0"
+      "uri": "https://trusttasks.org/spec/vta/app-state/put-many/1.0",
+      "consts": [
+        "TASK_VTA_APP_STATE_PUT_MANY_1_0"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vta/app-state/put/1.0",
@@ -715,16 +995,28 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/attestation/report/1.0"
+      "uri": "https://trusttasks.org/spec/vta/attestation/report/1.0",
+      "consts": [
+        "TASK_ATTESTATION_REPORT_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/attestation/status/1.0"
+      "uri": "https://trusttasks.org/spec/vta/attestation/status/1.0",
+      "consts": [
+        "TASK_ATTESTATION_STATUS_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/audit/get-retention/1.0"
+      "uri": "https://trusttasks.org/spec/vta/audit/get-retention/1.0",
+      "consts": [
+        "TASK_AUDIT_GET_RETENTION_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/audit/update-retention/1.0"
+      "uri": "https://trusttasks.org/spec/vta/audit/update-retention/1.0",
+      "consts": [
+        "TASK_AUDIT_UPDATE_RETENTION_1_0"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vta/backup/abort/1.0",
@@ -733,16 +1025,28 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/backup/complete-export/1.0"
+      "uri": "https://trusttasks.org/spec/vta/backup/complete-export/1.0",
+      "consts": [
+        "TASK_BACKUP_COMPLETE_EXPORT_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/backup/finalize-import/1.0"
+      "uri": "https://trusttasks.org/spec/vta/backup/finalize-import/1.0",
+      "consts": [
+        "TASK_BACKUP_FINALIZE_IMPORT_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/backup/initiate-export/1.0"
+      "uri": "https://trusttasks.org/spec/vta/backup/initiate-export/1.0",
+      "consts": [
+        "TASK_BACKUP_INITIATE_EXPORT_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/backup/initiate-import/1.0"
+      "uri": "https://trusttasks.org/spec/vta/backup/initiate-import/1.0",
+      "consts": [
+        "TASK_BACKUP_INITIATE_IMPORT_1_0"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vta/contexts/create/1.0",
@@ -769,10 +1073,16 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/contexts/preview-delete/1.0"
+      "uri": "https://trusttasks.org/spec/vta/contexts/preview-delete/1.0",
+      "consts": [
+        "TASK_CONTEXTS_PREVIEW_DELETE_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/contexts/update-did/1.0"
+      "uri": "https://trusttasks.org/spec/vta/contexts/update-did/1.0",
+      "consts": [
+        "TASK_CONTEXTS_UPDATE_DID_1_0"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vta/contexts/update/1.0",
@@ -781,34 +1091,64 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/credentials/issue/0.2"
+      "uri": "https://trusttasks.org/spec/vta/credentials/issue/0.2",
+      "consts": [
+        "TASK_VTA_CREDENTIALS_ISSUE_0_2"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/credentials/list/0.1"
+      "uri": "https://trusttasks.org/spec/vta/credentials/list/0.1",
+      "consts": [
+        "TASK_VTA_CREDENTIALS_LIST_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/credentials/revoke/0.1"
+      "uri": "https://trusttasks.org/spec/vta/credentials/revoke/0.1",
+      "consts": [
+        "TASK_VTA_CREDENTIALS_REVOKE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/did-templates/create/2.0"
+      "uri": "https://trusttasks.org/spec/vta/did-templates/create/2.0",
+      "consts": [
+        "TASK_DID_TEMPLATES_CREATE_2_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/did-templates/delete/2.0"
+      "uri": "https://trusttasks.org/spec/vta/did-templates/delete/2.0",
+      "consts": [
+        "TASK_DID_TEMPLATES_DELETE_2_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/did-templates/get/2.0"
+      "uri": "https://trusttasks.org/spec/vta/did-templates/get/2.0",
+      "consts": [
+        "TASK_DID_TEMPLATES_GET_2_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/did-templates/list/2.0"
+      "uri": "https://trusttasks.org/spec/vta/did-templates/list/2.0",
+      "consts": [
+        "TASK_DID_TEMPLATES_LIST_2_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/did-templates/render/2.0"
+      "uri": "https://trusttasks.org/spec/vta/did-templates/render/2.0",
+      "consts": [
+        "TASK_DID_TEMPLATES_RENDER_2_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/did-templates/update/2.0"
+      "uri": "https://trusttasks.org/spec/vta/did-templates/update/2.0",
+      "consts": [
+        "TASK_DID_TEMPLATES_UPDATE_2_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/management/reload-services/1.0"
+      "uri": "https://trusttasks.org/spec/vta/management/reload-services/1.0",
+      "consts": [
+        "TASK_MANAGEMENT_RELOAD_SERVICES_1_0"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vta/memory/delete/0.1",
@@ -829,10 +1169,16 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/passkey-vms/enroll-challenge/0.1"
+      "uri": "https://trusttasks.org/spec/vta/passkey-vms/enroll-challenge/0.1",
+      "consts": [
+        "TASK_PASSKEY_VMS_ENROLL_CHALLENGE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/passkey-vms/enroll-submit/0.1"
+      "uri": "https://trusttasks.org/spec/vta/passkey-vms/enroll-submit/0.1",
+      "consts": [
+        "TASK_PASSKEY_VMS_ENROLL_SUBMIT_0_1"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vta/passkey-vms/list/0.1",
@@ -841,10 +1187,16 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/passkey-vms/revoke/0.1"
+      "uri": "https://trusttasks.org/spec/vta/passkey-vms/revoke/0.1",
+      "consts": [
+        "TASK_PASSKEY_VMS_REVOKE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/seeds/export-mnemonic/1.0"
+      "uri": "https://trusttasks.org/spec/vta/seeds/export-mnemonic/1.0",
+      "consts": [
+        "TASK_SEEDS_EXPORT_MNEMONIC_1_0"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vta/seeds/list/1.0",
@@ -865,10 +1217,16 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/services/drain/cancel/1.0"
+      "uri": "https://trusttasks.org/spec/vta/services/drain/cancel/1.0",
+      "consts": [
+        "TASK_SERVICES_DRAIN_CANCEL_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/services/drain/list/1.0"
+      "uri": "https://trusttasks.org/spec/vta/services/drain/list/1.0",
+      "consts": [
+        "TASK_SERVICES_DRAIN_LIST_1_0"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vta/services/enable/1.0",
@@ -889,7 +1247,10 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/services/rollback/1.0"
+      "uri": "https://trusttasks.org/spec/vta/services/rollback/1.0",
+      "consts": [
+        "TASK_SERVICES_ROLLBACK_1_0"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vta/services/update/1.0",
@@ -898,28 +1259,52 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/agent-name/check/1.0"
+      "uri": "https://trusttasks.org/spec/vta/webvh/agent-name/check/1.0",
+      "consts": [
+        "TASK_WEBVH_AGENT_NAME_CHECK_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/agent-name/disable/1.0"
+      "uri": "https://trusttasks.org/spec/vta/webvh/agent-name/disable/1.0",
+      "consts": [
+        "TASK_WEBVH_AGENT_NAME_DISABLE_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/agent-name/enable/1.0"
+      "uri": "https://trusttasks.org/spec/vta/webvh/agent-name/enable/1.0",
+      "consts": [
+        "TASK_WEBVH_AGENT_NAME_ENABLE_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/agent-name/list/1.0"
+      "uri": "https://trusttasks.org/spec/vta/webvh/agent-name/list/1.0",
+      "consts": [
+        "TASK_WEBVH_AGENT_NAME_LIST_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/agent-name/remove/1.0"
+      "uri": "https://trusttasks.org/spec/vta/webvh/agent-name/remove/1.0",
+      "consts": [
+        "TASK_WEBVH_AGENT_NAME_REMOVE_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/agent-name/set/1.0"
+      "uri": "https://trusttasks.org/spec/vta/webvh/agent-name/set/1.0",
+      "consts": [
+        "TASK_WEBVH_AGENT_NAME_SET_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/dids/create/1.0"
+      "uri": "https://trusttasks.org/spec/vta/webvh/dids/create/1.0",
+      "consts": [
+        "TASK_WEBVH_DIDS_CREATE_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/dids/delete/1.0"
+      "uri": "https://trusttasks.org/spec/vta/webvh/dids/delete/1.0",
+      "consts": [
+        "TASK_WEBVH_DIDS_DELETE_1_0"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vta/webvh/dids/get/1.0",
@@ -934,52 +1319,93 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/dids/register-with-server/1.0"
+      "uri": "https://trusttasks.org/spec/vta/webvh/dids/register-with-server/1.0",
+      "consts": [
+        "TASK_WEBVH_DIDS_REGISTER_WITH_SERVER_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/dids/rotate-keys/1.0"
+      "uri": "https://trusttasks.org/spec/vta/webvh/dids/rotate-keys/1.0",
+      "consts": [
+        "TASK_WEBVH_DIDS_ROTATE_KEYS_1_0"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vta/webvh/dids/update/1.0",
       "consts": [
+        "TASK_WEBVH_DIDS_UPDATE_1_0",
         "WEBVH_UPDATE"
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/servers/domains/0.1"
+      "uri": "https://trusttasks.org/spec/vta/webvh/servers/domains/0.1",
+      "consts": [
+        "TASK_WEBVH_SERVERS_DOMAINS_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/servers/list/1.0"
+      "uri": "https://trusttasks.org/spec/vta/webvh/servers/list/1.0",
+      "consts": [
+        "TASK_WEBVH_SERVERS_LIST_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/servers/reconcile/0.1"
+      "uri": "https://trusttasks.org/spec/vta/webvh/servers/reconcile/0.1",
+      "consts": [
+        "TASK_WEBVH_SERVERS_RECONCILE_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/servers/register/1.0"
+      "uri": "https://trusttasks.org/spec/vta/webvh/servers/register/1.0",
+      "consts": [
+        "TASK_WEBVH_SERVERS_REGISTER_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/servers/remove/1.0"
+      "uri": "https://trusttasks.org/spec/vta/webvh/servers/remove/1.0",
+      "consts": [
+        "TASK_WEBVH_SERVERS_REMOVE_1_0"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webvh/servers/retire-orphan/0.1"
+      "uri": "https://trusttasks.org/spec/vta/webvh/servers/retire-orphan/0.1",
+      "consts": [
+        "TASK_WEBVH_SERVERS_RETIRE_ORPHAN_0_1"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vtc/join-requests/manifest/0.1"
+      "uri": "https://trusttasks.org/spec/vtc/join-requests/manifest/0.1",
+      "consts": [
+        "JOIN_REQUEST_MANIFEST_RESPONSE_TYPE",
+        "JOIN_REQUEST_MANIFEST_TYPE"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vtc/join-requests/status/0.1"
+      "uri": "https://trusttasks.org/spec/vtc/join-requests/status/0.1",
+      "consts": [
+        "JOIN_REQUEST_STATUS_RESPONSE_TYPE",
+        "JOIN_REQUEST_STATUS_TYPE"
+      ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vtc/join-requests/submit-receipt/0.1"
+      "uri": "https://trusttasks.org/spec/vtc/join-requests/submit-receipt/0.1",
+      "consts": [
+        "JOIN_REQUEST_SUBMIT_RECEIPT_TYPE"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vtc/join-requests/submit/0.2",
       "consts": [
+        "JOIN_REQUEST_SUBMIT_RESPONSE_TYPE",
+        "JOIN_REQUEST_SUBMIT_TYPE",
         "TYPE"
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vtc/members/removal-notice/0.1"
+      "uri": "https://trusttasks.org/spec/vtc/members/removal-notice/0.1",
+      "consts": [
+        "MEMBER_REMOVAL_NOTICE_TYPE"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vtc/members/request-vmc/0.1",
@@ -988,7 +1414,10 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vtc/members/self-remove-receipt/0.1"
+      "uri": "https://trusttasks.org/spec/vtc/members/self-remove-receipt/0.1",
+      "consts": [
+        "MEMBER_SELF_REMOVE_RECEIPT_TYPE"
+      ]
     },
     {
       "uri": "https://trusttasks.org/spec/vtc/members/self-remove/0.1",
@@ -999,6 +1428,7 @@
     {
       "uri": "https://trusttasks.org/spec/vtc/members/vmc/0.1",
       "consts": [
+        "MEMBER_VMC_RESPONSE_TYPE",
         "MEMBER_VMC_TYPE"
       ]
     }

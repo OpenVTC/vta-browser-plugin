@@ -32,6 +32,7 @@ import { CredentialsPane } from "./panes/credentials.js";
 import { MemoryPane } from "./panes/memory.js";
 import { PersonaPane } from "./panes/persona.js";
 import { AppStatePane } from "./panes/app-state.js";
+import { RoomsPane } from "./panes/rooms.js";
 import { managerSender } from "./sender.js";
 import { useVta, type Parties } from "./use-vta.js";
 import { contextHeading } from "./format.js";
@@ -45,6 +46,7 @@ export type SectionId =
   | "persona"
   | "memory"
   | "app-state"
+  | "rooms"
   | "services"
   | "maintenance"
   | "audit"
@@ -115,6 +117,11 @@ const ACTS: Act[] = [
       // shown because the selection is required, not merely useful.
       { id: "memory", label: "Memory", contextScoped: true },
       { id: "app-state", label: "App state", contextScoped: true },
+      // Key custody is held at the agent, not inside a context:
+      // `rooms/keys/list` takes no `contextId`, because a room's keys arrive
+      // from the room rather than being derived under one of this VTA's
+      // hierarchies. A context column here would filter nothing.
+      { id: "rooms", label: "Rooms", contextScoped: false },
     ],
   },
   {
@@ -355,6 +362,8 @@ export function ManagerShell() {
             contextHeading={heading}
           />
         );
+      case "rooms":
+        return <RoomsPane parties={parties} contexts={contexts.records} />;
       case "services":
         return <ServicesPane parties={parties} authority={vta.authority} />;
       case "maintenance":

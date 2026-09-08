@@ -1,7 +1,7 @@
 {
   "name": "@openvtc/pnm-core",
   "version": "0.9.1",
-  "description": "Browser-side bridge between WebAuthn passkeys and VTA-managed DIDs. Wire types, WebAuthn ceremony helpers, COSE→Multikey conversion, DID verificationMethod builder, REST + DIDComm transports, mediator client, SIOP / RP-login / provision-integration flows.",
+  "description": "Browser-side bridge between WebAuthn passkeys and VTA-managed DIDs. Wire types, WebAuthn ceremony helpers, COSE\u2192Multikey conversion, DID verificationMethod builder, REST + DIDComm transports, mediator client, SIOP / RP-login / provision-integration flows.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -108,7 +108,11 @@
       "types": "./dist/webauthn/index.d.ts",
       "import": "./dist/webauthn/index.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./rooms": {
+      "types": "./dist/rooms/index.d.ts",
+      "import": "./dist/rooms/index.js"
+    }
   },
   "sideEffects": false,
   "files": [
@@ -126,7 +130,7 @@
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
     "@noble/curves": "^2.4.0",
-    "@openvtc/trust-tasks": "^0.17.6",
+    "@openvtc/trust-tasks": "^0.17.7",
     "@openvtc/vti-didcomm-js": "^0.7.0",
     "@openvtc/vti-tsp-js": "^0.2.0",
     "@scure/base": "^2.2.0",

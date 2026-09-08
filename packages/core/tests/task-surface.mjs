@@ -63,6 +63,33 @@ const NOT_IN_SDK = [
       "Inbound notification from the agent once an approver decided. Not a request this " +
       "library can send, so it has no client constant.",
   },
+  // The rooms family is split across two recipients on purpose, and this list is
+  // where that split becomes visible. `rooms/keys/*` and `rooms/owner/*`
+  // terminate at a VTA — the member's own key holder, or the owner's — so they
+  // are vta-sdk constants and are checked above. The five below are served by
+  // the room's HOST, which holds ciphertext it cannot read and never holds a
+  // key. A host is not a VTA, so no vta-sdk constant should exist for them, and
+  // one appearing here would mean the boundary had moved.
+  {
+    prefix: "https://trusttasks.org/spec/rooms/create/",
+    why:
+      "Host-served: mints the room at whoever is hosting it (vti-rooms::wire, " +
+      "served by vtc-service/src/rooms). The VTA is not the counterparty.",
+  },
+  {
+    prefix: "https://trusttasks.org/spec/rooms/records/",
+    why:
+      "Host-served: list/get/put move sealed bytes to and from the host. Sealing " +
+      "and opening happen at the member's VTA under `rooms/keys/*`, which is the " +
+      "half that does have SDK constants.",
+  },
+  {
+    prefix: "https://trusttasks.org/spec/rooms/epoch/",
+    why:
+      "Host-served: the host records that an epoch advanced and serves the key " +
+      "chain. It never learns a key — the rung it carries is sealed under the " +
+      "incoming epoch, which only members hold.",
+  },
 ];
 
 // ── what this library references ────────────────────────────────────────────
@@ -279,7 +306,26 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // the agent does not name, rather than as a deprecation warning. That is the
   // expected shape of a cutover here: nothing is deployed, so neither side
   // keeps an old version alive.
-  const expected = 188;
+  // 188 -> 194 is the rooms family, and the canonical total moved 208 -> 214
+  // with it (six new SDK constants: `rooms/keys/{list,seal,chain}` and
+  // `rooms/owner/{invite,issue-membership,issue-authority}`, implemented at
+  // OpenVTC/verifiable-trust-infrastructure#1320 and #1329). The six this
+  // library gained are those minus `keys/chain`, plus `keys/open`, which was
+  // canonical and unimplemented until the rooms pane needed to read a record.
+  //
+  // **`rooms/keys/chain` is the one outstanding piece of the pane's own story.**
+  // The pane already tells a member their history is unreadable before the
+  // epoch they joined at; delivering the chain to their key holder is the
+  // repair, and it is a second hop after fetching the rungs from the host
+  // (`rooms/epoch/chain`, which is host-served and in NOT_IN_SDK). Wiring the
+  // two together is the next increment, not an omission to paper over.
+  //
+  // The outstanding count is unchanged at 20 — `keys/chain` joined it and
+  // `keys/open` left it — but the set is not the same: the four remaining
+  // `rooms/keys/*` (commit, key-package, present, welcome) are MLS group
+  // operations a browser does not perform. They belong to whatever holds the
+  // group state, which is the VTA, not this library.
+  const expected = 194;
   assert.equal(
     implemented.size,
     expected,

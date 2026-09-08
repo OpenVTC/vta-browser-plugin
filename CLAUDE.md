@@ -636,6 +636,49 @@ pins the client shapes, including the two the wire depends on: a `value` is sent
 as the JSON it is rather than wrapped in an object, and a `profileId` of `null`
 is an unbind rather than an omission.
 
+## Data rooms: custody on screen, and a second family a page may not drive
+
+`@openvtc/pnm-core/rooms` is subpath-only — deliberately **not** in the root
+barrel, the same discipline `admin/*` and the persona pool follow — and
+`manager/panes/rooms.tsx` is the one surface that uses it.
+
+**The rooms family is split across two recipients, and the split is the design.**
+`rooms/keys/*` terminates at the **member's own VTA** (their key holder) and
+`rooms/owner/*` at the **owner's**; everything else — `create`, `records/*`,
+`epoch/*` — is served by the room's **host**, which holds ciphertext it cannot
+read. `RoomsCaller` names the two parties for exactly this reason, and
+`tests/task-surface.mjs`'s `NOT_IN_SDK` records which half is which: a
+host-served verb gaining a `vta-sdk` constant would mean the boundary moved.
+
+**The pane lists key custody, and must never present it as membership.** The two
+sets differ in both directions: a room whose Welcome never arrived is absent
+though a perfectly good membership credential is held, and a VTA not yet told of
+a removal still lists a room it can read and can no longer write to. Authority is
+the host's decision, taken from credentials the room issued.
+
+**Two epochs per room, because neither alone is a diagnosis.** `epoch` behind the
+room's own means a commit was not delivered; `earliestReadableEpoch` equal to
+`epoch` means the epoch key chain has not arrived. Different repairs — and a
+member shown only "you can't read this" reads a pending delivery as lost history.
+`standing()` maps the pair to the three answers and
+`rooms-pane.render.test.mts` asserts each against the words on screen, not
+against the function.
+
+**A page may not drive `rooms/*` either**, and the owner verbs are the sharpest
+case `page-task-policy.ts` has: they mint credentials in the **room's** name, so
+one generic prompt got past an owner is a site issuing itself membership — or
+authority to admin the room — and the room would be right to honour it.
+`keys/open` returns plaintext the room withholds from its own host, and
+`keys/list` is that member's view of what they belong to. The refusal is the
+whole family because the boundary is "a page is not a member", not a judgement
+about particular verbs.
+
+**What breaks it:** exporting `rooms` from the root barrel (its URIs then reach
+the service worker); sending a `keys/*` task to the host or a host verb to the
+VTA; drawing a failed listing as an empty one ("this agent holds keys to no
+rooms" is a claim, and an agent that did not answer has made none); or rendering
+one epoch and calling it the answer.
+
 ## Key material never reaches a browser, and that is enforced
 
 `vta/seeds/*` — `list`, `rotate`, `export-mnemonic` — is the one task family
