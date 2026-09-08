@@ -35,7 +35,7 @@
 // in a colour that reads as though somebody had. `unregistered` is an honest
 // answer and its words on screen say so.
 
-import { REGISTERED_ROOTS } from "./claim-sensitivity.js";
+import { registeredRoots, type ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 
 /** The families this console groups by. `unregistered` is a real member, not a
  *  fallback bucket to be tidied away: it is the answer for every token the
@@ -108,10 +108,29 @@ export function familyStyle(family: Family): FamilyStyle {
  * tested first so `x:name.legal` cannot borrow `name`'s group, exactly as
  * `treatmentOf` refuses to let it borrow `name`'s mask.
  */
-export function familyOf(type: string): Family {
+/**
+ * The roots this console has words and a colour for.
+ *
+ * Exported so a test can assert the mapping is internally complete. It is
+ * deliberately **not** a claim about what the agent serves: a maintainer may
+ * declare a family this build has never heard of, and `unregistered` is the
+ * honest answer for one — the same answer a token nobody has classified gets,
+ * because from here that is exactly what it is.
+ */
+export const PLACED_ROOTS = [
+  "name", "person", "email", "phone", "address", "account", "url", "org",
+  "payment", "gov",
+] as const;
+
+export function familyOf(type: string, registry: ClaimTypeRegistry | null): Family {
   if (type.startsWith("x:")) return "unregistered";
   const root = type.split(".")[0] ?? "";
-  if (!REGISTERED_ROOTS.has(root)) return "unregistered";
+  // No table yet: `unregistered` is what a token nobody has classified gets,
+  // and while the registry is in flight that is exactly what every token is
+  // from here. Colouring by a compiled-in guess would put a family on
+  // something this agent may never have declared.
+  if (!registry) return "unregistered";
+  if (!registeredRoots(registry).has(root)) return "unregistered";
   switch (root) {
     case "name":
     case "person":

@@ -14,6 +14,7 @@
 import { useState } from "react";
 import type { PoolAttribute, PoolProfile } from "@openvtc/pnm-core/admin";
 import type { ContextRecord } from "@openvtc/pnm-core";
+import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 import { Button, Note, Panel } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { contextHeading } from "../format.js";
@@ -82,7 +83,15 @@ function Stepper({ step, reachable, onGo }: { step: Step; reachable: (s: Step) =
 /** The card a stranger would receive from a face — the thing a tick list
  *  cannot convey. Rendered from the pool directly: at this step nothing has
  *  been pushed anywhere yet, so the pool is the only source. */
-function StrangerCard({ attributes, faceName }: { attributes: PoolAttribute[]; faceName: string }) {
+function StrangerCard({
+  attributes,
+  faceName,
+  registry,
+}: {
+  attributes: PoolAttribute[];
+  faceName: string;
+  registry: ClaimTypeRegistry | null;
+}) {
   const name = attributes.find((f) => f.type === "name" || f.type.startsWith("name."));
   const rest = attributes.filter((f) => f !== name);
   const provable = attributes.some((f) => f.provenance.kind === "credentialBacked" && !f.stale);
@@ -99,7 +108,7 @@ function StrangerCard({ attributes, faceName }: { attributes: PoolAttribute[]; f
           <>
             <div style={{ display: "grid" }}>
               {name ? (
-                <FactValue type={name.type} value={name.value} style={{ fontSize: t.md, fontWeight: 640 }} />
+                <FactValue registry={registry} type={name.type} value={name.value} style={{ fontSize: t.md, fontWeight: 640 }} />
               ) : (
                 <span style={{ fontSize: t.md, fontWeight: 640 }}>—</span>
               )}
@@ -110,7 +119,7 @@ function StrangerCard({ attributes, faceName }: { attributes: PoolAttribute[]; f
               {rest.map((f) => (
                 <span key={f.attributeId} style={{ display: "contents" }}>
                   <span style={{ color: c.faint, fontFamily: font.mono, fontSize: t.xs }}>{f.label ?? f.type}</span>
-                  <FactValue type={f.type} value={f.value} />
+                  <FactValue registry={registry} type={f.type} value={f.value} />
                 </span>
               ))}
             </div>
@@ -142,6 +151,7 @@ export function GuidedSetup({
   onChanged,
   onFinished,
   onSkip,
+  registry,
 }: {
   parties: Parties;
   authority: Authority | null;
@@ -152,6 +162,7 @@ export function GuidedSetup({
   /** The third step succeeded; the map takes over with the outcome as its banner. */
   onFinished: (outcome: string) => void;
   onSkip: () => void;
+  registry: ClaimTypeRegistry | null;
 }) {
   const [step, setStep] = useState<Step>(attributes.length === 0 ? 1 : 2);
   const [contextId, setContextId] = useState(records[0]?.id ?? "");
@@ -181,7 +192,7 @@ export function GuidedSetup({
       {step === 1 && (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)", gap: 16 }}>
           <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
-            <AttributeEditor
+            <AttributeEditor registry={registry}
               key={`new-${attributes.length}`}
               parties={parties}
               authority={authority}
@@ -193,7 +204,7 @@ export function GuidedSetup({
                   {attributes.map((a) => (
                     <div key={a.attributeId} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: t.sm }}>
                       <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted, minWidth: 120 }}>{a.type}</span>
-                      <FactValue type={a.type} value={a.value} />
+                      <FactValue registry={registry} type={a.type} value={a.value} />
                     </div>
                   ))}
                 </div>
@@ -236,7 +247,7 @@ export function GuidedSetup({
             onCancel={() => setStep(1)}
             cancelLabel="Back — add more attributes"
           />
-          <StrangerCard attributes={preview} faceName={faceName} />
+          <StrangerCard registry={registry} attributes={preview} faceName={faceName} />
         </div>
       )}
 

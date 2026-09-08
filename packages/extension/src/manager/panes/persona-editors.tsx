@@ -42,6 +42,7 @@ import { useAsync } from "../use-async.js";
 import { contextHeading, formatInstant } from "../format.js";
 import { type Authority, type Parties } from "../use-vta.js";
 import { holderGate } from "../holder-gate.js";
+import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 import { maskedFact, treatmentFor, type Sensitivity } from "../claim-sensitivity.js";
 import { composeEntries, lockedRefs, preservedEntries, tickedFrom } from "../profile-entries.js";
 import { personaCandidates } from "../persona-candidates.js";
@@ -121,6 +122,7 @@ export function FactValue({
   style,
   textStyle,
   reveal,
+  registry,
 }: {
   type: string;
   value: unknown;
@@ -146,6 +148,9 @@ export function FactValue({
    * the honest end of the sentence, and better than a *Show* that cannot.
    */
   reveal?: () => Promise<unknown>;
+  /** The agent's claim-type table, or `null` while it loads. A caller must not
+   *  substitute a compiled-in one — that is the copy this replaced. */
+  registry: ClaimTypeRegistry | null;
 }) {
   const [shown, setShown] = useState(false);
   const [revealed, setRevealed] = useState<{ value: unknown } | null>(null);
@@ -153,7 +158,7 @@ export function FactValue({
   const [refused, setRefused] = useState<string | null>(null);
 
   const { text, withheld } = formatValue(revealed ? revealed.value : value);
-  const { text: hidden, masked } = maskedFact(type, text, sensitivity);
+  const { text: hidden, masked } = maskedFact(registry, type, text, sensitivity);
 
   // **A withheld value is never masked.** The mask is a statement that a value
   // is here and is being kept off the screen; drawing it over "not on this
@@ -364,6 +369,7 @@ export function AttributeEditor({
   onDone,
   onCancel,
   cancelLabel = "Cancel",
+  registry,
 }: {
   parties: Parties;
   authority: Authority | null;
@@ -376,6 +382,9 @@ export function AttributeEditor({
    *  that is where its button goes. */
   cancelLabel?: string | undefined;
   onDone: () => void;
+  /** The agent's claim-type table, or `null` while it loads. A caller must not
+   *  substitute a compiled-in one — that is the copy this replaced. */
+  registry: ClaimTypeRegistry | null;
 }) {
   const [type, setType] = useState(existing?.type ?? "");
   const [label, setLabel] = useState(existing?.label ?? "");
@@ -558,7 +567,7 @@ export function AttributeEditor({
             value={sensitivity}
             onChange={setSensitivity}
             fallback={
-              treatmentFor(type.trim()).treatment.sensitivity === "high"
+              treatmentFor(registry, type.trim()).treatment.sensitivity === "high"
                 ? "kept back until you ask"
                 : "shown"
             }
@@ -1043,11 +1052,15 @@ export function ResolvedProfile({
   parties,
   profileId,
   name,
+  registry,
 }: {
   parties: Parties;
   profileId: string;
   /** How to name it while loading and when it holds nothing. */
   name: string;
+  /** The agent's claim-type table, or `null` while it loads. A caller must not
+   *  substitute a compiled-in one — that is the copy this replaced. */
+  registry: ClaimTypeRegistry | null;
 }) {
   const resolved = useAsync(
     async () => personaProfileGet(managerSender, { ...parties, profileId, resolve: true }),
@@ -1082,7 +1095,7 @@ export function ResolvedProfile({
             style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}
           >
             <span style={{ fontFamily: font.mono, fontSize: t.xs, minWidth: 150 }}>{claim.type}</span>
-            <FactValue type={claim.type} value={claim.value} textStyle={{ wordBreak: "break-word" }} />
+            <FactValue registry={registry} type={claim.type} value={claim.value} textStyle={{ wordBreak: "break-word" }} />
             {inline && <Pill tone="accent">only in this face</Pill>}
             {claim.stale && <Pill tone="warn">stale</Pill>}
           </div>
@@ -1126,11 +1139,15 @@ export function PersonaClaims({
   contextId,
   personaDid,
   profileName,
+  registry,
 }: {
   parties: Parties;
   contextId: string;
   personaDid: string;
   profileName: string;
+  /** The agent's claim-type table, or `null` while it loads. A caller must not
+   *  substitute a compiled-in one — that is the copy this replaced. */
+  registry: ClaimTypeRegistry | null;
 }) {
   const bound = useAsync(
     async () => getBinding(managerSender, { ...parties, contextId, personaDid }),
@@ -1151,7 +1168,7 @@ export function PersonaClaims({
   }
 
   return (
-    <ResolvedProfile
+    <ResolvedProfile registry={registry}
       parties={parties}
       profileId={bound.data.profileId}
       name={bound.data.profileName ?? profileName}

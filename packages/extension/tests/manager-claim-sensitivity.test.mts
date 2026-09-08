@@ -14,15 +14,69 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  UNREGISTERED,
-  isSensitive,
-  maskText,
-  maskedFact,
-  treatmentOf,
-  treatmentFor,
-  isSensitiveFor,
-} from "../src/manager/claim-sensitivity.ts";
+import { maskText, maskedFact, treatmentFor, isSensitiveFor } from "../src/manager/claim-sensitivity.ts";
+
+/**
+ * The table as `persona/claim-types/list` serves it — the agent's own, not a
+ * copy this console holds.
+ *
+ * A fixture here because these tests are about what the console DRAWS given a
+ * table, which is unchanged; only where the table comes from moved. The
+ * resolution rules themselves are tested in
+ * `packages/core/tests/persona.claim-types.mjs`, next to the code that now
+ * performs them.
+ */
+const REGISTRY = {
+  registryVersion: "0.1",
+  entries: [
+    { type: "payment", sensitivity: "high", release: "stepUp", mask: "full" },
+    { type: "gov", sensitivity: "high", release: "stepUp", mask: "full" },
+    { type: "name", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "name.legal", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "name.given", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "name.family", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "name.display", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "name.previous", sensitivity: "high", release: "consent", mask: "full" },
+    { type: "person.birthDate", sensitivity: "high", release: "consent", mask: "full" },
+    { type: "person.pronouns", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "person.locale", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "email.personal", sensitivity: "normal", release: "consent", mask: "emailLocal" },
+    { type: "email.work", sensitivity: "normal", release: "consent", mask: "emailLocal" },
+    { type: "phone.mobile", sensitivity: "high", release: "consent", mask: "last2" },
+    { type: "phone.landline", sensitivity: "high", release: "consent", mask: "last2" },
+    { type: "address.postal", sensitivity: "high", release: "consent", mask: "full" },
+    { type: "address.country", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "gov.id.passport", sensitivity: "high", release: "stepUp", mask: "last4" },
+    { type: "gov.id.driverLicence", sensitivity: "high", release: "stepUp", mask: "last4" },
+    { type: "gov.id.national", sensitivity: "high", release: "stepUp", mask: "last4" },
+    { type: "gov.taxId", sensitivity: "high", release: "stepUp", mask: "last4" },
+    { type: "payment.card", sensitivity: "high", release: "stepUp", mask: "last4" },
+    { type: "payment.cardExpiry", sensitivity: "high", release: "stepUp", mask: "full" },
+    { type: "payment.iban", sensitivity: "high", release: "stepUp", mask: "last4" },
+    { type: "payment.accountNumber", sensitivity: "high", release: "stepUp", mask: "last4" },
+    { type: "account.handle", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "url.homepage", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "org.name", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "org.role", sensitivity: "normal", release: "consent", mask: "none" },
+  ],
+  unregistered: { sensitivity: "high", release: "consent", mask: "full" },
+  strictness: {
+    sensitivity: ["high", "normal"],
+    release: ["stepUp", "consent"],
+    mask: ["full", "last2", "last4", "emailLocal", "none"],
+  },
+} as never;
+
+/** The floor, as the served table declares it. */
+const UNREGISTERED = { sensitivity: "high", mask: "full" };
+
+// The registry is an argument now. These keep every assertion below reading as
+// it did, so what changed is visible in one place rather than on every line.
+const treatmentOf = (type: string) => treatmentFor(REGISTRY, type).treatment;
+const isSensitive = (type: string) => isSensitiveFor(REGISTRY, type);
+const drawn = (type: string, text: string, override?: "normal" | "high") =>
+  maskedFact(REGISTRY, type, text, override);
+
 
 // ── The registry's own answers ──────────────────────────────────────────────
 
@@ -32,8 +86,8 @@ test("a registered normal type is shown as it is", () => {
   // an operator to press Show reflexively, and `CLAIM-TYPES.md` §4 names that
   // outcome as the reason the rule is scoped to unknown tokens only.
   assert.equal(isSensitive("name.legal"), false);
-  assert.equal(maskedFact("name.legal", "Glenn Gore").text, "Glenn Gore");
-  assert.equal(maskedFact("name.legal", "Glenn Gore").masked, false);
+  assert.equal(drawn("name.legal", "Glenn Gore").text, "Glenn Gore");
+  assert.equal(drawn("name.legal", "Glenn Gore").masked, false);
 });
 
 test("the types whose exposure costs the most are hidden", () => {
@@ -58,9 +112,9 @@ test("a hidden value keeps the characters its type says are the recognisable one
   // the rest is what a stranger needs. That split is a property of the type,
   // which is why the style travels with the registry entry rather than with the
   // renderer.
-  assert.equal(maskedFact("payment.card", "4242424242424242").text, "•••• 4242");
-  assert.equal(maskedFact("phone.mobile", "+65 8262 2325").text, "•••• 25");
-  assert.equal(maskedFact("person.birthDate", "1975-03-11").text, "••••");
+  assert.equal(drawn("payment.card", "4242424242424242").text, "•••• 4242");
+  assert.equal(drawn("phone.mobile", "+65 8262 2325").text, "•••• 25");
+  assert.equal(drawn("person.birthDate", "1975-03-11").text, "••••");
 });
 
 // ── The conservative default ────────────────────────────────────────────────
@@ -69,7 +123,7 @@ test("a token the registry has never seen is hidden completely", () => {
   // `CLAIM-TYPES.md` §4 rule 3: a vocabulary nobody has reasoned about is
   // exactly the one where showing the value is a decision nobody made.
   assert.deepEqual(treatmentOf("crypto.walletSeed"), UNREGISTERED);
-  assert.equal(maskedFact("crypto.walletSeed", "correct horse battery").text, "••••");
+  assert.equal(drawn("crypto.walletSeed", "correct horse battery").text, "••••");
 });
 
 test("an x: token is hidden however it is spelled", () => {
@@ -78,7 +132,7 @@ test("an x: token is hidden however it is spelled", () => {
   // to resemble. `x:payment.card` must not inherit `payment.card`'s `last4` and
   // publish four digits of something nobody has classified.
   assert.deepEqual(treatmentOf("x:acme.loyaltyId"), UNREGISTERED);
-  assert.equal(maskedFact("x:payment.card", "4242424242424242").text, "••••");
+  assert.equal(drawn("x:payment.card", "4242424242424242").text, "••••");
 });
 
 test("an unregistered member of a hidden family is hidden, not guessed at", () => {
@@ -106,8 +160,8 @@ test("the mask does not publish the length of what it hides", () => {
   // One glyph per hidden character would report that this IBAN is 22 long and
   // that card 16 — a real hint for a value whose format is fixed. The run is
   // the same width whatever it covers.
-  const short = maskedFact("payment.accountNumber", "12345678").text;
-  const long = maskedFact("payment.iban", "GB33BUKB2020155555555555").text;
+  const short = drawn("payment.accountNumber", "12345678").text;
+  const long = drawn("payment.iban", "GB33BUKB2020155555555555").text;
   assert.equal(short.length, long.length);
 });
 
@@ -127,14 +181,14 @@ test("a hidden value is not an empty one", () => {
   // agent did not send — would tell the operator that an attribute they hold is a
   // attribute they do not. `masked` is what the pane draws differently on; it must
   // be set, and the text must not be blank.
-  const hidden = maskedFact("gov.id.passport", "X1234567");
+  const hidden = drawn("gov.id.passport", "X1234567");
   assert.equal(hidden.masked, true);
   assert.ok(hidden.text.trim().length > 0, "a hidden value still occupies its row");
   assert.notEqual(hidden.text, "X1234567");
 
   // And the paired negative: an unhidden value reports itself as one, so the
   // pane offers no control that would do nothing.
-  assert.equal(maskedFact("org.name", "OpenVTC").masked, false);
+  assert.equal(drawn("org.name", "OpenVTC").masked, false);
 });
 
 // ── The prefix walk (trust-tasks#377) ───────────────────────────────────────
@@ -209,13 +263,13 @@ test("a value with no mask style is not hidden", () => {
 // about their own data.
 
 test("no decision leaves the registry answering, and says so", () => {
-  const { treatment, source } = treatmentFor("phone.mobile");
+  const { treatment, source } = treatmentFor(REGISTRY, "phone.mobile");
   assert.deepEqual(treatment, treatmentOf("phone.mobile"));
   assert.equal(source, "registry");
 });
 
 test("a decision wins over the registry, and says whose it is", () => {
-  const { treatment, source } = treatmentFor("phone.mobile", "normal");
+  const { treatment, source } = treatmentFor(REGISTRY, "phone.mobile", "normal");
   assert.equal(treatment.sensitivity, "normal", "the holder outranks the table");
   assert.equal(source, "holder");
 });
@@ -225,8 +279,8 @@ test("a declared token keeps the registry's mask, whatever the holder decided", 
   // phone number is drawn, and this console does not overrule it — deciding it
   // is not worth withholding is not the same as deciding it should be legible
   // over a shoulder.
-  assert.equal(treatmentFor("phone.mobile", "normal").treatment.mask, "last2");
-  assert.equal(treatmentFor("name.legal", "high").treatment.mask, "none");
+  assert.equal(treatmentFor(REGISTRY, "phone.mobile", "normal").treatment.mask, "last2");
+  assert.equal(treatmentFor(REGISTRY, "name.legal", "high").treatment.mask, "none");
 });
 
 test("an unregistered token's mask follows the holder, because the floor was standing in for them", () => {
@@ -235,25 +289,25 @@ test("an unregistered token's mask follows the holder, because the floor was sta
   // holder deciding is the decision it stood in for. Without this, someone who
   // marked their own `profile.github` as not sensitive would still be shown
   // four bullets by a rule justified only by nobody having looked.
-  assert.equal(treatmentFor("profile.github").treatment.mask, "full");
-  assert.equal(treatmentFor("profile.github", "normal").treatment.mask, "none");
-  assert.equal(treatmentFor("profile.github", "high").treatment.mask, "full");
-  assert.equal(maskedFact("profile.github", "octocat", "normal").text, "octocat");
-  assert.equal(maskedFact("profile.github", "octocat", "normal").masked, false);
-  assert.equal(maskedFact("profile.github", "octocat").masked, true);
+  assert.equal(treatmentFor(REGISTRY, "profile.github").treatment.mask, "full");
+  assert.equal(treatmentFor(REGISTRY, "profile.github", "normal").treatment.mask, "none");
+  assert.equal(treatmentFor(REGISTRY, "profile.github", "high").treatment.mask, "full");
+  assert.equal(drawn("profile.github", "octocat", "normal").text, "octocat");
+  assert.equal(drawn("profile.github", "octocat", "normal").masked, false);
+  assert.equal(drawn("profile.github", "octocat").masked, true);
 });
 
 test("an x: token is unregistered here too, so the same rule reaches it", () => {
-  assert.equal(treatmentFor("x:payment.card", "normal").treatment.mask, "none");
+  assert.equal(treatmentFor(REGISTRY, "x:payment.card", "normal").treatment.mask, "none");
   // …but it does not become a registered token: no override, no change.
-  assert.equal(treatmentFor("x:payment.card").treatment.mask, "full");
+  assert.equal(treatmentFor(REGISTRY, "x:payment.card").treatment.mask, "full");
 });
 
 test("a family member invented under a gated family keeps the family's mask", () => {
   // `payment.giftCard` walks up to `payment`, which the registry declares. A
   // holder deciding it is not worth withholding does not make a gated family's
   // mask disappear.
-  assert.equal(treatmentFor("payment.giftCard", "normal").treatment.mask, "full");
+  assert.equal(treatmentFor(REGISTRY, "payment.giftCard", "normal").treatment.mask, "full");
 });
 
 // ── The mask style decides, not the sensitivity ─────────────────────────────
@@ -263,13 +317,13 @@ test("an email is masked, which is what the registry asked for all along", () =>
   // you, not worth withholding from every listing. `maskedFact` used to gate on
   // `high` and drew it in full, while `isSensitive` called it hidden — so the
   // strip promised a Show button that was never rendered.
-  const { text, masked } = maskedFact("email.personal", "glenn.gore@example.com");
+  const { text, masked } = drawn("email.personal", "glenn.gore@example.com");
   assert.equal(text, "g•••@example.com");
   assert.equal(masked, true);
-  assert.equal(isSensitiveFor("email.personal"), true, "the two answers agree now");
+  assert.equal(isSensitiveFor(REGISTRY, "email.personal"), true, "the two answers agree now");
 });
 
 test("a type with no mask style is drawn plainly and offers no control", () => {
-  assert.equal(maskedFact("name.legal", "Glenn Gore").masked, false);
-  assert.equal(isSensitiveFor("name.legal"), false);
+  assert.equal(drawn("name.legal", "Glenn Gore").masked, false);
+  assert.equal(isSensitiveFor(REGISTRY, "name.legal"), false);
 });

@@ -279,7 +279,7 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // the agent does not name, rather than as a deprecation warning. That is the
   // expected shape of a cutover here: nothing is deployed, so neither side
   // keeps an old version alive.
-  const expected = 187;
+  const expected = 188;
   assert.equal(
     implemented.size,
     expected,

@@ -41,189 +41,21 @@
 // here. Re-sync by comparing this table against that file, not by rewriting it
 // from memory.
 
+import {
+  resolveTreatment,
+  isRegisteredType,
+  type ClaimTypeRegistry,
+  type ClaimTreatment,
+} from "@openvtc/pnm-core/persona";
+
+export type { ClaimTreatment };
+
+/** One of the styles the registry enumerates under `maskStyles`. */
+export type MaskStyle = "none" | "last2" | "last4" | "emailLocal" | "full";
+
 /** How carefully a value is shown to its own holder — `CLAIM-TYPES.md` §3.1. */
 export type Sensitivity = "normal" | "high";
 
-/** One of the styles `claim-types.json` enumerates under `maskStyles`. */
-export type MaskStyle = "none" | "last2" | "last4" | "emailLocal" | "full";
-
-export interface ClaimTreatment {
-  sensitivity: Sensitivity;
-  mask: MaskStyle;
-}
-
-/** The `registryVersion` the table below was taken from. Carried so a future
- *  re-sync against a served registry has something to compare, and so a reader
- *  can tell which draft this agrees with. */
-export const REGISTRY_VERSION = "0.1";
-
-/**
- * What an unregistered token resolves to — `CLAIM-TYPES.md` §4 rule 3.
- *
- * Deliberately the conservative answer, and the registry gives the reasoning
- * rather than leaving it to be inferred: a vocabulary the registry has never
- * seen is exactly the one nobody has reasoned about, and an unknown value
- * rendered in the clear is a decision nobody made.
- *
- * Note what this is *not* applied to. §4 keeps "absence is the most restrictive
- * answer" for an unknown **token**, never for an unset field on a known one —
- * applied to the latter it would mask every legal name in every pool, which
- * teaches an operator to press *Show* reflexively and leaves them less
- * protected than before. So `name.legal` is `normal`/`none` because the
- * registry says so, and only a token with no entry falls here.
- */
-export const UNREGISTERED: ClaimTreatment = { sensitivity: "high", mask: "full" };
-
-/**
- * The core vocabulary, as `claim-types.json` declares it.
- *
- * A plain record rather than a `Map` so a reader can diff it against the JSON
- * line for line, which is the maintenance operation this table actually gets.
- */
-const REGISTERED: Readonly<Record<string, ClaimTreatment>> = {
-  // Family entries — matched as a prefix by `treatmentOf`, and the reason a
-  // token invented under a gated family cannot escape it.
-  payment: { sensitivity: "high", mask: "full" },
-  gov: { sensitivity: "high", mask: "full" },
-
-  // Both an exact token and a family prefix: a pool that keeps one
-  // undifferentiated name is using `name`, and without an entry it would mask
-  // in full.
-  name: { sensitivity: "normal", mask: "none" },
-
-  "name.legal": { sensitivity: "normal", mask: "none" },
-  "name.given": { sensitivity: "normal", mask: "none" },
-  "name.family": { sensitivity: "normal", mask: "none" },
-  "name.display": { sensitivity: "normal", mask: "none" },
-  "name.previous": { sensitivity: "high", mask: "full" },
-
-  "person.birthDate": { sensitivity: "high", mask: "full" },
-  "person.pronouns": { sensitivity: "normal", mask: "none" },
-  "person.locale": { sensitivity: "normal", mask: "none" },
-
-  "email.personal": { sensitivity: "normal", mask: "emailLocal" },
-  "email.work": { sensitivity: "normal", mask: "emailLocal" },
-
-  "phone.mobile": { sensitivity: "high", mask: "last2" },
-  "phone.landline": { sensitivity: "high", mask: "last2" },
-
-  "address.postal": { sensitivity: "high", mask: "full" },
-  "address.country": { sensitivity: "normal", mask: "none" },
-
-  "gov.id.passport": { sensitivity: "high", mask: "last4" },
-  "gov.id.driverLicence": { sensitivity: "high", mask: "last4" },
-  "gov.id.national": { sensitivity: "high", mask: "last4" },
-  "gov.taxId": { sensitivity: "high", mask: "last4" },
-
-  "payment.card": { sensitivity: "high", mask: "last4" },
-  "payment.cardExpiry": { sensitivity: "high", mask: "full" },
-  "payment.iban": { sensitivity: "high", mask: "last4" },
-  "payment.accountNumber": { sensitivity: "high", mask: "last4" },
-
-  "account.handle": { sensitivity: "normal", mask: "none" },
-  "url.homepage": { sensitivity: "normal", mask: "none" },
-
-  "org.name": { sensitivity: "normal", mask: "none" },
-  "org.role": { sensitivity: "normal", mask: "none" },
-};
-
-/**
- * The first segment of every token the table above declares.
- *
- * Derived rather than written out, so it cannot drift from the table on a
- * re-sync — a root that appears here without anyone editing this line is the
- * registry having grown one, which is exactly what `attribute-family.ts` wants
- * to be told about. It is the only thing outside this module that may ask what
- * the registry *covers*: whether a token is known is a registry question,
- * while what a family means on screen is a console one.
- */
-export const REGISTERED_ROOTS: ReadonlySet<string> = new Set(
-  Object.keys(REGISTERED).map((token) => token.split(".")[0]!),
-);
-
-/**
- * How this **type's** values are treated — `CLAIM-TYPES.md` §4, minus rule 1,
- * which is about one attribute rather than a type.
- *
- * §4's first rule is a per-attribute override the holder set explicitly, which
- * wins over the registry. It stays *above* this call, in `treatmentFor` below —
- * "the holder decided" and "the registry says" are two different claims about
- * one value, and a UI that wants to explain the difference needs both. This
- * function is only ever the second of them.
- *
- * **The prefix walk is rule 3, and it only ever tightens.** An unregistered
- * token takes the *more protective* of its longest registered prefix and the
- * unregistered floor, per axis — never the prefix outright. That direction is
- * the whole point: `payment.giftCard` inherits `payment`'s treatment because a
- * gated family must not be leavable by inventing a token, while `name.somethingNew`
- * does **not** inherit `name`'s `none` and stays masked, because a family entry
- * cannot make an unknown token visible.
- *
- * This console reported the walk's absence when it first vendored this table;
- * the registry gained it in trust-tasks#377, and this is that rule.
- */
-export function treatmentOf(type: string): ClaimTreatment {
-  // `x:` is the open extension namespace (`ClaimType` in
-  // `persona-record.schema.json`), and §4's last rule names it alongside an
-  // unregistered token. Tested before anything else so an `x:`-prefixed
-  // spelling of a core token cannot borrow that token's entry — nor, now,
-  // its family's.
-  if (type.startsWith("x:")) return UNREGISTERED;
-
-  const exact = REGISTERED[type];
-  if (exact) return exact;
-
-  // Longest registered prefix, on dot boundaries only: `payment.card` is under
-  // `payment`, but a token merely *starting with* those characters is not.
-  let prefix: ClaimTreatment | undefined;
-  const segments = type.split(".");
-  for (let i = segments.length - 1; i > 0; i--) {
-    const candidate = REGISTERED[segments.slice(0, i).join(".")];
-    if (candidate) {
-      prefix = candidate;
-      break;
-    }
-  }
-  if (!prefix) return UNREGISTERED;
-
-  return {
-    sensitivity: stricter(SENSITIVITY_ORDER, prefix.sensitivity, UNREGISTERED.sensitivity),
-    mask: stricter(MASK_ORDER, prefix.mask, UNREGISTERED.mask),
-  };
-}
-
-/** `strictness` in `claim-types.json`, most protective first. Kept as arrays
- *  rather than comparisons so the ordering is diffable against the registry. */
-const SENSITIVITY_ORDER: readonly Sensitivity[] = ["high", "normal"];
-const MASK_ORDER: readonly MaskStyle[] = ["full", "last2", "last4", "emailLocal", "none"];
-
-/** The more protective of two values on one axis. A value the order does not
- *  know is treated as least protective, so an unrecognised entry can never win
- *  and quietly loosen a treatment. */
-function stricter<T>(order: readonly T[], a: T, b: T): T {
-  const rank = (v: T) => {
-    const i = order.indexOf(v);
-    return i === -1 ? order.length : i;
-  };
-  return rank(a) <= rank(b) ? a : b;
-}
-
-/** Whether a value of this type is hidden until asked for.
- *
- *  Masking no longer requires `sensitivity: high` — §3.3 made the two
- *  independent, because they are two strengths of protection rather than one.
- *  `high` means *withheld from a listing that did not ask*; a mask style means
- *  *not shown in the clear*. An email address is worth hiding from the person
- *  behind you without being worth withholding from every listing, and until the
- *  two were separated there was no way to say so — `email.*` carried a style no
- *  rule could ever apply. */
-export function isSensitive(type: string): boolean {
-  return treatmentOf(type).mask !== "none";
-}
-
-/** The character a mask is drawn with. One glyph, everywhere, so a masked value
- *  is recognisable as one at a glance and never reads as a value that happens
- *  to contain punctuation. */
 const DOT = "•";
 
 /**
@@ -309,13 +141,14 @@ function emailLocal(text: string): string {
  * an unregistered token's mask follows it is written down.
  */
 export function maskedFact(
+  registry: ClaimTypeRegistry | null,
   type: string,
   text: string,
   override?: Sensitivity | undefined,
 ): { text: string; masked: boolean } {
-  const { treatment } = treatmentFor(type, override);
+  const { treatment } = treatmentFor(registry, type, override);
   if (treatment.mask === "none") return { text, masked: false };
-  const masked = maskText(text, treatment.mask);
+  const masked = maskText(text, treatment.mask as MaskStyle);
   // A mask that changed nothing would claim to hide while hiding nothing — the
   // honest answer is to draw the value plainly and offer no control, rather
   // than a *Show* button that does not change what is on screen.
@@ -353,37 +186,41 @@ export function maskedFact(
  * there the registry has an opinion and this console does not overrule it.
  */
 export function treatmentFor(
+  registry: ClaimTypeRegistry | null,
   type: string,
   override?: Sensitivity | undefined,
 ): { treatment: ClaimTreatment; source: "holder" | "registry" } {
-  const registry = treatmentOf(type);
-  if (override === undefined) return { treatment: registry, source: "registry" };
+  // No table yet. Everything is drawn masked and attributed to the registry,
+  // which is the fail-closed answer *and* the honest one: the holder's decision
+  // cannot be applied over an answer that has not arrived, and claiming
+  // `source: "holder"` here would put their name on a default.
+  if (!registry) {
+    return { treatment: { sensitivity: "high", mask: "full" }, source: "registry" };
+  }
+  const declared = resolveTreatment(registry, type);
+  if (override === undefined) return { treatment: declared, source: "registry" };
   return {
     treatment: {
       sensitivity: override,
-      mask: isRegistered(type) ? registry.mask : override === "high" ? "full" : "none",
+      mask: isRegisteredType(registry, type)
+        ? declared.mask
+        : override === "high"
+          ? "full"
+          : "none",
     },
     source: "holder",
   };
 }
 
-/** Whether the registry declares this token, or a family it belongs to — the
- *  same walk `treatmentOf` performs, asked as a question. An `x:` token is
- *  never registered, per §4's last rule. */
-function isRegistered(type: string): boolean {
-  if (type.startsWith("x:")) return false;
-  if (REGISTERED[type]) return true;
-  const segments = type.split(".");
-  for (let i = segments.length - 1; i > 0; i--) {
-    if (REGISTERED[segments.slice(0, i).join(".")]) return true;
-  }
-  return false;
-}
 
 /** Whether this attribute's value is hidden until asked for, the holder's own
  *  decision included. The `type`-only {@link isSensitive} is the registry's
  *  answer alone and stays that way — a call site holding a whole attribute
  *  should use this one. */
-export function isSensitiveFor(type: string, override?: Sensitivity | undefined): boolean {
-  return treatmentFor(type, override).treatment.mask !== "none";
+export function isSensitiveFor(
+  registry: ClaimTypeRegistry | null,
+  type: string,
+  override?: Sensitivity | undefined,
+): boolean {
+  return treatmentFor(registry, type, override).treatment.mask !== "none";
 }
