@@ -25,6 +25,7 @@ const enrolled = { enrolledExecutorDids: [AGENT.did] };
 
 const PREVIEW = "01J0000000000000000000000A";
 const AUTHZ_EXT = "org.openvtc.authorization-context";
+const CONTEXT_TYPE = "https://openvtc.org/persona/authorization-context/0.1";
 
 /** The agent-signed approve-request the refusal carries. */
 async function approveRequest({ as = AGENT, previewId = PREVIEW, ctx = {} } = {}) {
@@ -41,11 +42,16 @@ async function approveRequest({ as = AGENT, previewId = PREVIEW, ctx = {} } = {}
       reason: "Approve disclosing 1 fact to did:key:zVerifier",
       ext: {
         [AUTHZ_EXT]: {
-          operation: "persona/disclosure/present",
-          previewId,
-          verifierDid: "did:key:zVerifier",
-          claimTypes: ["payment.card"],
-          purpose: "checkout",
+          type: CONTEXT_TYPE,
+          summary: "Approve disclosing 1 fact to did:key:zVerifier",
+          risk: "high",
+          action: {
+            kind: "disclose",
+            previewId,
+            verifierDid: "did:key:zVerifier",
+            claimTypes: ["payment.card"],
+            purpose: "checkout",
+          },
           ...ctx,
         },
       },
@@ -129,6 +135,7 @@ test("what the holder is shown comes out of the signature", async () => {
   assert.deepEqual(res.context.claimTypes, ["payment.card"]);
   assert.equal(res.context.verifierDid, "did:key:zVerifier");
   assert.equal(res.context.purpose, "checkout");
+  assert.equal(res.context.summary, "Approve disclosing 1 fact to did:key:zVerifier");
   assert.equal(res.request.challenge, "a".repeat(32));
 });
 
@@ -152,7 +159,16 @@ test("the signed previewId must be the one the refusal named", async () => {
     refusal({
       previewId: PREVIEW,
       previewRetained: true,
-      approveRequest: await approveRequest({ previewId: "01JSOMETHINGELSE00000000AA" }),
+      approveRequest: await approveRequest({
+        ctx: {
+          action: {
+            kind: "disclose",
+            previewId: "01JSOMETHINGELSE00000000AA",
+            verifierDid: "did:key:zVerifier",
+            claimTypes: ["payment.card"],
+          },
+        },
+      }),
     }),
   );
   const res = await verifyDisclosureStepUp(seen, enrolled);
@@ -168,7 +184,7 @@ test("a tampered context does not survive the proof", async () => {
   const doc = await approveRequest();
   // Add a claim type after signing — the shape of an attacker widening what
   // the holder believes they are approving.
-  doc.payload.ext[AUTHZ_EXT].claimTypes.push("gov.passport");
+  doc.payload.ext[AUTHZ_EXT].action.claimTypes.push("gov.passport");
   const seen = disclosureStepUpRequiredFrom(
     refusal({ previewId: PREVIEW, previewRetained: true, approveRequest: doc }),
   );
@@ -198,4 +214,55 @@ test("the approval is a signed approve-response the agent can verify", async () 
   assert.equal(approval.recipient, AGENT.did, "the approval is not bound to the agent as audience");
   const proof = await verifyTrustTaskProof(approval, { expectedProofPurpose: "assertionMethod" });
   assert.equal(proof.verified, true, proof.reason ?? "");
+});
+
+test("a context for some other operation is not read as a disclosure", async () => {
+  // Every authorization context travels under the same `ext` key — a Cierge
+  // share ask included. Without the `type` check, one of those would be shown
+  // to the holder in a disclosure's words, and its `action` read for claim
+  // types it never had.
+  const doc = await approveRequest({
+    ctx: {
+      type: "https://openvtc.org/cierge/authorization-context/0.1",
+      action: { kind: "share", from: "finance", to: "travel" },
+    },
+  });
+  const seen = disclosureStepUpRequiredFrom(
+    refusal({ previewId: PREVIEW, previewRetained: true, approveRequest: doc }),
+  );
+  const res = await verifyDisclosureStepUp(seen, enrolled);
+  assert.equal(res.ok, false, "a share ask was accepted as a disclosure approval");
+  assert.match(res.reason, /not a disclosure/);
+});
+
+test("an action of another kind under the same context type is refused", async () => {
+  // `type` and `kind` answer different questions — which producer's vocabulary,
+  // and which action within it. A second `kind` added under the persona type is
+  // the case this exists for: without the check it would be read as a
+  // disclosure, its fields mined for claim types it never had, and shown to the
+  // holder in a disclosure's words.
+  const doc = await approveRequest({
+    ctx: {
+      action: { kind: "revoke", previewId: PREVIEW, claimTypes: ["payment.card"] },
+    },
+  });
+  const seen = disclosureStepUpRequiredFrom(
+    refusal({ previewId: PREVIEW, previewRetained: true, approveRequest: doc }),
+  );
+  const res = await verifyDisclosureStepUp(seen, enrolled);
+  assert.equal(res.ok, false, "an action of another kind was approved as a disclosure");
+  assert.match(res.reason, /not a disclosure/);
+});
+
+test("an action with no kind at all is refused", async () => {
+  // The shape a producer that forgot the discriminator emits. Absence is not
+  // permission.
+  const doc = await approveRequest({
+    ctx: { action: { previewId: PREVIEW, claimTypes: ["payment.card"] } },
+  });
+  const seen = disclosureStepUpRequiredFrom(
+    refusal({ previewId: PREVIEW, previewRetained: true, approveRequest: doc }),
+  );
+  const res = await verifyDisclosureStepUp(seen, enrolled);
+  assert.equal(res.ok, false, "an action with no kind was approved as a disclosure");
 });

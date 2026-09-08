@@ -57,6 +57,30 @@ export const DISCLOSURE_STEP_UP_REQUIRED_CODE = "persona/disclosure/present:step
 /** The reverse-DNS `ext` key the agent carries the disclosure's context under. */
 const AUTHZ_CONTEXT_EXT_KEY = "org.openvtc.authorization-context";
 
+/**
+ * The `type` a disclosure's authorization context declares.
+ *
+ * Contexts are a shared channel — a Cierge share ask travels under the same
+ * `ext` key — and `type` is how a renderer tells them apart. Checking it here
+ * means a context for some *other* operation cannot be read as a disclosure
+ * and shown with a disclosure's words.
+ */
+const DISCLOSURE_AUTHZ_CONTEXT_TYPE = "https://openvtc.org/persona/authorization-context/0.1";
+
+/**
+ * The `action.kind` a disclosure carries.
+ *
+ * Checked as well as `type`, because they answer different questions. `type`
+ * says which *producer's* vocabulary the context speaks; `kind` says which
+ * action within it. The persona context type carries only `disclose` today, so
+ * this rejects nothing yet — it is here for the second `kind` added under this
+ * type, which would otherwise be read as a disclosure, have its fields mined
+ * for `claimTypes` it never had, and be shown to the holder in a disclosure's
+ * words. Naming `kind` as the discriminator and then not checking it is how
+ * that arrives unnoticed.
+ */
+const DISCLOSURE_ACTION_KIND = "disclose";
+
 /** The agent needs a fresh approval before it will release this preview. */
 export interface DisclosureStepUpRequired {
   kind: "stepUpRequired";
@@ -86,6 +110,9 @@ export interface DisclosureStepUpRequired {
 /** What the agent says this approval would release. Read only from the
  *  verified document — the unsigned half of the refusal carries no authority. */
 export interface DisclosureApprovalContext {
+  /** The agent's one-line account of the act — the same string it put in the
+   *  request's `reason`, so a surface may show either without them differing. */
+  summary?: string;
   /** Who would receive it. */
   verifierDid?: string;
   /** The claim types that would leave. */
@@ -169,7 +196,25 @@ export async function verifyDisclosureStepUp(
   };
   const ctx = (payload.ext?.[AUTHZ_CONTEXT_EXT_KEY] ?? {}) as Record<string, unknown>;
 
-  if (ctx.previewId !== refusal.previewId) {
+  if (ctx.type !== DISCLOSURE_AUTHZ_CONTEXT_TYPE) {
+    return {
+      ok: false,
+      reason: `authorization context is ${String(ctx.type)}, not a disclosure`,
+    };
+  }
+
+  // The specifics live under `action`, keyed by `kind` — the shape every
+  // authorization context uses, so one renderer serves all of them.
+  const action = (ctx.action ?? {}) as Record<string, unknown>;
+
+  if (action.kind !== DISCLOSURE_ACTION_KIND) {
+    return {
+      ok: false,
+      reason: `authorization context action is ${String(action.kind)}, not a disclosure`,
+    };
+  }
+
+  if (action.previewId !== refusal.previewId) {
     return {
       ok: false,
       reason:
@@ -178,8 +223,8 @@ export async function verifyDisclosureStepUp(
     };
   }
 
-  const claimTypes = Array.isArray(ctx.claimTypes)
-    ? ctx.claimTypes.filter((t): t is string => typeof t === "string")
+  const claimTypes = Array.isArray(action.claimTypes)
+    ? action.claimTypes.filter((t): t is string => typeof t === "string")
     : [];
 
   return {
@@ -188,8 +233,9 @@ export async function verifyDisclosureStepUp(
     issuer: verified.issuer,
     context: {
       claimTypes,
-      ...(typeof ctx.verifierDid === "string" ? { verifierDid: ctx.verifierDid } : {}),
-      ...(typeof ctx.purpose === "string" ? { purpose: ctx.purpose } : {}),
+      ...(typeof ctx.summary === "string" ? { summary: ctx.summary } : {}),
+      ...(typeof action.verifierDid === "string" ? { verifierDid: action.verifierDid } : {}),
+      ...(typeof action.purpose === "string" ? { purpose: action.purpose } : {}),
     },
   };
 }
