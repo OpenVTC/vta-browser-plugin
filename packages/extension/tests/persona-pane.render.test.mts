@@ -17,6 +17,7 @@ import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { GuidedSetup } from "../src/manager/panes/persona-setup.js";
 import { IdentityMap } from "../src/manager/panes/persona-map.js";
 import { AttributeEditor, BindingForm, ResolvedProfile } from "../src/manager/panes/persona-editors.js";
+import { PersonaPane } from "../src/manager/panes/persona.js";
 import { buildGraph } from "../src/manager/identity-graph.js";
 
 const HOLDER = { session: { id: "s" }, roles: ["admin"], scopes: [] };
@@ -610,7 +611,7 @@ test("a value the agent withheld is said to be missing, not masked", async () =>
   const a = agent({});
   const ui = await render(withheldMap(), { chrome: { runtime: { sendMessage: a.sendMessage } } });
   const text = ui.text();
-  assert.match(text, /not on this page/, "the card says where the value is: with the agent");
+  assert.match(text, /with your agent/, "the card says where the value is: with the agent");
   assert.doesNotMatch(text, /•/, "a mask over a value nobody sent claims one is being held back");
   await ui.unmount();
 });
@@ -642,7 +643,7 @@ test("Hide drops a fetched value rather than covering it over", async () => {
   assert.match(ui.text(), /octocat/);
   await ui.click(ui.button("Hide"));
   assert.doesNotMatch(ui.text(), /octocat/, "hidden means gone from the page, not greyed");
-  assert.match(ui.text(), /not on this page/);
+  assert.match(ui.text(), /with your agent/);
   await ui.unmount();
 });
 
@@ -654,7 +655,7 @@ test("an agent that refuses says why, in place, and does not blank the card", as
   );
   await ui.click(ui.button("Show"));
   assert.match(ui.text(), /held the value back/);
-  assert.match(ui.text(), /not on this page/, "the card still says what it knows");
+  assert.match(ui.text(), /with your agent/, "the card still says what it knows");
   await ui.unmount();
 });
 
@@ -973,5 +974,65 @@ test("without the pool the claim falls back to the registry, which is weaker and
   await ui.settle();
   assert.doesNotMatch(ui.text(), /octocat/);
   assert.match(ui.text(), /Glenn Gore/, "a registered normal type is unaffected either way");
+  await ui.unmount();
+});
+
+// ── When the agent serves no claim-type table ──────────────────────────────
+//
+// Reported from a live wallet, and three separate defects in one screen: every
+// value masked including `name.legal`, a value the holder had explicitly marked
+// *show it* masked with the rest, and a heading saying the agent's table "does
+// not declare these" — about an agent that had not answered at all.
+
+const DECIDED = [
+  attribute("f1", "name.legal", "Glenn Gore"),
+  { ...attribute("f9", "profile.github", "octocat"), sensitivity: "normal" },
+];
+
+test("a decision the holder made still holds when no table arrived", async () => {
+  const a = agent({});
+  const ui = await render(
+    h(IdentityMap, {
+      parties: PARTIES,
+      authority: HOLDER,
+      // `null` is the state a failed or unimplemented `claim-types/list` leaves
+      // behind, and it used to discard the holder's own answer with it.
+      registry: null,
+      graph: buildGraph(DECIDED, [], []),
+      attributes: DECIDED,
+      profiles: [],
+      records: CONTEXTS,
+      history: [],
+      onReveal: async () => "never asked",
+      onChanged: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  const text = ui.text();
+  assert.match(text, /octocat/, "they said show it, and that does not depend on a table");
+  assert.doesNotMatch(text, /does not declare these/, "no table answered, so nothing declined anything");
+  assert.match(text, /Your agent has not said/);
+  await ui.unmount();
+});
+
+test("the pane says the table did not arrive, rather than letting it look like a rule", async () => {
+  // The fake agent throws on a task the test did not name, which is exactly
+  // what an agent that does not implement `persona/claim-types/list` does to
+  // this pane. Everything else answers, so the pool is on screen and only the
+  // table is missing — the shape the live wallet was in.
+  const a = agent({
+    "persona/attribute/list/1.0": { attributes: DECIDED },
+    "persona/profile/list/1.0": { profiles: [face("p1", "OSS Developer", ["f1"])] },
+    "persona/binding/list/1.0": { personas: [] },
+    "persona/disclosure/history/1.0": { disclosures: [] },
+  });
+  const ui = await render(
+    h(PersonaPane, { parties: PARTIES, authority: HOLDER, records: CONTEXTS }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.settle();
+  const text = ui.text();
+  assert.match(text, /would not give its claim-type table/);
+  assert.match(text, /What you have decided for yourself still stands/);
   await ui.unmount();
 });

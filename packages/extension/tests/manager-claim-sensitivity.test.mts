@@ -327,3 +327,40 @@ test("a type with no mask style is drawn plainly and offers no control", () => {
   assert.equal(drawn("name.legal", "Glenn Gore").masked, false);
   assert.equal(isSensitiveFor(REGISTRY, "name.legal"), false);
 });
+
+// ── A decision does not wait for the table ─────────────────────────────────
+//
+// Reported from a live wallet: every value masked, including `name.legal`,
+// including one the holder had explicitly marked *show it*, with a heading
+// saying the agent's table did not declare them. The agent had simply not
+// answered `persona/claim-types/list` — and `treatmentFor` returned the floor
+// for a missing table BEFORE looking at the holder's own decision, so an absent
+// answer silently overruled every choice they had made about their own values.
+
+test("the holder's decision outranks a table that never arrived", () => {
+  const { treatment, source } = treatmentFor(null, "profile.github", "normal");
+  assert.equal(treatment.sensitivity, "normal");
+  assert.equal(treatment.mask, "none", "they said show it; there is nothing to wait for");
+  assert.equal(source, "holder");
+});
+
+test("with no table and no decision, everything is masked — and says why", () => {
+  const { treatment, source } = treatmentFor(null, "name.legal");
+  assert.equal(treatment.mask, "full", "fail closed");
+  assert.equal(source, "unknown", "not `registry` — no registry answered");
+});
+
+test("a decision to keep something back survives a missing table too", () => {
+  // The direction that fails safe is not the only one that has to work: a
+  // holder who marked something private must not have that quietly ignored
+  // either, even though the outcome happens to match the floor.
+  const { treatment, source } = treatmentFor(null, "name.legal", "high");
+  assert.equal(treatment.mask, "full");
+  assert.equal(source, "holder", "their decision, not a default wearing their name");
+});
+
+test("with a table, a declared token still keeps the registry's mask", () => {
+  // The narrowness this PR must not lose: knowing the token is declared is
+  // exactly what the missing-table case cannot know.
+  assert.equal(treatmentFor(REGISTRY, "phone.mobile", "normal").treatment.mask, "last2");
+});

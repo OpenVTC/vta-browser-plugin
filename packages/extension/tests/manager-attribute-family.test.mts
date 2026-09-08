@@ -93,7 +93,7 @@ test("a family the agent serves and this build has never heard of is unregistere
 });
 
 test("every family has words and a hue, and the order names them all", () => {
-  const families: Family[] = ["identity", "contact", "public", "gated", "unregistered"];
+  const families: Family[] = ["identity", "contact", "public", "gated", "unregistered", "unknown"];
   assert.deepEqual([...FAMILY_ORDER].sort(), [...families].sort(), "a family with no place in the order never draws");
   for (const family of families) {
     const style = familyStyle(family);
@@ -114,4 +114,16 @@ test("no family's words claim the colour protects anything", () => {
       assert.ok(!words.includes(overclaim), `"${overclaim}" claims a protection this colour does not give: ${words}`);
     }
   }
+});
+
+test("no table is its own answer, and it does not accuse the tokens", () => {
+  // `unregistered` says the agent's table declines to declare this token.
+  // Saying that when no table arrived is a claim about the token that nobody
+  // checked — the same error as reporting a context the agent would not answer
+  // for as a context that holds nothing.
+  assert.equal(familyOf("name.legal", null), "unknown");
+  assert.equal(familyOf("x:whatever", null), "unknown", "even the one case that is unregistered by construction");
+  const { label, note } = familyStyle("unknown");
+  assert.doesNotMatch(`${label} ${note}`.toLowerCase(), /does not declare/);
+  assert.match(note.toLowerCase(), /did not answer/);
 });

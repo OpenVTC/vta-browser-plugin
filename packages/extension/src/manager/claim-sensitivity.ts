@@ -189,29 +189,55 @@ export function treatmentFor(
   registry: ClaimTypeRegistry | null,
   type: string,
   override?: Sensitivity | undefined,
-): { treatment: ClaimTreatment; source: "holder" | "registry" } {
-  // No table yet. Everything is drawn masked and attributed to the registry,
-  // which is the fail-closed answer *and* the honest one: the holder's decision
-  // cannot be applied over an answer that has not arrived, and claiming
-  // `source: "holder"` here would put their name on a default.
-  if (!registry) {
-    return { treatment: { sensitivity: "high", mask: "full" }, source: "registry" };
+): { treatment: ClaimTreatment; source: TreatmentSource } {
+  // **The holder's decision does not need the table.** §4 rule 1 makes it win
+  // over the registry's answer, so where they gave one there is nothing to
+  // combine and nothing to wait for. This branch is first for that reason.
+  //
+  // It used to be last, behind a fail-closed return for a missing registry, on
+  // the reasoning that a decision "cannot be applied over an answer that has not
+  // arrived". That reads well and is wrong: it made an agent that does not serve
+  // `persona/claim-types/list` — or one that failed to answer once — silently
+  // overrule every choice the holder had made about their own values. The
+  // console showed four bullets on a value its owner had explicitly marked
+  // *show it*, and attributed that to the registry.
+  //
+  // The mask axis still needs to know whether the token is *declared*, because a
+  // declared token's mask is the registry's own statement and this console does
+  // not overrule it. With no table that is unknowable, and the only evidence to
+  // hand is the holder — so their answer governs, which is also the answer they
+  // asked for.
+  if (override !== undefined) {
+    const declared = registry !== null && isRegisteredType(registry, type);
+    return {
+      treatment: {
+        sensitivity: override,
+        mask: declared ? resolveTreatment(registry!, type).mask : override === "high" ? "full" : "none",
+      },
+      source: "holder",
+    };
   }
-  const declared = resolveTreatment(registry, type);
-  if (override === undefined) return { treatment: declared, source: "registry" };
-  return {
-    treatment: {
-      sensitivity: override,
-      mask: isRegisteredType(registry, type)
-        ? declared.mask
-        : override === "high"
-          ? "full"
-          : "none",
-    },
-    source: "holder",
-  };
+  // No table, and no decision to fall back on: mask everything. `unknown` is a
+  // third source and not a synonym for `registry` — a surface that says "your
+  // agent's table does not declare this" when the table never arrived is
+  // stating a fact it does not have, which is the same error as reporting an
+  // unreadable context as an empty one.
+  if (!registry) {
+    return { treatment: { sensitivity: "high", mask: "full" }, source: "unknown" };
+  }
+  return { treatment: resolveTreatment(registry, type), source: "registry" };
 }
 
+
+/**
+ * Whose answer a treatment came from.
+ *
+ * `unknown` exists so a surface can tell "the table says nothing about this
+ * token" apart from "there is no table" — the same distinction the contexts
+ * band makes between a context that holds nothing and one the agent would not
+ * answer for. Both mask; only one of them is a statement about the token.
+ */
+export type TreatmentSource = "holder" | "registry" | "unknown";
 
 /** Whether this attribute's value is hidden until asked for, the holder's own
  *  decision included. The `type`-only {@link isSensitive} is the registry's
