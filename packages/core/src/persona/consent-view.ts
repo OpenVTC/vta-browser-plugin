@@ -111,7 +111,7 @@ function describePredicate(p: NonNullable<PreviewClaim["predicate"]>): string {
     }[p.op] ?? p.op;
   const arg = typeof p.arg === "string" ? p.arg : JSON.stringify(p.arg);
   // The trailing clause is the point of the row, not a footnote: this rung is
-  // the only one where the verifier learns a fact without receiving a value.
+  // the only one where the verifier learns something without receiving a value.
   return `proves ${op} ${arg} — the value itself is not sent`;
 }
 

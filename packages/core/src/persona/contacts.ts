@@ -4,7 +4,7 @@
 // identity out, these record what came back the other way. A contact is stored
 // **as received** and is never merged into the holder's own attributes — that
 // separation is the point. A contact is somebody else's account of themselves,
-// not a fact the holder is asserting, and a store that blurred the two would
+// not an attribute the holder is asserting, and a store that blurred the two would
 // let a peer's claim about their own name be re-presented as the holder's.
 //
 // Every contact is filed against `knownByPersona`: which of the holder's own

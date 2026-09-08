@@ -39,11 +39,11 @@ async function approveRequest({ as = AGENT, previewId = PREVIEW, ctx = {} } = {}
       subject: "did:key:zHolder",
       sessionId: "sess-42",
       challenge: "a".repeat(32),
-      reason: "Approve disclosing 1 fact to did:key:zVerifier",
+      reason: "Approve disclosing 1 attribute to did:key:zVerifier",
       ext: {
         [AUTHZ_EXT]: {
           type: CONTEXT_TYPE,
-          summary: "Approve disclosing 1 fact to did:key:zVerifier",
+          summary: "Approve disclosing 1 attribute to did:key:zVerifier",
           risk: "high",
           action: {
             kind: "disclose",
@@ -135,7 +135,7 @@ test("what the holder is shown comes out of the signature", async () => {
   assert.deepEqual(res.context.claimTypes, ["payment.card"]);
   assert.equal(res.context.verifierDid, "did:key:zVerifier");
   assert.equal(res.context.purpose, "checkout");
-  assert.equal(res.context.summary, "Approve disclosing 1 fact to did:key:zVerifier");
+  assert.equal(res.context.summary, "Approve disclosing 1 attribute to did:key:zVerifier");
   assert.equal(res.request.challenge, "a".repeat(32));
 });
 

@@ -122,8 +122,8 @@ test("emailLocal keeps the domain and nothing else, and refuses to guess", () =>
 
 test("a hidden value is not an empty one", () => {
   // A mask that rendered as nothing — or as the pane's word for a value the
-  // agent did not send — would tell the operator that a fact they hold is a
-  // fact they do not. `masked` is what the pane draws differently on; it must
+  // agent did not send — would tell the operator that an attribute they hold is a
+  // attribute they do not. `masked` is what the pane draws differently on; it must
   // be set, and the text must not be blank.
   const hidden = maskedFact("gov.id.passport", "X1234567");
   assert.equal(hidden.masked, true);

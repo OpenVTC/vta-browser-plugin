@@ -19,7 +19,7 @@
 //   - **Seed the ticks from every `ref`** — pinned and overridden entries have
 //     one too — and saving writes the same attribute twice: once live, from the
 //     tick, and once pinned, from the entry that was carried through. One
-//     apparently unchanged edit, two entries for one fact.
+//     apparently unchanged edit, two entries for one attribute.
 //
 // So the split is by entry *form*, not by whether an entry has a `ref`.
 

@@ -1,4 +1,4 @@
-// How carefully a fact's value is shown to the person who owns it.
+// How carefully an attribute's value is shown to the person who owns it.
 //
 // ## This is not a security control, and saying so is the point
 //
@@ -133,7 +133,7 @@ const REGISTERED: Readonly<Record<string, ClaimTreatment>> = {
  * §4's first rule is a per-attribute override the holder set explicitly, which
  * wins over the registry. No field carries one on the wire yet, so nothing here
  * can read it; when one exists it belongs *above* this call, not inside it,
- * because "the holder decided" and "the registry says" are different facts and
+ * because "the holder decided" and "the registry says" are different attributes and
  * a UI that wants to explain the difference needs both.
  *
  * **The prefix walk is rule 3, and it only ever tightens.** An unregistered
@@ -274,12 +274,12 @@ function emailLocal(text: string): string {
 }
 
 /**
- * What to draw for a fact, and whether a *Show* control belongs beside it.
+ * What to draw for an attribute, and whether a *Show* control belongs beside it.
  *
  * `masked` is the caller's cue for two separate things and both matter: a
  * reveal control, and a rendering distinct from an absent value. A pane that
  * greys a mask the way it greys "not requested" has told the operator that a
- * fact they hold is a fact they do not.
+ * attribute they hold is an attribute they do not.
  */
 export function maskedFact(type: string, text: string): { text: string; masked: boolean } {
   const treatment = treatmentOf(type);

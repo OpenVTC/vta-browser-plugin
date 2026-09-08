@@ -60,7 +60,7 @@ export function holderGate(authority: Authority | null): string | null {
   if (!authority) return null;
   if (isUnscopedHolder(authority)) return null;
   return (
-    "Your facts sit above every context, so reaching them takes authority of its own: " +
+    "Your attributes sit above every context, so reaching them takes authority of its own: " +
     "an agent credential with no context restriction, or one granted the " +
     "`persona-holder` capability. This console cannot see which you have — " +
     "`auth/whoami` reports roles and scopes, not capabilities — so it does not stop " +

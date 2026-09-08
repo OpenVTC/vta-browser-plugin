@@ -31,18 +31,18 @@ export function showsGuide(state: { faces: number | null; guiding: boolean; skip
 /**
  * Whether a holder can jump to a step of the guided setup.
  *
- * Step one is always reachable — going back to add another fact is the most
+ * Step one is always reachable — going back to add another attribute is the most
  * ordinary thing a person wants here, and until the stepper answered clicks
  * the only route was a button labelled "Cancel", which reads as abandoning the
  * whole flow rather than stepping back one.
  *
  * The later two are reachable only once they have something to work on: a face
- * cannot be composed out of no facts, and a persona cannot wear a face that
+ * cannot be composed out of no attributes, and a persona cannot wear a face that
  * does not exist. Reaching them empty would present a form whose every control
  * refuses, which is a worse answer than not offering the step.
  */
-export function reachableStep(step: 1 | 2 | 3, have: { facts: number; faces: number }): boolean {
+export function reachableStep(step: 1 | 2 | 3, have: { attributes: number; faces: number }): boolean {
   if (step === 1) return true;
-  if (step === 2) return have.facts > 0;
+  if (step === 2) return have.attributes > 0;
   return have.faces > 0;
 }

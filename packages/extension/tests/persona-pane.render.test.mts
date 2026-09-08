@@ -21,7 +21,7 @@ import { buildGraph } from "../src/manager/identity-graph.js";
 
 const HOLDER = { session: { id: "s" }, roles: ["admin"], scopes: [] };
 
-const fact = (id: string, type: string, value: string) => ({
+const attribute = (id: string, type: string, value: string) => ({
   attributeId: id,
   type,
   valueType: "string" as const,
@@ -50,7 +50,7 @@ const context = (id: string, name: string) => ({
 // The fixture is a registered token because these tests are about something
 // else; the masking of an unregistered one is asserted deliberately further
 // down.
-const FACTS = [fact("f1", "name.legal", "Glenn Gore"), fact("f2", "phone.mobile", "+65 8262 2325")];
+const FACTS = [attribute("f1", "name.legal", "Glenn Gore"), attribute("f2", "phone.mobile", "+65 8262 2325")];
 const CONTEXTS = [context("openvtc", "OpenVTC"), context("vta", "Verifiable Trust Agent")];
 
 // ── The blank pane (#179) ───────────────────────────────────────────────────
@@ -77,12 +77,12 @@ test("making a face does not loop the renderer", async () => {
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
 
-  assert.match(ui.text(), /Make a face/, "the guide should be on step two with facts and no face");
+  assert.match(ui.text(), /Make a face/, "the guide should be on step two with attributes and no face");
   assert.match(ui.text(), /What a stranger would receive/);
 
   // Ticking is what drove the loop: the scrape ran, set state, and re-rendered.
   const boxes = ui.all('input[type="checkbox"]');
-  assert.ok(boxes.length >= 2, `expected a tick per fact, saw ${boxes.length}`);
+  assert.ok(boxes.length >= 2, `expected a tick per attribute, saw ${boxes.length}`);
   await ui.check(boxes[0]!);
   await ui.check(boxes[1]!);
 
@@ -96,7 +96,7 @@ test("making a face does not loop the renderer", async () => {
 test("the stranger card starts empty and says so", async () => {
   // The paired negative: an empty card is a real state with its own sentence,
   // not a blank area. Without this, the assertion above is satisfied by a card
-  // that shows every fact regardless of the ticks.
+  // that shows every attribute regardless of the ticks.
   const a = agent({});
   const ui = await render(
     h(GuidedSetup, {
@@ -112,7 +112,7 @@ test("the stranger card starts empty and says so", async () => {
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
   assert.match(ui.text(), /Nothing ticked/);
-  assert.doesNotMatch(ui.text(), /Glenn Gore/, "an unticked fact must not appear on the card");
+  assert.doesNotMatch(ui.text(), /Glenn Gore/, "an unticked attribute must not appear on the card");
   await ui.unmount();
 });
 
@@ -137,7 +137,7 @@ test("a completed step in the stepper is a way back to it", async () => {
   );
 
   assert.match(ui.text(), /Make a face/);
-  const backToOne = ui.byText('[role="button"]', "Add a fact or two");
+  const backToOne = ui.byText('[role="button"]', "Add an attribute or two");
   assert.ok(backToOne, "the completed first step should be pressable");
   await ui.click(backToOne!);
   assert.match(ui.text(), /Why start here/, "clicking step one should return to it");
@@ -330,7 +330,7 @@ test("a context the agent would not answer for is not folded away as empty", asy
 
 // ── Values a shoulder should not collect (#185) ─────────────────────────────
 //
-// The console draws the holder's own facts, so a passport number sits on screen
+// The console draws the holder's own attributes, so a passport number sits on screen
 // for as long as the pane is open — through a screen share, a screenshot, and
 // anyone walking past. Hiding it is worth doing and is worth being precise
 // about what it is: the value was fetched before any of this ran, so this
@@ -343,10 +343,10 @@ test("a context the agent would not answer for is not folded away as empty", asy
 // only a render sees it.
 
 const SECRETS = [
-  fact("f1", "name.legal", "Glenn Gore"),
-  fact("f2", "phone.mobile", "+65 8262 2325"),
-  fact("f3", "gov.id.passport", "X1234567"),
-  fact("f4", "x:acme.badge", "BADGE-99"),
+  attribute("f1", "name.legal", "Glenn Gore"),
+  attribute("f2", "phone.mobile", "+65 8262 2325"),
+  attribute("f3", "gov.id.passport", "X1234567"),
+  attribute("f4", "x:acme.badge", "BADGE-99"),
 ];
 
 /** The map, mounted over `SECRETS` with nothing selected. */
@@ -385,7 +385,7 @@ test("a sensitive value is not on the map until it is asked for", async () => {
 
   // A hidden value is drawn, not omitted. Rendering nothing — or rendering the
   // pane's phrase for a value the agent did not send — would say the holder
-  // does not have a fact they do have.
+  // does not have an attribute they do have.
   assert.match(screen, /••••/, "a hidden value still occupies its row");
   assert.doesNotMatch(screen, /not requested/, "hidden is not the same state as absent");
   assert.match(screen, /•••• 25/, "the tail the holder recognises their own number by survives");
@@ -396,7 +396,7 @@ test("a sensitive value is not on the map until it is asked for", async () => {
 test("Show reveals one value, and only the one that was pressed", async () => {
   const ui = await mapOverSecrets();
   const controls = shows(ui);
-  assert.equal(controls.length, 3, "one control per hidden fact, and never a single global one");
+  assert.equal(controls.length, 3, "one control per hidden attribute, and never a single global one");
 
   await ui.click(controls[0]!);
   const screen = ui.text();
@@ -404,11 +404,11 @@ test("Show reveals one value, and only the one that was pressed", async () => {
   assert.doesNotMatch(screen, /X1234567/, "and reveals nothing else");
   assert.doesNotMatch(screen, /BADGE-99/);
 
-  // The card underneath is a click target — it selects the fact and opens the
+  // The card underneath is a click target — it selects the attribute and opens the
   // strip below the map. Revealing a value must not do that too: the operator
   // pressed Show, and the screen they were reading changing under them is the
   // symptom of a missing `stopPropagation`.
-  assert.doesNotMatch(screen, /Last left/, "revealing a value must not also select the fact");
+  assert.doesNotMatch(screen, /Last left/, "revealing a value must not also select the attribute");
 
   await ui.unmount();
 });

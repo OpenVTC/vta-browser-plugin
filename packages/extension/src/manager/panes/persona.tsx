@@ -5,13 +5,13 @@
 //
 // Everywhere else in the console, a context is the compartment: keys, DIDs,
 // memory and app-state all live inside one. The attribute pool and the profiles
-// over it do not. There is one person here, with one set of facts about
+// over it do not. There is one person here, with one set of attributes about
 // themselves, and the contexts are the places they choose to be known.
 //
 // So the pane is a picture rather than a filtered list — the identity map in
-// `persona-map.tsx`: facts on top, faces in the middle, contexts below, with the
+// `persona-map.tsx`: attributes on top, faces in the middle, contexts below, with the
 // one-way line drawn between. And for the holder who has nothing yet, the
-// guided setup in `persona-setup.tsx`: a fact, a face, a context, in the order
+// guided setup in `persona-setup.tsx`: an attribute, a face, a context, in the order
 // the model runs. This file loads what both need and decides which to show.
 //
 // ## The boundary runs through the middle of it
@@ -40,7 +40,7 @@
 //
 // ## Words
 //
-// On screen: a fact, a face, a context, a persona that wears a face. See
+// On screen: an attribute, a face, a context, a persona that wears a face. See
 // `design-docs/persona-vocabulary.md`. In code the spec's names stay where they
 // name wire records.
 
@@ -180,7 +180,7 @@ export function PersonaPane({
   if (attributes.error) {
     return (
       <div style={{ display: "grid", gap: 12 }}>
-        <LoadError what="your facts" error={attributes.error} />
+        <LoadError what="your attributes" error={attributes.error} />
       </div>
     );
   }
@@ -191,7 +191,7 @@ export function PersonaPane({
   }
   if (!attributes.data || !profiles.data) return <Loading what="your identity" />;
 
-  // No face means nothing for the map to draw. A holder with facts and no face
+  // No face means nothing for the map to draw. A holder with attributes and no face
   // lands on step two; one with nothing on step one.
   if (showGuide) {
     return (

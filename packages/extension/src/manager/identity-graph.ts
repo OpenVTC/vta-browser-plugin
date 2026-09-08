@@ -1,21 +1,21 @@
-// The identity map's model: facts, faces, contexts, and what reaches what.
+// The identity map's model: attributes, faces, contexts, and what reaches what.
 //
-// The persona pane draws one picture of the whole model — facts on top, faces
+// The persona pane draws one picture of the whole model — attributes on top, faces
 // in the middle, contexts below — and lights up everything a selection reaches.
-// Which things light up is the substance of the picture: a fact that reaches
+// Which things light up is the substance of the picture: an attribute that reaches
 // two contexts through one face is the holder's linkage made visible, and a
 // context that lights the wrong face is a lie about what it holds. So the graph
 // and the reach computation live here, out of the component, with no DOM and
 // no relative imports, where they can be tested the way `profile-entries.ts`
 // was.
 //
-// Vocabulary on screen follows `design-docs/persona-vocabulary.md`: a fact, a
+// Vocabulary on screen follows `design-docs/persona-vocabulary.md`: an attribute, a
 // face, a context, a persona that *wears* a face. The identifiers below keep the
 // spec's names where they name wire records (`profileId`, `personaDid`).
 
 import type { PoolAttribute, PoolProfile, PoolProfileEntry } from "@openvtc/pnm-core/admin";
 
-export interface FactNode {
+export interface AttributeNode {
   id: string;
   type: string;
   label?: string | undefined;
@@ -29,10 +29,10 @@ export interface FactNode {
 export interface FaceNode {
   id: string;
   name: string;
-  /** Facts this face selects by live reference. */
-  factIds: string[];
+  /** Attributes this face selects by live reference. */
+  attributeIds: string[];
   /** Entries that are not a live reference — pinned, overridden, inline. They
-   *  still reach a context; they just do not draw to a fact card. */
+   *  still reach a context; they just do not draw to an attribute card. */
   preserved: number;
   entries: PoolProfileEntry[];
   version: number;
@@ -65,14 +65,14 @@ export interface FaceLink {
 }
 
 export interface IdentityGraph {
-  facts: FactNode[];
+  attributes: AttributeNode[];
   faces: FaceNode[];
   contexts: ContextNode[];
   links: FaceLink[];
 }
 
 export type Selection =
-  | { kind: "fact"; id: string }
+  | { kind: "attribute"; id: string }
   | { kind: "face"; id: string }
   | { kind: "context"; id: string }
   | { kind: "persona"; contextId: string; did: string };
@@ -111,7 +111,7 @@ export function buildGraph(
   profiles: readonly PoolProfile[],
   contexts: readonly ContextInput[],
 ): IdentityGraph {
-  const facts: FactNode[] = attributes.map((a) => ({
+  const attributeNodes: AttributeNode[] = attributes.map((a) => ({
     id: a.attributeId,
     type: a.type,
     label: a.label,
@@ -127,7 +127,7 @@ export function buildGraph(
     return {
       id: p.profileId,
       name: p.name,
-      factIds: refs,
+      attributeIds: refs,
       preserved: p.entries.length - refs.length,
       entries: p.entries,
       version: p.version,
@@ -166,28 +166,28 @@ export function buildGraph(
     .filter(([, list]) => list.length > 1)
     .map(([faceId, list]) => ({ faceId, wearers: list }));
 
-  return { facts, faces, contexts: contextNodes, links };
+  return { attributes: attributeNodes, faces, contexts: contextNodes, links };
 }
 
 /** Everything a selection reaches, in every direction it can reach. */
 export interface Reach {
-  factIds: Set<string>;
+  attributeIds: Set<string>;
   faceIds: Set<string>;
   personaKeys: Set<string>;
   contextIds: Set<string>;
 }
 
 function empty(): Reach {
-  return { factIds: new Set(), faceIds: new Set(), personaKeys: new Set(), contextIds: new Set() };
+  return { attributeIds: new Set(), faceIds: new Set(), personaKeys: new Set(), contextIds: new Set() };
 }
 
 /**
  * What lights up.
  *
- * Reach runs **downwards from a fact** — the faces that select it, the personas
+ * Reach runs **downwards from an attribute** — the faces that select it, the personas
  * that wear those faces, the contexts they are in — and **upwards from a
- * context** — its personas' faces and those faces' facts. A face reaches both
- * ways. That asymmetry is the model: a fact's reach is where it *goes*; a
+ * context** — its personas' faces and those faces' attributes. A face reaches both
+ * ways. That asymmetry is the model: an attribute's reach is where it *goes*; a
  * context's reach is what it *holds*.
  *
  * Nothing here reads a context's copy. The picture is drawn from the pool and
@@ -199,7 +199,7 @@ export function reachOf(graph: IdentityGraph, selection: Selection | null): Reac
   const out = empty();
   if (!selection) return out;
 
-  const facesWithFact = (factId: string) => graph.faces.filter((f) => f.factIds.includes(factId));
+  const facesWithAttribute = (attributeId: string) => graph.faces.filter((f) => f.attributeIds.includes(attributeId));
   const wearersOf = (faceId: string) =>
     graph.contexts.flatMap((c) => c.personas.filter((p) => p.faceId === faceId));
 
@@ -213,13 +213,13 @@ export function reachOf(graph: IdentityGraph, selection: Selection | null): Reac
   const lightFaceUp = (faceId: string) => {
     out.faceIds.add(faceId);
     const face = graph.faces.find((f) => f.id === faceId);
-    for (const id of face?.factIds ?? []) out.factIds.add(id);
+    for (const id of face?.attributeIds ?? []) out.attributeIds.add(id);
   };
 
   switch (selection.kind) {
-    case "fact":
-      out.factIds.add(selection.id);
-      for (const face of facesWithFact(selection.id)) lightFaceDown(face.id);
+    case "attribute":
+      out.attributeIds.add(selection.id);
+      for (const face of facesWithAttribute(selection.id)) lightFaceDown(face.id);
       break;
     case "face":
       lightFaceUp(selection.id);
@@ -246,13 +246,13 @@ export function reachOf(graph: IdentityGraph, selection: Selection | null): Reac
   return out;
 }
 
-/** The faces a fact reaches, and the contexts beyond them — the sentence the
+/** The faces an attribute reaches, and the contexts beyond them — the sentence the
  *  detail strip says: "reaches 2 contexts through Glenn – Developer". */
-export function factReach(
+export function attributeReach(
   graph: IdentityGraph,
-  factId: string,
+  attributeId: string,
 ): { faces: FaceNode[]; contextIds: string[]; wearers: PersonaNode[] } {
-  const faces = graph.faces.filter((f) => f.factIds.includes(factId));
+  const faces = graph.faces.filter((f) => f.attributeIds.includes(attributeId));
   const wearers = graph.contexts.flatMap((c) =>
     c.personas.filter((p) => p.faceId !== null && faces.some((f) => f.id === p.faceId)),
   );

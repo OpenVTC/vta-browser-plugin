@@ -69,16 +69,16 @@ test("skipping is sticky, even when the last face goes", () => {
 
 import { reachableStep } from "../src/manager/persona-flow.ts";
 
-const reach = (step: 1 | 2 | 3, facts: number, faces: number) => reachableStep(step, { facts, faces });
+const reach = (step: 1 | 2 | 3, attributes: number, faces: number) => reachableStep(step, { attributes, faces });
 
 test("step one is always reachable, including from a standing start", () => {
   assert.equal(reach(1, 0, 0), true);
   assert.equal(reach(1, 3, 1), true);
 });
 
-test("a face cannot be composed out of no facts", () => {
+test("a face cannot be composed out of no attributes", () => {
   assert.equal(reach(2, 0, 0), false);
-  // The pair: one fact is enough to have something to tick.
+  // The pair: one attribute is enough to have something to tick.
   assert.equal(reach(2, 1, 0), true);
 });
 
@@ -90,5 +90,5 @@ test("a persona cannot wear a face that does not exist", () => {
 test("an unreachable step is refused rather than shown empty", () => {
   // Reaching a step with nothing to work on presents a form whose every
   // control refuses — a worse answer than not offering the step at all.
-  assert.equal(reach(2, 0, 1), false, "facts, not faces, are what step two needs");
+  assert.equal(reach(2, 0, 1), false, "attributes, not faces, are what step two needs");
 });

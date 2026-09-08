@@ -74,7 +74,7 @@ test("an unchanged edit round-trips the profile exactly", () => {
 test("no attribute is ever named twice", () => {
   // The duplicate bug: a pinned entry has a `ref`, so seeding the ticks from
   // every ref ticks its attribute AND carries the pinned entry through. The
-  // profile then presents one fact through two entries, from an edit in which
+  // profile then presents one attribute through two entries, from an edit in which
   // the operator touched nothing.
   const ticked = ["a-live", "a-pinned", "a-overridden"];
   const out = composeEntries(ALL, ticked);
