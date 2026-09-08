@@ -26,6 +26,7 @@ import {
   personasBlockingDelete,
   PROFILE_DELETE_BOUND,
 } from "../dist/admin/index.js";
+import { listBindings } from "../dist/persona/index.js";
 
 const HOLDER = { did: "did:key:zHolder" };
 const SERVICE = { did: "did:webvh:QmAgent:agent.example" };
@@ -410,4 +411,83 @@ test("a values listing can ask for the sensitive ones, and does not by default",
   const plain = recorder({ attributes: [] });
   await personaAttributeList(plain, { ...PARTIES, includeValues: true });
   assert.ok(!("includeSensitive" in plain.sent[0].envelope.payload));
+});
+
+// ── A listing is read to the end, not to the first page ────────────────────
+//
+// `*List` clients returned the first page and dropped `nextCursor`, which the
+// specification names as the mistake — "a producer MUST NOT infer exhaustion
+// from a short page" — and which nothing downstream could detect: a short array
+// is indistinguishable from a complete one. The console's identity map drew the
+// result as the whole truth.
+
+/** Answers with each reply in turn, recording what it was asked. */
+function pages(...replies) {
+  const sent = [];
+  return {
+    sent,
+    send(envelope) {
+      sent.push({ envelope });
+      return Promise.resolve(replies[sent.length - 1] ?? replies[replies.length - 1]);
+    },
+  };
+}
+
+const poolAttribute = (id) => ({
+  attributeId: id,
+  type: "name.legal",
+  valueType: "string",
+  provenance: { kind: "selfAsserted" },
+  version: 1,
+  updatedAt: "x",
+});
+
+test("the pool is read to the end, and the cursor goes back with the next request", async () => {
+  const r = pages(
+    { attributes: [poolAttribute("a1")], nextCursor: "c1" },
+    { attributes: [poolAttribute("a2")] },
+  );
+  const all = await personaAttributeList(r, { ...PARTIES });
+  assert.deepEqual(all.map((a) => a.attributeId), ["a1", "a2"]);
+  assert.equal(r.sent.length, 2);
+  assert.equal(r.sent[0].envelope.payload.cursor, undefined, "the first request invents no cursor");
+  assert.equal(r.sent[1].envelope.payload.cursor, "c1");
+});
+
+test("paging preserves the rest of the request, so a narrowed listing stays narrowed", async () => {
+  // The second page of a `typePrefix` query that forgot the prefix would return
+  // the whole pool — and `reveal-value.ts` matches by id, so it would quietly
+  // read every value the holder has to answer a question about one.
+  const r = pages(
+    { attributes: [poolAttribute("a1")], nextCursor: "c1" },
+    { attributes: [poolAttribute("a2")] },
+  );
+  await personaAttributeList(r, { ...PARTIES, typePrefix: "phone", includeValues: true, includeSensitive: true });
+  const second = r.sent[1].envelope.payload;
+  assert.equal(second.typePrefix, "phone");
+  assert.equal(second.includeValues, true);
+  assert.equal(second.includeSensitive, true);
+});
+
+test("faces are read to the end too", async () => {
+  const r = pages(
+    { profiles: [{ profileId: "p1", name: "One", entries: [], version: 1, updatedAt: "x" }], nextCursor: "c1" },
+    { profiles: [{ profileId: "p2", name: "Two", entries: [], version: 1, updatedAt: "x" }] },
+  );
+  const all = await personaProfileList(r, { ...PARTIES });
+  assert.deepEqual(all.map((p) => p.profileId), ["p1", "p2"]);
+});
+
+test("every persona in a context is read to the end, and no cursor comes back", async () => {
+  // The returned document carries no `nextCursor` because there is nothing left
+  // to fetch — the two console surfaces that ignored the member are correct by
+  // construction now rather than by luck.
+  const r = pages(
+    { personas: [{ personaDid: "did:key:zA", bound: true }], nextCursor: "c1" },
+    { personas: [{ personaDid: "did:key:zB", bound: false }] },
+  );
+  const res = await listBindings(r, { ...PARTIES, contextId: "openvtc" });
+  assert.deepEqual(res.personas.map((p) => p.personaDid), ["did:key:zA", "did:key:zB"]);
+  assert.equal(res.nextCursor, undefined);
+  assert.equal(r.sent[1].envelope.payload.contextId, "openvtc", "the context survives the second request");
 });

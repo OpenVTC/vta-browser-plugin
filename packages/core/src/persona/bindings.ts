@@ -28,6 +28,8 @@ import {
   type PersonaBindingListResponsePayload,
 } from "@openvtc/trust-tasks/persona/binding/list/1.0/payload";
 
+import { collectPages } from "../util/pages.js";
+
 import { call, type PersonaCallerParams } from "./call.js";
 
 export type PersonaBinding = PersonaBindingGetResponsePayload;
@@ -67,7 +69,22 @@ export interface ListBindingsParams extends PersonaCallerParams {
   cursor?: PersonaBindingListPayload["cursor"];
 }
 
-/** Every persona bound in this context. */
+/**
+ * Every persona present in this context — **to the end of the listing**.
+ *
+ * Not "every persona *bound*": the response carries `bound` per entry precisely
+ * because an unbound persona is still present, and a caller deciding what a
+ * context knows of the holder needs both kinds.
+ *
+ * The returned document carries no `nextCursor`, because there is nothing left
+ * to fetch. That absence is the honest report of what this now does, and a
+ * caller that used to ignore the member is correct by construction rather than
+ * by luck — which is what it was before: two console surfaces read `.personas`
+ * off the first page and drew the result as the whole truth.
+ *
+ * `limit` is the page size to ask for; `cursor` is where to start. Neither caps
+ * the result.
+ */
 export async function listBindings(
   sender: TrustTaskSender,
   params: ListBindingsParams,
@@ -77,12 +94,16 @@ export async function listBindings(
     ...(params.limit !== undefined ? { limit: params.limit } : {}),
     ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
   };
-  return call<PersonaBindingListPayload, PersonaBindingListResponsePayload>(
-    sender,
-    params,
-    BINDING_LIST,
-    BINDING_LIST_RESPONSE,
-    "persona/binding/list",
-    payload,
-  );
+  const personas = await collectPages("persona/binding/list", async (cursor) => {
+    const res = await call<PersonaBindingListPayload, PersonaBindingListResponsePayload>(
+      sender,
+      params,
+      BINDING_LIST,
+      BINDING_LIST_RESPONSE,
+      "persona/binding/list",
+      cursor === undefined ? payload : { ...payload, cursor },
+    );
+    return { items: res.personas ?? [], nextCursor: res.nextCursor };
+  });
+  return { personas };
 }

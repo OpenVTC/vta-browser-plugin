@@ -140,7 +140,7 @@ function emailLocal(text: string): string {
  * `treatmentFor`, which is where that decision is applied and where the reason
  * an unregistered token's mask follows it is written down.
  */
-export function maskedFact(
+export function maskedValue(
   registry: ClaimTypeRegistry | null,
   type: string,
   text: string,

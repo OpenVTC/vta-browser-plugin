@@ -43,7 +43,7 @@ import { contextHeading, formatInstant } from "../format.js";
 import { type Authority, type Parties } from "../use-vta.js";
 import { holderGate } from "../holder-gate.js";
 import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
-import { maskedFact, treatmentFor, type Sensitivity } from "../claim-sensitivity.js";
+import { maskedValue, treatmentFor, type Sensitivity } from "../claim-sensitivity.js";
 import { revealAttributeValue } from "../reveal-value.js";
 import { composeEntries, lockedRefs, preservedEntries, tickedFrom } from "../profile-entries.js";
 import { personaCandidates } from "../persona-candidates.js";
@@ -75,7 +75,7 @@ export function Label({ children }: { children: React.ReactNode }) {
  * with no value.
  *
  * **Not exported, and that is the enforcement.** Every value this pane draws
- * goes through `FactValue` below, which is where a sensitive one is hidden. A
+ * goes through `AttributeValue` below, which is where a sensitive one is hidden. A
  * surface that could reach the raw rendering would be one mask away from
  * printing a passport number in full, and it would look like ordinary code.
  */
@@ -116,7 +116,7 @@ function formatValue(value: unknown): { text: string; withheld: boolean } {
  * the console or navigating anywhere re-hides everything, and revealing the
  * same attribute in two places is two deliberate acts rather than one.
  */
-export function FactValue({
+export function AttributeValue({
   type,
   value,
   sensitivity,
@@ -159,7 +159,7 @@ export function FactValue({
   const [refused, setRefused] = useState<string | null>(null);
 
   const { text, withheld } = formatValue(revealed ? revealed.value : value);
-  const { text: hidden, masked } = maskedFact(registry, type, text, sensitivity);
+  const { text: hidden, masked } = maskedValue(registry, type, text, sensitivity);
 
   // **A withheld value is never masked.** The mask is a statement that a value
   // is here and is being kept off the screen; drawing it over "not on this
@@ -1199,7 +1199,7 @@ export function ResolvedProfile({
             style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}
           >
             <span style={{ fontFamily: font.mono, fontSize: t.xs, minWidth: 150 }}>{claim.type}</span>
-            <FactValue
+            <AttributeValue
               registry={registry}
               type={claim.type}
               value={claim.value}

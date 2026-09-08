@@ -525,7 +525,7 @@ a second copy. `rp-login/step-up.ts` re-exports every name, and
 `tests/rp-login.step-up.mjs` passes unchanged, which is what says the move was
 non-breaking.
 
-**Reveal lives in `FactValue`'s own state**, per value, and nowhere else. Lifted
+**Reveal lives in `AttributeValue`'s own state**, per value, and nowhere else. Lifted
 to the pane and keyed by fact id it would be a store of "things unhidden" that
 outlives the card the person was looking at and is one refactor from a *Show
 all*. Component state cannot become that: it dies with the element, so leaving
@@ -538,13 +538,38 @@ again, or catching the refusal and rethrowing it; matching the step-up code in
 `unverifiedApproveRequest` instead of the verified `context`; dropping the
 `previewId` cross-check; moving the verify/sign half back up beside the RP
 flow; a surface that formats a value itself instead of rendering
-`FactValue` (the second surface is always the one added later, and a value
+`AttributeValue` (the second surface is always the one added later, and a value
 masked on the card and printed in the strip is masked nowhere); greying a mask
 with `c.faint`, which is this pane's word for "the agent sent no value" and so
 makes a fact the holder has look like one they do not; reintroducing a compiled
 table as a fallback for a registry that has not loaded; or letting a UI string
 imply the console does not hold
 what it hides.
+
+**A listing is read to the end, and that is the client's job.** Every
+`persona/…/list` task is cursor-paginated, and the specification is explicit: a
+producer MUST NOT infer exhaustion from a short page — only an absent
+`nextCursor` means the end. `personaAttributeList`, `personaProfileList` and
+`listBindings` returned the first page and dropped the cursor, which nothing
+downstream could detect, because a short array is indistinguishable from a
+complete one: past the agent's page size (100 by default) the identity map drew
+a face pointing at attributes that were not in its own list, under counts that
+agreed with each other because they counted the same truncated array. All three
+now follow the cursor through `collectPages` (`core/src/util/pages.ts`), and
+`listBindings` returns a document with no `nextCursor` because there is nothing
+left to fetch. `limit` on those calls is the **page size to ask for**, never a
+cap on the result.
+
+**The bound throws rather than truncating.** `MAX_PAGES` guards against a far
+side that will not end — a cursor that repeats, or a pool beyond anything a
+picture can draw — and returning what had been collected would reintroduce the
+defect one layer down and with a longer array. It is set high enough (50 pages,
+25,000 records at the maximum page size) that reaching it means a fault rather
+than a large pool.
+
+**What breaks it:** reading `.attributes` / `.profiles` / `.personas` off a
+single response again; treating `limit` as a cap; or catching the bound's error
+and returning a partial list.
 
 **The console's components are rendered in tests, and this is how.**
 `tests/harness/` holds module hooks and a DOM so `node --test` can mount a

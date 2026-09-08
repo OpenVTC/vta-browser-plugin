@@ -19,7 +19,7 @@ import { Button, Note, Panel } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { contextHeading } from "../format.js";
 import type { Authority, Parties } from "../use-vta.js";
-import { AttributeEditor, BindingForm, FactValue, ProfileEditor } from "./persona-editors.js";
+import { AttributeEditor, BindingForm, AttributeValue, ProfileEditor } from "./persona-editors.js";
 import { holderGate } from "../holder-gate.js";
 import { reachableStep } from "../persona-flow.js";
 
@@ -108,7 +108,7 @@ function StrangerCard({
           <>
             <div style={{ display: "grid" }}>
               {name ? (
-                <FactValue registry={registry} type={name.type} value={name.value} style={{ fontSize: t.md, fontWeight: 640 }} />
+                <AttributeValue registry={registry} type={name.type} value={name.value} style={{ fontSize: t.md, fontWeight: 640 }} />
               ) : (
                 <span style={{ fontSize: t.md, fontWeight: 640 }}>—</span>
               )}
@@ -119,7 +119,7 @@ function StrangerCard({
               {rest.map((f) => (
                 <span key={f.attributeId} style={{ display: "contents" }}>
                   <span style={{ color: c.faint, fontFamily: font.mono, fontSize: t.xs }}>{f.label ?? f.type}</span>
-                  <FactValue registry={registry} type={f.type} value={f.value} />
+                  <AttributeValue registry={registry} type={f.type} value={f.value} />
                 </span>
               ))}
             </div>
@@ -204,7 +204,7 @@ export function GuidedSetup({
                   {attributes.map((a) => (
                     <div key={a.attributeId} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: t.sm }}>
                       <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted, minWidth: 120 }}>{a.type}</span>
-                      <FactValue registry={registry} type={a.type} value={a.value} />
+                      <AttributeValue registry={registry} type={a.type} value={a.value} />
                     </div>
                   ))}
                 </div>
