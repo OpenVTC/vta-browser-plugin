@@ -11,9 +11,6 @@
 import { pageTaskRefusal } from "./page-task-policy.js";
 import {
   disclosureStepUpFrom,
-  verifyDisclosureStepUp,
-  disclosureApprovalPayload,
-  DISCLOSURE_APPROVE_RESPONSE_TYPE,
   type DisclosureStepUpRequired,
 } from "@openvtc/pnm-core/persona";
 import { IndexedDBKVStore, listPendingInbound } from "@openvtc/pnm-core";
@@ -124,6 +121,12 @@ import {
   RUNTIME_TASK_CONSENT,
   CONSENT_KEEPALIVE_PORT,
   RUNTIME_STEP_UP_CONSENT,
+  OFFSCREEN_DISCLOSURE_STEP_UP,
+  RUNTIME_DISCLOSURE_STEP_UP_CONSENT,
+  type OffscreenDisclosureStepUpRequest,
+  type OffscreenDisclosureStepUpResponse,
+  type RuntimeDisclosureStepUpConsentRequest,
+  type RuntimeDisclosureStepUpConsentResponse,
   type RelayTaskFailure,
   type DiscloseResult,
   RUNTIME_STEP_UP_VTA,
@@ -1009,46 +1012,36 @@ async function handleDisclose(req: RuntimeDiscloseRequest): Promise<RuntimeDiscl
 /**
  * Obtain the fresh approval a `release: stepUp` disclosure needs.
  *
- * Order is the security property, and it is the same order the RP step-up
- * enforces: **verify, then show, then sign.** The approve-request arrives from
- * the agent inside the refusal, and everything the holder reads — the verifier,
- * the claim types, the purpose — is taken from *inside* its signature.
- * `verifyDisclosureStepUp` also refuses a request whose signed `previewId` is
- * not the one the refusal named, which is the case where the unsigned half and
- * the signed half disagree about which disclosure is being approved.
- *
- * A refused request returns before any prompt is raised, so the holder is never
- * shown a claim list this wallet could not verify. A declined prompt sends
- * nothing and the agent's challenge lapses on its TTL.
+ * Delegated to the offscreen document, and that is structural rather than
+ * stylistic: verifying the agent's approve-request resolves a DID, and DID
+ * resolution cannot be statically bundled into an MV3 service worker. A dynamic
+ * `import()` in `background.js` is the one thing CI asserts is absent, because a
+ * service worker cannot load one — so the verify and the signing live where
+ * they can, and this side contributes the only thing it uniquely can, a window
+ * for the human. `doStepUpVta` has exactly this shape for the same reason.
  */
 async function runDisclosureStepUp(
   active: { vtaDid: string; restBaseUrl?: string },
   origin: string,
   refusal: DisclosureStepUpRequired,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const verified = await verifyDisclosureStepUp(refusal, {
-    // The agent that refused is the only party whose approve-request this
-    // wallet will act on.
-    enrolledExecutorDids: [active.vtaDid],
-  });
-  if (!verified.ok) {
-    return { ok: false, error: `step-up request refused: ${verified.reason}` };
-  }
-
-  const approved = await raiseDisclosureStepUpConsent(origin, active.vtaDid, verified.context);
-  if (!approved) return { ok: false, error: "user declined the step-up approval" };
-
-  // An ordinary Trust Task. The channel signs it as the holder with
-  // `assertionMethod`, which IS the gate the approve-response requires — see
-  // `disclosureApprovalPayload` for why this does not carry a proof of its own.
-  const answered = await runPersonaTask(
-    active,
+  await ensureOffscreenDocument();
+  const ask: OffscreenDisclosureStepUpRequest = {
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_DISCLOSURE_STEP_UP,
+    vtaDid: active.vtaDid,
+    ...(active.restBaseUrl !== undefined ? { restBaseUrl: active.restBaseUrl } : {}),
     origin,
-    DISCLOSURE_APPROVE_RESPONSE_TYPE,
-    disclosureApprovalPayload(verified.request, true) as unknown as Record<string, unknown>,
-  );
-  if (!answered.ok) return { ok: false, error: answered.error };
-  return { ok: true };
+    refusal: {
+      previewId: refusal.previewId,
+      previewRetained: refusal.previewRetained,
+      unverifiedApproveRequest: refusal.unverifiedApproveRequest,
+    },
+  };
+  const result = (await chrome.runtime.sendMessage(ask)) as
+    | OffscreenDisclosureStepUpResponse
+    | undefined;
+  return result ?? { ok: false, error: "the step-up ceremony returned nothing" };
 }
 
 /**
@@ -1069,11 +1062,11 @@ async function runDisclosureStepUp(
  *
  * The text comes from the **verified** context, never the unsigned refusal.
  */
-async function raiseDisclosureStepUpConsent(
-  origin: string,
-  agentDid: string,
-  context: { verifierDid?: string; claimTypes: readonly string[]; purpose?: string },
-): Promise<boolean> {
+async function handleDisclosureStepUpConsent(
+  req: RuntimeDisclosureStepUpConsentRequest,
+): Promise<RuntimeDisclosureStepUpConsentResponse> {
+  const { origin, agentDid } = req;
+  const context = { verifierDid: req.verifierDid, claimTypes: req.claimTypes, purpose: req.purpose };
   const what =
     context.claimTypes.length === 1
       ? context.claimTypes[0]
@@ -1088,7 +1081,7 @@ async function raiseDisclosureStepUpConsent(
     action: "approve this disclosure",
     reason: `Release ${what}${to}${why}. This approval covers this one disclosure.`,
   });
-  return approved;
+  return { approved };
 }
 
 /** The persona and context this origin's stored profile entry names. */
@@ -3074,6 +3067,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Any failure to raise or resolve the prompt is a denial — silence is
       // not agreement, here as everywhere else in this file.
       .catch(() => sendResponse({ approved: false } satisfies RuntimeStepUpConsentResponse));
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_DISCLOSURE_STEP_UP_CONSENT) {
+    handleDisclosureStepUpConsent(message as RuntimeDisclosureStepUpConsentRequest)
+      .then(sendResponse)
+      // A denial, for the same reason as every other prompt here: silence is
+      // not agreement — least of all on the surface deciding whether a card
+      // number leaves.
+      .catch(() =>
+        sendResponse({ approved: false } satisfies RuntimeDisclosureStepUpConsentResponse),
+      );
     return true; // async sendResponse
   }
 

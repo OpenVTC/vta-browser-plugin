@@ -77,6 +77,11 @@ import {
   VtaSession,
   verifyDid,
 } from "@openvtc/pnm-core";
+import {
+  verifyDisclosureStepUp,
+  disclosureApprovalPayload,
+  DISCLOSURE_APPROVE_RESPONSE_TYPE,
+} from "@openvtc/pnm-core/persona";
 import { base64url } from "@openvtc/vti-didcomm-js";
 import { grantCommand } from "./grant-command.js";
 import { forgetInbox, getSettings, inboxFor, inboxToAdopt, setInbox } from "./config.js";
@@ -123,6 +128,11 @@ import {
   OFFSCREEN_SIGN_TRUST_TASK,
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
+  OFFSCREEN_DISCLOSURE_STEP_UP,
+  RUNTIME_DISCLOSURE_STEP_UP_CONSENT,
+  type OffscreenDisclosureStepUpRequest,
+  type RuntimeDisclosureStepUpConsentRequest,
+  type RuntimeDisclosureStepUpConsentResponse,
   OFFSCREEN_TARGET,
   OFFSCREEN_VAULT_DELETE,
   OFFSCREEN_REQUEST_TASK,
@@ -225,6 +235,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (msg.type === OFFSCREEN_REST_LOGIN) {
     doRestLogin(message as OffscreenRestLoginRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_DISCLOSURE_STEP_UP) {
+    doDisclosureStepUp(message as OffscreenDisclosureStepUpRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -3224,6 +3242,71 @@ async function doDidcommLogin(
       timings: sw.marks,
     },
   };
+}
+
+/**
+ * Obtain the fresh approval a `release: stepUp` disclosure needs.
+ *
+ * The same enforced order as `doStepUpVta`: **verify, then show, then sign.**
+ * Everything the human reads is taken from *inside* the agent's signature, per
+ * the spec's "consumers MUST verify the proof BEFORE surfacing the reason" —
+ * and here the reason is the list of facts about to leave, so the rule matters
+ * more rather than less.
+ *
+ * `verifyDisclosureStepUp` adds the check the generic verifier cannot make: the
+ * `previewId` inside the signature must equal the one the refusal named. The
+ * refusal's copy is unsigned, so approving against it would mean the holder
+ * read a prompt describing one disclosure and authorised whichever the
+ * signature meant.
+ *
+ * A refused request returns before the prompt, so the holder is never shown a
+ * claim list this wallet could not verify. A declined prompt sends nothing and
+ * the agent's challenge lapses on its TTL.
+ */
+async function doDisclosureStepUp(
+  req: OffscreenDisclosureStepUpRequest,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const verified = await verifyDisclosureStepUp(
+    { kind: "stepUpRequired", ...req.refusal },
+    { enrolledExecutorDids: await enrolledExecutorDids(req.vtaDid) },
+  );
+  if (!verified.ok) return { ok: false, error: `step-up request refused: ${verified.reason}` };
+
+  const ask: RuntimeDisclosureStepUpConsentRequest = {
+    type: RUNTIME_DISCLOSURE_STEP_UP_CONSENT,
+    origin: req.origin,
+    agentDid: verified.issuer,
+    claimTypes: [...verified.context.claimTypes],
+    ...(verified.context.verifierDid !== undefined
+      ? { verifierDid: verified.context.verifierDid }
+      : {}),
+    ...(verified.context.purpose !== undefined ? { purpose: verified.context.purpose } : {}),
+  };
+  const decision = (await chrome.runtime.sendMessage(ask)) as
+    | RuntimeDisclosureStepUpConsentResponse
+    | undefined;
+  // Anything but an explicit true — a vanished background, a malformed reply —
+  // is a denial. A prompt the holder never saw must not become an approval.
+  if (decision?.approved !== true) return { ok: false, error: "user declined the step-up approval" };
+
+  // An ordinary Trust Task: the channel signs it as the holder with
+  // `assertionMethod`, which IS the gate the approve-response requires, so the
+  // payload carries no proof of its own.
+  await doRequestTask({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_REQUEST_TASK,
+    vtaDid: req.vtaDid,
+    ...(req.restBaseUrl !== undefined ? { restBaseUrl: req.restBaseUrl } : {}),
+    origin: req.origin,
+    params: {
+      type: DISCLOSURE_APPROVE_RESPONSE_TYPE,
+      payload: disclosureApprovalPayload(verified.request, true) as unknown as Record<
+        string,
+        unknown
+      >,
+    },
+  } as OffscreenRequestTaskRequest);
+  return { ok: true };
 }
 
 async function doStepUpVta(
