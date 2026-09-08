@@ -81,19 +81,44 @@ test("every root this console places really is placed", () => {
   assert.deepEqual(unplaced, [], "place these roots in attribute-family.ts");
 });
 
-test("a family the agent serves and this build has never heard of is unregistered", () => {
-  // Not a gap — the honest answer. `unregistered`'s words say "nobody has
-  // classified this", which is precisely true of a family this console does not
-  // know. Colouring it by guessing would say more than is known.
+test("a family the agent declares and this build has no words for is the agent's own", () => {
+  // This asserted `unregistered` until deployment extension types existed
+  // (verifiable-trust-infrastructure#1327). `unregistered`'s words say the
+  // agent's table does not declare this — which is now false about exactly the
+  // rows an operator has just added, and the group heading is the first place
+  // they would look to check their work.
+  //
+  // `declared` says the true thing instead: the agent declares it, and this
+  // console has no family words of its own for it. Still no guessed colour,
+  // still no invented grouping — only the caption changes, and it changes from
+  // wrong to right.
   const novel = {
     ...(REGISTRY as unknown as Record<string, unknown>),
     entries: [{ type: "quantum", sensitivity: "normal", release: "consent", mask: "none" }],
   } as never;
-  assert.equal(familyOf("quantum.state", novel), "unregistered");
+  assert.equal(familyOf("quantum.state", novel), "declared");
+
+  // …and a token the agent does NOT declare is still unregistered, which is
+  // the distinction this whole test exists to keep.
+  assert.equal(familyOf("nothing.likeit", novel), "unregistered");
+});
+
+test("a declared family's words do not accuse the agent of not declaring it", () => {
+  const { label, note } = familyStyle("declared");
+  assert.doesNotMatch(`${label} ${note}`.toLowerCase(), /does not declare|not in the registry/);
+  assert.match(note.toLowerCase(), /declared by this agent/);
 });
 
 test("every family has words and a hue, and the order names them all", () => {
-  const families: Family[] = ["identity", "contact", "public", "gated", "unregistered", "unknown"];
+  const families: Family[] = [
+    "identity",
+    "contact",
+    "public",
+    "gated",
+    "declared",
+    "unregistered",
+    "unknown",
+  ];
   assert.deepEqual([...FAMILY_ORDER].sort(), [...families].sort(), "a family with no place in the order never draws");
   for (const family of families) {
     const style = familyStyle(family);

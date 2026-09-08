@@ -41,7 +41,14 @@ import { registeredRoots, type ClaimTypeRegistry } from "@openvtc/pnm-core/perso
  *  fallback bucket to be tidied away: it is the answer for every token the
  *  registry does not declare, which today includes most of what a holder
  *  invents for themselves. */
-export type Family = "identity" | "contact" | "public" | "gated" | "unregistered" | "unknown";
+export type Family =
+  | "identity"
+  | "contact"
+  | "public"
+  | "gated"
+  | "declared"
+  | "unregistered"
+  | "unknown";
 
 /** Top to bottom, the order the map lays the groups out in — roughly how
  *  closely a value identifies the person, so the row reads as a gradient rather
@@ -52,6 +59,7 @@ export const FAMILY_ORDER: readonly Family[] = [
   "contact",
   "public",
   "gated",
+  "declared",
   "unregistered",
   "unknown",
 ];
@@ -90,6 +98,18 @@ const STYLES: Readonly<Record<Family, FamilyStyle>> = {
     label: "Your agent asks first",
     note: "the registry gates these — a disclosure needs your approval each time",
     hue: "var(--m-fam-gated)",
+  },
+  declared: {
+    // The third answer, and it arrived with deployment extension types
+    // (verifiable-trust-infrastructure#1327). An agent may now declare a
+    // vocabulary this build has never heard of — `profile.github`, `employer` —
+    // and the honest thing to say about one is that the agent declares it and
+    // this console has no words of its own for the family. Saying "not in the
+    // registry" would have been false about the very rows an operator had just
+    // added, which is the one place they would go looking to check their work.
+    label: "Your agent's own",
+    note: "declared by this agent rather than by the shared registry — it decides how these are treated",
+    hue: "var(--m-fam-unregistered)",
   },
   unregistered: {
     label: "Not in the registry",
@@ -166,10 +186,10 @@ export function familyOf(type: string, registry: ClaimTypeRegistry | null): Fami
     case "gov":
       return "gated";
     default:
-      // A root the registry declares and this file has not placed. It reads as
-      // unclassified rather than being forced into the nearest group, and
-      // `manager-attribute-family.test.mts` fails on it — a re-sync that adds a
-      // vocabulary should be a decision someone makes, not a silent regrouping.
-      return "unregistered";
+      // Declared by the agent, in a family this build has no words for. Not
+      // `unregistered`: the table *does* declare it, and telling an operator
+      // their own extension type is unknown to their own agent would send them
+      // to debug a file that is working.
+      return "declared";
   }
 }
