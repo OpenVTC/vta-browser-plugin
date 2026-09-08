@@ -169,12 +169,157 @@ export async function roomsKeysSeal(
   return res.sealed;
 }
 
+import {
+  TYPE_URI as KEYS_PRESENT,
+  RESPONSE_TYPE_URI as KEYS_PRESENT_RESPONSE,
+  type RoomsKeysPresentPayload,
+  type RoomsKeysPresentResponsePayload,
+} from "@openvtc/trust-tasks/rooms/keys/present/0.1/payload";
+import {
+  TYPE_URI as KEYS_CHAIN,
+  RESPONSE_TYPE_URI as KEYS_CHAIN_RESPONSE,
+  type RoomsKeysChainPayload,
+  type RoomsKeysChainResponsePayload,
+} from "@openvtc/trust-tasks/rooms/keys/chain/0.1/payload";
+
+export interface RoomsPresentParams extends RoomsCaller {
+  roomId: string;
+  /** The action the presentation must confer, and no more. */
+  action: RoomAction;
+  /**
+   * Who it is for — a host's DID.
+   *
+   * Optional on the wire and never omitted here: it is what stops a presentation
+   * being replayed at a different host, and a caller that has one has no reason
+   * to leave it out.
+   */
+  audience: string;
+  /** A verifier-supplied freshness value, where one was offered. */
+  nonce?: string;
+}
+
+/**
+ * Ask this agent's own VTA for a presentation of the room's credentials.
+ *
+ * **Every host call needs one, and only this produces one.** The credentials
+ * themselves never cross — the VTA holds them and hands back a presentation
+ * bound to one operation, which is why `action` and `audience` are asked for
+ * rather than defaulted: a presentation minted for `read` should not open a
+ * `write`, and one minted for everything hands the caller the holder's whole
+ * standing.
+ *
+ * `nonce` is optional because a room host does not issue one. Freshness there is
+ * anchored by the request document's own proof and `issuedAt` — the host binds
+ * the presentation to the DID that signed the envelope, so an observed
+ * presentation is not replayable by anyone else. Pass a nonce when some other
+ * verifier supplies one; its absence here is a property of the host, not an
+ * omission.
+ *
+ * ## Why the answer is checked before it is returned
+ *
+ * The published schemas type the two ends of this value differently: this
+ * response declares `presentation` as a bare open object, while every host task
+ * `$ref`s `AuthorityPresentation`, whose `membership` and `authority` are
+ * REQUIRED. So the type that comes back does not fit the parameter it exists to
+ * fill, and the only ways past that are a blind cast or a check.
+ *
+ * A blind cast moves the failure: a presentation missing its chain reaches the
+ * host and comes back "no authority chain presented; a room operation is
+ * authorized by the chain" — an accusation aimed at the member, three hops from
+ * the agent that actually produced the empty answer. Checking here names the
+ * party that did.
+ */
+export async function roomsKeysPresent(
+  sender: TrustTaskSender,
+  params: RoomsPresentParams,
+): Promise<{ presentation: Presentation; expiresAt?: string }> {
+  // Built as a typed literal rather than spread-and-cast: the casts elsewhere in
+  // this module hide a misspelled member, and this payload has three of them
+  // whose names are easy to guess wrong (`nonce`, not `challenge`).
+  const payload: RoomsKeysPresentPayload = {
+    roomId: params.roomId,
+    action: params.action,
+    audience: params.audience,
+    ...(params.nonce ? { nonce: params.nonce } : {}),
+  };
+  const res = await call<RoomsKeysPresentResponsePayload>(
+    sender,
+    { holder: params.holder, service: params.service },
+    KEYS_PRESENT,
+    KEYS_PRESENT_RESPONSE,
+    "rooms/keys/present/0.1",
+    payload,
+  );
+
+  const got = res.presentation as Partial<Presentation> | undefined;
+  if (!got || typeof got.membership !== "string" || !Array.isArray(got.authority)) {
+    throw new Error(
+      `${params.service.did} returned a presentation for room ${params.roomId} with no ` +
+        `membership credential or no authority chain. A host authorizes from the chain ` +
+        `alone, so it would refuse this — and the refusal would read as if the member ` +
+        `lacked authority rather than as an agent that answered incompletely.`,
+    );
+  }
+
+  return {
+    presentation: got as Presentation,
+    ...(res.expiresAt ? { expiresAt: res.expiresAt } : {}),
+  };
+}
+
+/**
+ * Hand this agent's own VTA the rungs its principal fetched from the host.
+ *
+ * The last leg of a joining member's backfill, and the repair for a room that
+ * reads only from the epoch its holder joined at. The VTA accrues a rung for
+ * every membership change it lives through; this is for the history it did not.
+ *
+ * **The response is the answer worth having.** `earliestReadableEpoch` is not a
+ * restatement of what was sent — a rung extends reach only if every rung above
+ * it is present too, so a set with a gap in it is reported here rather than at
+ * the first record that will not open, which reads like corruption.
+ */
+export async function roomsKeysChain(
+  sender: TrustTaskSender,
+  params: RoomsCaller & { roomId: string; links: EpochLink[] },
+): Promise<RoomsKeysChainResponsePayload> {
+  const payload: RoomsKeysChainPayload = {
+    roomId: params.roomId,
+    // `links` is `[EpochLink, ...EpochLink[]]` — the schema's `minItems: 1`. A
+    // caller with nothing to deliver must not send an empty delivery, so the
+    // narrowing is here rather than left to the agent to reject.
+    links: params.links as RoomsKeysChainPayload["links"],
+  };
+  return call<RoomsKeysChainResponsePayload>(
+    sender,
+    { holder: params.holder, service: params.service },
+    KEYS_CHAIN,
+    KEYS_CHAIN_RESPONSE,
+    "rooms/keys/chain/0.1",
+    payload,
+  );
+}
+
 // ── The host side ────────────────────────────────────────────────────────
 //
 // Everything below goes to the room's HOST and carries an authority
 // presentation — the credentials the room issued, which is the only thing a
-// host consults. `presentation` is passed through opaquely: this module does
-// not mint credentials, and a caller that has none cannot do these.
+// host consults. Mint one with `roomsKeysPresent` above; nothing else in this
+// library produces one, and a caller that has none cannot do these at all.
+//
+// **The browser console cannot call any of these, and that is a property of the
+// extension rather than of this module.** Its bridge (`manager/carrier.ts`)
+// passes exactly `{type, payload}` — so that the offscreen document mints and
+// signs the envelope rather than counter-signing one composed in a page — and
+// the background then addresses it to the wallet's own VTA. A `service` naming a
+// host is therefore dropped, and the call lands at an agent that does not serve
+// it. Nothing type-checks as wrong; it simply goes to the wrong party.
+//
+// A surface holding a channel to a host of its own — a server-side consumer, a
+// CLI — uses these directly. A surface that only reaches its own agent asks the
+// agent to make the call: `rooms/keys/backfill` and `rooms/owner/register`
+// (trustoverip/dtgwg-trust-tasks-tf#402) exist for exactly that, and will appear
+// above, in the VTA-terminating half, once they ship.
 
 import {
   TYPE_URI as ROOMS_CREATE,
@@ -206,6 +351,16 @@ import {
   type RoomsEpochMintPayload,
   type RoomsEpochMintResponsePayload,
 } from "@openvtc/trust-tasks/rooms/epoch/mint/0.1/payload";
+import {
+  TYPE_URI as EPOCH_CHAIN,
+  RESPONSE_TYPE_URI as EPOCH_CHAIN_RESPONSE,
+  type RoomsEpochChainPayload,
+  type RoomsEpochChainResponsePayload,
+  type EpochLink,
+} from "@openvtc/trust-tasks/rooms/epoch/chain/0.1/payload";
+
+/** One rung of the epoch key chain: an epoch's storage key sealed under the next. */
+export type { EpochLink };
 
 /** The credentials a caller presents to a host. Opaque here. */
 export type Presentation = RoomsRecordsListPayload["presentation"];
@@ -288,6 +443,39 @@ export async function roomsRecordsPut(
     "rooms/records/put/0.1",
     rest as unknown as RoomsRecordsPutPayload,
   );
+}
+
+/**
+ * Fetch the room's epoch key chain from its host.
+ *
+ * The first of the two hops that repair a member who can only read from where
+ * they joined. This gets the rungs; [`roomsKeysChain`] hands them to the
+ * member's own VTA, which is the only party that can say how far back they
+ * actually reach.
+ *
+ * **Needs a `read` presentation, not a special one.** Reading the room and
+ * reading the parts written earlier are the same act, so they take the same
+ * grant — a separate one would be a grant nobody could explain.
+ *
+ * What comes back is ciphertext the host cannot read: a rung is an epoch's
+ * storage key sealed under the next, and no host holds either. Serving them to a
+ * party with no epoch key discloses only how many epochs there have been, which
+ * the room's epoch number already said.
+ */
+export async function roomsEpochChain(
+  sender: TrustTaskSender,
+  params: RoomsHostCall & { fromEpoch?: number; limit?: number },
+): Promise<EpochLink[]> {
+  const { holder, service, ...rest } = params;
+  const res = await call<RoomsEpochChainResponsePayload>(
+    sender,
+    { holder, service },
+    EPOCH_CHAIN,
+    EPOCH_CHAIN_RESPONSE,
+    "rooms/epoch/chain/0.1",
+    rest as unknown as RoomsEpochChainPayload,
+  );
+  return res.links ?? [];
 }
 
 /**

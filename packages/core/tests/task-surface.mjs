@@ -313,19 +313,22 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // library gained are those minus `keys/chain`, plus `keys/open`, which was
   // canonical and unimplemented until the rooms pane needed to read a record.
   //
-  // **`rooms/keys/chain` is the one outstanding piece of the pane's own story.**
-  // The pane already tells a member their history is unreadable before the
-  // epoch they joined at; delivering the chain to their key holder is the
-  // repair, and it is a second hop after fetching the rungs from the host
-  // (`rooms/epoch/chain`, which is host-served and in NOT_IN_SDK). Wiring the
-  // two together is the next increment, not an omission to paper over.
+  // 194 -> 196 closes that: `rooms/keys/chain` (the delivery that repairs a
+  // member reading only from where they joined) and `rooms/keys/present` (the
+  // presentation oracle). The canonical total does not move — both were already
+  // in the SDK and merely unimplemented here.
   //
-  // The outstanding count is unchanged at 20 — `keys/chain` joined it and
-  // `keys/open` left it — but the set is not the same: the four remaining
-  // `rooms/keys/*` (commit, key-package, present, welcome) are MLS group
-  // operations a browser does not perform. They belong to whatever holds the
-  // group state, which is the VTA, not this library.
-  const expected = 194;
+  // **`present` was the load-bearing one, and its absence was not visible as a
+  // gap.** Every host-served room task takes an authority presentation, and
+  // nothing in this library could produce one — so `records/{list,get,put}` and
+  // `epoch/mint` were exported, typechecked, and impossible to call. A count
+  // does not catch that; the missing family was in a *different* half of the
+  // surface from the ones it made unreachable.
+  //
+  // The three remaining `rooms/keys/*` — commit, key-package, welcome — are MLS
+  // group operations a browser does not perform. They belong to whatever holds
+  // the group state, which is the VTA, not this library.
+  const expected = 196;
   assert.equal(
     implemented.size,
     expected,
