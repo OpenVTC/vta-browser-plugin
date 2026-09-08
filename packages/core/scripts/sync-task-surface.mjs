@@ -51,6 +51,18 @@ function rustFiles(dir) {
 const URI = /"(https:\/\/trusttasks\.org\/spec\/[^"]+)"/g;
 /** `pub const NAME: &str = "…"` — the constant a deprecation attaches to. */
 const CONST_DECL = /(?:pub\s+)?const\s+([A-Z0-9_]+)\s*:\s*&'?\w*\s*str\s*=\s*"([^"]+)"/;
+/**
+ * The same declaration with the value wrapped onto the next line, which is what
+ * rustfmt does the moment name + type + literal passes 100 columns.
+ *
+ * Without this the URI is still recorded — the generic scan below finds the
+ * literal — but its constant's *name* is lost, and with it any `#[deprecated]`
+ * attached to it. That is not cosmetic: it silently exempted 130 of the SDK's
+ * 234 tasks from the deprecation check, which was every task whose name is long
+ * enough to wrap. The check reported green over the half of the surface most
+ * likely to be versioned.
+ */
+const CONST_DECL_OPEN = /(?:pub\s+)?const\s+([A-Z0-9_]+)\s*:\s*&'?\w*\s*str\s*=\s*$/;
 
 /** @type {Map<string, {uri: string, consts: Set<string>, deprecated?: string, files: Set<string>}>} */
 const tasks = new Map();
@@ -78,6 +90,19 @@ function record(uri, file) {
   return tasks.get(base);
 }
 
+/** Name a task's constant, and carry over any `#[deprecated]` it wore. */
+function attach(entry, constName, deprecation) {
+  if (!entry) return;
+  entry.consts.add(constName);
+  if (deprecation) {
+    const note = /note\s*=\s*"([^"]*)"/.exec(deprecation);
+    // Rust wraps long notes with a trailing backslash; fold those away too,
+    // or the snapshot carries line-continuation artefacts.
+    entry.deprecated =
+      note?.[1]?.replace(/\\\s*/g, " ").replace(/\s+/g, " ").trim() ?? "deprecated";
+  }
+}
+
 for (const file of rustFiles(sdkSrc)) {
   const rel = file.slice(sdkRoot.length + 1);
   const lines = readFileSync(file, "utf8").split("\n");
@@ -86,8 +111,20 @@ for (const file of rustFiles(sdkSrc)) {
   // declaration it applies to arrives, and drop it on any other statement.
   let pendingDeprecation = null;
   let inDeprecation = false;
+  /** A `const NAME: &str =` whose literal is on the line still to come. */
+  let pendingConst = null;
 
   for (const line of lines) {
+    if (pendingConst) {
+      const literal = /^\s*"([^"]+)"/.exec(line);
+      const { name, deprecation } = pendingConst;
+      pendingConst = null;
+      if (literal) {
+        attach(record(literal[1], rel), name, deprecation);
+        continue;
+      }
+    }
+
     if (inDeprecation || /^\s*#\[deprecated/.test(line)) {
       pendingDeprecation = (pendingDeprecation ?? "") + line.trim();
       inDeprecation = !line.includes("]");
@@ -96,18 +133,16 @@ for (const file of rustFiles(sdkSrc)) {
 
     const decl = CONST_DECL.exec(line);
     if (decl) {
-      const entry = record(decl[2], rel);
-      if (!entry) {
-        pendingDeprecation = null;
-        continue;
-      }
-      entry.consts.add(decl[1]);
-      if (pendingDeprecation) {
-        const note = /note\s*=\s*"([^"]*)"/.exec(pendingDeprecation);
-        // Rust wraps long notes with a trailing backslash; fold those away too,
-        // or the snapshot carries line-continuation artefacts.
-        entry.deprecated = note?.[1]?.replace(/\\\s*/g, " ").replace(/\s+/g, " ").trim() ?? "deprecated";
-      }
+      attach(record(decl[2], rel), decl[1], pendingDeprecation);
+      pendingDeprecation = null;
+      continue;
+    }
+
+    const open = CONST_DECL_OPEN.exec(line);
+    if (open) {
+      // Carry the deprecation across the wrap rather than letting the
+      // clear-on-any-statement rule below eat it.
+      pendingConst = { name: open[1], deprecation: pendingDeprecation };
       pendingDeprecation = null;
       continue;
     }
