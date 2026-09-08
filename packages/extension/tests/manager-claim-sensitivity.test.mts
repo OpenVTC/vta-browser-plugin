@@ -14,7 +14,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { maskText, maskedFact, treatmentFor, isSensitiveFor } from "../src/manager/claim-sensitivity.ts";
+import { maskText, maskedValue, treatmentFor, isSensitiveFor } from "../src/manager/claim-sensitivity.ts";
 
 /**
  * The table as `persona/claim-types/list` serves it — the agent's own, not a
@@ -75,7 +75,7 @@ const UNREGISTERED = { sensitivity: "high", mask: "full" };
 const treatmentOf = (type: string) => treatmentFor(REGISTRY, type).treatment;
 const isSensitive = (type: string) => isSensitiveFor(REGISTRY, type);
 const drawn = (type: string, text: string, override?: "normal" | "high") =>
-  maskedFact(REGISTRY, type, text, override);
+  maskedValue(REGISTRY, type, text, override);
 
 
 // ── The registry's own answers ──────────────────────────────────────────────
@@ -314,7 +314,7 @@ test("a family member invented under a gated family keeps the family's mask", ()
 
 test("an email is masked, which is what the registry asked for all along", () => {
   // `email.*` is `normal`/`emailLocal`: worth hiding from the person behind
-  // you, not worth withholding from every listing. `maskedFact` used to gate on
+  // you, not worth withholding from every listing. `maskedValue` used to gate on
   // `high` and drew it in full, while `isSensitive` called it hidden — so the
   // strip promised a Show button that was never rendered.
   const { text, masked } = drawn("email.personal", "glenn.gore@example.com");

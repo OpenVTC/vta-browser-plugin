@@ -55,7 +55,7 @@ import {
   AttributeEditor,
   BindingForm,
   DeleteProfile,
-  FactValue,
+  AttributeValue,
   PersonaClaims,
   ProfileEditor,
   ResolvedProfile,
@@ -615,7 +615,7 @@ export function IdentityMap({
                             {f.label && (
                               <span style={{ color: c.muted, whiteSpace: "nowrap", flexShrink: 0 }}>{f.label} ·</span>
                             )}
-                            <FactValue registry={registry}
+                            <AttributeValue registry={registry}
                               type={f.type}
                               value={f.value}
                               sensitivity={f.sensitivity}
@@ -984,7 +984,7 @@ function DetailStrip({
         <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 260px) minmax(0, 1fr) minmax(0, 1fr)", gap: 18 }}>
           <div style={{ display: "grid", gap: 3 }}>
             <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted }}>{attribute.type}</span>
-            <FactValue registry={registry}
+            <AttributeValue registry={registry}
               type={attribute.type}
               value={attribute.value}
               sensitivity={attribute.sensitivity}

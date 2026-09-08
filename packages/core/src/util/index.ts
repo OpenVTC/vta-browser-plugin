@@ -2,4 +2,5 @@
 // `util` is the bottom of the layering, and the boundary test enforces it.
 
 export * from "./base64url.js";
+export * from "./pages.js";
 export * from "./timing.js";

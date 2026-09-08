@@ -35,6 +35,7 @@
 // context. A context never pulls, and there is no task in this file that would
 // let it.
 
+import { collectPages } from "../util/pages.js";
 import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
@@ -202,11 +203,27 @@ export interface AttributeListParams extends PersonaHolderParams {
    * needs to see that something went stale rather than have it quietly omitted.
    */
   includeStale?: boolean;
+  /**
+   * The page size to ask for, **not** a cap on what comes back: this call
+   * follows `nextCursor` to the end. Left unset the agent picks (100 today).
+   */
   limit?: PersonaAttributeListPayload["limit"];
+  /** Where to start. Everything from there is returned, not one page of it. */
   cursor?: PersonaAttributeListPayload["cursor"];
 }
 
-/** Enumerate the pool. Metadata only unless `includeValues` is set. */
+/**
+ * Enumerate the pool. Metadata only unless `includeValues` is set.
+ *
+ * **Reads to the end**, following `nextCursor`. It used to return the first page
+ * and drop the cursor, which the specification names directly as the mistake —
+ * "a producer MUST NOT infer exhaustion from a short page — only an absent
+ * `nextCursor` means the end" — and which is invisible from the outside: a
+ * holder past the agent's page size got a silently short pool, and the console's
+ * identity map drew a face pointing at attributes that were not in it.
+ *
+ * See `collectPages` for what happens when the far side will not end.
+ */
 export async function personaAttributeList(
   sender: TrustTaskSender,
   params: AttributeListParams,
@@ -219,15 +236,17 @@ export async function personaAttributeList(
     ...(params.limit !== undefined ? { limit: params.limit } : {}),
     ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
   };
-  const res = await holderCall<PersonaAttributeListPayload, PersonaAttributeListResponsePayload>(
-    sender,
-    params,
-    ATTRIBUTE_LIST,
-    ATTRIBUTE_LIST_RESPONSE,
-    "persona/attribute/list/1.0",
-    payload,
-  );
-  return res.attributes ?? [];
+  return collectPages("persona/attribute/list", async (cursor) => {
+    const res = await holderCall<PersonaAttributeListPayload, PersonaAttributeListResponsePayload>(
+      sender,
+      params,
+      ATTRIBUTE_LIST,
+      ATTRIBUTE_LIST_RESPONSE,
+      "persona/attribute/list/1.0",
+      cursor === undefined ? payload : { ...payload, cursor },
+    );
+    return { items: res.attributes ?? [], nextCursor: res.nextCursor };
+  });
 }
 
 export interface AttributePutParams extends PersonaHolderParams {
@@ -369,8 +388,10 @@ export async function personaAttributeDelete(
 
 // ── Profiles ────────────────────────────────────────────────────────────────
 
-/** Every profile the holder has. Names and entries; never resolved values —
- *  see {@link personaProfileGet} for why there is no `resolve` here. */
+/** Every profile the holder has — **to the end of the listing**, like
+ *  {@link personaAttributeList}. Names and entries; never resolved values, see
+ *  {@link personaProfileGet} for why there is no `resolve` here. `limit` is the
+ *  page size to ask for, not a cap on the result. */
 export async function personaProfileList(
   sender: TrustTaskSender,
   params: PersonaHolderParams & { limit?: PersonaProfileListPayload["limit"]; cursor?: string },
@@ -379,15 +400,17 @@ export async function personaProfileList(
     ...(params.limit !== undefined ? { limit: params.limit } : {}),
     ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
   };
-  const res = await holderCall<PersonaProfileListPayload, PersonaProfileListResponsePayload>(
-    sender,
-    params,
-    PROFILE_LIST,
-    PROFILE_LIST_RESPONSE,
-    "persona/profile/list/1.0",
-    payload,
-  );
-  return res.profiles ?? [];
+  return collectPages("persona/profile/list", async (cursor) => {
+    const res = await holderCall<PersonaProfileListPayload, PersonaProfileListResponsePayload>(
+      sender,
+      params,
+      PROFILE_LIST,
+      PROFILE_LIST_RESPONSE,
+      "persona/profile/list/1.0",
+      cursor === undefined ? payload : { ...payload, cursor },
+    );
+    return { items: res.profiles ?? [], nextCursor: res.nextCursor };
+  });
 }
 
 export interface ProfileGetParams extends PersonaHolderParams {
