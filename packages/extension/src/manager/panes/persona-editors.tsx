@@ -42,7 +42,7 @@ import { useAsync } from "../use-async.js";
 import { contextHeading, formatInstant } from "../format.js";
 import { type Authority, type Parties } from "../use-vta.js";
 import { holderGate } from "../holder-gate.js";
-import { maskedFact } from "../claim-sensitivity.js";
+import { maskedFact, treatmentFor, type Sensitivity } from "../claim-sensitivity.js";
 import { composeEntries, lockedRefs, preservedEntries, tickedFrom } from "../profile-entries.js";
 import { personaCandidates } from "../persona-candidates.js";
 
@@ -117,12 +117,22 @@ function formatValue(value: unknown): { text: string; withheld: boolean } {
 export function FactValue({
   type,
   value,
+  sensitivity,
   style,
   textStyle,
   reveal,
 }: {
   type: string;
   value: unknown;
+  /**
+   * The holder's own decision on this attribute, where they made one. Absent
+   * means they did not, and the claim-type registry answers — the two are
+   * different claims and `treatmentFor` keeps them apart. A surface that has a
+   * whole attribute in hand should pass this; one that has only a type (a claim
+   * inside a face, read from a binding) has nothing to pass and gets the
+   * registry's answer, which is correct for it.
+   */
+  sensitivity?: Sensitivity | undefined;
   /** Typography for the row — applied to the wrapper, so the control inherits it. */
   style?: React.CSSProperties;
   /** Wrapping or truncation for the value itself, which differs per surface. */
@@ -143,7 +153,7 @@ export function FactValue({
   const [refused, setRefused] = useState<string | null>(null);
 
   const { text, withheld } = formatValue(revealed ? revealed.value : value);
-  const { text: hidden, masked } = maskedFact(type, text);
+  const { text: hidden, masked } = maskedFact(type, text, sensitivity);
 
   // **A withheld value is never masked.** The mask is a statement that a value
   // is here and is being kept off the screen; drawing it over "not on this
@@ -312,6 +322,41 @@ export function rawValue(value: unknown): string {
 }
 
 
+/**
+ * The holder's own answer, or the registry's.
+ *
+ * A `<select>` with three options rather than a checkbox, because "not decided"
+ * is a real state and not the same as choosing the value the registry happens
+ * to give today. `persona/attribute/put` is emphatic about why: sending back a
+ * *resolved* default freezes the attribute to today's table, so a later
+ * tightening of the registry would protect every new attribute and leave this
+ * one exposed. `""` is that third state and maps to omitting the member.
+ */
+function Decision<Value extends string>({
+  value,
+  onChange,
+  fallback,
+  options,
+}: {
+  value: Value | "";
+  onChange: (next: Value | "") => void;
+  /** What the registry answers today, named in the default option so the
+   *  person can see what they would be changing away from. */
+  fallback: string;
+  options: { value: Value; label: string }[];
+}) {
+  return (
+    <select style={fieldStyle} value={value} onChange={(e) => onChange(e.target.value as Value | "")}>
+      <option value="">Let your agent decide — today that means {fallback}</option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export function AttributeEditor({
   parties,
   authority,
@@ -336,6 +381,12 @@ export function AttributeEditor({
   const [label, setLabel] = useState(existing?.label ?? "");
   const [valueType, setValueType] = useState<AttributeValueType>(existing?.valueType ?? "string");
   const [raw, setRaw] = useState(rawValue(existing?.value));
+  // Both start from the record, so an edit that touches neither sends back what
+  // was there. A put REPLACES the attribute, so an editor that simply never
+  // mentioned these cleared the holder's decision on every save — silently,
+  // because nothing in the response says a member was dropped.
+  const [sensitivity, setSensitivity] = useState<Sensitivity | "">(existing?.sensitivity ?? "");
+  const [release, setRelease] = useState<"consent" | "stepUp" | "">(existing?.release ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<ConsentRequiredError | null>(null);
@@ -382,6 +433,11 @@ export function AttributeEditor({
           value: parsed.value,
           provenance,
           ...(label.trim() ? { label: label.trim() } : {}),
+          // Omitted where the person left it to the agent, which is how a
+          // decision is *cleared* as well as how one is never made. Never the
+          // resolved default — see `Decision` above.
+          ...(sensitivity ? { sensitivity } : {}),
+          ...(release ? { release } : {}),
           ...(existing ? { attributeId: existing.attributeId, expectedVersion: existing.version } : {}),
         });
         // Advisory, and it arrives with the write rather than before it: the
@@ -400,7 +456,7 @@ export function AttributeEditor({
     );
     setBusy(false);
     if (ok && linked === null) onDone();
-  }, [parties, type, label, valueType, raw, provenance, existing, onDone]);
+  }, [parties, type, label, valueType, raw, provenance, sensitivity, release, existing, onDone]);
 
   return (
     <Panel
@@ -485,6 +541,55 @@ export function AttributeEditor({
           )}
           <span style={{ fontSize: t.xs, color: c.faint }}>
             It must agree with the value type — the agent refuses a document where it does not.
+          </span>
+        </label>
+
+        {/* ── What happens to this value, decided here ──
+            Two questions, not one, because they are answered by different
+            things at different moments: the first is about your own screen and
+            about what your agent hands this page, the second is about a value
+            leaving for somebody else. The claim-type registry answers both
+            unless you say otherwise, and leaving them alone is a real answer —
+            it means "keep following the registry", so a later tightening
+            reaches this attribute too. */}
+        <label style={{ display: "grid", gap: 4 }}>
+          <Label>SHOWING IT TO YOU</Label>
+          <Decision
+            value={sensitivity}
+            onChange={setSensitivity}
+            fallback={
+              treatmentFor(type.trim()).treatment.sensitivity === "high"
+                ? "kept back until you ask"
+                : "shown"
+            }
+            options={[
+              { value: "normal" as const, label: "Show it — no need to hide this one" },
+              { value: "high" as const, label: "Keep it back until I ask for it" },
+            ]}
+          />
+          <span style={{ fontSize: t.xs, color: c.faint, lineHeight: 1.5 }}>
+            Kept back means your agent does not send the value to this page at all until you press
+            <em> Show</em> on it. It is also what hides it on screen — for a token the registry does
+            not know, like <code>profile.github</code>, saying <em>show it</em> is what takes the
+            bullets off the card.
+          </span>
+        </label>
+
+        <label style={{ display: "grid", gap: 4 }}>
+          <Label>LETTING IT LEAVE</Label>
+          <Decision
+            value={release}
+            onChange={setRelease}
+            fallback="you approve it once, before it goes"
+            options={[
+              { value: "consent" as const, label: "I approve it once, before it goes" },
+              { value: "stepUp" as const, label: "Ask me again, on my device, every single time" },
+            ]}
+          />
+          <span style={{ fontSize: t.xs, color: c.faint, lineHeight: 1.5 }}>
+            <em>Every single time</em> binds the approval to that one disclosure rather than to
+            being signed in — which is the difference between "each time" and "once per login".
+            Your agent refuses to hand the value over without it.
           </span>
         </label>
 

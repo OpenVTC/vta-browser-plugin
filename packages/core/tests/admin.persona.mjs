@@ -359,3 +359,55 @@ test("an empty list is a real answer and is not null", () => {
   // able to notice and say rather than have flattened into "we don't know".
   assert.deepEqual(personasBlockingDelete({ personaDids: [] }), []);
 });
+
+// ── The holder's own decisions travel, and absence is one of them ───────────
+//
+// `sensitivity` and `release` are OPTIONAL on the wire and their absence is
+// load-bearing: it records that the holder decided nothing, so every consumer
+// resolves from the claim-type registry. Sending a resolved value back would
+// freeze the attribute to today's table — a later tightening would protect
+// every new attribute and leave this one exposed — which is why these are
+// spread conditionally rather than always named.
+
+test("a decision the holder made is carried on the put", async () => {
+  const r = recorder({ attributeId: "01J", version: 2, created: false, updatedAt: "x" });
+  await personaAttributePut(r, {
+    ...PARTIES,
+    type: "profile.github",
+    valueType: "string",
+    value: "octocat",
+    provenance: { kind: "selfAsserted" },
+    sensitivity: "normal",
+    release: "stepUp",
+  });
+  const { payload } = r.sent[0].envelope;
+  assert.equal(payload.sensitivity, "normal");
+  assert.equal(payload.release, "stepUp");
+});
+
+test("a decision the holder did not make is absent, not resolved", async () => {
+  const r = recorder({ attributeId: "01J", version: 1, created: true, updatedAt: "x" });
+  await personaAttributePut(r, {
+    ...PARTIES,
+    type: "phone.mobile",
+    valueType: "string",
+    value: "+65 8262 2325",
+    provenance: { kind: "selfAsserted" },
+  });
+  const { payload } = r.sent[0].envelope;
+  assert.ok(!("sensitivity" in payload), "omitted means the registry answers");
+  assert.ok(!("release" in payload), "omitted means the registry answers");
+});
+
+test("a values listing can ask for the sensitive ones, and does not by default", async () => {
+  // The half of sensitivity that is not cosmetic: without this member the agent
+  // returns the metadata of every `sensitivity: high` attribute and the
+  // plaintext of none.
+  const r = recorder({ attributes: [] });
+  await personaAttributeList(r, { ...PARTIES, includeValues: true, includeSensitive: true });
+  assert.equal(r.sent[0].envelope.payload.includeSensitive, true);
+
+  const plain = recorder({ attributes: [] });
+  await personaAttributeList(plain, { ...PARTIES, includeValues: true });
+  assert.ok(!("includeSensitive" in plain.sent[0].envelope.payload));
+});

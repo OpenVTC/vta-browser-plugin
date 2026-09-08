@@ -20,6 +20,15 @@ export interface AttributeNode {
   type: string;
   label?: string | undefined;
   value: unknown;
+  /**
+   * The holder's own decisions about this value, carried only where they made
+   * one. Absent is not a third value: it says the claim-type registry answers,
+   * and a map that filled it in with the resolved default would be presenting
+   * the registry's answer as the holder's. `treatmentFor` is where the two are
+   * combined, and it needs to be able to tell them apart.
+   */
+  sensitivity?: PoolAttribute["sensitivity"];
+  release?: PoolAttribute["release"];
   provenance: PoolAttribute["provenance"];
   stale: boolean;
   staleReason?: string | undefined;
@@ -116,6 +125,8 @@ export function buildGraph(
     type: a.type,
     label: a.label,
     value: a.value,
+    sensitivity: a.sensitivity,
+    release: a.release,
     provenance: a.provenance,
     stale: a.stale === true,
     staleReason: a.staleReason,

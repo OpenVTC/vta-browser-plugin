@@ -124,6 +124,15 @@ export type PoolProfileEntry = PoolProfile["entries"][number];
 export type AttributeProvenance = PersonaAttributePutPayload["provenance"];
 /** What the value IS — the schema's own five. */
 export type AttributeValueType = PersonaAttributePutPayload["valueType"];
+/**
+ * The holder's own answer on how carefully a value is shown to them, where they
+ * gave one. `undefined` on a record is not a third value — it says the holder
+ * decided nothing and the claim-type registry answers instead.
+ */
+export type AttributeSensitivity = NonNullable<PersonaAttributePutPayload["sensitivity"]>;
+/** The holder's own answer on what it takes to let a value leave, where they
+ *  gave one. Absence means the same as it does for {@link AttributeSensitivity}. */
+export type AttributeRelease = NonNullable<PersonaAttributePutPayload["release"]>;
 /** One place the holder's identities link, and what can be done about it. */
 export type CorrelationFinding = PersonaCorrelationAnalyzeResponsePayload["findings"][number];
 /** One record of something that left, and to whom. */
@@ -248,6 +257,33 @@ export interface AttributePutParams extends PersonaHolderParams {
   /** The holder's own name for it — "work mobile", "the flat". */
   label?: string;
   provenance: AttributeProvenance;
+  /**
+   * How carefully this value is shown to the holder — **their** decision, not
+   * the registry's.
+   *
+   * **Absence is the meaningful state and must be preserved.** Omitted records
+   * that the holder decided nothing, so every consumer resolves it from the
+   * claim-type registry; sending back a value that was merely *resolved* pins
+   * the attribute to today's table, and a later tightening of the registry
+   * would then protect every new attribute and leave this one exposed. The
+   * specification says so in as many words. Send this only where a holder
+   * chose, and omit it to return the attribute to the registry's answer.
+   *
+   * `high` also governs the read path: a listing that did not set
+   * `includeSensitive` is answered without this value.
+   */
+  sensitivity?: AttributeSensitivity;
+  /**
+   * What it takes to let this value LEAVE — again the holder's decision, with
+   * the same meaning for absence.
+   *
+   * Distinct from `sensitivity`, which governs showing it to the holder.
+   * `consent` is the ordinary gate: a preview renders what would leave and the
+   * present releases it, so a human sees it once. `stepUp` additionally
+   * requires a fresh authentication bound to THAT preview — not to the session,
+   * because "each time" bound to a session degrades into "once per login".
+   */
+  release?: AttributeRelease;
   /** Optimistic concurrency: the attribute must be at exactly this version.
    *  The agent's conflict rejection carries its own view of the record, so a
    *  caller does not have to re-read to find out what it lost to. */
@@ -256,6 +292,14 @@ export interface AttributePutParams extends PersonaHolderParams {
 
 /**
  * Create or replace one attribute.
+ *
+ * **A put replaces the whole record**, so every member a caller omits is a
+ * member the attribute loses. That is the intended way to clear `sensitivity`
+ * or `release` back to the registry's answer, and it is also the way an editor
+ * that simply never mentioned them wiped a holder's decision on every save —
+ * silently, because the response says nothing about what was dropped. An editor
+ * must read them off the record it loaded and send them back unless the person
+ * changed them.
  *
  * The response's `correlation` is **advisory and computed after the write**.
  * The agent does not refuse on correlation grounds — the holder decides whether
@@ -274,6 +318,13 @@ export async function personaAttributePut(
     provenance: params.provenance,
     ...(params.attributeId !== undefined ? { attributeId: params.attributeId } : {}),
     ...(params.label !== undefined ? { label: params.label } : {}),
+    // Both spread conditionally, which is the whole of "absent means the holder
+    // decided nothing". A `sensitivity: undefined` member present in the object
+    // would serialise away to the same wire document, but the shape of this
+    // code is what a reader checks, and a put that always names them is one
+    // edit away from freezing a resolved default into the record.
+    ...(params.sensitivity !== undefined ? { sensitivity: params.sensitivity } : {}),
+    ...(params.release !== undefined ? { release: params.release } : {}),
     ...(params.expectedVersion !== undefined ? { expectedVersion: params.expectedVersion } : {}),
   };
   return holderCall<PersonaAttributePutPayload, PersonaAttributePutResponsePayload>(
