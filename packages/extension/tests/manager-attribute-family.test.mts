@@ -9,51 +9,87 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { familyOf, familyStyle, FAMILY_ORDER, type Family } from "../src/manager/attribute-family.ts";
-import { REGISTERED_ROOTS } from "../src/manager/claim-sensitivity.ts";
+import { PLACED_ROOTS, familyOf, familyStyle, FAMILY_ORDER, type Family } from "../src/manager/attribute-family.ts";
+// The roots come from the agent now, so the test supplies a table the way the
+// console receives one.
+const REGISTRY = {
+  registryVersion: "0.1",
+  entries: [
+    "name", "name.legal", "person", "person.birthDate", "email", "email.work",
+    "phone", "phone.mobile", "address", "address.postal", "account",
+    "account.handle", "url", "url.homepage", "org", "org.role", "gov",
+    "gov.id.passport", "payment", "payment.card",
+  ].map((type) => ({ type, sensitivity: "normal", release: "consent", mask: "none" })),
+  unregistered: { sensitivity: "high", release: "consent", mask: "full" },
+  strictness: {
+    sensitivity: ["high", "normal"],
+    release: ["stepUp", "consent"],
+    mask: ["full", "last2", "last4", "emailLocal", "none"],
+  },
+} as never;
+
 
 test("the registry's own vocabularies land where their words say", () => {
-  assert.equal(familyOf("name.legal"), "identity");
-  assert.equal(familyOf("person.birthDate"), "identity");
-  assert.equal(familyOf("email.work"), "contact");
-  assert.equal(familyOf("phone.mobile"), "contact");
-  assert.equal(familyOf("address.postal"), "contact");
-  assert.equal(familyOf("account.handle"), "public");
-  assert.equal(familyOf("org.role"), "public");
-  assert.equal(familyOf("gov.id.passport"), "gated");
-  assert.equal(familyOf("payment.card"), "gated");
+  assert.equal(familyOf("name.legal", REGISTRY), "identity");
+  assert.equal(familyOf("person.birthDate", REGISTRY), "identity");
+  assert.equal(familyOf("email.work", REGISTRY), "contact");
+  assert.equal(familyOf("phone.mobile", REGISTRY), "contact");
+  assert.equal(familyOf("address.postal", REGISTRY), "contact");
+  assert.equal(familyOf("account.handle", REGISTRY), "public");
+  assert.equal(familyOf("org.role", REGISTRY), "public");
+  assert.equal(familyOf("gov.id.passport", REGISTRY), "gated");
+  assert.equal(familyOf("payment.card", REGISTRY), "gated");
 });
 
 test("a token invented under a declared family stays in it", () => {
   // The same direction `treatmentOf` walks a prefix in: a family entry the
   // registry declares covers what is invented beneath it.
-  assert.equal(familyOf("payment.giftCard"), "gated");
-  assert.equal(familyOf("gov.id.somethingNew"), "gated");
+  assert.equal(familyOf("payment.giftCard", REGISTRY), "gated");
+  assert.equal(familyOf("gov.id.somethingNew", REGISTRY), "gated");
 });
 
 test("a token no registry root covers is unregistered, not guessed at", () => {
   // `profile.*` and `employer` are what a holder actually types today, and
   // neither is in the table. Inventing a "profile" family here would draw a
   // grouping nobody has agreed to.
-  assert.equal(familyOf("profile.github"), "unregistered");
-  assert.equal(familyOf("profile.signal"), "unregistered");
-  assert.equal(familyOf("employer"), "unregistered");
-  assert.equal(familyOf(""), "unregistered");
+  assert.equal(familyOf("profile.github", REGISTRY), "unregistered");
+  assert.equal(familyOf("profile.signal", REGISTRY), "unregistered");
+  assert.equal(familyOf("employer", REGISTRY), "unregistered");
+  assert.equal(familyOf("", REGISTRY), "unregistered");
 });
 
 test("the open extension namespace cannot borrow a core token's family", () => {
   // Tested first inside `familyOf` for the same reason `treatmentOf` tests it
   // first: `x:name.legal` must not inherit `name`.
-  assert.equal(familyOf("x:name.legal"), "unregistered");
-  assert.equal(familyOf("x:payment.card"), "unregistered");
+  assert.equal(familyOf("x:name.legal", REGISTRY), "unregistered");
+  assert.equal(familyOf("x:payment.card", REGISTRY), "unregistered");
 });
 
-test("every root the registry declares has been placed in a family", () => {
-  // A re-sync that adds a vocabulary fails here rather than quietly colouring
-  // it as unregistered — which would look identical to a token nobody has
-  // reasoned about, and be a different fact entirely.
-  const unplaced = [...REGISTERED_ROOTS].filter((root) => familyOf(`${root}.anything`) === "unregistered");
+test("every root this console places really is placed", () => {
+  // What this used to assert — that every root in a *vendored* table had a
+  // family — cannot survive reading the table from the agent: a maintainer may
+  // serve a vocabulary this build has never heard of, and colouring one is not
+  // something a compiled switch can promise. What is still checkable, and still
+  // the bug worth catching, is the mapping being internally complete.
+  const placed = {
+    ...(REGISTRY as unknown as Record<string, unknown>),
+    entries: PLACED_ROOTS.map((type) => ({
+      type, sensitivity: "normal", release: "consent", mask: "none",
+    })),
+  } as never;
+  const unplaced = PLACED_ROOTS.filter((r) => familyOf(`${r}.anything`, placed) === "unregistered");
   assert.deepEqual(unplaced, [], "place these roots in attribute-family.ts");
+});
+
+test("a family the agent serves and this build has never heard of is unregistered", () => {
+  // Not a gap — the honest answer. `unregistered`'s words say "nobody has
+  // classified this", which is precisely true of a family this console does not
+  // know. Colouring it by guessing would say more than is known.
+  const novel = {
+    ...(REGISTRY as unknown as Record<string, unknown>),
+    entries: [{ type: "quantum", sensitivity: "normal", release: "consent", mask: "none" }],
+  } as never;
+  assert.equal(familyOf("quantum.state", novel), "unregistered");
 });
 
 test("every family has words and a hue, and the order names them all", () => {

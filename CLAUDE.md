@@ -347,8 +347,10 @@ in), up is what a context **holds** of them (the accent). `Flow` is computed in
 draws. The family hues (`--m-fam-*`, `manager/attribute-family.ts`) are
 **categorical**, the same species as the act colours in `manager-theme.css` and
 bound by that file's rule: `--w-ok` / `--w-warn` / `--w-danger` stay the only
-colours that mean anything. `familyOf` groups **only** roots the vendored
-registry declares — `profile.*` and `employer` are `unregistered`, not a
+colours that mean anything. `familyOf` groups **only** roots the **agent's**
+registry declares and this console has placed (`PLACED_ROOTS`) — a family the
+agent serves that this build predates is `unregistered`, which is the honest
+answer for one rather than a gap. It groups only roots the registry declares — `profile.*` and `employer` are `unregistered`, not a
 "profile" family invented here — and no family's words may claim the colour
 protects anything, which `manager-attribute-family.test.mts` asserts directly.
 
@@ -372,11 +374,30 @@ border or in a pill; adding a `--m-fam-*` for something that is *state*; or
 giving `familyOf` a prefix rule the registry has not declared.
 
 **Sensitive values are hidden from the screen, and that is all it is.**
-`manager/claim-sensitivity.ts` carries a **vendored** copy of the claim-type
-registry's masking data — sensitivity and mask style per token, from
-`specs/persona/_shared/0.1/claim-types.json` at `registryVersion` 0.1 — because
-the agent does not serve that table: `persona/claim-types/list` is an open
-question in `CLAIM-TYPES.md` §6, deferred until the first extension type ships.
+The claim-type table is **read from the agent**, through
+`persona/claim-types/list` — `@openvtc/pnm-core/persona`'s `listClaimTypes`,
+loaded by `panes/persona.tsx` beside the pool and threaded down as a prop.
+`manager/claim-sensitivity.ts` used to carry a vendored copy; the copy was
+*correct*, which was never the problem. A copy of a table two repositories do
+not own costs a re-sync pull request against each on every change, and can only
+describe the tokens its own build knew about — an agent serving an extension
+type is invisible to a client shipping its own.
+
+**Resolution lives in core** (`resolveTreatment`), beside the served table, and
+the strictness orderings come from the agent — so "more protective" means the
+same thing on both sides, and a maintainer adding a stricter mask style is
+honoured without a rebuild. An axis value this build does not recognise is
+treated as **most** protective. `treatmentFor` still applies the holder's
+decision over that answer, unchanged: only the axis they decided moves, and a
+*declared* token's mask never does.
+
+**`null` is a real state and it fails closed.** While the table is in flight
+every value is masked and every attribute groups as `unregistered`, attributed
+to the registry rather than the holder — claiming `source: "holder"` for a
+default would put their name on one. There is deliberately no compiled
+fallback: a stale copy resolving a token the agent has since tightened is the
+failure the registry exists to end.
+
 An unregistered or `x:` token resolves to the conservative default
 (`high`/`full`) per §4 rule 3. The prefix walk **is** rule 3 and it only ever
 *tightens*: an unregistered token takes the more protective of its longest
@@ -498,8 +519,9 @@ flow; a surface that formats a value itself instead of rendering
 `FactValue` (the second surface is always the one added later, and a value
 masked on the card and printed in the strip is masked nowhere); greying a mask
 with `c.faint`, which is this pane's word for "the agent sent no value" and so
-makes a fact the holder has look like one they do not; adding a prefix fallback
-to the vendored table; or letting a UI string imply the console does not hold
+makes a fact the holder has look like one they do not; reintroducing a compiled
+table as a fallback for a registry that has not loaded; or letting a UI string
+imply the console does not hold
 what it hides.
 
 **The console's components are rendered in tests, and this is how.**

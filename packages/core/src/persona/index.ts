@@ -40,6 +40,7 @@
 
 export * from "./disclosure.js";
 export * from "./step-up.js";
+export * from "./claim-types.js";
 export * from "./consent-view.js";
 export * from "./renderers.js";
 export * from "./bindings.js";

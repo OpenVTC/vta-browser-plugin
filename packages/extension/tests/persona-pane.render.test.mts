@@ -50,6 +50,40 @@ const context = (id: string, name: string) => ({
 // The fixture is a registered token because these tests are about something
 // else; the masking of an unregistered one is asserted deliberately further
 // down.
+
+/**
+ * The claim-type table, as `persona/claim-types/list` serves one.
+ *
+ * A fixture rather than an import, because the console no longer holds a copy —
+ * it renders whatever the agent it is pointed at serves. `null` is a real state
+ * with its own case below: everything falls to the floor and is masked, which
+ * is the fail-closed answer while the table is in flight.
+ */
+const REGISTRY = {
+  registryVersion: "0.1",
+  entries: [
+    { type: "name", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "name.legal", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "name.display", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "person.birthDate", sensitivity: "high", release: "consent", mask: "full" },
+    { type: "email.work", sensitivity: "normal", release: "consent", mask: "emailLocal" },
+    { type: "phone.mobile", sensitivity: "high", release: "consent", mask: "last2" },
+    { type: "address.postal", sensitivity: "high", release: "consent", mask: "full" },
+    { type: "account.handle", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "org.role", sensitivity: "normal", release: "consent", mask: "none" },
+    { type: "gov", sensitivity: "high", release: "stepUp", mask: "full" },
+    { type: "gov.id.passport", sensitivity: "high", release: "stepUp", mask: "last4" },
+    { type: "payment", sensitivity: "high", release: "stepUp", mask: "full" },
+    { type: "payment.card", sensitivity: "high", release: "stepUp", mask: "last4" },
+  ],
+  unregistered: { sensitivity: "high", release: "consent", mask: "full" },
+  strictness: {
+    sensitivity: ["high", "normal"],
+    release: ["stepUp", "consent"],
+    mask: ["full", "last2", "last4", "emailLocal", "none"],
+  },
+} as never;
+
 const FACTS = [attribute("f1", "name.legal", "Glenn Gore"), attribute("f2", "phone.mobile", "+65 8262 2325")];
 const CONTEXTS = [context("openvtc", "OpenVTC"), context("vta", "Verifiable Trust Agent")];
 
@@ -65,6 +99,7 @@ test("making a face does not loop the renderer", async () => {
   const a = agent({ "persona/profile/put/1.0": { profileId: "p1", version: 1, created: true, updatedAt: "x" } });
   const ui = await render(
     h(GuidedSetup, {
+      registry: REGISTRY,
       parties: PARTIES,
       authority: HOLDER,
       records: CONTEXTS,
@@ -100,6 +135,7 @@ test("the stranger card starts empty and says so", async () => {
   const a = agent({});
   const ui = await render(
     h(GuidedSetup, {
+      registry: REGISTRY,
       parties: PARTIES,
       authority: HOLDER,
       records: CONTEXTS,
@@ -124,6 +160,7 @@ test("a completed step in the stepper is a way back to it", async () => {
   const a = agent({});
   const ui = await render(
     h(GuidedSetup, {
+      registry: REGISTRY,
       parties: PARTIES,
       authority: HOLDER,
       records: CONTEXTS,
@@ -251,6 +288,7 @@ test("selecting a persona aims the context's button at it", async () => {
   const a = agent({});
   const ui = await render(
     h(IdentityMap, {
+      registry: REGISTRY,
       parties: PARTIES,
       authority: HOLDER,
       graph,
@@ -286,6 +324,7 @@ test("a holder known nowhere is told so, not shown an empty grid", async () => {
   const a = agent({});
   const ui = await render(
     h(IdentityMap, {
+      registry: REGISTRY,
       parties: PARTIES,
       authority: HOLDER,
       graph,
@@ -312,6 +351,7 @@ test("a context the agent would not answer for is not folded away as empty", asy
   const a = agent({});
   const ui = await render(
     h(IdentityMap, {
+      registry: REGISTRY,
       parties: PARTIES,
       authority: HOLDER,
       graph,
@@ -353,6 +393,7 @@ const SECRETS = [
 const mapOverSecrets = async () =>
   render(
     h(IdentityMap, {
+      registry: REGISTRY,
       parties: PARTIES,
       authority: HOLDER,
       graph: buildGraph(SECRETS, [], [{ id: "openvtc", label: "OpenVTC", bindings: { ok: true, personas: [] } }]),
@@ -454,6 +495,7 @@ const DEV = face("p1", "Developer", ["f1"]);
 
 const map = (graph: ReturnType<typeof buildGraph>, profiles = [DEV]) =>
   h(IdentityMap, {
+      registry: REGISTRY,
     parties: PARTIES,
     authority: HOLDER,
     graph,
@@ -551,6 +593,7 @@ const WITHHELD = [
 
 const withheldMap = (extra: Record<string, unknown> = {}) =>
   h(IdentityMap, {
+      registry: REGISTRY,
     parties: PARTIES,
     authority: HOLDER,
     graph: buildGraph(WITHHELD, [], []),
@@ -624,6 +667,7 @@ test("a value the agent did send is still covered locally, with no second questi
   const a = agent({});
   const ui = await render(
     h(IdentityMap, {
+      registry: REGISTRY,
       parties: PARTIES,
       authority: HOLDER,
       graph: buildGraph(held, [], []),
@@ -654,6 +698,7 @@ const PUT_OK = { "persona/attribute/put/1.0": { attributeId: "a1", version: 2, c
 
 const editor = (existing?: Record<string, unknown>) =>
   h(AttributeEditor, {
+      registry: REGISTRY,
     parties: PARTIES,
     authority: HOLDER,
     ...(existing ? { existing } : {}),
@@ -758,6 +803,7 @@ test("a value the holder said to show is drawn on the map, not bulleted", async 
   const a = agent({});
   const ui = await render(
     h(IdentityMap, {
+      registry: REGISTRY,
       parties: PARTIES,
       authority: HOLDER,
       graph: buildGraph(shown, [], []),
@@ -773,4 +819,33 @@ test("a value the holder said to show is drawn on the map, not bulleted", async 
   assert.match(ui.text(), /octocat/);
   assert.doesNotMatch(ui.text(), /•/, "the holder decided; the floor no longer applies to this one");
   await ui.unmount();
+});
+
+test("with no table yet, every value is masked and nothing is coloured", async () => {
+  // `null` is what the pane holds for the round-trip it takes to read
+  // `persona/claim-types/list`, and it is the state a compiled-in fallback
+  // would have papered over. Everything falls to the floor: masked, and grouped
+  // as `unregistered`.
+  //
+  // Found by leaving it out. The reveal-control count went 3 → 4 against a
+  // fixture with no registry, which is this behaviour observed before it was
+  // asserted.
+  const ui = await render(
+    h(IdentityMap, {
+      registry: null,
+      parties: PARTIES,
+      authority: HOLDER,
+      graph: buildGraph(SECRETS, [], [{ id: "openvtc", label: "OpenVTC", bindings: { ok: true, personas: [] } }]),
+      attributes: SECRETS,
+      profiles: [],
+      records: CONTEXTS,
+      history: [],
+      onChanged: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: agent({}).sendMessage } } },
+  );
+  const screen = ui.text();
+  assert.doesNotMatch(screen, /Glenn Gore/, "a name the registry would show is still masked, because the registry has not spoken");
+  assert.doesNotMatch(screen, /8262 2325/);
+  assert.match(screen, /••••/, "the floor is a mask, not a blank");
 });

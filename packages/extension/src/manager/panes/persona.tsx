@@ -59,6 +59,10 @@ import { useAsync } from "../use-async.js";
 import { contextHeading } from "../format.js";
 import type { Authority, Parties } from "../use-vta.js";
 import { buildGraph, type ContextInput } from "../identity-graph.js";
+// `claim-types/list` is `Reach::Any` and describes the agent's vocabulary, not
+// the holder — so it lives in the wallet half of the SDK, not the operator half
+// the rest of this pane imports.
+import { listClaimTypes } from "@openvtc/pnm-core/persona";
 import { IdentityMap } from "./persona-map.js";
 import { GuidedSetup } from "./persona-setup.js";
 import { showsGuide } from "../persona-flow.js";
@@ -147,6 +151,13 @@ export function PersonaPane({
     async () => loadContexts(parties, records),
     [parties.holder.did, parties.service.did, records.map((r) => r.id).join(" ")],
   );
+  // The claim-type table, read from THIS agent rather than compiled in. Loaded
+  // beside the pool because the same agent answers both: if this refuses there
+  // are no attributes to mask either, so it needs no failure branch of its own.
+  const registry = useAsync(
+    async () => listClaimTypes(managerSender, parties),
+    [parties.holder.did, parties.service.did],
+  );
   const history = useAsync(
     async () => personaDisclosureHistory(managerSender, parties),
     [parties.holder.did, parties.service.did],
@@ -205,7 +216,7 @@ export function PersonaPane({
   // lands on step two; one with nothing on step one.
   if (showGuide) {
     return (
-      <GuidedSetup
+      <GuidedSetup registry={registry.data}
         parties={parties}
         authority={authority}
         records={records}
@@ -229,7 +240,7 @@ export function PersonaPane({
     <div style={{ display: "grid", gap: 20, alignContent: "start" }}>
       {profiles.error && <LoadError what="your faces" error={profiles.error} />}
       {contexts.error && <LoadError what="who is known where" error={contexts.error} />}
-      <IdentityMap
+      <IdentityMap registry={registry.data}
         parties={parties}
         authority={authority}
         graph={graph}

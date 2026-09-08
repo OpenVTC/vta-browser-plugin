@@ -49,6 +49,7 @@ import {
   type PersonaNode,
   type Selection,
 } from "../identity-graph.js";
+import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 import { familyOf, familyStyle, FAMILY_ORDER, type Family } from "../attribute-family.js";
 import {
   AttributeEditor,
@@ -355,6 +356,7 @@ export function IdentityMap({
   graph,
   attributes,
   profiles,
+  registry,
   records,
   history,
   onReveal,
@@ -366,6 +368,10 @@ export function IdentityMap({
   graph: IdentityGraph;
   attributes: PoolAttribute[];
   profiles: PoolProfile[];
+  /** The agent's claim-type table, or `null` while it loads. A caller must not
+   *  substitute a compiled-in one — that is the copy this replaced. */
+  registry: ClaimTypeRegistry | null;
+
   records: ContextRecord[];
   /** Everything that has left, for "last left" on a selected attribute. Null while
    *  loading or refused — the strip then says nothing rather than "never". */
@@ -413,7 +419,7 @@ export function IdentityMap({
   const grouped = useMemo(() => {
     const byFamily = new Map<Family, AttributeNode[]>();
     for (const a of graph.attributes) {
-      const family = familyOf(a.type);
+      const family = familyOf(a.type, registry);
       byFamily.set(family, [...(byFamily.get(family) ?? []), a]);
     }
     return FAMILY_ORDER.filter((f) => byFamily.has(f)).map((family) => ({
@@ -609,7 +615,7 @@ export function IdentityMap({
                             {f.label && (
                               <span style={{ color: c.muted, whiteSpace: "nowrap", flexShrink: 0 }}>{f.label} ·</span>
                             )}
-                            <FactValue
+                            <FactValue registry={registry}
                               type={f.type}
                               value={f.value}
                               sensitivity={f.sensitivity}
@@ -664,7 +670,7 @@ export function IdentityMap({
                       const lit = reach.attributeIds.has(id) && reach.faceIds.has(face.id);
                       return (
                         <span key={id} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: font.mono, fontSize: t.xs, padding: "3px 8px", borderRadius: "var(--w-r-sm)", background: lit ? c.accentSoft : c.raised, color: lit ? c.accent : c.text, border: `1px solid ${lit ? c.accentSoft : c.line}` }}>
-                          <span style={{ width: 6, height: 6, borderRadius: 999, background: familyStyle(familyOf(attribute?.type ?? "")).hue, flexShrink: 0 }} />
+                          <span style={{ width: 6, height: 6, borderRadius: 999, background: familyStyle(familyOf(attribute?.type ?? "", registry)).hue, flexShrink: 0 }} />
                           {attribute?.type ?? id}
                         </span>
                       );
@@ -835,7 +841,7 @@ export function IdentityMap({
 
       {/* ── Detail strip ── */}
       {selection && !editing && (
-        <DetailStrip
+        <DetailStrip registry={registry}
           parties={parties}
           authority={authority}
           graph={graph}
@@ -858,7 +864,7 @@ export function IdentityMap({
 
       {/* ── Editors ── */}
       {editing?.kind === "attribute" && (
-        <AttributeEditor
+        <AttributeEditor registry={registry}
           key={editing.existing?.attributeId ?? "new"}
           parties={parties}
           authority={authority}
@@ -911,6 +917,7 @@ function DetailStrip({
   selection,
   attributes,
   profiles,
+  registry,
   records,
   history,
   finding,
@@ -926,6 +933,10 @@ function DetailStrip({
   selection: Selection;
   attributes: PoolAttribute[];
   profiles: PoolProfile[];
+  /** The agent's claim-type table, or `null` while it loads. A caller must not
+   *  substitute a compiled-in one — that is the copy this replaced. */
+  registry: ClaimTypeRegistry | null;
+
   records: ContextRecord[];
   history: DisclosureRecord[] | null;
   finding: CorrelationFinding | null;
@@ -973,7 +984,7 @@ function DetailStrip({
         <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 260px) minmax(0, 1fr) minmax(0, 1fr)", gap: 18 }}>
           <div style={{ display: "grid", gap: 3 }}>
             <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted }}>{attribute.type}</span>
-            <FactValue
+            <FactValue registry={registry}
               type={attribute.type}
               value={attribute.value}
               sensitivity={attribute.sensitivity}
@@ -991,7 +1002,7 @@ function DetailStrip({
                 withheld is not in this page at all, and *Show* is the request
                 for it. Saying the first about the second is what the strip did
                 before, and it was the one claim it must never make wrongly. */}
-            {isSensitiveFor(attribute.type, attribute.sensitivity) && (
+            {isSensitiveFor(registry, attribute.type, attribute.sensitivity) && (
               <span style={{ fontSize: t.sm, color: c.faint }}>
                 {attribute.value === undefined
                   ? "Your agent has not sent this value to this page. Show asks it for this one."
@@ -1116,7 +1127,7 @@ function DetailStrip({
           <Button kind="quiet" onClick={() => onEdit({ kind: "face", existing: raw })}>Edit</Button>
           <DeleteProfile parties={parties} profile={raw} onDone={onChanged} />
         </div>
-        {showing === "claims" && <ResolvedProfile parties={parties} profileId={face.id} name={face.name} />}
+        {showing === "claims" && <ResolvedProfile registry={registry} parties={parties} profileId={face.id} name={face.name} />}
       </>,
     );
   }
@@ -1202,7 +1213,7 @@ function DetailStrip({
         </Button>
       </div>
       {showing === "claims" && p.faceId && (
-        <PersonaClaims parties={parties} contextId={ctx.id} personaDid={p.did} profileName={p.faceName ?? "this face"} />
+        <PersonaClaims registry={registry} parties={parties} contextId={ctx.id} personaDid={p.did} profileName={p.faceName ?? "this face"} />
       )}
     </>,
   );
