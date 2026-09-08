@@ -121,6 +121,27 @@ function standingWords(tally: ContextTally): string {
   return parts.join(" · ");
 }
 
+/**
+ * Whether the holder's own label is telling the reader anything the value does
+ * not already say.
+ *
+ * A label is a note to self — "work mobile", "the flat" — and it earns its
+ * place beside the value. When it *is* the value it earns nothing: a `company`
+ * attribute labelled "Affinidi" holding "Affinidi" drew **Affinidi · Affinidi**,
+ * which reads as a stutter and, worse, as two facts.
+ *
+ * Compared case- and space-insensitively, because "affinidi" beside "Affinidi"
+ * is the same stutter with a different shift key. Only a string value is
+ * compared: a JSON object rendered beside a label never repeats it, and
+ * stringifying one here to find out would be work in aid of a case that cannot
+ * arise.
+ */
+function labelSaysSomethingElse(label: string | undefined, value: unknown): boolean {
+  if (!label) return false;
+  if (typeof value !== "string") return true;
+  return label.trim().toLowerCase() !== value.trim().toLowerCase();
+}
+
 function staleWords(reason: string | undefined): string {
   switch (reason) {
     case "expired":
@@ -641,7 +662,7 @@ export function IdentityMap({
                                 on a card holding nothing the sentence that
                                 matters is the one about where the value is. It
                                 returns the moment the value does. */}
-                            {f.label && f.value !== undefined && (
+                            {f.value !== undefined && labelSaysSomethingElse(f.label, f.value) && (
                               <span style={{ color: c.muted, whiteSpace: "nowrap", flexShrink: 0 }}>{f.label} ·</span>
                             )}
                             <AttributeValue registry={registry}

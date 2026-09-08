@@ -1036,3 +1036,83 @@ test("the pane says the table did not arrive, rather than letting it look like a
   assert.match(text, /What you have decided for yourself still stands/);
   await ui.unmount();
 });
+
+// ── A label that repeats its own value ─────────────────────────────────────
+//
+// From a live pane: a `company` attribute labelled "Affinidi" holding
+// "Affinidi" drew **Affinidi · Affinidi**. A label is a note to self and earns
+// its place beside the value; when it *is* the value it earns nothing, and the
+// separator makes it read as two facts rather than one said twice.
+
+test("a label that repeats the value is not drawn twice", async () => {
+  // `sensitivity: "normal"` because `company` is unregistered and would
+  // otherwise be masked — which is how the pane the report came from was set
+  // up, and without it this test would pass on a card showing no value at all.
+  const doubled = [{ ...attribute("f1", "company", "Affinidi"), label: "Affinidi", sensitivity: "normal" }];
+  const a = agent({});
+  const ui = await render(
+    h(IdentityMap, {
+      parties: PARTIES,
+      authority: HOLDER,
+      registry: REGISTRY,
+      graph: buildGraph(doubled, [], []),
+      attributes: doubled,
+      profiles: [],
+      records: CONTEXTS,
+      history: [],
+      onReveal: async () => "never asked",
+      onChanged: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  const text = ui.text();
+  assert.match(text, /Affinidi/, "the value is still there");
+  assert.doesNotMatch(text, /Affinidi · Affinidi/);
+  await ui.unmount();
+});
+
+test("a label that says something the value does not is kept", async () => {
+  // The paired positive, and the reason the check is not simply "hide labels":
+  // "work mobile" beside a number is the whole point of having one.
+  const noted = [{ ...attribute("f2", "phone.mobile", "+65 8262 2325"), label: "work mobile" }];
+  const a = agent({});
+  const ui = await render(
+    h(IdentityMap, {
+      parties: PARTIES,
+      authority: HOLDER,
+      registry: REGISTRY,
+      graph: buildGraph(noted, [], []),
+      attributes: noted,
+      profiles: [],
+      records: CONTEXTS,
+      history: [],
+      onReveal: async () => "never asked",
+      onChanged: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  assert.match(ui.text(), /work mobile ·/);
+  await ui.unmount();
+});
+
+test("the same word in a different case is the same stutter", async () => {
+  const cased = [{ ...attribute("f3", "company", "Affinidi"), label: "affinidi ", sensitivity: "normal" }];
+  const a = agent({});
+  const ui = await render(
+    h(IdentityMap, {
+      parties: PARTIES,
+      authority: HOLDER,
+      registry: REGISTRY,
+      graph: buildGraph(cased, [], []),
+      attributes: cased,
+      profiles: [],
+      records: CONTEXTS,
+      history: [],
+      onReveal: async () => "never asked",
+      onChanged: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  assert.doesNotMatch(ui.text(), /affinidi ·/i);
+  await ui.unmount();
+});
