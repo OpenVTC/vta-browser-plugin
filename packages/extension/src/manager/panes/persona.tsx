@@ -62,7 +62,7 @@ import { buildGraph, type ContextInput } from "../identity-graph.js";
 // `claim-types/list` is `Reach::Any` and describes the agent's vocabulary, not
 // the holder — so it lives in the wallet half of the SDK, not the operator half
 // the rest of this pane imports.
-import { listClaimTypes } from "@openvtc/pnm-core/persona";
+import { listClaimTypes, unappliedClaimTypes } from "@openvtc/pnm-core/persona";
 import { IdentityMap } from "./persona-map.js";
 import { GuidedSetup } from "./persona-setup.js";
 import { showsGuide } from "../persona-flow.js";
@@ -250,6 +250,44 @@ export function PersonaPane({
     <div style={{ display: "grid", gap: 20, alignContent: "start" }}>
       {profiles.error && <LoadError what="your faces" error={profiles.error} />}
       {contexts.error && <LoadError what="who is known where" error={contexts.error} />}
+      {/* What the agent could not apply from its own claim-type file.
+          Loud, and at the top, because the failure is otherwise invisible: a
+          refused row leaves its token resolving from the core table, so the
+          screen looks entirely normal while a tightening the operator believes
+          is in force is not. The agent reports its refusals so somebody can be
+          told; this is where they are told. */}
+      {(() => {
+        const unapplied = unappliedClaimTypes(registry.data ?? null);
+        if (unapplied.rejected.length === 0 && !unapplied.fileError) return null;
+        return (
+          <Note tone="danger">
+            <div style={{ display: "grid", gap: 6 }}>
+              <strong>
+                {unapplied.fileError
+                  ? "Your agent could not read its claim-type file."
+                  : `Your agent could not apply ${unapplied.rejected.length} of its own claim ${
+                      unapplied.rejected.length === 1 ? "type" : "types"
+                    }.`}
+              </strong>
+              <span>
+                {unapplied.fileError
+                  ? "None of the types this deployment declares are in force."
+                  : "Those types are treated as the most private kind, as though they had never been declared. Fix or remove the declaration."}
+              </span>
+              {unapplied.fileError && (
+                <span style={{ fontFamily: "var(--w-mono)", fontSize: "var(--w-t-xs)" }}>
+                  {unapplied.fileError}
+                </span>
+              )}
+              {unapplied.rejected.map((r) => (
+                <span key={r.type} style={{ fontSize: "var(--w-t-sm)" }}>
+                  <strong style={{ fontFamily: "var(--w-mono)" }}>{r.type}</strong> — {r.reason}
+                </span>
+              ))}
+            </div>
+          </Note>
+        );
+      })()}
       {registry.error && (
         <Note tone="warn">
           Your agent would not give its claim-type table — {registry.error}. Until it does, every

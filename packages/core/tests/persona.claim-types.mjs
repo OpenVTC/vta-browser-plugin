@@ -8,7 +8,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { resolveTreatment, isRegisteredType, registeredRoots } from "../dist/persona/index.js";
+import {
+  resolveTreatment,
+  isRegisteredType,
+  registeredRoots,
+  unappliedClaimTypes,
+} from "../dist/persona/index.js";
 
 /** A registry shaped exactly as `persona/claim-types/list` returns one. */
 const registry = {
@@ -121,4 +126,86 @@ test("the roots come from the served table, not a compiled list", () => {
   assert.ok(roots.has("payment"));
   assert.ok(roots.has("email"));
   assert.ok(!roots.has("wholly"));
+});
+
+// ── What the agent could not apply ─────────────────────────────────────────
+//
+// A refused claim-type row is invisible from the outside: the token resolves
+// from the core table exactly as it would with no file at all, so the screen
+// looks normal while an operator's intended tightening is not in force. The
+// agent reports its refusals under `ext` so somebody can be told; these are the
+// checks on the half that reads them.
+
+test("the rejected rows are read out of the agent's ext", () => {
+  const registry = {
+    registryVersion: "0.1",
+    entries: [],
+    unregistered: { sensitivity: "high", release: "consent", mask: "full" },
+    strictness: { sensitivity: ["high", "normal"], release: ["stepUp", "consent"], mask: ["full", "none"] },
+    ext: {
+      "org.openvtc.claim-types": {
+        rejected: [{ type: "gov.id.passport", reason: "would weaken sensitivity" }],
+      },
+    },
+  };
+  const report = unappliedClaimTypes(registry);
+  assert.deepEqual(report.rejected, [{ type: "gov.id.passport", reason: "would weaken sensitivity" }]);
+  assert.equal(report.fileError, undefined);
+});
+
+test("a file the agent could not read is its own sentence", () => {
+  // Different from a rejected row: then *nothing* the deployment declared is in
+  // force, and the console says so rather than listing zero refusals.
+  const registry = {
+    registryVersion: "0.1",
+    entries: [],
+    unregistered: { sensitivity: "high", release: "consent", mask: "full" },
+    strictness: { sensitivity: ["high", "normal"], release: ["stepUp", "consent"], mask: ["full", "none"] },
+    ext: { "org.openvtc.claim-types": { fileError: "/etc/vta/claim-types.json: No such file" } },
+  };
+  const report = unappliedClaimTypes(registry);
+  assert.deepEqual(report.rejected, []);
+  assert.match(report.fileError, /No such file/);
+});
+
+test("an agent that reports nothing reports nothing", () => {
+  // The ordinary case, and the one every existing deployment is in.
+  const bare = {
+    registryVersion: "0.1",
+    entries: [],
+    unregistered: { sensitivity: "high", release: "consent", mask: "full" },
+    strictness: { sensitivity: ["high", "normal"], release: ["stepUp", "consent"], mask: ["full", "none"] },
+  };
+  assert.deepEqual(unappliedClaimTypes(bare), { rejected: [] });
+  assert.deepEqual(unappliedClaimTypes(null), { rejected: [] }, "and no table at all is not a complaint");
+});
+
+test("a malformed report is dropped rather than rendered", () => {
+  // `ext` is vendor-namespaced and the schema does not constrain it, so nothing
+  // upstream has checked this shape. A banner built from `undefined` would be a
+  // second fault reported as the first.
+  for (const bad of [
+    { "org.openvtc.claim-types": { rejected: "not a list" } },
+    { "org.openvtc.claim-types": { rejected: [{ type: 7, reason: "wrong type" }] } },
+    { "org.openvtc.claim-types": { rejected: [{ type: "ok" }] } },
+    { "org.openvtc.claim-types": "not an object" },
+    { "someone.else": { rejected: [{ type: "x", reason: "y" }] } },
+  ]) {
+    const report = unappliedClaimTypes({ ext: bad });
+    assert.deepEqual(report.rejected, [], `should have dropped ${JSON.stringify(bad)}`);
+  }
+});
+
+test("a well-formed row beside a malformed one still gets through", () => {
+  // Dropping the whole report because one row is wrong would hide a real
+  // refusal — the same mistake, one layer up, that the agent stopped making
+  // when it moved to per-row rejection.
+  const report = unappliedClaimTypes({
+    ext: {
+      "org.openvtc.claim-types": {
+        rejected: [{ type: "good.one", reason: "a reason" }, { nonsense: true }],
+      },
+    },
+  });
+  assert.deepEqual(report.rejected, [{ type: "good.one", reason: "a reason" }]);
 });
