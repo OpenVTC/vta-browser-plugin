@@ -1803,6 +1803,69 @@ export interface OffscreenRestLoginRequest {
  *  [`RuntimeLoginResponse`] via `sendResponse`. Mid-flow the offscreen calls
  *  back with a [`RuntimeStepUpConsentRequest`] once the approve-request has
  *  verified — the background raises the consent prompt then, not before. */
+/** background → offscreen: obtain the fresh approval a `release: stepUp`
+ *  disclosure needs.
+ *
+ *  **In the offscreen, not the background, and the reason is structural.**
+ *  Verifying the agent's approve-request resolves a DID, and DID resolution
+ *  cannot be statically bundled into an MV3 service worker — a dynamic
+ *  `import()` in `background.js` is the one thing CI asserts is absent, because
+ *  a service worker cannot load one. So the verify and the signing both happen
+ *  here and the background contributes the only thing it uniquely can: a
+ *  window for the human. Exactly the shape `OFFSCREEN_STEP_UP_VTA` already has.
+ *
+ *  Reply is an [`OffscreenDisclosureStepUpResponse`]. */
+export const OFFSCREEN_DISCLOSURE_STEP_UP = "pnm/offscreen-disclosure-step-up" as const;
+
+export interface OffscreenDisclosureStepUpRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_DISCLOSURE_STEP_UP;
+  /** The agent that refused, and the transport to answer it on. */
+  vtaDid: string;
+  restBaseUrl?: string;
+  /** The requesting page's origin — display only, for the prompt. */
+  origin: string;
+  /** The refusal, verbatim. Its `approveRequest` is UNVERIFIED here; nothing
+   *  in it may be shown until `verifyDisclosureStepUp` has passed. */
+  refusal: {
+    previewId: string;
+    previewRetained: boolean;
+    unverifiedApproveRequest: Record<string, unknown>;
+  };
+}
+
+export type OffscreenDisclosureStepUpResponse =
+  | { ok: true }
+  | { ok: false; error: string };
+
+/** offscreen → background: raise the DISCLOSURE step-up prompt for a VERIFIED
+ *  approve-request. Everything here came out of the signature.
+ *
+ *  Deliberately its own message rather than reusing [`RUNTIME_STEP_UP_CONSENT`]:
+ *  that one is answered through `gatedConsent`, which returns true outright for
+ *  an origin the holder ticked "remember this site" for. Right for a login
+ *  step-up; wrong for this one, where the whole requirement is that the holder
+ *  decides *each time*. An origin-level grant answering for them would turn
+ *  "each time" into "once per site". */
+export const RUNTIME_DISCLOSURE_STEP_UP_CONSENT = "vta-wallet/disclosure-step-up-consent" as const;
+
+export interface RuntimeDisclosureStepUpConsentRequest {
+  type: typeof RUNTIME_DISCLOSURE_STEP_UP_CONSENT;
+  origin: string;
+  /** The agent that asked — the proven signer of the approve-request. */
+  agentDid: string;
+  /** From the verified context. Who would receive the claims. */
+  verifierDid?: string;
+  /** From the verified context. What would leave. */
+  claimTypes: string[];
+  /** From the verified context. The verifier's stated reason, if any. */
+  purpose?: string;
+}
+
+export interface RuntimeDisclosureStepUpConsentResponse {
+  approved: boolean;
+}
+
 export interface OffscreenStepUpVtaRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_STEP_UP_VTA;

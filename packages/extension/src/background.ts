@@ -9,6 +9,10 @@
 // DIDComm flow: content → RUNTIME_LOGIN_DIDCOMM → consent → offscreen doc.
 
 import { pageTaskRefusal } from "./page-task-policy.js";
+import {
+  disclosureStepUpFrom,
+  type DisclosureStepUpRequired,
+} from "@openvtc/pnm-core/persona";
 import { IndexedDBKVStore, listPendingInbound } from "@openvtc/pnm-core";
 import {
   parseActiveVtaDid,
@@ -117,6 +121,14 @@ import {
   RUNTIME_TASK_CONSENT,
   CONSENT_KEEPALIVE_PORT,
   RUNTIME_STEP_UP_CONSENT,
+  OFFSCREEN_DISCLOSURE_STEP_UP,
+  RUNTIME_DISCLOSURE_STEP_UP_CONSENT,
+  type OffscreenDisclosureStepUpRequest,
+  type OffscreenDisclosureStepUpResponse,
+  type RuntimeDisclosureStepUpConsentRequest,
+  type RuntimeDisclosureStepUpConsentResponse,
+  type RelayTaskFailure,
+  type DiscloseResult,
   RUNTIME_STEP_UP_VTA,
   RUNTIME_APPROVER_STATE,
   RUNTIME_RESOLVE_AGENT_NAME,
@@ -863,13 +875,21 @@ const DISCLOSURE_CONSENT_PREFIX = "disclosure-consent:";
 const PERSONA_PREVIEW = "https://trusttasks.org/spec/persona/disclosure/preview/1.0";
 const PERSONA_PRESENT = "https://trusttasks.org/spec/persona/disclosure/present/1.0";
 
-/** Run one persona task as the wallet, not as the page. */
+/**
+ * Run one persona task as the wallet, not as the page.
+ *
+ * Returns the **relay** shape, not the page-facing one: this caller is the
+ * wallet, and the wallet has to tell one refusal from another to drive the
+ * step-up ceremony below (R3.7). Nothing here reaches the page — `handleDisclose`
+ * returns prose or the presentation, and the `code`/`details` the agent sent
+ * stop at this file, exactly as `handleRequestTask` narrows them off for a site.
+ */
 async function runPersonaTask(
   active: { vtaDid: string; restBaseUrl?: string },
   origin: string,
   type: string,
   payload: Record<string, unknown>,
-): Promise<RuntimeRequestTaskResponse> {
+): Promise<{ ok: true; result: unknown } | RelayTaskFailure> {
   await ensureOffscreenDocument();
   return (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
@@ -878,7 +898,7 @@ async function runPersonaTask(
     restBaseUrl: active.restBaseUrl,
     origin,
     params: { type, payload },
-  })) as RuntimeRequestTaskResponse;
+  })) as { ok: true; result: unknown } | RelayTaskFailure;
 }
 
 /**
@@ -957,12 +977,111 @@ async function handleDisclose(req: RuntimeDiscloseRequest): Promise<RuntimeDiscl
   const approved = await raiseDisclosureConsent(consentId);
   if (!approved) return { ok: false, error: "user declined the disclosure" };
 
-  const presented = await runPersonaTask(active.conn, req.origin, PERSONA_PRESENT, {
-    contextId: binding.contextId,
-    previewId: preview.previewId,
-  });
+  const present = async () =>
+    runPersonaTask(active.conn, req.origin, PERSONA_PRESENT, {
+      contextId: binding.contextId,
+      previewId: preview.previewId,
+    });
+
+  let presented = await present();
+
+  // `release: stepUp` — the agent wants a fresh authentication bound to THIS
+  // preview before it will release it (`CLAIM-TYPES.md` §3.2).
+  //
+  // Returned as a refusal rather than thrown, and answered here rather than
+  // handed on. A page that received "Error: stepUpRequired" would be stranded
+  // at the moment the holder was supposed to act, and the retry the agent
+  // explicitly offered — `previewRetained: true`, the same preview, once
+  // approved — would be discarded at the last hop.
+  const stepUp = disclosureStepUpFrom(
+    presented.ok ? undefined : presented.code,
+    presented.ok ? undefined : presented.details,
+  );
+  if (stepUp) {
+    const done = await runDisclosureStepUp(active.conn, req.origin, stepUp);
+    if (!done.ok) return { ok: false, error: done.error };
+    // The SAME preview. The refusal did not consume it, which is the whole
+    // reason this is retryable rather than a restart.
+    presented = await present();
+  }
+
   if (!presented.ok) return { ok: false, error: presented.error };
-  return { ok: true, result: presented.result ?? {} };
+  return { ok: true, result: (presented.result ?? {}) as DiscloseResult };
+}
+
+/**
+ * Obtain the fresh approval a `release: stepUp` disclosure needs.
+ *
+ * Delegated to the offscreen document, and that is structural rather than
+ * stylistic: verifying the agent's approve-request resolves a DID, and DID
+ * resolution cannot be statically bundled into an MV3 service worker. A dynamic
+ * `import()` in `background.js` is the one thing CI asserts is absent, because a
+ * service worker cannot load one — so the verify and the signing live where
+ * they can, and this side contributes the only thing it uniquely can, a window
+ * for the human. `doStepUpVta` has exactly this shape for the same reason.
+ */
+async function runDisclosureStepUp(
+  active: { vtaDid: string; restBaseUrl?: string },
+  origin: string,
+  refusal: DisclosureStepUpRequired,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  await ensureOffscreenDocument();
+  const ask: OffscreenDisclosureStepUpRequest = {
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_DISCLOSURE_STEP_UP,
+    vtaDid: active.vtaDid,
+    ...(active.restBaseUrl !== undefined ? { restBaseUrl: active.restBaseUrl } : {}),
+    origin,
+    refusal: {
+      previewId: refusal.previewId,
+      previewRetained: refusal.previewRetained,
+      unverifiedApproveRequest: refusal.unverifiedApproveRequest,
+    },
+  };
+  const result = (await chrome.runtime.sendMessage(ask)) as
+    | OffscreenDisclosureStepUpResponse
+    | undefined;
+  return result ?? { ok: false, error: "the step-up ceremony returned nothing" };
+}
+
+/**
+ * Ask the holder to approve **one** disclosure, freshly.
+ *
+ * Two departures from `gatedConsent`, and both are the requirement rather than
+ * caution:
+ *
+ *   - **`requestConsent` directly, so a trusted origin does not skip it.**
+ *     `gatedConsent` returns `true` outright for an origin the holder ticked
+ *     "remember this site" for. That is right for a login step-up and wrong
+ *     here: `release: stepUp` exists to make the holder decide *each time*, and
+ *     an origin-level grant that answered for them turns "each time" into
+ *     "once per site" — the same failure as binding to the session, reached
+ *     from a different direction.
+ *   - **`noRemember`, so it cannot become one.** There is nothing to remember:
+ *     the approval is bound to a single `previewId` and dies with it.
+ *
+ * The text comes from the **verified** context, never the unsigned refusal.
+ */
+async function handleDisclosureStepUpConsent(
+  req: RuntimeDisclosureStepUpConsentRequest,
+): Promise<RuntimeDisclosureStepUpConsentResponse> {
+  const { origin, agentDid } = req;
+  const context = { verifierDid: req.verifierDid, claimTypes: req.claimTypes, purpose: req.purpose };
+  const what =
+    context.claimTypes.length === 1
+      ? context.claimTypes[0]
+      : `${context.claimTypes.length} facts (${context.claimTypes.join(", ")})`;
+  const to = context.verifierDid ? ` to ${context.verifierDid}` : "";
+  const why = context.purpose ? ` — they say it is for: ${context.purpose}` : "";
+  const { approved } = await requestConsent({
+    origin,
+    rpDid: agentDid,
+    noRemember: true,
+    stepUp: true,
+    action: "approve this disclosure",
+    reason: `Release ${what}${to}${why}. This approval covers this one disclosure.`,
+  });
+  return { approved };
 }
 
 /** The persona and context this origin's stored profile entry names. */
@@ -2948,6 +3067,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Any failure to raise or resolve the prompt is a denial — silence is
       // not agreement, here as everywhere else in this file.
       .catch(() => sendResponse({ approved: false } satisfies RuntimeStepUpConsentResponse));
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_DISCLOSURE_STEP_UP_CONSENT) {
+    handleDisclosureStepUpConsent(message as RuntimeDisclosureStepUpConsentRequest)
+      .then(sendResponse)
+      // A denial, for the same reason as every other prompt here: silence is
+      // not agreement — least of all on the surface deciding whether a card
+      // number leaves.
+      .catch(() =>
+        sendResponse({ approved: false } satisfies RuntimeDisclosureStepUpConsentResponse),
+      );
     return true; // async sendResponse
   }
 

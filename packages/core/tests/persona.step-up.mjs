@@ -10,6 +10,8 @@ import assert from "node:assert/strict";
 
 import {
   disclosureStepUpRequiredFrom,
+  disclosureStepUpFrom,
+  disclosureApprovalPayload,
   verifyDisclosureStepUp,
   approveDisclosureStepUp,
   buildStepUpApproval,
@@ -314,4 +316,53 @@ test("the disclosure approval is minted as 0.3, and rp-login's is not", async ()
     const proof = await verifyTrustTaskProof(doc, { expectedProofPurpose: "assertionMethod" });
     assert.equal(proof.verified, true, proof.reason ?? "");
   }
+});
+
+test("a refusal that was not thrown is recognised the same way", () => {
+  // The wallet dispatches this task itself, so the agent's refusal arrives as
+  // `{code, details}` fields rather than inside an exception. One rule, two
+  // entry points — a second implementation would be the same three checks
+  // written twice and would drift on the third change, not the first.
+  const seen = disclosureStepUpFrom(DISCLOSURE_STEP_UP_REQUIRED_CODE, {
+    previewId: PREVIEW,
+    previewRetained: true,
+    approveRequest: { type: "x", payload: {} },
+  });
+  assert.ok(seen);
+  assert.equal(seen.previewId, PREVIEW);
+  assert.equal(seen.previewRetained, true);
+
+  // And the same strictness: without a previewId there is nothing to present
+  // again, without an approve-request nothing to approve.
+  assert.equal(disclosureStepUpFrom(DISCLOSURE_STEP_UP_REQUIRED_CODE, { previewId: PREVIEW }), null);
+  assert.equal(disclosureStepUpFrom("taskFailed", { previewId: PREVIEW, approveRequest: {} }), null);
+  assert.equal(disclosureStepUpFrom(undefined, undefined), null, "a success is not a refusal");
+});
+
+test("the approval echoes only what the verified request said", async () => {
+  const seen = disclosureStepUpRequiredFrom(
+    refusal({ previewId: PREVIEW, previewRetained: true, approveRequest: await approveRequest() }),
+  );
+  const verified = await verifyDisclosureStepUp(seen, enrolled);
+  assert.ok(verified.ok);
+
+  const payload = disclosureApprovalPayload(verified.request, true);
+  assert.equal(payload.subject, "did:key:zHolder");
+  assert.equal(payload.sessionId, "sess-42");
+  assert.equal(payload.challenge, "a".repeat(32));
+  assert.equal(payload.decision, "approved");
+
+  // No proof of its own, deliberately: this goes as an ordinary Trust Task and
+  // the channel signs it as the holder with `assertionMethod`, which IS the
+  // gate. A second proof here would duplicate or overwrite that one.
+  assert.equal("proof" in payload, false);
+  assert.equal("type" in payload, false, "a payload, not a document");
+});
+
+test("a denial is expressible, and says so rather than staying silent", () => {
+  const payload = disclosureApprovalPayload(
+    { subject: "did:key:zHolder", sessionId: "s", challenge: "c".repeat(32) },
+    false,
+  );
+  assert.equal(payload.decision, "denied");
 });
