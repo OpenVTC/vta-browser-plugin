@@ -26,6 +26,7 @@ import { useCallback, useEffect, useState } from "react";
 import { roomsKeysList, type HeldRoom } from "@openvtc/pnm-core/rooms";
 import { Note, Panel } from "../../ui.js";
 import { CreateRoom } from "./rooms-create.js";
+import { IssueInRoomsName } from "./rooms-owner.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
@@ -156,6 +157,11 @@ export function RoomsPane({
     <>
       {list}
       <CreateRoom parties={parties} contexts={contexts} onCreated={() => void load()} />
+      {/* Below the list rather than beside it: issuing is about a room the owner
+          already has, and the list is key custody — a room can appear in one and
+          not the other in both directions, so pairing them per-row would suggest
+          a correspondence that does not hold. */}
+      <IssueInRoomsName parties={parties} />
     </>
   );
 }
