@@ -62,6 +62,7 @@ import { buildGraph, type ContextInput } from "../identity-graph.js";
 import { IdentityMap } from "./persona-map.js";
 import { GuidedSetup } from "./persona-setup.js";
 import { showsGuide } from "../persona-flow.js";
+import { revealAttributeValue, type RevealTarget } from "../reveal-value.js";
 import { DisclosureHistoryPanel } from "./persona-editors.js";
 
 /**
@@ -125,9 +126,18 @@ export function PersonaPane({
   // their own pool from a surface holding an unscoped holder credential —
   // the one place where showing them is the job — and a map of types with
   // no values cannot answer "is this the right phone number".
+  // Values are asked for, sensitive ones are not. `includeSensitive` is the
+  // half that is not cosmetic (see `reveal-value.ts`): without it the agent
+  // answers with the metadata of every `sensitivity: high` attribute and the
+  // plaintext of none, which is exactly the state this pane should be in until
+  // a person presses *Show* on one of them.
   const attributes = useAsync(
     async () => personaAttributeList(managerSender, { ...parties, includeValues: true }),
     [parties.holder.did, parties.service.did],
+  );
+  const reveal = useCallback(
+    (target: RevealTarget) => revealAttributeValue(managerSender, parties, target),
+    [parties],
   );
   const profiles = useAsync(
     async () => personaProfileList(managerSender, parties),
@@ -227,6 +237,7 @@ export function PersonaPane({
         profiles={profiles.data}
         records={records}
         history={history.data?.disclosures ?? null}
+        onReveal={reveal}
         onChanged={reloadAll}
         banner={
           banner ? (

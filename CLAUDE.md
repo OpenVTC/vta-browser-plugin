@@ -323,13 +323,18 @@ address and phone number without showing them any of it.
 the pool, the faces and every context's bindings, builds `identity-graph.ts`'s
 model, and shows either the guided setup (`persona-setup.tsx`, while the holder
 has no face) or the identity map (`persona-map.tsx`). What lights up when
-something is selected — a fact's reach runs *down* to the contexts it goes to,
-a context's runs *up* to the facts it holds — is computed in
-`identity-graph.ts` and tested; the component only draws. The on-screen words
-are a **fact**, a **face**, a **context** and a persona that **wears** a face,
-per `design-docs/persona-vocabulary.md`; the spec's words (`attribute`,
-`profile`, `binding`, `materialise`) stay in code and off the screen. Add copy
-in those words, or change the document first.
+something is selected — an attribute's reach runs *down* to the contexts it goes
+to, a context's runs *up* to the attributes it holds — is computed in
+`identity-graph.ts` and tested; the component only draws. The on-screen words are
+an **attribute**, a **face**, a **context** and a persona that **wears** a face,
+per `design-docs/persona-vocabulary.md`. The word for a value the holder keeps is
+the spec's own: *fact* asserted a truth the model cannot promise — the card said
+it directly above a provenance line reading *you said so* — and `fact` was
+already spent on `vtc-service`'s verified policy inputs, very nearly the opposite
+meaning in the same product (#191). It is banned from screen copy, and
+`manager-holder-gate.test.mts` checks. The remaining spec words (`profile`,
+`binding`, `materialise`) stay in code and off the screen. Add copy in those
+words, or change the document first.
 
 **Colour on the map carries three things, in three channels that never
 overlap.** The **border** is selection and reach; the **inset stripe** on an
@@ -373,16 +378,39 @@ registry's masking data — sensitivity and mask style per token, from
 the agent does not serve that table: `persona/claim-types/list` is an open
 question in `CLAIM-TYPES.md` §6, deferred until the first extension type ships.
 An unregistered or `x:` token resolves to the conservative default
-(`high`/`full`) per §4 rule 3, and there is deliberately **no prefix walk**: the
-JSON declares only leaves, so inventing a `payment.*` family rule locally would
-make an unknown member of that family show *more* than the registry asks.
+(`high`/`full`) per §4 rule 3. The prefix walk **is** rule 3 and it only ever
+*tightens*: an unregistered token takes the more protective of its longest
+registered prefix and that default, per axis — so `payment.giftCard` inherits
+`payment`'s gating and cannot be escaped by inventing a token, while
+`name.somethingNew` does **not** inherit `name`'s `none` and stays masked. (This
+note used to say there was deliberately no walk, which was true of the table
+before the registry gained one in trust-tasks#377.) A local rule that walks in
+the *loosening* direction is still the thing to refuse.
 
-**It is not a security control and must not be described as one.** The value was
-fetched before any of it ran, so masking changes what is drawn and never what
-the page holds. It defends against a shoulder, a screenshot and a screen share,
-which is the whole scope. The control that would matter is a read-path one —
-`includeSensitive` on `persona/attribute/list`, so a listing that did not ask is
-answered without the values — and it does not exist yet.
+**The mask is not the control. The request is.** Masking a value already
+fetched defends a shoulder, a screenshot and a screen share, and nothing else —
+never say more than that about it. The control that matters is on the read path,
+it now exists, and the console uses it: `includeSensitive` on
+`persona/attribute/list` (trust-tasks 0.17.4). The pane lists with
+`includeValues` and **without** it, so the plaintext of every `sensitivity: high`
+attribute is genuinely not in the page, and *Show* is the request for one —
+`manager/reveal-value.ts`, narrowed by `typePrefix` to that attribute's type and
+matched back by `attributeId`, because there is no `attribute/get` and a type can
+have siblings. *Hide* then **drops** what was fetched rather than covering it.
+
+Before this the console never sent the member, so the agent answered with the
+metadata of every sensitive attribute and the plaintext of none — and the pane
+drew a mask over the placeholder. A card read `••••` beside a *Show* that
+revealed "not requested", under a line promising the agent "has already sent
+this value here". Two states, one shape on screen, and the reassuring one was
+the lie.
+
+**What breaks it:** setting `includeSensitive` on the pane's own listing (three
+lines, every *Show* instant, and every card and passport number the holder owns
+sitting in a React tree because a button *might* be pressed — the decorative
+version with extra steps); masking a withheld placeholder, which claims a value
+is being held back when none arrived; matching a reveal by position rather than
+`attributeId`; or a *Hide* that only covers what a press fetched.
 
 **A `release: stepUp` disclosure is refused, and the refusal is returned rather
 than thrown.** `payment.*` and `gov.*` resolve to `release: stepUp` in the

@@ -15,15 +15,16 @@
 // shared, a screenshot pasted into an issue. Those are real, and they are the
 // entire scope.
 //
-// **The control that would matter does not exist yet.** It is a read-path one —
-// an `includeSensitive` flag on `persona/attribute/list`, so a listing that did
-// not ask for sensitive values is answered without them and the console never
-// holds the string in the first place. `CLAIM-TYPES.md` §3.1 says the same
-// thing in one sentence: "Masking a value already fetched is theatre. The
-// control that matters is on the read path; the mask is what makes the control
-// visible." Until that flag lands in the spec and the agent, this file is the
-// visible half of a control whose enforcing half is missing. Do not describe it
-// as anything more in a UI string, a commit message or a review.
+// **The control that matters is the read path, and it now exists.**
+// `includeSensitive` on `persona/attribute/list` (trust-tasks 0.17.4) is what
+// keeps a sensitive value out of the page in the first place, and the persona
+// pane lists *without* it: see `reveal-value.ts`, where *Show* becomes the
+// request for one value rather than a curtain drawn back over a string that was
+// already here. `CLAIM-TYPES.md` §3.1 says it in one sentence — "Masking a value
+// already fetched is theatre. The control that matters is on the read path; the
+// mask is what makes the control visible." This file is that visible half, and
+// only that half. Do not describe it as anything more in a UI string, a commit
+// message or a review.
 //
 // ## The table below is vendored, and will go stale
 //

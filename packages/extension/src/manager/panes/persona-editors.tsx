@@ -78,7 +78,10 @@ export function Label({ children }: { children: React.ReactNode }) {
  * printing a passport number in full, and it would look like ordinary code.
  */
 function formatValue(value: unknown): { text: string; withheld: boolean } {
-  if (value === undefined) return { text: "not requested", withheld: true };
+  // "not on this page" rather than "not requested": the second described the
+  // request that was made, which is a fact about the console, while the person
+  // reading it wants to know where the value is. It is with their agent.
+  if (value === undefined) return { text: "not on this page", withheld: true };
   if (value === null) return { text: "null", withheld: false };
   if (typeof value === "string") return { text: value, withheld: false };
   if (typeof value === "number" || typeof value === "boolean") {
@@ -116,6 +119,7 @@ export function FactValue({
   value,
   style,
   textStyle,
+  reveal,
 }: {
   type: string;
   value: unknown;
@@ -123,10 +127,58 @@ export function FactValue({
   style?: React.CSSProperties;
   /** Wrapping or truncation for the value itself, which differs per surface. */
   textStyle?: React.CSSProperties;
+  /**
+   * Ask the agent for this one value, when it did not send it.
+   *
+   * Optional, because not every surface can: a claim inside a face was read
+   * from a binding, not from the pool, and there is no second question to ask
+   * about it. Where it is absent a withheld value simply says so — which is
+   * the honest end of the sentence, and better than a *Show* that cannot.
+   */
+  reveal?: () => Promise<unknown>;
 }) {
   const [shown, setShown] = useState(false);
-  const { text, withheld } = formatValue(value);
+  const [revealed, setRevealed] = useState<{ value: unknown } | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
+
+  const { text, withheld } = formatValue(revealed ? revealed.value : value);
   const { text: hidden, masked } = maskedFact(type, text);
+
+  // **A withheld value is never masked.** The mask is a statement that a value
+  // is here and is being kept off the screen; drawing it over "not on this
+  // page" said the opposite of the truth, and hid the fact that the console
+  // had never been sent anything. This is the line that makes the difference
+  // between the two states visible instead of identical.
+  const covered = masked && !withheld && !shown;
+  const askable = withheld && reveal !== undefined && !asking;
+
+  const ask = async () => {
+    if (!reveal) return;
+    setAsking(true);
+    setRefused(null);
+    try {
+      setRevealed({ value: await reveal() });
+      setShown(true);
+    } catch (e) {
+      setRefused(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  // Hiding a value this component fetched *drops* it, rather than covering it
+  // again. The plaintext arrived because a person asked; when they are done
+  // with it there is no reason for the page to keep holding it, and a mask over
+  // a value still in the tree is the decorative version this whole path exists
+  // to stop being.
+  const hide = () => {
+    setRevealed(null);
+    setShown(false);
+  };
+
+  const label = asking ? "Asking…" : shown || (revealed !== null) ? "Hide" : "Show";
+  const pressable = askable || covered || shown || revealed !== null;
 
   return (
     <span style={{ display: "inline-flex", alignItems: "baseline", gap: 7, minWidth: 0, ...style }}>
@@ -137,26 +189,34 @@ export function FactValue({
           // make an attribute the holder has look exactly like an attribute they do not,
           // and the difference is the one thing a hidden value must still say.
           color: withheld ? c.faint : c.text,
-          ...(masked && !shown ? { fontFamily: font.mono, letterSpacing: 0.5 } : {}),
+          ...(covered ? { fontFamily: font.mono, letterSpacing: 0.5 } : {}),
           ...textStyle,
         }}
       >
-        {masked && !shown ? hidden : text}
+        {covered ? hidden : text}
       </span>
-      {masked && (
+      {refused && (
+        <span style={{ flexShrink: 0, fontSize: t.xs, color: c.warn }}>— {refused}</span>
+      )}
+      {pressable && (
         <button
           // The attribute card underneath is itself a click target — it selects the
           // attribute. Without this, revealing a value also moves the selection, and
           // the strip the operator was reading changes under them.
           onClick={(e) => {
             e.stopPropagation();
-            setShown((s) => !s);
+            if (revealed !== null || shown) hide();
+            else if (withheld) void ask();
+            else setShown(true);
           }}
+          disabled={asking}
           title={
-            shown
-              ? "Hide it again."
-              : "Hidden because this kind of attribute is sensitive. Showing it changes what is on your " +
-                "screen, not what this page holds — your agent has already sent the value here."
+            shown || revealed !== null
+              ? "Hide it again — a value this page asked for is dropped, not covered over."
+              : withheld
+                ? "Your agent has not sent this value to this page. Show asks it for this one value."
+                : "Hidden because this kind of attribute is sensitive. Showing it changes what is on your " +
+                  "screen, not what this page holds — your agent has already sent the value here."
           }
           style={{
             flexShrink: 0,
@@ -168,10 +228,10 @@ export function FactValue({
             fontSize: t.xs,
             fontWeight: 600,
             fontFamily: "inherit",
-            cursor: "pointer",
+            cursor: asking ? "default" : "pointer",
           }}
         >
-          {shown ? "Hide" : "Show"}
+          {label}
         </button>
       )}
     </span>

@@ -61,6 +61,7 @@ import {
 } from "./persona-editors.js";
 import { holderGate } from "../holder-gate.js";
 import { isSensitive } from "../claim-sensitivity.js";
+import type { RevealTarget } from "../reveal-value.js";
 
 // ── Words for what the agent knows ──────────────────────────────────────────
 
@@ -356,6 +357,7 @@ export function IdentityMap({
   profiles,
   records,
   history,
+  onReveal,
   onChanged,
   banner,
 }: {
@@ -368,6 +370,10 @@ export function IdentityMap({
   /** Everything that has left, for "last left" on a selected attribute. Null while
    *  loading or refused — the strip then says nothing rather than "never". */
   history: DisclosureRecord[] | null;
+  /** Ask the agent for one withheld value. Threaded down rather than called
+   *  here, because the parties belong to the pane and a component that could
+   *  ask on its own is one that could ask for all of them. */
+  onReveal: (target: RevealTarget) => Promise<unknown>;
   onChanged: () => void;
   /** Shown once, above the map — the guided setup's hand-off. */
   banner?: ReactNode;
@@ -606,6 +612,7 @@ export function IdentityMap({
                             <FactValue
                               type={f.type}
                               value={f.value}
+                              reveal={() => onReveal({ attributeId: f.id, type: f.type })}
                               style={{ minWidth: 0, overflow: "hidden" }}
                               textStyle={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
                             />
@@ -836,6 +843,7 @@ export function IdentityMap({
           profiles={profiles}
           records={records}
           history={history}
+          onReveal={onReveal}
           finding={selection.kind === "attribute" ? (valueLinked.get(selection.id) ?? null) : null}
           showing={showing}
           onShow={setShowing}
@@ -906,6 +914,7 @@ function DetailStrip({
   history,
   finding,
   showing,
+  onReveal,
   onShow,
   onEdit,
   onChanged,
@@ -920,6 +929,7 @@ function DetailStrip({
   history: DisclosureRecord[] | null;
   finding: CorrelationFinding | null;
   showing: "claims" | null;
+  onReveal: (target: RevealTarget) => Promise<unknown>;
   onShow: (s: "claims" | null) => void;
   onEdit: (e: Editing) => void;
   onChanged: () => void;
@@ -965,6 +975,7 @@ function DetailStrip({
             <FactValue
               type={attribute.type}
               value={attribute.value}
+              reveal={() => onReveal({ attributeId: attribute.id, type: attribute.type })}
               style={{ fontSize: t.md, fontWeight: 640 }}
               textStyle={{ wordBreak: "break-word" }}
             />
@@ -972,14 +983,17 @@ function DetailStrip({
               {attribute.label ? `${attribute.label} · ` : ""}{prov.text}
               {attribute.provenance.kind === "credentialBacked" ? " — provable, and the same signature to everyone who sees it" : attribute.provenance.kind === "selfAsserted" ? " — passed on, never proven" : ""}
             </span>
-            {/* The one place with room to say what the mask is and is not. A
-                *Show* button with no explanation invites the reading that a
-                hidden value is one the console does not hold, and this console
-                holds every value it draws. */}
+            {/* The one place with room to say what the mask is and is not —
+                and the two cases are not the same sentence. A value the agent
+                sent is being kept off the screen and nothing more. A value it
+                withheld is not in this page at all, and *Show* is the request
+                for it. Saying the first about the second is what the strip did
+                before, and it was the one claim it must never make wrongly. */}
             {isSensitive(attribute.type) && (
               <span style={{ fontSize: t.sm, color: c.faint }}>
-                Hidden until you press Show — that is about who can see your screen. Your agent has
-                already sent this value here.
+                {attribute.value === undefined
+                  ? "Your agent has not sent this value to this page. Show asks it for this one."
+                  : "Hidden until you press Show — that is about who can see your screen. Your agent has already sent this value here."}
               </span>
             )}
             {attribute.stale && <span style={{ fontSize: t.sm, color: c.warn }}>Can no longer be proven ({attribute.staleReason ?? "stale"}).</span>}

@@ -166,6 +166,28 @@ export interface AttributeListParams extends PersonaHolderParams {
    */
   includeValues?: boolean;
   /**
+   * Widen `includeValues` to cover attributes resolving to `sensitivity: high`.
+   *
+   * **This is the half of sensitivity that is not cosmetic.** Without it the
+   * agent answers a values listing with the metadata of every sensitive
+   * attribute and the plaintext of none, so a client that masks what it
+   * received is not the control — the request it did not make is. The
+   * specification says so directly: "a consumer that masks a value it has
+   * already received defends a screen; it does not keep a card number out of a
+   * log, a crash dump or a process's memory."
+   *
+   * Separate from `includeValues` rather than a third state of it, because a
+   * picker wants every name and no card and should not have to choose between
+   * plaintext for everything and plaintext for nothing. It has no effect on its
+   * own: it widens a values request and can never be the thing that introduces
+   * plaintext.
+   *
+   * Ask for it per attribute, at the moment a human asks to see one — not for
+   * a whole pool up front, which is the shape that makes a mask decorative
+   * again.
+   */
+  includeSensitive?: boolean;
+  /**
    * Include attributes whose backing credential can no longer be re-derived.
    * Defaults to *included* at the agent: a holder deciding what to present
    * needs to see that something went stale rather than have it quietly omitted.
@@ -183,6 +205,7 @@ export async function personaAttributeList(
   const payload: PersonaAttributeListPayload = {
     ...(params.typePrefix !== undefined ? { typePrefix: params.typePrefix } : {}),
     ...(params.includeValues !== undefined ? { includeValues: params.includeValues } : {}),
+    ...(params.includeSensitive !== undefined ? { includeSensitive: params.includeSensitive } : {}),
     ...(params.includeStale !== undefined ? { includeStale: params.includeStale } : {}),
     ...(params.limit !== undefined ? { limit: params.limit } : {}),
     ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
