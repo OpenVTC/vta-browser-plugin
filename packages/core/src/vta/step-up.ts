@@ -24,7 +24,8 @@ import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import type { TrustTask } from "./protocol.js";
 
-import { TYPE_URI as MSG_APPROVE_RESPONSE } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.2/payload";
+import { TYPE_URI as MSG_APPROVE_RESPONSE_0_2 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.2/payload";
+import { TYPE_URI as MSG_APPROVE_RESPONSE_0_3 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.3/payload";
 import { TYPE_URI as APPROVE_REQUEST_0_2 } from "@openvtc/trust-tasks/auth/step-up/approve-request/0.2/payload";
 import { TYPE_URI as APPROVE_REQUEST_0_1 } from "@openvtc/trust-tasks/auth/step-up/approve-request/0.1/payload";
 
@@ -193,6 +194,20 @@ export interface StepUpApproveResponsePayload {
   deniedReason?: string;
 }
 
+/**
+ * Which acknowledgement vocabulary the relying party can answer in.
+ *
+ * **Not a preference — a property of the party being answered.** A response
+ * document's `type` is the request's `type` plus `#response`, so this decides
+ * what the RP is *allowed to say back*. `0.3` adds `recorded`, the honest answer
+ * for an approval bound to one operation rather than to the session.
+ *
+ * Sending `0.3` to a relying party that does not know it is refused as an
+ * unsupported type — which takes out step-up for that party entirely — so this
+ * is per-RP and never a global default.
+ */
+export type ApproveResponseVersion = "0.2" | "0.3";
+
 export interface BuildStepUpApprovalArgs {
   /** The wallet's Ed25519 signing identity — its `did` is the response
    *  `subject`/`issuer` and its `kid` the proof's `verificationMethod`. It
@@ -207,12 +222,30 @@ export interface BuildStepUpApprovalArgs {
   approved: boolean;
   /** Human-readable rationale, attached when the user denies. */
   deniedReason?: string;
+  /**
+   * The version this relying party can answer in. **Required, deliberately.**
+   *
+   * This wallet speaks to two relying parties with different capabilities — the
+   * VTA, which accepts `0.3`, and the did-hosting control plane, which does not
+   * — and there is no default that is right for both. An optional field would
+   * make the next relying party added inherit whichever answer happened to be
+   * the default, and both directions of that mistake are silent: too low and
+   * the approval needlessly elevates a session, too high and every step-up
+   * against that party is refused.
+   *
+   * The same reasoning as `SigningIdentity` being a required channel input:
+   * a call that could omit it is a call that gets it wrong by not thinking.
+   */
+  responseVersion: ApproveResponseVersion;
 }
 
 /**
- * Build and sign the `auth/step-up/approve-response/0.2` Trust-Task document.
- * The DI proof (`eddsa-jcs-2022`, `proofPurpose: assertionMethod`) over the
- * subject key is what the RP verifies to elevate the session.
+ * Build and sign an `auth/step-up/approve-response` Trust-Task document, in the
+ * version `responseVersion` names. The DI proof (`eddsa-jcs-2022`,
+ * `proofPurpose: assertionMethod`) over the subject key is what the RP verifies.
+ *
+ * The payload is identical across `0.2` and `0.3`; only the acknowledgement the
+ * RP may return differs, which is why the version rides on the request.
  */
 export async function buildStepUpApproval(
   args: BuildStepUpApprovalArgs,
@@ -228,7 +261,7 @@ export async function buildStepUpApproval(
 
   const document: TrustTask<StepUpApproveResponsePayload> & { proof?: unknown } = {
     id: globalThis.crypto.randomUUID(),
-    type: MSG_APPROVE_RESPONSE,
+    type: args.responseVersion === "0.3" ? MSG_APPROVE_RESPONSE_0_3 : MSG_APPROVE_RESPONSE_0_2,
     issuer: args.signing.did,
     recipient: args.rpDid,
     payload,

@@ -203,13 +203,21 @@ export async function performStepUpVta(
   }
   mark("user consent");
 
-  // 4. Sign the approve-response/0.2 locally (holder-self-signs — no VTA
+  // 4. Sign the approve-response locally (holder-self-signs — no VTA
   //    round-trip). Every echoed field comes from the *verified* payload.
+  //
+  //    **0.2, and it stays 0.2 until the control plane moves.** This flow
+  //    answers the did-hosting control plane, not the VTA. `recorded` is a 0.3
+  //    member and the VTA is the party that learned it; sending 0.3 here would
+  //    be refused as an unsupported type and would take out login elevation
+  //    entirely. Nothing on this path binds an approval to a single operation,
+  //    so there is nothing 0.3 would buy it either.
   const approval = await buildStepUpApproval({
     signing: args.signing,
     rpDid: args.rpDid,
     request: verified.request,
     approved: true,
+    responseVersion: "0.2",
   });
   mark("sign approval");
 
