@@ -236,15 +236,28 @@ type Mood = "plain" | "self" | "down" | "up" | "dim";
  */
 function cardStyle(mood: Mood, extra?: React.CSSProperties, stripe?: string): React.CSSProperties {
   const lit = mood === "down" || mood === "up" ? FLOW_COLOUR[mood] : null;
+  // **The selection outranks everything it reaches, visually.**
+  //
+  // Both used to wear a coloured border, so selecting a persona lit its face,
+  // its attributes and its context in the same treatment as the row that had
+  // been clicked — a dozen outlined boxes and no way to tell which one was the
+  // question. "I clicked on the persona DID, but how can you tell?"
+  //
+  // So the two states stop competing: a reached card is a *wash* with the
+  // ordinary border, and only the selection carries a ring. One outline on the
+  // screen, and it is always the thing you pressed.
   const ring =
     mood === "self"
-      ? { border: `2px solid ${c.accent}`, background: c.surface }
+      ? { border: `2px solid ${c.accent}`, background: c.accentSoft }
       : lit
-        ? { border: `1px solid ${lit.edge}`, background: lit.wash }
+        ? { border: `1px solid ${c.line}`, background: lit.wash }
         : { border: `1px solid ${c.line}`, background: c.surface };
   const shadows = [
     stripe ? `inset 3px 0 0 ${stripe}` : null,
-    mood === "self" ? `0 0 0 4px ${c.accentSoft}` : null,
+    // Two rings rather than one: a hairline of the page's own ground, then the
+    // accent. It reads as lifted off the band at any zoom, where a single soft
+    // halo disappears against a card that is already tinted.
+    mood === "self" ? `0 0 0 2px ${c.ground}, 0 0 0 5px ${c.accent}` : null,
   ].filter(Boolean);
   return {
     borderRadius: "var(--w-r-md)",
@@ -553,8 +566,15 @@ export function IdentityMap({
       <div ref={stage} style={{ position: "relative", display: "grid", gap: 26 }} onClick={(e) => {
         if (e.target === e.currentTarget) setSelection(null);
       }}>
+        {/* Behind the cards, not over them.
+            The SVG is positioned and the bands are not, so the SVG won a
+            stacking contest nobody entered it into: every edge was drawn
+            *across* the boxes it connects, through the type and the value. The
+            bands become positioned with a higher `zIndex` below, which is the
+            whole fix — an edge that disappears under a card reads as going
+            behind it, which is what it does. */}
         <svg
-          style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none", overflow: "visible" }}
+          style={{ position: "absolute", left: 0, top: 0, zIndex: 0, pointerEvents: "none", overflow: "visible" }}
           width={size.w}
           height={size.h}
           fill="none"
@@ -571,7 +591,7 @@ export function IdentityMap({
         </svg>
 
         {/* ── Attributes ── */}
-        <section style={{ display: "grid", gap: 10 }}>
+        <section style={{ position: "relative", zIndex: 1, display: "grid", gap: 10 }}>
           <BandLabel text="Attributes" sub="yours alone — nothing below can read these" />
           <div style={{ display: "grid", gap: 16 }}>
             {grouped.map(({ family, members }) => {
@@ -612,7 +632,16 @@ export function IdentityMap({
                               own — and a *Show* that scrolled out of a card clipped to
                               one line would be a control nobody could press. */}
                           <div style={{ display: "flex", alignItems: "baseline", gap: 5, minWidth: 0, fontSize: t.base, fontWeight: 600 }}>
-                            {f.label && (
+                            {/* The label steps aside when the agent sent no
+                                value. "Singapore · with your agent" does not
+                                fit a 222px card and truncated to "Singapore ·
+                                with y…", losing the half that says what to do
+                                about it. The label is the holder's own note and
+                                the type above already names the attribute, so
+                                on a card holding nothing the sentence that
+                                matters is the one about where the value is. It
+                                returns the moment the value does. */}
+                            {f.label && f.value !== undefined && (
                               <span style={{ color: c.muted, whiteSpace: "nowrap", flexShrink: 0 }}>{f.label} ·</span>
                             )}
                             <AttributeValue registry={registry}
@@ -642,7 +671,7 @@ export function IdentityMap({
         </section>
 
         {/* ── Faces ── */}
-        <section style={{ display: "grid", gap: 10 }}>
+        <section style={{ position: "relative", zIndex: 1, display: "grid", gap: 10 }}>
           <BandLabel text="Faces" sub="which attributes you show together" />
           <div style={{ display: "flex", flexWrap: "wrap", gap: 14, justifyContent: "center" }}>
             {graph.faces.map((face) => {
@@ -694,7 +723,7 @@ export function IdentityMap({
         </section>
 
         {/* ── The line ── */}
-        <div style={{ position: "relative", height: 1, borderTop: `1px dashed ${c.faint}`, margin: "4px 0" }}>
+        <div style={{ position: "relative", zIndex: 1, height: 1, borderTop: `1px dashed ${c.faint}`, margin: "4px 0" }}>
           <span style={{ position: "absolute", right: 0, top: -12, display: "inline-flex", alignItems: "center", gap: 7, padding: "3px 10px", borderRadius: 999, background: c.ground, border: `1px solid ${c.line}`, fontSize: t.xs, color: c.muted, fontWeight: 600 }}>
             <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v11M3.5 8.5 8 13l4.5-4.5" /></svg>
             Copies go down. Nothing reads up.
@@ -702,7 +731,7 @@ export function IdentityMap({
         </div>
 
         {/* ── Contexts ── */}
-        <section style={{ display: "grid", gap: 10 }}>
+        <section style={{ position: "relative", zIndex: 1, display: "grid", gap: 10 }}>
           <BandLabel
             text="Contexts"
             sub="where you are known, and as whom"
@@ -754,8 +783,14 @@ export function IdentityMap({
                       {ctx.personas.map((p) => {
                         const key = personaKey(ctx.id, p.did);
                         const pFlow = flowOf(reach, "persona", key);
+                        // Same hierarchy as the cards: reached is a wash, and
+                        // only the selection wears a ring. This row is the one
+                        // a person clicks most — it is what "who am I in this
+                        // context" is asked of — so it is the one that most
+                        // needs to look pressed.
                         const wash = pFlow === "self" ? c.accentSoft : pFlow ? FLOW_COLOUR[pFlow].wash : c.raised;
-                        const edge = pFlow === "self" ? c.accent : pFlow ? FLOW_COLOUR[pFlow].edge : c.line;
+                        const edge = pFlow === "self" ? c.accent : c.line;
+                        const ring = pFlow === "self" ? `0 0 0 2px ${c.ground}, 0 0 0 5px ${c.accent}` : undefined;
                         const linked = showLinks && p.faceId !== null && linkedFaces.has(p.faceId);
                         return (
                           <div
@@ -765,7 +800,7 @@ export function IdentityMap({
                               e.stopPropagation();
                               select({ kind: "persona", contextId: ctx.id, did: p.did });
                             }}
-                            style={{ display: "grid", gap: 3, padding: "6px 8px", borderRadius: "var(--w-r-sm)", background: wash, border: `1px solid ${edge}`, cursor: "pointer" }}
+                            style={{ display: "grid", gap: 3, padding: "6px 8px", borderRadius: "var(--w-r-sm)", background: wash, border: `${pFlow === "self" ? 2 : 1}px solid ${edge}`, ...(ring ? { boxShadow: ring } : {}), cursor: "pointer" }}
                           >
                             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                               <span style={{ fontSize: t.sm, fontWeight: 640 }}>{personaLabel(p.did)}</span>
