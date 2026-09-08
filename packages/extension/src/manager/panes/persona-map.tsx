@@ -37,13 +37,19 @@ import { formatInstant } from "../format.js";
 import type { Authority, Parties } from "../use-vta.js";
 import {
   attributeReach,
+  flowOf,
   personaKey,
   reachOf,
+  standingOf,
+  tallyContexts,
   type AttributeNode,
+  type ContextTally,
+  type Flow,
   type IdentityGraph,
   type PersonaNode,
   type Selection,
 } from "../identity-graph.js";
+import { familyOf, familyStyle, FAMILY_ORDER, type Family } from "../attribute-family.js";
 import {
   AttributeEditor,
   BindingForm,
@@ -93,6 +99,24 @@ function personaLabel(did: string): string {
   const host = parts.find((p) => p.role === "host")?.text;
   if (host) return host;
   return did.length > 22 ? `${did.slice(0, 22)}…` : did;
+}
+
+/**
+ * The header's account of the contexts, which has to be exactly that: every
+ * context, counted once, under one standing.
+ *
+ * It used to say "known in 1 of 12" while the band below drew two cards and the
+ * fold claimed ten — three numbers from three different tests, one of which
+ * quietly denied a card the reader could see. Every clause here comes from
+ * `tallyContexts`, so they cannot disagree, and the clauses that are zero are
+ * left out rather than printed as an absence nobody asked about.
+ */
+function standingWords(tally: ContextTally): string {
+  const parts = [`known in ${tally.known}`];
+  if (tally.identified > 0) parts.push(`an identifier in ${tally.identified}`);
+  if (tally.unreadable > 0) parts.push(`${tally.unreadable} unreadable`);
+  parts.push(`absent from ${tally.absent}`);
+  return parts.join(" · ");
 }
 
 function staleWords(reason: string | undefined): string {
@@ -165,34 +189,82 @@ function curve(from: Box, to: Box): string {
 
 // ── Cards ───────────────────────────────────────────────────────────────────
 
-type Mood = "plain" | "lit" | "selected" | "dim";
+/**
+ * The two directions, in colour.
+ *
+ * `reachOf` has always known that a selection reaches asymmetrically — down
+ * from an attribute to where copies of it went, up from a context to what it
+ * holds — and the map used to paint both in one accent, which told a reader
+ * *that* things were connected and left the direction to be worked out from
+ * the layout. Two hues say it outright.
+ *
+ * Down borrows `--m-act-data`, which the contexts band already wears: a
+ * downward path is coloured by where it ends, so the hue is the destination
+ * rather than a fifth thing to learn. Up keeps the accent. Neither is a
+ * semantic colour — `--w-ok` / `--w-warn` / `--w-danger` still mean the only
+ * things colour means here — and the words on the cards say the same thing
+ * without them.
+ */
+const FLOW_COLOUR: Record<"down" | "up", { edge: string; wash: string }> = {
+  down: { edge: "var(--m-act-data)", wash: "var(--m-act-data-soft)" },
+  up: { edge: c.accent, wash: c.accentSoft },
+};
 
-function cardStyle(mood: Mood, extra?: React.CSSProperties): React.CSSProperties {
+/**
+ * An edge is lit only when both of its ends are, and it takes its colour from
+ * the end the eye travelled *to* — the one that is not the selection. A dark
+ * end means the edge is not on the path at all, whatever else its ends happen
+ * to be lit by.
+ */
+function edgeFlow(from: Flow | null, to: Flow | null): "down" | "up" | null {
+  if (!from || !to) return null;
+  const far = from === "self" ? to : from;
+  return far === "self" ? "down" : far;
+}
+
+type Mood = "plain" | "self" | "down" | "up" | "dim";
+
+/**
+ * `stripe` is the family colour, drawn as an inset shadow rather than a
+ * `borderLeft`. Two reasons, and the second is the one that bites: the border
+ * is already carrying selection and reach, so a left border in a third colour
+ * would break that channel's own rule — and React warns (correctly) about a
+ * style object that sets the `border` shorthand on one render and `borderLeft`
+ * on another, which is exactly what a mood change does.
+ */
+function cardStyle(mood: Mood, extra?: React.CSSProperties, stripe?: string): React.CSSProperties {
+  const lit = mood === "down" || mood === "up" ? FLOW_COLOUR[mood] : null;
   const ring =
-    mood === "selected"
-      ? { border: `2px solid ${c.accent}`, boxShadow: `0 0 0 4px ${c.accentSoft}` }
-      : mood === "lit"
-        ? { border: `1px solid ${c.accent}` }
-        : { border: `1px solid ${c.line}` };
+    mood === "self"
+      ? { border: `2px solid ${c.accent}`, background: c.surface }
+      : lit
+        ? { border: `1px solid ${lit.edge}`, background: lit.wash }
+        : { border: `1px solid ${c.line}`, background: c.surface };
+  const shadows = [
+    stripe ? `inset 3px 0 0 ${stripe}` : null,
+    mood === "self" ? `0 0 0 4px ${c.accentSoft}` : null,
+  ].filter(Boolean);
   return {
-    background: c.surface,
     borderRadius: "var(--w-r-md)",
-    padding: "10px 12px",
+    padding: stripe ? "10px 12px 10px 15px" : "10px 12px",
+    ...(shadows.length > 0 ? { boxShadow: shadows.join(", ") } : {}),
     display: "flex",
     flexDirection: "column",
     gap: 4,
     cursor: "pointer",
     opacity: mood === "dim" ? 0.45 : 1,
-    transition: "opacity 120ms ease, border-color 120ms ease",
+    transition: "opacity 120ms ease, border-color 120ms ease, background 120ms ease",
     boxSizing: "border-box",
     ...ring,
     ...extra,
   };
 }
 
-function moodOf(selected: boolean, lit: boolean, anySelection: boolean): Mood {
-  if (selected) return "selected";
-  if (lit) return "lit";
+/** A node's mood follows its flow exactly: the selection itself, the two
+ *  directions, or dimmed because something else is selected. */
+function moodOf(flow: Flow | null, anySelection: boolean): Mood {
+  if (flow === "self") return "self";
+  if (flow) return flow;
   return anySelection ? "dim" : "plain";
 }
 
@@ -313,19 +385,39 @@ export function IdentityMap({
   // is not that, and on an agent with a dozen contexts eleven cards saying
   // "nobody" drown the one that matters. So the empty ones fold into a single
   // row unless asked for — but a context the agent would not answer for stays
-  // visible, because "could not ask" is not "nobody is known here".
-  const isKnown = (ctx: (typeof graph.contexts)[number]) => ctx.personas.length > 0 || ctx.unreadable !== undefined;
-  const knownContexts = graph.contexts.filter(isKnown);
-  const emptyContexts = graph.contexts.filter((ctx) => !isKnown(ctx));
-  const shownContexts = showEmpty ? graph.contexts : knownContexts;
+  // visible, because "could not ask" is not "nobody is known here", and one
+  // holding an unbound persona stays visible too, because "knows an identifier
+  // of yours" is not that either.
+  //
+  // Which is which is `standingOf`, in the model with tests, and the header
+  // below counts the same predicate. Two tests for one question is how the
+  // arithmetic came apart last time.
+  const presentContexts = graph.contexts.filter((ctx) => standingOf(ctx) !== "absent");
+  const emptyContexts = graph.contexts.filter((ctx) => standingOf(ctx) === "absent");
+  const shownContexts = showEmpty ? graph.contexts : presentContexts;
 
   const stage = useRef<HTMLDivElement | null>(null);
   const { boxes, size, register } = useBoxes(stage, [graph, editing, selection?.kind]);
 
   const reach = useMemo(() => reachOf(graph, selection), [graph, selection]);
+  // Grouped rather than one long row: see `attribute-family.ts` for what a
+  // family is and why only the registry's own roots get one. A family with no
+  // members draws no heading — the point is the shape of *this* pool, not a
+  // checklist of the vocabulary.
+  const grouped = useMemo(() => {
+    const byFamily = new Map<Family, AttributeNode[]>();
+    for (const a of graph.attributes) {
+      const family = familyOf(a.type);
+      byFamily.set(family, [...(byFamily.get(family) ?? []), a]);
+    }
+    return FAMILY_ORDER.filter((f) => byFamily.has(f)).map((family) => ({
+      family,
+      members: byFamily.get(family)!,
+    }));
+  }, [graph.attributes]);
   const any = selection !== null;
   const linkedFaces = useMemo(() => new Set(graph.links.map((l) => l.faceId)), [graph.links]);
-  const known = graph.contexts.filter((ctx) => ctx.personas.some((p) => p.faceId)).length;
+  const tally = tallyContexts(graph);
 
   const select = (next: Selection) =>
     setSelection((cur) => (cur && JSON.stringify(cur) === JSON.stringify(next) ? null : next));
@@ -355,7 +447,7 @@ export function IdentityMap({
 
   // ── edges ──
   const edges = useMemo(() => {
-    const out: { d: string; kind: "attribute" | "wear" | "link"; lit: boolean }[] = [];
+    const out: { d: string; kind: "attribute" | "wear" | "link"; flow: "down" | "up" | null }[] = [];
     for (const face of graph.faces) {
       const fb = boxes.get(`face:${face.id}`);
       if (!fb) continue;
@@ -365,19 +457,20 @@ export function IdentityMap({
         out.push({
           d: curve(ab, fb),
           kind: "attribute",
-          lit: reach.attributeIds.has(attributeId) && reach.faceIds.has(face.id),
+          flow: edgeFlow(flowOf(reach, "attribute", attributeId), flowOf(reach, "face", face.id)),
         });
       }
       for (const ctx of graph.contexts) {
         for (const p of ctx.personas) {
           if (p.faceId !== face.id) continue;
-          const pb = boxes.get(`persona:${personaKey(ctx.id, p.did)}`);
+          const key = personaKey(ctx.id, p.did);
+          const pb = boxes.get(`persona:${key}`);
           if (!pb) continue;
           const isLink = showLinks && linkedFaces.has(face.id);
           out.push({
             d: curve(fb, pb),
             kind: isLink ? "link" : "wear",
-            lit: reach.faceIds.has(face.id) && reach.personaKeys.has(personaKey(ctx.id, p.did)),
+            flow: edgeFlow(flowOf(reach, "face", face.id), flowOf(reach, "persona", key)),
           });
         }
       }
@@ -385,8 +478,11 @@ export function IdentityMap({
     return out;
   }, [graph, boxes, reach, showLinks, linkedFaces]);
 
+  // An unlit edge is now neutral rather than teal. Teal used to mean "a face is
+  // worn here" at rest and "this is the path you selected" when lit, which is
+  // one hue doing two jobs; at rest the line itself already says it.
   const stroke = (e: (typeof edges)[number]) =>
-    e.kind === "link" ? c.danger : e.lit ? c.accent : e.kind === "wear" ? "var(--m-act-data)" : c.line;
+    e.kind === "link" ? c.danger : e.flow ? FLOW_COLOUR[e.flow].edge : c.line;
 
   return (
     <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
@@ -402,9 +498,7 @@ export function IdentityMap({
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <Pill tone="off">{graph.attributes.length} attribute{graph.attributes.length === 1 ? "" : "s"}</Pill>
           <Pill tone="off">{graph.faces.length} face{graph.faces.length === 1 ? "" : "s"}</Pill>
-          <Pill tone={known > 0 ? "accent" : "off"}>
-            known in {known} of {graph.contexts.length} context{graph.contexts.length === 1 ? "" : "s"}
-          </Pill>
+          <Pill tone={tally.known > 0 ? "accent" : "off"}>{standingWords(tally)}</Pill>
           {graph.links.length > 0 && (
             <Pill tone="danger">{graph.links.length} link{graph.links.length === 1 ? "" : "s"}</Pill>
           )}
@@ -428,6 +522,22 @@ export function IdentityMap({
       )}
       {denied && <Note tone="warn">{denied}</Note>}
 
+      {/* The key appears with the first selection and not before: a legend for
+          colours that are not yet on screen is noise, and the two hues only
+          exist while something is selected. */}
+      {any && (
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center", fontSize: t.sm, color: c.muted }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+            <span style={{ width: 22, height: 3, borderRadius: 2, background: FLOW_COLOUR.down.edge }} />
+            goes down — a copy of this leaves you
+          </span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+            <span style={{ width: 22, height: 3, borderRadius: 2, background: FLOW_COLOUR.up.edge }} />
+            comes up — what that context holds of yours
+          </span>
+        </div>
+      )}
+
       <div ref={stage} style={{ position: "relative", display: "grid", gap: 26 }} onClick={(e) => {
         if (e.target === e.currentTarget) setSelection(null);
       }}>
@@ -437,59 +547,83 @@ export function IdentityMap({
           height={size.h}
           fill="none"
         >
-          {edges.filter((e) => !e.lit && e.kind !== "link").map((e, i) => (
+          {edges.filter((e) => !e.flow && e.kind !== "link").map((e, i) => (
             <path key={`u${i}`} d={e.d} stroke={stroke(e)} strokeWidth={1.5} opacity={any ? 0.5 : 1} />
           ))}
           {edges.filter((e) => e.kind === "link").map((e, i) => (
-            <path key={`l${i}`} d={e.d} stroke={c.danger} strokeWidth={2.5} strokeDasharray="6 5" opacity={any && !e.lit ? 0.5 : 1} />
+            <path key={`l${i}`} d={e.d} stroke={c.danger} strokeWidth={2.5} strokeDasharray="6 5" opacity={any && !e.flow ? 0.5 : 1} />
           ))}
-          {edges.filter((e) => e.lit && e.kind !== "link").map((e, i) => (
-            <path key={`t${i}`} d={e.d} stroke={c.accent} strokeWidth={2.5} />
+          {edges.filter((e) => e.flow && e.kind !== "link").map((e, i) => (
+            <path key={`t${i}`} d={e.d} stroke={stroke(e)} strokeWidth={2.5} />
           ))}
         </svg>
 
         {/* ── Attributes ── */}
         <section style={{ display: "grid", gap: 10 }}>
           <BandLabel text="Attributes" sub="yours alone — nothing below can read these" />
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
-            {graph.attributes.map((f) => {
-              const selected = selection?.kind === "attribute" && selection.id === f.id;
-              const prov = provenanceWords(f.provenance);
-              const linked = valueLinked.get(f.id);
+          <div style={{ display: "grid", gap: 16 }}>
+            {grouped.map(({ family, members }) => {
+              const fam = familyStyle(family);
               return (
-                <div
-                  key={f.id}
-                  ref={register(`attribute:${f.id}`)}
-                  onClick={() => select({ kind: "attribute", id: f.id })}
-                  style={cardStyle(moodOf(selected, reach.attributeIds.has(f.id), any), { width: 222, ...(f.stale ? { opacity: any && !reach.attributeIds.has(f.id) && !selected ? 0.35 : 0.72 } : {}) })}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted }}>{f.type}</span>
-                    {f.stale && <Pill tone="warn">{staleWords(f.staleReason)}</Pill>}
+                <div key={family} style={{ display: "grid", gap: 8 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 999, background: fam.hue, alignSelf: "center", flexShrink: 0 }} />
+                    <span style={{ fontSize: t.xs, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 650 }}>{fam.label}</span>
+                    <span style={{ fontSize: t.xs, color: c.faint }}>{fam.note}</span>
                   </div>
-                  {/* The label and the value are two spans rather than one
-                      string, because the value now carries a control of its
-                      own — and a *Show* that scrolled out of a card clipped to
-                      one line would be a control nobody could press. */}
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 5, minWidth: 0, fontSize: t.base, fontWeight: 600 }}>
-                    {f.label && (
-                      <span style={{ color: c.muted, whiteSpace: "nowrap", flexShrink: 0 }}>{f.label} ·</span>
-                    )}
-                    <FactValue
-                      type={f.type}
-                      value={f.value}
-                      style={{ minWidth: 0, overflow: "hidden" }}
-                      textStyle={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-                    />
-                  </div>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                    <Pill tone={prov.tone}>{prov.text}</Pill>
-                    {linked && <Pill tone="danger">{linked.severity === "high" ? "links" : "may link"}</Pill>}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 14 }}>
+                    {members.map((f) => {
+                      const flow = flowOf(reach, "attribute", f.id);
+                      const prov = provenanceWords(f.provenance);
+                      const linked = valueLinked.get(f.id);
+                      return (
+                        <div
+                          key={f.id}
+                          ref={register(`attribute:${f.id}`)}
+                          onClick={() => select({ kind: "attribute", id: f.id })}
+                          // The family stripe survives every mood, because which family
+                          // a value comes from does not change with what is selected —
+                          // and it is the only place a family hue touches a card, so
+                          // the border and the pills keep meaning what they meant.
+                          style={cardStyle(
+                            moodOf(flow, any),
+                            { width: 222, ...(f.stale ? { opacity: any && flow === null ? 0.35 : 0.72 } : {}) },
+                            fam.hue,
+                          )}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                            <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted }}>{f.type}</span>
+                            {f.stale && <Pill tone="warn">{staleWords(f.staleReason)}</Pill>}
+                          </div>
+                          {/* The label and the value are two spans rather than one
+                              string, because the value now carries a control of its
+                              own — and a *Show* that scrolled out of a card clipped to
+                              one line would be a control nobody could press. */}
+                          <div style={{ display: "flex", alignItems: "baseline", gap: 5, minWidth: 0, fontSize: t.base, fontWeight: 600 }}>
+                            {f.label && (
+                              <span style={{ color: c.muted, whiteSpace: "nowrap", flexShrink: 0 }}>{f.label} ·</span>
+                            )}
+                            <FactValue
+                              type={f.type}
+                              value={f.value}
+                              style={{ minWidth: 0, overflow: "hidden" }}
+                              textStyle={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                            />
+                          </div>
+                          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                            <Pill tone={prov.tone}>{prov.text}</Pill>
+                            {linked && <Pill tone="danger">{linked.severity === "high" ? "links" : "may link"}</Pill>}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               );
             })}
-            <AddTile label="+ Add an attribute" onClick={() => setEditing({ kind: "attribute" })} disabled={null} />
+            <div style={{ display: "flex" }}>
+              <AddTile label="+ Add an attribute" onClick={() => setEditing({ kind: "attribute" })} disabled={null} />
+            </div>
           </div>
         </section>
 
@@ -498,7 +632,6 @@ export function IdentityMap({
           <BandLabel text="Faces" sub="which attributes you show together" />
           <div style={{ display: "flex", flexWrap: "wrap", gap: 14, justifyContent: "center" }}>
             {graph.faces.map((face) => {
-              const selected = selection?.kind === "face" && selection.id === face.id;
               const wearers = graph.contexts.flatMap((ctx) => ctx.personas.filter((p) => p.faceId === face.id));
               const linked = linkedFaces.has(face.id);
               return (
@@ -506,18 +639,24 @@ export function IdentityMap({
                   key={face.id}
                   ref={register(`face:${face.id}`)}
                   onClick={() => select({ kind: "face", id: face.id })}
-                  style={cardStyle(moodOf(selected, reach.faceIds.has(face.id), any), { width: 330, padding: "12px 14px", gap: 8 })}
+                  style={cardStyle(moodOf(flowOf(reach, "face", face.id), any), { width: 330, padding: "12px 14px", gap: 8 })}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                     <span style={{ fontSize: t.base, fontWeight: 640 }}>{face.name}</span>
                     {linked && showLinks && <Pill tone="danger">links {wearers.length} personas</Pill>}
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {/* Each chip carries its attribute's family dot, which is
+                        what makes a face readable without opening it: four
+                        contact dots and a gated one is a different offer from
+                        five names, and the card can say so in the space it
+                        already has. */}
                     {face.attributeIds.map((id) => {
                       const attribute = graph.attributes.find((f) => f.id === id);
                       const lit = reach.attributeIds.has(id) && reach.faceIds.has(face.id);
                       return (
-                        <span key={id} style={{ fontFamily: font.mono, fontSize: t.xs, padding: "3px 8px", borderRadius: "var(--w-r-sm)", background: lit ? c.accentSoft : c.raised, color: lit ? c.accent : c.text, border: `1px solid ${lit ? c.accentSoft : c.line}` }}>
+                        <span key={id} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: font.mono, fontSize: t.xs, padding: "3px 8px", borderRadius: "var(--w-r-sm)", background: lit ? c.accentSoft : c.raised, color: lit ? c.accent : c.text, border: `1px solid ${lit ? c.accentSoft : c.line}` }}>
+                          <span style={{ width: 6, height: 6, borderRadius: 999, background: familyStyle(familyOf(attribute?.type ?? "")).hue, flexShrink: 0 }} />
                           {attribute?.type ?? id}
                         </span>
                       );
@@ -561,19 +700,19 @@ export function IdentityMap({
               ) : undefined
             }
           />
-          {knownContexts.length === 0 && !showEmpty && (
+          {presentContexts.length === 0 && !showEmpty && (
             <div style={{ fontSize: t.sm, color: c.faint, lineHeight: 1.55, padding: "6px 0" }}>
               You are not known anywhere yet. Nothing below the line holds a copy of anything.
             </div>
           )}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
             {shownContexts.map((ctx) => {
-              const selected = selection?.kind === "context" && selection.id === ctx.id;
+              const standing = standingOf(ctx);
               return (
                 <div
                   key={ctx.id}
                   onClick={() => select({ kind: "context", id: ctx.id })}
-                  style={cardStyle(moodOf(selected, reach.contextIds.has(ctx.id), any), { padding: "12px 14px", gap: 10, minHeight: 120 })}
+                  style={cardStyle(moodOf(flowOf(reach, "context", ctx.id), any), { padding: "12px 14px", gap: 10, minHeight: 120 })}
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ color: "var(--m-act-data)", display: "inline-flex" }}>
@@ -584,15 +723,25 @@ export function IdentityMap({
                   </div>
                   {ctx.unreadable ? (
                     <span style={{ fontSize: t.sm, color: c.warn }}>Your agent would not say who is known here — {ctx.unreadable}</span>
-                  ) : ctx.personas.length === 0 ? (
+                  ) : standing === "absent" ? (
                     <span style={{ fontSize: t.sm, color: c.faint }}>Nobody yet. This context knows nothing about you.</span>
                   ) : (
                     <div style={{ display: "grid", gap: 6 }}>
-                      <span style={{ fontSize: t.xs, color: c.faint, textTransform: "uppercase", letterSpacing: 0.4 }}>Known here as</span>
+                      {/* Two headings, because they are two different answers.
+                          A persona that wears nothing is still a persona: the
+                          context knows an identifier of the holder's and can
+                          address it, while holding none of their attributes.
+                          Calling that "known here as" overstates what left, and
+                          folding it in with the contexts that hold nothing
+                          hides an identifier the holder has out there. */}
+                      <span style={{ fontSize: t.xs, color: c.faint, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                        {standing === "identified" ? "An identifier only" : "Known here as"}
+                      </span>
                       {ctx.personas.map((p) => {
                         const key = personaKey(ctx.id, p.did);
-                        const pSelected = selection?.kind === "persona" && selection.contextId === ctx.id && selection.did === p.did;
-                        const lit = reach.personaKeys.has(key);
+                        const pFlow = flowOf(reach, "persona", key);
+                        const wash = pFlow === "self" ? c.accentSoft : pFlow ? FLOW_COLOUR[pFlow].wash : c.raised;
+                        const edge = pFlow === "self" ? c.accent : pFlow ? FLOW_COLOUR[pFlow].edge : c.line;
                         const linked = showLinks && p.faceId !== null && linkedFaces.has(p.faceId);
                         return (
                           <div
@@ -602,7 +751,7 @@ export function IdentityMap({
                               e.stopPropagation();
                               select({ kind: "persona", contextId: ctx.id, did: p.did });
                             }}
-                            style={{ display: "grid", gap: 3, padding: "6px 8px", borderRadius: "var(--w-r-sm)", background: pSelected || lit ? c.accentSoft : c.raised, border: `1px solid ${pSelected ? c.accent : lit ? c.accentSoft : c.line}`, cursor: "pointer" }}
+                            style={{ display: "grid", gap: 3, padding: "6px 8px", borderRadius: "var(--w-r-sm)", background: wash, border: `1px solid ${edge}`, cursor: "pointer" }}
                           >
                             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                               <span style={{ fontSize: t.sm, fontWeight: 640 }}>{personaLabel(p.did)}</span>
@@ -618,6 +767,11 @@ export function IdentityMap({
                         );
                       })}
                     </div>
+                  )}
+                  {standing === "identified" && (
+                    <span style={{ fontSize: t.sm, color: c.muted }}>
+                      This context can address that identifier. It holds nothing else of yours.
+                    </span>
                   )}
                   <div>
                     {/* A persona selected in this context is the one the

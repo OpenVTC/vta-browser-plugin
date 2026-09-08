@@ -12,8 +12,11 @@ import assert from "node:assert/strict";
 import {
   buildGraph,
   attributeReach,
+  flowOf,
   personaKey,
   reachOf,
+  standingOf,
+  tallyContexts,
   type ContextInput,
 } from "../src/manager/identity-graph.ts";
 
@@ -137,4 +140,79 @@ test("attributeReach says where an attribute goes in the words the strip uses", 
   assert.deepEqual(r.faces.map((f) => f.name), ["Developer"]);
   assert.deepEqual(r.contextIds.sort(), ["openvtc", "vta"]);
   assert.equal(r.wearers.length, 2);
+});
+
+// ── Which way the light travelled ───────────────────────────────────────────
+//
+// The map paints the two directions in two colours, so a wrong flow is a
+// picture that says a copy left the holder when a context merely holds one, or
+// the reverse. Every case below names the direction as well as the node,
+// because "lit" was what the pane used to know and it was not enough.
+
+test("selecting an attribute sends everything below it downwards", () => {
+  const r = reachOf(G, { kind: "attribute", id: "f-phone" });
+  assert.equal(flowOf(r, "attribute", "f-phone"), "self");
+  assert.equal(flowOf(r, "face", "F-dev"), "down");
+  assert.equal(flowOf(r, "persona", personaKey("openvtc", "did:a")), "down");
+  assert.equal(flowOf(r, "context", "openvtc"), "down");
+});
+
+test("selecting a context pulls everything above it upwards", () => {
+  const r = reachOf(G, { kind: "context", id: "openvtc" });
+  assert.equal(flowOf(r, "context", "openvtc"), "self");
+  assert.equal(flowOf(r, "persona", personaKey("openvtc", "did:a")), "up");
+  assert.equal(flowOf(r, "face", "F-dev"), "up");
+  assert.equal(flowOf(r, "attribute", "f-phone"), "up");
+});
+
+test("a face is the one selection that splits — up to its attributes, down to its wearers", () => {
+  const r = reachOf(G, { kind: "face", id: "F-dev" });
+  assert.equal(flowOf(r, "face", "F-dev"), "self");
+  assert.equal(flowOf(r, "attribute", "f-name"), "up");
+  assert.equal(flowOf(r, "persona", personaKey("vta", "did:b")), "down");
+  assert.equal(flowOf(r, "context", "vta"), "down");
+});
+
+test("a node nothing reaches has no flow at all", () => {
+  const r = reachOf(G, { kind: "attribute", id: "f-phone" });
+  assert.equal(flowOf(r, "attribute", "f-signal"), null, "not lit is not a direction");
+  assert.equal(flowOf(reachOf(G, null), "context", "openvtc"), null);
+});
+
+// ── One predicate for what a context is ─────────────────────────────────────
+
+test("a persona wearing nothing leaves its context identified, not known and not absent", () => {
+  // This is the vta card in the live console: the face was unbound, the
+  // persona record stayed, and `binding/list` keeps enumerating it. The
+  // context knows an identifier and holds no attributes — a third answer.
+  const g = buildGraph(ATTRS, FACES, [ctx("vta", [{ did: "did:c", faceId: null }])]);
+  assert.equal(standingOf(g.contexts[0]!), "identified");
+});
+
+test("every context is counted exactly once, so the header's numbers close", () => {
+  const g = buildGraph(ATTRS, FACES, [
+    ...CTXS,
+    { id: "dark", label: "dark", bindings: { ok: false, error: "refused" } },
+  ]);
+  const tally = tallyContexts(g);
+  assert.deepEqual(tally, { known: 2, identified: 0, absent: 1, unreadable: 1, total: 4 });
+  assert.equal(
+    tally.known + tally.identified + tally.absent + tally.unreadable,
+    tally.total,
+    "the band, the header and the fold all read this — they cannot be allowed to disagree",
+  );
+});
+
+test("a context holding one bound and one unbound persona is known, not identified", () => {
+  // `vta` in the fixture holds both. Whichever way it were counted twice, one
+  // of the two numbers on screen would be wrong.
+  assert.equal(standingOf(G.contexts.find((x) => x.id === "vta")!), "known");
+  assert.deepEqual(tallyContexts(G), { known: 2, identified: 0, absent: 1, unreadable: 0, total: 3 });
+});
+
+test("an unreadable context is never counted as absent", () => {
+  // "Could not ask" folded in with "holds nothing about you" is the one wrong
+  // answer this page must not give, and the tally is now where that is decided.
+  const g = buildGraph(ATTRS, FACES, [{ id: "dark", label: "dark", bindings: { ok: false, error: "refused" } }]);
+  assert.deepEqual(tallyContexts(g), { known: 0, identified: 0, absent: 0, unreadable: 1, total: 1 });
 });

@@ -427,3 +427,104 @@ test("a revealed value does not survive leaving the pane", async () => {
   assert.doesNotMatch(second.text(), /X1234567/, "coming back must not come back revealed");
   await second.unmount();
 });
+
+// ── The context that was denied and drawn at once ───────────────────────────
+//
+// The live console showed a card for a context holding an unbound persona,
+// under a band captioned "where you are known", while the header counted it as
+// nowhere and the fold row forgot it entirely: one of twelve, ten folded, two
+// drawn. Whichever number a reader trusted, one of the others was lying to
+// them, and the state underneath — a context that knows an identifier and
+// holds no attributes — had no words anywhere on the screen.
+
+const identified = (id: string, label: string, did: string) => ({
+  id,
+  label,
+  bindings: { ok: true as const, personas: [{ did, faceId: null, claimCount: 0 }] },
+});
+const knownAs = (id: string, label: string) => ({
+  id,
+  label,
+  bindings: {
+    ok: true as const,
+    personas: [{ did: "did:a", faceId: "p1", faceName: "Developer", claimCount: 1 }],
+  },
+});
+const DEV = face("p1", "Developer", ["f1"]);
+
+const map = (graph: ReturnType<typeof buildGraph>, profiles = [DEV]) =>
+  h(IdentityMap, {
+    parties: PARTIES,
+    authority: HOLDER,
+    graph,
+    attributes: FACTS,
+    profiles,
+    records: CONTEXTS,
+    history: [],
+    onChanged: () => {},
+  });
+
+test("a context holding an unbound persona is drawn as an identifier, not as knowing you", async () => {
+  const graph = buildGraph(FACTS, [DEV], [
+    knownAs("openvtc", "OpenVTC"),
+    identified("vta", "Verifiable Trust Agent", "did:webvh:x:webvh.storm.ws:glenn-vta"),
+  ]);
+  const a = agent({});
+  const ui = await render(map(graph), { chrome: { runtime: { sendMessage: a.sendMessage } } });
+  const text = ui.text();
+  assert.match(text, /An identifier only/, "the third state has words of its own");
+  assert.match(text, /Known here as/, "and the context that does know the holder keeps its own");
+  assert.match(text, /can address that identifier/);
+  await ui.unmount();
+});
+
+test("the header counts every context once, so its numbers close", async () => {
+  const graph = buildGraph(FACTS, [DEV], [
+    knownAs("openvtc", "OpenVTC"),
+    identified("vta", "Verifiable Trust Agent", "did:b"),
+    { id: "webvh", label: "webvh", bindings: { ok: true, personas: [] } },
+  ]);
+  const a = agent({});
+  const ui = await render(map(graph), { chrome: { runtime: { sendMessage: a.sendMessage } } });
+  const text = ui.text();
+  assert.match(text, /known in 1/);
+  assert.match(text, /an identifier in 1/);
+  assert.match(text, /absent from 1(?!\d)/);
+  // The header used to say one thing and the band another. The fold is the
+  // third voice, and it must agree with both.
+  assert.match(text, /Not known in 1 other context\b/);
+  assert.doesNotMatch(text, /known in 1 of 3/, "the old single-test count is what came apart");
+  await ui.unmount();
+});
+
+// ── Colour that says which way a copy went ──────────────────────────────────
+
+test("the direction key appears only once something is selected", async () => {
+  const graph = buildGraph(FACTS, [DEV], [knownAs("openvtc", "OpenVTC")]);
+  const a = agent({});
+  const ui = await render(map(graph), { chrome: { runtime: { sendMessage: a.sendMessage } } });
+  assert.doesNotMatch(ui.text(), /goes down/, "a key for colours nothing is wearing yet is noise");
+
+  // Selecting an attribute is what puts the two hues on screen.
+  const card = ui.byText("div", "name.legal");
+  assert.ok(card, "the attribute card is on the map");
+  await ui.click(card);
+  const text = ui.text();
+  assert.match(text, /goes down/);
+  assert.match(text, /comes up/);
+  await ui.unmount();
+});
+
+test("attributes are grouped under the family their claim type comes from", async () => {
+  // `name.legal` and `phone.mobile` are two different registry vocabularies and
+  // must not end up under one heading; the group's words come from the registry
+  // rather than from the spelling of the token.
+  const graph = buildGraph(FACTS, [], []);
+  const a = agent({});
+  const ui = await render(map(graph, []), { chrome: { runtime: { sendMessage: a.sendMessage } } });
+  const text = ui.text();
+  assert.match(text, /Who you are/);
+  assert.match(text, /How to reach you/);
+  assert.doesNotMatch(text, /Not in the registry/, "no unregistered attribute here, so no heading for one");
+  await ui.unmount();
+});

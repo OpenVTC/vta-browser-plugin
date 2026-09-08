@@ -127,6 +127,20 @@ const REGISTERED: Readonly<Record<string, ClaimTreatment>> = {
 };
 
 /**
+ * The first segment of every token the table above declares.
+ *
+ * Derived rather than written out, so it cannot drift from the table on a
+ * re-sync — a root that appears here without anyone editing this line is the
+ * registry having grown one, which is exactly what `attribute-family.ts` wants
+ * to be told about. It is the only thing outside this module that may ask what
+ * the registry *covers*: whether a token is known is a registry question,
+ * while what a family means on screen is a console one.
+ */
+export const REGISTERED_ROOTS: ReadonlySet<string> = new Set(
+  Object.keys(REGISTERED).map((token) => token.split(".")[0]!),
+);
+
+/**
  * How this type's values are treated — `CLAIM-TYPES.md` §4, minus the rule
  * this console cannot take part in.
  *
