@@ -51,6 +51,7 @@ import {
 } from "../identity-graph.js";
 import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 import { familyOf, familyStyle, FAMILY_ORDER, type Family } from "../attribute-family.js";
+import { unappliedClaimTypes } from "@openvtc/pnm-core/persona";
 import {
   AttributeEditor,
   BindingForm,
@@ -461,6 +462,13 @@ export function IdentityMap({
       members: byFamily.get(family)!,
     }));
   }, [graph.attributes]);
+  // The types this agent refused from its own file, as a set of tokens. The
+  // banner above the map names them; a card wearing one says so where the
+  // person is looking at the value it affects.
+  const unapplied = useMemo(
+    () => new Set(unappliedClaimTypes(registry).rejected.map((r) => r.type)),
+    [registry],
+  );
   const any = selection !== null;
   const linkedFaces = useMemo(() => new Set(graph.links.map((l) => l.faceId)), [graph.links]);
   const tally = tallyContexts(graph);
@@ -676,6 +684,13 @@ export function IdentityMap({
                           </div>
                           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                             <Pill tone={prov.tone}>{prov.text}</Pill>
+                            {/* Not a property of the value — a property of its
+                                *type*, which the agent declined to apply. Said
+                                here because this is the card whose masking is
+                                wrong as a result, and a banner at the top of a
+                                long page is easy to scroll past on the way to
+                                the thing it is about. */}
+                            {unapplied.has(f.type) && <Pill tone="danger">type not applied</Pill>}
                             {linked && <Pill tone="danger">{linked.severity === "high" ? "links" : "may link"}</Pill>}
                           </div>
                         </div>

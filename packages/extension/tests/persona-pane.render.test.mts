@@ -1116,3 +1116,109 @@ test("the same word in a different case is the same stutter", async () => {
   assert.doesNotMatch(ui.text(), /affinidi ·/i);
   await ui.unmount();
 });
+
+// ── When the agent could not apply its own claim types ─────────────────────
+//
+// A refused row is invisible from the outside: the token resolves from the core
+// table exactly as it would with no file at all. So the console has to say it,
+// and say it where somebody is looking — a fault whose only symptom is a value
+// being masked more than the operator intended is a fault nobody reports.
+
+const WITH_REJECTIONS = {
+  ...(REGISTRY as unknown as Record<string, unknown>),
+  ext: {
+    "org.openvtc.claim-types": {
+      rejected: [{ type: "profile.github", reason: "`profile github` is not a vocabulary token" }],
+    },
+  },
+} as never;
+
+test("the pane says which claim types the agent would not apply, and what it means", async () => {
+  const a = agent({
+    "persona/attribute/list/1.0": { attributes: FACTS },
+    "persona/profile/list/1.0": { profiles: [face("p1", "OSS Developer", ["f1"])] },
+    "persona/claim-types/list/1.0": WITH_REJECTIONS,
+    "persona/binding/list/1.0": { personas: [] },
+    "persona/disclosure/history/1.0": { disclosures: [] },
+  });
+  const ui = await render(
+    h(PersonaPane, { parties: PARTIES, authority: HOLDER, records: CONTEXTS }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.settle();
+  const text = ui.text();
+  assert.match(text, /could not apply 1 of its own claim type/);
+  assert.match(text, /profile\.github/);
+  assert.match(text, /not a vocabulary token/, "the agent's own reason, not a paraphrase");
+  assert.match(text, /treated as the most private kind/);
+  assert.match(text, /Fix or remove the declaration/);
+  await ui.unmount();
+});
+
+test("a file the agent could not read is a different sentence", async () => {
+  // Not "0 types were refused": nothing the deployment declared is in force,
+  // which is a bigger and differently-shaped fault.
+  const a = agent({
+    "persona/attribute/list/1.0": { attributes: FACTS },
+    "persona/profile/list/1.0": { profiles: [face("p1", "OSS Developer", ["f1"])] },
+    "persona/claim-types/list/1.0": {
+      ...(REGISTRY as unknown as Record<string, unknown>),
+      ext: { "org.openvtc.claim-types": { fileError: "/etc/vta/claim-types.json: No such file" } },
+    },
+    "persona/binding/list/1.0": { personas: [] },
+    "persona/disclosure/history/1.0": { disclosures: [] },
+  });
+  const ui = await render(
+    h(PersonaPane, { parties: PARTIES, authority: HOLDER, records: CONTEXTS }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.settle();
+  const text = ui.text();
+  assert.match(text, /could not read its claim-type file/);
+  assert.match(text, /None of the types this deployment declares are in force/);
+  assert.match(text, /No such file/);
+  await ui.unmount();
+});
+
+test("an agent with nothing to report says nothing", async () => {
+  // The state every existing deployment is in. A banner that appears when
+  // everything is fine is one people learn to scroll past.
+  const a = agent({
+    "persona/attribute/list/1.0": { attributes: FACTS },
+    "persona/profile/list/1.0": { profiles: [face("p1", "OSS Developer", ["f1"])] },
+    "persona/claim-types/list/1.0": REGISTRY,
+    "persona/binding/list/1.0": { personas: [] },
+    "persona/disclosure/history/1.0": { disclosures: [] },
+  });
+  const ui = await render(
+    h(PersonaPane, { parties: PARTIES, authority: HOLDER, records: CONTEXTS }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.settle();
+  assert.doesNotMatch(ui.text(), /could not apply/);
+  await ui.unmount();
+});
+
+test("the attribute using an unapplied type is marked on its own card", async () => {
+  // The banner is at the top of a long page. The card is where the value whose
+  // masking is wrong actually is.
+  const marked = [attribute("f9", "profile.github", "octocat")];
+  const a = agent({});
+  const ui = await render(
+    h(IdentityMap, {
+      parties: PARTIES,
+      authority: HOLDER,
+      registry: WITH_REJECTIONS,
+      graph: buildGraph(marked, [], []),
+      attributes: marked,
+      profiles: [],
+      records: CONTEXTS,
+      history: [],
+      onReveal: async () => "never asked",
+      onChanged: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  assert.match(ui.text(), /type not applied/);
+  await ui.unmount();
+});

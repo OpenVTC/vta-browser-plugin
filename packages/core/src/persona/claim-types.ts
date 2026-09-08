@@ -80,6 +80,64 @@ export async function listClaimTypes(
   );
 }
 
+/** The reverse-DNS `ext` key the agent reports its own configuration under —
+ *  kept in lockstep with `vta-service`'s `handle_claim_types_list`. */
+const EXT_KEY_CLAIM_TYPES = "org.openvtc.claim-types";
+
+/** One claim type this deployment declared and its agent would not apply. */
+export interface UnappliedClaimType {
+  /** The token as the operator's file spelled it. */
+  type: string;
+  /** The agent's reason, in its words. */
+  reason: string;
+}
+
+/** What the agent could not apply from its own configuration. */
+export interface UnappliedReport {
+  rejected: UnappliedClaimType[];
+  /** Set when the extension file itself could not be read — a different
+   *  sentence from a rejected row, because then *nothing* the deployment
+   *  declared is in force. */
+  fileError?: string;
+}
+
+/**
+ * What this agent could not apply from its own claim-type file.
+ *
+ * **Why a client reads this at all.** A refused row is otherwise invisible: the
+ * token resolves from the core table exactly as it would with no file, so an
+ * operator's intended tightening is quietly not in force and the screen looks
+ * completely normal. The agent reports its refusals precisely so somebody can
+ * be told, and this is the half that tells them.
+ *
+ * Read defensively, member by member, because it is `ext` — a vendor-namespaced
+ * object the schema does not constrain, so nothing upstream has checked its
+ * shape. A malformed report is dropped rather than rendered: a banner built
+ * from `undefined` is a second fault reported as the first.
+ */
+export function unappliedClaimTypes(registry: ClaimTypeRegistry | null): UnappliedReport {
+  const none: UnappliedReport = { rejected: [] };
+  const ext = registry?.ext as Record<string, unknown> | undefined;
+  const report = ext?.[EXT_KEY_CLAIM_TYPES];
+  if (!report || typeof report !== "object") return none;
+  const { rejected, fileError } = report as { rejected?: unknown; fileError?: unknown };
+
+  const rows = Array.isArray(rejected)
+    ? rejected.filter(
+        (r): r is UnappliedClaimType =>
+          typeof r === "object" &&
+          r !== null &&
+          typeof (r as { type?: unknown }).type === "string" &&
+          typeof (r as { reason?: unknown }).reason === "string",
+      )
+    : [];
+
+  return {
+    rejected: rows,
+    ...(typeof fileError === "string" ? { fileError } : {}),
+  };
+}
+
 /** The open extension namespace. `ClaimType` in `persona-record.schema.json`. */
 const EXTENSION_PREFIX = "x:";
 
