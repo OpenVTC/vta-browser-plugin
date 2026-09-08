@@ -80,10 +80,18 @@ export function Label({ children }: { children: React.ReactNode }) {
  * printing a passport number in full, and it would look like ordinary code.
  */
 function formatValue(value: unknown): { text: string; withheld: boolean } {
-  // "not on this page" rather than "not requested": the second described the
-  // request that was made, which is a fact about the console, while the person
-  // reading it wants to know where the value is. It is with their agent.
-  if (value === undefined) return { text: "not on this page", withheld: true };
+  // **"with your agent"**, because the two earlier attempts each described
+  // something other than what the reader needs.
+  //
+  // "not requested" described the request the console made — true, and about
+  // the console rather than the value. "not on this page" fixed that and
+  // introduced its own contradiction: pressing *Show* fetches the value and
+  // displays it, so the card had said the value was not here and then produced
+  // it, which reads as the screen not knowing its own mind.
+  //
+  // This says where the value is, and the control beside it says what pressing
+  // it does. Neither is a claim the next press disproves.
+  if (value === undefined) return { text: "with your agent", withheld: true };
   if (value === null) return { text: "null", withheld: false };
   if (typeof value === "string") return { text: value, withheld: false };
   if (typeof value === "number" || typeof value === "boolean") {

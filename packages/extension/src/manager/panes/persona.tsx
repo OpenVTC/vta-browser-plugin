@@ -151,9 +151,16 @@ export function PersonaPane({
     async () => loadContexts(parties, records),
     [parties.holder.did, parties.service.did, records.map((r) => r.id).join(" ")],
   );
-  // The claim-type table, read from THIS agent rather than compiled in. Loaded
-  // beside the pool because the same agent answers both: if this refuses there
-  // are no attributes to mask either, so it needs no failure branch of its own.
+  // The claim-type table, read from THIS agent rather than compiled in.
+  //
+  // **It needs a failure branch of its own, and the note here used to say it
+  // did not.** The reasoning was that the same agent answers both, so a refusal
+  // would take the attributes with it — but they are two different tasks, and an
+  // agent that lists a pool perfectly while declining or not implementing
+  // `persona/claim-types/list` is exactly what a live wallet hit. Every value
+  // then falls to the floor and is masked, which is the right *behaviour* and a
+  // silent one: the screen said the table did not declare these tokens, which is
+  // a claim about the tokens that nobody had checked.
   const registry = useAsync(
     async () => listClaimTypes(managerSender, parties),
     [parties.holder.did, parties.service.did],
@@ -168,7 +175,10 @@ export function PersonaPane({
     profiles.reload();
     contexts.reload();
     history.reload();
-  }, [attributes, profiles, contexts, history]);
+    // Reloaded with the rest. Left out, a table that failed once stayed failed
+    // for the life of the tab, and every value stayed masked with it.
+    registry.reload();
+  }, [attributes, profiles, contexts, history, registry]);
 
   // Guide or map — derived, with two flags that each fix a different way the
   // naive version is wrong.
@@ -240,6 +250,13 @@ export function PersonaPane({
     <div style={{ display: "grid", gap: 20, alignContent: "start" }}>
       {profiles.error && <LoadError what="your faces" error={profiles.error} />}
       {contexts.error && <LoadError what="who is known where" error={contexts.error} />}
+      {registry.error && (
+        <Note tone="warn">
+          Your agent would not give its claim-type table — {registry.error}. Until it does, every
+          value here is hidden as the most private kind, whatever kind it actually is. What you have
+          decided for yourself still stands.
+        </Note>
+      )}
       <IdentityMap registry={registry.data}
         parties={parties}
         authority={authority}

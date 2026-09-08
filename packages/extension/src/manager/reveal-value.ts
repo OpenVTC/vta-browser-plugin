@@ -53,7 +53,7 @@ export interface RevealTarget {
  * The plaintext of one attribute, asked for explicitly.
  *
  * Throws when the agent answers without it. That is deliberate: a caller that
- * received `undefined` would render "not on this page" again and the person
+ * received `undefined` would redraw "with your agent" again and the person
  * would press *Show* a second time, learning nothing. The two ways it happens
  * are worth telling apart in the message a surface shows — the attribute is
  * gone, or the agent declined to widen the listing — and both are the agent

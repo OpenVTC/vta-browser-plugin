@@ -69,7 +69,7 @@ test("the answer is matched by id, because a type can have siblings", async () =
 });
 
 test("an agent that still withholds the value is an error, not another blank", async () => {
-  // Returning `undefined` would redraw "not on this page" and the person would
+  // Returning `undefined` would redraw "with your agent" and the person would
   // press Show again, learning nothing about why.
   const s = sender([attr()]);
   await assert.rejects(

@@ -461,6 +461,26 @@ per §3.3; `maskedFact` gated on `high` anyway, so `email.*` (`normal` /
 `emailLocal`) was called hidden by `isSensitive` and drawn in full by the
 renderer — a promised *Show* button that never appeared.
 
+**A decision does not wait for the table.** `treatmentFor` applies the holder's
+`sensitivity` first, before it looks at the registry at all — §4 rule 1 makes
+their answer win, so where they gave one there is nothing to combine and nothing
+to wait for. It used to return the fail-closed floor for a missing registry
+*before* reading the override, which meant an agent that does not implement
+`persona/claim-types/list`, or failed to answer once, silently overruled every
+choice the holder had made about their own values. The mask axis still keeps a
+*declared* token's registry mask; with no table, whether the token is declared is
+unknowable and the holder is the only evidence there is.
+
+**A missing table is not a statement about a token.** `source: "unknown"` and the
+`unknown` family exist so the screen can say *your agent has not said* rather
+than *your agent's table does not declare these* — the second is a claim about
+the tokens that nobody checked, the same error as reporting an unreadable
+context as an empty one. `persona.tsx` surfaces `registry.error` in a note (it
+used to swallow it on the reasoning that "the same agent answers both", which is
+false: they are different tasks and a live wallet listed its pool perfectly while
+serving no table), and `reloadAll` reloads it — left out, one failure kept every
+value masked for the life of the tab.
+
 **An editor may not write a value it never held.** The pane lists without
 `includeSensitive` — the point of #194 — so an existing sensitive attribute
 reaches the editor with `value: undefined`, `rawValue` turns that into `""`, and

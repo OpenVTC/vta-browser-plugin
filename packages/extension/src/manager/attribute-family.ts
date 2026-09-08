@@ -41,13 +41,20 @@ import { registeredRoots, type ClaimTypeRegistry } from "@openvtc/pnm-core/perso
  *  fallback bucket to be tidied away: it is the answer for every token the
  *  registry does not declare, which today includes most of what a holder
  *  invents for themselves. */
-export type Family = "identity" | "contact" | "public" | "gated" | "unregistered";
+export type Family = "identity" | "contact" | "public" | "gated" | "unregistered" | "unknown";
 
 /** Top to bottom, the order the map lays the groups out in — roughly how
  *  closely a value identifies the person, so the row reads as a gradient rather
  *  than an alphabet. `unregistered` sits last because it is the group whose
  *  size is a question rather than a fact about the holder. */
-export const FAMILY_ORDER: readonly Family[] = ["identity", "contact", "public", "gated", "unregistered"];
+export const FAMILY_ORDER: readonly Family[] = [
+  "identity",
+  "contact",
+  "public",
+  "gated",
+  "unregistered",
+  "unknown",
+];
 
 export interface FamilyStyle {
   /** The group heading, in the vocabulary of `design-docs/persona-vocabulary.md`. */
@@ -89,6 +96,16 @@ const STYLES: Readonly<Record<Family, FamilyStyle>> = {
     note: "your agent's claim-type table does not declare these, so they are treated as the most private kind",
     hue: "var(--m-fam-unregistered)",
   },
+  unknown: {
+    // Not a family at all, and the words must not read as one. "Your agent's
+    // table does not declare these" is a statement *about the tokens*, and
+    // printing it when no table arrived says something nobody checked — the
+    // same error as reporting a context the agent would not answer for as a
+    // context that holds nothing.
+    label: "Your agent has not said",
+    note: "it did not answer with a claim-type table, so everything here is treated as the most private kind until it does",
+    hue: "var(--m-fam-unregistered)",
+  },
 };
 
 export function familyStyle(family: Family): FamilyStyle {
@@ -123,13 +140,15 @@ export const PLACED_ROOTS = [
 ] as const;
 
 export function familyOf(type: string, registry: ClaimTypeRegistry | null): Family {
+  // No table. Every token here is unclassified, but *why* it is unclassified is
+  // a different sentence and the heading says it out loud — `unknown` rather
+  // than `unregistered`. Colouring by a compiled-in guess would put a family on
+  // something this agent may never have declared, which is the copy this
+  // replaced; claiming the agent *declined* the token is the copy that replaced
+  // it and was wrong in the other direction.
+  if (!registry) return "unknown";
   if (type.startsWith("x:")) return "unregistered";
   const root = type.split(".")[0] ?? "";
-  // No table yet: `unregistered` is what a token nobody has classified gets,
-  // and while the registry is in flight that is exactly what every token is
-  // from here. Colouring by a compiled-in guess would put a family on
-  // something this agent may never have declared.
-  if (!registry) return "unregistered";
   if (!registeredRoots(registry).has(root)) return "unregistered";
   switch (root) {
     case "name":
