@@ -381,8 +381,18 @@ strip **no longer renders the value at all**: two `AttributeValue`s for one
 attribute is two *Show* buttons and two reveal states, and the second is always
 the one that stops being maintained.
 
+**The detail strip is pinned to the bottom of the pane.** Same defect, arrived
+at from the other side: the strip is the last element of a document two or three
+screens tall, so selecting anything put its *Edit* and *Delete* below the fold —
+clicking a face looked like it had merely highlighted something. `position:
+sticky` rather than `fixed`, because the strip belongs to the pane and must not
+hang over the rail or the context column. It is capped at `46vh` and scrolls,
+and it carries its own dismiss, since "click the card again" stopped being the
+only way out the moment it became persistent.
+
 **What breaks it:** rendering an editor inline again, or as a mode that replaces
-the list; dropping the anchor from `Editing`; re-adding a Worlds pane; reading
+the list; dropping the anchor from `Editing`; unpinning the strip, or letting it
+grow past its cap; re-adding a Worlds pane; reading
 `.faceIds` off a facet to build a move instead of `movePlan`; drawing a value on
 a closed card; or letting the strip render one again.
 

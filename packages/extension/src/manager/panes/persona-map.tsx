@@ -1334,6 +1334,7 @@ export function IdentityMap({
           showing={showing}
           onShow={setShowing}
           onEdit={setEditing}
+          onDismiss={() => setSelection(null)}
           onChanged={() => {
             setSelection(null);
             onChanged();
@@ -1461,6 +1462,7 @@ function DetailStrip({
   onShow,
   onEdit,
   onChanged,
+  onDismiss,
 }: {
   parties: Parties;
   authority: Authority | null;
@@ -1481,13 +1483,71 @@ function DetailStrip({
   onReveal: (target: RevealTarget) => Promise<unknown>;
   onShow: (s: "claims" | null) => void;
   onEdit: (e: Editing) => void;
+  /** Clear the selection. The strip is pinned now, so it needs a way out that
+   *  is not "find the card again and click it a second time". */
+  onDismiss: () => void;
   onChanged: () => void;
 }) {
   const denied = holderGate(authority);
   const labelOf = (id: string) => graph.contexts.find((x) => x.id === id)?.label ?? id;
 
+  /**
+   * The strip is **pinned to the bottom of the pane**, not left at the end of
+   * the page.
+   *
+   * It is the last element of a document two or three screens tall, so
+   * selecting anything used to put its detail — and, more to the point, its
+   * *Edit* and *Delete* buttons — below the fold. Clicking a face therefore
+   * looked like it had only highlighted something: the actions existed, on a
+   * screen nobody had scrolled to. That is the same defect the popovers fixed
+   * one layer up, arrived at from the other direction, and fixing it here fixes
+   * it for attributes, faces and contexts at once rather than by adding an
+   * Edit button to three kinds of card.
+   *
+   * `sticky` rather than `fixed`: it belongs to the pane, so it must not hang
+   * over the rail or the context column, and it must stop at the pane's own
+   * bottom edge rather than the window's.
+   *
+   * Capped and scrollable because a context with many personas makes a tall
+   * one, and a detail panel that eats the map it describes is worse than one
+   * that scrolls.
+   */
   const strip = (children: ReactNode) => (
-    <div style={{ background: c.surface, border: `1px solid ${c.line}`, borderLeft: `3px solid ${c.accent}`, borderRadius: "var(--w-r-md)", padding: "12px 16px", display: "grid", gap: 12 }}>
+    <div
+      style={{
+        position: "sticky",
+        bottom: 0,
+        zIndex: 5,
+        marginTop: 4,
+        background: c.surface,
+        border: `1px solid ${c.line}`,
+        borderLeft: `3px solid ${c.accent}`,
+        borderRadius: "var(--w-r-md)",
+        padding: "12px 16px",
+        display: "grid",
+        gap: 12,
+        maxHeight: "46vh",
+        overflowY: "auto",
+        boxShadow: "0 -6px 18px rgba(15,20,32,.10)",
+      }}
+    >
+      <button
+        onClick={onDismiss}
+        aria-label="Clear selection"
+        style={{
+          position: "absolute",
+          top: 8,
+          right: 10,
+          border: "none",
+          background: "transparent",
+          color: c.faint,
+          cursor: "pointer",
+          padding: 2,
+          lineHeight: 0,
+        }}
+      >
+        <Icon name="close" size={15} />
+      </button>
       {children}
     </div>
   );
