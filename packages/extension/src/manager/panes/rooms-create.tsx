@@ -31,7 +31,7 @@
 // the retry registers the room that was minted rather than minting a second one.
 
 import { useCallback, useEffect, useState } from "react";
-import { roomsCreate } from "@openvtc/pnm-core/rooms";
+import { roomsOwnerRegister } from "@openvtc/pnm-core/rooms";
 import { webvhDidCreate } from "@openvtc/pnm-core/webvh";
 import { webvhServerList } from "@openvtc/pnm-core/webvh";
 import type { WebvhServerRecord } from "@openvtc/pnm-core/webvh";
@@ -202,10 +202,16 @@ export function CreateRoom({
     // ── Half two: tell a host ──
     const ok = await runMutation(
       async () => {
-        await roomsCreate(managerSender, {
-          holder: parties.holder,
-          service: { did: hostDid.trim() },
+        // Through the agent, not straight at the host. This console addresses
+        // every task to the wallet's own VTA — its bridge carries a type and a
+        // payload and nothing else — so `rooms/create` composed here would name
+        // a host that never travels and land at an agent that does not serve it.
+        // `rooms/owner/register` is the same registration asked of the party
+        // that can make the call.
+        await roomsOwnerRegister(managerSender, {
+          ...parties,
           roomId: room!.did,
+          host: hostDid.trim(),
           ownerDid: parties.holder.did,
           visibility,
           ...(retentionDays.trim() ? { retentionDays: Number(retentionDays.trim()) } : {}),

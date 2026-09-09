@@ -704,6 +704,12 @@
       "uri": "https://trusttasks.org/spec/push/wake/0.2"
     },
     {
+      "uri": "https://trusttasks.org/spec/rooms/keys/backfill/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_BACKFILL_0_1"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/rooms/keys/chain/0.1",
       "consts": [
         "TASK_ROOMS_KEYS_CHAIN_0_1"
@@ -767,6 +773,12 @@
       "uri": "https://trusttasks.org/spec/rooms/owner/issue-membership/0.1",
       "consts": [
         "TASK_ROOMS_OWNER_ISSUE_MEMBERSHIP_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/owner/register/0.1",
+      "consts": [
+        "TASK_ROOMS_OWNER_REGISTER_0_1"
       ]
     },
     {

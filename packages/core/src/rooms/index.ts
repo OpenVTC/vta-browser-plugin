@@ -279,6 +279,54 @@ export async function roomsKeysPresent(
  * it is present too, so a set with a gap in it is reported here rather than at
  * the first record that will not open, which reads like corruption.
  */
+import {
+  TYPE_URI as KEYS_BACKFILL,
+  RESPONSE_TYPE_URI as KEYS_BACKFILL_RESPONSE,
+  type RoomsKeysBackfillPayload,
+  type RoomsKeysBackfillResponsePayload,
+} from "@openvtc/trust-tasks/rooms/keys/backfill/0.1/payload";
+
+/**
+ * Ask this agent to fetch the room's history from its host, and keep it.
+ *
+ * **The repair for a room that reads only from where its holder joined**, and
+ * the one call a surface can make for it. What it folds together is three hops
+ * — mint a presentation, ask the host for the rungs, store them — of which a
+ * browser can make the first and third and not the second. The agent makes all
+ * three, being the party with a channel to the host.
+ *
+ * `host` is named because nothing maps a room to one. A room is portable, so a
+ * host a surface remembered would go stale the moment the room moved; the agent
+ * holds key custody, which is a different fact. A member learned the host from
+ * whoever invited them.
+ *
+ * **Read the three numbers together.** `fetched` is what the host served,
+ * `stored` how many were new, and `earliestReadableEpoch` how far back the agent
+ * can now actually derive a key — which is the only one that answers the
+ * question. Rungs that arrive below a gap extend reach not at all, so a surface
+ * reporting `stored` alone would celebrate over a room that still cannot open a
+ * word of its history.
+ */
+export async function roomsKeysBackfill(
+  sender: TrustTaskSender,
+  params: RoomsCaller & { roomId: string; host: string; fromEpoch?: number; limit?: number },
+): Promise<RoomsKeysBackfillResponsePayload> {
+  const payload: RoomsKeysBackfillPayload = {
+    roomId: params.roomId,
+    host: params.host,
+    ...(params.fromEpoch !== undefined ? { fromEpoch: params.fromEpoch } : {}),
+    ...(params.limit !== undefined ? { limit: params.limit } : {}),
+  };
+  return call<RoomsKeysBackfillResponsePayload>(
+    sender,
+    { holder: params.holder, service: params.service },
+    KEYS_BACKFILL,
+    KEYS_BACKFILL_RESPONSE,
+    "rooms/keys/backfill/0.1",
+    payload,
+  );
+}
+
 export async function roomsKeysChain(
   sender: TrustTaskSender,
   params: RoomsCaller & { roomId: string; links: EpochLink[] },
@@ -503,6 +551,57 @@ export async function roomsEpochMint(
     EPOCH_MINT_RESPONSE,
     "rooms/epoch/mint/0.1",
     rest as unknown as RoomsEpochMintPayload,
+  );
+}
+
+import {
+  TYPE_URI as OWNER_REGISTER,
+  RESPONSE_TYPE_URI as OWNER_REGISTER_RESPONSE,
+  type RoomsOwnerRegisterPayload,
+  type RoomsOwnerRegisterResponsePayload,
+} from "@openvtc/trust-tasks/rooms/owner/register/0.1/payload";
+
+/**
+ * Ask this agent to register a room with a host.
+ *
+ * `rooms/create` performed by the agent, and the reason to prefer it over
+ * calling `roomsCreate` directly is not convenience: a surface that reaches only
+ * its own agent **cannot** call `roomsCreate` at all, because the recipient it
+ * names never travels. This one is addressed to the agent, which can.
+ *
+ * The order it belongs in is unchanged: the room's identity is minted first —
+ * a separate act this does not perform — and a host is then told about a room
+ * that already exists. A host that named the room would be a host the room could
+ * not leave.
+ *
+ * `host` in the response is what the agent actually reached, which is the value
+ * worth recording. Normally identical to what was asked for; where it is not, a
+ * caller storing its own request would hold a host it never spoke to.
+ */
+export async function roomsOwnerRegister(
+  sender: TrustTaskSender,
+  params: RoomsCaller & {
+    roomId: string;
+    host: string;
+    visibility: "open" | "attributed" | "private";
+    ownerDid?: string;
+    retentionDays?: number;
+  },
+): Promise<RoomsOwnerRegisterResponsePayload> {
+  const payload = {
+    roomId: params.roomId,
+    host: params.host,
+    visibility: params.visibility,
+    ...(params.ownerDid ? { ownerDid: params.ownerDid } : {}),
+    ...(params.retentionDays !== undefined ? { retentionDays: params.retentionDays } : {}),
+  } as RoomsOwnerRegisterPayload;
+  return call<RoomsOwnerRegisterResponsePayload>(
+    sender,
+    { holder: params.holder, service: params.service },
+    OWNER_REGISTER,
+    OWNER_REGISTER_RESPONSE,
+    "rooms/owner/register/0.1",
+    payload,
   );
 }
 
