@@ -21,6 +21,8 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode
 import {
   personaAttributeDelete,
   personaCorrelationAnalyze,
+  personaFacetPut,
+  personaFacetDelete,
   personaProfileList,
   type CorrelationFinding,
   type DisclosureRecord,
@@ -52,6 +54,8 @@ import {
 import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 import type { PoolFacet } from "@openvtc/pnm-core/admin";
 import { familyOf, familyStyle, FAMILY_ORDER, type Family } from "../attribute-family.js";
+import { worldHue } from "../world-colour.js";
+import { worldsOfAttribute, worldOfFace, movePlan } from "../world-model.js";
 import { rankFindings, tallyCrossings, crossingWords, type RankedFinding } from "../correlation-model.js";
 import { provenanceWords, labelSaysSomethingElse, staleWords } from "../attribute-words.js";
 import { unappliedClaimTypes } from "@openvtc/pnm-core/persona";
@@ -65,7 +69,10 @@ import {
   ResolvedProfile,
 } from "./persona-editors.js";
 import { holderGate } from "../holder-gate.js";
-import { isSensitiveFor } from "../claim-sensitivity.js";
+import { Popover } from "../popover.js";
+import { WorldEditor } from "./worlds.js";
+import { Icon } from "../icons.js";
+import { isSensitiveFor, maskedValue } from "../claim-sensitivity.js";
 import type { RevealTarget } from "../reveal-value.js";
 
 // ── Words for what the agent knows ──────────────────────────────────────────
@@ -249,6 +256,30 @@ function cardStyle(mood: Mood, extra?: React.CSSProperties, stripe?: string): Re
   };
 }
 
+/**
+ * What a *closed* attribute card says instead of its value.
+ *
+ * Three states, and they are three because collapsing any two of them tells a
+ * lie the holder cannot detect:
+ *
+ *   "held back"  the agent sent no value — the pane lists without
+ *                `includeSensitive`, so this is the normal state of every
+ *                sensitive attribute, and *Show* is a real request for one.
+ *   "hidden"     a value is in hand and the mask covers it on screen.
+ *   "shown"      a value is in hand and the registry does not mask it, so
+ *                opening the card puts it on screen.
+ *
+ * The first two used to be one word, which claimed a value was being held back
+ * when none had arrived — the exact defect the reveal path was built to end,
+ * reintroduced one layer up. A closed card must never say less truthfully than
+ * an open one.
+ */
+function collapsedStatus(registry: ClaimTypeRegistry | null, f: AttributeNode): string {
+  if (f.value === undefined) return "held back";
+  const { masked } = maskedValue(registry, f.type, String(f.value), f.sensitivity);
+  return masked ? "hidden" : "shown";
+}
+
 /** A node's mood follows its flow exactly: the selection itself, the two
  *  directions, or dimmed because something else is selected. */
 function moodOf(flow: Flow | null, anySelection: boolean): Mood {
@@ -271,7 +302,7 @@ function BandLabel({ text, sub, action }: { text: string; sub: string; action?: 
   );
 }
 
-function AddTile({ label, onClick, disabled }: { label: string; onClick: () => void; disabled: string | null }) {
+function AddTile({ label, onClick, disabled }: { label: string; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void; disabled: string | null }) {
   return (
     <button
       onClick={onClick}
@@ -293,6 +324,273 @@ function AddTile({ label, onClick, disabled }: { label: string; onClick: () => v
     >
       {label}
     </button>
+  );
+}
+
+/**
+ * One world, and the faces inside it.
+ *
+ * `world: null` is the tray for faces that belong nowhere — a real state with
+ * its own words, never an omission, and always drawn even when empty.
+ *
+ * The world's hue is used in three places on this component and **none of them
+ * is a face card's border, stripe or pill**: the bubble's ground, its dot, and
+ * the ring it wears while a face is hovering over it. Those are surfaces the
+ * face cards do not use, which is what lets a fourth categorical colour exist
+ * here without colliding with selection, family or status.
+ */
+function WorldBubble({
+  world,
+  faces,
+  graph,
+  reach,
+  any,
+  registry,
+  denied,
+  dragging,
+  linkedFaces,
+  showLinks,
+  onDragStart,
+  onDragEnd,
+  onDrop,
+  onSelect,
+  onEditWorld,
+  parties,
+  onChanged,
+}: {
+  world: PoolFacet | null;
+  faces: IdentityGraph["faces"];
+  graph: IdentityGraph;
+  reach: ReturnType<typeof reachOf>;
+  any: boolean;
+  registry: ClaimTypeRegistry | null;
+  denied: string | null;
+  dragging: string | null;
+  linkedFaces: Set<string>;
+  showLinks: boolean;
+  onDragStart: (faceId: string) => void;
+  onDragEnd: () => void;
+  onDrop: (faceId: string, toFacetId: string | null) => void;
+  onSelect: (faceId: string) => void;
+  onEditWorld: (world: PoolFacet, anchor: HTMLElement) => void;
+  parties: Parties;
+  onChanged: () => void;
+}) {
+  const [over, setOver] = useState(false);
+  const hue = world ? worldHue(world.colour) : c.faint;
+  // A bubble only offers itself as a target for a face that is not already in
+  // it: highlighting the world a face came from invites a no-op.
+  const takes = dragging !== null && !faces.some((f) => f.id === dragging);
+  const editRef = useRef<HTMLButtonElement | null>(null);
+  const attributeCount = world?.attributeIds?.length ?? 0;
+
+  return (
+    <div
+      onDragOver={(e) => {
+        if (!takes) return;
+        e.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        const faceId = e.dataTransfer.getData("text/plain");
+        if (faceId) onDrop(faceId, world?.facetId ?? null);
+      }}
+      style={{
+        flex: "1 1 300px",
+        minWidth: 280,
+        maxWidth: 430,
+        display: "grid",
+        gap: 9,
+        padding: "11px 13px 13px",
+        borderRadius: "var(--w-r-lg)",
+        background: world ? `color-mix(in srgb, ${hue} 8%, ${c.surface})` : "transparent",
+        border: `1px ${world ? "solid" : "dashed"} color-mix(in srgb, ${hue} 30%, transparent)`,
+        ...(over && takes ? { boxShadow: `0 0 0 2px ${hue}`, background: `color-mix(in srgb, ${hue} 15%, ${c.surface})` } : {}),
+        transition: "box-shadow 120ms ease, background 120ms ease",
+      }}
+    >
+      <div style={{ display: "grid", gap: 2 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 22 }}>
+          {world?.icon ? (
+            <span style={{ fontSize: 13, lineHeight: 1, flexShrink: 0 }}>{world.icon}</span>
+          ) : (
+            <span style={{ width: 11, height: 11, borderRadius: 999, background: hue, flexShrink: 0 }} />
+          )}
+          <span style={{ fontWeight: 660, fontSize: t.base, flex: "1 1 auto", minWidth: 0 }}>
+            {world ? world.name : "Belongs to no world"}
+          </span>
+          {world && (
+            <>
+              <button
+                ref={editRef}
+                onClick={() => editRef.current && onEditWorld(world, editRef.current)}
+                {...(denied ? { title: denied } : {})}
+                style={{
+                  border: `1px solid ${c.line}`, background: c.surface, color: c.muted,
+                  borderRadius: "var(--w-r-sm)", padding: "3px 9px", fontSize: t.xs, cursor: "pointer",
+                }}
+              >
+                Edit
+              </button>
+              {/* The confirm is the most load-bearing copy in the feature, and
+                  it says what SURVIVES before it says what goes. A bubble
+                  containing cards looks exactly like a folder, and a holder who
+                  reads Delete as "and everything in it" will never press it —
+                  while one who presses it believing that, and is right, has
+                  lost faces they cannot get back. A facet is an arrangement:
+                  there is no `cascade` anywhere on the wire, deliberately. */}
+              <Destructive<{ released: number; names: string[] }>
+                label="Delete"
+                disabledReason={denied}
+                preview={async () => ({ released: faces.length, names: faces.map((f) => f.name) })}
+                renderPreview={(p) => (
+                  <div style={{ fontSize: t.sm, color: c.text, display: "grid", gap: 6 }}>
+                    <div>
+                      <strong>{world.name}</strong> stops being a part of your life on this screen.
+                    </div>
+                    <div>
+                      {p.released === 0
+                        ? "No face belongs to it, and nothing else changes."
+                        : `${p.released === 1 ? "The face" : `All ${p.released} faces`} in it — ` +
+                          `${p.names.join(", ")} — ${p.released === 1 ? "stays" : "stay"} ` +
+                          `exactly as ${p.released === 1 ? "it is" : "they are"}. ` +
+                          `${p.released === 1 ? "It" : "They"} will simply belong to no world.`}
+                    </div>
+                    <div style={{ color: c.faint, fontSize: t.xs }}>
+                      Nothing already shared is affected — that has left.
+                    </div>
+                  </div>
+                )}
+                commit={async () => {
+                  await personaFacetDelete(managerSender, {
+                    ...parties,
+                    facetId: world.facetId,
+                    expectedVersion: world.version,
+                  });
+                }}
+                onDone={onChanged}
+              />
+            </>
+          )}
+        </div>
+        <span style={{ fontSize: t.xs, color: c.muted }}>
+          {faces.length} {faces.length === 1 ? "face" : "faces"}
+          {world ? ` · ${attributeCount} attribute${attributeCount === 1 ? "" : "s"}` : ""}
+        </span>
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, minHeight: 44, alignContent: "flex-start" }}>
+        {faces.map((face) => (
+          <FaceCard
+            key={face.id}
+            face={face}
+            graph={graph}
+            reach={reach}
+            any={any}
+            registry={registry}
+            linked={linkedFaces.has(face.id)}
+            showLinks={showLinks}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+            onSelect={onSelect}
+          />
+        ))}
+        {faces.length === 0 && (
+          <span style={{ fontSize: t.xs, color: c.faint, fontStyle: "italic", alignSelf: "center" }}>
+            {world ? "Drop a face here" : "Every face belongs somewhere — that is fine too"}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** One face, draggable between worlds. */
+function FaceCard({
+  face,
+  graph,
+  reach,
+  any,
+  registry,
+  linked,
+  showLinks,
+  onDragStart,
+  onDragEnd,
+  onSelect,
+}: {
+  face: IdentityGraph["faces"][number];
+  graph: IdentityGraph;
+  reach: ReturnType<typeof reachOf>;
+  any: boolean;
+  registry: ClaimTypeRegistry | null;
+  linked: boolean;
+  showLinks: boolean;
+  onDragStart: (faceId: string) => void;
+  onDragEnd: () => void;
+  onSelect: (faceId: string) => void;
+}) {
+  const wearers = graph.contexts.flatMap((ctx) => ctx.personas.filter((p) => p.faceId === face.id));
+  const contexts = new Set(wearers.map((w) => w.contextId)).size;
+  return (
+    <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData("text/plain", face.id);
+        e.dataTransfer.effectAllowed = "move";
+        onDragStart(face.id);
+      }}
+      onDragEnd={onDragEnd}
+      onClick={() => onSelect(face.id)}
+      // Flexible rather than fixed: a bubble is as wide as the row lets it be,
+      // and a fixed 176px card meant two faces stacked vertically inside a
+      // 300px bubble while the space beside them stayed empty.
+      style={cardStyle(moodOf(flowOf(reach, "face", face.id), any), {
+        flex: "1 1 132px",
+        minWidth: 128,
+        maxWidth: "100%",
+        padding: "9px 11px",
+        gap: 6,
+        cursor: "grab",
+      })}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: t.sm, fontWeight: 640, flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {face.name}
+        </span>
+        {linked && showLinks && <Pill tone="danger">links</Pill>}
+      </div>
+      {/* Family dots rather than the full chip list: four contact dots and a
+          gated one is the shape of the offer, and it fits a card a third the
+          width. The types themselves are one click away in the strip. */}
+      <div style={{ display: "flex", gap: 3, flexWrap: "wrap", alignItems: "center" }}>
+        {face.attributeIds.slice(0, 8).map((id) => {
+          const attribute = graph.attributes.find((f) => f.id === id);
+          const lit = reach.attributeIds.has(id) && reach.faceIds.has(face.id);
+          return (
+            <span
+              key={id}
+              title={attribute?.type ?? id}
+              style={{
+                width: 7, height: 7, borderRadius: 999, flexShrink: 0,
+                background: familyStyle(familyOf(attribute?.type ?? "", registry)).hue,
+                ...(lit ? { boxShadow: `0 0 0 2px ${c.accentSoft}` } : {}),
+              }}
+            />
+          );
+        })}
+        <span style={{ fontSize: t.xs, color: c.faint, marginLeft: 2 }}>
+          {face.attributeIds.length} attribute{face.attributeIds.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      <span style={{ fontSize: t.xs, color: c.faint }}>
+        {wearers.length === 0
+          ? "worn by nobody yet"
+          : `worn in ${contexts} context${contexts === 1 ? "" : "s"}`}
+      </span>
+    </div>
   );
 }
 
@@ -331,11 +629,22 @@ function ChooseContext({
 
 // ── The map ─────────────────────────────────────────────────────────────────
 
-type Editing =
+/**
+ * What is being edited, and **where it was opened from**.
+ *
+ * `anchor` is the element the person actually pressed, and it is not optional
+ * decoration: every editor on this map used to render at the bottom of the
+ * JSX, which on a populated wallet is ~1700px down a 2450px scroller that does
+ * not move. Pressing "Add an attribute" changed nothing anyone could see. The
+ * form now opens against the control that summoned it, so carrying that
+ * element is what makes the fix possible.
+ */
+type Editing = (
   | { kind: "attribute"; existing?: PoolAttribute }
   | { kind: "face"; existing?: PoolProfile }
   /** `contextId: null` means "somewhere" — the form asks which context first. */
-  | { kind: "bind"; contextId: string | null; personaDid?: string };
+  | { kind: "bind"; contextId: string | null; personaDid?: string }
+) & { anchor: HTMLElement | null };
 
 export function IdentityMap({
   parties,
@@ -343,7 +652,7 @@ export function IdentityMap({
   graph,
   attributes,
   profiles,
-  worlds,
+  worlds = [],
   registry,
   records,
   history,
@@ -383,7 +692,42 @@ export function IdentityMap({
   const [findings, setFindings] = useState<CorrelationFinding[] | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
   const [showEmpty, setShowEmpty] = useState(false);
+  /** Which world's editor is open, and the control it points at. `existing`
+   *  absent means a new one. */
+  const [worldEditing, setWorldEditing] = useState<{ existing?: PoolFacet; anchor: HTMLElement | null } | null>(null);
+  /** The face being dragged, so a bubble can light up as a target without
+   *  reading `dataTransfer` — which is write-only during `dragover`. */
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
   const denied = holderGate(authority);
+
+  /**
+   * Move a face into `toFacetId`, or out of every world when it is null.
+   *
+   * The writes and their ORDER come from `movePlan`, which is tested: the
+   * agent refuses to place a face that is already placed, so the world losing
+   * it has to be rewritten first. Sequential rather than `Promise.all` for the
+   * same reason — the second write is only legal once the first has landed.
+   */
+  const moveFace = useCallback(
+    async (faceId: string, toFacetId: string | null) => {
+      setMoveError(null);
+      const plan = movePlan(worlds, profiles, attributes, faceId, toFacetId);
+      if (plan.length === 0) return;
+      try {
+        for (const { icon, ...w } of plan) {
+          await personaFacetPut(managerSender, { ...parties, ...w, ...(icon ? { icon } : {}) });
+        }
+        onChanged();
+      } catch (e) {
+        // Surfaced rather than swallowed: a drag that silently did nothing is
+        // the same class of defect as an editor that opens off screen.
+        setMoveError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [worlds, profiles, attributes, parties, onChanged],
+  );
+
 
   // The band promises "where you are known". A context where nobody is known
   // is not that, and on an agent with a dozen contexts eleven cards saying
@@ -401,7 +745,7 @@ export function IdentityMap({
   const shownContexts = showEmpty ? graph.contexts : presentContexts;
 
   const stage = useRef<HTMLDivElement | null>(null);
-  const { boxes, size, register } = useBoxes(stage, [graph, editing, selection?.kind]);
+  const { boxes, size, register } = useBoxes(stage, [graph, editing, selection]);
 
   const reach = useMemo(() => reachOf(graph, selection), [graph, selection]);
   // Grouped rather than one long row: see `attribute-family.ts` for what a
@@ -428,6 +772,27 @@ export function IdentityMap({
   );
   const any = selection !== null;
   const linkedFaces = useMemo(() => new Set(graph.links.map((l) => l.faceId)), [graph.links]);
+
+  /** Everything every bubble needs. Bundled so the three call sites cannot
+   *  drift in what they pass. */
+  const bubbleShared = {
+    graph,
+    reach,
+    any,
+    registry,
+    denied,
+    dragging,
+    linkedFaces,
+    showLinks,
+    onDragStart: setDragging,
+    onDragEnd: () => setDragging(null),
+    onDrop: moveFace,
+    onSelect: (id: string) => select({ kind: "face", id }),
+    onEditWorld: (existing: PoolFacet, anchor: HTMLElement) => setWorldEditing({ existing, anchor }),
+    parties,
+    onChanged,
+  } as const;
+
   const tally = tallyContexts(graph);
 
   const select = (next: Selection) =>
@@ -606,8 +971,15 @@ export function IdentityMap({
           height={size.h}
           fill="none"
         >
-          {edges.filter((e) => !e.flow && e.kind !== "link").map((e, i) => (
-            <path key={`u${i}`} d={e.d} stroke={stroke(e)} strokeWidth={1.5} opacity={any ? 0.5 : 1} />
+          {/* Drawn only once something is selected.
+              With nothing selected these are twenty-odd low-contrast curves
+              crossing the whole page, answering a question nobody asked — and
+              `reachOf` has no answer to draw until there is a selection, so
+              they were never carrying information at rest. The links below are
+              the exception: a link is true whether or not anyone selected
+              anything, and suppressing it would be hiding a finding. */}
+          {any && edges.filter((e) => !e.flow && e.kind !== "link").map((e, i) => (
+            <path key={`u${i}`} d={e.d} stroke={stroke(e)} strokeWidth={1.5} opacity={0.5} />
           ))}
           {edges.filter((e) => e.kind === "link").map((e, i) => (
             <path key={`l${i}`} d={e.d} stroke={c.danger} strokeWidth={2.5} strokeDasharray="6 5" opacity={any && !e.flow ? 0.5 : 1} />
@@ -635,6 +1007,10 @@ export function IdentityMap({
                       const flow = flowOf(reach, "attribute", f.id);
                       const prov = provenanceWords(f.provenance);
                       const linked = valueLinked.get(f.id);
+                      // Expanded means *this* card is the selection — not merely
+                      // that something is selected and this one is in its reach.
+                      const expanded = flow === "self";
+                      const worldOfAttribute = worldsOfAttribute(worlds, f.id)[0];
                       return (
                         <div
                           key={f.id}
@@ -646,60 +1022,89 @@ export function IdentityMap({
                           // the border and the pills keep meaning what they meant.
                           style={cardStyle(
                             moodOf(flow, any),
-                            { width: 222, ...(f.stale ? { opacity: any && flow === null ? 0.35 : 0.72 } : {}) },
+                            {
+                              width: expanded ? 268 : undefined,
+                              ...(f.stale ? { opacity: any && flow === null ? 0.35 : 0.72 } : {}),
+                            },
                             fam.hue,
                           )}
                         >
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                            <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted }}>{f.type}</span>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            {/* The world's hue, and the ONLY place it touches an
+                                attribute card — a 6px dot, never the border and
+                                never a pill, so selection and status keep the
+                                channels they already own. */}
+                            {worldOfAttribute && (
+                              <span
+                                title={`Part of ${worldOfAttribute.name}`}
+                                style={{ width: 6, height: 6, borderRadius: 999, background: worldHue(worldOfAttribute.colour), flexShrink: 0 }}
+                              />
+                            )}
+                            <span style={{ fontFamily: font.mono, fontSize: t.xs, color: expanded ? c.muted : c.text, whiteSpace: "nowrap" }}>{f.type}</span>
+                            {!expanded && (
+                              // Collapsed, a card says what *kind* of answer it
+                              // holds, never the answer. Thirteen values drawn
+                              // before anyone asked for one is both the density
+                              // complaint and a shoulder-surfing surface.
+                              <span style={{ fontSize: t.xs, color: c.faint, whiteSpace: "nowrap" }}>
+                                {collapsedStatus(registry, f)}
+                              </span>
+                            )}
                             {f.stale && <Pill tone="warn">{staleWords(f.staleReason)}</Pill>}
-                          </div>
-                          {/* The label and the value are two spans rather than one
-                              string, because the value now carries a control of its
-                              own — and a *Show* that scrolled out of a card clipped to
-                              one line would be a control nobody could press. */}
-                          <div style={{ display: "flex", alignItems: "baseline", gap: 5, minWidth: 0, fontSize: t.base, fontWeight: 600 }}>
-                            {/* The label steps aside when the agent sent no
-                                value. "Singapore · with your agent" does not
-                                fit a 222px card and truncated to "Singapore ·
-                                with y…", losing the half that says what to do
-                                about it. The label is the holder's own note and
-                                the type above already names the attribute, so
-                                on a card holding nothing the sentence that
-                                matters is the one about where the value is. It
-                                returns the moment the value does. */}
-                            {f.value !== undefined && labelSaysSomethingElse(f.label, f.value) && (
-                              <span style={{ color: c.muted, whiteSpace: "nowrap", flexShrink: 0 }}>{f.label} ·</span>
-                            )}
-                            <AttributeValue registry={registry}
-                              type={f.type}
-                              value={f.value}
-                              sensitivity={f.sensitivity}
-                              reveal={() => onReveal({ attributeId: f.id, type: f.type })}
-                              style={{ minWidth: 0, overflow: "hidden" }}
-                              textStyle={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-                            />
-                          </div>
-                          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                            <Pill tone={prov.tone}>{prov.text}</Pill>
-                            {/* Not a property of the value — a property of its
-                                *type*, which the agent declined to apply. Said
-                                here because this is the card whose masking is
-                                wrong as a result, and a banner at the top of a
-                                long page is easy to scroll past on the way to
-                                the thing it is about. */}
-                            {unapplied.has(f.type) && <Pill tone="danger">type not applied</Pill>}
-                            {/* Severity only. The crossing is the OTHER axis and does not
-                                belong in this channel: two pills side by side
-                                read as one scale, and "links" is about how
-                                strongly, not about whether the holder minds.
-                                The strip and the summary carry the crossing. */}
-                            {linked && (
-                              <Pill tone="danger">
-                                {linked.finding.severity === "high" ? "links" : "may link"}
-                              </Pill>
+                            {!expanded && linked && (
+                              <Pill tone="danger">{linked.finding.severity === "high" ? "links" : "may link"}</Pill>
                             )}
                           </div>
+                          {expanded && (
+                            <>
+                              {/* The label and the value are two spans rather than one
+                                  string, because the value now carries a control of its
+                                  own — and a *Show* that scrolled out of a card clipped to
+                                  one line would be a control nobody could press. */}
+                              <div style={{ display: "flex", alignItems: "baseline", gap: 5, minWidth: 0, fontSize: t.base, fontWeight: 600 }}>
+                                {/* The label steps aside when the agent sent no
+                                    value. "Singapore · with your agent" does not
+                                    fit a narrow card and truncated to "Singapore ·
+                                    with y…", losing the half that says what to do
+                                    about it. The label is the holder's own note and
+                                    the type above already names the attribute, so
+                                    on a card holding nothing the sentence that
+                                    matters is the one about where the value is. It
+                                    returns the moment the value does. */}
+                                {f.value !== undefined && labelSaysSomethingElse(f.label, f.value) && (
+                                  <span style={{ color: c.muted, whiteSpace: "nowrap", flexShrink: 0 }}>{f.label} ·</span>
+                                )}
+                                <AttributeValue registry={registry}
+                                  type={f.type}
+                                  value={f.value}
+                                  sensitivity={f.sensitivity}
+                                  reveal={() => onReveal({ attributeId: f.id, type: f.type })}
+                                  style={{ minWidth: 0, overflow: "hidden" }}
+                                  textStyle={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                                />
+                              </div>
+                              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                                <Pill tone={prov.tone}>{prov.text}</Pill>
+                                {/* Not a property of the value — a property of its
+                                    *type*, which the agent declined to apply. Said
+                                    here because this is the card whose masking is
+                                    wrong as a result, and a banner at the top of a
+                                    long page is easy to scroll past on the way to
+                                    the thing it is about. */}
+                                {unapplied.has(f.type) && <Pill tone="danger">type not applied</Pill>}
+                                {/* Severity only. The crossing is the OTHER axis and does not
+                                    belong in this channel: two pills side by side
+                                    read as one scale, and "links" is about how
+                                    strongly, not about whether the holder minds.
+                                    The strip and the summary carry the crossing. */}
+                                {linked && (
+                                  <Pill tone="danger">
+                                    {linked.finding.severity === "high" ? "links" : "may link"}
+                                  </Pill>
+                                )}
+                              </div>
+                            </>
+                          )}
                         </div>
                       );
                     })}
@@ -708,61 +1113,56 @@ export function IdentityMap({
               );
             })}
             <div style={{ display: "flex" }}>
-              <AddTile label="+ Add an attribute" onClick={() => setEditing({ kind: "attribute" })} disabled={null} />
+              <AddTile label="+ Add an attribute" onClick={(e) => setEditing({ kind: "attribute", anchor: e.currentTarget })} disabled={null} />
             </div>
           </div>
         </section>
 
-        {/* ── Faces ── */}
+        {/* ── Worlds & faces ──
+            The faces band is grouped by world rather than laid out flat, and
+            the separate Worlds screen is gone: a grouping you cannot see beside
+            the things it groups is a list of names, and arranging faces on one
+            screen while looking at them on another is the same act done twice.
+            A world's hue lives on the bubble's GROUND — a surface that did not
+            exist before — so the three channels a card already spends (border
+            for selection and reach, stripe for family, pills for status) are
+            untouched. */}
         <section style={{ position: "relative", zIndex: 1, display: "grid", gap: 10 }}>
-          <BandLabel text="Faces" sub="which attributes you show together" />
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 14, justifyContent: "center" }}>
-            {graph.faces.map((face) => {
-              const wearers = graph.contexts.flatMap((ctx) => ctx.personas.filter((p) => p.faceId === face.id));
-              const linked = linkedFaces.has(face.id);
-              return (
-                <div
-                  key={face.id}
-                  ref={register(`face:${face.id}`)}
-                  onClick={() => select({ kind: "face", id: face.id })}
-                  style={cardStyle(moodOf(flowOf(reach, "face", face.id), any), { width: 330, padding: "12px 14px", gap: 8 })}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: t.base, fontWeight: 640 }}>{face.name}</span>
-                    {linked && showLinks && <Pill tone="danger">links {wearers.length} personas</Pill>}
-                  </div>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {/* Each chip carries its attribute's family dot, which is
-                        what makes a face readable without opening it: four
-                        contact dots and a gated one is a different offer from
-                        five names, and the card can say so in the space it
-                        already has. */}
-                    {face.attributeIds.map((id) => {
-                      const attribute = graph.attributes.find((f) => f.id === id);
-                      const lit = reach.attributeIds.has(id) && reach.faceIds.has(face.id);
-                      return (
-                        <span key={id} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: font.mono, fontSize: t.xs, padding: "3px 8px", borderRadius: "var(--w-r-sm)", background: lit ? c.accentSoft : c.raised, color: lit ? c.accent : c.text, border: `1px solid ${lit ? c.accentSoft : c.line}` }}>
-                          <span style={{ width: 6, height: 6, borderRadius: 999, background: familyStyle(familyOf(attribute?.type ?? "", registry)).hue, flexShrink: 0 }} />
-                          {attribute?.type ?? id}
-                        </span>
-                      );
-                    })}
-                    {face.preserved > 0 && (
-                      <span style={{ fontSize: t.xs, padding: "3px 8px", borderRadius: "var(--w-r-sm)", background: c.raised, color: c.muted, border: `1px solid ${c.line}` }}>
-                        +{face.preserved} pinned, shown differently, or only here
-                      </span>
-                    )}
-                  </div>
-                  <span style={{ fontSize: t.sm, color: c.faint }}>
-                    {wearers.length === 0
-                      ? "worn by nobody yet"
-                      : `worn by ${wearers.length} persona${wearers.length === 1 ? "" : "s"} in ${new Set(wearers.map((w) => w.contextId)).size} context${new Set(wearers.map((w) => w.contextId)).size === 1 ? "" : "s"}`}
-                  </span>
-                </div>
-              );
-            })}
-            <AddTile label="+ New face" onClick={() => setEditing({ kind: "face" })} disabled={graph.attributes.length === 0 ? "Add an attribute first — a face is a selection over attributes." : null} />
+          <BandLabel
+            text="Worlds & faces"
+            sub="the parts of your life, and the faces that belong to them — drag a face to move it"
+          />
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "flex-start" }}>
+            {worlds.map((world) => (
+              <WorldBubble
+                key={world.facetId}
+                world={world}
+                faces={graph.faces.filter((f) => worldOfFace(worlds, f.id)?.facetId === world.facetId)}
+                {...bubbleShared}
+              />
+            ))}
+            {/* Belonging nowhere is a real state and is always drawn, even
+                empty. A band that listed only arranged faces would under-report
+                what the holder has — the same defect as a context tally that
+                omits a standing. */}
+            <WorldBubble
+              key="__unplaced"
+              world={null}
+              faces={graph.faces.filter((f) => !worldOfFace(worlds, f.id))}
+              {...bubbleShared}
+            />
+            <AddTile
+              label="+ New world"
+              onClick={(e) => setWorldEditing({ anchor: e.currentTarget })}
+              disabled={denied}
+            />
+            <AddTile
+              label="+ New face"
+              onClick={(e) => setEditing({ kind: "face", anchor: e.currentTarget })}
+              disabled={graph.attributes.length === 0 ? "Add an attribute first — a face is a selection over attributes." : null}
+            />
           </div>
+          {moveError && <Note tone="danger">{moveError}</Note>}
         </section>
 
         {/* ── The line ── */}
@@ -877,10 +1277,11 @@ export function IdentityMap({
                       kind="quiet"
                       disabled={graph.faces.length === 0}
                       {...(graph.faces.length === 0 ? { title: "Make a face first." } : denied ? { title: denied } : {})}
-                      onClick={() =>
+                      onClick={(e) =>
                         setEditing({
                           kind: "bind",
                           contextId: ctx.id,
+                          anchor: e.currentTarget,
                           ...(selectedPersonaIn(ctx.id) ? { personaDid: selectedPersonaIn(ctx.id)! } : {}),
                         })
                       }
@@ -904,7 +1305,7 @@ export function IdentityMap({
                   kind="default"
                   disabled={graph.faces.length === 0}
                   {...(graph.faces.length === 0 ? { title: "Make a face first." } : denied ? { title: denied } : {})}
-                  onClick={() => setEditing({ kind: "bind", contextId: null })}
+                  onClick={(e) => setEditing({ kind: "bind", contextId: null, anchor: e.currentTarget })}
                 >
                   Be known somewhere else…
                 </Button>
@@ -940,47 +1341,103 @@ export function IdentityMap({
         />
       )}
 
-      {/* ── Editors ── */}
+      {/* ── Editors ──
+          Every one of these opens as a popover against the control that
+          summoned it. They used to render right here, at the end of the JSX,
+          which put the first field of an "Add an attribute" form roughly 1700px
+          down a 2450px scroller whose scrollTop never moved — so the commonest
+          action on this screen appeared to do nothing at all. See
+          `popover.tsx`. */}
       {editing?.kind === "attribute" && (
-        <AttributeEditor registry={registry}
-          key={editing.existing?.attributeId ?? "new"}
-          parties={parties}
-          authority={authority}
-          {...(editing.existing ? { existing: editing.existing } : {})}
-          onDone={done}
-          onCancel={() => setEditing(null)}
-        />
+        <Popover
+          anchor={{ current: editing.anchor }}
+          onClose={() => setEditing(null)}
+          title={editing.existing ? "Edit attribute" : "Add an attribute"}
+        >
+          <AttributeEditor registry={registry}
+            key={editing.existing?.attributeId ?? "new"}
+            parties={parties}
+            authority={authority}
+            {...(editing.existing ? { existing: editing.existing } : {})}
+            onDone={done}
+            onCancel={() => setEditing(null)}
+          />
+        </Popover>
       )}
       {editing?.kind === "face" && (
-        <ProfileEditor
-          key={editing.existing?.profileId ?? "new"}
-          parties={parties}
-          authority={authority}
-          attributes={attributes}
-          {...(editing.existing ? { existing: editing.existing } : {})}
-          onDone={done}
-          onCancel={() => setEditing(null)}
-        />
+        <Popover
+          anchor={{ current: editing.anchor }}
+          onClose={() => setEditing(null)}
+          title={editing.existing ? "Edit face" : "New face"}
+          width={460}
+        >
+          <ProfileEditor
+            key={editing.existing?.profileId ?? "new"}
+            parties={parties}
+            authority={authority}
+            attributes={attributes}
+            {...(editing.existing ? { existing: editing.existing } : {})}
+            onDone={done}
+            onCancel={() => setEditing(null)}
+          />
+        </Popover>
       )}
       {editing?.kind === "bind" && editing.contextId === null && (
-        <ChooseContext
-          contexts={emptyContexts.length > 0 ? emptyContexts : graph.contexts}
-          onChoose={(contextId) => setEditing({ kind: "bind", contextId })}
-          onCancel={() => setEditing(null)}
-        />
+        <Popover
+          anchor={{ current: editing.anchor }}
+          onClose={() => setEditing(null)}
+          title="Where?"
+        >
+          <ChooseContext
+            contexts={emptyContexts.length > 0 ? emptyContexts : graph.contexts}
+            onChoose={(contextId) => setEditing({ kind: "bind", contextId, anchor: editing.anchor })}
+            onCancel={() => setEditing(null)}
+          />
+        </Popover>
+      )}
+      {worldEditing && (
+        <Popover
+          anchor={{ current: worldEditing.anchor }}
+          onClose={() => setWorldEditing(null)}
+          title={worldEditing.existing ? "Edit world" : "A new part of your life"}
+          width={470}
+        >
+          <WorldEditor
+            key={worldEditing.existing?.facetId ?? "new"}
+            parties={parties}
+            authority={authority}
+            {...(worldEditing.existing ? { existing: worldEditing.existing } : {})}
+            faces={profiles}
+            attributes={attributes}
+            registry={registry}
+            worlds={worlds}
+            onDone={() => {
+              setWorldEditing(null);
+              onChanged();
+            }}
+            onCancel={() => setWorldEditing(null)}
+          />
+        </Popover>
       )}
       {editing?.kind === "bind" && editing.contextId !== null && (
-        <BindingForm
-          key={`${editing.contextId}:${editing.personaDid ?? "new"}`}
-          parties={parties}
-          authority={authority}
-          contextId={editing.contextId}
-          contextLabel={graph.contexts.find((x) => x.id === editing.contextId)?.label ?? editing.contextId}
-          profiles={profiles}
-          personaDid={editing.personaDid}
-          onDone={done}
-          onCancel={() => setEditing(null)}
-        />
+        <Popover
+          anchor={{ current: editing.anchor }}
+          onClose={() => setEditing(null)}
+          title="Be known here"
+          width={460}
+        >
+          <BindingForm
+            key={`${editing.contextId}:${editing.personaDid ?? "new"}`}
+            parties={parties}
+            authority={authority}
+            contextId={editing.contextId}
+            contextLabel={graph.contexts.find((x) => x.id === editing.contextId)?.label ?? editing.contextId}
+            profiles={profiles}
+            personaDid={editing.personaDid}
+            onDone={done}
+            onCancel={() => setEditing(null)}
+          />
+        </Popover>
       )}
     </div>
   );
@@ -1063,15 +1520,15 @@ function DetailStrip({
       <>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 260px) minmax(0, 1fr) minmax(0, 1fr)", gap: 18 }}>
           <div style={{ display: "grid", gap: 3 }}>
-            <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted }}>{attribute.type}</span>
-            <AttributeValue registry={registry}
-              type={attribute.type}
-              value={attribute.value}
-              sensitivity={attribute.sensitivity}
-              reveal={() => onReveal({ attributeId: attribute.id, type: attribute.type })}
-              style={{ fontSize: t.md, fontWeight: 640 }}
-              textStyle={{ wordBreak: "break-word" }}
-            />
+            {/* The type names what the strip is about; the VALUE is not
+                repeated here.
+                The selected card expands in place and renders it, and two
+                `AttributeValue`s for one attribute means two *Show* buttons,
+                two reveal states and two things to keep in step — the second of
+                which is always the one that stops being updated. The strip's
+                job is what the card has no room for: what the mask means, what
+                the holder decided, where it reaches, when it last left. */}
+            <span style={{ fontFamily: font.mono, fontSize: t.md, fontWeight: 640 }}>{attribute.type}</span>
             <span style={{ fontSize: t.sm, color: c.faint }}>
               {attribute.label ? `${attribute.label} · ` : ""}{prov.text}
               {attribute.provenance.kind === "credentialBacked" ? " — provable, and the same signature to everyone who sees it" : attribute.provenance.kind === "selfAsserted" ? " — passed on, never proven" : ""}
@@ -1143,7 +1600,7 @@ function DetailStrip({
           {col("Last left", lastLeft((d) => d.claimTypes.includes(attribute.type)))}
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <Button kind="quiet" onClick={() => onEdit({ kind: "attribute", existing: raw })}>Edit</Button>
+          <Button kind="quiet" onClick={(e) => onEdit({ kind: "attribute", existing: raw, anchor: e.currentTarget })}>Edit</Button>
           <Destructive<PoolProfile[]>
             label="Delete"
             preview={async () => {
@@ -1216,7 +1673,7 @@ function DetailStrip({
           <Button kind="quiet" onClick={() => onShow(showing === "claims" ? null : "claims")}>
             {showing === "claims" ? "Hide" : "What it shows"}
           </Button>
-          <Button kind="quiet" onClick={() => onEdit({ kind: "face", existing: raw })}>Edit</Button>
+          <Button kind="quiet" onClick={(e) => onEdit({ kind: "face", existing: raw, anchor: e.currentTarget })}>Edit</Button>
           <DeleteProfile parties={parties} profile={raw} onDone={onChanged} />
         </div>
         {showing === "claims" && (
@@ -1255,7 +1712,7 @@ function DetailStrip({
             kind="quiet"
             disabled={Boolean(denied) || graph.faces.length === 0}
             {...(denied ? { title: denied } : graph.faces.length === 0 ? { title: "Make a face first." } : {})}
-            onClick={() => onEdit({ kind: "bind", contextId: ctx.id })}
+            onClick={(e) => onEdit({ kind: "bind", contextId: ctx.id, anchor: e.currentTarget })}
           >
             Be known here as…
           </Button>
@@ -1301,7 +1758,7 @@ function DetailStrip({
           kind="quiet"
           disabled={Boolean(denied)}
           {...(denied ? { title: denied } : {})}
-          onClick={() => onEdit({ kind: "bind", contextId: ctx.id, personaDid: p.did })}
+          onClick={(e) => onEdit({ kind: "bind", contextId: ctx.id, personaDid: p.did, anchor: e.currentTarget })}
         >
           {p.faceId ? "Change face" : "Put on a face"}
         </Button>

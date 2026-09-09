@@ -415,52 +415,87 @@ const mapOverSecrets = async () =>
 const shows = (ui: Awaited<ReturnType<typeof mapOverSecrets>>) =>
   ui.all("button").filter((b) => (b.textContent ?? "").trim() === "Show");
 
+/**
+ * Select the card for `type`, which is what puts its value on screen.
+ *
+ * The map draws a *collapsed* card by default — the type and whether the value
+ * is held back, never the value — so thirteen secrets are not sitting in the
+ * DOM because someone opened the pane. Selecting one expands it in place. Every
+ * assertion below about masking, revealing and refusing is therefore made
+ * against an opened card, which is where a person makes them too.
+ */
+const openCard = async (ui: { byText: (s: string, t: string) => Element | null; click: (el: Element) => Promise<void> }, type: string) => {
+  const chip = ui.byText("span", type);
+  assert.ok(chip, `no card for ${type} on screen`);
+  await ui.click(chip!);
+};
+
 test("a sensitive value is not on the map until it is asked for", async () => {
   const ui = await mapOverSecrets();
-  const screen = ui.text();
 
-  assert.doesNotMatch(screen, /8262 2325/, "a mobile number must not be drawn in full");
-  assert.doesNotMatch(screen, /X1234567/, "a passport number must not be drawn in full");
-  // An `x:` token is one nobody has classified, which is the reason to hide it
-  // rather than a reason to show it.
-  assert.doesNotMatch(screen, /BADGE-99/, "an extension token resolves to the conservative default");
-  // And the paired negative, which is the half that keeps this usable: a type
-  // the registry calls normal is still a value on screen.
-  assert.match(screen, /Glenn Gore/, "a legal name is not a sensitive value and must not be hidden");
+  // Closed, no value of any kind is on screen — not the sensitive ones and not
+  // the ordinary ones. That is the density fix, and it is also the strongest
+  // form of the privacy one.
+  const closed = ui.text();
+  assert.doesNotMatch(closed, /8262 2325/, "a mobile number must not be drawn in full");
+  assert.doesNotMatch(closed, /X1234567/, "a passport number must not be drawn in full");
+  assert.doesNotMatch(closed, /BADGE-99/, "an extension token resolves to the conservative default");
+  // A card still says whether it is holding something back, because "I have
+  // this and it is hidden" and "I do not have this" must never look alike.
+  // Three states, never two: "hidden" is a value in hand behind a mask,
+  // "held back" is a value the agent never sent. A closed card must not blur
+  // them — that is the defect the reveal path exists to end.
+  assert.match(closed, /hidden/, "a closed card says the value is masked");
 
+  // Opened, the registry's answer is what decides. A type it calls normal is a
+  // value on screen; a sensitive one is bulleted.
+  await openCard(ui, "name.legal");
+  assert.match(ui.text(), /Glenn Gore/, "a legal name is not a sensitive value and must not be hidden");
+
+  await openCard(ui, "phone.mobile");
+  const open = ui.text();
+  assert.doesNotMatch(open, /8262 2325/, "opening a card does not reveal a sensitive value");
   // A hidden value is drawn, not omitted. Rendering nothing — or rendering the
   // pane's phrase for a value the agent did not send — would say the holder
   // does not have an attribute they do have.
-  assert.match(screen, /••••/, "a hidden value still occupies its row");
-  assert.doesNotMatch(screen, /not requested/, "hidden is not the same state as absent");
-  assert.match(screen, /•••• 25/, "the tail the holder recognises their own number by survives");
+  assert.match(open, /••••/, "a hidden value still occupies its row");
+  assert.doesNotMatch(open, /not requested/, "hidden is not the same state as absent");
+  assert.match(open, /•••• 25/, "the tail the holder recognises their own number by survives");
 
   await ui.unmount();
 });
 
 test("Show reveals one value, and only the one that was pressed", async () => {
   const ui = await mapOverSecrets();
+  assert.equal(shows(ui).length, 0, "a closed map offers no reveal at all — there is no value to reveal");
+  await openCard(ui, "phone.mobile");
   const controls = shows(ui);
-  assert.equal(controls.length, 3, "one control per hidden attribute, and never a single global one");
+  assert.equal(controls.length, 1, "the open card carries its own control, and there is never a global one");
 
   await ui.click(controls[0]!);
   const screen = ui.text();
   assert.match(screen, /8262 2325/, "the pressed control reveals its own value");
+  // The other secrets are not merely unrevealed — with their cards closed they
+  // are not in the page at all, which is the stronger property.
   assert.doesNotMatch(screen, /X1234567/, "and reveals nothing else");
   assert.doesNotMatch(screen, /BADGE-99/);
 
-  // The card underneath is a click target — it selects the attribute and opens the
-  // strip below the map. Revealing a value must not do that too: the operator
-  // pressed Show, and the screen they were reading changing under them is the
-  // symptom of a missing `stopPropagation`.
-  assert.doesNotMatch(screen, /Last left/, "revealing a value must not also select the attribute");
+  // The card underneath is a click target, and pressing Show must not reach it.
+  // The check is the assertion above rather than a separate one: a click that
+  // bubbled would TOGGLE the selection off, the card would collapse, and the
+  // value would leave the page — so `8262 2325` still being on screen after the
+  // press is exactly the missing-`stopPropagation` test, and it fails loudly.
+  // The strip is legitimately open here, because opening the card is what put
+  // the control on screen in the first place.
+  assert.match(screen, /Last left/, "the strip stays with the attribute that was opened");
 
   await ui.unmount();
 });
 
 test("a revealed value does not survive leaving the pane", async () => {
   const first = await mapOverSecrets();
-  await first.click(shows(first)[1]!);
+  await openCard(first, "gov.id.passport");
+  await first.click(shows(first)[0]!);
   assert.match(first.text(), /X1234567/);
   await first.unmount();
 
@@ -469,6 +504,7 @@ test("a revealed value does not survive leaving the pane", async () => {
   // a module-level set, `localStorage`, a store the pane outlives — which is
   // the whole reason it is asserted rather than assumed.
   const second = await mapOverSecrets();
+  await openCard(second, "gov.id.passport");
   assert.doesNotMatch(second.text(), /X1234567/, "coming back must not come back revealed");
   await second.unmount();
 });
@@ -631,6 +667,7 @@ test("Show fetches the one withheld value and displays it", async () => {
     }),
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
+  await openCard(ui, "profile.github");
   await ui.click(ui.button("Show"));
   assert.match(ui.text(), /octocat/, "the value arrives only because it was asked for");
   assert.deepEqual(asked, [{ attributeId: "f9", type: "profile.github" }], "one attribute, not the pool");
@@ -642,6 +679,7 @@ test("Hide drops a fetched value rather than covering it over", async () => {
   // page until then. Covering it again would put it back where it was.
   const a = agent({});
   const ui = await render(withheldMap(), { chrome: { runtime: { sendMessage: a.sendMessage } } });
+  await openCard(ui, "profile.github");
   await ui.click(ui.button("Show"));
   assert.match(ui.text(), /octocat/);
   await ui.click(ui.button("Hide"));
@@ -656,6 +694,7 @@ test("an agent that refuses says why, in place, and does not blank the card", as
     withheldMap({ onReveal: async () => { throw new Error("your agent held the value back"); } }),
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
+  await openCard(ui, "profile.github");
   await ui.click(ui.button("Show"));
   assert.match(ui.text(), /held the value back/);
   assert.match(ui.text(), /with your agent/, "the card still says what it knows");
@@ -684,6 +723,7 @@ test("a value the agent did send is still covered locally, with no second questi
     }),
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
+  await openCard(ui, "phone.mobile");
   await ui.click(ui.button("Show"));
   assert.match(ui.text(), /8262 2325/);
   assert.equal(asked, 0, "it was already here — asking again would be a second disclosure for nothing");
@@ -820,6 +860,7 @@ test("a value the holder said to show is drawn on the map, not bulleted", async 
     }),
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
+  await openCard(ui, "profile.github");
   assert.match(ui.text(), /octocat/);
   assert.doesNotMatch(ui.text(), /•/, "the holder decided; the floor no longer applies to this one");
   await ui.unmount();
@@ -848,6 +889,7 @@ test("with no table yet, every value is masked and nothing is coloured", async (
     }),
     { chrome: { runtime: { sendMessage: agent({}).sendMessage } } },
   );
+  await openCard(ui, "name.legal");
   const screen = ui.text();
   assert.doesNotMatch(screen, /Glenn Gore/, "a name the registry would show is still masked, because the registry has not spoken");
   assert.doesNotMatch(screen, /8262 2325/);
@@ -1011,6 +1053,7 @@ test("a decision the holder made still holds when no table arrived", async () =>
     }),
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
+  await openCard(ui, "profile.github");
   const text = ui.text();
   assert.match(text, /octocat/, "they said show it, and that does not depend on a table");
   assert.doesNotMatch(text, /does not declare these/, "no table answered, so nothing declined anything");
@@ -1068,6 +1111,7 @@ test("a label that repeats the value is not drawn twice", async () => {
     }),
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
+  await openCard(ui, "company");
   const text = ui.text();
   assert.match(text, /Affinidi/, "the value is still there");
   assert.doesNotMatch(text, /Affinidi · Affinidi/);
@@ -1094,6 +1138,7 @@ test("a label that says something the value does not is kept", async () => {
     }),
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
+  await openCard(ui, "phone.mobile");
   assert.match(ui.text(), /work mobile ·/);
   await ui.unmount();
 });
@@ -1222,6 +1267,7 @@ test("the attribute using an unapplied type is marked on its own card", async ()
     }),
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
+  await openCard(ui, "profile.github");
   assert.match(ui.text(), /type not applied/);
   await ui.unmount();
 });

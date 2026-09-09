@@ -44,6 +44,17 @@ function installGlobals(window) {
     define(name, name === "window" ? window : name === "document" ? document : window[name]);
   }
   define("getComputedStyle", window.getComputedStyle.bind(window));
+  // The bare window globals. A component written for a browser says
+  // `addEventListener(...)` and `innerHeight`, not `window.addEventListener` —
+  // `shell.tsx` and `popover.tsx` both do — and without these it throws
+  // `ReferenceError` on mount, in a file the failing test never names. They are
+  // part of "a DOM exists" in exactly the way `document` is.
+  for (const name of ["addEventListener", "removeEventListener", "dispatchEvent", "requestIdleCallback", "matchMedia", "scrollTo", "scrollBy"]) {
+    if (typeof window[name] === "function") define(name, window[name].bind(window));
+  }
+  for (const name of ["innerWidth", "innerHeight", "scrollX", "scrollY", "location", "localStorage", "sessionStorage", "KeyboardEvent", "DragEvent", "DataTransfer", "SVGElement"]) {
+    if (window[name] !== undefined) define(name, window[name]);
+  }
   define("requestAnimationFrame", (fn) => setTimeout(() => fn(Date.now()), 0));
   define("cancelAnimationFrame", (id) => clearTimeout(id));
   // The map measures cards to draw its edges. happy-dom has no layout, so every
@@ -174,6 +185,20 @@ export async function render(element, { chrome: chromeStub } = {}) {
         throw new Error(`no button matching “${text}”. On screen: ${labels.join(", ") || "none"}`);
       }
       return found;
+    },
+    /**
+     * Press a key on the window.
+     *
+     * On the window rather than on an element because that is where the
+     * listeners under test live: a popover's Escape handler is bound globally
+     * so it fires wherever the caret happens to be, which is the whole point of
+     * it. Through `act` like every other event, so React settles the same way
+     * the browser would.
+     */
+    key: async (key) => {
+      await act(async () => {
+        window.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true }));
+      });
     },
     click: async (el) => {
       await act(async () => {
