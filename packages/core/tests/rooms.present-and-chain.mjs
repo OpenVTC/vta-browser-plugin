@@ -33,38 +33,31 @@ function recorder(reply) {
 
 // ── present ─────────────────────────────────────────────────────────────────
 
-// The member is `nonce`, not `challenge` — the schema's *description* says
-// "freshness value" and reading that instead of the member name puts an unknown
-// key on a payload the agent will reject.
-test("the freshness value is sent as `nonce`, and omitted when absent", async () => {
-  const withNonce = recorder({ presentation: PRESENTATION });
-  await roomsKeysPresent(withNonce, {
-    holder: HOLDER, service: AGENT, roomId: ROOM, action: "read",
-    audience: HOST, nonce: "n-1",
-  });
-  assert.equal(withNonce.sent[0].envelope.payload.nonce, "n-1");
-  assert.ok(!("challenge" in withNonce.sent[0].envelope.payload));
-
-  const without = recorder({ presentation: PRESENTATION });
-  await roomsKeysPresent(without, {
-    holder: HOLDER, service: AGENT, roomId: ROOM, action: "read", audience: HOST,
-  });
-  assert.ok(
-    !("nonce" in without.sent[0].envelope.payload),
-    "an absent nonce must be absent, not null — the payload denies unknown shapes",
-  );
-});
-
-// `audience` is optional on the wire and is what stops a presentation being
-// replayed at a different host, so a caller holding one has no reason to omit it.
-test("the presentation is scoped to one action and one audience", async () => {
+// `0.2` removed `audience` and `nonce`, and this asserts their ABSENCE rather
+// than nothing at all. Neither was doing what its name suggested: `audience` at
+// the task layer names the document's destination — the agent being asked, not
+// the host the presentation is later shown to — and a room presentation needs no
+// nonce, because a host binds it to whoever signed the envelope. The payload is
+// `additionalProperties: false`, so a caller that still sends either is refused
+// by the agent, and the test that would have caught that is this one.
+test("neither `audience` nor `nonce` is sent — 0.2 has no such members", async () => {
   const channel = recorder({ presentation: PRESENTATION });
   await roomsKeysPresent(channel, {
-    holder: HOLDER, service: AGENT, roomId: ROOM, action: "read", audience: HOST,
+    holder: HOLDER, service: AGENT, roomId: ROOM, action: "read",
+  });
+  const { payload } = channel.sent[0].envelope;
+  assert.ok(!("audience" in payload), "0.2 has no `audience`");
+  assert.ok(!("nonce" in payload), "0.2 has no `nonce`");
+  assert.ok(!("challenge" in payload), "and never had a `challenge`");
+});
+
+test("the presentation is scoped to one action and one room", async () => {
+  const channel = recorder({ presentation: PRESENTATION });
+  await roomsKeysPresent(channel, {
+    holder: HOLDER, service: AGENT, roomId: ROOM, action: "read",
   });
   const { payload } = channel.sent[0].envelope;
   assert.equal(payload.action, "read");
-  assert.equal(payload.audience, HOST);
   assert.equal(payload.roomId, ROOM);
 });
 
@@ -74,7 +67,7 @@ test("the presentation is scoped to one action and one audience", async () => {
 test("present is addressed to the agent, not the host", async () => {
   const channel = recorder({ presentation: PRESENTATION });
   await roomsKeysPresent(channel, {
-    holder: HOLDER, service: AGENT, roomId: ROOM, action: "read", audience: HOST,
+    holder: HOLDER, service: AGENT, roomId: ROOM, action: "read",
   });
   assert.equal(channel.sent[0].envelope.recipient, AGENT.did);
   assert.equal(channel.sent[0].envelope.issuer, HOLDER.did);
@@ -93,7 +86,7 @@ test("an incomplete presentation is refused where it was produced", async () => 
   ]) {
     await assert.rejects(
       roomsKeysPresent(recorder({ presentation: bad }), {
-        holder: HOLDER, service: AGENT, roomId: ROOM, action: "read", audience: HOST,
+        holder: HOLDER, service: AGENT, roomId: ROOM, action: "read",
       }),
       (e) => {
         assert.match(e.message, new RegExp(AGENT.did), `${what}: must name the agent`);
@@ -112,7 +105,7 @@ test("an incomplete presentation is refused where it was produced", async () => 
 // depth.
 test("an empty authority array is forwarded, not judged here", async () => {
   const res = await roomsKeysPresent(recorder({ presentation: { membership: "m", authority: [] } }), {
-    holder: HOLDER, service: AGENT, roomId: ROOM, action: "read", audience: HOST,
+    holder: HOLDER, service: AGENT, roomId: ROOM, action: "read",
   });
   assert.deepEqual(res.presentation.authority, []);
 });

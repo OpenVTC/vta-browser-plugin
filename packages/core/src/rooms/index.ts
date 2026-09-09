@@ -174,7 +174,7 @@ import {
   RESPONSE_TYPE_URI as KEYS_PRESENT_RESPONSE,
   type RoomsKeysPresentPayload,
   type RoomsKeysPresentResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/present/0.1/payload";
+} from "@openvtc/trust-tasks/rooms/keys/present/0.2/payload";
 import {
   TYPE_URI as KEYS_CHAIN,
   RESPONSE_TYPE_URI as KEYS_CHAIN_RESPONSE,
@@ -186,17 +186,16 @@ export interface RoomsPresentParams extends RoomsCaller {
   roomId: string;
   /** The action the presentation must confer, and no more. */
   action: RoomAction;
-  /**
-   * Who it is for — a host's DID.
-   *
-   * Optional on the wire and never omitted here: it is what stops a presentation
-   * being replayed at a different host, and a caller that has one has no reason
-   * to leave it out.
-   */
-  audience: string;
-  /** A verifier-supplied freshness value, where one was offered. */
-  nonce?: string;
 }
+
+// `audience` and `nonce` were members of `rooms/keys/present/0.1` and are gone
+// from `0.2`. Neither was doing what its name suggested: `audience` at the task
+// layer names the *destination* of the document, which is the agent being asked,
+// not the host the presentation will later be shown to — and a room
+// presentation needs no nonce, because a host binds it to whoever signed the
+// envelope rather than to a challenge it issued. Removing them is what
+// `dtgwg-trust-tasks-tf#418`'s cutover did; a caller that still sends them is
+// refused by `additionalProperties: false`.
 
 /**
  * Ask this agent's own VTA for a presentation of the room's credentials.
@@ -234,20 +233,17 @@ export async function roomsKeysPresent(
   params: RoomsPresentParams,
 ): Promise<{ presentation: Presentation; expiresAt?: string }> {
   // Built as a typed literal rather than spread-and-cast: the casts elsewhere in
-  // this module hide a misspelled member, and this payload has three of them
-  // whose names are easy to guess wrong (`nonce`, not `challenge`).
+  // this module hide a misspelled member, and this one has moved once already.
   const payload: RoomsKeysPresentPayload = {
     roomId: params.roomId,
     action: params.action,
-    audience: params.audience,
-    ...(params.nonce ? { nonce: params.nonce } : {}),
   };
   const res = await call<RoomsKeysPresentResponsePayload>(
     sender,
     { holder: params.holder, service: params.service },
     KEYS_PRESENT,
     KEYS_PRESENT_RESPONSE,
-    "rooms/keys/present/0.1",
+    "rooms/keys/present/0.2",
     payload,
   );
 
@@ -323,6 +319,108 @@ export async function roomsKeysBackfill(
     KEYS_BACKFILL,
     KEYS_BACKFILL_RESPONSE,
     "rooms/keys/backfill/0.1",
+    payload,
+  );
+}
+
+import {
+  TYPE_URI as KEYS_READ,
+  RESPONSE_TYPE_URI as KEYS_READ_RESPONSE,
+  type RoomsKeysReadPayload,
+  type RoomsKeysReadResponsePayload,
+} from "@openvtc/trust-tasks/rooms/keys/read/0.1/payload";
+import {
+  TYPE_URI as KEYS_BROWSE,
+  RESPONSE_TYPE_URI as KEYS_BROWSE_RESPONSE,
+  type RoomsKeysBrowsePayload,
+  type RoomsKeysBrowseResponsePayload,
+} from "@openvtc/trust-tasks/rooms/keys/browse/0.1/payload";
+
+/**
+ * Ask this agent to read one record from a room's host — and to check what the
+ * host said about it on the way through.
+ *
+ * **This is how a console reads a record at all.** `rooms/records/*` is served
+ * by the host, and `carrierParams` passes only `{type, payload}` while the
+ * offscreen document supplies its own agent as the recipient — so a `service`
+ * naming a host is dropped and the call lands somewhere that does not serve it.
+ * The same reason `roomsKeysBackfill` exists.
+ *
+ * **The agent verifies; this renders.** Do not re-implement the check here. The
+ * epoch key never leaves the agent, so it is the only party that can open the
+ * record, and it is the only party on the member's side that remembers what this
+ * host said last time. `verification` is its account of both.
+ *
+ * **`verification` is a verdict, never a failure.** An adverse value still
+ * returns the record — a member's own agent refusing because the *host*
+ * misbehaved would punish them for somebody else's act, and lock them out of
+ * the room holding the records that would show what happened. The consequence
+ * belongs on the write path. A surface that treats an adverse verdict as an
+ * error has inverted the design.
+ */
+export async function roomsKeysRead(
+  sender: TrustTaskSender,
+  params: RoomsCaller & { roomId: string; host: string; key: string },
+): Promise<RoomsKeysReadResponsePayload> {
+  const payload: RoomsKeysReadPayload = {
+    roomId: params.roomId,
+    host: params.host,
+    key: params.key,
+  };
+  return call<RoomsKeysReadResponsePayload>(
+    sender,
+    { holder: params.holder, service: params.service },
+    KEYS_READ,
+    KEYS_READ_RESPONSE,
+    "rooms/keys/read/0.1",
+    payload,
+  );
+}
+
+/**
+ * Ask this agent to list a room's records at its host, and to check the listing
+ * against what the host committed to.
+ *
+ * Metadata, never bodies — a property of the task rather than of the tier, and
+ * why this and {@link roomsKeysRead} are two calls: looking at a room's shelf
+ * should not decrypt the room.
+ *
+ * **`limit` is the page size to ask the host for, never a cap on the result.**
+ * The agent follows the host's cursor and reports `complete`. A caller that
+ * treats `limit` as "give me N" gets N and a listing that is not comparable
+ * against anything — see below.
+ *
+ * **`verification.count` is the check this call exists for**, and it is narrow.
+ * A reader cannot recompute a room's root from a listing, but it can *count*: a
+ * host that omits a record while committing to a tree that holds it contradicts
+ * itself inside one exchange, with no second party and no anchor. It means
+ * something **only** when `complete` is true and neither `prefix` nor
+ * `sinceVersion` was set; anything else is `notComparable`, which will be the
+ * common answer and is not a fault.
+ */
+export async function roomsKeysBrowse(
+  sender: TrustTaskSender,
+  params: RoomsCaller & {
+    roomId: string;
+    host: string;
+    prefix?: string;
+    sinceVersion?: number;
+    limit?: number;
+  },
+): Promise<RoomsKeysBrowseResponsePayload> {
+  const payload: RoomsKeysBrowsePayload = {
+    roomId: params.roomId,
+    host: params.host,
+    ...(params.prefix !== undefined ? { prefix: params.prefix } : {}),
+    ...(params.sinceVersion !== undefined ? { sinceVersion: params.sinceVersion } : {}),
+    ...(params.limit !== undefined ? { limit: params.limit } : {}),
+  };
+  return call<RoomsKeysBrowseResponsePayload>(
+    sender,
+    { holder: params.holder, service: params.service },
+    KEYS_BROWSE,
+    KEYS_BROWSE_RESPONSE,
+    "rooms/keys/browse/0.1",
     payload,
   );
 }
@@ -633,7 +731,7 @@ import {
   RESPONSE_TYPE_URI as OWNER_AUTHORITY_RESPONSE,
   type RoomsOwnerIssueAuthorityPayload,
   type RoomsOwnerIssueAuthorityResponsePayload,
-} from "@openvtc/trust-tasks/rooms/owner/issue-authority/0.1/payload";
+} from "@openvtc/trust-tasks/rooms/owner/issue-authority/0.2/payload";
 
 /** What every issuance names: the room, and the key that signs as it. */
 export interface RoomsIssueCall extends RoomsCaller {
@@ -717,7 +815,7 @@ export async function roomsOwnerIssueAuthority(
     { holder, service },
     OWNER_AUTHORITY,
     OWNER_AUTHORITY_RESPONSE,
-    "rooms/owner/issue-authority/0.1",
+    "rooms/owner/issue-authority/0.2",
     rest as unknown as RoomsOwnerIssueAuthorityPayload,
   );
 }

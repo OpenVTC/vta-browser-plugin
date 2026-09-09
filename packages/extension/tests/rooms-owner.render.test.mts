@@ -20,7 +20,7 @@ import { IssueInRoomsName } from "../src/manager/panes/rooms-owner.js";
 
 const INVITE = "rooms/owner/invite/0.1";
 const MEMBERSHIP = "rooms/owner/issue-membership/0.1";
-const AUTHORITY = "rooms/owner/issue-authority/0.1";
+const AUTHORITY = "rooms/owner/issue-authority/0.2";
 
 const ROOM = "did:webvh:QmRoom:rooms.example";
 const KEY = "room-northwind-signing";

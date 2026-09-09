@@ -728,6 +728,12 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/rooms/keys/browse/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_BROWSE_0_1"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/rooms/keys/chain/0.1",
       "consts": [
         "TASK_ROOMS_KEYS_CHAIN_0_1"
@@ -758,9 +764,15 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/rooms/keys/present/0.1",
+      "uri": "https://trusttasks.org/spec/rooms/keys/present/0.2",
       "consts": [
-        "TASK_ROOMS_KEYS_PRESENT_0_1"
+        "TASK_ROOMS_KEYS_PRESENT_0_2"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/keys/read/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_READ_0_1"
       ]
     },
     {
@@ -782,9 +794,9 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/rooms/owner/issue-authority/0.1",
+      "uri": "https://trusttasks.org/spec/rooms/owner/issue-authority/0.2",
       "consts": [
-        "TASK_ROOMS_OWNER_ISSUE_AUTHORITY_0_1"
+        "TASK_ROOMS_OWNER_ISSUE_AUTHORITY_0_2"
       ]
     },
     {
@@ -813,6 +825,9 @@
       "consts": [
         "TASK_TRUST_TASK_DISCOVERY_0_1"
       ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/trust-task-error/0.5"
     },
     {
       "uri": "https://trusttasks.org/spec/vault/archive/0.1",
