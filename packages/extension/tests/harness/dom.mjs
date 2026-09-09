@@ -181,6 +181,19 @@ export async function render(element, { chrome: chromeStub } = {}) {
       });
     },
     /**
+     * Click holding a modifier — shift-range selection and nothing else so far.
+     *
+     * Its own helper rather than an argument to `click` because it must go
+     * through `act` like every other event: a raw `dispatchEvent` from a test
+     * updates React outside the batch, which warns, and settles in a different
+     * order than the browser would.
+     */
+    clickWith: async (el, init) => {
+      await act(async () => {
+        el.dispatchEvent(new window.MouseEvent("click", { bubbles: true, ...init }));
+      });
+    },
+    /**
      * Type into an input or textarea, the way React hears it.
      *
      * The tracker reset is the load-bearing line. React keeps a `_valueTracker`

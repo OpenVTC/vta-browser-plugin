@@ -64,10 +64,11 @@ import { buildGraph, type ContextInput } from "../identity-graph.js";
 // the rest of this pane imports.
 import { listClaimTypes, unappliedClaimTypes } from "@openvtc/pnm-core/persona";
 import { IdentityMap } from "./persona-map.js";
+import { AttributeList } from "./persona-list.js";
 import { GuidedSetup } from "./persona-setup.js";
 import { showsGuide } from "../persona-flow.js";
 import { revealAttributeValue, type RevealTarget } from "../reveal-value.js";
-import { DisclosureHistoryPanel } from "./persona-editors.js";
+import { AttributeEditor, DisclosureHistoryPanel } from "./persona-editors.js";
 
 /**
  * Who is known in each context, with the face they wear resolved to an id.
@@ -112,6 +113,47 @@ async function loadContexts(parties: Parties, records: ContextRecord[]): Promise
         return { id: r.id, label, bindings: { ok: false, error: e instanceof Error ? e.message : String(e) } };
       }
     }),
+  );
+}
+
+/**
+ * Map or list, over the same model.
+ *
+ * Two words and nothing else. It is not a settings control and must not read
+ * as one: the views answer different questions rather than showing more or less
+ * of the same answer, so neither is a "detail level" and neither is default in
+ * a way the other has to argue with.
+ */
+function ViewToggle({ view, onView }: { view: "map" | "list"; onView: (v: "map" | "list") => void }) {
+  const item = (v: "map" | "list", label: string) => (
+    <button
+      key={v}
+      onClick={() => onView(v)}
+      aria-pressed={view === v}
+      style={{
+        font: "inherit",
+        fontSize: "var(--w-t-sm)",
+        padding: "5px 12px",
+        cursor: "pointer",
+        border: `1px solid ${view === v ? "var(--w-accent)" : "var(--w-line)"}`,
+        background: view === v ? "var(--w-accent-soft)" : "var(--w-surface)",
+        color: view === v ? "var(--w-text)" : "var(--w-muted)",
+        borderRadius: "var(--w-r-sm)",
+      }}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      {item("map", "Map")}
+      {item("list", "List")}
+      <span style={{ fontSize: "var(--w-t-xs)", color: "var(--w-faint)" }}>
+        {view === "map"
+          ? "Select anything to see where it reaches."
+          : "Tick several to delete them or add them to a face."}
+      </span>
+    </div>
   );
 }
 
@@ -198,10 +240,27 @@ export function PersonaPane({
   const [guiding, setGuiding] = useState(false);
   const [skipped, setSkipped] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
+  /**
+   * Which view of the same graph is on screen.
+   *
+   * Two views, one model — the map answers "what reaches what", the list is the
+   * shape you tidy in. Session state rather than stored: a person who came here
+   * to delete four numbers wants the list *now*, and would not thank a console
+   * that remembered that choice a week later when they came to look at reach.
+   */
+  const [view, setView] = useState<"map" | "list">("map");
+  /** The attribute the list asked to edit, by id. Held as an id rather than a
+   *  record so a reload cannot leave the editor holding a stale copy. */
+  const [editingId, setEditingId] = useState<string | null>(null);
   const showGuide = showsGuide({ faces: profiles.data?.length ?? null, guiding, skipped });
   useEffect(() => {
     if (showGuide) setGuiding(true);
   }, [showGuide]);
+
+  const editing = useMemo(
+    () => (attributes.data ?? []).find((a) => a.attributeId === editingId),
+    [attributes.data, editingId],
+  );
 
   const graph = useMemo(
     () => buildGraph(attributes.data ?? [], profiles.data ?? [], contexts.data ?? []),
@@ -295,6 +354,39 @@ export function PersonaPane({
           decided for yourself still stands.
         </Note>
       )}
+      <ViewToggle view={view} onView={setView} />
+      {view === "list" ? (
+        editing ? (
+          <AttributeEditor
+            // Keyed on the record. `AttributeEditor` seeds `useState` from
+            // `existing`, which runs on mount and never again — so without this
+            // React reuses the instance when the list opens a second attribute
+            // and the form shows the first one's value. On a *put*, which
+            // replaces, that is not a stale form: it is one attribute's value
+            // written over another's.
+            key={editing.attributeId}
+            registry={registry.data}
+            parties={parties}
+            authority={authority}
+            existing={editing}
+            onDone={() => {
+              setEditingId(null);
+              reloadAll();
+            }}
+            onCancel={() => setEditingId(null)}
+          />
+        ) : (
+          <AttributeList
+            attributes={graph.attributes}
+            faces={graph.faces}
+            registry={registry.data}
+            parties={parties}
+            reveal={reveal}
+            onChanged={reloadAll}
+            onEdit={(a) => setEditingId(a.id)}
+          />
+        )
+      ) : (
       <IdentityMap registry={registry.data}
         parties={parties}
         authority={authority}
@@ -324,6 +416,7 @@ export function PersonaPane({
           ) : undefined
         }
       />
+      )}
       <DisclosureHistoryPanel parties={parties} authority={authority} records={records} />
     </div>
   );
