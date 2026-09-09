@@ -423,6 +423,7 @@ export function PersonaPane({
         )
       ) : (
       <IdentityMap registry={registry.data}
+        worlds={worlds.data ?? []}
         parties={parties}
         authority={authority}
         graph={graph}
