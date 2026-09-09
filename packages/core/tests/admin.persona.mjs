@@ -21,6 +21,9 @@ import {
   personaProfilePut,
   personaProfileDelete,
   personaBindingSet,
+  personaFacetPut,
+  personaFacetList,
+  personaFacetDelete,
   personaCorrelationAnalyze,
   personaDisclosureHistory,
   personasBlockingDelete,
@@ -89,6 +92,19 @@ test("every task names its 1.0 URI, request and response", async () => {
       { ...PARTIES, contextId: "demo", personaDid: "did:key:zP" },
       "persona/binding/set/1.0",
       { contextId: "demo", personaDid: "did:key:zP", version: 1, boundAt: "x" },
+    ],
+    [
+      personaFacetPut,
+      { ...PARTIES, name: "Work", colour: "teal" },
+      "persona/facet/put/1.0",
+      { facetId: "01F", version: 1, created: true, updatedAt: "x" },
+    ],
+    [personaFacetList, { ...PARTIES }, "persona/facet/list/1.0", { facets: [] }],
+    [
+      personaFacetDelete,
+      { ...PARTIES, facetId: "01F" },
+      "persona/facet/delete/1.0",
+      { existed: true, releasedFaces: 0 },
     ],
     [personaCorrelationAnalyze, { ...PARTIES }, "persona/correlation/analyze/1.0", { findings: [] }],
     [
@@ -490,4 +506,77 @@ test("every persona in a context is read to the end, and no cursor comes back", 
   assert.deepEqual(res.personas.map((p) => p.personaDid), ["did:key:zA", "did:key:zB"]);
   assert.equal(res.nextCursor, undefined);
   assert.equal(r.sent[1].envelope.payload.contextId, "openvtc", "the context survives the second request");
+});
+
+// ── Facets ──────────────────────────────────────────────────────────────────
+
+test("a facet carries no contextId — it arranges records that have no compartment", async () => {
+  const channel = recorder({ facetId: "01F", version: 1, created: true, updatedAt: "x" });
+  await personaFacetPut(channel, { ...PARTIES, name: "Work", colour: "teal" });
+  assert.equal(channel.sent[0].envelope.body?.contextId, undefined);
+  assert.equal(channel.sent[0].envelope.payload?.contextId, undefined);
+});
+
+test("membership is sent only when the caller supplied it", async () => {
+  // Both lists are REPLACED by a put. Sending `[]` for a caller that passed
+  // nothing would empty a facet's membership on an edit that meant to rename
+  // it — the same replace hazard the attribute editor guards one record down.
+  const channel = recorder({ facetId: "01F", version: 1, created: true, updatedAt: "x" });
+  await personaFacetPut(channel, { ...PARTIES, name: "Work", colour: "teal" });
+  const payload = channel.sent[0].envelope.payload ?? channel.sent[0].envelope.body;
+  assert.equal(payload.faceIds, undefined, "an unsupplied membership was sent as empty");
+  assert.equal(payload.attributeIds, undefined);
+  assert.equal(payload.icon, undefined);
+});
+
+test("membership that WAS supplied is carried, including an explicit empty", async () => {
+  // The paired assertion: a suite that only checks omissions would pass for a
+  // client that never sent membership at all.
+  const channel = recorder({ facetId: "01F", version: 2, created: false, updatedAt: "x" });
+  await personaFacetPut(channel, {
+    ...PARTIES,
+    facetId: "01F",
+    name: "Work",
+    colour: "plum",
+    icon: "\u{1F4BC}",
+    faceIds: ["01P"],
+    attributeIds: [],
+    expectedVersion: 1,
+  });
+  const payload = channel.sent[0].envelope.payload ?? channel.sent[0].envelope.body;
+  assert.deepEqual(payload.faceIds, ["01P"]);
+  assert.deepEqual(payload.attributeIds, [], "an explicit empty list was dropped");
+  assert.equal(payload.colour, "plum");
+  assert.equal(payload.expectedVersion, 1);
+});
+
+test("a facet listing follows the cursor to the end", async () => {
+  // `limit` is the page size to ask for, never a cap. A client that stopped at
+  // the first page would draw a picture missing every facet past it, and a
+  // short array is indistinguishable from a complete one.
+  const pages = [
+    { facets: [{ facetId: "a" }], nextCursor: "c1" },
+    { facets: [{ facetId: "b" }], nextCursor: "c2" },
+    { facets: [{ facetId: "c" }] },
+  ];
+  let n = 0;
+  const channel = { send: () => Promise.resolve(pages[n++]) };
+  const all = await personaFacetList(channel, { ...PARTIES, limit: 1 });
+  assert.deepEqual(all.map((f) => f.facetId), ["a", "b", "c"]);
+});
+
+test("a facet listing returns [] rather than undefined", async () => {
+  const channel = recorder({});
+  assert.deepEqual(await personaFacetList(channel, { ...PARTIES }), []);
+});
+
+test("deleting a facet sends only the facet — there is no cascade to send", async () => {
+  // A facet is an arrangement, not a container. There is no cascading form of
+  // this call anywhere on the wire, and a client inventing one would be asking
+  // for a member the agent would refuse.
+  const channel = recorder({ existed: true, releasedFaces: 2 });
+  const res = await personaFacetDelete(channel, { ...PARTIES, facetId: "01F" });
+  const payload = channel.sent[0].envelope.payload ?? channel.sent[0].envelope.body;
+  assert.deepEqual(Object.keys(payload).sort(), ["facetId"]);
+  assert.equal(res.releasedFaces, 2, "the released-face count is what a screen reads");
 });

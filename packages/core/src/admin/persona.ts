@@ -7,7 +7,7 @@
 // is deliberately incomplete: a wallet's holder identity is scoped to a
 // context, so every task in this file would come back `e.p.msg.forbidden` if a
 // wallet surface called it. That module says so in its own header, and CI greps
-// the built extension bundles for the ten task URIs below to keep the statement
+// the built extension bundles for the thirteen task URIs below to keep the statement
 // true rather than merely written down.
 //
 // So this module is the other half, and it lives beside the console's other
@@ -19,7 +19,7 @@
 //
 // ## The gate
 //
-// The agent refuses all ten unless the caller is an **unscoped holder** —
+// The agent refuses all thirteen unless the caller is an **unscoped holder** —
 // `Admin` *and* unrestricted scope (`require_super_admin`, not `role ==
 // Admin`). That distinction is the whole design: an administrator scoped to one
 // context who could read the pool would be reading identity data belonging to
@@ -88,6 +88,25 @@ import {
   type PersonaBindingSetResponsePayload,
 } from "@openvtc/trust-tasks/persona/binding/set/1.0/payload";
 import {
+  TYPE_URI as FACET_PUT,
+  RESPONSE_TYPE_URI as FACET_PUT_RESPONSE,
+  type PersonaFacetPutPayload,
+  type PersonaFacetPutResponsePayload,
+  type FacetColour,
+} from "@openvtc/trust-tasks/persona/facet/put/1.0/payload";
+import {
+  TYPE_URI as FACET_LIST,
+  RESPONSE_TYPE_URI as FACET_LIST_RESPONSE,
+  type PersonaFacetListPayload,
+  type PersonaFacetListResponsePayload,
+} from "@openvtc/trust-tasks/persona/facet/list/1.0/payload";
+import {
+  TYPE_URI as FACET_DELETE,
+  RESPONSE_TYPE_URI as FACET_DELETE_RESPONSE,
+  type PersonaFacetDeletePayload,
+  type PersonaFacetDeleteResponsePayload,
+} from "@openvtc/trust-tasks/persona/facet/delete/1.0/payload";
+import {
   TYPE_URI as CORRELATION_ANALYZE,
   RESPONSE_TYPE_URI as CORRELATION_ANALYZE_RESPONSE,
   type PersonaCorrelationAnalyzePayload,
@@ -134,6 +153,19 @@ export type AttributeSensitivity = NonNullable<PersonaAttributePutPayload["sensi
 /** The holder's own answer on what it takes to let a value leave, where they
  *  gave one. Absence means the same as it does for {@link AttributeSensitivity}. */
 export type AttributeRelease = NonNullable<PersonaAttributePutPayload["release"]>;
+/** One named part of the holder's life, and what belongs to it. */
+export type PoolFacet = PersonaFacetListResponsePayload["facets"][number];
+/**
+ * The eight colour **names**. Never a literal — each surface resolves one
+ * against its own palette, so the same world is legible in a terminal, a light
+ * theme and a dark one.
+ *
+ * Re-exported from the generated bindings rather than restated: a hand-written
+ * copy of an enum drifts the moment a ninth colour is published, and nothing
+ * compares the two.
+ */
+export type { FacetColour };
+
 /** One place the holder's identities link, and what can be done about it. */
 export type CorrelationFinding = PersonaCorrelationAnalyzeResponsePayload["findings"][number];
 /** One record of something that left, and to whom. */
@@ -701,6 +733,136 @@ export async function personaDisclosureHistory(
     DISCLOSURE_HISTORY,
     DISCLOSURE_HISTORY_RESPONSE,
     "persona/disclosure/history/1.0",
+    payload,
+  );
+}
+
+// ── Facets: the holder's arrangement of their own identity ──────────────────
+//
+// On screen these are **worlds** — see `design-docs/persona-vocabulary.md`. The
+// wire keeps the specification's word, exactly as `profile`/face does.
+//
+// Membership lives on the facet rather than on the records it names, and that
+// is not a filing decision. `persona/attribute/put` REPLACES the attribute, and
+// this console lists without `includeSensitive` on purpose — so a client that
+// arranged by writing to attributes would either have to fetch every sensitive
+// value the holder owns to perform an arrangement that has nothing to do with
+// values, or send a put without one and destroy them. One record here has
+// neither problem.
+
+export interface FacetPutParams extends PersonaHolderParams {
+  /** Omit to create. Supplying one addresses an existing facet. */
+  facetId?: string;
+  name: string;
+  colour: FacetColour;
+  /** One or two emoji. Decorative, carries no meaning, and a surface that
+   *  cannot render it shows the name. */
+  icon?: string;
+  /**
+   * Profiles belonging to this facet.
+   *
+   * **Replaced, not merged.** Omitting it means an empty list — a member whose
+   * absence meant "keep" would make it impossible to empty one. A caller
+   * editing a facet sends back the membership it loaded, the same discipline
+   * `personaProfilePut` needs for its entries.
+   */
+  faceIds?: string[];
+  /** Attributes belonging to this facet, with the same replace semantics. An
+   *  attribute may belong to several facets; a face may not. */
+  attributeIds?: string[];
+  expectedVersion?: number;
+}
+
+/**
+ * Create or replace one facet.
+ *
+ * Refused with `persona/facet/put:faceAlreadyPlaced` when a listed face belongs
+ * to another facet — the error's `details.placed` names the facet already
+ * holding it, so a caller can offer to move it rather than send the holder
+ * looking.
+ */
+export async function personaFacetPut(
+  sender: TrustTaskSender,
+  params: FacetPutParams,
+): Promise<PersonaFacetPutResponsePayload> {
+  const payload: PersonaFacetPutPayload = {
+    ...(params.facetId !== undefined ? { facetId: params.facetId } : {}),
+    name: params.name,
+    colour: params.colour,
+    ...(params.icon !== undefined ? { icon: params.icon } : {}),
+    ...(params.faceIds !== undefined ? { faceIds: params.faceIds } : {}),
+    ...(params.attributeIds !== undefined ? { attributeIds: params.attributeIds } : {}),
+    ...(params.expectedVersion !== undefined ? { expectedVersion: params.expectedVersion } : {}),
+  };
+  return holderCall<PersonaFacetPutPayload, PersonaFacetPutResponsePayload>(
+    sender,
+    params,
+    FACET_PUT,
+    FACET_PUT_RESPONSE,
+    "persona/facet/put/1.0",
+    payload,
+  );
+}
+
+/**
+ * Every facet, following the cursor to the end.
+ *
+ * `limit` is the page size to ask for and never a cap on the result — the same
+ * rule the other three listings in this module follow, and for the same reason:
+ * a short page is indistinguishable from a complete one, so only an absent
+ * `nextCursor` means the end.
+ */
+export async function personaFacetList(
+  sender: TrustTaskSender,
+  params: PersonaHolderParams & { limit?: PersonaFacetListPayload["limit"]; cursor?: string },
+): Promise<PoolFacet[]> {
+  const payload: PersonaFacetListPayload = {
+    ...(params.limit !== undefined ? { limit: params.limit } : {}),
+    ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
+  };
+  return collectPages("persona/facet/list", async (cursor) => {
+    const res = await holderCall<PersonaFacetListPayload, PersonaFacetListResponsePayload>(
+      sender,
+      params,
+      FACET_LIST,
+      FACET_LIST_RESPONSE,
+      "persona/facet/list/1.0",
+      cursor === undefined ? payload : { ...payload, cursor },
+    );
+    return { items: res.facets ?? [], nextCursor: res.nextCursor };
+  });
+}
+
+export interface FacetDeleteParams extends PersonaHolderParams {
+  facetId: string;
+  expectedVersion?: number;
+}
+
+/**
+ * Delete one facet.
+ *
+ * **Deletes nothing it named.** Every face and attribute survives — a facet is
+ * an arrangement, not a container, and there is deliberately no cascading form
+ * of this call anywhere on the wire. `releasedFaces` says how many faces now
+ * belong to no facet, which is what a surface needs to describe the result
+ * honestly rather than saying only "deleted".
+ *
+ * `existed: false` is a successful no-op, not a failure.
+ */
+export async function personaFacetDelete(
+  sender: TrustTaskSender,
+  params: FacetDeleteParams,
+): Promise<PersonaFacetDeleteResponsePayload> {
+  const payload: PersonaFacetDeletePayload = {
+    facetId: params.facetId,
+    ...(params.expectedVersion !== undefined ? { expectedVersion: params.expectedVersion } : {}),
+  };
+  return holderCall<PersonaFacetDeletePayload, PersonaFacetDeleteResponsePayload>(
+    sender,
+    params,
+    FACET_DELETE,
+    FACET_DELETE_RESPONSE,
+    "persona/facet/delete/1.0",
     payload,
   );
 }

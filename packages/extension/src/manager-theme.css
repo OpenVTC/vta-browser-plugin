@@ -59,6 +59,33 @@
   --m-fam-gated: #a15381;
   --m-fam-unregistered: #8a92a3;
 
+  /* World colours — the holder's own choice, and the THIRD categorical set.
+   *
+   * A world (`persona/facet` on the wire) is a part of a person's life, and
+   * these eight are the only colours one may wear. The wire carries a *name*
+   * — `teal`, `plum` — and never a literal, so a world stays legible in this
+   * console, in a terminal and on a phone, each resolving the name against its
+   * own palette. That is also what makes the closed set enforceable: given an
+   * arbitrary hex from a holder, this file could not keep a decorative choice
+   * out of the one channel that means something.
+   *
+   * None is named for, or drawn near, `--w-ok` / `--w-warn` / `--w-danger`.
+   * That constraint is not a matter of taste and is asserted in
+   * `manager-world-colour.test.mts`: a holder who names a world "Work" and
+   * picks the red one would otherwise have every card in it reading as an
+   * alarm, and no way to discover why.
+   *
+   * Held at the same low chroma as the family set, for the same reason — they
+   * fill a small chip beside a name, never a border or a pill. */
+  --m-world-slate: #5c6b80;
+  --m-world-indigo: #5b5fbf;
+  --m-world-teal: #2c7c85;
+  --m-world-moss: #4f7d5e;
+  --m-world-sand: #8a7440;
+  --m-world-clay: #a2664a;
+  --m-world-rose: #b05878;
+  --m-world-plum: #8455a8;
+
   /* The rail's own ground — a half-step off `--w-ground` so the three columns
    * read as three columns without a hard border doing the work. */
   --m-rail: #f2f4f8;
@@ -81,6 +108,17 @@
     --m-fam-public: #85b795;
     --m-fam-gated: #d18cb2;
     --m-fam-unregistered: #6f7a8c;
+
+    /* Lifted for a dark ground, same hues and the same distance from the
+     * semantic three. */
+    --m-world-slate: #8d9bb0;
+    --m-world-indigo: #8f92e0;
+    --m-world-teal: #58aeb8;
+    --m-world-moss: #85b795;
+    --m-world-sand: #c0a668;
+    --m-world-clay: #d1937a;
+    --m-world-rose: #e08aa8;
+    --m-world-plum: #b98cd8;
 
     --m-rail: #0e131c;
     --m-tree: #10151f;
