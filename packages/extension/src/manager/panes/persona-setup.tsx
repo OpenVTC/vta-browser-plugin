@@ -19,6 +19,7 @@ import { Button, Note, Panel } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { contextHeading } from "../format.js";
 import type { Authority, Parties } from "../use-vta.js";
+import type { RevealTarget } from "../reveal-value.js";
 import { AttributeEditor, BindingForm, AttributeValue, ProfileEditor } from "./persona-editors.js";
 import { StarterForm } from "./persona-starter.js";
 import { holderGate } from "../holder-gate.js";
@@ -88,10 +89,12 @@ function StrangerCard({
   attributes,
   faceName,
   registry,
+  onReveal,
 }: {
   attributes: PoolAttribute[];
   faceName: string;
   registry: ClaimTypeRegistry | null;
+  onReveal: (target: RevealTarget) => Promise<unknown>;
 }) {
   const name = attributes.find((f) => f.type === "name" || f.type.startsWith("name."));
   const rest = attributes.filter((f) => f !== name);
@@ -109,7 +112,14 @@ function StrangerCard({
           <>
             <div style={{ display: "grid" }}>
               {name ? (
-                <AttributeValue registry={registry} type={name.type} value={name.value} style={{ fontSize: t.md, fontWeight: 640 }} />
+                <AttributeValue
+                  registry={registry}
+                  type={name.type}
+                  value={name.value}
+                  sensitivity={name.sensitivity}
+                  reveal={() => onReveal({ attributeId: name.attributeId, type: name.type })}
+                  style={{ fontSize: t.md, fontWeight: 640 }}
+                />
               ) : (
                 <span style={{ fontSize: t.md, fontWeight: 640 }}>—</span>
               )}
@@ -120,7 +130,13 @@ function StrangerCard({
               {rest.map((f) => (
                 <span key={f.attributeId} style={{ display: "contents" }}>
                   <span style={{ color: c.faint, fontFamily: font.mono, fontSize: t.xs }}>{f.label ?? f.type}</span>
-                  <AttributeValue registry={registry} type={f.type} value={f.value} />
+                  <AttributeValue
+                    registry={registry}
+                    type={f.type}
+                    value={f.value}
+                    sensitivity={f.sensitivity}
+                    reveal={() => onReveal({ attributeId: f.attributeId, type: f.type })}
+                  />
                 </span>
               ))}
             </div>
@@ -153,6 +169,7 @@ export function GuidedSetup({
   onFinished,
   onSkip,
   registry,
+  onReveal,
 }: {
   parties: Parties;
   authority: Authority | null;
@@ -164,6 +181,15 @@ export function GuidedSetup({
   onFinished: (outcome: string) => void;
   onSkip: () => void;
   registry: ClaimTypeRegistry | null;
+  /**
+   * Ask the agent for one value it kept back.
+   *
+   * Threaded in with the fix that made this screen honour the holder's own
+   * `sensitivity`: without it a *Show* on a genuinely withheld value has
+   * nothing to call, and a button that cannot do what it says is the same
+   * defect one step along.
+   */
+  onReveal: (target: RevealTarget) => Promise<unknown>;
 }) {
   const [step, setStep] = useState<Step>(attributes.length === 0 ? 1 : 2);
   const [contextId, setContextId] = useState(records[0]?.id ?? "");
@@ -225,7 +251,13 @@ export function GuidedSetup({
                   {attributes.map((a) => (
                     <div key={a.attributeId} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: t.sm }}>
                       <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted, minWidth: 120 }}>{a.type}</span>
-                      <AttributeValue registry={registry} type={a.type} value={a.value} />
+                      <AttributeValue
+                        registry={registry}
+                        type={a.type}
+                        value={a.value}
+                        sensitivity={a.sensitivity}
+                        reveal={() => onReveal({ attributeId: a.attributeId, type: a.type })}
+                      />
                     </div>
                   ))}
                 </div>
@@ -268,7 +300,7 @@ export function GuidedSetup({
             onCancel={() => setStep(1)}
             cancelLabel="Back — add more attributes"
           />
-          <StrangerCard registry={registry} attributes={preview} faceName={faceName} />
+          <StrangerCard onReveal={onReveal} registry={registry} attributes={preview} faceName={faceName} />
         </div>
       )}
 

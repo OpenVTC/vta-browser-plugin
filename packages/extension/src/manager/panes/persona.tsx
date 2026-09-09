@@ -306,6 +306,7 @@ export function PersonaPane({
   if (showGuide) {
     return (
       <GuidedSetup registry={registry.data}
+        onReveal={reveal}
         parties={parties}
         authority={authority}
         records={records}
