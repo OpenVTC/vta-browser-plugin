@@ -11,7 +11,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { showsGuide } from "../src/manager/persona-flow.ts";
+import { showsGuide, suggestsWorlds, NUDGE_AT_FACES } from "../src/manager/persona-flow.ts";
 
 const s = (faces: number | null, guiding = false, skipped = false) => showsGuide({ faces, guiding, skipped });
 
@@ -91,4 +91,31 @@ test("an unreachable step is refused rather than shown empty", () => {
   // Reaching a step with nothing to work on presents a form whose every
   // control refuses — a worse answer than not offering the step at all.
   assert.equal(reach(2, 0, 1), false, "attributes, not faces, are what step two needs");
+});
+
+// ── Worlds are optional and late, so the pane says so at the right moment ────
+
+test("no nudge while a holder has few faces", () => {
+  // A world arranging one face is an arrangement of one thing. Below the
+  // threshold the suggestion is noise, and noise at setup is what teaches
+  // people to ignore the pane.
+  for (const faces of [0, 1, 2, 3]) {
+    assert.equal(suggestsWorlds({ faces, worlds: 0 }), false, `nudged at ${faces} faces`);
+  }
+});
+
+test("the nudge arrives when the list starts to be the wall worlds fix", () => {
+  assert.equal(suggestsWorlds({ faces: NUDGE_AT_FACES, worlds: 0 }), true);
+  assert.equal(suggestsWorlds({ faces: 12, worlds: 0 }), true);
+});
+
+test("a holder who already has a world is not nudged toward worlds", () => {
+  assert.equal(suggestsWorlds({ faces: 12, worlds: 1 }), false);
+});
+
+test("nothing is suggested while either number is still loading", () => {
+  // A suggestion that appears and vanishes is one nobody trusts.
+  assert.equal(suggestsWorlds({ faces: null, worlds: 0 }), false);
+  assert.equal(suggestsWorlds({ faces: 12, worlds: null }), false);
+  assert.equal(suggestsWorlds({ faces: null, worlds: null }), false);
 });
