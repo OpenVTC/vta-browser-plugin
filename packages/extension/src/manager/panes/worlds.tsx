@@ -34,6 +34,7 @@ import {
   personaFacetDelete,
   type PoolFacet,
   type PoolProfile,
+  type PoolAttribute,
   type FacetColour,
 } from "@openvtc/pnm-core/admin";
 import { Button, Note, Panel } from "../../ui.js";
@@ -44,6 +45,8 @@ import { holderGate } from "../holder-gate.js";
 import type { Authority, Parties } from "../use-vta.js";
 import { WORLD_COLOURS, worldHue, worldColourName } from "../world-colour.js";
 import { placedElsewhere, worldOfFace, unplacedFaces, type Placement } from "../world-model.js";
+import { groupRows } from "../attribute-list.js";
+import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 
 function Swatch({
   colour,
@@ -104,6 +107,8 @@ function WorldEditor({
   authority,
   existing,
   faces,
+  attributes,
+  registry,
   worlds,
   onDone,
   onCancel,
@@ -112,6 +117,8 @@ function WorldEditor({
   authority: Authority | null;
   existing?: PoolFacet;
   faces: readonly PoolProfile[];
+  attributes: readonly PoolAttribute[];
+  registry: ClaimTypeRegistry | null;
   worlds: readonly PoolFacet[];
   onDone: () => void;
   onCancel: () => void;
@@ -123,6 +130,10 @@ function WorldEditor({
   // opened with an empty selection and saved would silently empty the world's
   // membership on an edit that meant to rename it.
   const [chosen, setChosen] = useState<Set<string>>(new Set(existing?.faceIds ?? []));
+  // Same seeding rule, same reason: a put replaces this list too.
+  const [chosenAttrs, setChosenAttrs] = useState<Set<string>>(
+    new Set(existing?.attributeIds ?? []),
+  );
   const [busy, setBusy] = useState(false);
   const [conflict, setConflict] = useState<Placement[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -140,11 +151,7 @@ function WorldEditor({
         colour,
         ...(icon.trim() ? { icon: icon.trim() } : {}),
         faceIds: [...chosen],
-        // Sent explicitly, and empty until this pane offers attribute
-        // membership. Omitting it would mean the same thing on the wire — a
-        // replace — but saying so here is what stops someone later reading the
-        // omission as "leave them alone".
-        attributeIds: existing?.attributeIds ?? [],
+        attributeIds: [...chosenAttrs],
       });
       onDone();
     } catch (e) {
@@ -157,7 +164,7 @@ function WorldEditor({
     } finally {
       setBusy(false);
     }
-  }, [parties, existing, name, colour, icon, chosen, onDone]);
+  }, [parties, existing, name, colour, icon, chosen, chosenAttrs, onDone]);
 
   const toggle = (id: string) =>
     setChosen((current) => {
@@ -165,6 +172,30 @@ function WorldEditor({
       if (!next.delete(id)) next.add(id);
       return next;
     });
+
+  const toggleAttr = (id: string) =>
+    setChosenAttrs((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+
+  // Grouped by the families the map and the list already use, rather than a
+  // flat column of thirty. Same grouping, one definition — two arrangements of
+  // one pool that disagree is the defect where a person counts six in one place
+  // and five in another.
+  const attributeGroups = groupRows(
+    attributes.map((a) => ({
+      id: a.attributeId,
+      type: a.type,
+      label: a.label,
+      value: a.value,
+      provenance: a.provenance,
+      stale: Boolean(a.stale),
+      version: a.version,
+    })) as never,
+    registry,
+  );
 
   return (
     <Panel title={existing ? `Edit ${existing.name}` : "A new part of your life"}>
@@ -254,6 +285,49 @@ function WorldEditor({
           )}
         </div>
 
+        <div style={{ display: "grid", gap: 8 }}>
+          <span style={{ fontSize: t.sm, color: c.text }}>Which attributes belong to it?</span>
+          {/* No exclusivity here, and none is implied: an attribute may belong
+              to several worlds, because a mobile number is genuinely part of a
+              working life and a home one at once. */}
+          <span style={{ fontSize: t.xs, color: c.faint }}>
+            An attribute can belong to more than one — your mobile is probably in both.
+          </span>
+          {attributeGroups.length === 0 ? (
+            <span style={{ fontSize: t.sm, color: c.faint }}>You have no attributes yet.</span>
+          ) : (
+            attributeGroups.map((g) => (
+              <div key={g.family} style={{ display: "grid", gap: 4 }}>
+                <span style={{ fontSize: t.xs, color: c.faint, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span
+                    aria-hidden="true"
+                    style={{ width: 3, height: 11, background: g.style.hue, borderRadius: 2 }}
+                  />
+                  {g.style.label}
+                </span>
+                {g.rows.map((row) => (
+                  <label
+                    key={row.id}
+                    style={{ display: "flex", alignItems: "center", gap: 9, fontSize: t.sm, paddingLeft: 9 }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={chosenAttrs.has(row.id)}
+                      aria-label={row.label ?? row.type}
+                      onChange={() => toggleAttr(row.id)}
+                      style={{ accentColor: c.accent, width: 15, height: 15 }}
+                    />
+                    <code style={{ fontFamily: font.mono, fontSize: t.xs, color: c.muted }}>
+                      {row.type}
+                    </code>
+                    {row.label && <span style={{ color: c.faint, fontSize: t.xs }}>{row.label}</span>}
+                  </label>
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+
         {conflict && (
           <Note tone="warn">
             {conflict.length === 1
@@ -287,12 +361,16 @@ export function WorldsPane({
   authority,
   worlds,
   faces,
+  attributes,
+  registry,
   onChanged,
 }: {
   parties: Parties;
   authority: Authority | null;
   worlds: readonly PoolFacet[];
   faces: readonly PoolProfile[];
+  attributes: readonly PoolAttribute[];
+  registry: ClaimTypeRegistry | null;
   onChanged: () => void;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
@@ -313,6 +391,8 @@ export function WorldsPane({
         authority={authority}
         {...(target ? { existing: target } : {})}
         faces={faces}
+        attributes={attributes}
+        registry={registry}
         worlds={worlds}
         onDone={() => {
           setEditing(null);
@@ -415,6 +495,13 @@ export function WorldsPane({
                   ? "No faces belong to it yet."
                   : members.map((f) => f.name).join(" · ")}
               </div>
+              {(w.attributeIds?.length ?? 0) > 0 && (
+                <div style={{ fontSize: t.xs, color: c.faint }}>
+                  {w.attributeIds!.length} attribute
+                  {w.attributeIds!.length === 1 ? "" : "s"} belong
+                  {w.attributeIds!.length === 1 ? "s" : ""} to it
+                </div>
+              )}
             </div>
           );
         })

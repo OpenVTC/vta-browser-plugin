@@ -87,3 +87,26 @@ export function placedElsewhere(error: unknown): Placement[] | null {
   // is invisible.
   return out.length === placed.length ? out : null;
 }
+
+/**
+ * The worlds an attribute belongs to.
+ *
+ * Plural, and that is the difference from {@link worldOfFace}. A face belongs
+ * to one world because the world is where a consumer reads its colour from; an
+ * attribute belongs to as many as are true, because a mobile number is
+ * genuinely part of a working life and a home one at the same time. A model
+ * that made the holder choose would be asking a question about their phone that
+ * has no answer, and the agent enforces no exclusivity here for the same
+ * reason.
+ *
+ * Returned in the order the worlds are listed rather than the order the
+ * attribute was added to each, so two attributes in the same worlds draw their
+ * chips in the same order — a row whose chips reshuffle between renders reads
+ * as a change when nothing changed.
+ */
+export function worldsOfAttribute(
+  worlds: readonly PoolFacet[],
+  attributeId: string,
+): PoolFacet[] {
+  return worlds.filter((w) => (w.attributeIds ?? []).includes(attributeId));
+}

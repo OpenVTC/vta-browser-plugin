@@ -7,11 +7,16 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { worldOfFace, unplacedFaces, placedElsewhere } from "../src/manager/world-model.ts";
+import {
+  worldOfFace,
+  worldsOfAttribute,
+  unplacedFaces,
+  placedElsewhere,
+} from "../src/manager/world-model.ts";
 import { ConsentRequiredError, RelayTaskError } from "../src/manager/carrier.ts";
 
-const world = (id: string, name: string, faceIds: string[]) =>
-  ({ facetId: id, name, colour: "teal", faceIds, attributeIds: [], version: 1, updatedAt: "x" }) as never;
+const world = (id: string, name: string, faceIds: string[], attributeIds: string[] = []) =>
+  ({ facetId: id, name, colour: "teal", faceIds, attributeIds, version: 1, updatedAt: "x" }) as never;
 const face = (id: string, name: string) =>
   ({ profileId: id, name, entries: [], version: 1, updatedAt: "x" }) as never;
 
@@ -103,4 +108,29 @@ test("a mixed array is refused rather than filtered", () => {
     details: { placed: [{ faceId: "f1", facetId: "w2" }, { faceId: 7 }] },
   });
   assert.equal(placedElsewhere(refusal), null);
+});
+
+test("an attribute may belong to several worlds, and all of them are reported", () => {
+  // The asymmetry with a face, and the reason for it: a mobile number is
+  // genuinely part of a working life and a home one at once, so a model that
+  // made the holder choose would be asking a question with no answer. The agent
+  // enforces no exclusivity here either.
+  const worlds = [
+    world("w1", "Work", [], ["a1", "a2"]),
+    world("w2", "Home", [], ["a1"]),
+    world("w3", "Play", [], []),
+  ];
+  assert.deepEqual(worldsOfAttribute(worlds, "a1").map((w) => w.name), ["Work", "Home"]);
+  assert.deepEqual(worldsOfAttribute(worlds, "a2").map((w) => w.name), ["Work"]);
+  assert.deepEqual(worldsOfAttribute(worlds, "a9"), []);
+});
+
+test("an attribute's worlds come back in listing order, not membership order", () => {
+  // Two attributes in the same worlds must draw their dots in the same order:
+  // a row whose marks reshuffle between renders reads as a change when nothing
+  // changed.
+  const worlds = [world("w1", "Work", [], ["a1"]), world("w2", "Home", [], ["a1"])];
+  assert.deepEqual(worldsOfAttribute(worlds, "a1").map((w) => w.facetId), ["w1", "w2"]);
+  const reversed = [worlds[1]!, worlds[0]!];
+  assert.deepEqual(worldsOfAttribute(reversed, "a1").map((w) => w.facetId), ["w2", "w1"]);
 });
