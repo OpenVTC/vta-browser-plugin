@@ -20,6 +20,7 @@ import { c, t, font } from "../../theme.js";
 import { contextHeading } from "../format.js";
 import type { Authority, Parties } from "../use-vta.js";
 import { AttributeEditor, BindingForm, AttributeValue, ProfileEditor } from "./persona-editors.js";
+import { StarterForm } from "./persona-starter.js";
 import { holderGate } from "../holder-gate.js";
 import { reachableStep } from "../persona-flow.js";
 
@@ -168,6 +169,16 @@ export function GuidedSetup({
   const [contextId, setContextId] = useState(records[0]?.id ?? "");
   const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [faceName, setFaceName] = useState("");
+  /**
+   * Whether step one is showing the suggestions or the free-form editor.
+   *
+   * Suggestions first, and only while the holder has nothing: someone who has
+   * already added an attribute has met the model and is better served by the
+   * editor, and a form of mostly-blank boxes above it would read as work
+   * outstanding. Sticky once chosen, because "I'd rather type my own" is a
+   * statement about this person rather than about this render.
+   */
+  const [manual, setManual] = useState(false);
   const denied = holderGate(authority);
   const face = profiles[0];
 
@@ -192,12 +203,22 @@ export function GuidedSetup({
       {step === 1 && (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)", gap: 16 }}>
           <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
+            {!manual && attributes.length === 0 ? (
+              <StarterForm
+                parties={parties}
+                authority={authority}
+                registry={registry}
+                onDone={onChanged}
+                onManual={() => setManual(true)}
+              />
+            ) : (
             <AttributeEditor registry={registry}
               key={`new-${attributes.length}`}
               parties={parties}
               authority={authority}
               onDone={onChanged}
             />
+            )}
             {attributes.length > 0 && (
               <Panel title={`${attributes.length} attribute${attributes.length === 1 ? "" : "s"} so far`}>
                 <div style={{ display: "grid", gap: 6 }}>
