@@ -109,6 +109,7 @@ test("making a face does not loop the renderer", async () => {
       onChanged: () => {},
       onFinished: () => {},
       onSkip: () => {},
+      onReveal: async () => ({}),
     }),
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
@@ -145,6 +146,7 @@ test("the stranger card starts empty and says so", async () => {
       onChanged: () => {},
       onFinished: () => {},
       onSkip: () => {},
+      onReveal: async () => ({}),
     }),
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
@@ -170,6 +172,7 @@ test("a completed step in the stepper is a way back to it", async () => {
       onChanged: () => {},
       onFinished: () => {},
       onSkip: () => {},
+      onReveal: async () => ({}),
     }),
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
@@ -1220,5 +1223,138 @@ test("the attribute using an unapplied type is marked on its own card", async ()
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
   );
   assert.match(ui.text(), /type not applied/);
+  await ui.unmount();
+});
+
+/**
+ * Step back to "Add an attribute or two".
+ *
+ * The guide opens on step two the moment the holder has any attribute, and the
+ * panel this section is about — "N attributes so far" — is on step one, which
+ * is where the report's screenshot was taken. The stepper's completed circles
+ * are the way back.
+ */
+async function backToStepOne(ui: Awaited<ReturnType<typeof render>>) {
+  const back = ui.all('[role="button"]')[0];
+  if (back) await ui.click(back);
+}
+
+// ── The guided setup honours the holder's own decision ──────────────────────
+
+test("a value the holder marked SHOW IT is not drawn as bullets in the guide", async () => {
+  // Reported from the live console with a screenshot: `profile.github` set to
+  // *show it* still rendered as ●●●● in "N attributes so far".
+  //
+  // The cause was one missing prop. All three `AttributeValue` call sites in
+  // the guide passed `type` and `value` and never `sensitivity`, so
+  // `treatmentFor` fell through to the registry — and for an UNREGISTERED token
+  // the registry's answer is the conservative floor, `high`/`full`. The holder's
+  // answer existed, was stored, was returned by the agent, and was dropped on
+  // the way to the component.
+  //
+  // Asserted on the token the report named, and on the state the report
+  // described: the value legible, not the mask absent — a test for "no bullets"
+  // would also pass if the value vanished entirely.
+  const shown = {
+    attributeId: "a9",
+    type: "profile.github",
+    valueType: "string" as const,
+    value: "stormer78",
+    label: "github",
+    provenance: { kind: "selfAsserted" as const },
+    sensitivity: "normal" as const,
+    version: 1,
+    updatedAt: "2026-09-09T00:00:00Z",
+  };
+  const a = agent({});
+  const ui = await render(
+    h(GuidedSetup, {
+      registry: REGISTRY,
+      parties: PARTIES,
+      authority: HOLDER,
+      records: CONTEXTS,
+      attributes: [shown],
+      profiles: [],
+      onChanged: () => {},
+      onFinished: () => {},
+      onSkip: () => {},
+      onReveal: async () => ({}),
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await backToStepOne(ui);
+
+  assert.match(ui.text(), /stormer78/, "the holder said show it and the guide hid it anyway");
+  assert.doesNotMatch(ui.text(), /●●●●|••••/, "a value marked show it was still masked");
+  await ui.unmount();
+});
+
+test("an unregistered value the holder did NOT decide on stays masked in the guide", async () => {
+  // The other direction, and the reason the first test is not just "never
+  // mask": absent is not a decision, so the registry's conservative floor is
+  // the right answer and must survive the fix.
+  const undecided = {
+    attributeId: "a8",
+    type: "profile.github",
+    valueType: "string" as const,
+    value: "stormer78",
+    provenance: { kind: "selfAsserted" as const },
+    version: 1,
+    updatedAt: "2026-09-09T00:00:00Z",
+  };
+  const a = agent({});
+  const ui = await render(
+    h(GuidedSetup, {
+      registry: REGISTRY,
+      parties: PARTIES,
+      authority: HOLDER,
+      records: CONTEXTS,
+      attributes: [undecided],
+      profiles: [],
+      onChanged: () => {},
+      onFinished: () => {},
+      onSkip: () => {},
+      onReveal: async () => ({}),
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await backToStepOne(ui);
+  assert.doesNotMatch(ui.text(), /stormer78/, "an undecided unregistered value was shown in full");
+  await ui.unmount();
+});
+
+test("a DECLARED token keeps the registry's mask even when the holder says show it", async () => {
+  // §3.3: the axes are independent. The holder's `sensitivity` moves that axis
+  // only, and `email.work` stays `emailLocal` however they mark it. The
+  // unregistered exception is narrow and must not widen into this.
+  const declared = {
+    attributeId: "a7",
+    type: "email.work",
+    valueType: "string" as const,
+    value: "glenn@acme.example",
+    provenance: { kind: "selfAsserted" as const },
+    sensitivity: "normal" as const,
+    version: 1,
+    updatedAt: "2026-09-09T00:00:00Z",
+  };
+  const a = agent({});
+  const ui = await render(
+    h(GuidedSetup, {
+      registry: REGISTRY,
+      parties: PARTIES,
+      authority: HOLDER,
+      records: CONTEXTS,
+      attributes: [declared],
+      profiles: [],
+      onChanged: () => {},
+      onFinished: () => {},
+      onSkip: () => {},
+      onReveal: async () => ({}),
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await backToStepOne(ui);
+  assert.doesNotMatch(ui.text(), /glenn@acme\.example/, "a declared token lost its registry mask");
+  assert.match(ui.text(), /@acme\.example/, "the emailLocal mask should still show the domain");
   await ui.unmount();
 });
