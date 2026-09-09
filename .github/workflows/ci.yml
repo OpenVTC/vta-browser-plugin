@@ -162,7 +162,7 @@ jobs:
       # file" structural; the assertion below fails if it is ever lost.
       - name: Assert the holder-scoped half of persona is confined to the console
         run: |
-          for task in 'persona/attribute/put/1.0' 'persona/attribute/list/1.0' 'persona/attribute/delete/1.0' 'persona/profile/put/1.0' 'persona/profile/get/1.0' 'persona/profile/list/1.0' 'persona/profile/delete/1.0' 'persona/binding/set/1.0' 'persona/correlation/analyze/1.0' 'persona/disclosure/history/1.0'; do
+          for task in 'persona/attribute/put/1.0' 'persona/attribute/list/1.0' 'persona/attribute/delete/1.0' 'persona/profile/put/1.0' 'persona/profile/get/1.0' 'persona/profile/list/1.0' 'persona/profile/delete/1.0' 'persona/binding/set/1.0' 'persona/facet/put/1.0' 'persona/facet/list/1.0' 'persona/facet/delete/1.0' 'persona/correlation/analyze/1.0' 'persona/disclosure/history/1.0'; do
             leaked=$(grep -rlF "$task" packages/extension/dist/ | grep -v '^packages/extension/dist/manager\.js$' || true)
             if [ -n "$leaked" ]; then
               echo "::error::$leaked contains $task — this half of persona/* reads or writes the holder's attribute pool, which sits above every trust context. A wallet surface naming it is the boundary being crossed the wrong way; only the console may. Check for an import of @openvtc/pnm-core/admin from a wallet entry, or a shared chunk. See packages/core/src/admin/persona.ts."
@@ -188,13 +188,13 @@ jobs:
       - name: Assert the console still carries the persona surface it is the exception for
         run: |
           bundle=packages/extension/dist/manager.js
-          for task in 'persona/attribute/put/1.0' 'persona/attribute/list/1.0' 'persona/attribute/delete/1.0' 'persona/profile/put/1.0' 'persona/profile/get/1.0' 'persona/profile/list/1.0' 'persona/profile/delete/1.0' 'persona/binding/set/1.0' 'persona/correlation/analyze/1.0' 'persona/disclosure/history/1.0'; do
+          for task in 'persona/attribute/put/1.0' 'persona/attribute/list/1.0' 'persona/attribute/delete/1.0' 'persona/profile/put/1.0' 'persona/profile/get/1.0' 'persona/profile/list/1.0' 'persona/profile/delete/1.0' 'persona/binding/set/1.0' 'persona/facet/put/1.0' 'persona/facet/list/1.0' 'persona/facet/delete/1.0' 'persona/correlation/analyze/1.0' 'persona/disclosure/history/1.0'; do
             if ! grep -qF "$task" "$bundle"; then
               echo "::error::$bundle no longer contains $task. The guard above permits it here precisely because the console's persona pane calls it; a build without it is a pane that cannot do what it offers. If the pane genuinely dropped this task, remove it from BOTH lists in the same change."
               exit 1
             fi
           done
-          echo "OK: the console carries all ten holder-scoped persona tasks"
+          echo "OK: the console carries all thirteen holder-scoped persona tasks"
 
       # The console's isolation rests on it being one self-contained file: the
       # guard above names exactly one exception, so a second chunk would be a
