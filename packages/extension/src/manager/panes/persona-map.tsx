@@ -50,7 +50,9 @@ import {
   type Selection,
 } from "../identity-graph.js";
 import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
+import type { PoolFacet } from "@openvtc/pnm-core/admin";
 import { familyOf, familyStyle, FAMILY_ORDER, type Family } from "../attribute-family.js";
+import { rankFindings, tallyCrossings, crossingWords, type RankedFinding } from "../correlation-model.js";
 import { provenanceWords, labelSaysSomethingElse, staleWords } from "../attribute-words.js";
 import { unappliedClaimTypes } from "@openvtc/pnm-core/persona";
 import {
@@ -341,6 +343,7 @@ export function IdentityMap({
   graph,
   attributes,
   profiles,
+  worlds,
   registry,
   records,
   history,
@@ -353,6 +356,10 @@ export function IdentityMap({
   graph: IdentityGraph;
   attributes: PoolAttribute[];
   profiles: PoolProfile[];
+  /** The holder's worlds, for the second axis on a correlation finding. Empty
+   *  is the honest answer before anyone has made one, and every finding then
+   *  reads as `unknown` rather than as `within`. */
+  worlds: readonly PoolFacet[];
   /** The agent's claim-type table, or `null` while it loads. A caller must not
    *  substitute a compiled-in one — that is the copy this replaced. */
   registry: ClaimTypeRegistry | null;
@@ -444,9 +451,15 @@ export function IdentityMap({
       setChecking(`Your agent would not check — ${e instanceof Error ? e.message : String(e)}`);
     }
   }, [parties]);
+  // Ranked once, here, so the strip and the summary read the same model — two
+  // places computing the second axis is how one of them comes to disagree.
+  const ranked = useMemo(() => rankFindings(findings ?? [], worlds), [findings, worlds]);
   const valueLinked = useMemo(
-    () => new Map((findings ?? []).filter((f) => f.attributeId).map((f) => [f.attributeId!, f])),
-    [findings],
+    () =>
+      new Map(
+        ranked.filter((r) => r.finding.attributeId).map((r) => [r.finding.attributeId!, r]),
+      ),
+    [ranked],
   );
 
   // ── edges ──
@@ -524,6 +537,41 @@ export function IdentityMap({
       {findings && findings.length === 0 && (
         <Note tone="accent">Your agent finds no two attributes holding the same value. That is an answer, not an empty result.</Note>
       )}
+      {findings && findings.length > 0 && (() => {
+        // Counted from one place, so the numbers cannot disagree with the rows
+        // below them — the same discipline `tallyContexts` exists for.
+        const tally = tallyCrossings(ranked);
+        return (
+          <Note tone={tally.crosses > 0 ? "danger" : "accent"}>
+            <div style={{ display: "grid", gap: 6 }}>
+              {tally.crosses > 0 && (
+                <strong>
+                  {tally.crosses === 1
+                    ? "One link crosses two parts of your life."
+                    : `${tally.crosses} links cross two parts of your life.`}{" "}
+                  Anyone who sees both sides knows they are the same person.
+                </strong>
+              )}
+              {tally.within > 0 && (
+                <span>
+                  {tally.within === 1 ? "One link stays" : `${tally.within} links stay`} inside a
+                  single world — you arranged {tally.within === 1 ? "it" : "them"}.{" "}
+                  {tally.within === 1 ? "It is" : "They are"} still {tally.within === 1 ? "a link" : "links"}.
+                </span>
+              )}
+              {tally.unknown > 0 && (
+                // Said once, here, rather than on every row. Absence is not
+                // "stays in one world" — the agent answered no such question.
+                <span style={{ color: c.faint }}>
+                  {tally.unknown === 1 ? "One link is" : `${tally.unknown} links are`} unsorted:
+                  your agent did not say whether {tally.unknown === 1 ? "it crosses" : "they cross"}{" "}
+                  a world. Making some worlds is what answers that.
+                </span>
+              )}
+            </div>
+          </Note>
+        );
+      })()}
       {denied && <Note tone="warn">{denied}</Note>}
 
       {/* The key appears with the first selection and not before: a legend for
@@ -641,7 +689,16 @@ export function IdentityMap({
                                 long page is easy to scroll past on the way to
                                 the thing it is about. */}
                             {unapplied.has(f.type) && <Pill tone="danger">type not applied</Pill>}
-                            {linked && <Pill tone="danger">{linked.severity === "high" ? "links" : "may link"}</Pill>}
+                            {/* Severity only. The crossing is the OTHER axis and does not
+                                belong in this channel: two pills side by side
+                                read as one scale, and "links" is about how
+                                strongly, not about whether the holder minds.
+                                The strip and the summary carry the crossing. */}
+                            {linked && (
+                              <Pill tone="danger">
+                                {linked.finding.severity === "high" ? "links" : "may link"}
+                              </Pill>
+                            )}
                           </div>
                         </div>
                       );
@@ -960,7 +1017,9 @@ function DetailStrip({
 
   records: ContextRecord[];
   history: DisclosureRecord[] | null;
-  finding: CorrelationFinding | null;
+  /** The finding for the selected attribute, ranked against the holder's
+   *  worlds — `crossing` is the second axis and is never read off `severity`. */
+  finding: RankedFinding | null;
   showing: "claims" | null;
   onReveal: (target: RevealTarget) => Promise<unknown>;
   onShow: (s: "claims" | null) => void;
@@ -1066,7 +1125,19 @@ function DetailStrip({
               {linkedFaces.length > 0 && (
                 <span style={{ color: c.danger }}>{reach.wearers.length} personas carry this exact value — that is the link.</span>
               )}
-              {finding && <span style={{ color: c.danger }}>{finding.why}</span>}
+              {finding && (
+                <>
+                  <span style={{ color: c.danger }}>{finding.finding.why}</span>
+                  {/* The second axis, where the agent answered it. Silent on
+                      `unknown`: the summary says that once rather than putting
+                      a claim on every row. */}
+                  {crossingWords(finding) && (
+                    <span style={{ color: finding.crossing === "crosses" ? c.danger : c.muted }}>
+                      {crossingWords(finding)}
+                    </span>
+                  )}
+                </>
+              )}
             </>
           ))}
           {col("Last left", lastLeft((d) => d.claimTypes.includes(attribute.type)))}
