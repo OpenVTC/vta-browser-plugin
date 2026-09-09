@@ -10,12 +10,41 @@ import assert from "node:assert/strict";
 import { agent, h, render, PARTIES, UNSCOPED_HOLDER } from "./harness/dom.mjs";
 import { WorldsPane } from "../src/manager/panes/worlds.js";
 
-const world = (id: string, name: string, faceIds: string[], colour = "teal") =>
-  ({ facetId: id, name, colour, faceIds, attributeIds: [], version: 1, updatedAt: "x" }) as never;
+const world = (id: string, name: string, faceIds: string[], colour = "teal", attributeIds: string[] = []) =>
+  ({ facetId: id, name, colour, faceIds, attributeIds, version: 1, updatedAt: "x" }) as never;
 const face = (id: string, name: string) =>
   ({ profileId: id, name, entries: [], version: 1, updatedAt: "x" }) as never;
 
 const FACES = [face("f1", "Acme"), face("f2", "LinkedIn"), face("f3", "Loose")];
+
+const attribute = (id: string, type: string, value: string) => ({
+  attributeId: id,
+  type,
+  valueType: "string" as const,
+  value,
+  provenance: { kind: "selfAsserted" as const },
+  version: 1,
+  updatedAt: "x",
+});
+const ATTRS = [
+  attribute("a1", "email.work", "ada@acme.example"),
+  attribute("a2", "phone.mobile", "+61 400 000 000"),
+];
+const REGISTRY = {
+  registryVersion: "0.1",
+  entries: ["email", "email.work", "phone", "phone.mobile"].map((type) => ({
+    type,
+    sensitivity: "normal",
+    release: "consent",
+    mask: "none",
+  })),
+  unregistered: { sensitivity: "high", release: "consent", mask: "full" },
+  strictness: {
+    sensitivity: ["high", "normal"],
+    release: ["stepUp", "consent"],
+    mask: ["full", "last2", "last4", "emailLocal", "none"],
+  },
+} as never;
 
 function mount(fake: ReturnType<typeof agent>, worlds: unknown[], extra = {}) {
   return {
@@ -24,6 +53,8 @@ function mount(fake: ReturnType<typeof agent>, worlds: unknown[], extra = {}) {
       authority: UNSCOPED_HOLDER,
       worlds,
       faces: FACES,
+      attributes: ATTRS,
+      registry: REGISTRY,
       onChanged: () => {},
       ...extra,
     }),
@@ -179,5 +210,56 @@ test("a placement refusal offers a way out instead of a raw error", async () => 
   // Either shape is acceptable to a person; what must never appear is a bare
   // stack of wire text with no next step.
   assert.match(screen.text(), /belong to another world|already belong/);
+  await screen.unmount();
+});
+
+
+test("the editor offers attributes grouped the way the rest of the console groups them", async () => {
+  const fake = putOk();
+  const m = mount(fake, []);
+  const screen = await render(m.element, m.options);
+  await screen.click(screen.button("New world"));
+  await screen.settle();
+  const text = screen.text();
+  assert.match(text, /Which attributes belong to it\?/);
+  assert.match(text, /How to reach you/, "attributes were not grouped by family");
+  assert.match(text, /more than one/, "the no-exclusivity rule is not said");
+  assert.match(text, /email\.work/);
+  await screen.unmount();
+});
+
+test("an attribute checkbox is never disabled — several worlds is legal", async () => {
+  const m = mount(putOk(), [world("w1", "Work", [], "teal", ["a1"])]);
+  const screen = await render(m.element, m.options);
+  await screen.click(screen.all("button").filter((b) => b.textContent?.includes("Edit"))[0]!);
+  await screen.settle();
+  for (const box of screen.all('input[aria-label="email.work"], input[aria-label="phone.mobile"]')) {
+    assert.equal(box.disabled, false, "an attribute was blocked from a second world");
+  }
+  await screen.unmount();
+});
+
+test("an edit opens with the attribute membership it will replace, and sends it", async () => {
+  const fake = putOk();
+  const m = mount(fake, [world("w1", "Work", ["f1"], "teal", ["a1"])]);
+  const screen = await render(m.element, m.options);
+  await screen.click(screen.all("button").filter((b) => b.textContent?.includes("Edit"))[0]!);
+  await screen.settle();
+  assert.equal(screen.all('input[aria-label="email.work"]')[0]!.checked, true);
+  assert.equal(screen.all('input[aria-label="phone.mobile"]')[0]!.checked, false);
+
+  // Add the mobile — the "work email + work number together" case.
+  await screen.check(screen.all('input[aria-label="phone.mobile"]')[0]!);
+  await screen.click(screen.button("Save"));
+  await screen.settle();
+  const sent = fake.of("facet/put")[0]!;
+  assert.deepEqual(sent.payload.attributeIds.sort(), ["a1", "a2"]);
+  assert.deepEqual(sent.payload.faceIds, ["f1"], "face membership was lost by an attribute edit");
+});
+
+test("a world card says how many attributes belong to it", async () => {
+  const m = mount(putOk(), [world("w1", "Work", [], "teal", ["a1", "a2"])]);
+  const screen = await render(m.element, m.options);
+  assert.match(screen.text(), /2 attributes belong to it/);
   await screen.unmount();
 });

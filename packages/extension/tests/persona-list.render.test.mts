@@ -60,6 +60,7 @@ function mount(graph: ReturnType<typeof graphOf>, extra: Record<string, unknown>
   return h(AttributeList, {
     attributes: graph.attributes,
     faces: graph.faces,
+    worlds: [],
     registry: REGISTRY,
     parties: PARTIES,
     reveal: async () => ({}),

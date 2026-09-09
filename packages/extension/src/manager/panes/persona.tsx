@@ -384,6 +384,8 @@ export function PersonaPane({
           authority={authority}
           worlds={worlds.data ?? []}
           faces={profiles.data}
+          attributes={attributes.data}
+          registry={registry.data}
           onChanged={reloadAll}
         />
       ) : view === "list" ? (
@@ -410,6 +412,7 @@ export function PersonaPane({
           <AttributeList
             attributes={graph.attributes}
             faces={graph.faces}
+            worlds={worlds.data ?? []}
             registry={registry.data}
             parties={parties}
             reveal={reveal}

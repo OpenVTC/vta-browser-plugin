@@ -36,7 +36,7 @@
 // on purpose is its own decision.
 
 import { useCallback, useMemo, useState } from "react";
-import { personaAttributeDelete, personaProfilePut } from "@openvtc/pnm-core/admin";
+import { personaAttributeDelete, personaProfilePut, type PoolFacet } from "@openvtc/pnm-core/admin";
 import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 import { Button, Note, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
@@ -60,6 +60,9 @@ import {
   type DeletePreview,
 } from "../attribute-list.js";
 import { AttributeValue } from "./persona-editors.js";
+import { worldsOfAttribute } from "../world-model.js";
+import { worldHue } from "../world-colour.js";
+import type { FacetColour } from "@openvtc/pnm-core/admin";
 import type { RevealTarget } from "../reveal-value.js";
 
 /**
@@ -94,16 +97,51 @@ function TriCheck({
   );
 }
 
+/**
+ * The worlds an attribute belongs to, as dots.
+ *
+ * Dots and a title rather than named chips: a row already carries a type, a
+ * value, a provenance and a status, and four more words per row would bury the
+ * value under its own metadata. The name is on the title and in the editor —
+ * this is a reminder that the attribute is arranged, not the place a person
+ * reads the arrangement.
+ */
+function WorldDots({ worlds }: { worlds: readonly PoolFacet[] }) {
+  if (worlds.length === 0) return null;
+  return (
+    <span
+      style={{ display: "inline-flex", gap: 3, flex: "0 0 auto" }}
+      title={`In ${worlds.map((w) => w.name).join(", ")}`}
+      aria-label={`In ${worlds.map((w) => w.name).join(", ")}`}
+    >
+      {worlds.map((w) => (
+        <span
+          key={w.facetId}
+          aria-hidden="true"
+          style={{
+            width: 7,
+            height: 7,
+            borderRadius: 999,
+            background: worldHue(w.colour as FacetColour),
+          }}
+        />
+      ))}
+    </span>
+  );
+}
+
 function Row({
   attribute,
   selected,
   registry,
+  worlds,
   reveal,
   onToggle,
   onEdit,
 }: {
   attribute: AttributeNode;
   selected: boolean;
+  worlds: readonly PoolFacet[];
   registry: ClaimTypeRegistry | null;
   reveal: (target: RevealTarget) => Promise<unknown>;
   onToggle: (id: string, shift: boolean) => void;
@@ -156,6 +194,7 @@ function Row({
       <span style={{ fontSize: t.xs, color: prov.tone === "off" ? c.faint : c.muted, whiteSpace: "nowrap" }}>
         {prov.text}
       </span>
+      <WorldDots worlds={worlds} />
       {attribute.stale && <Pill tone="warn">{staleWords(attribute.staleReason)}</Pill>}
       <Button kind="quiet" onClick={() => onEdit(attribute)}>
         Edit
@@ -168,6 +207,7 @@ function Group({
   group,
   selection,
   registry,
+  worlds,
   reveal,
   onToggleRow,
   onToggleGroup,
@@ -176,6 +216,7 @@ function Group({
   group: ListGroup;
   selection: ReadonlySet<string>;
   registry: ClaimTypeRegistry | null;
+  worlds: readonly PoolFacet[];
   reveal: (target: RevealTarget) => Promise<unknown>;
   onToggleRow: (id: string, shift: boolean) => void;
   onToggleGroup: (group: ListGroup) => void;
@@ -213,6 +254,7 @@ function Group({
           attribute={row}
           selected={selection.has(row.id)}
           registry={registry}
+          worlds={worldsOfAttribute(worlds, row.id)}
           reveal={reveal}
           onToggle={onToggleRow}
           onEdit={onEdit}
@@ -307,6 +349,7 @@ function AddToFace({
 export function AttributeList({
   attributes,
   faces,
+  worlds,
   registry,
   parties,
   reveal,
@@ -315,6 +358,9 @@ export function AttributeList({
 }: {
   attributes: readonly AttributeNode[];
   faces: readonly FaceNode[];
+  /** The holder's worlds, so a row can say it is arranged. Empty is the honest
+   *  answer before anyone has made one, and draws nothing. */
+  worlds: readonly PoolFacet[];
   registry: ClaimTypeRegistry | null;
   parties: Parties;
   reveal: (target: RevealTarget) => Promise<unknown>;
@@ -446,6 +492,7 @@ export function AttributeList({
           group={group}
           selection={live}
           registry={registry}
+          worlds={worlds}
           reveal={reveal}
           onToggleRow={onToggleRow}
           onToggleGroup={onToggleGroup}
