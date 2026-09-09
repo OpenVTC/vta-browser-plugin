@@ -68,7 +68,7 @@ import { IdentityMap } from "./persona-map.js";
 import { AttributeList } from "./persona-list.js";
 import { WorldsPane } from "./worlds.js";
 import { GuidedSetup } from "./persona-setup.js";
-import { showsGuide } from "../persona-flow.js";
+import { showsGuide, suggestsWorlds } from "../persona-flow.js";
 import { revealAttributeValue, type RevealTarget } from "../reveal-value.js";
 import { AttributeEditor, DisclosureHistoryPanel } from "./persona-editors.js";
 
@@ -373,6 +373,32 @@ export function PersonaPane({
           Your agent would not give its claim-type table — {registry.error}. Until it does, every
           value here is hidden as the most private kind, whatever kind it actually is. What you have
           decided for yourself still stands.
+        </Note>
+      )}
+      {/* Worlds are optional and late, so nothing mentions them until the face
+          list is starting to be the wall they fix. Below the threshold a world
+          would be an arrangement of one thing; the guide deliberately does not
+          raise them at all, since a holder finishing setup has one face. */}
+      {suggestsWorlds({
+        faces: profiles.data?.length ?? null,
+        worlds: worlds.data?.length ?? null,
+      }) && (
+        <Note tone="accent">
+          <div style={{ display: "grid", gap: 6 }}>
+            <strong>You have {profiles.data.length} faces now.</strong>
+            <span>
+              Worlds group them by the part of your life they belong to — Work, Home, Play — and
+              they are how your agent can tell a link you arranged from one you did not.
+            </span>
+            <div>
+              <button
+                onClick={() => setView("worlds")}
+                style={{ border: "none", background: "none", padding: 0, color: "var(--w-accent)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}
+              >
+                Make one
+              </button>
+            </div>
+          </div>
         </Note>
       )}
       <ViewToggle view={view} onView={setView} />

@@ -1358,3 +1358,65 @@ test("a DECLARED token keeps the registry's mask even when the holder says show 
   assert.match(ui.text(), /@acme\.example/, "the emailLocal mask should still show the domain");
   await ui.unmount();
 });
+
+// ── Worlds are discoverable when they are worth discovering ─────────────────
+
+/**
+ * The pane, with `n` faces and `w` worlds, past the guide.
+ *
+ * `skipped` is not available from outside, so the fixture gives the holder a
+ * face — which is what puts them on the map rather than in the guide.
+ */
+function paneWith(faces: number, worlds: number) {
+  const a = agent({
+    "persona/attribute/list/1.0": { attributes: [attribute("a1", "name.legal", "Ada")] },
+    "persona/profile/list/1.0": {
+      profiles: Array.from({ length: faces }, (_, i) => face(`p${i}`, `Face ${i}`, ["a1"])),
+    },
+    "persona/facet/list/1.0": {
+      facets: Array.from({ length: worlds }, (_, i) => ({
+        facetId: `w${i}`,
+        name: `World ${i}`,
+        colour: "teal",
+        faceIds: [],
+        attributeIds: [],
+        version: 1,
+        updatedAt: "x",
+      })),
+    },
+    "persona/claim-types/list/1.0": REGISTRY,
+    "persona/disclosure/history/1.0": { disclosures: [] },
+    "persona/binding/list/1.0": { personas: [] },
+  });
+  return {
+    element: h(PersonaPane, { parties: PARTIES, authority: HOLDER, records: CONTEXTS }),
+    options: { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  };
+}
+
+test("nothing mentions worlds while the holder has few faces", async () => {
+  // A world arranging one face is an arrangement of one thing, and a
+  // suggestion nobody needs yet is one they learn to scroll past.
+  const m = paneWith(2, 0);
+  const screen = await render(m.element, m.options);
+  await screen.settle();
+  assert.doesNotMatch(screen.text(), /Worlds group them/);
+  await screen.unmount();
+});
+
+test("the nudge arrives once the face list is the wall worlds fix", async () => {
+  const m = paneWith(5, 0);
+  const screen = await render(m.element, m.options);
+  await screen.settle();
+  assert.match(screen.text(), /You have 5 faces now/);
+  assert.match(screen.text(), /Worlds group them/);
+  await screen.unmount();
+});
+
+test("a holder who already keeps a world is not nudged toward worlds", async () => {
+  const m = paneWith(5, 1);
+  const screen = await render(m.element, m.options);
+  await screen.settle();
+  assert.doesNotMatch(screen.text(), /Worlds group them/);
+  await screen.unmount();
+});

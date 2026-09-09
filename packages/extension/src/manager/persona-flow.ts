@@ -46,3 +46,36 @@ export function reachableStep(step: 1 | 2 | 3, have: { attributes: number; faces
   if (step === 2) return have.attributes > 0;
   return have.faces > 0;
 }
+
+/**
+ * Whether the pane should point a holder at worlds yet.
+ *
+ * Worlds are the one part of this model that is **optional and late**. An
+ * attribute, a face and a context are each required for the next to mean
+ * anything, which is why the guide walks all three; a world arranges faces the
+ * holder does not have yet, so putting it in the guide would be asking someone
+ * to file one thing into a category.
+ *
+ * The cost of leaving it out is real, though, and was invisible until someone
+ * asked: nothing in the guide mentions worlds, so a holder finishes setup, lands
+ * on the map, and only meets the feature by clicking a tab they had no reason to
+ * look for. Discoverable to someone already hunting for it is not discoverable.
+ *
+ * So the nudge is timed to when the answer is useful rather than to arrival:
+ * several faces, and no world yet. Below the threshold a world would be an
+ * arrangement of one thing; above it, the list is starting to be the wall this
+ * feature exists to fix.
+ *
+ * Returns false while either number is unknown. A pane that nudged during a
+ * load would flash a suggestion and withdraw it, and a suggestion that appears
+ * and vanishes is one nobody trusts.
+ */
+export const NUDGE_AT_FACES = 4;
+
+export function suggestsWorlds(state: {
+  faces: number | null;
+  worlds: number | null;
+}): boolean {
+  if (state.faces === null || state.worlds === null) return false;
+  return state.worlds === 0 && state.faces >= NUDGE_AT_FACES;
+}
