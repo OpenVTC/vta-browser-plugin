@@ -48,6 +48,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   personaAttributeList,
   personaDisclosureHistory,
+  personaFacetList,
   personaProfileList,
 } from "@openvtc/pnm-core/admin";
 import { getBinding, listBindings } from "@openvtc/pnm-core/persona";
@@ -65,6 +66,7 @@ import { buildGraph, type ContextInput } from "../identity-graph.js";
 import { listClaimTypes, unappliedClaimTypes } from "@openvtc/pnm-core/persona";
 import { IdentityMap } from "./persona-map.js";
 import { AttributeList } from "./persona-list.js";
+import { WorldsPane } from "./worlds.js";
 import { GuidedSetup } from "./persona-setup.js";
 import { showsGuide } from "../persona-flow.js";
 import { revealAttributeValue, type RevealTarget } from "../reveal-value.js";
@@ -124,8 +126,14 @@ async function loadContexts(parties: Parties, records: ContextRecord[]): Promise
  * of the same answer, so neither is a "detail level" and neither is default in
  * a way the other has to argue with.
  */
-function ViewToggle({ view, onView }: { view: "map" | "list"; onView: (v: "map" | "list") => void }) {
-  const item = (v: "map" | "list", label: string) => (
+function ViewToggle({
+  view,
+  onView,
+}: {
+  view: "map" | "list" | "worlds";
+  onView: (v: "map" | "list" | "worlds") => void;
+}) {
+  const item = (v: "map" | "list" | "worlds", label: string) => (
     <button
       key={v}
       onClick={() => onView(v)}
@@ -148,10 +156,13 @@ function ViewToggle({ view, onView }: { view: "map" | "list"; onView: (v: "map" 
     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
       {item("map", "Map")}
       {item("list", "List")}
+      {item("worlds", "Worlds")}
       <span style={{ fontSize: "var(--w-t-xs)", color: "var(--w-faint)" }}>
         {view === "map"
           ? "Select anything to see where it reaches."
-          : "Tick several to delete them or add them to a face."}
+          : view === "list"
+            ? "Tick several to delete them or add them to a face."
+            : "The parts of your life, and the faces that belong to them."}
       </span>
     </div>
   );
@@ -189,6 +200,14 @@ export function PersonaPane({
     async () => personaProfileList(managerSender, parties),
     [parties.holder.did, parties.service.did],
   );
+  // Its own load, and its failure is its own. A worlds listing that refused
+  // must not blank the map: an arrangement the console could not read is not
+  // an absence of arrangement, and drawing one as the other is the same error
+  // as an unreadable context reported as an empty one.
+  const worlds = useAsync(
+    async () => personaFacetList(managerSender, parties),
+    [parties.holder.did, parties.service.did],
+  );
   const contexts = useAsync(
     async () => loadContexts(parties, records),
     [parties.holder.did, parties.service.did, records.map((r) => r.id).join(" ")],
@@ -216,11 +235,12 @@ export function PersonaPane({
     attributes.reload();
     profiles.reload();
     contexts.reload();
+    worlds.reload();
     history.reload();
     // Reloaded with the rest. Left out, a table that failed once stayed failed
     // for the life of the tab, and every value stayed masked with it.
     registry.reload();
-  }, [attributes, profiles, contexts, history, registry]);
+  }, [attributes, profiles, contexts, worlds, history, registry]);
 
   // Guide or map — derived, with two flags that each fix a different way the
   // naive version is wrong.
@@ -248,7 +268,7 @@ export function PersonaPane({
    * to delete four numbers wants the list *now*, and would not thank a console
    * that remembered that choice a week later when they came to look at reach.
    */
-  const [view, setView] = useState<"map" | "list">("map");
+  const [view, setView] = useState<"map" | "list" | "worlds">("map");
   /** The attribute the list asked to edit, by id. Held as an id rather than a
    *  record so a reload cannot leave the editor holding a stale copy. */
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -355,7 +375,18 @@ export function PersonaPane({
         </Note>
       )}
       <ViewToggle view={view} onView={setView} />
-      {view === "list" ? (
+      {worlds.error && view === "worlds" && (
+        <LoadError what="your worlds" error={worlds.error} />
+      )}
+      {view === "worlds" ? (
+        <WorldsPane
+          parties={parties}
+          authority={authority}
+          worlds={worlds.data ?? []}
+          faces={profiles.data}
+          onChanged={reloadAll}
+        />
+      ) : view === "list" ? (
         editing ? (
           <AttributeEditor
             // Keyed on the record. `AttributeEditor` seeds `useState` from

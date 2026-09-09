@@ -340,7 +340,9 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // the console. That is not a gap left open: `rooms/create` and
   // `rooms/epoch/chain` are what the agent sends onward, and a second copy of
   // that call from here would be one that never arrives.
-  const expected = 198;
+  // 198 → 201: persona/facet/{put,list,delete}, the holder's arrangement of
+  // their own identity (dtgwg-trust-tasks-tf#405, VTI#1338).
+  const expected = 201;
   assert.equal(
     implemented.size,
     expected,
