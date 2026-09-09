@@ -1,11 +1,11 @@
 // Making a room, rendered.
 //
-// The form does two writes against two different parties, and the interesting
-// tests are all about the seam between them: the DID is minted at the agent,
-// the room is registered at a host, and **the first is not undoable**. So what
-// happens when the second fails is the property worth pinning, not the happy
-// path — an operator who loses the `signingKeyId` has a room nothing can ever
-// issue in the name of, and no way to get it back.
+// Two writes, both to the agent — the second asks it to reach a host, because
+// this console cannot. The interesting tests are all about the seam between
+// them: the DID is minted first and **that is not undoable**. So what happens
+// when the registration fails is the property worth pinning, not the happy path
+// — an operator who loses the `signingKeyId` has a room nothing can ever issue
+// in the name of, and no way to get it back.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -14,7 +14,14 @@ import { CreateRoom } from "../src/manager/panes/rooms-create.js";
 
 const SERVERS = "vta/webvh/servers/list/1.0";
 const DIDS_CREATE = "vta/webvh/dids/create/1.0";
-const ROOMS_CREATE = "rooms/create/0.1";
+// `rooms/owner/register`, not `rooms/create`. The console cannot address a host
+// at all — its bridge carries a type and a payload and addresses everything to
+// the wallet's own VTA — so the registration is asked of the agent, which can
+// make the call. A test naming `rooms/create` here would be pinning a call that
+// lands at a party that does not serve it.
+const REGISTER = "rooms/owner/register/0.1";
+
+const HOST_DID = "did:webvh:QmHost:host.example";
 
 const CONTEXTS = [
   { id: "openvtc", name: "OpenVTC", basePath: "/openvtc", createdAt: "2026-09-07T09:00:00Z" },
@@ -50,26 +57,26 @@ const fillAll = async (screen: Awaited<ReturnType<typeof mount>>["screen"]) => {
   await screen.select(selects[0]!, "openvtc"); // context
   await screen.select(selects[1]!, "webvh-1"); // hosting server
   await screen.type(inputs[0]!, "did:web:mediator.example"); // mediator
-  await screen.type(inputs[1]!, "did:webvh:QmHost:host.example"); // host
+  await screen.type(inputs[1]!, HOST_DID); // host
 };
 
 // ── The seam ────────────────────────────────────────────────────────────────
 
 test("both halves are written, identity first", async () => {
-  const { a, screen } = await mount({ [DIDS_CREATE]: MINTED, [ROOMS_CREATE]: { roomId: MINTED.did, epoch: 1 } });
+  const { a, screen } = await mount({ [DIDS_CREATE]: MINTED, [REGISTER]: { roomId: MINTED.did, host: HOST_DID, epoch: 1 } });
   await fillAll(screen);
   await screen.click(screen.button("Create room"));
 
   const writes = a.calls.map((c) => c.type).filter((t) => !t.includes("servers/list"));
   assert.deepEqual(
     writes.map((t) => t.replace("https://trusttasks.org/spec/", "")),
-    [`${DIDS_CREATE}`, `${ROOMS_CREATE}`],
+    [`${DIDS_CREATE}`, `${REGISTER}`],
     "the DID must exist before a host is told about the room",
   );
 });
 
 test("the room is minted from the room template, addressable and hosted", async () => {
-  const { a, screen } = await mount({ [DIDS_CREATE]: MINTED, [ROOMS_CREATE]: { roomId: MINTED.did, epoch: 1 } });
+  const { a, screen } = await mount({ [DIDS_CREATE]: MINTED, [REGISTER]: { roomId: MINTED.did, host: HOST_DID, epoch: 1 } });
   await fillAll(screen);
   await screen.click(screen.button("Create room"));
 
@@ -85,15 +92,17 @@ test("the room is minted from the room template, addressable and hosted", async 
 // The room's identifier is the DID that was just minted, and the owner is the
 // caller. A form that sent anything else here would register a room somebody
 // else controls, or one nobody does.
-test("the host is told the minted DID and who owns it", async () => {
-  const { a, screen } = await mount({ [DIDS_CREATE]: MINTED, [ROOMS_CREATE]: { roomId: MINTED.did, epoch: 1 } });
+test("the agent is told the minted DID, the host, and who owns it", async () => {
+  const { a, screen } = await mount({ [DIDS_CREATE]: MINTED, [REGISTER]: { roomId: MINTED.did, host: HOST_DID, epoch: 1 } });
   await fillAll(screen);
   await screen.click(screen.button("Create room"));
 
-  const create = a.calls.find((c) => c.type.includes("rooms/create"))!;
-  assert.equal(create.payload.roomId, MINTED.did);
-  assert.equal(create.payload.ownerDid, PARTIES.holder.did);
-  assert.equal(create.payload.visibility, "private", "private is the default a room should start at");
+  const register = a.calls.find((c) => c.type.includes("owner/register"))!;
+  assert.equal(register.payload.roomId, MINTED.did);
+  assert.equal(register.payload.ownerDid, PARTIES.holder.did);
+  assert.equal(register.payload.visibility, "private", "private is the default a room should start at");
+  // The host rides in the payload, because it cannot ride in the recipient.
+  assert.equal(register.payload.host, HOST_DID);
 });
 
 // ── The failure that costs something ────────────────────────────────────────
@@ -101,7 +110,7 @@ test("the host is told the minted DID and who owns it", async () => {
 test("a minted identity survives a failed registration, both halves on screen", async () => {
   const { screen } = await mount({
     [DIDS_CREATE]: MINTED,
-    [ROOMS_CREATE]: () => {
+    [REGISTER]: () => {
       throw new Error("host unreachable");
     },
   });
@@ -120,9 +129,9 @@ test("retrying after a failed registration registers rather than minting again",
   let hostFails = true;
   const { a, screen } = await mount({
     [DIDS_CREATE]: MINTED,
-    [ROOMS_CREATE]: () => {
+    [REGISTER]: () => {
       if (hostFails) throw new Error("host unreachable");
-      return { roomId: MINTED.did, epoch: 1 };
+      return { roomId: MINTED.did, host: HOST_DID, epoch: 1 };
     },
   });
   await fillAll(screen);
@@ -133,7 +142,7 @@ test("retrying after a failed registration registers rather than minting again",
 
   const mints = a.calls.filter((c) => c.type.includes("dids/create"));
   assert.equal(mints.length, 1, "a second press minted a second room and orphaned the first");
-  assert.equal(a.calls.filter((c) => c.type.includes("rooms/create")).length, 2);
+  assert.equal(a.calls.filter((c) => c.type.includes("owner/register")).length, 2);
 });
 
 // ── What the form refuses to do ─────────────────────────────────────────────

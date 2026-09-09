@@ -328,7 +328,19 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // The three remaining `rooms/keys/*` — commit, key-package, welcome — are MLS
   // group operations a browser does not perform. They belong to whatever holds
   // the group state, which is the VTA, not this library.
-  const expected = 196;
+  // 196 -> 198, and the canonical total 214 -> 216, are the two tasks that let a
+  // surface reach a room's host without being able to address one:
+  // `rooms/keys/backfill` and `rooms/owner/register`
+  // (trustoverip/dtgwg-trust-tasks-tf#402, implemented at
+  // OpenVTC/verifiable-trust-infrastructure#1332). Both terminate at the
+  // member's own agent, which is the whole point — the agent makes the host
+  // call, being the party with a channel to one.
+  //
+  // Their host-served counterparts stay in NOT_IN_SDK and stay uncallable from
+  // the console. That is not a gap left open: `rooms/create` and
+  // `rooms/epoch/chain` are what the agent sends onward, and a second copy of
+  // that call from here would be one that never arrives.
+  const expected = 198;
   assert.equal(
     implemented.size,
     expected,

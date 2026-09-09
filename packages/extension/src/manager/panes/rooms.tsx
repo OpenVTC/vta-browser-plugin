@@ -26,6 +26,7 @@ import { useCallback, useEffect, useState } from "react";
 import { roomsKeysList, type HeldRoom } from "@openvtc/pnm-core/rooms";
 import { Note, Panel } from "../../ui.js";
 import { CreateRoom } from "./rooms-create.js";
+import { FetchHistory } from "./rooms-backfill.js";
 import { IssueInRoomsName } from "./rooms-owner.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
@@ -137,6 +138,13 @@ export function RoomsPane({
                     here is decided by the host, from credentials the room issued — so a room
                     it can read may still refuse a write.
                   </p>
+                  {/* Offered only where there is something to repair. A room
+                      that already reads to its first epoch has no chain left to
+                      fetch, and a button that did nothing would teach an
+                      operator to distrust the one that does. */}
+                  {r.earliestReadableEpoch > 1 && (
+                    <FetchHistory parties={parties} room={r} onFetched={() => void load()} />
+                  )}
                 </div>
               );
             }}
