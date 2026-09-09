@@ -15,7 +15,12 @@ import {
   type RevokePayload,
   type TrustTask,
 } from "./protocol.js";
-import { buildTrustTask, parseTrustTaskReply, signOutboundTask } from "./trust-task.js";
+import {
+  buildTrustTask,
+  parseTrustTaskReply,
+  signOutboundTask,
+  verifyTrustTaskReply,
+} from "./trust-task.js";
 import { asTaskSigner, type ChannelSigner, type TaskSigner } from "./trust-task.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
@@ -165,6 +170,13 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
     // The binding envelope has already vouched for the message, so accept any
     // non-error response type unless the caller pinned an expectedResponseType.
     const doc = (msg.body ?? {}) as TrustTask<unknown>;
+    // The authcrypt envelope already proved the sender, and the check above
+    // binds it to this VTA — but the envelope attests to the *transport*, not
+    // to the document. A relay that could pack for us could still hand us a
+    // body we did not get from the agent, and the document's own proof is what
+    // closes that.
+    await verifyTrustTaskReply(doc ?? {}, this.vta.did);
+
     return parseTrustTaskReply<Res>(doc, {
       ...(opts.expectedResponseType !== undefined
         ? { expectedResponseType: opts.expectedResponseType }

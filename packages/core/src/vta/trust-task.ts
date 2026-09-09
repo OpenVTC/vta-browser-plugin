@@ -20,6 +20,7 @@ import { isStandardCode, normalizeCode } from "@openvtc/trust-tasks/_runtime/cod
 
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
+import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import { VtaClientError, type VtaErrorCode } from "./errors.js";
 import {
   isTrustTaskErrorType,
@@ -206,6 +207,66 @@ type ReplyDocument = { type?: string; payload?: unknown };
  * - Otherwise the `payload` is returned as `Res` (validated against
  *   `expectedResponseType` first, when one is supplied).
  */
+/**
+ * Verify that a reply really came from the agent this channel is talking to.
+ *
+ * **A reply is bytes off a socket.** Nothing else on this path establishes who
+ * produced them — the transport proves a connection, and over REST not even
+ * that beyond TLS to a host name. Without the proof an intermediary can rewrite
+ * an ACL listing, flip a policy decision, or answer for an agent that never
+ * spoke, and every check after this one passes, because the checks after this
+ * one are about shape.
+ *
+ * Every specification that requires a proof on its request requires one on its
+ * response too — SPEC §7.3 item 7: "where a specification declares no
+ * requirement for the response, the request's applies to it". 265 of them do.
+ *
+ * ## Two checks, and the second is the one easy to omit
+ *
+ * The proof must verify, **and its proven signer must be the agent we
+ * addressed**. `verifyTrustTaskProof` answers only the first — its own contract
+ * says it "does NOT check framework-level bindings ... that's the caller's job".
+ * A proof by somebody else's key verifies perfectly well, so skipping the
+ * binding turns "signed by somebody" into "signed by our agent".
+ *
+ * ## What is exempt
+ *
+ * An error document. Its `type` resolves to the framework's `trust-task-error`
+ * specification, whose own proof requirement is RECOMMENDED rather than
+ * REQUIRED, so demanding one would make every conforming refusal unreadable —
+ * including the ones carrying the reason a caller needs.
+ *
+ * ## No staging flag
+ *
+ * The Rust client has one because it talks to agents that may predate response
+ * signing. This one does not: nothing here is deployed, and the house rule is
+ * that the plugin and the VTA cut over together rather than carrying a fold
+ * that reads as a live constraint.
+ */
+export async function verifyTrustTaskReply(
+  doc: { type?: string; proof?: unknown },
+  expectedSigner: string,
+): Promise<void> {
+  if (isTrustTaskErrorType(doc.type)) return;
+
+  const result = await verifyTrustTaskProof(doc as Record<string, unknown>);
+  if (!result.verified) {
+    throw new VtaClientError(
+      "e.client.parse",
+      `the reply from ${expectedSigner} is unsigned or its proof does not verify ` +
+        `(${result.reason ?? "no reason given"}). An unsigned answer is bytes, not evidence`,
+    );
+  }
+  if (result.signer !== expectedSigner) {
+    throw new VtaClientError(
+      "e.client.parse",
+      `the reply claiming to come from ${expectedSigner} is signed by ${result.signer}. ` +
+        `The proof verifies, which means somebody really signed it — just not the agent ` +
+        `this channel is talking to`,
+    );
+  }
+}
+
 export function parseTrustTaskReply<Res>(
   doc: TrustTask<unknown> | ReplyDocument,
   opts: ParseTrustTaskReplyOptions = {},

@@ -24,7 +24,7 @@ import type { TspFrameClaim } from "../didcomm/index.js";
 import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
 import { VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
-import { parseTrustTaskReply, signOutboundTask } from "./trust-task.js";
+import { parseTrustTaskReply, signOutboundTask, verifyTrustTaskReply } from "./trust-task.js";
 import { asTaskSigner, type ChannelSigner, type TaskSigner } from "./trust-task.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 
@@ -271,6 +271,11 @@ export class TspChannel implements TrustTaskChannel {
     if (!doc) {
       throw new VtaClientError("e.client.parse", "tsp: reply resolved with no claimed document");
     }
+
+    // TSP's own unpack proves the sender VID, and the document's proof is a
+    // separate claim about the document. Both, for the same reason the DIDComm
+    // arm checks both.
+    await verifyTrustTaskReply(doc ?? {}, this.vta.vid);
 
     return parseTrustTaskReply<Res>(doc, {
       ...(opts.expectedResponseType !== undefined

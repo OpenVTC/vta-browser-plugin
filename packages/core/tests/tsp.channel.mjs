@@ -4,9 +4,19 @@ import assert from "node:assert/strict";
 import { TspChannel, VtaSession, buildTrustTask } from "../dist/index.js";
 import { pack, unpack } from "@openvtc/vti-tsp-js";
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
+import { signTrustTask } from "../dist/trust-tasks/sign.js";
+import { generateSigningIdentity } from "../dist/siop/self-issued.js";
 
 const utf8 = new TextEncoder();
 const fromUtf8 = new TextDecoder();
+
+// The simulated agent's identity, at module scope so the envelopes below can
+// address the same DID the channel expects a reply from. A `did:key`, and the
+// same key signs both the outer TSP signature and the document proof: the
+// channel now verifies that proof, and a `did:web` VID would need the network
+// to resolve.
+const VTA_SIGNING = generateSigningIdentity();
+const VTA_VID = VTA_SIGNING.did;
 
 function tspIdentity(vid) {
   const sign = ed25519.utils.randomSecretKey();
@@ -46,6 +56,16 @@ function simulatedVtaTransport(vta, holder, dispatch, replySenderVid) {
       // pass. A dispatch that sets `threadId` itself keeps it — that is how the
       // mis-threaded case below is expressed.
       if (replyDoc.threadId === undefined) replyDoc.threadId = reqDoc.id;
+      // Signed AFTER `threadId` is set, because a proof covers the document it
+      // was made over — signing first and mutating after produces a proof that
+      // fails to verify, which is what the channel then (correctly) refuses.
+      //
+      // The double signs at all because a real VTA does: every specification
+      // requiring a proof on its request requires one on its response too, so a
+      // double that did not sign would model a VTA that no longer exists.
+      if (vta.signing && !replyDoc.proof && !String(replyDoc.type ?? "").includes("trust-task-error")) {
+        await signTrustTask({ envelope: replyDoc, signing: vta.signing });
+      }
       // Seal the reply under `replySenderVid` (defaults to the VTA's real VID),
       // still using the VTA's keys — so the channel's own sender-VID check is
       // what's exercised, not a crypto failure.
@@ -71,7 +91,7 @@ function simulatedVtaTransport(vta, holder, dispatch, replySenderVid) {
 
 function makeChannel(dispatch, replySenderVid) {
   const holder = tspIdentity("did:web:holder.example");
-  const vta = tspIdentity("did:web:vta.example");
+  const vta = { ...tspIdentity(VTA_VID), signing: VTA_SIGNING };
   const transport = simulatedVtaTransport(vta, holder, dispatch, replySenderVid);
   const channel = new TspChannel({
     transport,
@@ -91,7 +111,7 @@ function makeChannel(dispatch, replySenderVid) {
       publicKey: holder.signPk,
     },
     vta: {
-      vid: "did:web:vta.example", // what the channel expects as the reply sender
+      vid: vta.vid, // what the channel expects as the reply sender
       encryptionPublicKey: vta.encPk,
       signingPublicKey: vta.signPk,
     },
@@ -111,7 +131,7 @@ test("TspChannel round-trips a trust task through a simulated VTA (real TSP cryp
 
   const env = buildTrustTask(LIST, { contextId: "work" }, {
     issuer: "did:web:holder.example",
-    recipient: "did:web:vta.example",
+    recipient: VTA_VID,
   });
   const res = await channel.send(env, { expectedResponseType: LIST_RESP });
 
@@ -124,7 +144,7 @@ test("TspChannel decodes a trust-task-error reply into a typed VtaClientError", 
     type: "https://trusttasks.org/spec/trust-task-error/0.2",
     payload: { code: "vault/list:permissionDenied", message: "nope", retryable: false },
   }));
-  const env = buildTrustTask(LIST, {}, { issuer: "did:web:holder.example", recipient: "did:web:vta.example" });
+  const env = buildTrustTask(LIST, {}, { issuer: "did:web:holder.example", recipient: VTA_VID });
   await assert.rejects(
     () => channel.send(env, { expectedResponseType: LIST_RESP }),
     (e) => e.code === "e.p.msg.forbidden" && /nope/.test(e.message),
@@ -137,7 +157,7 @@ test("TspChannel never accepts a reply sealed by the wrong sender VID", async ()
     () => ({ type: LIST_RESP, payload: {} }),
     "did:web:imposter.example",
   );
-  const env = buildTrustTask(LIST, {}, { issuer: "did:web:holder.example", recipient: "did:web:vta.example" });
+  const env = buildTrustTask(LIST, {}, { issuer: "did:web:holder.example", recipient: VTA_VID });
   await assert.rejects(() => channel.send(env, { expectedResponseType: LIST_RESP }));
 
   // The property is unchanged — an imposter's frame is never this request's
@@ -164,7 +184,7 @@ test("TspChannel does not claim a reply threaded to a different request", async 
     threadId: "urn:uuid:some-other-request",
     payload: { entries: [], truncated: false },
   }));
-  const env = buildTrustTask(LIST, {}, { issuer: "did:web:holder.example", recipient: "did:web:vta.example" });
+  const env = buildTrustTask(LIST, {}, { issuer: "did:web:holder.example", recipient: VTA_VID });
   await assert.rejects(() => channel.send(env, { expectedResponseType: LIST_RESP }));
   assert.equal(transport.lastClaim, false, "a mis-threaded document must not be claimed");
 });
@@ -174,7 +194,7 @@ test("VtaSession routes over TSP when present (TSP > DIDComm > REST)", async () 
   const restStub = { kind: "rest", async send() { throw new Error("REST should not be used"); } };
   const session = new VtaSession([restStub, channel]);
   assert.equal(session.primaryKind, "tsp");
-  const env = buildTrustTask(LIST, {}, { issuer: "did:web:holder.example", recipient: "did:web:vta.example" });
+  const env = buildTrustTask(LIST, {}, { issuer: "did:web:holder.example", recipient: VTA_VID });
   const res = await session.send(env, { expectedResponseType: LIST_RESP });
   assert.deepEqual(res, { entries: [], truncated: false });
 });
