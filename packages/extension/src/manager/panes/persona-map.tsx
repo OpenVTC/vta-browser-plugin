@@ -51,6 +51,7 @@ import {
 } from "../identity-graph.js";
 import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 import { familyOf, familyStyle, FAMILY_ORDER, type Family } from "../attribute-family.js";
+import { provenanceWords, labelSaysSomethingElse, staleWords } from "../attribute-words.js";
 import { unappliedClaimTypes } from "@openvtc/pnm-core/persona";
 import {
   AttributeEditor,
@@ -66,25 +67,6 @@ import { isSensitiveFor } from "../claim-sensitivity.js";
 import type { RevealTarget } from "../reveal-value.js";
 
 // ── Words for what the agent knows ──────────────────────────────────────────
-
-/** Provenance as a trust level in plain words — `design-docs/persona-vocabulary.md`. */
-function provenanceWords(p: AttributeNode["provenance"]): { text: string; tone: "off" | "accent" | "ok" } {
-  switch (p.kind) {
-    case "credentialBacked": {
-      const issuer = p.issuerDid ? issuerLabel(p.issuerDid) : null;
-      return { text: issuer ? `credential · ${issuer}` : "credential", tone: "accent" };
-    }
-    case "generated":
-      return { text: p.perVerifier ? "made per verifier" : "generated", tone: "ok" };
-    default:
-      return { text: "you said so", tone: "off" };
-  }
-}
-
-function issuerLabel(did: string): string {
-  const host = splitDid(did).find((part) => part.role === "host")?.text;
-  return host ?? did.slice(0, 18) + "…";
-}
 
 /**
  * How a persona is labelled on a card.
@@ -120,38 +102,6 @@ function standingWords(tally: ContextTally): string {
   if (tally.unreadable > 0) parts.push(`${tally.unreadable} unreadable`);
   parts.push(`absent from ${tally.absent}`);
   return parts.join(" · ");
-}
-
-/**
- * Whether the holder's own label is telling the reader anything the value does
- * not already say.
- *
- * A label is a note to self — "work mobile", "the flat" — and it earns its
- * place beside the value. When it *is* the value it earns nothing: a `company`
- * attribute labelled "Affinidi" holding "Affinidi" drew **Affinidi · Affinidi**,
- * which reads as a stutter and, worse, as two facts.
- *
- * Compared case- and space-insensitively, because "affinidi" beside "Affinidi"
- * is the same stutter with a different shift key. Only a string value is
- * compared: a JSON object rendered beside a label never repeats it, and
- * stringifying one here to find out would be work in aid of a case that cannot
- * arise.
- */
-function labelSaysSomethingElse(label: string | undefined, value: unknown): boolean {
-  if (!label) return false;
-  if (typeof value !== "string") return true;
-  return label.trim().toLowerCase() !== value.trim().toLowerCase();
-}
-
-function staleWords(reason: string | undefined): string {
-  switch (reason) {
-    case "expired":
-      return "stale · expired";
-    case "revoked":
-      return "stale · revoked";
-    default:
-      return "stale";
-  }
 }
 
 // ── Measuring cards so edges can be drawn between them ──────────────────────
