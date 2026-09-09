@@ -172,6 +172,47 @@ test("the delete preview counts credential-backed attributes separately", () => 
   assert.equal(preview.credentialBacked, 1);
 });
 
+test("the preview counts what a face still references, in all three forms", () => {
+  // The half that decides whether the delete works at all: the agent refuses an
+  // attribute a face still names unless `cascade` is set. Reading only live
+  // references would under-count — a pin and an override name it too — and put
+  // the holder back in the one-refusal-at-a-time state this exists to prevent.
+  const faces = [
+    {
+      id: "f1",
+      name: "Work",
+      attributeIds: ["a1"],
+      preserved: 0,
+      version: 1,
+      entries: [{ ref: "a1" }, { ref: "a3", pinVersion: 2 }],
+    },
+    {
+      id: "f2",
+      name: "Play",
+      attributeIds: [],
+      preserved: 0,
+      version: 1,
+      entries: [{ ref: "a4", override: { value: "+61 0" } }, { inline: { type: "x:h" } }],
+    },
+    { id: "f3", name: "Spare", attributeIds: [], preserved: 0, version: 1, entries: [] },
+  ] as never as Parameters<typeof previewDelete>[3];
+
+  const groups = groupRows(pool(), REGISTRY);
+  const preview = previewDelete(new Set(["a1", "a3", "a4"]), groups, pool(), faces);
+  assert.equal(preview.usedInFaces, 3, "a pin or an override was not counted as a reference");
+  assert.deepEqual(preview.facesAffected, ["Work", "Play"], "a face losing nothing was named");
+});
+
+test("an inline entry is nobody's pool attribute", () => {
+  const faces = [
+    { id: "f1", name: "Work", attributeIds: [], preserved: 0, version: 1, entries: [{ inline: { type: "x:h" } }] },
+  ] as never as Parameters<typeof previewDelete>[3];
+  const groups = groupRows(pool(), REGISTRY);
+  const preview = previewDelete(new Set(["a1"]), groups, pool(), faces);
+  assert.equal(preview.usedInFaces, 0);
+  assert.deepEqual(preview.facesAffected, []);
+});
+
 test("bulk visibility is not offered, and the refusal has words", () => {
   // `attribute/put` is a replace and this console does not hold the values it
   // masks, so a bulk visibility change would blank every sensitive attribute in

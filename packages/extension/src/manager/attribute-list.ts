@@ -47,7 +47,8 @@ import {
   type Family,
   type FamilyStyle,
 } from "./attribute-family.js";
-import type { AttributeNode } from "./identity-graph.js";
+import type { AttributeNode, FaceNode } from "./identity-graph.js";
+import type { PoolProfileEntry } from "@openvtc/pnm-core/admin";
 import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 
 /** One family's heading and the attributes under it, in display order. */
@@ -249,12 +250,33 @@ export interface DeletePreview {
   lastOfType: number;
   /** How many are credential-backed, and so cost more than retyping. */
   credentialBacked: number;
+  /**
+   * How many of the selected attributes a face still references.
+   *
+   * **This is the half that decides whether the delete works at all.** The
+   * agent refuses to delete an attribute a profile still names unless
+   * `cascade` is set — "a profile silently projecting one fewer claim is a
+   * failure the holder discovers from the far side of a disclosure" — so a
+   * bulk delete of twelve where five are in use is five refusals, arriving one
+   * at a time, after the seven that succeeded.
+   *
+   * Counting them up front is what lets the confirm step ask the second
+   * question *before* anything is sent, the way `Destructive`'s `force` tick
+   * does: overriding a refusal the agent makes on purpose is its own decision
+   * and does not follow from pressing Delete.
+   */
+  usedInFaces: number;
+  /** The faces that would lose an entry, by name, in graph order. Named rather
+   *  than counted because "Work loses two" is the sentence that changes a mind,
+   *  and the holder cannot get it from anywhere else on this screen. */
+  facesAffected: string[];
 }
 
 export function previewDelete(
   selection: ReadonlySet<string>,
   groups: readonly ListGroup[],
   attributes: readonly AttributeNode[],
+  faces: readonly FaceNode[] = [],
 ): DeletePreview {
   const rows = selectedRows(selection, groups);
   const remaining = new Map<string, number>();
@@ -264,10 +286,45 @@ export function previewDelete(
   }
   const types: string[] = [];
   for (const r of rows) if (!types.includes(r.type)) types.push(r.type);
+
+  // A face reaches an attribute by live reference, by pin and by override —
+  // `attributeIds` carries only the first. The other two still *name* the
+  // attribute, so the agent refuses on them too; reading only live references
+  // would under-count and put the holder back in the one-refusal-at-a-time
+  // state this preview exists to prevent.
+  const referenced = new Set<string>();
+  const facesAffected: string[] = [];
+  for (const face of faces) {
+    let touches = false;
+    for (const entry of face.entries) {
+      const ref = entryRef(entry);
+      if (ref !== null && selection.has(ref)) {
+        referenced.add(ref);
+        touches = true;
+      }
+    }
+    if (touches) facesAffected.push(face.name);
+  }
+
   return {
     count: rows.length,
     types,
     lastOfType: types.filter((ty) => (remaining.get(ty) ?? 0) === 0).length,
     credentialBacked: rows.filter((r) => r.provenance.kind === "credentialBacked").length,
+    usedInFaces: referenced.size,
+    facesAffected,
   };
+}
+
+/**
+ * The pool attribute an entry draws on, or `null` for an inline one.
+ *
+ * The client-side twin of `ProfileEntry::referenced` in `vta-persona`. Kept
+ * here rather than imported because the console reads entries as the wire
+ * shape, and the four forms are distinguished by which members are present.
+ */
+function entryRef(entry: PoolProfileEntry): string | null {
+  return typeof entry === "object" && entry !== null && "ref" in entry
+    ? ((entry as { ref?: unknown }).ref as string | undefined) ?? null
+    : null;
 }
