@@ -40,6 +40,9 @@ const ATTRS = [{
   attributeId: "a1", type: "name.legal", valueType: "string" as const, value: "Glenn Gore",
   provenance: { kind: "selfAsserted" as const }, version: 1, updatedAt: "x",
 }];
+const FACES = [{
+  profileId: "p1", name: "Work", entries: [{ ref: "a1" }], version: 1, updatedAt: "x",
+}] as never[];
 
 const mapScreen = () =>
   render(
@@ -106,6 +109,77 @@ test("a new world opens its own form from its own button", async () => {
   const dialog = ui.all('[role="dialog"]')[0];
   assert.ok(dialog, "the world form must open as an overlay too");
   assert.match(dialog!.textContent ?? "", /What do you call it\?/);
+  await ui.unmount();
+});
+
+test("selecting a face and pressing Edit opens the form, not a band below the fold", async () => {
+  // Reported after the first round of this work: "editing a face still shows a
+  // form at the bottom". The popover was fine — the *button that opens it* was
+  // not reachable. Selecting anything renders the detail strip, and the strip
+  // was the last element of a page two or three screens tall, so its Edit and
+  // Delete sat below the fold. Clicking a face looked like it had only
+  // highlighted something.
+  //
+  // The strip is pinned to the bottom of the pane now. That cannot be asserted
+  // without layout, so this asserts the path it unblocked, end to end: select a
+  // face, press Edit, get a dialog.
+  const ui = await render(
+    h(IdentityMap, {
+      registry: REGISTRY,
+      parties: PARTIES,
+      authority: HOLDER,
+      graph: buildGraph(ATTRS, FACES, []),
+      attributes: ATTRS,
+      profiles: FACES,
+      worlds: [],
+      records: [],
+      history: [],
+      onReveal: async () => ({}),
+      onChanged: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: agent({}).sendMessage } } },
+  );
+
+  const card = ui.byText("div", "Work");
+  assert.ok(card, "the face card must be on the map");
+  await ui.click(card!);
+  // The strip is what carries the actions, and it must appear on selection.
+  assert.match(ui.text(), /Worn by/, "selecting a face must open its detail strip");
+
+  await ui.click(ui.button("Edit"));
+  const dialog = ui.all('[role="dialog"]')[0];
+  assert.ok(dialog, "Edit must open the face form as an overlay");
+  assert.match(dialog!.textContent ?? "", /Shows|SHOWS/, "and it is the face editor");
+  await ui.unmount();
+});
+
+test("the detail strip offers a way out of its own selection", async () => {
+  // It is pinned now, so "click the card again" is no longer the only way to
+  // dismiss it — and a panel that covers the bottom of the pane with no visible
+  // close is a panel people fight.
+  const ui = await render(
+    h(IdentityMap, {
+      registry: REGISTRY,
+      parties: PARTIES,
+      authority: HOLDER,
+      graph: buildGraph(ATTRS, FACES, []),
+      attributes: ATTRS,
+      profiles: FACES,
+      worlds: [],
+      records: [],
+      history: [],
+      onReveal: async () => ({}),
+      onChanged: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: agent({}).sendMessage } } },
+  );
+  await ui.click(ui.byText("div", "Work")!);
+  assert.match(ui.text(), /Worn by/);
+
+  const clear = ui.all('button[aria-label="Clear selection"]')[0];
+  assert.ok(clear, "the strip must carry a dismiss");
+  await ui.click(clear!);
+  assert.doesNotMatch(ui.text(), /Worn by/, "dismissing must clear the selection");
   await ui.unmount();
 });
 
