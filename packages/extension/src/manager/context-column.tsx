@@ -10,6 +10,7 @@ import { useMemo, useState } from "react";
 import { c, t, font } from "../theme.js";
 import { buildContextTree, flattenContextTree, type ContextNode } from "./context-tree.js";
 import { contextLabel } from "./format.js";
+import { Icon } from "./icons.js";
 import type { ContextRecord } from "@openvtc/pnm-core";
 
 /** `null` means "all contexts" — the filter cleared, not a context named null. */
@@ -126,8 +127,31 @@ export function ContextTree({
   error: string | null;
 }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [query, setQuery] = useState("");
   const roots = useMemo(() => buildContextTree(records), [records]);
-  const rows = useMemo(() => flattenContextTree(roots, collapsed), [roots, collapsed]);
+  const all = useMemo(() => flattenContextTree(roots, collapsed), [roots, collapsed]);
+
+  /**
+   * Rows matching the filter, with the tree flattened while one is typed.
+   *
+   * **Ancestors are ignored while filtering**, deliberately. Keeping the
+   * hierarchy would mean drawing every unmatched parent of a match, so a search
+   * for "eng" returns `work` and `work/platform` too — rows the person did not
+   * ask for and cannot tell apart from ones they did. A filtered tree is a
+   * list, and the id under each row is what says where it sits.
+   *
+   * Matched on the id as well as the label because the id is what joins this
+   * column to every table beside it, and an operator who has one in hand from a
+   * task response has nothing but the id to search by.
+   */
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter(({ node }) => {
+      const label = node.record ? contextLabel(node.record).primary : node.name;
+      return label.toLowerCase().includes(q) || (node.id ?? "").toLowerCase().includes(q);
+    });
+  }, [all, query]);
 
   const toggle = (id: string | undefined) => {
     if (!id) return;
@@ -186,6 +210,32 @@ export function ContextTree({
         </button>
       </div>
 
+      {/* Shown once there are enough contexts for the column to be a scroll
+          rather than a glance. Below that a search box is a control that costs
+          more attention than the list it filters. */}
+      {records.length >= 8 && (
+        <div style={{ padding: "0 14px 8px", position: "relative", display: "flex", alignItems: "center" }}>
+          <Icon name="search" size={13} style={{ position: "absolute", left: 21, color: c.faint, pointerEvents: "none" }} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter"
+            aria-label="Filter contexts"
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "5px 8px 5px 24px",
+              background: c.ground,
+              color: c.text,
+              border: `1px solid ${c.line}`,
+              borderRadius: "var(--w-r-sm)",
+              fontSize: t.sm,
+              fontFamily: font.sans,
+            }}
+          />
+        </div>
+      )}
+
       {loading && (
         <span style={{ padding: "6px 14px", fontSize: t.sm, color: c.faint }}>Loading…</span>
       )}
@@ -194,7 +244,15 @@ export function ContextTree({
           {error}
         </span>
       )}
-      {!loading && !error && rows.length === 0 && (
+      {/* A filter that matched nothing is not the same state as an agent with
+          no contexts, and must not borrow its sentence — that one tells the
+          operator to go and ask for a grant they may already have. */}
+      {!loading && !error && rows.length === 0 && query.trim() !== "" && (
+        <span style={{ padding: "6px 14px", fontSize: t.sm, color: c.faint, lineHeight: 1.5 }}>
+          No context matches “{query.trim()}”. {all.length} {all.length === 1 ? "is" : "are"} here.
+        </span>
+      )}
+      {!loading && !error && rows.length === 0 && query.trim() === "" && (
         <span style={{ padding: "6px 14px", fontSize: t.sm, color: c.faint, lineHeight: 1.5 }}>
           No contexts you can reach. Contexts you administer appear here — ask an admin at this
           agent for a grant, or create one below.

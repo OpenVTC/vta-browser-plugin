@@ -137,3 +137,20 @@ body,
 body {
   overflow: hidden;
 }
+
+/* ── Popover content must fit the popover ───────────────────────────────────
+ *
+ * A grid or flex item's `min-width` defaults to `auto`, which refuses to shrink
+ * below its content's min-content width. Inside a popover — a box with a fixed
+ * width — that means one long help paragraph, or an unbreakable mono token like
+ * `phone.mobile`, sizes its whole column past the edge and the text is clipped
+ * at the border. The editors shown in popovers are built from several layers of
+ * nested, inline-styled grids, so this is one rule rather than a prop threaded
+ * through each of them.
+ *
+ * Safe as a stylesheet rule precisely because it is one: any component that
+ * genuinely needs a minimum sets it inline, and an inline style wins.
+ */
+[role="dialog"] * {
+  min-width: 0;
+}

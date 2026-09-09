@@ -34,7 +34,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { agent, h, render, PARTIES, UNSCOPED_HOLDER } from "./harness/dom.mjs";
-import { WorldsPane } from "../src/manager/panes/worlds.js";
+import { WorldEditor } from "../src/manager/panes/worlds.js";
+import { IdentityMap } from "../src/manager/panes/persona-map.js";
 import { AttributeList } from "../src/manager/panes/persona-list.js";
 import { buildGraph } from "../src/manager/identity-graph.js";
 
@@ -100,21 +101,42 @@ const FACES = [face("f1", "Acme"), face("f2", "LinkedIn")];
 
 const quiet = () => agent({});
 
-test("the worlds list speaks the table", async () => {
+/** The map, which is where worlds are drawn now that the pane is gone. */
+const mapWith = (worlds: unknown[]) =>
+  h(IdentityMap, {
+    parties: PARTIES,
+    authority: UNSCOPED_HOLDER,
+    registry: REGISTRY,
+    graph: buildGraph(ATTRS, FACES, []),
+    attributes: ATTRS,
+    profiles: FACES,
+    worlds,
+    records: [],
+    history: [],
+    onReveal: async () => ({}),
+    onChanged: () => {},
+  });
+
+/** The editor, as the popover mounts it. */
+const editorWith = (worlds: unknown[], existing?: unknown) =>
+  h(WorldEditor, {
+    parties: PARTIES,
+    authority: UNSCOPED_HOLDER,
+    ...(existing ? { existing } : {}),
+    faces: FACES,
+    attributes: ATTRS,
+    registry: REGISTRY,
+    worlds,
+    onDone: () => {},
+    onCancel: () => {},
+  });
+
+test("the worlds on the map speak the table", async () => {
   const fake = quiet();
-  const screen = await render(
-    h(WorldsPane, {
-      parties: PARTIES,
-      authority: UNSCOPED_HOLDER,
-      worlds: [world("w1", "Work", ["f1"])],
-      faces: FACES,
-      attributes: ATTRS,
-      registry: REGISTRY,
-      onChanged: () => {},
-    }),
-    { chrome: { runtime: { sendMessage: fake.sendMessage } } },
-  );
-  assertSpeaksTheTable(screen.text(), "the worlds list");
+  const screen = await render(mapWith([world("w1", "Work", ["f1"])]), {
+    chrome: { runtime: { sendMessage: fake.sendMessage } },
+  });
+  assertSpeaksTheTable(screen.text(), "the worlds band on the map");
   await screen.unmount();
 });
 
@@ -123,19 +145,9 @@ test("the world editor speaks the table", async () => {
   // after a wire member.
   const fake = quiet();
   const screen = await render(
-    h(WorldsPane, {
-      parties: PARTIES,
-      authority: UNSCOPED_HOLDER,
-      worlds: [world("w1", "Work", ["f1"])],
-      faces: FACES,
-      attributes: ATTRS,
-      registry: REGISTRY,
-      onChanged: () => {},
-    }),
+    editorWith([world("w1", "Work", ["f1"])], world("w1", "Work", ["f1"])),
     { chrome: { runtime: { sendMessage: fake.sendMessage } } },
   );
-  await screen.click(screen.all("button").filter((b) => b.textContent?.includes("Edit"))[0]!);
-  await screen.settle();
   assertSpeaksTheTable(screen.text(), "the world editor");
   await screen.unmount();
 });
@@ -143,19 +155,10 @@ test("the world editor speaks the table", async () => {
 test("an empty worlds screen speaks the table", async () => {
   // Empty states are written last and read first.
   const fake = quiet();
-  const screen = await render(
-    h(WorldsPane, {
-      parties: PARTIES,
-      authority: UNSCOPED_HOLDER,
-      worlds: [],
-      faces: FACES,
-      attributes: ATTRS,
-      registry: REGISTRY,
-      onChanged: () => {},
-    }),
-    { chrome: { runtime: { sendMessage: fake.sendMessage } } },
-  );
-  assertSpeaksTheTable(screen.text(), "the empty worlds screen");
+  const screen = await render(mapWith([]), {
+    chrome: { runtime: { sendMessage: fake.sendMessage } },
+  });
+  assertSpeaksTheTable(screen.text(), "a map with no worlds yet");
   await screen.unmount();
 });
 
@@ -164,18 +167,9 @@ test("the delete confirm speaks the table", async () => {
   // because it is written while thinking about the record rather than the
   // person.
   const fake = quiet();
-  const screen = await render(
-    h(WorldsPane, {
-      parties: PARTIES,
-      authority: UNSCOPED_HOLDER,
-      worlds: [world("w1", "Work", ["f1"])],
-      faces: FACES,
-      attributes: ATTRS,
-      registry: REGISTRY,
-      onChanged: () => {},
-    }),
-    { chrome: { runtime: { sendMessage: fake.sendMessage } } },
-  );
+  const screen = await render(mapWith([world("w1", "Work", ["f1"])]), {
+    chrome: { runtime: { sendMessage: fake.sendMessage } },
+  });
   await screen.click(screen.button("Delete"));
   await screen.settle();
   assertSpeaksTheTable(screen.text(), "the world delete confirm");

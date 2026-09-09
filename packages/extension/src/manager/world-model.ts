@@ -6,7 +6,7 @@
 // already?*, *what belongs nowhere?* — and getting one wrong is a screen that
 // says something untrue rather than a screen that looks wrong.
 
-import type { PoolFacet, PoolProfile } from "@openvtc/pnm-core/admin";
+import type { FacetColour, PoolFacet, PoolProfile } from "@openvtc/pnm-core/admin";
 import { RelayTaskError } from "./carrier.js";
 
 /** One face the agent refused to place, and the world already holding it. */
@@ -159,4 +159,75 @@ export function seedMembership(
     droppedFaces: namedFaces.length - faceIds.size,
     droppedAttributes: namedAttributes.length - attributeIds.size,
   };
+}
+
+/** One `persona/facet/put`, as a mover needs to send it. */
+export interface FacetWrite {
+  facetId: string;
+  name: string;
+  colour: FacetColour;
+  icon?: string | undefined;
+  faceIds: string[];
+  attributeIds: string[];
+}
+
+/**
+ * The writes that move one face from wherever it is to `toFacetId`.
+ *
+ * **Order matters and is the whole reason this is a function.** `facet/put`
+ * replaces, and the agent refuses a write that would place a face already
+ * placed elsewhere (`persona/facet/put:faceAlreadyPlaced` — see
+ * {@link placedElsewhere}). So the source has to be rewritten *without* the
+ * face before the destination is rewritten *with* it. Sending them the other
+ * way round is refused, and sending only the destination silently leaves the
+ * face in two worlds on any agent that does not enforce the check.
+ *
+ * Every write carries the world's **live** membership, via {@link seedMembership}:
+ * a put that echoed back a dangling id would be refused with `unresolvedReference`
+ * naming a ULID whose record no longer exists — which is exactly the bug that
+ * made a world permanently uneditable (plugin #216). Moving a face therefore
+ * also tidies the world it touches, which is the behaviour the dangling ids
+ * were kept for.
+ *
+ * Returns `[]` when the face is already where it is being dropped, so a drop
+ * onto its own world costs no round trip and cannot fail.
+ */
+export function movePlan(
+  worlds: readonly PoolFacet[],
+  faces: readonly PoolProfile[],
+  attributes: readonly { attributeId: string }[],
+  faceId: string,
+  toFacetId: string | null,
+): FacetWrite[] {
+  const from = worldOfFace(worlds, faceId);
+  if ((from?.facetId ?? null) === toFacetId) return [];
+
+  const writeFor = (w: PoolFacet, faceIds: string[]): FacetWrite => {
+    const live = seedMembership(w, faces, attributes);
+    return {
+      facetId: w.facetId,
+      name: w.name,
+      colour: w.colour,
+      ...(w.icon ? { icon: w.icon } : {}),
+      faceIds,
+      attributeIds: [...live.attributeIds],
+    };
+  };
+
+  const out: FacetWrite[] = [];
+  if (from) {
+    const live = seedMembership(from, faces, attributes);
+    out.push(writeFor(from, [...live.faceIds].filter((id) => id !== faceId)));
+  }
+  if (toFacetId) {
+    const to = worlds.find((w) => w.facetId === toFacetId);
+    // A destination that has vanished between render and drop is dropped
+    // silently rather than guessed at: the source write above still runs, so
+    // the face ends up unplaced, which is the honest half of the move.
+    if (to) {
+      const live = seedMembership(to, faces, attributes);
+      out.push(writeFor(to, [...new Set([...live.faceIds, faceId])]));
+    }
+  }
+  return out;
 }

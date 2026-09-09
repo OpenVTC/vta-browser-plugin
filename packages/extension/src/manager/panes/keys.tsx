@@ -117,18 +117,32 @@ function CreateKey({
     }
   }, [parties, contextId, keyType, label, keyId, internal, onCreated]);
 
+  // A form nobody can submit is not a form — it is a wall of controls with a
+  // dead button, and the reason it is dead is a sentence underneath it that has
+  // to be read to be found. Ask the precondition, then draw the form.
+  //
+  // Only for the *missing context*, not for the missing role: a form withheld
+  // because of authority would tell an operator this agent has no such feature,
+  // when what it has is a grant they do not hold. That one stays drawn and
+  // disabled, with the reason on the control — see `hasRole`.
+  if (!contextId) {
+    return (
+      <Panel title="New key" description="A key is minted into a context, and belongs to it.">
+        <span style={{ fontSize: t.sm, color: c.faint }}>
+          Select a context in the tree to mint a key into it.
+        </span>
+      </Panel>
+    );
+  }
+
   return (
     <Panel
       title="New key"
       description={
-        contextId ? (
-          <>
-            Minted into <code style={{ fontFamily: font.mono }}>{contextId}</code>. Your agent
-            holds the private half and never returns it — only the public key comes back.
-          </>
-        ) : (
-          "Select a context in the tree to mint a key into it."
-        )
+        <>
+          Minted into <code style={{ fontFamily: font.mono }}>{contextId}</code>. Your agent
+          holds the private half and never returns it — only the public key comes back.
+        </>
       }
     >
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>

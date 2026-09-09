@@ -12,9 +12,10 @@
 // Routing is on `location.hash`, matching `app-shell.tsx`, so a pane is
 // linkable and a reload lands where the operator was.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { contextsList, type ContextRecord } from "@openvtc/pnm-core";
-import { c, t } from "../theme.js";
+import { c, radius, t } from "../theme.js";
+import { Icon, type IconName } from "./icons.js";
 import { Note } from "../ui.js";
 import { ContextTree, type ContextSelection } from "./context-column.js";
 import { WhoamiBanner } from "./whoami-banner.js";
@@ -58,6 +59,10 @@ export type SectionId =
 interface Section {
   id: SectionId;
   label: string;
+  /** The glyph the rail draws, and the only thing left of this section once
+   *  the rail is collapsed. Declared per section rather than derived from the
+   *  id so a rename cannot silently drop it. */
+  icon: IconName;
   /**
    * Whether the selected context actually narrows what this pane asks.
    *
@@ -89,9 +94,9 @@ const ACTS: Act[] = [
     colour: "var(--m-act-identity)",
     soft: "var(--m-act-identity-soft)",
     sections: [
-      { id: "contexts", label: "Contexts", contextScoped: true },
-      { id: "keys", label: "Keys", contextScoped: true },
-      { id: "dids", label: "DIDs", contextScoped: true },
+      { id: "contexts", label: "Contexts", icon: "contexts", contextScoped: true },
+      { id: "keys", label: "Keys", icon: "keys", contextScoped: true },
+      { id: "dids", label: "DIDs", icon: "dids", contextScoped: true },
     ],
   },
   {
@@ -103,7 +108,7 @@ const ACTS: Act[] = [
     soft: "var(--m-act-data-soft)",
     sections: [
       // Issuer-side only, and agent-wide: `vta/credentials` takes no context.
-      { id: "credentials", label: "Credentials", contextScoped: false },
+      { id: "credentials", label: "Credentials", icon: "credentials", contextScoped: false },
       // The holder's own identity, and the one pane that is agent-wide because
       // its records sit ABOVE every context rather than outside them. The tree
       // would be a filter that filters nothing — worse here than elsewhere,
@@ -111,17 +116,17 @@ const ACTS: Act[] = [
       // pool has compartments, which is the exact misreading the family's
       // one-way boundary exists to prevent. `persona/binding/set` names a
       // context, and takes it as an argument to the write.
-      { id: "persona", label: "Persona", contextScoped: false },
+      { id: "persona", label: "Persona", icon: "persona", contextScoped: false },
       // For both of these `contextId` is part of the record's address rather
       // than a filter, so the pane refuses to answer agent-wide. The column is
       // shown because the selection is required, not merely useful.
-      { id: "memory", label: "Memory", contextScoped: true },
-      { id: "app-state", label: "App state", contextScoped: true },
+      { id: "memory", label: "Memory", icon: "memory", contextScoped: true },
+      { id: "app-state", label: "App state", icon: "app-state", contextScoped: true },
       // Key custody is held at the agent, not inside a context:
       // `rooms/keys/list` takes no `contextId`, because a room's keys arrive
       // from the room rather than being derived under one of this VTA's
       // hierarchies. A context column here would filter nothing.
-      { id: "rooms", label: "Rooms", contextScoped: false },
+      { id: "rooms", label: "Rooms", icon: "rooms", contextScoped: false },
     ],
   },
   {
@@ -131,11 +136,11 @@ const ACTS: Act[] = [
     sections: [
       // Transports are agent-wide: `servicesList` takes no context, because a
       // transport is not owned by one.
-      { id: "services", label: "Transports", contextScoped: false },
+      { id: "services", label: "Transports", icon: "services", contextScoped: false },
       // Operations whose subject is the agent itself rather than anything it
       // holds — backup and restart. Agent-wide by definition, so no context.
-      { id: "maintenance", label: "Maintenance", contextScoped: false },
-      { id: "audit", label: "Audit", contextScoped: true },
+      { id: "maintenance", label: "Maintenance", icon: "maintenance", contextScoped: false },
+      { id: "audit", label: "Audit", icon: "audit", contextScoped: true },
     ],
   },
   {
@@ -143,12 +148,12 @@ const ACTS: Act[] = [
     colour: "var(--m-act-graph)",
     soft: "var(--m-act-graph-soft)",
     sections: [
-      { id: "access", label: "Access", contextScoped: true },
-      { id: "approvals", label: "Approvals", contextScoped: true },
-      { id: "policy", label: "Policy", contextScoped: true },
+      { id: "access", label: "Access", icon: "access", contextScoped: true },
+      { id: "approvals", label: "Approvals", icon: "approvals", contextScoped: true },
+      { id: "policy", label: "Policy", icon: "policy", contextScoped: true },
       // `sessionsList` returns the caller's sessions; a session is held at the
       // agent, not inside a context.
-      { id: "sessions", label: "Sessions", contextScoped: false },
+      { id: "sessions", label: "Sessions", icon: "sessions", contextScoped: false },
     ],
   },
 ];
@@ -166,12 +171,44 @@ function sectionFromHash(): SectionId {
   return (known as string[]).includes(raw) ? (raw as SectionId) : "contexts";
 }
 
+/**
+ * Whether the rail is folded to icons, remembered across sessions.
+ *
+ * `localStorage` rather than a setting at the agent: this is a per-screen
+ * preference — the same operator wants it open on a desktop and folded on a
+ * laptop — and a round trip to the VTA to find out how wide a column is would
+ * be absurd. A throwing accessor (a private window, site data blocked) reads as
+ * "expanded", which is the state that needs no explanation.
+ */
+const RAIL_KEY = "vta-console/rail-collapsed";
+
+function readRailCollapsed(): boolean {
+  try {
+    return localStorage.getItem(RAIL_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeRailCollapsed(v: boolean): void {
+  try {
+    localStorage.setItem(RAIL_KEY, v ? "1" : "0");
+  } catch {
+    // Nothing to do and nothing worth saying: the rail still works, it just
+    // forgets. Failing the render over a preference would be the bigger fault.
+  }
+}
+
 function ActRail({
   section,
   onSelect,
+  collapsed,
+  onToggle,
 }: {
   section: SectionId;
   onSelect: (id: SectionId) => void;
+  collapsed: boolean;
+  onToggle: () => void;
 }) {
   return (
     <nav
@@ -180,58 +217,163 @@ function ActRail({
         background: "var(--m-rail)",
         borderRight: `1px solid ${c.line}`,
         overflowY: "auto",
-        padding: "12px 0",
+        overflowX: "hidden",
+        padding: "8px 0 12px",
         display: "grid",
         gridAutoRows: "min-content",
-        gap: 14,
+        gap: collapsed ? 10 : 14,
+        alignContent: "start",
       }}
     >
+      <div style={{ display: "flex", justifyContent: collapsed ? "center" : "flex-end", padding: collapsed ? 0 : "0 10px 2px" }}>
+        <button
+          onClick={onToggle}
+          aria-label={collapsed ? "Expand sections" : "Collapse sections"}
+          aria-expanded={!collapsed}
+          title={`${collapsed ? "Expand" : "Collapse"} sections (${navigator.platform.startsWith("Mac") ? "\u2318" : "Ctrl+"}\\)`}
+          style={{
+            border: `1px solid ${c.line}`,
+            background: c.surface,
+            color: c.muted,
+            borderRadius: radius.sm,
+            width: 26,
+            height: 24,
+            display: "grid",
+            placeItems: "center",
+            cursor: "pointer",
+          }}
+        >
+          <Icon name="chevron" size={14} style={{ transform: collapsed ? undefined : "rotate(180deg)" }} />
+        </button>
+      </div>
+
       {ACTS.map((act) => (
-        <div key={act.title} style={{ borderLeft: `4px solid ${act.colour}`, paddingLeft: 11 }}>
-          <h2
-            style={{
-              margin: "0 0 5px",
-              fontSize: t.xs,
-              textTransform: "uppercase",
-              letterSpacing: 0.5,
-              // The act's own colour, not a neutral. The rail is the only thing
-              // saying which of the three questions a section answers, and a
-              // 4px edge alone is too quiet to carry it.
-              color: act.colour,
-              fontWeight: 640,
-            }}
-          >
-            {act.title}
-          </h2>
-          {act.sections.map((s) => {
-            const active = s.id === section;
-            return (
-              <button
-                key={s.id}
-                onClick={() => onSelect(s.id)}
-                aria-current={active ? "page" : undefined}
-                style={{
-                  display: "block",
-                  width: "calc(100% - 10px)",
-                  textAlign: "left",
-                  border: "none",
-                  borderRadius: "var(--w-r-sm)",
-                  padding: "6px 9px",
-                  margin: "1px 0",
-                  cursor: "pointer",
-                  background: active ? act.soft : "transparent",
-                  color: active ? act.colour : c.text,
-                  fontSize: t.sm,
-                  fontWeight: active ? 640 : 440,
-                }}
-              >
-                {s.label}
-              </button>
-            );
-          })}
+        <div
+          key={act.title}
+          style={
+            collapsed
+              ? { borderLeft: `3px solid ${act.colour}`, marginLeft: 6, paddingTop: 2 }
+              : { borderLeft: `4px solid ${act.colour}`, paddingLeft: 11 }
+          }
+        >
+          {!collapsed && (
+            <h2
+              style={{
+                margin: "0 0 5px",
+                fontSize: t.xs,
+                textTransform: "uppercase",
+                letterSpacing: 0.5,
+                // The act's own colour, not a neutral. The rail is the only thing
+                // saying which of the three questions a section answers, and a
+                // 4px edge alone is too quiet to carry it.
+                color: act.colour,
+                fontWeight: 640,
+              }}
+            >
+              {act.title}
+            </h2>
+          )}
+          {act.sections.map((sec) => (
+            <RailButton
+              key={sec.id}
+              section={sec}
+              act={act}
+              active={sec.id === section}
+              collapsed={collapsed}
+              onSelect={onSelect}
+            />
+          ))}
         </div>
       ))}
     </nav>
+  );
+}
+
+/**
+ * One section in the rail.
+ *
+ * Its own component because of the collapsed tooltip: a CSS-only `::after`
+ * cannot escape the rail's `overflow: hidden`, and a `title` attribute waits a
+ * second and cannot be styled. Hover state here means the label can be drawn
+ * `position: fixed`, beside the icon, immediately.
+ *
+ * **Collapsed, the icon carries the act colour.** The 3px edge alone is too
+ * quiet once the heading is gone — which is the same reason the expanded rail
+ * colours its headings — and without it the fold turns four labelled groups
+ * into fifteen identical grey glyphs.
+ */
+function RailButton({
+  section,
+  act,
+  active,
+  collapsed,
+  onSelect,
+}: {
+  section: Section;
+  act: Act;
+  active: boolean;
+  collapsed: boolean;
+  onSelect: (id: SectionId) => void;
+}) {
+  const [hover, setHover] = useState(false);
+  const ref = useRef<HTMLButtonElement | null>(null);
+  const rect = hover && collapsed ? ref.current?.getBoundingClientRect() : undefined;
+
+  return (
+    <>
+      <button
+        ref={ref}
+        onClick={() => onSelect(section.id)}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        onFocus={() => setHover(true)}
+        onBlur={() => setHover(false)}
+        aria-current={active ? "page" : undefined}
+        title={collapsed ? undefined : section.label}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 9,
+          width: collapsed ? 38 : "calc(100% - 10px)",
+          justifyContent: collapsed ? "center" : "flex-start",
+          textAlign: "left",
+          border: "none",
+          borderRadius: radius.sm,
+          padding: collapsed ? "7px 0" : "6px 9px",
+          margin: collapsed ? "2px 4px" : "1px 0",
+          cursor: "pointer",
+          background: active ? act.soft : "transparent",
+          color: active ? act.colour : collapsed ? act.colour : c.text,
+          fontSize: t.sm,
+          fontWeight: active ? 640 : 440,
+        }}
+      >
+        <Icon name={section.icon} size={18} />
+        {!collapsed && <span>{section.label}</span>}
+      </button>
+      {rect && (
+        <span
+          role="tooltip"
+          style={{
+            position: "fixed",
+            left: rect.right + 8,
+            top: rect.top + rect.height / 2,
+            transform: "translateY(-50%)",
+            background: c.text,
+            color: c.ground,
+            fontSize: t.xs,
+            fontWeight: 600,
+            padding: "4px 9px",
+            borderRadius: radius.sm,
+            whiteSpace: "nowrap",
+            pointerEvents: "none",
+            zIndex: 60,
+          }}
+        >
+          {section.label}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -266,6 +408,27 @@ export function ManagerShell() {
   const vta = useVta();
   const [section, setSection] = useState<SectionId>(sectionFromHash);
   const [selected, setSelected] = useState<ContextSelection>(null);
+  const [railCollapsed, setRailCollapsed] = useState(readRailCollapsed);
+
+  const toggleRail = useCallback(() => {
+    setRailCollapsed((v) => {
+      writeRailCollapsed(!v);
+      return !v;
+    });
+  }, []);
+
+  // The same gesture every editor in this class of app uses for the same
+  // thing. Bound on the window rather than the rail so it works wherever the
+  // caret is, and guarded on the modifier so a literal backslash still types.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "\\" || !(e.metaKey || e.ctrlKey)) return;
+      e.preventDefault();
+      toggleRail();
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [toggleRail]);
 
   useEffect(() => {
     const onHash = () => setSection(sectionFromHash());
@@ -446,7 +609,11 @@ export function ManagerShell() {
       style={{
         height: "100%",
         display: "grid",
-        gridTemplateColumns: scoped ? "186px 244px minmax(0, 1fr)" : "186px minmax(0, 1fr)",
+        gridTemplateColumns: [
+          railCollapsed ? "52px" : "186px",
+          ...(scoped ? ["244px"] : []),
+          "minmax(0, 1fr)",
+        ].join(" "),
         gridTemplateRows: "auto minmax(0, 1fr)",
         gridTemplateAreas: scoped
           ? `"rail tree banner" "rail tree pane"`
@@ -454,7 +621,12 @@ export function ManagerShell() {
       }}
     >
       <div style={{ gridArea: "rail", minHeight: 0 }}>
-        <ActRail section={section} onSelect={go} />
+        <ActRail
+          section={section}
+          onSelect={go}
+          collapsed={railCollapsed}
+          onToggle={toggleRail}
+        />
       </div>
 
       {scoped && (

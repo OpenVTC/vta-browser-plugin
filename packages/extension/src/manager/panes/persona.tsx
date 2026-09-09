@@ -66,7 +66,6 @@ import { buildGraph, type ContextInput } from "../identity-graph.js";
 import { listClaimTypes, unappliedClaimTypes } from "@openvtc/pnm-core/persona";
 import { IdentityMap } from "./persona-map.js";
 import { AttributeList } from "./persona-list.js";
-import { WorldsPane } from "./worlds.js";
 import { GuidedSetup } from "./persona-setup.js";
 import { showsGuide, suggestsWorlds } from "../persona-flow.js";
 import { revealAttributeValue, type RevealTarget } from "../reveal-value.js";
@@ -126,14 +125,31 @@ async function loadContexts(parties: Parties, records: ContextRecord[]): Promise
  * of the same answer, so neither is a "detail level" and neither is default in
  * a way the other has to argue with.
  */
+/**
+ * The three views over one pool.
+ *
+ * **Worlds is deliberately not one of them.** It was, and it was the wrong
+ * shape: a grouping you cannot see beside the things it groups is a list of
+ * names, and arranging faces on one screen while looking at them on another is
+ * the same act performed twice. Worlds now live on the map, as the bubbles the
+ * faces sit inside, and are edited there.
+ *
+ * **Released is new, and it is a promotion rather than an addition.** The
+ * disclosure history used to render below every view as a footer — the single
+ * most important privacy answer this product has, "what has left and to whom",
+ * reachable only by scrolling past the entire map. It is a peer of the other
+ * two because it answers a question of the same size.
+ */
+export type PersonaView = "map" | "list" | "released";
+
 function ViewToggle({
   view,
   onView,
 }: {
-  view: "map" | "list" | "worlds";
-  onView: (v: "map" | "list" | "worlds") => void;
+  view: PersonaView;
+  onView: (v: PersonaView) => void;
 }) {
-  const item = (v: "map" | "list" | "worlds", label: string) => (
+  const item = (v: PersonaView, label: string) => (
     <button
       key={v}
       onClick={() => onView(v)}
@@ -156,13 +172,13 @@ function ViewToggle({
     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
       {item("map", "Map")}
       {item("list", "List")}
-      {item("worlds", "Worlds")}
+      {item("released", "Released")}
       <span style={{ fontSize: "var(--w-t-xs)", color: "var(--w-faint)" }}>
         {view === "map"
           ? "Select anything to see where it reaches."
           : view === "list"
             ? "Tick several to delete them or add them to a face."
-            : "The parts of your life, and the faces that belong to them."}
+            : "Everything your agent has handed over on your behalf, across every context."}
       </span>
     </div>
   );
@@ -268,7 +284,7 @@ export function PersonaPane({
    * to delete four numbers wants the list *now*, and would not thank a console
    * that remembered that choice a week later when they came to look at reach.
    */
-  const [view, setView] = useState<"map" | "list" | "worlds">("map");
+  const [view, setView] = useState<PersonaView>("map");
   /** The attribute the list asked to edit, by id. Held as an id rather than a
    *  record so a reload cannot leave the editor holding a stale copy. */
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -392,29 +408,21 @@ export function PersonaPane({
             </span>
             <div>
               <button
-                onClick={() => setView("worlds")}
+                onClick={() => setView("map")}
                 style={{ border: "none", background: "none", padding: 0, color: "var(--w-accent)", cursor: "pointer", font: "inherit", textDecoration: "underline" }}
               >
-                Make one
+                Make one on the map
               </button>
             </div>
           </div>
         </Note>
       )}
       <ViewToggle view={view} onView={setView} />
-      {worlds.error && view === "worlds" && (
+      {worlds.error && view === "map" && (
         <LoadError what="your worlds" error={worlds.error} />
       )}
-      {view === "worlds" ? (
-        <WorldsPane
-          parties={parties}
-          authority={authority}
-          worlds={worlds.data ?? []}
-          faces={profiles.data}
-          attributes={attributes.data}
-          registry={registry.data}
-          onChanged={reloadAll}
-        />
+      {view === "released" ? (
+        <DisclosureHistoryPanel parties={parties} authority={authority} records={records} />
       ) : view === "list" ? (
         editing ? (
           <AttributeEditor
@@ -479,7 +487,6 @@ export function PersonaPane({
         }
       />
       )}
-      <DisclosureHistoryPanel parties={parties} authority={authority} records={records} />
     </div>
   );
 }

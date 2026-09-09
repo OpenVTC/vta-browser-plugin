@@ -336,10 +336,65 @@ meaning in the same product (#191). It is banned from screen copy, and
 `binding`, `materialise`) stay in code and off the screen. Add copy in those
 words, or change the document first.
 
+**Every editor opens as a popover, anchored to what was clicked.** This was
+the console's loudest defect and the fix is structural, so it is worth knowing
+before touching a form. Editors used to render at the *end* of the map's JSX —
+after the attributes, the faces, the divider, the contexts and the selection
+strip — which on a populated wallet put the first field around 1700px down a
+2450px scroller whose `scrollTop` never moved, with focus left on the button.
+Pressing *Add an attribute* changed nothing a person could see; the list and
+worlds screens instead *replaced* the list, so the thing being worked on
+vanished. `popover.tsx` is now the one behaviour: positioned `fixed` against
+the anchor (measuring against a scroll container means knowing which one, and
+being wrong glues it 800px away), focus moved into the first field, `Escape`
+closing it and returning focus. An `Editing` state therefore carries the
+element it was opened from — that is not decoration.
+
+`Panel` reads `ChromeProvided` and drops its own border and padding inside one,
+rather than four editors each learning where they are being shown. And
+`[role="dialog"] *` sets `min-width: 0` in `manager-theme.css`, because a grid
+item's default `auto` refuses to shrink below its content and one long help
+paragraph sized the editors past the popover's edge.
+
+**Worlds live on the map, and the Worlds tab is gone.** A grouping you cannot
+see beside the things it groups is a list of names, and arranging faces on one
+screen while looking at them on another is the same act performed twice. Faces
+sit inside world bubbles and move by dragging; `worlds.tsx` is now only the
+editor the popover mounts. The view toggle is **Map / List / Released**, and
+`Released` is a promotion rather than an addition: the disclosure history is the
+biggest privacy answer this product has and it used to be a footer under every
+other view.
+
+`movePlan` (`world-model.ts`) owns a move, and the **order is the reason it is a
+function**: `facet/put` replaces, and the agent refuses to place a face that is
+already placed, so the source is rewritten without it before the destination is
+rewritten with it. Every write carries live membership via `seedMembership` — a
+put echoing a dangling id is refused `unresolvedReference` and leaves the world
+uneditable (plugin #216).
+
+**A card is closed until it is selected.** An attribute card draws its type and
+one of three words — `shown`, `hidden`, `held back` — and never the value;
+selecting it expands it in place. Those three stay three: *hidden* is a value in
+hand behind a mask, *held back* is one the agent never sent, and collapsing them
+is exactly the defect the reveal path exists to end, one layer up. The detail
+strip **no longer renders the value at all**: two `AttributeValue`s for one
+attribute is two *Show* buttons and two reveal states, and the second is always
+the one that stops being maintained.
+
+**What breaks it:** rendering an editor inline again, or as a mode that replaces
+the list; dropping the anchor from `Editing`; re-adding a Worlds pane; reading
+`.faceIds` off a facet to build a move instead of `movePlan`; drawing a value on
+a closed card; or letting the strip render one again.
+
 **Colour on the map carries three things, in three channels that never
 overlap.** The **border** is selection and reach; the **inset stripe** on an
 attribute card and the dot on a face's chips are its claim-type family; the
-**pills** are status. Reach is drawn in two hues rather than one because
+**pills** are status. A world's colour is a **fourth** categorical set and it
+does not touch any of those: it is the *ground* of the bubble the faces sit in,
+plus a 6px dot on an attribute card — surfaces the three channels do not use.
+Putting a world hue on a card border or in a pill is what breaks this.
+
+Reach is drawn in two hues rather than one because
 `reachOf` was always asymmetric and the single accent hid it: down is a copy
 **leaving** the holder (`--m-act-data`, borrowed from the contexts band it ends
 in), up is what a context **holds** of them (the accent). `Flow` is computed in

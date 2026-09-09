@@ -1,4 +1,11 @@
-// Worlds — the parts of a life, and the faces that belong to them.
+// The world editor — naming a part of a life, and choosing what belongs to it.
+//
+// This file used to be a *screen*, listing worlds beside the map that draws
+// them. That was the wrong shape: a grouping you cannot see next to the things
+// it groups is a list of names, and arranging faces on one screen while looking
+// at them on another is the same act performed twice. Worlds are now bubbles on
+// the identity map, edited by this component in a popover; the pane is gone and
+// what survives is the form and the one refusal it has to explain.
 //
 // A holder who uses this model for a while does not end up with three faces.
 // They end up with twenty, and a flat list of twenty is a list nobody reads.
@@ -109,7 +116,7 @@ export function WorldChip({ facet }: { facet: PoolFacet }) {
   );
 }
 
-function WorldEditor({
+export function WorldEditor({
   parties,
   authority,
   existing,
@@ -420,167 +427,5 @@ function WorldEditor({
         </div>
       </div>
     </Panel>
-  );
-}
-
-export function WorldsPane({
-  parties,
-  authority,
-  worlds,
-  faces,
-  attributes,
-  registry,
-  onChanged,
-}: {
-  parties: Parties;
-  authority: Authority | null;
-  worlds: readonly PoolFacet[];
-  faces: readonly PoolProfile[];
-  attributes: readonly PoolAttribute[];
-  registry: ClaimTypeRegistry | null;
-  onChanged: () => void;
-}) {
-  const [editing, setEditing] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  const denied = holderGate(authority);
-  const loose = useMemo(() => unplacedFaces(worlds, faces), [worlds, faces]);
-
-  const target = worlds.find((w) => w.facetId === editing);
-
-  if (creating || target) {
-    return (
-      <WorldEditor
-        // Keyed on the record: the editor seeds state from its props, which run
-        // on mount and never again, so an unkeyed second open shows the first
-        // world's name and colour — and a put replaces.
-        key={target?.facetId ?? "new"}
-        parties={parties}
-        authority={authority}
-        {...(target ? { existing: target } : {})}
-        faces={faces}
-        attributes={attributes}
-        registry={registry}
-        worlds={worlds}
-        onDone={() => {
-          setEditing(null);
-          setCreating(false);
-          onChanged();
-        }}
-        onCancel={() => {
-          setEditing(null);
-          setCreating(false);
-        }}
-      />
-    );
-  }
-
-  return (
-    <div style={{ display: "grid", gap: 14, alignContent: "start" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-        <div style={{ display: "grid", gap: 3 }}>
-          <span style={{ fontSize: t.md, fontWeight: 640, color: c.text }}>Your worlds</span>
-          <span style={{ fontSize: t.sm, color: c.muted }}>
-            A part of your life, and the faces that belong to it. Keep your worlds apart.
-          </span>
-        </div>
-        <Button
-          kind="primary"
-          disabled={Boolean(denied)}
-          {...(denied ? { title: denied } : {})}
-          onClick={() => setCreating(true)}
-        >
-          New world
-        </Button>
-      </div>
-
-      {worlds.length === 0 ? (
-        <Note tone="accent">
-          You have no worlds yet. Most people start with two — the part of life they work in, and
-          the part they do not.
-        </Note>
-      ) : (
-        worlds.map((w) => {
-          const members = faces.filter((f) => w.faceIds?.includes(f.profileId));
-          return (
-            <div
-              key={w.facetId}
-              style={{
-                border: `1px solid ${c.line}`,
-                borderRadius: "var(--w-r-md)",
-                padding: "12px 14px",
-                display: "grid",
-                gap: 8,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <WorldChip facet={w} />
-                <div style={{ display: "flex", gap: 8 }}>
-                  <Button kind="quiet" onClick={() => setEditing(w.facetId)}>
-                    Edit
-                  </Button>
-                  <Destructive<{ released: number; names: string[] }>
-                    label="Delete"
-                    disabledReason={denied}
-                    preview={async () => ({
-                      released: members.length,
-                      names: members.map((f) => f.name),
-                    })}
-                    renderPreview={(p) => (
-                      <div style={{ fontSize: t.sm, color: c.text, display: "grid", gap: 6 }}>
-                        <div>
-                          <strong>{w.name}</strong> stops being a part of your life on this screen.
-                        </div>
-                        {/* The sentence that decides whether this reads as a
-                            folder. Said first, and said even when nothing
-                            belongs to it. */}
-                        <div>
-                          {p.released === 0
-                            ? "No face belongs to it, and nothing else changes."
-                            : `${p.released === 1 ? "The face" : `All ${p.released} faces`} in it — ` +
-                              `${p.names.join(", ")} — ${p.released === 1 ? "stays" : "stay"} ` +
-                              `exactly as ${p.released === 1 ? "it is" : "they are"}. ` +
-                              `${p.released === 1 ? "It" : "They"} will simply belong to no world.`}
-                        </div>
-                        <div style={{ color: c.faint, fontSize: t.xs }}>
-                          Nothing already shared is affected — that has left.
-                        </div>
-                      </div>
-                    )}
-                    commit={async () => {
-                      await personaFacetDelete(managerSender, {
-                        ...parties,
-                        facetId: w.facetId,
-                        expectedVersion: w.version,
-                      });
-                    }}
-                    onDone={onChanged}
-                  />
-                </div>
-              </div>
-              <div style={{ fontSize: t.sm, color: c.muted }}>
-                {members.length === 0
-                  ? "No faces belong to it yet."
-                  : members.map((f) => f.name).join(" · ")}
-              </div>
-              {(w.attributeIds?.length ?? 0) > 0 && (
-                <div style={{ fontSize: t.xs, color: c.faint }}>
-                  {w.attributeIds!.length} attribute
-                  {w.attributeIds!.length === 1 ? "" : "s"} belong
-                  {w.attributeIds!.length === 1 ? "s" : ""} to it
-                </div>
-              )}
-            </div>
-          );
-        })
-      )}
-
-      {worlds.length > 0 && loose.length > 0 && (
-        <Note tone="accent">
-          {loose.length === 1 ? "One face belongs" : `${loose.length} faces belong`} to no world:{" "}
-          {loose.map((f) => f.name).join(", ")}. That is a fine place for{" "}
-          {loose.length === 1 ? "it" : "them"} to stay.
-        </Note>
-      )}
-    </div>
   );
 }
