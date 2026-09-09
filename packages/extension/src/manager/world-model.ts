@@ -110,3 +110,53 @@ export function worldsOfAttribute(
 ): PoolFacet[] {
   return worlds.filter((w) => (w.attributeIds ?? []).includes(attributeId));
 }
+
+/** A world's membership, split into what still exists and what does not. */
+export interface SeededMembership {
+  faceIds: Set<string>;
+  attributeIds: Set<string>;
+  /** Ids the world names whose records are gone. Counted, not listed: the
+   *  holder cannot act on a ULID for a record that no longer exists, and the
+   *  only useful thing to say is that the arrangement referred to something
+   *  and no longer does. */
+  droppedFaces: number;
+  droppedAttributes: number;
+}
+
+/**
+ * The membership to open an editor with.
+ *
+ * **Only what still resolves.** `persona/facet/list` returns dangling
+ * membership rather than pruning it — deliberately, so a consumer can offer to
+ * tidy — and the specification is explicit that a consumer "renders a dangling
+ * id as an arrangement to repair rather than as a record that exists".
+ *
+ * Seeding the raw lists breaks that in the worst available way. A dangling id
+ * has no checkbox, because there is no record to draw a row for; it rides along
+ * invisibly into the next `put`; and the agent refuses the whole write with
+ * `unresolvedReference`, naming ULIDs the holder cannot find, cannot untick and
+ * cannot clear. The world becomes permanently uneditable by the only screen
+ * that edits it.
+ *
+ * So the editor opens with the live membership and says how much it dropped.
+ * Saving then repairs the record, which is the tidying the agent kept the
+ * dangling ids around to make possible.
+ */
+export function seedMembership(
+  existing: PoolFacet | undefined,
+  faces: readonly PoolProfile[],
+  attributes: readonly { attributeId: string }[],
+): SeededMembership {
+  const liveFaces = new Set(faces.map((f) => f.profileId));
+  const liveAttributes = new Set(attributes.map((a) => a.attributeId));
+  const namedFaces = existing?.faceIds ?? [];
+  const namedAttributes = existing?.attributeIds ?? [];
+  const faceIds = new Set(namedFaces.filter((id) => liveFaces.has(id)));
+  const attributeIds = new Set(namedAttributes.filter((id) => liveAttributes.has(id)));
+  return {
+    faceIds,
+    attributeIds,
+    droppedFaces: namedFaces.length - faceIds.size,
+    droppedAttributes: namedAttributes.length - attributeIds.size,
+  };
+}

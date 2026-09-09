@@ -12,6 +12,7 @@ import {
   worldsOfAttribute,
   unplacedFaces,
   placedElsewhere,
+  seedMembership,
 } from "../src/manager/world-model.ts";
 import { ConsentRequiredError, RelayTaskError } from "../src/manager/carrier.ts";
 
@@ -133,4 +134,46 @@ test("an attribute's worlds come back in listing order, not membership order", (
   assert.deepEqual(worldsOfAttribute(worlds, "a1").map((w) => w.facetId), ["w1", "w2"]);
   const reversed = [worlds[1]!, worlds[0]!];
   assert.deepEqual(worldsOfAttribute(reversed, "a1").map((w) => w.facetId), ["w2", "w1"]);
+});
+
+// ── Dangling membership is repaired, not carried ────────────────────────────
+
+test("an editor opens with only the membership that still exists", () => {
+  // The live bug this closes. `facet/list` returns dangling ids on purpose so a
+  // consumer can offer to tidy; seeding them raw sends them back into a `put`
+  // the agent refuses, naming ULIDs the holder cannot untick — there is no row
+  // to untick, because the record is gone. The world becomes permanently
+  // uneditable by the only screen that edits it.
+  const existing = {
+    facetId: "w1",
+    name: "Work",
+    colour: "teal",
+    faceIds: ["f1", "GONE-FACE"],
+    attributeIds: ["a1", "GONE-1", "GONE-2"],
+    version: 3,
+    updatedAt: "x",
+  } as never;
+  const seeded = seedMembership(existing, [face("f1", "Acme")], [{ attributeId: "a1" }]);
+  assert.deepEqual([...seeded.faceIds], ["f1"]);
+  assert.deepEqual([...seeded.attributeIds], ["a1"]);
+  assert.equal(seeded.droppedFaces, 1);
+  assert.equal(seeded.droppedAttributes, 2);
+});
+
+test("a world with nothing stale drops nothing and says nothing", () => {
+  const existing = {
+    facetId: "w1", name: "Work", colour: "teal",
+    faceIds: ["f1"], attributeIds: ["a1"], version: 1, updatedAt: "x",
+  } as never;
+  const seeded = seedMembership(existing, [face("f1", "Acme")], [{ attributeId: "a1" }]);
+  assert.equal(seeded.droppedFaces, 0);
+  assert.equal(seeded.droppedAttributes, 0);
+});
+
+test("a new world starts empty and reports no repair", () => {
+  const seeded = seedMembership(undefined, [face("f1", "Acme")], [{ attributeId: "a1" }]);
+  assert.equal(seeded.faceIds.size, 0);
+  assert.equal(seeded.attributeIds.size, 0);
+  assert.equal(seeded.droppedFaces, 0);
+  assert.equal(seeded.droppedAttributes, 0);
 });

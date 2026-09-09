@@ -263,3 +263,68 @@ test("a world card says how many attributes belong to it", async () => {
   assert.match(screen.text(), /2 attributes belong to it/);
   await screen.unmount();
 });
+
+test("a world naming deleted records opens editable, and offers the repair", async () => {
+  // Reported from the live console: "facet references 1 face(s) and 8
+  // attribute(s) that do not exist", listing ULIDs with no row to untick. The
+  // world could not be saved by the only screen that edits it.
+  const stale = {
+    facetId: "w1",
+    name: "Work",
+    colour: "teal",
+    faceIds: ["f1", "01M22H8CAHEA3M3DTNB5SPNNK4"],
+    attributeIds: ["a1", "01M22GP4VDH19GRJW3BG8NYPQX"],
+    version: 3,
+    updatedAt: "x",
+  } as never;
+  const fake = putOk();
+  const m = mount(fake, [stale]);
+  const screen = await render(m.element, m.options);
+  await screen.click(screen.all("button").filter((b) => b.textContent?.includes("Edit"))[0]!);
+  await screen.settle();
+
+  assert.match(screen.text(), /still named 1 face and 1 attribute you have since deleted/);
+
+  await screen.click(screen.button("Save"));
+  await screen.settle();
+  const sent = fake.of("facet/put")[0]!;
+  assert.deepEqual(sent.payload.faceIds, ["f1"], "a deleted face was sent back to the agent");
+  assert.deepEqual(sent.payload.attributeIds, ["a1"], "a deleted attribute was sent back");
+});
+
+test("picking a mark sends it, and pressing it again clears it", async () => {
+  const fake = putOk();
+  const m = mount(fake, []);
+  const screen = await render(m.element, m.options);
+  await screen.click(screen.button("New world"));
+  await screen.settle();
+  await screen.type(screen.all('input[aria-label="What do you call it?"]')[0]!, "Play");
+
+  const controller = screen.all('button[aria-label="Mark 🎮"]')[0]!;
+  await screen.click(controller);
+  assert.equal(screen.all('input[aria-label="A mark (optional)"]')[0]!.value, "🎮");
+
+  // A picker with no way back forces a mark on anyone who tries one.
+  await screen.click(controller);
+  assert.equal(screen.all('input[aria-label="A mark (optional)"]')[0]!.value, "");
+
+  await screen.click(controller);
+  await screen.click(screen.button("Create"));
+  await screen.settle();
+  assert.equal(fake.of("facet/put")[0]!.payload.icon, "🎮");
+});
+
+test("a mark too long for the wire is refused here, not after Save", async () => {
+  const fake = putOk();
+  const m = mount(fake, []);
+  const screen = await render(m.element, m.options);
+  await screen.click(screen.button("New world"));
+  await screen.settle();
+  await screen.type(screen.all('input[aria-label="What do you call it?"]')[0]!, "Family");
+  await screen.type(
+    screen.all('input[aria-label="A mark (optional)"]')[0]!,
+    "\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}",
+  );
+  assert.match(screen.text(), /too long for your agent to store/);
+  assert.equal(screen.button("Create").disabled, true, "an over-long mark could still be saved");
+});

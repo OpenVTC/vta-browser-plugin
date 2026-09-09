@@ -44,7 +44,14 @@ import { Destructive } from "../destructive.js";
 import { holderGate } from "../holder-gate.js";
 import type { Authority, Parties } from "../use-vta.js";
 import { WORLD_COLOURS, worldHue, worldColourName } from "../world-colour.js";
-import { placedElsewhere, worldOfFace, unplacedFaces, type Placement } from "../world-model.js";
+import { WORLD_MARKS, MAX_MARK_LENGTH, markFits } from "../world-marks.js";
+import {
+  placedElsewhere,
+  worldOfFace,
+  unplacedFaces,
+  seedMembership,
+  type Placement,
+} from "../world-model.js";
 import { groupRows } from "../attribute-list.js";
 import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 
@@ -126,14 +133,17 @@ function WorldEditor({
   const [name, setName] = useState(existing?.name ?? "");
   const [colour, setColour] = useState<FacetColour>((existing?.colour as FacetColour) ?? "slate");
   const [icon, setIcon] = useState(existing?.icon ?? "");
-  // Seeded from what was loaded. A put REPLACES both lists, so an editor that
-  // opened with an empty selection and saved would silently empty the world's
-  // membership on an edit that meant to rename it.
-  const [chosen, setChosen] = useState<Set<string>>(new Set(existing?.faceIds ?? []));
-  // Same seeding rule, same reason: a put replaces this list too.
-  const [chosenAttrs, setChosenAttrs] = useState<Set<string>>(
-    new Set(existing?.attributeIds ?? []),
+  // Seeded from what was loaded, minus what no longer exists. A put REPLACES
+  // both lists, so an editor opening empty would silently empty the world on an
+  // edit that meant to rename it — and one seeding the raw lists carries
+  // dangling ids into a write the agent refuses, naming ULIDs the holder cannot
+  // untick because there is no row to untick. See `seedMembership`.
+  const seeded = useMemo(
+    () => seedMembership(existing, faces, attributes),
+    [existing, faces, attributes],
   );
+  const [chosen, setChosen] = useState<Set<string>>(seeded.faceIds);
+  const [chosenAttrs, setChosenAttrs] = useState<Set<string>>(seeded.attributeIds);
   const [busy, setBusy] = useState(false);
   const [conflict, setConflict] = useState<Placement[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -229,24 +239,62 @@ function WorldEditor({
           </div>
         </div>
 
-        <label style={{ display: "grid", gap: 4, maxWidth: 160 }}>
+        <div style={{ display: "grid", gap: 6 }}>
           <span style={{ fontSize: t.sm, color: c.text }}>A mark (optional)</span>
-          <input
-            value={icon}
-            aria-label="A mark (optional)"
-            placeholder="💼"
-            maxLength={4}
-            onChange={(e) => setIcon(e.target.value)}
-            style={{
-              background: c.surface,
-              color: c.text,
-              border: `1px solid ${c.line}`,
-              borderRadius: "var(--w-r-sm)",
-              padding: "7px 9px",
-              fontSize: t.sm,
-            }}
-          />
-        </label>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxWidth: 420 }}>
+            {WORLD_MARKS.map((m) => (
+              <button
+                key={m}
+                type="button"
+                aria-label={`Mark ${m}`}
+                aria-pressed={icon === m}
+                // Pressing the chosen one clears it: the field is optional and
+                // a picker with no way back forces a mark on anyone who tries
+                // one.
+                onClick={() => setIcon(icon === m ? "" : m)}
+                style={{
+                  width: 30,
+                  height: 30,
+                  fontSize: 16,
+                  lineHeight: 1,
+                  cursor: "pointer",
+                  borderRadius: "var(--w-r-sm)",
+                  background: icon === m ? c.accentSoft : c.surface,
+                  border: `1px solid ${icon === m ? c.accent : c.line}`,
+                  padding: 0,
+                }}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          <label style={{ display: "grid", gap: 4, maxWidth: 160 }}>
+            <span style={{ fontSize: t.xs, color: c.faint }}>Or type your own</span>
+            <input
+              value={icon}
+              aria-label="A mark (optional)"
+              placeholder="💼"
+              maxLength={MAX_MARK_LENGTH}
+              onChange={(e) => setIcon(e.target.value)}
+              style={{
+                background: c.surface,
+                color: c.text,
+                border: `1px solid ${c.line}`,
+                borderRadius: "var(--w-r-sm)",
+                padding: "7px 9px",
+                fontSize: t.sm,
+              }}
+            />
+          </label>
+          {icon !== "" && !markFits(icon) && (
+            // Said here rather than discovered as a refusal after Save. A joined
+            // sequence — a family, a flag, a profession — is longer than the
+            // wire allows, and the agent would reject the whole write for it.
+            <span style={{ fontSize: t.xs, color: c.warn }}>
+              That mark is too long for your agent to store. Try a single one.
+            </span>
+          )}
+        </div>
 
         <div style={{ display: "grid", gap: 6 }}>
           <span style={{ fontSize: t.sm, color: c.text }}>Which faces belong to it?</span>
@@ -328,6 +376,23 @@ function WorldEditor({
           )}
         </div>
 
+        {(seeded.droppedFaces > 0 || seeded.droppedAttributes > 0) && (
+          <Note tone="accent">
+            This world still named{" "}
+            {[
+              seeded.droppedFaces > 0
+                ? `${seeded.droppedFaces} face${seeded.droppedFaces === 1 ? "" : "s"}`
+                : null,
+              seeded.droppedAttributes > 0
+                ? `${seeded.droppedAttributes} attribute${seeded.droppedAttributes === 1 ? "" : "s"}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" and ")}{" "}
+            you have since deleted. Saving tidies that up — nothing else changes.
+          </Note>
+        )}
+
         {conflict && (
           <Note tone="warn">
             {conflict.length === 1
@@ -342,7 +407,9 @@ function WorldEditor({
         <div style={{ display: "flex", gap: 10 }}>
           <Button
             kind="primary"
-            disabled={name.trim() === "" || busy || Boolean(denied)}
+            disabled={
+              name.trim() === "" || busy || Boolean(denied) || (icon !== "" && !markFits(icon))
+            }
             onClick={() => void save()}
           >
             {busy ? "Saving…" : existing ? "Save" : "Create"}
