@@ -21,6 +21,7 @@ import assert from "node:assert/strict";
 
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import { pack, unpack } from "@openvtc/vti-tsp-js";
+import { signTrustTask } from "../dist/trust-tasks/sign.js";
 
 import {
   DidcommVtaTransport,
@@ -59,7 +60,12 @@ async function assertSignedBy(doc, expectedIssuer) {
 test("DIDComm: the document the VTA unpacks carries a proof that verifies", async () => {
   const signing = generateSigningIdentity();
   const holder = Identity.generate(signing.did);
-  const vta = Identity.generate("did:key:zVtaStub");
+  // A real `did:key` for the agent, whose key also signs the reply document —
+  // the channel verifies that proof now, and a stub DID would not resolve.
+  const vtaSigning = generateSigningIdentity();
+  const vta = Identity.generate(vtaSigning.did);
+  const signedReply = { type: `${VAULT_DELETE}#response`, payload: { deleted: true } };
+  await signTrustTask({ envelope: signedReply, signing: vtaSigning });
 
   let received;
   const bridge = new InMemoryDidcommBridge({
@@ -68,10 +74,11 @@ test("DIDComm: the document the VTA unpacks carries a proof that verifies", asyn
     vtaHandlers: {
       [TRUST_TASK_ENVELOPE_TYPE]: (req) => {
         received = req.body;
-        return {
-          type: TRUST_TASK_ENVELOPE_TYPE,
-          body: { type: `${VAULT_DELETE}#response`, payload: { deleted: true } },
-        };
+        // Signed, because a real VTA signs its responses and the channel
+        // refuses an unsigned one. Pre-signed rather than signed here: the
+        // handler is synchronous, and the reply carries no per-request member
+        // that would need to be set after signing.
+        return { type: TRUST_TASK_ENVELOPE_TYPE, body: signedReply };
       },
     },
   });
@@ -142,10 +149,14 @@ test("TSP: the sealed document carries a proof, distinct from the outer signatur
   const signing = generateSigningIdentity();
   const holderSignSk = ed25519.utils.randomSecretKey();
   const holderEncSk = x25519.utils.randomSecretKey();
-  const vtaSignSk = ed25519.utils.randomSecretKey();
+  // The agent's identity is a real `did:key` and its signing key is the one
+  // that signs the reply document: the channel verifies that proof now, and a
+  // `did:web` VID would need the network to resolve.
+  const vtaSigning = generateSigningIdentity();
+  const vtaSignSk = vtaSigning.privateKey;
   const vtaEncSk = x25519.utils.randomSecretKey();
   const holderVid = signing.did;
-  const vtaVid = "did:web:vta.example";
+  const vtaVid = vtaSigning.did;
 
   let received;
   const transport = {
@@ -156,16 +167,19 @@ test("TSP: the sealed document carries a proof, distinct from the outer signatur
         senderSigningKey: ed25519.getPublicKey(holderSignSk),
       });
       received = JSON.parse(fromUtf8.decode(opened.payload));
+      // Signed, because a real VTA signs its responses and the channel refuses
+      // an unsigned one. Built fully first: a proof covers the document it was
+      // made over, so anything added after it would invalidate it.
+      const replyDoc = {
+        type: `${VAULT_DELETE}#response`,
+        // `threadId` threads to the request, as the VTA's `respond_with` does —
+        // the channel will not claim a reply without it.
+        threadId: received.id,
+        payload: { deleted: true },
+      };
+      await signTrustTask({ envelope: replyDoc, signing: vtaSigning });
       const reply = await pack(
-        utf8.encode(
-          // `threadId` threads to the request, as the VTA's `respond_with`
-          // does — the channel will not claim a reply without it.
-          JSON.stringify({
-            type: `${VAULT_DELETE}#response`,
-            threadId: received.id,
-            payload: { deleted: true },
-          }),
-        ),
+        utf8.encode(JSON.stringify(replyDoc)),
         vtaVid,
         holderVid,
         {

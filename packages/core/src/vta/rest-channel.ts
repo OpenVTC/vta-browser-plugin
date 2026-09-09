@@ -15,7 +15,7 @@ import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
 import { TRUST_TASK_PATH } from "./endpoint.js";
 import { errorFromBody, VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
-import { parseTrustTaskReply, signOutboundTask } from "./trust-task.js";
+import { parseTrustTaskReply, signOutboundTask, verifyTrustTaskReply } from "./trust-task.js";
 import { asTaskSigner, type ChannelSigner, type TaskSigner } from "./trust-task.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { isTrustTaskErrorType } from "./protocol.js";
@@ -126,6 +126,9 @@ export class RestChannel implements TrustTaskChannel {
         ? { expectedResponseType: opts.expectedResponseType }
         : {}),
       operationLabel: label,
+      // The agent this channel is bound to, from its own configuration —
+      // never the reply's own `issuer`, which is the claim being checked.
+      expectedSigner: this.auth.service.did,
     });
   }
 
@@ -197,7 +200,13 @@ export async function decodeTrustTaskHttpAck(res: Response): Promise<void> {
  */
 export async function decodeTrustTaskHttpReply<Res>(
   res: Response,
-  opts: { expectedResponseType?: string; operationLabel?: string } = {},
+  opts: {
+    expectedResponseType?: string;
+    operationLabel?: string;
+    /** The agent this channel addressed. Its proof is what makes the reply
+     *  evidence rather than bytes — see {@link verifyTrustTaskReply}. */
+    expectedSigner?: string;
+  } = {},
 ): Promise<Res> {
   let doc: { type?: string; payload?: unknown } | undefined;
   try {
@@ -212,6 +221,10 @@ export async function decodeTrustTaskHttpReply<Res>(
   }
   if (!res.ok && !isTrustTaskErrorType(doc?.type)) {
     throw errorFromBody(doc, res.status, res.statusText);
+  }
+
+  if (opts.expectedSigner !== undefined) {
+    await verifyTrustTaskReply(doc ?? {}, opts.expectedSigner);
   }
 
   return parseTrustTaskReply<Res>(doc, {
