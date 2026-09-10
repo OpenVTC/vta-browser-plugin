@@ -92,11 +92,16 @@ const STYLES: Readonly<Record<Family, FamilyStyle>> = {
   },
   gated: {
     // Not "sensitive" and not "protected": the registry marks these
-    // `release: stepUp`, so the agent refuses a disclosure until the holder
-    // approves that particular one. That is an agent behaviour worth naming,
-    // and it is the only claim this label makes.
+    // `release: stepUp`, so the agent refuses to let one of these leave until
+    // the holder approves that particular departure. That is an agent
+    // behaviour worth naming, and it is the only claim this label makes.
+    //
+    // The note said "a disclosure needs your approval each time" until the TUI
+    // borrowed the string and its own banned-word guard rejected it:
+    // `disclosure` is retired by the table, and *letting it leave* is the
+    // agreed phrase for this journey. Same fact, in the words a person reads.
     label: "Your agent asks first",
-    note: "the registry gates these — a disclosure needs your approval each time",
+    note: "the registry gates these — your agent asks you again before one of them leaves",
     hue: "var(--m-fam-gated)",
   },
   declared: {

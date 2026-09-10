@@ -702,7 +702,7 @@ export function AttributeEditor({
             ]}
           />
           <span style={{ fontSize: t.xs, color: c.faint, lineHeight: 1.5 }}>
-            <em>Every single time</em> binds the approval to that one disclosure rather than to
+            <em>Every single time</em> binds the approval to that one departure rather than to
             being signed in — which is the difference between "each time" and "once per login".
             Your agent refuses to hand the value over without it.
           </span>
