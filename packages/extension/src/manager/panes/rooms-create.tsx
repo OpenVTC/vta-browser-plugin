@@ -111,6 +111,16 @@ export function CreateRoom({
   const [existing, setExisting] = useState<RoomIdentity>({ did: "", signingKeyId: "" });
 
   const [hostDid, setHostDid] = useState("");
+  // The host-minting panel, collapsed by default. Pasting a host DID stays the
+  // one-field common case; minting one is the answer to "where do I get a host
+  // DID?", which is a question you ask once per deployment, not once per room.
+  const [hostMint, setHostMint] = useState(false);
+  const [hostCtx, setHostCtx] = useState("");
+  const [hostServer, setHostServer] = useState("");
+  const [hostUrl, setHostUrl] = useState("");
+  const [hostMediator, setHostMediator] = useState("");
+  const [hostBusy, setHostBusy] = useState(false);
+  const [hostError, setHostError] = useState<string | null>(null);
   const [visibility, setVisibility] = useState<"open" | "attributed" | "private">("private");
   const [retentionDays, setRetentionDays] = useState("");
 
@@ -160,6 +170,52 @@ export function CreateRoom({
         : null;
 
   const hostMissing = !hostDid.trim() ? "Name the host that will serve this room's records." : null;
+
+  // Mint a DID for the host, in a context the host will be granted on.
+  //
+  // The same `webvh/dids/create` the room's own identity uses, with the
+  // `room-host` template — which publishes a DIDComm service pointing at the
+  // mediator and a `VTARest` service at the host's URL. A host DID that
+  // advertises neither is one no member can reach, which is why the template
+  // requires all three vars rather than defaulting them.
+  //
+  // Deliberately does NOT register the host anywhere or grant it anything. It
+  // mints an identity in a context; the host still enrols on its own and an
+  // operator still grants it. This button removes the step nobody could guess,
+  // not the step that is somebody's decision.
+  const mintHost = useCallback(async () => {
+    setHostBusy(true);
+    setHostError(null);
+    await runMutation(
+      async () => {
+        const res = await webvhDidCreate(managerSender, {
+          ...parties,
+          contextId: hostCtx,
+          serverId: hostServer,
+          template: "room-host",
+          templateVars: {
+            WEBVH_SERVER: hostServer,
+            URL: hostUrl.trim(),
+            MEDIATOR_DID: hostMediator.trim(),
+          },
+        });
+        setHostDid(res.did);
+        setHostMint(false);
+      },
+      { onConsent: setPending, onError: setHostError },
+    );
+    setHostBusy(false);
+  }, [parties, hostCtx, hostServer, hostUrl, hostMediator]);
+
+  const hostMintMissing = !hostCtx
+    ? "Choose the context the host's DID belongs to — the one it will be granted an application role on."
+    : !hostServer
+      ? "Choose a hosting server to publish the host DID's log through."
+      : !hostUrl.trim()
+        ? "The host needs a URL: members that can open one reach its record surface there."
+        : !hostMediator.trim()
+          ? "The host needs a mediator DID — it is how a member that cannot open a URL reaches it at all."
+          : null;
 
   const submit = useCallback(async () => {
     setBusy(true);
@@ -333,6 +389,21 @@ export function CreateRoom({
           <Label hint="— serves the records, and never holds a key">HOST DID</Label>
           <input style={fieldStyle} value={hostDid} onChange={(e) => setHostDid(e.target.value)} />
         </label>
+        <Button
+          kind="quiet"
+          onClick={() => {
+            // Seed from the room's choices, because in practice the host lives
+            // in the same context on the same server. Seeded rather than shared:
+            // a host may legitimately be elsewhere, and a field that silently
+            // tracked the room's would make that impossible to express.
+            setHostCtx((p) => p || contextId);
+            setHostServer((p) => p || serverId);
+            setHostMediator((p) => p || mediatorDid);
+            setHostMint((p) => !p);
+          }}
+        >
+          {hostMint ? "Cancel" : "Mint one"}
+        </Button>
         <label style={{ display: "grid", gap: 4 }}>
           <Label>VISIBILITY</Label>
           <select
@@ -355,6 +426,75 @@ export function CreateRoom({
           />
         </label>
       </div>
+
+      {hostMint && (
+        <Panel>
+          <div style={{ fontSize: t.sm, color: c.muted, marginBottom: 8 }}>
+            Mints a DID for the host with the <code>room-host</code> template, which publishes a
+            DIDComm service at the mediator and a REST service at the host&apos;s URL. It does not
+            enrol or authorise anything: the host still enrols itself, and granting it an
+            application role on this context is still your decision.
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <label style={{ display: "grid", gap: 4 }}>
+              <Label hint="— where the host will be granted">HOST CONTEXT</Label>
+              <select
+                style={fieldStyle}
+                value={hostCtx}
+                onChange={(e) => setHostCtx(e.target.value)}
+              >
+                <option value="">Choose…</option>
+                {contexts.map((ctx) => (
+                  <option key={ctx.id} value={ctx.id}>
+                    {ctx.name ? `${ctx.name} (${ctx.id})` : ctx.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 4 }}>
+              <Label>HOSTING SERVER</Label>
+              <select
+                style={fieldStyle}
+                value={hostServer}
+                onChange={(e) => setHostServer(e.target.value)}
+                disabled={servers === null}
+              >
+                <option value="">{servers === null ? "Reading…" : "Choose…"}</option>
+                {(servers ?? []).map((sv) => (
+                  <option key={sv.id} value={sv.id}>
+                    {sv.label ? `${sv.label} (${sv.id})` : sv.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: 4, flex: "1 1 16rem" }}>
+              <Label hint="— where it serves records over HTTP">HOST URL</Label>
+              <input
+                style={fieldStyle}
+                value={hostUrl}
+                onChange={(e) => setHostUrl(e.target.value)}
+              />
+            </label>
+            <label style={{ display: "grid", gap: 4, flex: "1 1 16rem" }}>
+              <Label hint="— how a member with no reachable URL gets there">MEDIATOR DID</Label>
+              <input
+                style={fieldStyle}
+                value={hostMediator}
+                onChange={(e) => setHostMediator(e.target.value)}
+              />
+            </label>
+          </div>
+          {hostError && <Note tone="warn">{hostError}</Note>}
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8 }}>
+            <Button onClick={() => void mintHost()} disabled={busy || hostBusy || !!hostMintMissing}>
+              {hostBusy ? "Minting…" : "Mint host DID"}
+            </Button>
+            {hostMintMissing && (
+              <span style={{ fontSize: t.sm, color: c.muted }}>{hostMintMissing}</span>
+            )}
+          </div>
+        </Panel>
+      )}
 
       {visibility === "open" && (
         <Note tone="warn">
