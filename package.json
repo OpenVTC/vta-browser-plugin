@@ -30,6 +30,6 @@
     "@swc/wasm": "~1.15.47"
   },
   "dependencies": {
-    "@openvtc/trust-tasks": "^0.17.8"
+    "@openvtc/trust-tasks": "^0.19.1"
   }
 }
