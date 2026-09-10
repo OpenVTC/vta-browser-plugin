@@ -194,3 +194,80 @@ test("a failed server listing says so rather than offering an empty menu", async
   );
   assert.match(screen.text(), /failure to ask, not an agent with none registered/);
 });
+
+// ── Minting the host ────────────────────────────────────────────────────────
+//
+// "Where do I get a host DID?" is the question this form provoked and did not
+// answer: it asks for one without saying that somebody has to mint it first.
+// The button answers it. What matters is that it mints the *host* — a different
+// template, a different service block — and that it does not quietly do the two
+// things that are somebody's decision rather than a form's.
+
+const HOST_MINTED = {
+  did: "did:webvh:QmNewHost:hosts.example",
+  contextId: "openvtc",
+  scid: "QmNewHost",
+  portable: true,
+  signingKeyId: "host-signing",
+  kaKeyId: "host-ka",
+  preRotationKeyCount: 0,
+  createdAt: "2026-09-10T10:00:00Z",
+};
+
+/** Open the host panel and fill it. Leaves the room half untouched. */
+const mintAHost = async (screen: Awaited<ReturnType<typeof mount>>["screen"]) => {
+  await screen.click(screen.button("Mint one"));
+  const selects = screen.all("select");
+  const inputs = screen.all("input").filter((el) => el.type !== "radio");
+  // Indexed from the end: the panel renders last, and counting forwards would
+  // pin this test to how many fields the room half happens to have.
+  await screen.select(selects.at(-2)!, "openvtc"); // host context
+  await screen.select(selects.at(-1)!, "webvh-1"); // hosting server
+  await screen.type(inputs.at(-2)!, "https://host.example"); // host url
+  await screen.type(inputs.at(-1)!, "did:web:mediator.example"); // host mediator
+  await screen.click(screen.button("Mint host DID"));
+};
+
+test("the host is minted from the room-host template, not the room one", async () => {
+  const { a, screen } = await mount({ [DIDS_CREATE]: HOST_MINTED });
+  await mintAHost(screen);
+
+  const mint = a.calls.find((c) => c.type.includes("dids/create"))!;
+  assert.equal(mint.payload.template, "room-host");
+  assert.equal(mint.payload.contextId, "openvtc");
+  assert.equal(mint.payload.serverId, "webvh-1");
+  // All three of the template's requiredVars. A host DID that advertises no
+  // service block is one no member can reach, and the failure surfaces much
+  // later as "the room does not work".
+  assert.equal(mint.payload.templateVars.WEBVH_SERVER, "webvh-1");
+  assert.equal(mint.payload.templateVars.URL, "https://host.example");
+  assert.equal(mint.payload.templateVars.MEDIATOR_DID, "did:web:mediator.example");
+});
+
+test("the minted host DID lands in the field, so the room can be created with it", async () => {
+  const { screen } = await mount({ [DIDS_CREATE]: HOST_MINTED });
+  await mintAHost(screen);
+
+  const inputs = screen.all("input").filter((el) => el.type !== "radio");
+  assert.equal(
+    inputs[1]!.value,
+    HOST_MINTED.did,
+    "minting that left the operator to copy the DID by hand would not have removed the step",
+  );
+});
+
+// The button mints an identity. It does not enrol the host and does not grant
+// it anything — the host enrols itself, and the grant is a person deciding this
+// host may act in their context. A form that did either silently would be
+// making that decision on the operator's behalf.
+test("minting a host writes exactly one task, and it is not a grant", async () => {
+  const { a, screen } = await mount({ [DIDS_CREATE]: HOST_MINTED });
+  await mintAHost(screen);
+
+  const writes = a.calls.map((c) => c.type).filter((t) => !t.includes("servers/list"));
+  assert.deepEqual(
+    writes.map((t) => t.replace("https://trusttasks.org/spec/", "")),
+    [DIDS_CREATE],
+    "one mint, no acl/grant, no rooms/owner/register",
+  );
+});
