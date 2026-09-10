@@ -27,6 +27,7 @@ import { roomsKeysList, type HeldRoom } from "@openvtc/pnm-core/rooms";
 import { Note, Panel } from "../../ui.js";
 import { CreateRoom } from "./rooms-create.js";
 import { FetchHistory } from "./rooms-backfill.js";
+import { RoomRecords } from "./rooms-records.js";
 import { IssueInRoomsName } from "./rooms-owner.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
@@ -145,6 +146,10 @@ export function RoomsPane({
                   {r.earliestReadableEpoch > 1 && (
                     <FetchHistory parties={parties} room={r} onFetched={() => void load()} />
                   )}
+                  {/* Reading is offered on every room, including one whose
+                      history is incomplete: what a member can open now is not
+                      contingent on what they cannot. */}
+                  <RoomRecords parties={parties} room={r} />
                 </div>
               );
             }}
