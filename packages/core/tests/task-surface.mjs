@@ -342,7 +342,12 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // that call from here would be one that never arrives.
   // 198 → 201: persona/facet/{put,list,delete}, the holder's arrangement of
   // their own identity (dtgwg-trust-tasks-tf#405, VTI#1338).
-  const expected = 201;
+  // 201 → 204: rooms/keys/{read,browse} — the console reads a record through
+  // its own agent, because `rooms/records/*` is served by a host it cannot
+  // address (dtgwg-trust-tasks-tf#426). The third is `rooms/keys/present/0.2`
+  // and `rooms/owner/issue-authority/0.2` counting as new families beside the
+  // 0.1 this library had drifted behind.
+  const expected = 204;
   assert.equal(
     implemented.size,
     expected,
