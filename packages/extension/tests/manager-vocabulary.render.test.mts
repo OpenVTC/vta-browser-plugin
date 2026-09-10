@@ -37,6 +37,7 @@ import { agent, h, render, PARTIES, UNSCOPED_HOLDER } from "./harness/dom.mjs";
 import { WorldEditor } from "../src/manager/panes/worlds.js";
 import { IdentityMap } from "../src/manager/panes/persona-map.js";
 import { AttributeList } from "../src/manager/panes/persona-list.js";
+import { AttributeEditor } from "../src/manager/panes/persona-editors.js";
 import { buildGraph } from "../src/manager/identity-graph.js";
 
 /**
@@ -52,6 +53,17 @@ const BANNED: readonly [RegExp, string][] = [
   [/\bcorrelations?\b/i, "correlation — on screen it is a link."],
   [/\bself-asserted\b/i, "self-asserted — on screen it is “you said so”."],
   [/\bcredential-backed\b/i, "credential-backed — on screen it is “credential · issuer”."],
+  // Added after the TUI's own guard caught a string this console had shipped:
+  // the gated family's note read "a disclosure needs your approval each time".
+  // `disclosure` is the wire and audit word; on screen the journey is *letting
+  // it leave*, and what has already gone is *what has left*. It is never a
+  // claim type, so any appearance in rendered text is prose.
+  [/\bdisclosures?\b/i, "disclosure — on screen it is letting it leave, or what has left."],
+  // `fact` for an attribute was retired twice over: it asserts a truth a
+  // self-asserted value does not have, and `Facts` already names a *verified*
+  // policy input in the VTC ceremony engine. The table's standing rule is to
+  // change it on sight.
+  [/\bfacts?\b/i, "fact — on screen an attribute is an attribute."],
 ];
 
 function assertSpeaksTheTable(text: string, where: string) {
@@ -199,6 +211,27 @@ test("the attribute list speaks the table, selection and all", async () => {
   await screen.unmount();
 });
 
+test("the attribute editor speaks the table", async () => {
+  // The editor is mounted here as well as in `persona-pane.render.test.mts`,
+  // because it carries the longest stretch of prose in the persona family —
+  // the two Decision explainers — and prose is where a retired word survives.
+  // One of them said "binds the approval to that one disclosure" until the TUI
+  // borrowed the string and refused it.
+  const fake = quiet();
+  const screen = await render(
+    h(AttributeEditor, {
+      registry: REGISTRY,
+      parties: PARTIES,
+      authority: UNSCOPED_HOLDER,
+      onDone: () => {},
+      onCancel: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: fake.sendMessage } } },
+  );
+  assertSpeaksTheTable(screen.text(), "the attribute editor");
+  await screen.unmount();
+});
+
 test("the guard is non-vacuous", () => {
   // A rendered-text check passes trivially if the render is empty, so the
   // matcher itself is exercised on a string that should fail.
@@ -209,6 +242,14 @@ test("the guard is non-vacuous", () => {
   assert.throws(
     () => assertSpeaksTheTable("A materialised copy goes down.", "a fixture"),
     /materialise/,
+  );
+  assert.throws(
+    () => assertSpeaksTheTable("A disclosure needs your approval.", "a fixture"),
+    /says “disclosure” on screen/,
+  );
+  assert.throws(
+    () => assertSpeaksTheTable("3 facts about you.", "a fixture"),
+    /says “facts” on screen/,
   );
   // And a legitimate token is not a false positive.
   assertSpeaksTheTable("profile.github  name.given", "a fixture");

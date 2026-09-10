@@ -1067,10 +1067,16 @@ async function handleDisclosureStepUpConsent(
 ): Promise<RuntimeDisclosureStepUpConsentResponse> {
   const { origin, agentDid } = req;
   const context = { verifierDid: req.verifierDid, claimTypes: req.claimTypes, purpose: req.purpose };
+  // `attributes`, not `facts`, and "let it leave", not "disclosure". Both words
+  // are retired by `design-docs/persona-vocabulary.md` and this card is the
+  // holder's own screen — the one place in this flow where they read anything.
+  // `fact` was wrong twice over: it asserts a truth a self-asserted value does
+  // not have, and it is already the VTC ceremony engine's word for a *verified*
+  // policy input, which is very nearly the opposite.
   const what =
     context.claimTypes.length === 1
       ? context.claimTypes[0]
-      : `${context.claimTypes.length} facts (${context.claimTypes.join(", ")})`;
+      : `${context.claimTypes.length} attributes (${context.claimTypes.join(", ")})`;
   const to = context.verifierDid ? ` to ${context.verifierDid}` : "";
   const why = context.purpose ? ` — they say it is for: ${context.purpose}` : "";
   const { approved } = await requestConsent({
@@ -1078,8 +1084,8 @@ async function handleDisclosureStepUpConsent(
     rpDid: agentDid,
     noRemember: true,
     stepUp: true,
-    action: "approve this disclosure",
-    reason: `Release ${what}${to}${why}. This approval covers this one disclosure.`,
+    action: "let this leave",
+    reason: `Release ${what}${to}${why}. This approval covers this one departure, and nothing else.`,
   });
   return { approved };
 }
