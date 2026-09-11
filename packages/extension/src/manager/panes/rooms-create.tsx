@@ -1,36 +1,55 @@
-// Making a room: an identity, then a host, then what that host may see.
+// Making a room: a host, then the room's own identity, then what the host sees.
 //
-// **A room is a DID, not a row in a host's table.** That is the whole reason
-// this form has more than one step. The room's own identity issues the
-// credentials that govern it, and a host authorises every operation against
-// those credentials rather than against anything it stores — so the room is
-// portable. Re-point it at another host and the room has moved, with no
+// **A room is a DID, not a row in a host's table.** The room's own identity
+// issues the credentials that govern it, and a host authorises every operation
+// against those credentials rather than against anything it stores — so the
+// room is portable. Re-point it at another host and the room has moved, with no
 // credential reissued and nothing to migrate.
 //
-// Which is why the identity is minted (or supplied) **first**, and the host is
-// told about a room that already exists. The reverse order would be a host
-// handing out an identifier, and a room whose name came from its host is a room
-// that cannot leave.
+// ## Host first on screen, room first on the wire
 //
-// ## Why it is laid out as numbered steps
+// The form asks for the host before the room. A host is a prerequisite that may
+// have to be created — its DID minted — while the room is the thing the
+// operator came to make, and asking for the room first only to reveal a step
+// later that there is nowhere to put it is the order people tripped over.
 //
-// It used to be one wrap of fields under a paragraph, and the two things an
-// operator most needed to find were the two they missed: which mediator to
-// name, and that a host DID can be minted here at all (a quiet "Mint one" beside
-// the field, read as a label). So each step now says what it decides and why
-// before it asks, and each way through a step is a **peer choice** with its
-// consequence written beside it — never a primary field with an alternative
-// hiding next to it. Nothing is written until the last button, and the list
-// above that button says what pressing it will do.
+// That order is about the **host's own DID**, and it does not touch the rule
+// that matters: the room's identity is minted before any host is told about it.
+// A room whose name came from its host is a room that cannot leave, so `submit`
+// still writes `dids/create` before `rooms/owner/register`, whatever order the
+// screen asks in.
+//
+// Each way through a step is a **peer choice** with its consequence written
+// beside it, never a primary field with an alternative hiding next to it — the
+// earlier "Mint one" button beside the HOST DID field was read as a label.
+//
+// ## The host needs a URL, today
+//
+// Not a preference of this form. The `room-host` service serves records over
+// HTTP and nothing else, and `vta-service` can only initiate a call to a host
+// over REST (`OUTBOUND_SUPPORTED` in its `operations/room_host.rs`: DIDComm and
+// TSP need a pending-reply registry it does not keep yet). A host advertising
+// only a mediator is refused there as "no transport in common". The
+// `room-host` template publishes a mediator too, but nothing answers on it — so
+// the words on screen say the URL is what carries everything, and must not
+// describe the mediator as a way in. When both of those change, the URL can
+// become optional; not before.
 //
 // ## The mediator is offered, not typed
 //
 // `vta/services/list` names the mediator the agent's DIDComm and TSP transports
-// route through, so the usual answer is already known and typing a DID is the
-// exception. It is offered as what the agent *routes through*, never as what
-// works: advertisement is not availability. The listing is admin-gated and a
-// context-scoped caller may be refused — that is a failure to ask, not an agent
-// without a mediator, so the form says so and falls back to the typed field.
+// route through, so the usual answer is already known. It is offered as what the
+// agent *routes through*, never as what works: advertisement is not
+// availability. The listing is admin-gated and a context-scoped caller may be
+// refused — a failure to ask, not an agent without a mediator — so the form says
+// so and falls back to the typed field.
+//
+// ## The DID's path
+//
+// Both mints let the operator name the path the DID is served under, or leave
+// it to the hosting server. Absent is `autoAssign` and is the default. A chosen
+// name is checked against the server's own rule first (`webvh-path.ts` says why
+// a refusal is worth avoiding rather than merely reporting).
 //
 // ## The pair, and why both halves are asked for
 //
@@ -39,8 +58,7 @@
 // **named, not looked up** — nothing maps a DID to the key it was minted with,
 // and a mapping invented for convenience is one that goes stale after a
 // rotation. So a DID without its key identifier is a room that cannot invite
-// anyone, and the "already minted" path asks for both rather than pretending
-// the DID alone is enough.
+// anyone, and the "already minted" path asks for both.
 //
 // ## The failure that matters
 //
@@ -62,6 +80,7 @@ import { managerSender } from "../sender.js";
 import { ConsentRequiredError } from "../carrier.js";
 import { ConsentCeremony, runMutation } from "../destructive.js";
 import { contextHeading } from "../format.js";
+import { didPath, pathProblem } from "../webvh-path.js";
 import type { Parties } from "../use-vta.js";
 
 const fieldStyle: React.CSSProperties = {
@@ -133,6 +152,24 @@ function agentMediators(services: ServiceState[]): AgentMediator[] {
   }
   return [...byDid.values()].sort((a, b) => Number(b.enabled) - Number(a.enabled));
 }
+
+/**
+ * Whether a DID's path is the hosting server's choice or the operator's.
+ *
+ * `path` survives switching back to the server's choice, so flipping between
+ * the two does not throw away what was typed — but only `named` decides what is
+ * sent.
+ */
+interface PathChoice {
+  named: boolean;
+  path: string;
+}
+
+const SERVER_CHOOSES: PathChoice = { named: false, path: "" };
+
+/** `pathMode` for a mint: absent is the server's choice (`autoAssign`). */
+const pathMode = (choice: PathChoice) =>
+  choice.named ? { pathMode: { mode: "explicit" as const, path: choice.path } } : {};
 
 function Label({ children, hint }: { children: string; hint?: string | undefined }) {
   return (
@@ -229,7 +266,6 @@ function Choice({
  * A numbered step: what it decides, why, then the controls.
  *
  * The tick says the step has what it needs — not that anything was written.
- * Nothing is, until the button at the end.
  */
 function Step({
   n,
@@ -442,6 +478,82 @@ function MediatorPicker({
 }
 
 /**
+ * The path a DID is published under: the hosting server's choice, or a name.
+ *
+ * The preview is the reason to show the name at all — `rooms/northwind` typed
+ * into a field is a path, and the operator is picking a DID. Showing where it
+ * lands inside one is what makes the choice legible.
+ */
+function PathPicker({
+  name,
+  example,
+  value,
+  onChange,
+}: {
+  name: string;
+  example: string;
+  value: PathChoice;
+  onChange: (next: PathChoice) => void;
+}) {
+  const group = useId();
+  const problem = value.named && value.path ? pathProblem(value.path) : null;
+
+  return (
+    <div style={{ display: "grid", gap: 6 }}>
+      <Label hint="— the part of the DID after the domain">DID PATH</Label>
+      <div style={choices}>
+        <Choice
+          name={group}
+          value="path-auto"
+          checked={!value.named}
+          onSelect={() => onChange({ ...value, named: false })}
+          title="Let the hosting server choose"
+        >
+          It allocates a fresh name that is free on that server.
+        </Choice>
+        <Choice
+          name={group}
+          value="path-named"
+          checked={value.named}
+          onSelect={() => onChange({ ...value, named: true })}
+          title="Choose a name"
+        >
+          <span>
+            A name you pick, such as <code>{example}</code>. It becomes part of the DID.
+          </span>
+        </Choice>
+      </div>
+      {value.named && (
+        <>
+          <input
+            aria-label={name}
+            style={{ ...fieldStyle, width: "100%", fontFamily: font.mono }}
+            value={value.path}
+            placeholder={example}
+            spellCheck={false}
+            autoCapitalize="none"
+            autoComplete="off"
+            onChange={(e) => onChange({ ...value, path: e.target.value })}
+          />
+          {problem ? (
+            <span style={{ fontSize: t.xs, color: c.danger }}>{problem}</span>
+          ) : value.path ? (
+            <span style={{ fontSize: t.xs, color: c.muted, fontFamily: font.mono, wordBreak: "break-all" }}>
+              <span style={{ color: c.faint }}>did:webvh:&lt;scid&gt;:&lt;domain&gt;:</span>
+              <strong style={{ color: c.text }}>{didPath(value.path)}</strong>
+            </span>
+          ) : (
+            <span style={{ fontSize: t.xs, color: c.muted }}>
+              Lowercase letters, digits and hyphens, with “/” between segments.
+            </span>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
  * What was minted, kept on screen.
  *
  * Not a receipt — a recovery. `signingKeyId` is the half an operator does not
@@ -474,6 +586,23 @@ export function CreateRoom({
   contexts: ContextRecord[];
   onCreated: () => void;
 }) {
+  // ── Step 1: the host ──
+  // `have` or `mint`. Pasting stays the default — a host DID is minted once per
+  // deployment, not once per room — but minting is a peer option in plain view.
+  const [hostSource, setHostSource] = useState<"have" | "mint">("have");
+  const [hostDid, setHostDid] = useState("");
+  const [hostCtx, setHostCtx] = useState("");
+  const [hostServer, setHostServer] = useState("");
+  const [hostUrl, setHostUrl] = useState("");
+  const [hostMediator, setHostMediator] = useState("");
+  const [hostPath, setHostPath] = useState<PathChoice>(SERVER_CHOOSES);
+  const [hostBusy, setHostBusy] = useState(false);
+  const [hostError, setHostError] = useState<string | null>(null);
+  // Which host DID this form minted, and in which context, so the note saying
+  // what is still to do stays attached to that DID and not to one pasted over it.
+  const [hostMinted, setHostMinted] = useState<{ did: string; contextId: string } | null>(null);
+
+  // ── Step 2: the room's identity ──
   // `mint` or `existing`. The default is `mint` because the common case is a
   // room that does not exist yet, and offering "paste a DID" first invites
   // pasting the *agent's* DID, which would make the agent the room.
@@ -481,22 +610,14 @@ export function CreateRoom({
   const [contextId, setContextId] = useState("");
   const [serverId, setServerId] = useState("");
   const [mediatorDid, setMediatorDid] = useState("");
+  // Whether the operator picked the room's mediator themselves. A mediator
+  // chosen for a host just minted seeds the room's — but never over a choice
+  // someone made on purpose.
+  const [mediatorChosen, setMediatorChosen] = useState(false);
+  const [roomPath, setRoomPath] = useState<PathChoice>(SERVER_CHOOSES);
   const [existing, setExisting] = useState<RoomIdentity>({ did: "", signingKeyId: "" });
 
-  // `have` or `mint`. Pasting stays the default — a host DID is minted once per
-  // deployment, not once per room — but minting is a peer option in plain view,
-  // because a first-time operator does not know one can be.
-  const [hostSource, setHostSource] = useState<"have" | "mint">("have");
-  const [hostDid, setHostDid] = useState("");
-  const [hostCtx, setHostCtx] = useState("");
-  const [hostServer, setHostServer] = useState("");
-  const [hostUrl, setHostUrl] = useState("");
-  const [hostMediator, setHostMediator] = useState("");
-  const [hostBusy, setHostBusy] = useState(false);
-  const [hostError, setHostError] = useState<string | null>(null);
-  // Which host DID this form minted, and in which context, so the note saying
-  // what is still to do stays attached to that DID and not to one pasted over it.
-  const [hostMinted, setHostMinted] = useState<{ did: string; contextId: string } | null>(null);
+  // ── Step 3: what the host sees ──
   const [visibility, setVisibility] = useState<Visibility>("private");
   const [retentionDays, setRetentionDays] = useState("");
 
@@ -535,7 +656,10 @@ export function CreateRoom({
         // click from "a different mediator". Only an advertised one: preselecting
         // a mediator the agent has switched off would be choosing a dead path.
         const usual = found.find((m) => m.enabled)?.did;
-        if (usual) setMediatorDid((p) => p || usual);
+        if (usual) {
+          setHostMediator((p) => p || usual);
+          setMediatorDid((p) => p || usual);
+        }
       } catch (e) {
         if (live) setMediatorsError(e instanceof Error ? e.message : String(e));
       }
@@ -554,42 +678,45 @@ export function CreateRoom({
 
   const retention = retentionDays.trim();
   const retentionBad = retention !== "" && !/^[1-9]\d*$/.test(retention);
+  const roomPathProblem = roomPath.named ? pathProblem(roomPath.path) : null;
+  const hostPathProblem = hostPath.named ? pathProblem(hostPath.path) : null;
 
   // Everything the *chosen* path needs, and nothing it does not: a form that
   // greys its button without saying which field is missing is a form people
-  // fill in twice.
+  // fill in twice. Each names its step, and the earliest step speaks first.
+  const hostMissing = hostSource === "mint"
+    ? "Step 1: mint the host's DID, or choose a host that already has one."
+    : !hostDid.trim()
+      ? "Step 1: name the host that will serve this room's records."
+      : null;
+
   const missing =
     source === "mint"
       ? !contextId
-        ? "Step 1: choose the context the room's DID belongs to."
+        ? "Step 2: choose the context the room's DID belongs to."
         : !serverId
-          ? "Step 1: choose a hosting server to publish the DID's log through."
+          ? "Step 2: choose a hosting server to publish the room's DID through."
           : !mediatorDid.trim()
-            ? "Step 1: the room needs a mediator — it is what makes the room addressable, so an invitation or an epoch notice can reach it."
-            : null
+            ? "Step 2: the room needs a mediator — it is what makes the room addressable, so an invitation or an epoch notice can reach it."
+            : roomPathProblem
+              ? `Step 2: ${roomPathProblem}`
+              : null
       : !identity
-        ? "Step 1: a room's identity is a DID and the identifier of the key that signs for it. Both."
+        ? "Step 2: a room's identity is a DID and the identifier of the key that signs for it. Both."
         : null;
-
-  const hostMissing = hostSource === "mint"
-    ? "Step 2: mint the host's DID, or choose a host that already has one."
-    : !hostDid.trim()
-      ? "Step 2: name the host that will serve this room's records."
-      : null;
 
   const retentionMissing = retentionBad
     ? "Step 3: retention is a whole number of days, or empty."
     : null;
 
-  const blocked = missing ?? hostMissing ?? retentionMissing;
+  const blocked = hostMissing ?? missing ?? retentionMissing;
 
   // Mint a DID for the host, in a context the host will be granted on.
   //
   // The same `webvh/dids/create` the room's own identity uses, with the
-  // `room-host` template — which publishes a DIDComm service pointing at the
-  // mediator and a `VTARest` service at the host's URL. A host DID that
-  // advertises neither is one no member can reach, which is why the template
-  // requires all three vars rather than defaulting them.
+  // `room-host` template — which publishes a `VTARest` service at the host's
+  // URL and a DIDComm service at a mediator. All three of its `requiredVars`
+  // are asked for rather than defaulted.
   //
   // Deliberately does NOT register the host anywhere or grant it anything. It
   // mints an identity in a context; the host still enrols on its own and an
@@ -604,6 +731,7 @@ export function CreateRoom({
           ...parties,
           contextId: hostCtx,
           serverId: hostServer,
+          ...pathMode(hostPath),
           template: "room-host",
           templateVars: {
             WEBVH_SERVER: hostServer,
@@ -614,28 +742,36 @@ export function CreateRoom({
         setHostDid(res.did);
         setHostMinted({ did: res.did, contextId: hostCtx });
         setHostSource("have");
+        // Seed the room from the host just minted, because in practice a room
+        // lives in the same context on the same server behind the same mediator
+        // as its host. Seeded rather than shared: a room may legitimately be
+        // elsewhere, and a field that silently tracked the host's could not
+        // express it. The mediator only where nobody chose one for the room.
+        setContextId((p) => p || hostCtx);
+        setServerId((p) => p || hostServer);
+        if (!mediatorChosen) setMediatorDid(hostMediator.trim());
       },
       { onConsent: setPending, onError: setHostError },
     );
     setHostBusy(false);
-  }, [parties, hostCtx, hostServer, hostUrl, hostMediator]);
+  }, [parties, hostCtx, hostServer, hostUrl, hostMediator, hostPath, mediatorChosen]);
 
   const hostMintMissing = !hostCtx
     ? "Choose the context the host's DID belongs to — the one it will be granted an application role on."
     : !hostServer
-      ? "Choose a hosting server to publish the host DID's log through."
+      ? "Choose a hosting server to publish the host's DID through."
       : !hostUrl.trim()
-        ? "The host needs a URL: members that can open one reach its records there."
+        ? "The host needs a URL: it serves records over HTTPS, and your agent can only reach a host over REST."
         : !hostMediator.trim()
-          ? "The host needs a mediator — it is how a member that cannot open a URL reaches it at all."
-          : null;
+          ? "Choose a mediator for the host's DID to publish."
+          : hostPathProblem;
 
   const submit = useCallback(async () => {
     setBusy(true);
     setError(null);
     setPending(null);
 
-    // ── Half one: the identity ──
+    // ── The room's identity, before any host hears of it ──
     let room = identity;
     if (!room) {
       const ok = await runMutation(
@@ -644,6 +780,7 @@ export function CreateRoom({
             ...parties,
             contextId,
             serverId,
+            ...pathMode(roomPath),
             template: "room",
             // `WEBVH_SERVER` is one of the `room` template's `requiredVars` and
             // its document substitutes it nowhere — so it is passed to satisfy
@@ -668,7 +805,7 @@ export function CreateRoom({
       setSource("existing");
     }
 
-    // ── Half two: tell a host ──
+    // ── Then tell the host ──
     const ok = await runMutation(
       async () => {
         // Through the agent, not straight at the host. This console addresses
@@ -693,16 +830,18 @@ export function CreateRoom({
       setMinted(null);
       setExisting({ did: "", signingKeyId: "" });
       setSource("mint");
+      // A name is one room's. Kept, the next room would ask for a path that is
+      // now taken and be refused at the server.
+      setRoomPath(SERVER_CHOOSES);
       setHostDid("");
       setHostMinted(null);
       onCreated();
     }
   }, [
-    parties, identity, contextId, serverId, mediatorDid, hostDid, visibility, retention,
+    parties, identity, contextId, serverId, roomPath, mediatorDid, hostDid, visibility, retention,
     onCreated,
   ]);
 
-  const usualMediator = mediators?.find((m) => m.enabled)?.did ?? "";
   const serverName = (id: string) => {
     const s = servers?.find((x) => x.id === id);
     return s?.label ?? id;
@@ -711,8 +850,8 @@ export function CreateRoom({
   // A step is ticked only once every step before it is, too. Step three is
   // valid on arrival — its defaults are fine — and a green tick on the last step
   // beside two unfinished ones reads as a form filled in out of order.
-  const stepOneReady = source === "mint" ? !missing : Boolean(identity);
-  const stepTwoReady = stepOneReady && !hostMissing;
+  const stepOneReady = !hostMissing;
+  const stepTwoReady = stepOneReady && !missing;
   const stepThreeReady = stepTwoReady && !retentionBad;
   const identityGroup = useId();
   const hostGroup = useId();
@@ -721,9 +860,9 @@ export function CreateRoom({
   return (
     <Panel
       title="New room"
-      description="Three decisions, in order: the room's own identity, the host that stores its
-        records, and how much that host can see. Nothing is written to your agent until you press
-        Create room at the end."
+      description="Three decisions, in order: the host that will store the room's records, the
+        room's own identity, and how much that host can see. Minting a host's DID is its own
+        button; the room itself is written only when you press Create room at the end."
     >
       {serversError && (
         <Note tone="warn">
@@ -735,12 +874,123 @@ export function CreateRoom({
       <div style={{ display: "grid", marginTop: 4 }}>
         <Step
           n={1}
-          title="Give the room its own identity"
+          title="Choose a host for the room's records"
           done={stepOneReady}
-          why="A room is a DID of its own, not an entry in a host's database. It signs the
+          why="A host stores a room's records and serves them to members. It never holds a key. It
+            has a DID of its own, and the room is registered with that DID — so a new host needs its
+            DID minted before there is anything to register the room with."
+        >
+          <div style={choices}>
+            <Choice
+              name={hostGroup}
+              value="have-host"
+              checked={hostSource === "have"}
+              onSelect={() => setHostSource("have")}
+              title="Use a host that already has a DID"
+            >
+              Paste the DID of a room host that is already running. It must publish a URL — that
+              is the only way your agent can reach a host today.
+            </Choice>
+            <Choice
+              name={hostGroup}
+              value="mint-host"
+              checked={hostSource === "mint"}
+              onSelect={() => setHostSource("mint")}
+              title="Mint a DID for a new host"
+            >
+              For a host you have not deployed yet. Your agent creates its identity; the host
+              service then enrols with it.
+            </Choice>
+          </div>
+
+          {hostSource === "have" ? (
+            <>
+              <Field label="HOST DID" hint="— the host's own DID, not its URL" grow="1 1 22rem">
+                <input
+                  aria-label="Host DID"
+                  style={fieldStyle}
+                  value={hostDid}
+                  onChange={(e) => setHostDid(e.target.value)}
+                />
+              </Field>
+              {hostMinted && hostMinted.did === hostDid.trim() && (
+                <Note tone="accent">
+                  <strong>Host DID minted.</strong> It is an identity, not a running host. Two things
+                  happen outside this form before members can use it: the host service enrols with
+                  this DID, and you grant it the <em>application</em> role on{" "}
+                  {contextHeading(contexts.find((x) => x.id === hostMinted.contextId), hostMinted.contextId)}{" "}
+                  from the Access pane. Creating the room asks the host to accept it, so that fails
+                  until the host is up — and if it does, the room&apos;s identity is kept for a retry.
+                </Note>
+              )}
+            </>
+          ) : (
+            <div
+              style={{
+                display: "grid",
+                gap: 10,
+                padding: "12px 14px",
+                border: `1px dashed ${c.line}`,
+                borderRadius: "var(--w-r-sm)",
+              }}
+            >
+              <p style={{ margin: 0, fontSize: t.sm, color: c.muted, lineHeight: 1.55, maxWidth: "82ch" }}>
+                Your agent mints the host&apos;s DID from the <code>room-host</code> template, which
+                publishes the host&apos;s URL and a mediator. <strong>The URL is what carries
+                everything today</strong>: the host serves records over HTTPS only, and your agent
+                can only reach a host over REST. The mediator is published beside it, but the host
+                does not listen there yet. Minting does not start, enrol or authorise the host — the
+                host enrols itself, and granting it an application role is still your decision.
+              </p>
+              <div style={row}>
+                <Field label="HOST CONTEXT" hint="— where the host will be granted">
+                  <ContextSelect name="Host context" contexts={contexts} value={hostCtx} onChange={setHostCtx} />
+                </Field>
+                <Field label="HOSTING SERVER" hint="— publishes the host's DID">
+                  <ServerSelect name="Host hosting server" servers={servers} value={hostServer} onChange={setHostServer} />
+                </Field>
+                <Field label="HOST URL" hint="— required; where it serves records over HTTPS" grow="1 1 16rem">
+                  <input
+                    aria-label="Host URL"
+                    style={fieldStyle}
+                    value={hostUrl}
+                    placeholder="https://…"
+                    onChange={(e) => setHostUrl(e.target.value)}
+                  />
+                </Field>
+              </div>
+              <PathPicker name="Host DID path" example="room-host" value={hostPath} onChange={setHostPath} />
+              <div style={{ display: "grid", gap: 6 }}>
+                <Label hint="— published in the host's DID; the host serves over its URL today">HOST MEDIATOR</Label>
+                <MediatorPicker
+                  name="Host mediator DID"
+                  value={hostMediator}
+                  onChange={setHostMediator}
+                  known={mediators}
+                  knownError={mediatorsError}
+                />
+              </div>
+              {hostError && <Note tone="warn">{hostError}</Note>}
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <Button onClick={() => void mintHost()} disabled={busy || hostBusy || !!hostMintMissing}>
+                  {hostBusy ? "Minting…" : "Mint host DID"}
+                </Button>
+                {hostMintMissing && (
+                  <span style={{ fontSize: t.sm, color: c.muted }}>{hostMintMissing}</span>
+                )}
+              </div>
+            </div>
+          )}
+        </Step>
+
+        <Step
+          n={2}
+          title="Give the room its own identity"
+          done={stepTwoReady}
+          why="A room is a DID of its own, not an entry in the host's database. It signs the
             invitations and memberships that govern it, so it can move to another host later
             without reissuing any of them. Your agent keeps its signing key; this console never
-            sees it."
+            sees it. It is minted when you press Create room, before the host is told about it."
         >
           <div style={choices}>
             <Choice
@@ -773,12 +1023,16 @@ export function CreateRoom({
                   <ServerSelect name="Room hosting server" servers={servers} value={serverId} onChange={setServerId} />
                 </Field>
               </div>
+              <PathPicker name="Room DID path" example="rooms/northwind" value={roomPath} onChange={setRoomPath} />
               <div style={{ display: "grid", gap: 6 }}>
                 <Label hint="— how invitations and epoch notices reach the room">MEDIATOR</Label>
                 <MediatorPicker
                   name="Room mediator DID"
                   value={mediatorDid}
-                  onChange={setMediatorDid}
+                  onChange={(did) => {
+                    setMediatorChosen(true);
+                    setMediatorDid(did);
+                  }}
                   known={mediators}
                   knownError={mediatorsError}
                 />
@@ -802,124 +1056,6 @@ export function CreateRoom({
                   onChange={(e) => setExisting((p) => ({ ...p, signingKeyId: e.target.value }))}
                 />
               </Field>
-            </div>
-          )}
-        </Step>
-
-        <Step
-          n={2}
-          title="Choose a host for its records"
-          done={stepTwoReady}
-          why="The host stores the room's records and serves them to members. It never holds a key.
-            A host is identified by a DID of its own, and the room is registered with that DID —
-            so if the host is new, mint its DID here first."
-        >
-          <div style={choices}>
-            <Choice
-              name={hostGroup}
-              value="have-host"
-              checked={hostSource === "have"}
-              onSelect={() => setHostSource("have")}
-              title="Use a host that already has a DID"
-            >
-              Paste the DID of a room host that is already running.
-            </Choice>
-            <Choice
-              name={hostGroup}
-              value="mint-host"
-              checked={hostSource === "mint"}
-              onSelect={() => {
-                // Seeded from the room's choices, because in practice the host
-                // lives in the same context on the same server behind the same
-                // mediator. Seeded rather than shared: a host may legitimately be
-                // elsewhere, and a field that silently tracked the room's would
-                // make that impossible to express.
-                setHostCtx((p) => p || contextId);
-                setHostServer((p) => p || serverId);
-                setHostMediator((p) => p || mediatorDid || usualMediator);
-                setHostSource("mint");
-              }}
-              title="Mint a DID for a new host"
-            >
-              For a host you have not deployed yet. Your agent creates its identity; the host
-              service then enrols with it.
-            </Choice>
-          </div>
-
-          {hostSource === "have" ? (
-            <>
-              <Field label="HOST DID" hint="— the host's own DID, not its URL" grow="1 1 22rem">
-                <input
-                  aria-label="Host DID"
-                  style={fieldStyle}
-                  value={hostDid}
-                  onChange={(e) => setHostDid(e.target.value)}
-                />
-              </Field>
-              {hostMinted && hostMinted.did === hostDid.trim() && (
-                <Note tone="accent">
-                  <strong>Host DID minted.</strong> It is an identity, not a running host. Two things
-                  happen outside this form before members can use it: the host service enrols with
-                  this DID, and you grant it the <em>application</em> role on{" "}
-                  {contextHeading(contexts.find((x) => x.id === hostMinted.contextId), hostMinted.contextId)}{" "}
-                  from the Access pane. Registering the room asks the host to accept it, so that
-                  fails until the host is up — and if it does, the room&apos;s identity is kept for a
-                  retry.
-                </Note>
-              )}
-            </>
-          ) : (
-            <div
-              style={{
-                display: "grid",
-                gap: 10,
-                padding: "12px 14px",
-                border: `1px dashed ${c.line}`,
-                borderRadius: "var(--w-r-sm)",
-              }}
-            >
-              <p style={{ margin: 0, fontSize: t.sm, color: c.muted, lineHeight: 1.55, maxWidth: "82ch" }}>
-                Your agent mints the host&apos;s DID from the <code>room-host</code> template, which
-                publishes where members reach it: a REST service at its URL and a DIDComm service
-                at its mediator. It does not start, enrol or authorise the host — the host enrols
-                itself, and granting it an application role on its context is still your decision.
-              </p>
-              <div style={row}>
-                <Field label="HOST CONTEXT" hint="— where the host will be granted">
-                  <ContextSelect name="Host context" contexts={contexts} value={hostCtx} onChange={setHostCtx} />
-                </Field>
-                <Field label="HOSTING SERVER">
-                  <ServerSelect name="Host hosting server" servers={servers} value={hostServer} onChange={setHostServer} />
-                </Field>
-                <Field label="HOST URL" hint="— where it serves records over HTTPS" grow="1 1 16rem">
-                  <input
-                    aria-label="Host URL"
-                    style={fieldStyle}
-                    value={hostUrl}
-                    placeholder="https://…"
-                    onChange={(e) => setHostUrl(e.target.value)}
-                  />
-                </Field>
-              </div>
-              <div style={{ display: "grid", gap: 6 }}>
-                <Label hint="— how a member with no reachable URL gets to the host">HOST MEDIATOR</Label>
-                <MediatorPicker
-                  name="Host mediator DID"
-                  value={hostMediator}
-                  onChange={setHostMediator}
-                  known={mediators}
-                  knownError={mediatorsError}
-                />
-              </div>
-              {hostError && <Note tone="warn">{hostError}</Note>}
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <Button onClick={() => void mintHost()} disabled={busy || hostBusy || !!hostMintMissing}>
-                  {hostBusy ? "Minting…" : "Mint host DID"}
-                </Button>
-                {hostMintMissing && (
-                  <span style={{ fontSize: t.sm, color: c.muted }}>{hostMintMissing}</span>
-                )}
-              </div>
             </div>
           )}
         </Step>
@@ -985,11 +1121,16 @@ export function CreateRoom({
               <>
                 Mint the room&apos;s DID in{" "}
                 <strong>{contextId ? contextHeading(contexts.find((x) => x.id === contextId), contextId) : "the chosen context"}</strong>{" "}
-                and publish it through <strong>{serverId ? serverName(serverId) : "the chosen server"}</strong>.
-                This is the step that cannot be taken back.
+                and publish it through <strong>{serverId ? serverName(serverId) : "the chosen server"}</strong>
+                {roomPath.named && roomPath.path && !roomPathProblem ? (
+                  <> at <code>{roomPath.path}</code></>
+                ) : (
+                  <>, at a path the server chooses</>
+                )}
+                . This is the step that cannot be taken back.
               </>
             ) : (
-              <>Mint nothing — the room uses the identity entered in step 1.</>
+              <>Mint nothing — the room uses the identity entered in step 2.</>
             )}
           </li>
           <li>
