@@ -68,6 +68,25 @@ test("portable:false is sent, because false is a decision and absent is not", as
   assert.equal(ch.sent[0].envelope.payload.portable, false);
 });
 
+// The agent defaults setPrimary to TRUE and overwrites the context's DID. A
+// caller minting a DID beside the context's own has to be able to say false,
+// and have it arrive as false.
+test("setPrimary:false is sent, because the agent's default is true", async () => {
+  const ch = recorder({ record: {} });
+  await webvhDidCreate(ch, { ...CALL, contextId: "c", setPrimary: false });
+  assert.equal(ch.sent[0].envelope.payload.setPrimary, false);
+
+  const ch2 = recorder({ record: {} });
+  await webvhDidCreate(ch2, { ...CALL, contextId: "c", setPrimary: true });
+  assert.equal(ch2.sent[0].envelope.payload.setPrimary, true);
+});
+
+test("an omitted setPrimary is absent, not false", async () => {
+  const ch = recorder({ record: {} });
+  await webvhDidCreate(ch, { ...CALL, contextId: "c" });
+  assert.ok(!("setPrimary" in ch.sent[0].envelope.payload));
+});
+
 test("get only asks for the log when told to", async () => {
   const ch = recorder({ record: {} });
   await webvhDidGet(ch, { ...CALL, did: "did:webvh:QmA:h.example" });
