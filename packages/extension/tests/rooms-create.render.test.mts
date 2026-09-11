@@ -599,3 +599,53 @@ test("switching back to the server's choice sends no path, whatever was typed", 
   await screen.click(screen.button("Create room"));
   assert.equal(mintOf(a, "room").payload.pathMode, undefined);
 });
+
+// ── TSP ─────────────────────────────────────────────────────────────────────
+//
+// Off by default on both mints, the agent's own posture: advertising a
+// transport nothing behind the DID decodes gives clients a route they will
+// choose and cannot use.
+
+test("a room advertises TSP only when asked", async () => {
+  const { a, screen } = await mount({ [DIDS_CREATE]: MINTED, [REGISTER]: REGISTERED });
+  await fillAll(screen);
+  await screen.click(screen.button("Create room"));
+  assert.equal(mintOf(a, "room").payload.addTspService, undefined);
+});
+
+test("ticking TSP for the room sends addTspService on the room's mint", async () => {
+  const { a, screen } = await mount({ [DIDS_CREATE]: MINTED, [REGISTER]: REGISTERED });
+  await fillAll(screen);
+  await screen.check(field(screen, "Room advertises TSP"));
+  assert.match(screen.text(), /advertising TSP beside DIDComm/);
+  await screen.click(screen.button("Create room"));
+  assert.equal(mintOf(a, "room").payload.addTspService, true);
+});
+
+// The room's box says who answers, and the honest answer today is nobody: the
+// agent listens at its mediator as its own DID.
+test("the room's TSP choice says nothing answers as a room's DID yet", async () => {
+  const { screen } = await mount({});
+  await fillAll(screen);
+  assert.match(screen.text(), /nothing answers as a room's DID yet/);
+});
+
+// Two different holders — room-host for the host, nothing yet for the room — so
+// one answer is no evidence for the other.
+test("ticking TSP for a new host sends it on the host's mint, not the room's", async () => {
+  const { a, screen } = await mount({ [DIDS_CREATE]: MINT_EITHER, [REGISTER]: REGISTERED });
+  await mintAHost(screen, async () => {
+    await screen.check(field(screen, "Host advertises TSP"));
+  });
+  assert.equal(mintOf(a, "room-host").payload.addTspService, true);
+
+  await screen.click(screen.button("The host is running"));
+  await screen.click(screen.button("Create room"));
+  assert.equal(mintOf(a, "room").payload.addTspService, undefined);
+});
+
+test("a new host advertises TSP only when asked", async () => {
+  const { a, screen } = await mount({ [DIDS_CREATE]: HOST_MINTED });
+  await mintAHost(screen);
+  assert.equal(mintOf(a, "room-host").payload.addTspService, undefined);
+});
