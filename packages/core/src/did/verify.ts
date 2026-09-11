@@ -16,6 +16,8 @@
 
 import { resolve as vtiResolve } from "@openvtc/vti-didcomm-js";
 
+import { assertResolvableWebvhHost } from "./egress-guard.js";
+
 export type DidMethod = "webvh" | "peer" | "key" | "unknown";
 
 export interface VerifyDidResult {
@@ -77,12 +79,28 @@ export function didWebvhDomain(did: string): string | undefined {
   return parts[3];
 }
 
+/** Options shared by the functions here that resolve a DID. */
+export interface ResolveDidOptions {
+  /** Resolve a DID to its resolution result. Defaults to the
+   *  `@openvtc/vti-didcomm-js` resolver. The did:webvh host guard runs before
+   *  this is called, whichever resolver is in use. */
+  resolveDid?: (did: string) => Promise<unknown>;
+}
+
+const defaultResolveDid = (did: string): Promise<unknown> => vtiResolve(did, {});
+
 /**
  * Resolve and validate an RP DID. Never throws — failures are returned via
  * `resolved: false` and `error`, because the consent UI wants to *render*
  * the error rather than crash.
+ *
+ * A did:webvh whose host is local-only or not a public address is refused
+ * before anything is fetched ({@link assertResolvableWebvhHost}).
  */
-export async function verifyDid(did: string): Promise<VerifyDidResult> {
+export async function verifyDid(
+  did: string,
+  opts: ResolveDidOptions = {},
+): Promise<VerifyDidResult> {
   const method = didMethod(did);
   const domain = method === "webvh" ? didWebvhDomain(did) : undefined;
   const base: VerifyDidResult = {
@@ -95,7 +113,8 @@ export async function verifyDid(did: string): Promise<VerifyDidResult> {
     return { ...base, error: "Unrecognised DID method" };
   }
   try {
-    const resolution = (await vtiResolve(did, {})) as {
+    if (method === "webvh") assertResolvableWebvhHost(did);
+    const resolution = (await (opts.resolveDid ?? defaultResolveDid)(did)) as {
       didDocument?: { id?: string; alsoKnownAs?: unknown };
       didResolutionMetadata?: { error?: string };
     };
