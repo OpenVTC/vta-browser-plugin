@@ -491,3 +491,40 @@ export function PathPicker({
     </div>
   );
 }
+
+/**
+ * Whether a minted DID also advertises TSP at its mediator.
+ *
+ * A checkbox rather than a pair of cards because it adds to the mediator above
+ * it rather than choosing between two things. Off by default, the agent's own
+ * posture: a DID advertising a transport nothing behind it decodes is one
+ * clients will choose and cannot use, so ticking it is a claim about whoever
+ * holds the DID — and the words beside it say who that is.
+ */
+export function TspChoice({
+  name,
+  checked,
+  onChange,
+  children,
+}: {
+  name: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <label style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: t.sm, cursor: "pointer" }}>
+      <input
+        type="checkbox"
+        aria-label={name}
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ margin: "3px 0 0" }}
+      />
+      <span style={{ display: "grid", gap: 2, minWidth: 0 }}>
+        <span style={{ fontWeight: 600, color: c.text }}>Also advertise TSP at this mediator</span>
+        <span style={{ fontSize: t.xs, color: c.muted, lineHeight: 1.5 }}>{children}</span>
+      </span>
+    </label>
+  );
+}

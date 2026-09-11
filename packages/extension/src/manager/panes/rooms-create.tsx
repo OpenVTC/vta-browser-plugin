@@ -45,10 +45,14 @@
 // `vta-service` can only initiate a call to a host over REST (`OUTBOUND_SUPPORTED`
 // in its `operations/room_host.rs`), so a host with no URL cannot be registered.
 // The mediator is for members: room-host started with `--mediator-did` serves
-// DIDComm and TSP there. The `room-host` template advertises the mediator for
-// DIDComm only, and the agent does not apply `addTspService` to a
-// template-rendered document — so a minted host DID publishes no TSP entry,
-// which is a gap in the template rather than a choice this form can make.
+// DIDComm and TSP there. The templates publish the mediator for DIDComm; each
+// mint here can add a `TSPTransport` entry at the same mediator with
+// `addTspService`, which the agent applies to a template-rendered document
+// (verifiable-trust-infrastructure, alongside this change — before it, the flag
+// was accepted and silently dropped for every templated DID). Off by default:
+// for a host it is a claim that room-host will answer TSP at `--mediator-did`;
+// for a room, nothing answers as the room's DID over either protocol yet, and
+// the words beside the box say so.
 //
 // ## Screen order and wire order
 //
@@ -100,6 +104,7 @@ import {
   SERVER_CHOOSES,
   ServerSelect,
   Step,
+  TspChoice,
   type AgentMediator,
   type PathChoice,
 } from "./rooms-create-parts.js";
@@ -242,6 +247,7 @@ export function CreateRoom({
   const [hostUrl, setHostUrl] = useState("");
   const [hostMediator, setHostMediator] = useState("");
   const [hostPath, setHostPath] = useState<PathChoice>(SERVER_CHOOSES);
+  const [hostTsp, setHostTsp] = useState(false);
   const [hostBusy, setHostBusy] = useState(false);
   const [hostError, setHostError] = useState<string | null>(null);
   const [hostMinted, setHostMinted] = useState<
@@ -258,6 +264,9 @@ export function CreateRoom({
   // A mediator seeded from the host never replaces one picked on purpose.
   const [mediatorChosen, setMediatorChosen] = useState(false);
   const [roomPath, setRoomPath] = useState<PathChoice>(SERVER_CHOOSES);
+  // Not seeded from the host's: TSP on a host DID is answered by room-host,
+  // and on a room DID by nothing yet, so one is no evidence for the other.
+  const [roomTsp, setRoomTsp] = useState(false);
   const [existing, setExisting] = useState<RoomIdentity>({ did: "", signingKeyId: "" });
   const [pasteRoom, setPasteRoom] = useState(false);
   const [typeKey, setTypeKey] = useState(false);
@@ -449,6 +458,7 @@ export function CreateRoom({
           serverId: hostServer,
           setPrimary: true,
           ...pathMode(hostPath),
+          ...(hostTsp ? { addTspService: true } : {}),
           template: "room-host",
           templateVars: {
             WEBVH_SERVER: hostServer,
@@ -471,7 +481,7 @@ export function CreateRoom({
       { onConsent: setPending, onError: setHostError },
     );
     setHostBusy(false);
-  }, [parties, contextId, hostServer, hostUrl, hostMediator, hostPath, mediatorChosen]);
+  }, [parties, contextId, hostServer, hostUrl, hostMediator, hostPath, hostTsp, mediatorChosen]);
 
   // Make an existing DID in this context the context's own — the host's.
   const makeHost = useCallback(async () => {
@@ -504,6 +514,7 @@ export function CreateRoom({
             // Beside the host's DID, never in place of it. See the header.
             setPrimary: false,
             ...pathMode(roomPath),
+            ...(roomTsp ? { addTspService: true } : {}),
             template: "room",
             // `WEBVH_SERVER` is one of the `room` template's `requiredVars` and
             // its document substitutes it nowhere — so it is passed to satisfy
@@ -559,7 +570,7 @@ export function CreateRoom({
       onCreated();
     }
   }, [
-    parties, identity, contextId, serverId, roomPath, mediatorDid, hostDid, visibility, retention,
+    parties, identity, contextId, serverId, roomPath, roomTsp, mediatorDid, hostDid, visibility, retention,
     onCreated,
   ]);
 
@@ -769,8 +780,8 @@ export function CreateRoom({
                 context&apos;s own DID — the identity room-host serves as once enrolled. It publishes
                 two ways in. <strong>The URL is what your agent uses, and it is required</strong>: your
                 agent calls hosts over REST only. The mediator is for members — a host started with{" "}
-                <code>--mediator-did</code> answers DIDComm and TSP there, though the template
-                advertises it for DIDComm only.
+                <code>--mediator-did</code> answers DIDComm and TSP there. The DID advertises it for
+                DIDComm, and for TSP too if you tick the box below.
               </p>
               {contextDid && (
                 <Note tone="warn">
@@ -804,6 +815,10 @@ export function CreateRoom({
                   knownError={mediatorsError}
                 />
               </div>
+              <TspChoice name="Host advertises TSP" checked={hostTsp} onChange={setHostTsp}>
+                room-host started with <code>--mediator-did</code> answers TSP there as well as
+                DIDComm, as this DID. Leave it off if the host will not be started that way.
+              </TspChoice>
               {hostError && <Note tone="warn">{hostError}</Note>}
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <Button onClick={() => void mintHost()} disabled={busy || hostBusy || !!hostMintMissing}>
@@ -919,6 +934,10 @@ export function CreateRoom({
                   knownError={mediatorsError}
                 />
               </div>
+              <TspChoice name="Room advertises TSP" checked={roomTsp} onChange={setRoomTsp}>
+                Published beside the room&apos;s DIDComm entry. Your agent listens at its mediator as
+                its own DID only, so nothing answers as a room&apos;s DID yet — over DIDComm or TSP.
+              </TspChoice>
             </>
           ) : (
             <div style={{ display: "grid", gap: 8 }}>
@@ -1100,6 +1119,7 @@ export function CreateRoom({
                 ) : (
                   <>, at a path the server chooses</>
                 )}
+                {roomTsp ? <>, advertising TSP beside DIDComm</> : null}
                 . This is the step that cannot be taken back.
               </>
             ) : (

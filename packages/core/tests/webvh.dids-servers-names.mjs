@@ -87,6 +87,16 @@ test("an omitted setPrimary is absent, not false", async () => {
   assert.ok(!("setPrimary" in ch.sent[0].envelope.payload));
 });
 
+test("addTspService is sent when given and absent when not", async () => {
+  const ch = recorder({ record: {} });
+  await webvhDidCreate(ch, { ...CALL, contextId: "c", addTspService: true });
+  assert.equal(ch.sent[0].envelope.payload.addTspService, true);
+
+  const ch2 = recorder({ record: {} });
+  await webvhDidCreate(ch2, { ...CALL, contextId: "c" });
+  assert.ok(!("addTspService" in ch2.sent[0].envelope.payload));
+});
+
 test("get only asks for the log when told to", async () => {
   const ch = recorder({ record: {} });
   await webvhDidGet(ch, { ...CALL, did: "did:webvh:QmA:h.example" });

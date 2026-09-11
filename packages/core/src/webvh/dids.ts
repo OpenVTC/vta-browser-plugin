@@ -110,6 +110,15 @@ export interface WebvhDidCreateParams extends WebvhCall {
    */
   setPrimary?: boolean;
   /**
+   * Publish a `TSPTransport` entry at the mediator the document names for
+   * DIDComm, beside that entry.
+   *
+   * Opt-in at the agent, and a claim about the DID's holder: a DID advertising
+   * a transport nothing behind it decodes is one clients will choose and cannot
+   * use.
+   */
+  addTspService?: boolean;
+  /**
    * Render the document from a stored or built-in DID template.
    *
    * The reason a caller reaches for this rather than composing a document: a
@@ -165,6 +174,7 @@ export async function webvhDidCreate(
     // keeping the context's identity, and dropping it lets the agent's `true`
     // default replace it.
     ...(rest.setPrimary !== undefined ? { setPrimary: rest.setPrimary } : {}),
+    ...(rest.addTspService !== undefined ? { addTspService: rest.addTspService } : {}),
     ...(rest.template ? { template: rest.template } : {}),
     ...(rest.templateContext ? { templateContext: rest.templateContext } : {}),
     ...(rest.templateVars ? { templateVars: rest.templateVars } : {}),
