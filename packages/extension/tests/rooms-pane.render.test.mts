@@ -29,13 +29,14 @@ const room = (roomId: string, epoch: number, earliestReadableEpoch: number) => (
 });
 
 // The pane also carries the create form, which reads the agent's hosting
-// servers on mount. Named here so the fake agent answers it rather than
-// throwing — these tests are about the listing, and `rooms-create.render`
-// covers the form.
+// servers and its transports (for the mediator it offers) on mount. Named here
+// so the fake agent answers them rather than throwing — these tests are about
+// the listing, and `rooms-create.render` covers the form.
 const SERVERS = "vta/webvh/servers/list/1.0";
+const SERVICES = "vta/services/list/1.0";
 
 const mount = async (rooms: unknown[]) => {
-  const a = agent({ [LIST]: { rooms }, [SERVERS]: { servers: [] } });
+  const a = agent({ [LIST]: { rooms }, [SERVERS]: { servers: [] }, [SERVICES]: { services: [] } });
   const screen = await render(h(RoomsPane, { parties: PARTIES, contexts: [] } as never), {
     chrome: { runtime: { sendMessage: a.sendMessage } },
   });
