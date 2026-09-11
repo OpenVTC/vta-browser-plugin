@@ -6,6 +6,11 @@
 // when the registration fails is the property worth pinning, not the happy path
 // — an operator who loses the `signingKeyId` has a room nothing can ever issue
 // in the name of, and no way to get it back.
+//
+// Fields are found by their accessible name, never by position. The form is a
+// sequence of steps whose fields appear and disappear with the choices above
+// them, so "the second input" names a different field depending on which way
+// through step one a test took.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -13,6 +18,7 @@ import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { CreateRoom } from "../src/manager/panes/rooms-create.js";
 
 const SERVERS = "vta/webvh/servers/list/1.0";
+const SERVICES = "vta/services/list/1.0";
 const DIDS_CREATE = "vta/webvh/dids/create/1.0";
 // `rooms/owner/register`, not `rooms/create`. The console cannot address a host
 // at all — its bridge carries a type and a payload and addresses everything to
@@ -22,10 +28,21 @@ const DIDS_CREATE = "vta/webvh/dids/create/1.0";
 const REGISTER = "rooms/owner/register/0.1";
 
 const HOST_DID = "did:webvh:QmHost:host.example";
+const AGENT_MEDIATOR = "did:web:mediator.example";
 
 const CONTEXTS = [
   { id: "openvtc", name: "OpenVTC", basePath: "/openvtc", createdAt: "2026-09-07T09:00:00Z" },
 ];
+
+// DIDComm and TSP through one mediator, and REST beside them — the shape a
+// deployed agent actually reports.
+const AGENT_SERVICES = {
+  services: [
+    { kind: "didcomm", enabled: true, mediatorDid: AGENT_MEDIATOR },
+    { kind: "tsp", enabled: true, mediatorDid: AGENT_MEDIATOR },
+    { kind: "rest", enabled: true, url: "https://agent.example" },
+  ],
+};
 
 const MINTED = {
   did: "did:webvh:QmRoom:rooms.example",
@@ -41,6 +58,7 @@ const MINTED = {
 const mount = async (answers: Record<string, unknown>) => {
   const a = agent({
     [SERVERS]: { servers: [{ id: "webvh-1", did: "did:webvh:QmHost:host.example", label: "Primary", createdAt: "x", updatedAt: "x" }] },
+    [SERVICES]: AGENT_SERVICES,
     ...answers,
   });
   const screen = await render(
@@ -50,14 +68,34 @@ const mount = async (answers: Record<string, unknown>) => {
   return { a, screen };
 };
 
-/** Fill the mint path and the host, which is every field the form needs. */
-const fillAll = async (screen: Awaited<ReturnType<typeof mount>>["screen"]) => {
-  const selects = screen.all("select");
-  const inputs = screen.all("input").filter((el) => el.type !== "radio");
-  await screen.select(selects[0]!, "openvtc"); // context
-  await screen.select(selects[1]!, "webvh-1"); // hosting server
-  await screen.type(inputs[0]!, "did:web:mediator.example"); // mediator
-  await screen.type(inputs[1]!, HOST_DID); // host
+type Screen = Awaited<ReturnType<typeof mount>>["screen"];
+
+/** A field by its accessible name. Throws when absent, so a test that meant to
+ *  fill something says so rather than passing. */
+const field = (screen: Screen, name: string) => {
+  const el = screen.all(`[aria-label="${name}"]`)[0];
+  if (!el) throw new Error(`no field named “${name}”`);
+  return el;
+};
+
+/** A radio by its value. `at` picks among repeats — both mediator pickers
+ *  offer an `other`, and the host's renders second. */
+const radio = (screen: Screen, value: string, at = 0) => {
+  const el = screen.all(`input[type="radio"][value="${value}"]`).at(at);
+  if (!el) throw new Error(`no radio with value “${value}”`);
+  return el;
+};
+
+/** Writes only: the two listings the form reads on mount are not the subject. */
+const writes = (a: { calls: { type: string }[] }) =>
+  a.calls.map((c) => c.type.replace("https://trusttasks.org/spec/", "")).filter((t) => !t.includes("/list/"));
+
+/** Fill the mint path and the host, which is every field the form needs. The
+ *  mediator is not typed: the agent's own is already chosen. */
+const fillAll = async (screen: Screen) => {
+  await screen.select(field(screen, "Room context"), "openvtc");
+  await screen.select(field(screen, "Room hosting server"), "webvh-1");
+  await screen.type(field(screen, "Host DID"), HOST_DID);
 };
 
 // ── The seam ────────────────────────────────────────────────────────────────
@@ -67,9 +105,8 @@ test("both halves are written, identity first", async () => {
   await fillAll(screen);
   await screen.click(screen.button("Create room"));
 
-  const writes = a.calls.map((c) => c.type).filter((t) => !t.includes("servers/list"));
   assert.deepEqual(
-    writes.map((t) => t.replace("https://trusttasks.org/spec/", "")),
+    writes(a),
     [`${DIDS_CREATE}`, `${REGISTER}`],
     "the DID must exist before a host is told about the room",
   );
@@ -86,7 +123,7 @@ test("the room is minted from the room template, addressable and hosted", async 
   // satisfies the template's own requiredVars check.
   assert.equal(mint.payload.serverId, "webvh-1");
   assert.equal(mint.payload.templateVars.WEBVH_SERVER, "webvh-1");
-  assert.equal(mint.payload.templateVars.MEDIATOR_DID, "did:web:mediator.example");
+  assert.equal(mint.payload.templateVars.MEDIATOR_DID, AGENT_MEDIATOR);
 });
 
 // The room's identifier is the DID that was just minted, and the owner is the
@@ -151,9 +188,8 @@ test("retrying after a failed registration registers rather than minting again",
 // anyone. Discovering that at the first invitation is far worse than here.
 test("an existing identity needs both halves before it can be used", async () => {
   const { screen } = await mount({});
-  await screen.click(screen.byText("label", "I already have one")!);
-  const inputs = screen.all("input").filter((el) => el.type !== "radio");
-  await screen.type(inputs[0]!, "did:webvh:QmRoom:rooms.example");
+  await screen.click(radio(screen, "existing"));
+  await screen.type(field(screen, "Room DID"), "did:webvh:QmRoom:rooms.example");
   assert.match(screen.text(), /DID and the identifier of the key that signs for it/);
 });
 
@@ -163,7 +199,26 @@ test("an existing identity needs both halves before it can be used", async () =>
 test("nothing is written while a required field is empty", async () => {
   const { a, screen } = await mount({});
   await screen.click(screen.button("Create room"));
-  assert.deepEqual(a.calls.filter((c) => !c.type.includes("servers/list")), []);
+  assert.deepEqual(writes(a), []);
+});
+
+// `Number("two weeks")` is NaN, and NaN is what would have been sent.
+test("a retention that is not a whole number of days holds the button", async () => {
+  const { a, screen } = await mount({ [DIDS_CREATE]: MINTED });
+  await fillAll(screen);
+  await screen.type(field(screen, "Retention days"), "two weeks");
+  await screen.click(screen.button("Create room"));
+  assert.deepEqual(writes(a), []);
+  assert.match(screen.text(), /retention is a whole number of days/);
+});
+
+// Step three is valid on arrival — its defaults are fine. Ticking it beside two
+// unfinished steps reads as a form completed out of order.
+test("a step is not marked ready before the steps above it are", async () => {
+  const { screen } = await mount({});
+  assert.equal(screen.all('[aria-label="Step 3, ready"]').length, 0);
+  await fillAll(screen);
+  assert.equal(screen.all('[aria-label="Step 3, ready"]').length, 1);
 });
 
 // `open` means the host reads every record. That is a legitimate choice and a
@@ -171,14 +226,13 @@ test("nothing is written while a required field is empty", async () => {
 // read as "not restricted yet".
 test("choosing open says the host can read everything", async () => {
   const { screen } = await mount({});
-  const selects = screen.all("select");
-  await screen.select(selects[2]!, "open");
+  await screen.click(radio(screen, "open"));
   assert.match(screen.text(), /stores record bodies in the clear/);
 });
 
 // A hosting-server list that failed is not an agent with no servers registered.
 test("a failed server listing says so rather than offering an empty menu", async () => {
-  const a = agent({});
+  const a = agent({ [SERVICES]: AGENT_SERVICES });
   const screen = await render(
     h(CreateRoom, { parties: PARTIES, contexts: CONTEXTS, onCreated: () => {} } as never),
     {
@@ -195,13 +249,72 @@ test("a failed server listing says so rather than offering an empty menu", async
   assert.match(screen.text(), /failure to ask, not an agent with none registered/);
 });
 
+// ── The mediator ────────────────────────────────────────────────────────────
+//
+// It used to be a blank field under "MEDIATOR DID", which asked an operator to
+// go and find a DID their own agent already routes through. The agent says which
+// one; the form offers it.
+
+test("the agent's own mediator is offered and already chosen", async () => {
+  const { screen } = await mount({});
+  assert.match(screen.text(), new RegExp(AGENT_MEDIATOR));
+  assert.equal(radio(screen, AGENT_MEDIATOR).checked, true);
+  // DIDComm and TSP share it: one card naming both, not two cards that are the
+  // same choice.
+  assert.equal(screen.all(`input[type="radio"][value="${AGENT_MEDIATOR}"]`).length, 1);
+  assert.match(screen.text(), /routes DIDComm and TSP through it/);
+});
+
+test("a different mediator is one choice away, and it is what gets sent", async () => {
+  const { a, screen } = await mount({ [DIDS_CREATE]: MINTED, [REGISTER]: { roomId: MINTED.did, host: HOST_DID, epoch: 1 } });
+  await fillAll(screen);
+  await screen.click(radio(screen, "other"));
+  await screen.type(field(screen, "Room mediator DID"), "did:web:elsewhere.example");
+  await screen.click(screen.button("Create room"));
+
+  const mint = a.calls.find((c) => c.type.includes("dids/create"))!;
+  assert.equal(mint.payload.templateVars.MEDIATOR_DID, "did:web:elsewhere.example");
+});
+
+// `services/list` is admin-gated. A caller refused it is not looking at an agent
+// without a mediator, and must still be able to make a room.
+test("transports that cannot be read say so, and a typed mediator still works", async () => {
+  const { a, screen } = await mount({
+    [SERVICES]: () => {
+      throw new Error("forbidden");
+    },
+    [DIDS_CREATE]: MINTED,
+    [REGISTER]: { roomId: MINTED.did, host: HOST_DID, epoch: 1 },
+  });
+  assert.match(screen.text(), /could not be read \(forbidden\)/);
+  assert.match(screen.text(), /failure to ask, not an agent without one/);
+
+  await fillAll(screen);
+  await screen.type(field(screen, "Room mediator DID"), "did:web:typed.example");
+  await screen.click(screen.button("Create room"));
+  const mint = a.calls.find((c) => c.type.includes("dids/create"))!;
+  assert.equal(mint.payload.templateVars.MEDIATOR_DID, "did:web:typed.example");
+});
+
+// A switched-off transport's mediator is listed — it is still the agent's — but
+// choosing it for the operator would be choosing a path the agent is not
+// advertising.
+test("a mediator the agent is not advertising is offered but not preselected", async () => {
+  const { screen } = await mount({
+    [SERVICES]: { services: [{ kind: "didcomm", enabled: false, mediatorDid: AGENT_MEDIATOR }] },
+  });
+  assert.equal(radio(screen, AGENT_MEDIATOR).checked, false);
+  assert.match(screen.text(), /not advertising this one right now/);
+});
+
 // ── Minting the host ────────────────────────────────────────────────────────
 //
 // "Where do I get a host DID?" is the question this form provoked and did not
-// answer: it asks for one without saying that somebody has to mint it first.
-// The button answers it. What matters is that it mints the *host* — a different
-// template, a different service block — and that it does not quietly do the two
-// things that are somebody's decision rather than a form's.
+// answer, and the first answer — a quiet "Mint one" beside the field — was
+// missed by the person it was built for. What matters is that minting is a
+// choice in plain view, that it mints the *host* (a different template, a
+// different service block), and that it does not quietly do the two things that
+// are somebody's decision rather than a form's.
 
 const HOST_MINTED = {
   did: "did:webvh:QmNewHost:hosts.example",
@@ -214,19 +327,21 @@ const HOST_MINTED = {
   createdAt: "2026-09-10T10:00:00Z",
 };
 
-/** Open the host panel and fill it. Leaves the room half untouched. */
-const mintAHost = async (screen: Awaited<ReturnType<typeof mount>>["screen"]) => {
-  await screen.click(screen.button("Mint one"));
-  const selects = screen.all("select");
-  const inputs = screen.all("input").filter((el) => el.type !== "radio");
-  // Indexed from the end: the panel renders last, and counting forwards would
-  // pin this test to how many fields the room half happens to have.
-  await screen.select(selects.at(-2)!, "openvtc"); // host context
-  await screen.select(selects.at(-1)!, "webvh-1"); // hosting server
-  await screen.type(inputs.at(-2)!, "https://host.example"); // host url
-  await screen.type(inputs.at(-1)!, "did:web:mediator.example"); // host mediator
+/** Choose to mint a host and fill its fields. Leaves the room half untouched,
+ *  so the host's context and server have nothing to seed from. */
+const mintAHost = async (screen: Screen) => {
+  await screen.click(radio(screen, "mint-host"));
+  await screen.select(field(screen, "Host context"), "openvtc");
+  await screen.select(field(screen, "Host hosting server"), "webvh-1");
+  await screen.type(field(screen, "Host URL"), "https://host.example");
   await screen.click(screen.button("Mint host DID"));
 };
+
+test("minting a host is offered beside pasting one, before anything is pressed", async () => {
+  const { screen } = await mount({});
+  assert.equal(radio(screen, "mint-host").checked, false);
+  assert.match(screen.text(), /Mint a DID for a new host/);
+});
 
 test("the host is minted from the room-host template, not the room one", async () => {
   const { a, screen } = await mount({ [DIDS_CREATE]: HOST_MINTED });
@@ -241,19 +356,34 @@ test("the host is minted from the room-host template, not the room one", async (
   // later as "the room does not work".
   assert.equal(mint.payload.templateVars.WEBVH_SERVER, "webvh-1");
   assert.equal(mint.payload.templateVars.URL, "https://host.example");
-  assert.equal(mint.payload.templateVars.MEDIATOR_DID, "did:web:mediator.example");
+  assert.equal(mint.payload.templateVars.MEDIATOR_DID, AGENT_MEDIATOR);
+});
+
+// Seeded from the room's choice, not from the agent's default: an operator who
+// picked a different mediator for the room is describing where this deployment
+// lives, and the host is almost always beside it.
+test("the host's mediator follows the room's choice", async () => {
+  const { a, screen } = await mount({ [DIDS_CREATE]: HOST_MINTED });
+  await screen.click(radio(screen, "other"));
+  await screen.type(field(screen, "Room mediator DID"), "did:web:elsewhere.example");
+  await mintAHost(screen);
+
+  const mint = a.calls.find((c) => c.type.includes("dids/create"))!;
+  assert.equal(mint.payload.templateVars.MEDIATOR_DID, "did:web:elsewhere.example");
 });
 
 test("the minted host DID lands in the field, so the room can be created with it", async () => {
   const { screen } = await mount({ [DIDS_CREATE]: HOST_MINTED });
   await mintAHost(screen);
 
-  const inputs = screen.all("input").filter((el) => el.type !== "radio");
   assert.equal(
-    inputs[1]!.value,
+    field(screen, "Host DID").value,
     HOST_MINTED.did,
     "minting that left the operator to copy the DID by hand would not have removed the step",
   );
+  // And it says what is still to do, because a minted identity is not a host.
+  assert.match(screen.text(), /Host DID minted/);
+  assert.match(screen.text(), /application role/);
 });
 
 // The button mints an identity. It does not enrol the host and does not grant
@@ -264,10 +394,5 @@ test("minting a host writes exactly one task, and it is not a grant", async () =
   const { a, screen } = await mount({ [DIDS_CREATE]: HOST_MINTED });
   await mintAHost(screen);
 
-  const writes = a.calls.map((c) => c.type).filter((t) => !t.includes("servers/list"));
-  assert.deepEqual(
-    writes.map((t) => t.replace("https://trusttasks.org/spec/", "")),
-    [DIDS_CREATE],
-    "one mint, no acl/grant, no rooms/owner/register",
-  );
+  assert.deepEqual(writes(a), [DIDS_CREATE], "one mint, no acl/grant, no rooms/owner/register");
 });
