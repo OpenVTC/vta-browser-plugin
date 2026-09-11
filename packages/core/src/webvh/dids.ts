@@ -100,6 +100,16 @@ export interface WebvhDidCreateParams extends WebvhCall {
   /** Allow the DID to move location later. Cannot be added afterwards. */
   portable?: boolean;
   /**
+   * Whether this DID becomes its context's own identity (`ctx.did`).
+   *
+   * **Absent is not "no".** The agent defaults it to `true` and overwrites
+   * whatever the context acted as before, so a caller that says nothing replaces
+   * the context's identity with every DID it mints. That matters wherever
+   * something serves *as* its context's DID — a room-host fetches that DID's
+   * keys at startup — so a DID minted beside another one must say `false`.
+   */
+  setPrimary?: boolean;
+  /**
    * Render the document from a stored or built-in DID template.
    *
    * The reason a caller reaches for this rather than composing a document: a
@@ -151,6 +161,10 @@ export async function webvhDidCreate(
     ...(rest.url ? { url: rest.url } : {}),
     ...(rest.pathMode ? { pathMode: rest.pathMode } : {}),
     ...(rest.portable !== undefined ? { portable: rest.portable } : {}),
+    // `!== undefined` for the same reason as `portable`: `false` is the caller
+    // keeping the context's identity, and dropping it lets the agent's `true`
+    // default replace it.
+    ...(rest.setPrimary !== undefined ? { setPrimary: rest.setPrimary } : {}),
     ...(rest.template ? { template: rest.template } : {}),
     ...(rest.templateContext ? { templateContext: rest.templateContext } : {}),
     ...(rest.templateVars ? { templateVars: rest.templateVars } : {}),
