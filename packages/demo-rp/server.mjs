@@ -42,6 +42,38 @@ const SESSION_COOKIE_NAME = "demo_session";
 // side authority and the floor.
 const SESSION_TTL_MS = 60 * 60 * 1000;
 
+// ─── CORS allow-list ───────────────────────────────────────────────
+//
+// An exact list, never a reflection.
+//
+// This used to echo whatever `Origin` arrived into
+// `Access-Control-Allow-Origin` and pair it with
+// `Access-Control-Allow-Credentials: true` — the one combination CORS has no
+// wildcard for, because it means "this specific origin may read a response
+// sent with the visitor's cookies". Reflecting it grants that to every origin
+// that asks, so a page on any site could read `/me` for a signed-in visitor.
+// `SameSite=Lax` on the session cookie is what kept that from being worse, and
+// a cookie attribute is not where the decision belongs.
+//
+// Allowed: the demo's own origin (filled in below once the socket is bound —
+// `PORT=0` is a real way to run this, and the test does), plus anything named
+// in `ALLOWED_ORIGINS` as a comma-separated list of exact origins. Anything
+// else gets no allow-origin header at all, which is what makes the browser
+// refuse the read.
+const EXTRA_ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter((o) => o.length > 0);
+
+/** The demo's own origin(s). Empty until `listen` reports the bound port. */
+let selfOrigins = [];
+/** The port actually bound — `PORT` unless `PORT=0` asked the OS to pick. */
+let boundPort = PORT;
+
+function isAllowedOrigin(origin) {
+  return selfOrigins.includes(origin) || EXTRA_ALLOWED_ORIGINS.includes(origin);
+}
+
 /** @type {Map<string, { username: string, expiresAt: number }>} */
 const sessions = new Map();
 
@@ -103,7 +135,7 @@ function homePage(req) {
     : `<p class="warn">Not logged in.</p>
        <ol>
          <li>Open the VTA wallet, add a <code>password</code> vault entry pinned to this origin.</li>
-         <li>Set <code>loginConfig</code> to <code>{ loginUrl: "http://${HOST}:${PORT}/api/login", format: "json" }</code>.</li>
+         <li>Set <code>loginConfig</code> to <code>{ loginUrl: "http://${HOST}:${boundPort}/api/login", format: "json" }</code>.</li>
          <li>Click the wallet's <strong>🔑 Use</strong> button.</li>
          <li>The wallet injects the session cookie; refresh this page.</li>
        </ol>
@@ -260,13 +292,17 @@ function handleLogout(req, res) {
 // ─── Router ────────────────────────────────────────────────────────
 
 const server = createServer(async (req, res) => {
-  // Permissive CORS — the wallet extension's content script lives in
-  // its own origin and may issue cross-origin requests during the
-  // proxy-login round-trip the VTA itself initiates. Since the demo
-  // doesn't ship any sensitive endpoints, allow any origin with
-  // credentials. Tighten in production.
+  // CORS, from the allow-list built at the top of this file.
+  //
+  // `Vary: Origin` goes out on every response, matched or not: the headers
+  // below depend on the request's `Origin`, so a cache that ignored it would
+  // hand the allowed origin's answer to the next caller. Credentials are only
+  // ever paired with an origin that matched, and `*` is never sent — the two
+  // together are refused by every browser anyway, and a demo that appears to
+  // get away with it is the thing someone copies into production.
+  res.setHeader("vary", "Origin");
   const origin = req.headers.origin;
-  if (origin) {
+  if (origin && isAllowedOrigin(origin)) {
     res.setHeader("access-control-allow-origin", origin);
     res.setHeader("access-control-allow-credentials", "true");
     res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
@@ -302,8 +338,28 @@ const server = createServer(async (req, res) => {
   res.end("not found");
 });
 
+// Loopback spellings of one host. A browser treats them as different origins;
+// the operator reaches the same socket through any of them, so a loopback bind
+// allows all three rather than whichever one they happened to type.
+const LOOPBACK_HOSTS = ["127.0.0.1", "::1", "localhost"];
+
 server.listen(PORT, HOST, () => {
-  console.log(`[demo-rp] listening on http://${HOST}:${PORT}`);
+  // `server.address()`, not `PORT`: `PORT=0` asks the OS for a free port,
+  // which is how the test boots this without fighting whatever holds 4040.
+  boundPort = server.address().port;
+  selfOrigins = LOOPBACK_HOSTS.includes(HOST)
+    ? [
+        `http://127.0.0.1:${boundPort}`,
+        `http://localhost:${boundPort}`,
+        `http://[::1]:${boundPort}`,
+      ]
+    : [`http://${HOST}:${boundPort}`];
+  console.log(`[demo-rp] listening on http://${HOST}:${boundPort}`);
+  console.log(
+    `[demo-rp] CORS allow-list: ${[...selfOrigins, ...EXTRA_ALLOWED_ORIGINS].join(", ")}`,
+  );
   console.log(`[demo-rp] demo credentials: ${DEMO_USERNAME} / ${DEMO_PASSWORD}`);
-  console.log(`[demo-rp] vault entry loginConfig.loginUrl: http://${HOST}:${PORT}/api/login`);
+  console.log(
+    `[demo-rp] vault entry loginConfig.loginUrl: http://${HOST}:${boundPort}/api/login`,
+  );
 });
