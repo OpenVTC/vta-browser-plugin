@@ -10,6 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { crc24, crc24ToBytes, decodeArmor, buildChunkAad } from "../dist/provision/index.js";
+import { MAX_ARMOR_INPUT_CHARS } from "../dist/provision/armor.js";
 
 // CRC24 init value is 0xB704CE. Empty input → no bytes XOR'd → result = init.
 test("crc24: empty input returns init", () => {
@@ -106,6 +107,22 @@ test("decodeArmor: missing Bundle-Id is rejected", () => {
   const ok = buildArmorBlock(raw, "00000000000000000000000000000000");
   const bad = ok.replace(/Bundle-Id:[^\n]+\n/, "");
   assert.throws(() => decodeArmor(bad), /missing Bundle-Id/);
+});
+
+test("decodeArmor: an input over the cap is refused", () => {
+  // The parser runs before anything has authenticated these bytes — the HPKE
+  // open that does comes afterwards — so the input size is bounded rather than
+  // trusted. Everything in the decoder is linear in the input and allocates per
+  // block, so the failure without a cap is work, not a wrong answer.
+  const raw = new Uint8Array([42]);
+  const ok = buildArmorBlock(raw, "00000000000000000000000000000000");
+  const oversized = `${ok}\n${"A".repeat(MAX_ARMOR_INPUT_CHARS)}`;
+  assert.throws(() => decodeArmor(oversized), /over the \d+ limit/);
+
+  // And the cap is nowhere near a real block, so this is not a test that would
+  // pass against a decoder that had stopped working.
+  assert.equal(decodeArmor(ok).length, 1);
+  assert.ok(MAX_ARMOR_INPUT_CHARS > 1024 * 1024, "a cap this low would refuse real bundles");
 });
 
 test("buildChunkAad: stable serialisation matches Rust ChunkPlaintext::aad", () => {

@@ -41,8 +41,30 @@ interface ParsedBlock {
   sealedBytes: Uint8Array;
 }
 
+/**
+ * Ceiling on one `decodeArmor` input, in characters — armor is ASCII, so for
+ * anything well-formed that is bytes.
+ *
+ * 4 MiB of armor is roughly 3 MiB of sealed bytes, far above any real bundle:
+ * a bundle is chunked precisely so it need not arrive as a single string. The
+ * bound exists because everything below is linear in the input and allocates a
+ * line array plus a base64 buffer per block, and this parser runs on bytes
+ * nobody has authenticated yet — the HPKE open that establishes that comes
+ * afterwards, over AAD built from these headers. A pasted 200 MB "bundle"
+ * should be a rejection, not a wedged worker. Raising this is one line;
+ * having no bound at all is not.
+ */
+export const MAX_ARMOR_INPUT_CHARS = 4 * 1024 * 1024;
+
 /** Decode armored input into one or more SealedBundles, grouped by Bundle-Id. */
 export function decodeArmor(input: string): SealedBundle[] {
+  // Before the split, not inside the loop: the split is itself proportional to
+  // the input, so a check after it has already done the work.
+  if (input.length > MAX_ARMOR_INPUT_CHARS) {
+    throw new Error(
+      `armor: input is ${input.length} characters, over the ${MAX_ARMOR_INPUT_CHARS} limit`,
+    );
+  }
   const lines = input.split(/\r?\n/);
   const bundles: SealedBundle[] = [];
 
