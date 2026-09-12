@@ -8,6 +8,35 @@ For history before this file, see `git log` on `packages/tsp-js`.
 
 ## [Unreleased]
 
+### Added
+
+- **Pluggable key custody for HPKE-Auth and Ed25519 signing.** Two capability
+  interfaces — `KeyAgreement` (the raw X25519 ECDH half of AuthEncap/AuthDecap)
+  and `SigningKey` — let a backend that never exports a private key drive
+  sealing, opening and signing: `hpke.sealWithKeyAgreement`,
+  `hpke.openWithKeyAgreement` and `sign.signWithSigningKey`, plus
+  `authEncapWithKeyAgreement` / `authDecapWithKeyAgreement` on the internal
+  module for test-vector verification.
+
+  Purely additive. Every existing export keeps its signature, its output and
+  its sync/async shape; `pack`/`unpack` still take raw keys (a capability-driven
+  pair is the next increment); base mode has no local key to hold and so needs
+  no variant.
+
+  This targets non-exporting *software* custody — an Askar-backed KMS, say. It
+  is **not** an enclave claim: the suite pins DHKEM(X25519, HKDF-SHA256), and
+  Secure Enclave, StrongBox and mainstream cloud KMS ECDH are all
+  NIST-curve-only, so none of them can perform this DH at all. Ed25519 signing
+  is a separate question, and Android Keystore has supported it since API 33.
+
+  A capability is foreign code, so its outputs are validated on every call:
+  32-byte lengths, and RFC 9180 §4.1's mandatory all-zero-DH abort. That abort
+  lives in `dh()` on the raw path, and a backend whose DH is opaque has no
+  reason to reject a low-order peer key on our behalf — leaving it unchecked
+  would make HPKE-Auth's sender authentication forgeable by a peer publishing a
+  low-order key. A signature is likewise verified under the capability's own
+  `publicKey` before it is returned.
+
 ## [0.2.0] - 2026-08-17
 
 ### Changed

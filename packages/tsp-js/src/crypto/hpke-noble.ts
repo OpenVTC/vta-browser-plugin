@@ -43,6 +43,7 @@ const MODE_AUTH = 0x02;
 const NSECRET = 32; // DHKEM(X25519) shared secret
 const NK = 32; // ChaCha20Poly1305 key
 const NN = 12; // ChaCha20Poly1305 nonce
+const NX25519 = 32; // X25519 public key, and its DH output
 
 const HPKE_V1 = new TextEncoder().encode("HPKE-v1");
 const EMPTY = new Uint8Array(0);
@@ -221,10 +222,48 @@ export async function openBase(
  * `publicKey` is the identity's own public key; `agree` returns the RAW ECDH
  * output, no KDF applied — this is exactly the static-key half of AuthEncap/
  * AuthDecap's DH, nothing more.
+ *
+ * Both members are validated on every call — see `checkedAgree`.
  */
 export interface KeyAgreement {
   publicKey: Uint8Array;
   agree(peerPublicKey: Uint8Array): Promise<Uint8Array>;
+}
+
+// A `KeyAgreement` is foreign code, so its two outputs get the validation
+// noble gives a raw key. Two distinct reasons, and the first is the sharp one:
+//
+// §4.1 makes the all-zero abort MANDATORY for X25519, and on the raw path
+// `dh()` is the only place it happens. A backend whose DH is opaque — Askar, a
+// `crypto_scalarmult`-style primitive, a KMS's raw ECDH — has no reason to
+// reject a low-order peer key on our behalf, so taking its output unchecked
+// moves the whole guarantee into the backend. That matters because `enc` is
+// attacker-chosen and `senderPk` comes from the peer's own DID document: with
+// both DH terms of AuthDecap derived from low-order points, `shared_secret`
+// becomes a constant the attacker can compute, and HPKE-Auth's sender
+// authentication — TSP's only sender proof for the ciphertext — is forgeable.
+//
+// The lengths are the quieter half: a backend handing back a DER- or
+// multibase-wrapped secret, or a `publicKey` that is the identity's Ed25519
+// key rather than its X25519 one, otherwise produces well-formed ciphertext
+// that no recipient can open, failing at the AEAD tag with nothing pointing
+// back at the adapter.
+async function checkedAgree(ka: KeyAgreement, peerPublicKey: Uint8Array): Promise<Uint8Array> {
+  const shared = await ka.agree(peerPublicKey);
+  if (shared.length !== NX25519) {
+    throw new Error(`tsp: KeyAgreement.agree returned ${shared.length} bytes, expected ${NX25519}`);
+  }
+  // Same message as `dh()`: the two paths must be indistinguishable here.
+  if (shared.every((b) => b === 0)) throw new Error("tsp: DH produced the all-zero shared secret");
+  return shared;
+}
+
+/** The capability's own public key, which goes into `kem_context` verbatim. */
+function checkedPublicKey(ka: KeyAgreement): Uint8Array {
+  if (ka.publicKey.length !== NX25519) {
+    throw new Error(`tsp: KeyAgreement.publicKey is ${ka.publicKey.length} bytes, expected ${NX25519}`);
+  }
+  return ka.publicKey;
 }
 
 /**
@@ -240,11 +279,12 @@ export async function authEncapWithKeyAgreement(
   senderKeyAgreement: KeyAgreement,
   unsafe?: UnsafeFixedEphemeral,
 ): Promise<{ sharedSecret: Uint8Array; enc: Uint8Array }> {
+  const senderPk = checkedPublicKey(senderKeyAgreement);
   const skE = unsafe?.__unsafeFixedEphemeralSk ?? x25519.utils.randomSecretKey();
   const enc = x25519.getPublicKey(skE);
-  const staticDh = await senderKeyAgreement.agree(recipientPk);
+  const staticDh = await checkedAgree(senderKeyAgreement, recipientPk);
   const dhBytes = cat(dh(skE, recipientPk), staticDh);
-  const kemContext = cat(enc, recipientPk, senderKeyAgreement.publicKey);
+  const kemContext = cat(enc, recipientPk, senderPk);
   return { sharedSecret: extractAndExpand(dhBytes, kemContext), enc };
 }
 
@@ -258,9 +298,16 @@ export async function authDecapWithKeyAgreement(
   recipientKeyAgreement: KeyAgreement,
   senderPk: Uint8Array,
 ): Promise<Uint8Array> {
-  const dhWithEnc = await recipientKeyAgreement.agree(enc);
-  const dhWithSender = await recipientKeyAgreement.agree(senderPk);
-  const kemContext = cat(enc, recipientKeyAgreement.publicKey, senderPk);
+  const recipientPk = checkedPublicKey(recipientKeyAgreement);
+  // Both terms are the same static key against a different peer key, so the
+  // two calls are independent. Awaiting them in sequence doubles decap latency
+  // against exactly the network- or IPC-backed custody this interface exists
+  // for, for no ordering the KEM cares about.
+  const [dhWithEnc, dhWithSender] = await Promise.all([
+    checkedAgree(recipientKeyAgreement, enc),
+    checkedAgree(recipientKeyAgreement, senderPk),
+  ]);
+  const kemContext = cat(enc, recipientPk, senderPk);
   return extractAndExpand(cat(dhWithEnc, dhWithSender), kemContext);
 }
 
