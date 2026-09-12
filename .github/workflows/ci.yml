@@ -33,7 +33,7 @@ jobs:
       # runs here, in a job that has this repo's token in its environment. The
       # SHA is what runs; the comment is what a human reads. `dependabot.yml`
       # rewrites the two together, which is what keeps a pin from going stale.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Nothing in this workflow writes to the repository. The default
           # leaves the job's token in `.git/config`, where every later step can
@@ -294,7 +294,7 @@ jobs:
   actions-are-pinned:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
