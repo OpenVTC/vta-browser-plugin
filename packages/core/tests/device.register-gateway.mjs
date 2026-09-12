@@ -125,3 +125,42 @@ test("a non-2xx that is NOT a trust-task document still reports status and body"
     /failed \(502\): upstream exploded/,
   );
 });
+
+// ── The gateway URL is the trust decision ────────────────────────────────────
+
+test("a gateway that is not https on a public host is never contacted", async () => {
+  // `register` is unauthenticated, so whatever this URL names receives the
+  // device's push endpoint and auth secret. The URL is operator config, which
+  // makes it a typo away from a plain-http hop or a host on the local network —
+  // and the assertion that matters is that nothing was *sent*, not merely that
+  // the call rejected.
+  for (const gatewayUrl of [
+    "http://gw.example", //     plain http
+    "https://localhost:8443", //  this machine
+    "https://10.0.0.7", //        local network
+    "https://gw.internal", //     local-only name
+    "https://169.254.169.254", // cloud metadata
+    "gw.example", //              not a URL
+  ]) {
+    let contacted = false;
+    const fetchStub = async () => {
+      contacted = true;
+      return jsonResponse({});
+    };
+
+    await assert.rejects(
+      () =>
+        registerPushChannel({
+          gatewayUrl,
+          registration: REGISTRATION,
+          controllerVtaDid: "did:webvh:example:vta",
+          fetch: fetchStub,
+        }),
+      /push gateway URL/,
+      `${gatewayUrl} must be refused`,
+    );
+    assert.equal(contacted, false, `${gatewayUrl} must not be contacted`);
+  }
+  // The paired positive is the first test in this file: an https gateway on a
+  // public host still registers and returns its handle.
+});

@@ -18,7 +18,7 @@
 // inside it. Changing the inbox now means re-registering the address with
 // whoever routes to you — not a new identity.
 
-import { IndexedDBKVStore } from "@openvtc/pnm-core";
+import { assertPublicHttpsUrl, IndexedDBKVStore } from "@openvtc/pnm-core";
 
 /** Who put an inbox mediator there. Absent on records written before this
  *  existed — treated as "nobody is on record", which is the truth. */
@@ -253,6 +253,15 @@ export async function getSettings(): Promise<WalletSettings> {
 
 /** Merge a partial update into the stored settings. */
 export async function setSettings(patch: Partial<WalletSettings>): Promise<void> {
+  // The push gateway is the one setting here that is a network target: the
+  // service worker POSTs `push/register` to it unauthenticated, with no consent
+  // prompt in front of it and this device's push endpoint and auth secret in
+  // the body. Judge it as it is WRITTEN, where the Settings page has an
+  // operator to show the error to — a background wake hours later has only the
+  // console. `registerPushChannel` checks it again before sending.
+  if (patch.pushGatewayUrl !== undefined) {
+    assertPublicHttpsUrl(patch.pushGatewayUrl, { what: "push gateway URL" });
+  }
   // Merged onto the STORED record, not the defaulted one. See `storedSettings`.
   const stored = await storedSettings();
   await new IndexedDBKVStore().put(SETTINGS_KEY, { ...stored, ...patch });

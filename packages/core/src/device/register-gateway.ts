@@ -15,6 +15,7 @@
 import type { WakeHandle } from "./set-wake.js";
 import { isTrustTaskErrorType } from "../vta/protocol.js";
 import { withFetchTimeout } from "../http/timeout-fetch.js";
+import { assertPublicHttpsUrl } from "../http/public-endpoint.js";
 
 // push/register/0.2 — the payload is field-identical to 0.1 (no enum values),
 // so this is a pure version-string bump. The gateway accepts both 0.1 and 0.2
@@ -56,6 +57,13 @@ export interface RegisterPushChannelOptions {
 export async function registerPushChannel(
   opts: RegisterPushChannelOptions,
 ): Promise<WakeHandle> {
+  // `push/register` is unauthenticated, so this URL *is* the trust decision:
+  // whatever it names receives this device's push endpoint and auth secret.
+  // https on a public host, or nothing is sent. Checked here as well as where
+  // the setting is written, because a record stored before that check existed
+  // still arrives at this line.
+  assertPublicHttpsUrl(opts.gatewayUrl, { what: "push gateway URL" });
+
   const f = withFetchTimeout(opts.fetch);
   const base = opts.gatewayUrl.replace(/\/+$/, "");
 
