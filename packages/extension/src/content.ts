@@ -72,6 +72,15 @@ const RUNTIME_TYPE_BY_METHOD: Record<BridgeMethod, string> = {
 // ─── 2. Relay provider → background → provider. ───
 window.addEventListener("message", (event: MessageEvent) => {
   if (event.source !== window) return;
+  // Same origin as well as same window. `event.source === window` already means
+  // the sender is code running in this frame, so on its own this line closes
+  // nothing — it is here because "the origin is never checked" should not be
+  // something a reader has to reason their way out of, and because the two
+  // checks would fail for different reasons if a later change loosened either.
+  // Either way the origin the background acts on is never this one: it
+  // overwrites the body's `origin` with the browser-attested `sender.origin`
+  // and rejects a page-facing message that has none.
+  if (event.origin !== window.origin) return;
   const req = event.data as InpageRequest | undefined;
   if (!req || req.source !== INPAGE_SOURCE) return;
 
