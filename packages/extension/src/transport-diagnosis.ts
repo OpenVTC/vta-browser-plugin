@@ -41,13 +41,17 @@
 // observed rather than asserting a cause, and every remediation it suggests
 // is safe to attempt if the guess is wrong.
 
-import { isFetchTimeout } from "@openvtc/pnm-core";
+import { isBlockedEndpointError, isFetchTimeout } from "@openvtc/pnm-core";
 
 /**
  * Stable causes a transport failure is classified into. Match on these —
  * never on `detail`, which is prose for a human and may be reworded (R3.7).
  */
 export const TRANSPORT_DIAGNOSIS = {
+  /** Refused by this wallet before anything was dialed: the endpoint named a
+   *  host that is not on the public internet. Not a connectivity failure —
+   *  nothing was contacted, so no probe result applies. */
+  blockedEndpoint: "mediator/blocked-endpoint",
   /** The host answered an opaque probe but refused the real request. Almost
    *  always a CORS allowlist that does not carry this extension's origin. */
   originNotAllowed: "mediator/origin-not-allowed",
@@ -96,6 +100,30 @@ export function classifyTransportFailure(args: {
   const { error, reachable, host, origin } = args;
   const where = host ? ` at ${host}` : "";
 
+  // First, and on the code rather than the class. Two guards carry this one
+  // code — the library's, over the endpoints a mediator's DID document
+  // advertises and a VTA's REST base, and this package's, over the host a
+  // did:webvh names — and an `instanceof` would miss whichever it was not
+  // written against (R3.7).
+  //
+  // Nothing was dialed, so `reachable` says nothing here and is not consulted:
+  // a probe is about a host that answered, and this endpoint was never asked.
+  if (isBlockedEndpointError(error)) {
+    const named = error.host ?? host;
+    return {
+      code: TRANSPORT_DIAGNOSIS.blockedEndpoint,
+      detail:
+        `This wallet refused the endpoint${named ? ` ${named}` : ""} because it names a host ` +
+        `that is not on the public internet, so nothing was contacted.`,
+      remediation:
+        `Check the endpoints in the mediator's DID document. A wallet will not dial ` +
+        `loopback, a private, link-local or carrier-NAT address, or a local-only name ` +
+        `such as \`localhost\` — whoever operates this mediator has to advertise the ` +
+        `address it is reachable at from the internet. Only a development build of this ` +
+        `extension talks to a local stack.`,
+    };
+  }
+
   if (isFetchTimeout(error)) {
     return {
       code: TRANSPORT_DIAGNOSIS.timeout,
@@ -108,7 +136,7 @@ export function classifyTransportFailure(args: {
   if (!(error instanceof TypeError)) {
     return {
       code: TRANSPORT_DIAGNOSIS.rejected,
-      detail: `The mediator${where} answered and refused the request: ${messageOf(error)}`,
+      detail: `The mediator${where} answered and refused the request: ${refusalOf(error)}`,
     };
   }
 
@@ -192,4 +220,23 @@ export function originOf(url: string | undefined): string | undefined {
 
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * What a mediator's refusal amounts to, for someone reading the pane.
+ *
+ * `@openvtc/vti-didcomm-js` 0.8 keeps the response body OUT of the message —
+ * from a hostile endpoint it is attacker-chosen text, and these strings end up
+ * in logs, a pasted self-test report and the UI — and puts it on `err.body`
+ * with the HTTP status on `err.status`. So the status is read from the field
+ * rather than scraped back out of the sentence (R3.7), and the body is quoted
+ * as a bounded, clearly-delimited excerpt beside the message rather than in
+ * place of it.
+ */
+function refusalOf(err: unknown): string {
+  const { status, body } = err as { status?: unknown; body?: unknown };
+  const code = typeof status === "number" ? ` (HTTP ${status})` : "";
+  const text = typeof body === "string" ? body.trim() : "";
+  const excerpt = text ? ` — it said: ${JSON.stringify(text.slice(0, 200))}` : "";
+  return `${messageOf(err)}${code}${excerpt}`;
 }

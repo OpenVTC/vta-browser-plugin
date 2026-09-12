@@ -111,6 +111,73 @@ test("a probe that cannot run says so rather than blaming the host", async () =>
   assert.equal(await probeReachable("https://mediator.example/auth", fake), "unprobed");
 });
 
+test("an endpoint refused for naming a non-public host is not a connectivity story", () => {
+  // What `@openvtc/vti-didcomm-js` 0.8 throws when a mediator's DID document
+  // advertises `https://127.0.0.1:9099`. Structurally it is neither a
+  // `TypeError` nor a timeout, so before this branch existed it fell through to
+  // "the mediator answered and refused the request" — a sentence about a host
+  // that was never contacted, and one that sends the reader to look at a
+  // mediator's ACL instead of at the address in its document.
+  const blocked = Object.assign(
+    new Error(
+      "net-guard: mediator REST endpoint https://127.0.0.1:9099/ refused: 127.0.0.1 is not a public address (set allowPrivate for local development)",
+    ),
+    { code: "E_BLOCKED_ENDPOINT", reason: "private_address", host: "127.0.0.1" },
+  );
+
+  const d = classifyTransportFailure({ error: blocked, reachable: "unprobed" });
+  assert.equal(d.code, TRANSPORT_DIAGNOSIS.blockedEndpoint);
+  // The host, so the reader can see which address was refused.
+  assert.match(d.detail, /127\.0\.0\.1/);
+  assert.match(d.detail, /not on the public internet/);
+  // And that nothing was dialed, which is the part a person acts on.
+  assert.match(d.detail, /nothing was contacted/);
+});
+
+test("a probe that happened to land does not re-classify a refusal", () => {
+  // `reachable: "reachable"` can only be about some other request; this
+  // endpoint was never asked. Repeating it here would turn a wallet-side
+  // refusal into an accusation about the mediator's CORS config.
+  const blocked = Object.assign(new Error("net-guard: refused"), {
+    code: "E_BLOCKED_ENDPOINT",
+    reason: "private_name",
+    host: "mediator.local",
+  });
+  const d = classifyTransportFailure({
+    error: blocked,
+    reachable: "reachable",
+    host: "https://mediator.local",
+    origin: "chrome-extension://abc",
+  });
+  assert.equal(d.code, TRANSPORT_DIAGNOSIS.blockedEndpoint);
+  assert.doesNotMatch(d.remediation ?? "", /cors_allow_origin/);
+});
+
+test("response detail is read from the error's fields, not its sentence", () => {
+  // 0.8 keeps an attacker-chosen body out of the message — these strings reach
+  // logs, the pasted self-test report and the pane — and puts it on `err.body`
+  // with the status on `err.status`. The pane still has to be able to show
+  // both, so they are read from the fields rather than scraped back out of the
+  // message (R3.7).
+  const refused = Object.assign(
+    new Error("mediator-auth: 502 from https://mediator.example/authenticate"),
+    { status: 502, body: "upstream is down" },
+  );
+  const d = classifyTransportFailure({ error: refused, reachable: "reachable" });
+  assert.equal(d.code, TRANSPORT_DIAGNOSIS.rejected);
+  assert.match(d.detail, /HTTP 502/);
+  assert.match(d.detail, /upstream is down/);
+});
+
+test("a long body is excerpted rather than pasted whole", () => {
+  const refused = Object.assign(new Error("mediator-auth: non-JSON body"), {
+    status: 200,
+    body: "x".repeat(5_000),
+  });
+  const d = classifyTransportFailure({ error: refused, reachable: "reachable" });
+  assert.ok(d.detail.length < 500, `detail was ${d.detail.length} characters`);
+});
+
 test("originOf keeps the scheme and drops the path", () => {
   assert.equal(originOf("https://mediator.example/mediator/v1/authenticate"), "https://mediator.example");
   assert.equal(originOf("not a url"), undefined);
