@@ -30,7 +30,8 @@
 
 import { resolve as vtiResolve } from "@openvtc/vti-didcomm-js";
 
-import { didMethod } from "./verify.js";
+import { assertResolvableWebvhHost } from "./egress-guard.js";
+import { didMethod, type ResolveDidOptions } from "./verify.js";
 
 export interface DeriveSigningKeyIdResult {
   /** The DID the caller asked us to derive for. Echoed for symmetry. */
@@ -49,8 +50,12 @@ export interface DeriveSigningKeyIdResult {
 
 /** Derive the verification-method id (`signingKeyId`) candidates from
  *  the given DID. Never throws — failures land as `candidates: []` +
- *  an `error` string. */
-export async function deriveSigningKeyId(did: string): Promise<DeriveSigningKeyIdResult> {
+ *  an `error` string. A did:webvh whose host is local-only or not a
+ *  public address is refused before anything is fetched. */
+export async function deriveSigningKeyId(
+  did: string,
+  opts: ResolveDidOptions = {},
+): Promise<DeriveSigningKeyIdResult> {
   const method = didMethod(did);
   if (method === "key") {
     // did:key:zXxx → did:key:zXxx#zXxx. The multibase tag (after
@@ -65,9 +70,12 @@ export async function deriveSigningKeyId(did: string): Promise<DeriveSigningKeyI
     return { did, candidates: [], error: "Unrecognised DID method" };
   }
   // did:peer, did:webvh: full resolution. did:peer is offline; webvh
-  // hits the network and verifies the log.
+  // hits the network and verifies the log — at a host the DID's author
+  // chose, so the host is judged first.
   try {
-    const resolution = (await vtiResolve(did, {})) as {
+    if (method === "webvh") assertResolvableWebvhHost(did);
+    const resolve = opts.resolveDid ?? ((d: string) => vtiResolve(d, {}));
+    const resolution = (await resolve(did)) as {
       didDocument?: {
         id?: string;
         authentication?: Array<string | { id?: string }>;

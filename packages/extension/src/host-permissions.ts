@@ -36,6 +36,10 @@
 //    control that silently degrades is worse than one that isn't there.
 //    A did:webvh host behind a restrictive CORS policy is the known gap —
 //    it surfaces as "unresolved" in the prompt, which fails closed.
+//    Because no grant stands in the way, the host a did:webvh names is
+//    judged in core before anything is fetched: local-only names and
+//    non-public addresses are refused (`core/src/did/egress-guard.ts`) and
+//    surface the same way.
 //  - **Mediator** — but only half of it, and the half that is exempt is not
 //    the half that fails. The WebSocket upgrade is not subject to CORS; the
 //    authentication handshake that must precede it is two ordinary `fetch`
