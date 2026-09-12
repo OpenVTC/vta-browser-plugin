@@ -281,7 +281,7 @@ jobs:
       # and the zip is identical across the Node matrix.
       - name: Upload Web Store zip
         if: matrix.node == '26'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vta-wallet-extension
           path: packages/extension/release/*.zip
