@@ -217,6 +217,7 @@ import {
   displayHostFor,
   hasOriginPermission,
 } from "./host-permissions.js";
+import { vetEgressUrl } from "./proxy-url.js";
 import { ConsentReplayLedger, replayKey } from "./consent-replay.js";
 
 /** Consent-gated requests awaiting their one exempt replay. In-memory by
@@ -1566,6 +1567,9 @@ export class HostPermissionError extends Error {
 }
 
 async function proxyFetch(url: string, init: RequestInit): Promise<Response> {
+  // Judged before the grant is checked — see `proxy-url.ts` for what that
+  // covers and why it runs first.
+  vetEgressUrl(url);
   // Host grants are per-origin and requested just-in-time from a UI context
   // (host-permissions.ts). A service worker cannot prompt, so an ungranted
   // origin fails fast with a code the popup knows how to act on — rather
@@ -1576,6 +1580,14 @@ async function proxyFetch(url: string, init: RequestInit): Promise<Response> {
   try {
     return await fetch(url, {
       ...init,
+      // A grant is per-origin, and a redirect leaves that origin. A 302 to
+      // `http://localhost:…` or `http://169.254.169.254/…` would be followed
+      // with the extension's permissions and come back through the bridge as
+      // though the granted origin had answered it. There is no re-vetting
+      // available in a browser — `redirect: "manual"` yields an opaque
+      // response nothing can inspect — so the redirect is refused instead.
+      // After `...init` deliberately: a caller cannot spread this away.
+      redirect: "error",
       signal: AbortSignal.timeout(PROXY_FETCH_TIMEOUT_MS),
     });
   } catch (e) {
