@@ -38,6 +38,7 @@ Override via env:
 | `HOST` | `127.0.0.1` | Bind address — must be loopback for the VTA's `http:@openvtc/pnm-@openvtc/pnm-` loopback carve-out to accept this URL |
 | `DEMO_USERNAME` | `alice` | Hardcoded test user |
 | `DEMO_PASSWORD` | `passw0rd!` | Hardcoded test password |
+| `ALLOWED_ORIGINS` | — | Extra origins allowed to make credentialed cross-origin reads, comma-separated and matched exactly (e.g. `https://partner.example`). The demo's own origin is always allowed; every other origin gets no `Access-Control-Allow-Origin` header at all |
 
 ## Wallet setup
 
@@ -77,4 +78,4 @@ Then in the wallet popup, click **🔑 Use** on the entry. The wallet will:
 - Sessions are an in-memory map; restarting the server invalidates all sessions.
 - Cookie is not `HttpOnly` so the page's inline JS can read it for the status indicator. A production RP would scope tighter.
 - No `Secure` attribute (the demo runs on plain HTTP loopback). Real deployments MUST add `Secure`.
-- Permissive CORS — allow any origin with credentials. The demo doesn't ship sensitive endpoints; tighten in production.
+- CORS is an exact allow-list — the demo's own origin plus anything in `ALLOWED_ORIGINS` — and credentials are only ever paired with an origin that matched. It used to reflect any request `Origin` into `Access-Control-Allow-Origin` alongside `Access-Control-Allow-Credentials: true`, which let any site read `/me` for a signed-in visitor. `tests/cors.test.mjs` pins the current behaviour.
