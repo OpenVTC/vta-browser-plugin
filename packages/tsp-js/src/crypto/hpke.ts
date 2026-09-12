@@ -100,3 +100,58 @@ export async function openBase(
 ): Promise<Uint8Array> {
   return noble.openBase(ciphertext, aad, enc, recipientSk, info);
 }
+
+// ── Pluggable key custody ──
+//
+// The same auth mode, with the local X25519 key behind a capability instead of
+// passed in raw, for custody that never exports a private key. These belong
+// here rather than only in `hpke-noble.ts` because `exports` in package.json
+// names `.` and `./hpke` and nothing else: a consumer cannot deep-import the
+// internal module (`ERR_PACKAGE_PATH_NOT_EXPORTED`), so a capability seam that
+// exists only there is one no adapter can reach.
+//
+// Base mode has no local key to hold, so it needs no capability variant.
+
+/**
+ * A key-agreement capability: the raw X25519 ECDH half of AuthEncap/AuthDecap,
+ * performed by something that holds the private key and will not part with it.
+ *
+ * Targets non-exporting *software* custody — an Askar-backed KMS, say. It is
+ * **not** an enclave claim: this suite pins DHKEM(X25519, HKDF-SHA256), and
+ * Secure Enclave, StrongBox and mainstream cloud KMS ECDH (AWS
+ * `DeriveSharedSecret`, GCP raw ECDH) are NIST-curve-only, so none of them can
+ * perform this DH at all.
+ */
+export type { KeyAgreement } from "./hpke-noble.js";
+
+/**
+ * HPKE-Auth seal with the sender's key behind a {@link KeyAgreement}.
+ * Byte-identical to {@link seal} for the same keys. `recipientPk` is still a
+ * raw 32-byte X25519 public key, and — as with {@link seal} — the
+ * fixed-ephemeral test hook is deliberately not forwarded.
+ */
+export async function sealWithKeyAgreement(
+  plaintext: Uint8Array,
+  aad: Uint8Array,
+  senderKeyAgreement: noble.KeyAgreement,
+  recipientPk: Uint8Array,
+  info: Uint8Array,
+): Promise<SealResult> {
+  return noble.sealWithKeyAgreement(plaintext, aad, senderKeyAgreement, recipientPk, info);
+}
+
+/**
+ * HPKE-Auth open with the recipient's key behind a {@link KeyAgreement}.
+ * Same contract as {@link open}, including throwing on authentication failure;
+ * `senderPk` is still a raw 32-byte X25519 public key.
+ */
+export async function openWithKeyAgreement(
+  ciphertext: Uint8Array,
+  aad: Uint8Array,
+  enc: Uint8Array,
+  recipientKeyAgreement: noble.KeyAgreement,
+  senderPk: Uint8Array,
+  info: Uint8Array,
+): Promise<Uint8Array> {
+  return noble.openWithKeyAgreement(ciphertext, aad, enc, recipientKeyAgreement, senderPk, info);
+}
