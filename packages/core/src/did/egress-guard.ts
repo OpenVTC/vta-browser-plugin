@@ -60,6 +60,27 @@ export class BlockedEndpointError extends Error {
 }
 
 /**
+ * True when `err` is a refusal to contact an endpoint.
+ *
+ * Structural on `code`, deliberately. There are two guards carrying this one
+ * code: this module, for the host a did:webvh names, and
+ * `@openvtc/vti-didcomm-js/net-guard`, for the endpoints a mediator's DID
+ * document advertises and a VTA's REST base. They are separate classes, so an
+ * `instanceof` here would silently miss the library's — which is the one a
+ * hostile mediator document trips. Matching the code is the whole point of
+ * having a stable one (R3.7).
+ */
+export function isBlockedEndpointError(err: unknown): err is Error & {
+  code: typeof BLOCKED_ENDPOINT;
+  reason?: string;
+  host?: string;
+  url?: string;
+  label?: string;
+} {
+  return err instanceof Error && (err as { code?: unknown }).code === BLOCKED_ENDPOINT;
+}
+
+/**
  * Throw unless `did` is a did:webvh whose host is safe to fetch from: a public
  * IP address, or a name that is not local-only.
  *

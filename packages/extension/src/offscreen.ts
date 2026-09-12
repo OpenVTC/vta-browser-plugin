@@ -85,6 +85,7 @@ import {
 import { base64url } from "@openvtc/vti-didcomm-js";
 import { grantCommand } from "./grant-command.js";
 import { forgetInbox, getSettings, inboxFor, inboxToAdopt, setInbox } from "./config.js";
+import { walletNetPolicy } from "./net-policy.js";
 import { loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import type { Transport, TransportHealth, TransportObservation } from "./transports.js";
@@ -698,7 +699,7 @@ async function diagnoseTransportDown(
       // asks about the thing that broke rather than a health route that may
       // be served by something else. It answers `405` to the probe's GET —
       // irrelevant, since an opaque response only has to exist.
-      probeUrl = await resolveMediatorEndpoint(mediatorDid)
+      probeUrl = await resolveMediatorEndpoint(mediatorDid, { netPolicy: walletNetPolicy() })
         .then((m) => m.authEndpoint)
         .catch(() => undefined);
     }
@@ -795,7 +796,12 @@ async function diagnoseMediator(
 
   let authEndpoint: string | undefined;
   try {
-    authEndpoint = (await resolveMediatorEndpoint(mediatorDid)).authEndpoint;
+    // The self-test resolves under the SAME policy the real path uses, so a
+    // mediator this wallet would refuse to dial reports as refused here rather
+    // than passing a check the wallet will not honour.
+    authEndpoint = (
+      await resolveMediatorEndpoint(mediatorDid, { netPolicy: walletNetPolicy() })
+    ).authEndpoint;
     checks.push({
       id: `${idBase}.resolve`,
       label: `${label} mediator DID resolves`,
@@ -1125,7 +1131,15 @@ async function buildVtaSession(
   }
   const rest = restBaseUrl || services.rest?.baseUrl;
   if (rest) {
-    channels.push(new RestChannel({ baseUrl: rest, holder, signing: documentSigner, service }));
+    channels.push(
+      new RestChannel({
+        baseUrl: rest,
+        holder,
+        signing: documentSigner,
+        service,
+        netPolicy: walletNetPolicy(),
+      }),
+    );
     // Deliberately `"unknown"`, not `"up"`. A `RestChannel` is built from a
     // URL without contacting anything, so construction is not evidence — and
     // a REST channel that turns out to be unreachable fails the caller's
@@ -1828,7 +1842,12 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
   const connect: MediatorConnector = (m) => {
     let c = conns.get(m);
     if (!c) {
-      c = connectMediatorSession({ holder: ephemeral, mediatorDid: m, vtaDid: pending.vtaDid });
+      c = connectMediatorSession({
+        holder: ephemeral,
+        mediatorDid: m,
+        vtaDid: pending.vtaDid,
+        netPolicy: walletNetPolicy(),
+      });
       conns.set(m, c);
     }
     return c;
@@ -1966,7 +1985,12 @@ async function doOnboardContexts(): Promise<{ contexts: Array<{ id: string; name
   const connect: MediatorConnector = (m) => {
     let c = conns.get(m);
     if (!c) {
-      c = connectMediatorSession({ holder: ephemeral, mediatorDid: m, vtaDid: pending.vtaDid });
+      c = connectMediatorSession({
+        holder: ephemeral,
+        mediatorDid: m,
+        vtaDid: pending.vtaDid,
+        netPolicy: walletNetPolicy(),
+      });
       conns.set(m, c);
     }
     return c;
@@ -2290,6 +2314,7 @@ async function createWarmSession(
   const conn = await connectMediatorSession({
     holder: identity,
     mediatorDid,
+    netPolicy: walletNetPolicy(),
     // No fixed peer for a shared session; the session resolves each reply's
     // sender on demand. Seed with our own DID (harmless) to satisfy the API;
     // each operation resolves its real VTA target separately (cached).
@@ -2436,6 +2461,7 @@ async function createApproverWarmSession(vtaDid: string): Promise<MediatorConnec
   const conn = await connectMediatorSession({
     holder: approver.identity,
     mediatorDid,
+    netPolicy: walletNetPolicy(),
     vtaDid: approver.identity.did,
     onClose: () => {
       approverPool.delete(key);

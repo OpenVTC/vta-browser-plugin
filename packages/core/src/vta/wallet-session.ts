@@ -1,4 +1,4 @@
-import type { Identity } from "../didcomm/index.js";
+import type { Identity, NetPolicy } from "../didcomm/index.js";
 import {
   connectMediatorSession,
   type MediatorConnection,
@@ -30,8 +30,10 @@ export interface WalletSessionFromDidsConfig {
   fetch?: typeof fetch;
   /** WebSocket ctor (defaults to globalThis.WebSocket). */
   webSocketImpl?: WebSocketCtor;
-  /** Allow `ws://`/`http://` endpoints. Local dev only. */
-  allowInsecure?: boolean;
+  /** Egress policy for the mediator's advertised endpoints. Strict by default;
+   *  a dev build against a mediator on localhost needs both `allowInsecure`
+   *  and `allowPrivate`. */
+  netPolicy?: NetPolicy;
   /** Per-request timeout. */
   timeoutMs?: number;
 }
@@ -110,9 +112,7 @@ export class WalletSession {
         vtaDid: cfg.vtaDid,
         ...(cfg.fetch ? { fetch: cfg.fetch } : {}),
         ...(cfg.webSocketImpl ? { webSocketImpl: cfg.webSocketImpl } : {}),
-        ...(cfg.allowInsecure !== undefined
-          ? { allowInsecure: cfg.allowInsecure }
-          : {}),
+        ...(cfg.netPolicy ? { netPolicy: cfg.netPolicy } : {}),
       });
     } catch (err) {
       holder.dispose();

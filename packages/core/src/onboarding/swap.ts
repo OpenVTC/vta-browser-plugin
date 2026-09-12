@@ -16,7 +16,7 @@
 // `runProvisionIntegration` (M2C) rather than self-minting + swapping. Kept
 // consistent with the channel pattern for when a swap-based flow is needed.
 
-import type { Identity } from "../didcomm/index.js";
+import type { Identity, NetPolicy } from "../didcomm/index.js";
 import { issueSwapPresentation, type SigningIdentity } from "../siop/self-issued.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import { DidcommVtaTransport, type RemoteDidcommEndpoint } from "../vta/didcomm.js";
@@ -130,8 +130,12 @@ export function swapAclDidcomm(opts: SwapAclDidcommOptions): Promise<AclSwapResu
 }
 
 export interface SwapAclRestOptions {
-  /** VTA REST base URL (from `#vta-rest`, e.g. `http://localhost:8100`). */
+  /** VTA REST base URL (from `#vta-rest`). Vetted before it is dialed: https on
+   *  a public host unless `netPolicy` widens it. */
   baseUrl: string;
+  /** Egress policy for `baseUrl`. A local VTA (`http://localhost:8100`) needs
+   *  `{ allowInsecure: true, allowPrivate: true }`. */
+  netPolicy?: NetPolicy;
   /** Authcrypt sender = the OLD DID (the operator-granted ephemeral). */
   ephemeral: Identity;
   /** Signs the VP-JWT; its DID is the NEW DID (the wallet's holder did:peer). */
@@ -159,6 +163,7 @@ export function swapAclRest(opts: SwapAclRestOptions): Promise<AclSwapResult> {
     holder: opts.ephemeral,
     signing: opts.ephemeralSigning,
     service: opts.service,
+    ...(opts.netPolicy ? { netPolicy: opts.netPolicy } : {}),
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
   return swapAcl(channel, {

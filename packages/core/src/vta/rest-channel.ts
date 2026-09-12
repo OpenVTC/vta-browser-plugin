@@ -19,7 +19,14 @@ import { parseTrustTaskReply, signOutboundTask, verifyTrustTaskReply } from "./t
 import { asTaskSigner, type ChannelSigner, type TaskSigner } from "./trust-task.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { isTrustTaskErrorType } from "./protocol.js";
-import { getVtaBearer, makeReauth, type VtaAuthInputs } from "./auth.js";
+import { guardedFetch } from "@openvtc/vti-didcomm-js/net-guard";
+
+import {
+  getVtaBearer,
+  makeReauth,
+  vtaRestEndpointPolicy,
+  type VtaAuthInputs,
+} from "./auth.js";
 import { withFetchTimeout, isFetchTimeout, DEFAULT_FETCH_TIMEOUT_MS } from "../http/timeout-fetch.js";
 
 export interface RestChannelOptions extends VtaAuthInputs {
@@ -66,10 +73,17 @@ export class RestChannel implements TrustTaskChannel {
       baseUrl: opts.baseUrl,
       holder: opts.holder,
       service: opts.service,
+      ...(opts.netPolicy ? { netPolicy: opts.netPolicy } : {}),
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
     };
     this.path = opts.trustTasksPath ?? TRUST_TASK_PATH;
-    this.fetchImpl = withFetchTimeout(opts.fetch);
+    // The dispatcher URL is composed from the same `baseUrl` the bearer
+    // handshake uses, so it is held to the same policy — vetted before it is
+    // dialed, and never followed through a redirect. The cast states what the
+    // library's JSDoc types loosely (see `getVtaBearer`).
+    this.fetchImpl = withFetchTimeout(
+      guardedFetch(opts.fetch, vtaRestEndpointPolicy(opts.netPolicy)) as typeof fetch,
+    );
   }
 
   /**

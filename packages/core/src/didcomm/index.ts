@@ -28,6 +28,27 @@ import {
   x25519,
   jwk as vtiJwk,
 } from "@openvtc/vti-didcomm-js";
+import type { NetPolicy } from "@openvtc/vti-didcomm-js/net-guard";
+
+/**
+ * Egress policy for endpoints this wallet did not choose: the REST, auth and
+ * WebSocket URLs a mediator's DID document advertises, and a VTA's REST base.
+ *
+ * Every field defaults to the strict setting, so a caller that passes nothing
+ * gets https/wss on a public host — which is what makes an omitted policy safe
+ * rather than merely untested. Two opt-outs exist, and since
+ * `@openvtc/vti-didcomm-js` 0.8 they are independent: `allowInsecure` admits
+ * `http:`/`ws:` and nothing else, so a mediator on `http://localhost` needs
+ * `allowPrivate` as well. `allowHosts` narrows to named hosts.
+ *
+ * A refusal is a `BlockedEndpointError` carrying `code: "E_BLOCKED_ENDPOINT"`
+ * — match on that, never on the message ({@link isBlockedEndpointError}).
+ */
+export type { NetPolicy } from "@openvtc/vti-didcomm-js/net-guard";
+
+/** A DID resolver, in the shape the library's `resolve` option takes.
+ *  Injectable so a test can prove a refused endpoint is never dialed. */
+type DidDocumentResolver = (did: string) => Promise<{ didDocument?: unknown }>;
 
 export type DidcommCurve = "X25519" | "P-256" | "secp256k1";
 
@@ -380,18 +401,24 @@ export interface ResolvedMediatorEndpoint extends ResolvedKeyAgreement {
 
 /**
  * Resolve a mediator DID to its key-agreement material + transport
- * endpoints. Refuses plaintext (`ws://`/`http://`) endpoints unless
- * `allowInsecure` is set (local dev only) — a tampered/stale DID
- * document must not be able to downgrade the transport. Throws if the
- * mediator advertises no WebSocket endpoint, since the bridge needs one
- * for live delivery.
+ * endpoints.
+ *
+ * The endpoints come out of a document this wallet did not write, so each one
+ * is checked before anything is dialed ({@link NetPolicy}): https/wss only, no
+ * credentials in the URL, and no loopback, private, link-local, CGNAT or
+ * local-only host. A tampered or stale document therefore cannot downgrade the
+ * transport *or* point the wallet at a machine on the user's own network.
+ *
+ * Throws if the mediator advertises no WebSocket endpoint, since the bridge
+ * needs one for live delivery.
  */
 export async function resolveMediatorEndpoint(
   mediatorDid: string,
-  options: { allowInsecure?: boolean } = {},
+  options: { netPolicy?: NetPolicy; resolve?: DidDocumentResolver } = {},
 ): Promise<ResolvedMediatorEndpoint> {
   const m = await vtiResolveMediator(mediatorDid, {
-    allowInsecure: options.allowInsecure ?? false,
+    ...(options.netPolicy ? { netPolicy: options.netPolicy } : {}),
+    ...(options.resolve ? { resolve: options.resolve } : {}),
   });
   if (!m.wsEndpoint) {
     throw new Error(
@@ -495,10 +522,11 @@ export async function resolveVtaServices(did: string): Promise<VtaServices> {
 // in vta/ never imports the library directly.
 // ---------------------------------------------------------------------------
 
-// The library's mediator-auth `.d.ts` is abbreviated (its `mediator`
-// return omits `did`/`x25519Pub`; its args omit `allowInsecure`), though
-// the runtime provides both. Re-type accurately here so the rest of the
-// file stays cast-free.
+// The library types `mediator.wsEndpoint` as nullable, because a mediator may
+// advertise none. This facade requires one — live delivery is the wallet's
+// whole inbound path — and `MediatorSession` refuses a missing endpoint on
+// construction anyway, since its egress check runs on that URL. So the cast
+// narrows the type rather than hiding a case.
 interface VtiResolvedMediator {
   did: string;
   restEndpoint: string;
@@ -514,7 +542,8 @@ const authenticateToMediator = vtiAuthenticateToMediator as unknown as (args: {
   clientX25519Public: Uint8Array;
   clientKid?: string;
   fetch?: typeof fetch;
-  allowInsecure?: boolean;
+  netPolicy?: NetPolicy;
+  resolve?: DidDocumentResolver;
 }) => Promise<{ accessToken: string; mediator: VtiResolvedMediator }>;
 
 /** WebSocket constructor compatible with the library session (the
@@ -621,8 +650,14 @@ export interface ConnectMediatorSessionOptions {
   fetch?: typeof fetch;
   /** WebSocket ctor (defaults to globalThis.WebSocket). */
   webSocketImpl?: WebSocketCtor;
-  /** Allow ws://, http:// endpoints. Local dev only. */
-  allowInsecure?: boolean;
+  /** Egress policy for the endpoints the mediator's DID document advertises —
+   *  REST, auth and WebSocket. Strict by default (https/wss, public hosts); a
+   *  dev build pointed at a mediator on localhost needs **both**
+   *  `allowInsecure` and `allowPrivate`. See {@link NetPolicy}. */
+  netPolicy?: NetPolicy;
+  /** DID resolver override. A test seam, named as in `verifyDid`: it lets a
+   *  test prove that a refused endpoint is never dialed. */
+  resolve?: DidDocumentResolver;
   /** Called once if the socket drops unexpectedly (not via `close()`).
    *  A warm-session holder uses this to evict + reconnect. */
   onClose?: () => void;
@@ -653,7 +688,8 @@ export async function connectMediatorSession(
     clientX25519Private: clientPrivate,
     clientX25519Public: clientPublic,
     clientKid: opts.holder.kid,
-    allowInsecure: opts.allowInsecure ?? false,
+    ...(opts.netPolicy ? { netPolicy: opts.netPolicy } : {}),
+    ...(opts.resolve ? { resolve: opts.resolve } : {}),
     ...(opts.fetch ? { fetch: opts.fetch } : {}),
   });
 
@@ -729,6 +765,11 @@ export async function connectMediatorSession(
       // Awaited so a handler that persists finishes before the ack.
       if (inboundTspHandler) await inboundTspHandler(bytes);
     },
+    // The same policy the auth handshake ran under. The session checks
+    // `wsEndpoint` when it is constructed and again before every socket open,
+    // so a document whose WebSocket URL names a private host is refused here
+    // instead of being handed this wallet's mediator JWT.
+    ...(opts.netPolicy ? { netPolicy: opts.netPolicy } : {}),
     ...(opts.onClose ? { onClose: opts.onClose } : {}),
     ...(opts.webSocketImpl ? { WebSocketImpl: opts.webSocketImpl } : {}),
   });

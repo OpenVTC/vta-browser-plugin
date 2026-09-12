@@ -40,6 +40,27 @@ Rules that bite hardest here:
   `errorFromBody(doc, status, statusText)`, never by handing the spent
   `Response` back to `errorFromResponse` — that throws into a swallowing
   `catch` and silently degrades to a status-only guess.
+- **Endpoints this wallet did not choose are vetted before they are dialed, and
+  production gets no opt-out.** A mediator's REST, auth and WebSocket URLs come
+  out of its DID document; a VTA's REST base is written from one at onboarding.
+  Each goes through `@openvtc/vti-didcomm-js` 0.8's `netPolicy`
+  (`net-guard.js`): https/wss only, no credentials in the URL, no loopback,
+  private, link-local, carrier-NAT or local-only host, and no redirect
+  followed. `walletNetPolicy` (`extension/src/net-policy.ts`) is the single
+  place that decides, and it keys off the build — `npm run dev` builds with
+  `--mode development`, so `import.meta.env.DEV` is set and the policy carries
+  `allowInsecure` **and** `allowPrivate`; every packaged build gets neither.
+  **Since 0.8 those two flags are independent**: `allowInsecure` admits
+  `http:`/`ws:` and nothing more, so a local mediator or VTA needs both, and a
+  dev setup that sets only the first fails on `localhost` where it used to
+  work. A refusal is `code: "E_BLOCKED_ENDPOINT"` — match it with
+  `isBlockedEndpointError`, which is structural on the code because the library
+  and this package's did:webvh guard are two classes carrying one code (R3.7).
+  `transport-diagnosis.ts` renders it as `mediator/blocked-endpoint`, and the
+  refusal is deliberately not classified from a probe: nothing was contacted.
+  What none of this can do in a browser: an extension has no DNS API, so a
+  public name that *resolves* to a private address still passes. `allowHosts`
+  is the answer to that and needs a pinned list the wallet does not yet hold.
 - **R1.6 + MV3 — persist before ack.** Anything that acknowledges a mediator
   message must durably store it first; assume the worker/offscreen document
   dies on the next line. **Satisfied — and easy to break again**: see "How

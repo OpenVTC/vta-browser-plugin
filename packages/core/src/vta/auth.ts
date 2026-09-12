@@ -26,7 +26,9 @@
 // VTAs never share a token; call `invalidateVtaBearer` after a 401 to
 // force re-auth.
 
-import { packAuthcrypt, type Identity } from "../didcomm/index.js";
+import { guardedFetch } from "@openvtc/vti-didcomm-js/net-guard";
+
+import { packAuthcrypt, type Identity, type NetPolicy } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";
 import { withFetchTimeout } from "../http/timeout-fetch.js";
 
@@ -67,6 +69,30 @@ export interface VtaAuthInputs {
   service: RemoteDidcommEndpoint;
   /** fetch impl (defaults to global). */
   fetch?: typeof fetch;
+  /** Egress policy for `baseUrl`. Strict by default — https on a public host —
+   *  so a dev build talking to a VTA on `http://localhost` needs both
+   *  `allowInsecure` and `allowPrivate`. See {@link vtaRestEndpointPolicy}. */
+  netPolicy?: NetPolicy;
+}
+
+/**
+ * The egress policy a VTA REST base URL is held to.
+ *
+ * `baseUrl` is configuration rather than a document endpoint, but the
+ * configuration is written from a DID document (or a QR code) at onboarding, so
+ * it is vetted on the same terms as one: `https:` on a public host unless the
+ * caller widens it. `guardedFetch` then re-checks every request URL built from
+ * it and refuses to follow a redirect — this is the one channel that carries a
+ * bearer token, and an allowed host must not be able to hand it onwards.
+ *
+ * Exported so the channel and the bearer handshake are demonstrably held to the
+ * same policy rather than to two that happen to match.
+ */
+export function vtaRestEndpointPolicy(netPolicy?: NetPolicy): {
+  label: string;
+  schemes: string[];
+} & NetPolicy {
+  return { label: "VTA REST", schemes: ["https:"], ...netPolicy };
 }
 
 /**
@@ -76,7 +102,13 @@ export interface VtaAuthInputs {
  * round-trip so it doesn't trip the VTA's per-IP unauth rate limit.
  */
 export async function getVtaBearer(opts: VtaAuthInputs): Promise<string> {
-  const f = withFetchTimeout(opts.fetch);
+  // Guard inside the timeout wrapper so both hold: every URL is checked before
+  // it is dialed (throwing `BlockedEndpointError` with
+  // `code: "E_BLOCKED_ENDPOINT"`) and every request is still bounded (R1.2).
+  // The cast states what the library's JSDoc types loosely — `guardedFetch`
+  // returns a drop-in for the `fetch` it wrapped.
+  const guarded = guardedFetch(opts.fetch, vtaRestEndpointPolicy(opts.netPolicy)) as typeof fetch;
+  const f = withFetchTimeout(guarded);
   const base = opts.baseUrl.replace(/\/+$/, "");
 
   const cacheKey = bearerCacheKey(base, opts.holder.did);
