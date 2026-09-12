@@ -1,0 +1,30 @@
+# Dependabot, for the two ecosystems this repo has.
+#
+# `github-actions` is the half that `ci.yml` depends on. Every action there is
+# pinned to a commit SHA rather than a tag, and a SHA does not float: without
+# something proposing the next one, an upstream fix never arrives. Dependabot
+# rewrites the SHA *and* the `# v5` comment beside it, which is what makes a pin
+# maintainable instead of a thing that rots.
+#
+# `cooldown` holds a release back for a week. The attacks this is about — a
+# compromised publish, a tag repointed at someone else's code — are found in
+# hours to days, and nothing here needs to be on a tarball published this
+# morning: the extension is not deployed and CI is the only consumer.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+
+  # One entry for the whole workspace: npm workspaces resolve into a single
+  # root `package-lock.json`, so that is the manifest Dependabot updates.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
