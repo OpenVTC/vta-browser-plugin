@@ -122,29 +122,33 @@ test("a VTA that answers the bearer handshake with a redirect is refused, and th
   // base URL + holder, and a cache hit would answer without a request.
   const holder = Identity.generate("did:example:holder-redirect");
   try {
-    await assert.rejects(
-      () =>
-        getVtaBearer({
-          baseUrl: vtaBase,
-          holder,
-          service: vtaEndpoint(),
-          netPolicy: DEV_POLICY,
-        }),
-      (err) => {
-        assert.equal(err.code, BLOCKED_ENDPOINT, "must carry the stable code (R3.7)");
-        // The reason is what says the redirect did the refusing. `scheme` or
-        // `private_address` here would mean the dev policy was not applied and
-        // this test proves nothing about redirects.
-        assert.equal(err.reason, "redirect");
-        assert.equal(err.status, 302);
-        return true;
-      },
-    );
-    // It got as far as asking — otherwise the refusal above could have happened
+    // Caught rather than asserted inline, so the count below is the first thing
+    // checked: it is the property this file is named for, and a failure should
+    // say "the redirect was followed" rather than something about an error shape.
+    let err;
+    try {
+      await getVtaBearer({
+        baseUrl: vtaBase,
+        holder,
+        service: vtaEndpoint(),
+        netPolicy: DEV_POLICY,
+      });
+    } catch (e) {
+      err = e;
+    }
+
+    assert.deepEqual(reached, [], "the redirect was followed to the internal listener");
+
+    assert.ok(err, "the handshake must not succeed through a redirect");
+    assert.equal(err.code, BLOCKED_ENDPOINT, "must carry the stable code (R3.7)");
+    // The reason is what says the redirect did the refusing. `scheme` or
+    // `private_address` here would mean the dev policy was not applied and this
+    // test proves nothing about redirects.
+    assert.equal(err.reason, "redirect");
+    assert.equal(err.status, 302);
+    // It got as far as asking — otherwise the refusal could have happened
     // before the request, which is a different control.
     assert.deepEqual(asked, ["/auth/challenge"]);
-    // And this is the assertion the file is for.
-    assert.deepEqual(reached, [], "the redirect was followed to the internal listener");
   } finally {
     holder.dispose();
   }

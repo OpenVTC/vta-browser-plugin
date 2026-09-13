@@ -122,29 +122,39 @@ test("verifyDid opens no socket to this machine, however the host is spelled", a
   t.mock.method(console, "error", () => {});
   connections = [];
 
-  for (const spelling of ALL) {
-    const did = dialsListener(spelling);
-    const result = await verifyDid(did);
-    assert.equal(result.resolved, false, spelling);
-    // The refusal is the guard's, not a network error dressed up as one: its
-    // message is the one `assertResolvableWebvhHost` writes.
-    assert.match(result.error ?? "", /so it was not contacted$/, spelling);
+  // Every vector first, then the assertions — so a failure is the count, which
+  // is what this file is for, rather than whichever vector came first.
+  const results = ALL.map(() => undefined);
+  for (const [i, spelling] of ALL.entries()) {
+    results[i] = await verifyDid(dialsListener(spelling));
   }
 
   assert.deepEqual(connections, [], "a refused host reached the socket");
+
+  for (const [i, spelling] of ALL.entries()) {
+    assert.equal(results[i].resolved, false, spelling);
+    // The refusal is the guard's, not a network error dressed up as one: its
+    // message is the one `assertResolvableWebvhHost` writes. Without this, a
+    // resolver that simply could not reach the listener would look the same.
+    assert.match(results[i].error ?? "", /so it was not contacted$/, spelling);
+  }
 });
 
 test("deriveSigningKeyId opens no socket either — the second entry point", async (t) => {
   t.mock.method(console, "error", () => {});
   connections = [];
 
-  for (const spelling of ALL) {
-    const result = await deriveSigningKeyId(dialsListener(spelling));
-    assert.deepEqual(result.candidates, [], spelling);
-    assert.match(result.error ?? "", /so it was not contacted$/, spelling);
+  const results = ALL.map(() => undefined);
+  for (const [i, spelling] of ALL.entries()) {
+    results[i] = await deriveSigningKeyId(dialsListener(spelling));
   }
 
   assert.deepEqual(connections, [], "a refused host reached the socket");
+
+  for (const [i, spelling] of ALL.entries()) {
+    assert.deepEqual(results[i].candidates, [], spelling);
+    assert.match(results[i].error ?? "", /so it was not contacted$/, spelling);
+  }
 });
 
 test("the resolver does dial the listener when the guard is not in front of it", async (t) => {
