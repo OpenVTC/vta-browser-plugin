@@ -237,6 +237,31 @@ test("deriveSigningKeyId still resolves public did:webvh and did:peer through th
   assert.deepEqual(peer.candidates, [`${peerDid}#key-1`]);
 });
 
+// What this test can and cannot fail on, because it is easy to read more into
+// it than it says.
+//
+// `didwebvh-ts@2.8.0` refuses a host itself — "IP addresses are not allowed as
+// hosts" — for a dotted quad and for anything spelled only from `[0-9a-f:]`. So
+// for `BLOCKED_LITERALS`, and for a few of the numeric forms (`2130706433`,
+// `0`, `017700000001`, `0177.0.0.1`, `%31%32%37.0.0.1`), an empty `requested`
+// below is true whether or not the guard runs at all. Removing the CGNAT row
+// from `V4_BLOCKED` fails the literals test and both stub tests above, and
+// leaves THIS one green.
+//
+// That is a division of labour rather than a hole, and it is worth saying out
+// loud:
+//
+//   - those literals are asserted against `assertResolvableWebvhHost`
+//     directly, at the top of this file, where nothing else is consulted and
+//     the dependency cannot stand in for the guard;
+//   - what this test uniquely carries is the classes the dependency misses —
+//     every name, and the numeric forms the URL parser rewrites into a private
+//     address — which do reach `fetch` the moment the guard is gone. Those are
+//     what make it fail.
+//
+// `did.egress-socket.mjs` makes the same claim one layer lower, against a real
+// loopback listener, and for this reason it uses only spellings the dependency
+// lets through.
 test("with the real resolver, a blocked host produces no network request", async (t) => {
   const requested = [];
   const realFetch = globalThis.fetch;
