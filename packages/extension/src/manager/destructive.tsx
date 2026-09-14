@@ -14,6 +14,20 @@
 // because the agent refuses a non-empty deletion on purpose and overriding that
 // refusal is a second decision.
 //
+// ## `nature`, and why a second component was not written
+//
+// Not every two-step action is a destruction. Realigning a DID's key records
+// asks the agent for the same thing — what would change, before it changes —
+// and then applies it, but nothing is lost: records are renamed and the key
+// material behind them is untouched.
+//
+// Drawing that in red would be a lie of exactly the kind `manager-theme.css`
+// forbids, where `--w-danger` is one of three colours that mean something. So
+// the *shape* of the decision is shared and the **voice** is a parameter:
+// `nature: "corrective"` asks what would change rather than what would be
+// destroyed, and draws in the accent rather than in danger. It gets no `force`
+// tick, because there is no refusal to override.
+//
 // ## Why `consentRequired` renders here
 //
 // The agent may answer "a human must approve this first". That is not a
@@ -77,6 +91,15 @@ export function ConsentCeremony({ pending }: { pending: ConsentRequiredError }) 
 export interface DestructiveProps<P> {
   /** Button copy for the action itself, e.g. "Delete context". */
   label: string;
+  /**
+   * What kind of action this is, which decides the voice and the colour.
+   *
+   * `destructive` (the default) is the one this component was written for:
+   * something is lost, so the preview asks what would be destroyed and is drawn
+   * in danger. `corrective` is a repair — the preview asks what would change,
+   * and drawing it in danger would overstate it.
+   */
+  nature?: "destructive" | "corrective";
   /** Disabled reason, or null when the action is available. Shown rather than
    *  hiding the control — see `hasRole` in `use-vta.ts`. */
   disabledReason?: string | null;
@@ -112,6 +135,7 @@ type Phase<P> =
  */
 export function Destructive<P>({
   label,
+  nature = "destructive",
   disabledReason = null,
   preview,
   renderPreview,
@@ -122,6 +146,7 @@ export function Destructive<P>({
 }: DestructiveProps<P>) {
   const [phase, setPhase] = useState<Phase<P>>({ kind: "idle" });
   const [force, setForce] = useState(false);
+  const corrective = nature === "corrective";
 
   const reset = useCallback(() => {
     setPhase({ kind: "idle" });
@@ -162,7 +187,7 @@ export function Destructive<P>({
   if (phase.kind === "idle") {
     return (
       <Button
-        kind="danger"
+        kind={corrective ? "quiet" : "danger"}
         disabled={Boolean(disabledReason)}
         {...(disabledReason ? { title: disabledReason } : {})}
         onClick={() => void start()}
@@ -173,7 +198,13 @@ export function Destructive<P>({
   }
 
   if (phase.kind === "previewing") {
-    return <span style={{ fontSize: t.sm, color: c.muted }}>Asking your agent what this would destroy…</span>;
+    return (
+      <span style={{ fontSize: t.sm, color: c.muted }}>
+        {corrective
+          ? "Asking your agent what this would change…"
+          : "Asking your agent what this would destroy…"}
+      </span>
+    );
   }
 
   if (phase.kind === "consent") {
@@ -217,7 +248,7 @@ export function Destructive<P>({
 
   return (
     <div style={{ display: "grid", gap: 12, maxWidth: 460 }}>
-      <Note tone="danger">
+      <Note tone={corrective ? "accent" : "danger"}>
         <div style={{ display: "grid", gap: 8 }}>{renderPreview(p)}</div>
       </Note>
 
@@ -234,7 +265,7 @@ export function Destructive<P>({
       )}
 
       <div style={{ display: "flex", gap: 8 }}>
-        <Button kind="danger" disabled={blocked || busy} onClick={() => void run(p)}>
+        <Button kind={corrective ? "primary" : "danger"} disabled={blocked || busy} onClick={() => void run(p)}>
           {busy ? "Working…" : label}
         </Button>
         <Button kind="quiet" disabled={busy} onClick={reset}>

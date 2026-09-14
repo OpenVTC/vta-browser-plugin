@@ -347,7 +347,20 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // address (dtgwg-trust-tasks-tf#426). The third is `rooms/keys/present/0.2`
   // and `rooms/owner/issue-authority/0.2` counting as new families beside the
   // 0.1 this library had drifted behind.
-  const expected = 204;
+  //
+  // 204 → 205 is `vta/webvh/dids/realign-keys/1.0` — the repair for a DID whose
+  // key records are not named after the verification methods it publishes
+  // (dtgwg-trust-tasks-tf#456, VTI#1466 and #1470).
+  //
+  // **The canonical total jumps 227 → 235 in the same commit, and only one of
+  // those eight is this task.** The other seven were always in the SDK and
+  // invisible to the scanner: `vta-sdk` derives a growing number of constants
+  // from the generated payload type rather than writing the URI out, and
+  // `sync-task-surface.mjs` matched only literals until it was taught to
+  // resolve them. So this is not the agent growing seven families — it is a
+  // snapshot that had been under-counting the denominator, and with it the gap
+  // this number exists to keep reviewable.
+  const expected = 205;
   assert.equal(
     implemented.size,
     expected,

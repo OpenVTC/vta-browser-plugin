@@ -13,6 +13,7 @@ import {
   webvhDidCreate,
   webvhDidDelete,
   webvhDidList,
+  webvhDidRealignKeys,
   type WebvhDidRecord,
 } from "@openvtc/pnm-core/webvh";
 import { Button, Did, Note, Panel, Pill } from "../../ui.js";
@@ -138,6 +139,103 @@ function CreateDid({
   );
 }
 
+/** What the agent said a realignment would do, or did. */
+type RealignPlan = Awaited<ReturnType<typeof webvhDidRealignKeys>>;
+
+/**
+ * Bring this DID's key records back onto the verification-method ids its
+ * published document declares.
+ *
+ * **The dry run is not a courtesy, it is the diagnosis.** There is nothing on
+ * this screen that tells an operator whether a DID needs this: the answer lives
+ * in the agent's key store and the DID's log, and comparing them is exactly what
+ * the task does. So the preview is the whole feature — a DID that is already
+ * consistent says so, and one that is not lists the renames before any of them
+ * happen.
+ *
+ * Offered on every DID for the same reason. Showing the action only where the
+ * console *thinks* it is needed would mean shipping a second, client-side copy
+ * of the comparison, which could disagree with the agent's — and the operator
+ * would have no way to find out.
+ */
+function RealignKeys({
+  parties,
+  did,
+  disabledReason,
+  onDone,
+}: {
+  parties: Parties;
+  did: string;
+  disabledReason: string | null;
+  onDone: () => void;
+}) {
+  return (
+    <Destructive<RealignPlan>
+      label="Realign keys"
+      nature="corrective"
+      disabledReason={disabledReason}
+      preview={() => webvhDidRealignKeys(managerSender, { ...parties, did, dryRun: true })}
+      renderPreview={(plan) => <RealignPreview plan={plan} />}
+      commit={async () => {
+        await webvhDidRealignKeys(managerSender, { ...parties, did, dryRun: false });
+      }}
+      onDone={onDone}
+    />
+  );
+}
+
+function RealignPreview({ plan }: { plan: RealignPlan }) {
+  if (plan.moved.length === 0 && plan.unmatched.length === 0) {
+    return (
+      <>
+        <strong>Nothing to change.</strong>
+        <span>
+          Every verification method this DID publishes is held under the name the document
+          gives it.
+        </span>
+      </>
+    );
+  }
+  return (
+    <>
+      {plan.moved.length > 0 && (
+        <>
+          <strong>
+            {plan.moved.length} key{plan.moved.length === 1 ? "" : "s"} would be renamed.
+          </strong>
+          <span>
+            The key material is untouched — these are the names your agent answers to when
+            something addresses a key by the id the document publishes.
+          </span>
+          <div style={{ display: "grid", gap: 6 }}>
+            {plan.moved.map((m) => (
+              <div
+                key={m.to}
+                style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}
+              >
+                <div style={{ color: c.muted }}>{m.from}</div>
+                <div>→ {m.to}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {/* Said out loud rather than folded into "nothing to do": a method with
+          no record here is a key this agent does not hold, and a realignment
+          that reports one has not finished the job. */}
+      {plan.unmatched.length > 0 && (
+        <span>
+          Your agent holds no key for {plan.unmatched.length} of the methods this DID publishes,
+          so it cannot name {plan.unmatched.length === 1 ? "it" : "them"}:{" "}
+          <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
+            {plan.unmatched.join(", ")}
+          </span>
+        </span>
+      )}
+    </>
+  );
+}
+
 export function DidsPane({
   parties,
   authority,
@@ -209,7 +307,8 @@ export function DidsPane({
       key: "actions",
       header: "",
       render: (d) => (
-        <div style={{ minWidth: 190 }}>
+        <div style={{ display: "grid", gap: 8, minWidth: 190 }}>
+          <RealignKeys parties={parties} did={d.did} disabledReason={denied} onDone={list.reload} />
           <Destructive<WebvhDidRecord>
             label="Delete"
             disabledReason={denied}

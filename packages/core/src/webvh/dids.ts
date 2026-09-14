@@ -34,6 +34,12 @@ import {
   type Response as DidsListResponse,
 } from "@openvtc/trust-tasks/vta/webvh/dids/list/1.0/payload";
 import {
+  TYPE_URI as DIDS_REALIGN_KEYS,
+  RESPONSE_TYPE_URI as DIDS_REALIGN_KEYS_RESPONSE,
+  type Payload as DidsRealignKeysPayload,
+  type Response as DidsRealignKeysResponse,
+} from "@openvtc/trust-tasks/vta/webvh/dids/realign-keys/1.0/payload";
+import {
   TYPE_URI as DIDS_UPDATE,
   RESPONSE_TYPE_URI as DIDS_UPDATE_RESPONSE,
   type Payload as DidsUpdatePayload,
@@ -273,4 +279,33 @@ export async function webvhDidRegisterWithServer(
   return send(sender, { holder, service }, DIDS_REGISTER_WITH_SERVER,
     DIDS_REGISTER_WITH_SERVER_RESPONSE,
     "vta/webvh/dids/register-with-server/1.0", payload);
+}
+
+/**
+ * Rename a DID's key records onto the verification-method ids its published
+ * document declares.
+ *
+ * **The repair for records the agent named without reading its own document.**
+ * A key record's id is a verification-method id — it is what a mediator matches
+ * an inbound JWE recipient against, and what anyone reading the document would
+ * hand to a signing task. Where the two disagree, the agent holds a key the
+ * document addresses under a name the agent does not answer to.
+ *
+ * `keys/rename` cannot fix that and is not meant to: its identifier gate refuses
+ * `:` and `#` so that a rename is not a way to write verification-method-shaped
+ * names into a key store. So this call names nothing — `did` and `dryRun` are
+ * the whole payload, and the agent derives every target from that DID's own
+ * published log, matching records to methods by public key.
+ *
+ * **Send it once with `dryRun` before sending it without.** The response is the
+ * same shape either way and says which it is, so a caller can show the plan and
+ * then apply exactly what was shown.
+ */
+export async function webvhDidRealignKeys(
+  sender: TrustTaskSender,
+  params: WebvhCall & DidsRealignKeysPayload,
+): Promise<DidsRealignKeysResponse> {
+  const { holder, service, ...payload } = params;
+  return send(sender, { holder, service }, DIDS_REALIGN_KEYS, DIDS_REALIGN_KEYS_RESPONSE,
+    "vta/webvh/dids/realign-keys/1.0", payload);
 }
