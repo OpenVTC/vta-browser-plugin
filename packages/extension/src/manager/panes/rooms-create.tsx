@@ -68,6 +68,18 @@
 // records by that prefix — a convention of this agent rather than a contract,
 // which is why typing one stays possible.
 //
+// **The key record's id and the DID document's verification method are not the
+// same string for a templated mint, and here they disagree by one.** The `room`
+// and `room-host` built-in templates (`vta-sdk/templates/`) number their
+// verification methods `#key-1` (signing) and `#key-2` (key agreement), while
+// the create path saves the key records as `#key-0` and `#key-1` — so the
+// document's `#key-1` names the signing key and the keystore's names the
+// x25519 one. The public keys still line up positionally, which is why a room
+// credential (the VTA signs it naming `{room_did}#key-1`, matching the
+// template) verifies; what does not survive is *addressing a key by the id the
+// document publishes*. Hence the filter below: the offer is by prefix and
+// `keyType !== "x25519"`, never by fragment number. Reported upstream.
+//
 // Minting can succeed and registration fail. The DID is real and the key
 // identifier is the half nobody writes down, so `Minted` keeps both on screen
 // and the flow switches to the existing-identity path pre-filled: the retry
