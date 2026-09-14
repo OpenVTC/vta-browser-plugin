@@ -34,6 +34,25 @@ import {
 export const TRUST_TASK_ENVELOPE_TYPE =
   "https://trusttasks.org/binding/didcomm/0.1/envelope";
 
+/**
+ * The TSP binding's payload wrapper `type` (binding 0.1).
+ *
+ * A TSP frame carries a sender VID, a recipient VID and opaque bytes — it has
+ * no message `type` of its own the way DIDComm does, and no request path the
+ * way HTTPS does. So the binding puts the marker in the JSON payload:
+ * `{ "type": TSP_BINDING_ENVELOPE_TYPE, "document": <TrustTask> }`.
+ *
+ * **This wrapper used to be omitted at both ends of this workspace**, which is
+ * why it is worth a note rather than a line. The wallet sealed the bare
+ * document and the VTA parsed one, so the two agreed with each other and with
+ * nothing else: a conformant peer built on `trust-tasks-tsp` would have refused
+ * every frame with `WrongEnvelopeType`, and neither side could use the binding
+ * library at all. Adopted together with the VTA — no deprecation window,
+ * because nothing is deployed.
+ */
+export const TSP_BINDING_ENVELOPE_TYPE =
+  "https://trusttasks.org/binding/tsp/0.1/envelope";
+
 /** Framework error-document `type` — a `TrustTask` whose payload is a
  *  {@link TrustTaskErrorPayload}. The 0.1 form; later framework versions emit
  *  {@link TRUST_TASK_ERROR_TYPE_0_2} or {@link TRUST_TASK_ERROR_TYPE_0_3}. Use

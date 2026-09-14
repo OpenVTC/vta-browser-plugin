@@ -3,9 +3,11 @@
 //
 // The VTA pushes `task-consent` and step-up requests to a wallet. Over DIDComm
 // those arrive as a binding envelope (`TRUST_TASK_ENVELOPE_TYPE`) whose `body`
-// is the Trust-Task document. Over TSP the plaintext *is* the document, with no
-// wrapper — so the two paths differ only in carriage, and this module makes
-// that the only difference the inbound pipeline sees.
+// is the Trust-Task document; over TSP as the TSP binding's own envelope
+// (`TSP_BINDING_ENVELOPE_TYPE`), whose `document` is the same thing. Each
+// binding says "this is a Trust Task" in the one place its transport gives it —
+// so the two paths differ only in carriage, and this module makes that the only
+// difference the inbound pipeline sees.
 //
 // **The pipeline is already document-centric**, which is why the adaptation is
 // honest rather than a fudge: `parseTaskConsentRequest` verifies the
@@ -26,6 +28,8 @@
 // happens here.
 
 import { decodeEnvelope, unpack } from "@openvtc/vti-tsp-js";
+
+import { openTspEnvelope } from "./tsp-binding.js";
 
 import { VtaClientError } from "./errors.js";
 import { TRUST_TASK_ENVELOPE_TYPE } from "./protocol.js";
@@ -116,15 +120,10 @@ export async function unpackInboundTsp(
     );
   }
 
-  let doc: Record<string, unknown>;
-  try {
-    doc = JSON.parse(fromUtf8.decode(opened.payload)) as Record<string, unknown>;
-  } catch (err) {
-    throw new VtaClientError(
-      "e.client.parse",
-      `tsp inbound: payload is not JSON: ${(err as Error).message}`,
-    );
-  }
+  // The binding envelope comes off here, and nowhere else in this path:
+  // everything below works on the Trust-Task document, exactly as the DIDComm
+  // inbound does once its own envelope is unwrapped.
+  const doc = openTspEnvelope(fromUtf8.decode(opened.payload));
 
   const id = typeof doc.id === "string" ? doc.id : undefined;
   if (!id || typeof doc.type !== "string") {

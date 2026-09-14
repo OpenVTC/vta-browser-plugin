@@ -14,6 +14,8 @@ import { unpackInboundTsp, TRUST_TASK_ENVELOPE_TYPE } from "../dist/index.js";
 import { pack } from "@openvtc/vti-tsp-js";
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 
+import { wrapTspEnvelope } from "../dist/vta/tsp-binding.js";
+
 const utf8 = new TextEncoder();
 
 
@@ -50,9 +52,11 @@ function resolverFor(endpoint) {
   });
 }
 
+/// A document is sealed the way the binding requires; a raw string is sealed
+/// verbatim, which is how the malformed-carriage cases are written.
 async function sealed(payload, { from = executor, senderVid = from.vid } = {}) {
   const out = await pack(
-    utf8.encode(typeof payload === "string" ? payload : JSON.stringify(payload)),
+    utf8.encode(typeof payload === "string" ? payload : wrapTspEnvelope(payload)),
     senderVid,
     holder.vid,
     {

@@ -18,6 +18,8 @@
 // simulator in tests).
 
 import { pack, unpack } from "@openvtc/vti-tsp-js";
+
+import { openTspEnvelope, wrapTspEnvelope } from "./tsp-binding.js";
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 
 import type { TspFrameClaim } from "../didcomm/index.js";
@@ -157,8 +159,11 @@ export class TspChannel implements TrustTaskChannel {
     // Both `send` and `notify` seal through here, so this is the one place the
     // proof has to be attached — before the JSON the seal is taken over.
     await signOutboundTask(envelope, this.signer);
-    // TSP plaintext = the Trust-Task envelope JSON (no binding wrapper).
-    const plaintext = utf8.encode(JSON.stringify(envelope));
+    // TSP plaintext = the binding envelope, with the signed document inside it.
+    // The wrapper goes on *after* signing, and must: the proof is taken over the
+    // document, so anything that reshaped it here would invalidate every
+    // signature while looking identical on screen.
+    const plaintext = utf8.encode(wrapTspEnvelope(envelope));
     const packed = await pack(plaintext, this.holder.vid, this.vta.vid, {
       senderSigningKey: this.holder.signingPrivateKey,
       senderEncryptionKey: this.holder.encryptionPrivateKey,
@@ -225,9 +230,13 @@ export class TspChannel implements TrustTaskChannel {
       }
       let doc: { type?: string; id?: unknown; payload?: unknown; threadId?: unknown };
       try {
-        doc = JSON.parse(fromUtf8.decode(reply.payload)) as typeof doc;
+        // The reply comes back in the same binding envelope it was sent in. A
+        // reply that dropped the wrapper would make the binding asymmetric —
+        // conformant one way and not the other — which is harder to notice than
+        // being wrong in both directions.
+        doc = openTspEnvelope(fromUtf8.decode(reply.payload)) as typeof doc;
       } catch (err) {
-        lastDecline = `payload not JSON: ${(err as Error).message}`;
+        lastDecline = (err as Error).message;
         return false;
       }
       // `threadId` on a response is the request's `threadId` or, as here, its
