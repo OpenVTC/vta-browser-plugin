@@ -41,7 +41,7 @@ const ROOT = fileURLToPath(new URL("../src/manager", import.meta.url));
  * that adding a key is inconvenient.
  */
 const KEYED_ELSEWHERE: Record<string, string> = {
-  RenameKey: "rendered per row by `Table`, which keys each <tr> on rowKey",
+  RenameEditor: "rendered as `Table`'s expanded row, inside the fragment keyed on rowKey",
   ChangeRole: "rendered per row by `Table`, which keys each <tr> on rowKey",
 };
 
@@ -75,8 +75,12 @@ function seededComponents(): { name: string; where: string }[] {
       const body = src.slice(m.index + m[0].length);
       const end = body.search(/\n(?:export )?function /);
       const scope = end === -1 ? body : body.slice(0, end);
+      // The prop may be read anywhere inside the `useState(…)` call, not only
+      // as its whole argument: `useState(nameable ? record.keyId : "")` is
+      // seeded from `record` exactly as much as `useState(record.keyId)` is,
+      // and the narrower match read it as a component with no state at all.
       const seeds = props.some((p) =>
-        new RegExp(`useState\\(\\s*${p}\\.`).test(scope) || new RegExp(`useState\\(\\s*${p}\\?\\.`).test(scope),
+        new RegExp(`useState\\([^;]*?\\b${p}\\??\\.`).test(scope),
       );
       if (seeds) found.push({ name, where: rel });
     }

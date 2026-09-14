@@ -11,7 +11,7 @@
 // key is not an administration task, it is use, and a console that offers a
 // "sign this" box turns an audit trail of key management into an oracle.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   keysCreate,
   keysList,
@@ -29,6 +29,12 @@ import { Loading, LoadError, Table, Truncated, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
 import { formatDate } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
+import {
+  isNameable,
+  keyNameProblem,
+  suggestKeyName,
+  MAX_KEY_NAME_BYTES,
+} from "../key-name.js";
 import type { ContextSelection } from "../context-column.js";
 
 const PAGE = 50;
@@ -198,37 +204,101 @@ function CreateKey({
   );
 }
 
-function RenameKey({
+/**
+ * Rename a key — the editor, which opens beneath the row rather than inside the
+ * actions column.
+ *
+ * Two things this is shaped by, both of which the previous version got wrong.
+ *
+ * **A name is not the id.** Every key an agent mints for a DID is addressed by
+ * a DID URL, and `keys/rename` will not take one back: the agent's gate is
+ * `[A-Za-z0-9._-]` up to 64 bytes (`key-name.ts`), so the pre-filled current id
+ * was the one value guaranteed to be refused — an operator pressing Save got
+ * `new_key_id is 86 bytes; maximum is 64` and no way to read what would work.
+ * The field now starts empty for such a key, with a suggestion as placeholder,
+ * and the rule is stated before it is broken.
+ *
+ * **And it is a one-way door.** A DID document addresses this key by the id it
+ * has today; the agent cannot be given that id again, because it contains `:`
+ * and `#`. So the warning is not decoration — nothing undoes it.
+ */
+function RenameEditor({
   parties,
   record,
+  onClose,
   onDone,
 }: {
   parties: Parties;
   record: KeyRecord;
+  onClose: () => void;
   onDone: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [next, setNext] = useState(record.keyId);
+  const nameable = isNameable(record.keyId);
+  const [next, setNext] = useState(nameable ? record.keyId : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<ConsentRequiredError | null>(null);
+  const fieldId = useId();
+  const input = useRef<HTMLInputElement | null>(null);
 
-  if (!open) {
-    return (
-      <Button kind="quiet" onClick={() => setOpen(true)}>
-        Rename
-      </Button>
-    );
-  }
+  // Opened from a button several columns to the right; without this the caret
+  // is nowhere and the row that just appeared looks like a decoration.
+  useEffect(() => {
+    input.current?.focus();
+  }, []);
+
+  const typed = next.trim();
+  const suggestion = nameable ? "" : suggestKeyName(record.keyId);
+  // Nothing typed is not a problem to report — it is the state the field opens
+  // in. Reporting it would put a red line under an empty box.
+  const problem = typed === "" ? null : keyNameProblem(typed);
+  const unchanged = typed === record.keyId;
 
   return (
-    <div style={{ display: "grid", gap: 7 }}>
-      <input style={fieldStyle} value={next} onChange={(e) => setNext(e.target.value)} />
+    <div style={{ display: "grid", gap: 8, maxWidth: 620, paddingTop: 2 }}>
+      <label htmlFor={fieldId} style={{ fontSize: t.xs, color: c.muted }}>
+        NEW NAME
+      </label>
+      <input
+        id={fieldId}
+        ref={input}
+        style={{ ...fieldStyle, width: "100%", fontFamily: font.mono }}
+        value={next}
+        {...(suggestion ? { placeholder: suggestion } : {})}
+        onChange={(e) => setNext(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onClose();
+        }}
+      />
+      <span style={{ fontSize: t.xs, color: c.faint, lineHeight: 1.5 }}>
+        Letters, digits, and <code style={{ fontFamily: font.mono }}>. - _</code> — up to{" "}
+        {MAX_KEY_NAME_BYTES} characters. Your agent refuses anything else.
+        {suggestion && (
+          <>
+            {" "}
+            The field is empty on purpose —{" "}
+            <code style={{ fontFamily: font.mono }}>{suggestion}</code> is a suggestion, not a
+            value.
+          </>
+        )}
+      </span>
+
+      {!nameable && (
+        <Note tone="warn">
+          This key is addressed as <code style={{ fontFamily: font.mono }}>{record.keyId}</code>,
+          which is how a DID document names it. A name cannot contain{" "}
+          <code style={{ fontFamily: font.mono }}>:</code> or{" "}
+          <code style={{ fontFamily: font.mono }}>#</code>, so renaming it detaches the key from
+          that document and your agent will not accept the old id back.
+        </Note>
+      )}
+      {problem && <Note tone="danger">{problem}</Note>}
       {error && <Note tone="danger">{error}</Note>}
       {pending && <ConsentCeremony pending={pending} />}
+
       <div style={{ display: "flex", gap: 6 }}>
         <Button
-          disabled={busy || !next.trim() || next === record.keyId}
+          disabled={busy || typed === "" || Boolean(problem) || unchanged}
           onClick={() => {
             setBusy(true);
             setError(null);
@@ -237,14 +307,14 @@ function RenameKey({
                 await keysRename(managerSender, {
                   ...parties,
                   keyId: record.keyId,
-                  newKeyId: next.trim(),
+                  newKeyId: typed,
                 });
               },
               { onConsent: setPending, onError: setError },
             ).then((ok) => {
               setBusy(false);
               if (ok) {
-                setOpen(false);
+                onClose();
                 onDone();
               }
             });
@@ -252,7 +322,7 @@ function RenameKey({
         >
           {busy ? "Saving…" : "Save"}
         </Button>
-        <Button kind="quiet" onClick={() => setOpen(false)}>
+        <Button kind="quiet" onClick={onClose}>
           Cancel
         </Button>
       </div>
@@ -274,6 +344,10 @@ export function KeysPane({
   contextHeading?: string | undefined;
 }) {
   const [limit, setLimit] = useState(PAGE);
+  // Which key is being renamed, held here rather than in the row: the editor
+  // renders as the table's expanded row, which is a sibling of the cells, not
+  // a child of one.
+  const [renaming, setRenaming] = useState<string | null>(null);
 
   const list = useAsync(
     () =>
@@ -329,7 +403,12 @@ export function KeysPane({
           <span style={{ color: c.faint, fontSize: t.xs }}>revoked</span>
         ) : (
           <div style={{ display: "grid", gap: 8, minWidth: 190 }}>
-            <RenameKey parties={parties} record={k} onDone={list.reload} />
+            <Button
+              kind="quiet"
+              onClick={() => setRenaming((id) => (id === k.keyId ? null : k.keyId))}
+            >
+              Rename
+            </Button>
             <Destructive<KeyRecord>
               label="Revoke"
               disabledReason={revokeDenied}
@@ -372,6 +451,19 @@ export function KeysPane({
               columns={columns}
               rows={list.data.keys}
               rowKey={(k) => k.keyId}
+              // Beneath the key it renames, full width — the actions column is
+              // the narrowest in the table and a DID-shaped field squeezed into
+              // it shows about eight characters of the thing being edited.
+              expanded={(k) =>
+                renaming === k.keyId ? (
+                  <RenameEditor
+                    parties={parties}
+                    record={k}
+                    onClose={() => setRenaming(null)}
+                    onDone={list.reload}
+                  />
+                ) : null
+              }
               empty={
                 contextId
                   ? `No keys in ${contextId}. Keys minted into this context appear here.`
