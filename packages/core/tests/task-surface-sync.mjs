@@ -18,17 +18,29 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const SCRIPT = resolve(import.meta.dirname, "../scripts/sync-task-surface.mjs");
-const SNAPSHOT = resolve(import.meta.dirname, "../task-surface.json");
 
-/** Build a throwaway `vta-sdk` whose `src/` holds `files`, and sync from it. */
+/**
+ * Build a throwaway `vta-sdk` whose `src/` holds `files`, and sync from it.
+ *
+ * **Into the throwaway directory, never over the checked-in snapshot.** This
+ * used to write the real `task-surface.json` and restore it in a `finally`,
+ * which is a race rather than a cleanup: `node --test` runs test files in
+ * parallel processes, and `tests/task-surface.mjs` reads that same file at
+ * module scope. It saw either this fixture's handful of tasks — surfacing as
+ * "task-surface.json looks truncated" and "implements 0 of 3 canonical task
+ * families" — or a half-written file, as `SyntaxError: Unexpected end of JSON
+ * input`. Both reproduced only where the two files happened to overlap, which
+ * on a developer machine with cores to spare is rarely, and on a two-core CI
+ * runner is often.
+ */
 function syncFrom(files) {
   const root = mkdtempSync(join(tmpdir(), "fake-sdk-"));
-  const saved = readFileSync(SNAPSHOT, "utf8");
+  const out = join(root, "task-surface.json");
   mkdirSync(join(root, "src"), { recursive: true });
   writeFileSync(join(root, "Cargo.toml"), 'version = "9.9.9"\n');
   for (const [name, body] of Object.entries(files)) {
@@ -38,15 +50,17 @@ function syncFrom(files) {
     let status = 0;
     let stderr = "";
     try {
-      execFileSync(process.execPath, [SCRIPT, root], { stdio: ["ignore", "pipe", "pipe"] });
+      execFileSync(process.execPath, [SCRIPT, root, out], { stdio: ["ignore", "pipe", "pipe"] });
     } catch (e) {
       status = e.status ?? 1;
       stderr = String(e.stderr ?? "");
     }
-    return { status, stderr, snapshot: JSON.parse(readFileSync(SNAPSHOT, "utf8")) };
+    // A run that stopped deliberately writes nothing, which is the property
+    // two of these tests are about — so an absent file is reported as `null`
+    // rather than throwing here and losing the status that explains it.
+    const snapshot = existsSync(out) ? JSON.parse(readFileSync(out, "utf8")) : null;
+    return { status, stderr, snapshot };
   } finally {
-    // The script writes the real snapshot, so put it back however this ends.
-    writeFileSync(SNAPSHOT, saved);
     rmSync(root, { recursive: true, force: true });
   }
 }
@@ -144,8 +158,14 @@ pub const ORPHAN_TYPE: &str =
   // The *declaration* line, not the value line below it: that is where the
   // constant is and where someone would edit it.
   assert.match(stderr, /p\.rs:2/, "the message does not say where to look");
-  // And the snapshot on disk is untouched — a failed sync must not half-write.
-  assert.ok(snapshot.tasks.length > 0, "the real snapshot was overwritten by a failed run");
+  // And nothing was written — a failed sync must not half-write.
+  //
+  // This used to read "the real snapshot is untouched", because the script had
+  // no way to write anywhere else and the fixture ran against the checked-in
+  // file. Writing to the run's own path states the property directly: a stop
+  // leaves no snapshot at all, rather than leaving one whose survival is only
+  // evidence that this particular run did not get as far as the write.
+  assert.equal(snapshot, null, "a stopped sync still produced a snapshot");
 });
 
 // `include_str!` constants are `&str` and are not tasks. The stop above must

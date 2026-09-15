@@ -5,7 +5,7 @@
 // rendering, which is how the extension ended up with two visual identities
 // and ~20 ad-hoc hex literals.
 
-import { createContext, useContext, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { splitDid, didHost, type DidPart } from "./did-display.js";
 import { displayAgentName, type AgentName } from "./agent-name.js";
 import { c, t, font, button, pill, type ButtonKind, type PillTone } from "./theme.js";
@@ -300,5 +300,56 @@ export function Note({ tone = "warn", children }: { tone?: NoteTone; children: R
 export function Empty({ children }: { children: ReactNode }) {
   return (
     <div style={{ fontSize: t.sm, color: c.faint, padding: "10px 0" }}>{children}</div>
+  );
+}
+
+/**
+ * Copy a value to the clipboard, and say whether it worked.
+ *
+ * **The refusal is the reason this is a component.** `navigator.clipboard`
+ * rejects — a document without focus, a browser that has not granted the
+ * permission — and the six places that had grown their own copy button each had
+ * to remember that. A button that flips to "Copied" on a promise nobody awaited
+ * tells the operator their DID is on the clipboard when it is not, and they find
+ * out by pasting something else.
+ *
+ * Two seconds, then back: long enough to read, short enough that a second copy
+ * of a *different* value is not mistaken for the first one still showing.
+ */
+export function CopyButton({
+  value,
+  label = "Copy",
+  kind = "quiet",
+  title,
+}: {
+  value: string;
+  label?: string;
+  kind?: ButtonKind;
+  /** Which value this copies, for the accessible name. A row of identical
+   *  "Copy" buttons is unusable with a screen reader without it. */
+  title?: string;
+}) {
+  const [state, setState] = useState<"idle" | "done" | "refused">("idle");
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  const copy = () => {
+    clearTimeout(timer.current);
+    navigator.clipboard.writeText(value).then(
+      () => setState("done"),
+      () => setState("refused"),
+    );
+    timer.current = setTimeout(() => setState("idle"), 2000);
+  };
+
+  return (
+    <Button
+      kind={kind}
+      onClick={copy}
+      {...(title ? { title: state === "refused" ? `${title} — the browser refused clipboard access` : title } : {})}
+    >
+      {state === "done" ? "Copied" : state === "refused" ? "Refused" : label}
+    </Button>
   );
 }

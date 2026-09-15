@@ -94,7 +94,7 @@ jobs:
       # contain this" a structural property rather than a convention.
       - name: Assert agent-administration surface is confined to the console
         run: |
-          for task in 'acl/grant/0.1' 'acl/revoke/0.1' 'acl/update/0.1' 'contexts/delete/1.0' 'keys/create/0.1' 'keys/sign/0.1' 'policy/upsert/0.2' 'device/wipe/0.1' 'config/patch/0.1' 'vta/did-templates/create/2.0' 'consent/approver-set/1.0' 'keys/import/0.1' 'did-management/did/delete/0.1' 'vta/services/enable/1.0' 'vta/services/disable/1.0' 'vta/credentials/issue/0.1' 'vta/credentials/revoke/0.1'; do
+          for task in 'acl/grant/0.1' 'acl/revoke/0.1' 'acl/update/0.1' 'contexts/delete/1.0' 'keys/create/0.1' 'keys/sign/0.1' 'policy/upsert/0.2' 'device/wipe/0.1' 'config/patch/0.1' 'vta/did-templates/create/2.0' 'vta/did-templates/list/2.0' 'vta/did-templates/update/2.0' 'vta/did-templates/delete/2.0' 'vta/did-templates/render/2.0' 'consent/approver-set/1.0' 'keys/import/0.1' 'did-management/did/delete/0.1' 'vta/services/enable/1.0' 'vta/services/disable/1.0' 'vta/credentials/issue/0.1' 'vta/credentials/revoke/0.1'; do
             leaked=$(grep -rlF "$task" packages/extension/dist/ | grep -v '^packages/extension/dist/manager\.js$' || true)
             if [ -n "$leaked" ]; then
               echo "::error::$leaked contains $task — @openvtc/pnm-core/admin must not be reachable from any wallet surface (check for a root-barrel import, or a shared chunk)"

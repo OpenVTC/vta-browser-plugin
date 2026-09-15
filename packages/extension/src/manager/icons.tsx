@@ -42,7 +42,7 @@ import type { CSSProperties } from "react";
  *  name, which is what keeps `shell.tsx` from carrying a second lookup table. */
 export type IconName =
   // Sections, one per `SectionId`.
-  | "contexts" | "keys" | "dids"
+  | "contexts" | "keys" | "dids" | "did-templates"
   | "credentials" | "persona" | "memory" | "app-state" | "rooms"
   | "services" | "maintenance" | "audit"
   | "access" | "approvals" | "policy" | "sessions"
@@ -63,6 +63,12 @@ const PATHS: Record<IconName, string> = {
     "M11.2 12h9.4M18 12v3.2M15.1 12v2.4",
   dids:
     "M3.9 10.9 10.9 3.9h6.6a2.6 2.6 0 0 1 2.6 2.6v6.6l-7 7a2.1 2.1 0 0 1-3 0l-6.2-6.2a2.1 2.1 0 0 1 0-3z",
+  // The DIDs tag with a second one behind it: a template is the shape a DID is
+  // stamped from, so the two sections read as kin in the rail. Both copies stay
+  // inside the 24-unit box — a path that runs to the edge is clipped on the
+  // stroke, which shows up as a glyph with one flat side.
+  "did-templates":
+    "M6.6 13.6 3.4 10.4a1.9 1.9 0 0 1 0-2.7l6.3-6.3h3M9.6 13.1l5.9-5.9h4.5a1.8 1.8 0 0 1 1.8 1.8v4.5l-5.9 5.9a1.5 1.5 0 0 1-2.1 0l-4.2-4.2a1.5 1.5 0 0 1 0-2.1z",
   credentials:
     "M6.9 8.2h7.2M6.9 11.6h4.6M14.9 19.7 14.3 23l2.3-1.4 2.3 1.4-.6-3.3",
   persona:
@@ -117,6 +123,7 @@ const SHAPES: Partial<Record<IconName, string>> = {
   contexts: `<circle cx="7.7" cy="8.3" r="1.25" fill="currentColor" stroke="none"/>`,
   keys: `<circle cx="7.6" cy="12" r="3.6"/>`,
   dids: `<circle cx="16.2" cy="7.8" r="1.35"/>`,
+  "did-templates": `<circle cx="18.4" cy="10.4" r="1.15"/>`,
   credentials: `<rect x="3.4" y="4.2" width="17.2" height="11.6" rx="2.2"/><circle cx="16.6" cy="17.4" r="2.9"/>`,
   persona: `<circle cx="12" cy="8.4" r="3.8"/>`,
   "app-state": `<rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2.6"/><circle cx="6.7" cy="6.85" r=".75" fill="currentColor" stroke="none"/><circle cx="9.2" cy="6.85" r=".75" fill="currentColor" stroke="none"/>`,
