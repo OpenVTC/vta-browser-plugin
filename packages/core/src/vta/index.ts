@@ -18,6 +18,7 @@ export * from "./auth.js";
 export * from "./auth-tasks.js";
 export * from "./transport.js";
 export * from "./trust-task.js";
+export * from "./tsp-binding.js";
 export * from "./tsp-channel.js";
 export * from "./tsp-inbound.js";
 export * from "./tsp-mediator-transport.js";

@@ -7,6 +7,8 @@ import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import { signTrustTask } from "../dist/trust-tasks/sign.js";
 import { generateSigningIdentity } from "../dist/siop/self-issued.js";
 
+import { openTspEnvelope, wrapTspEnvelope } from "../dist/vta/tsp-binding.js";
+
 const utf8 = new TextEncoder();
 const fromUtf8 = new TextDecoder();
 
@@ -48,7 +50,11 @@ function simulatedVtaTransport(vta, holder, dispatch, replySenderVid) {
       });
       assert.equal(req.sender, holder.vid);
       assert.equal(req.receiver, vta.vid);
-      const reqDoc = JSON.parse(fromUtf8.decode(req.payload));
+      // The simulated VTA speaks the binding, like the real one: it opens the
+      // envelope to read the request and seals its reply back in one. A stub
+      // that accepted a bare document would let the wallet regress to the old
+      // dialect with every test still green.
+      const reqDoc = openTspEnvelope(fromUtf8.decode(req.payload));
       const replyDoc = dispatch(reqDoc);
       // The real VTA threads its response to the request: `respond_with` sets
       // `thread_id = self.thread_id.or(self.id)`. The channel correlates on
@@ -69,7 +75,7 @@ function simulatedVtaTransport(vta, holder, dispatch, replySenderVid) {
       // Seal the reply under `replySenderVid` (defaults to the VTA's real VID),
       // still using the VTA's keys — so the channel's own sender-VID check is
       // what's exercised, not a crypto failure.
-      const sealed = await pack(utf8.encode(JSON.stringify(replyDoc)), replySenderVid ?? vta.vid, holder.vid, {
+      const sealed = await pack(utf8.encode(wrapTspEnvelope(replyDoc)), replySenderVid ?? vta.vid, holder.vid, {
         senderSigningKey: vta.signSk,
         senderEncryptionKey: vta.encSk,
         receiverEncryptionKey: holder.encPk,

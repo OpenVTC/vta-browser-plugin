@@ -39,6 +39,8 @@ import {
 // `vault/delete/0.1` is one of the 93 — a mutation, and proof REQUIRED.
 const VAULT_DELETE = "https://trusttasks.org/spec/vault/delete/0.1";
 
+import { openTspEnvelope, wrapTspEnvelope } from "../dist/vta/tsp-binding.js";
+
 const utf8 = new TextEncoder();
 const fromUtf8 = new TextDecoder();
 
@@ -166,7 +168,9 @@ test("TSP: the sealed document carries a proof, distinct from the outer signatur
         senderEncryptionKey: x25519.getPublicKey(holderEncSk),
         senderSigningKey: ed25519.getPublicKey(holderSignSk),
       });
-      received = JSON.parse(fromUtf8.decode(opened.payload));
+      // Opened through the binding: what the wallet seals is the envelope, and
+      // the document under test is inside it.
+      received = openTspEnvelope(fromUtf8.decode(opened.payload));
       // Signed, because a real VTA signs its responses and the channel refuses
       // an unsigned one. Built fully first: a proof covers the document it was
       // made over, so anything added after it would invalidate it.
@@ -179,7 +183,7 @@ test("TSP: the sealed document carries a proof, distinct from the outer signatur
       };
       await signTrustTask({ envelope: replyDoc, signing: vtaSigning });
       const reply = await pack(
-        utf8.encode(JSON.stringify(replyDoc)),
+        utf8.encode(wrapTspEnvelope(replyDoc)),
         vtaVid,
         holderVid,
         {
