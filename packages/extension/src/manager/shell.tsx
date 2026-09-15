@@ -22,6 +22,7 @@ import { WhoamiBanner } from "./whoami-banner.js";
 import { ContextsPane } from "./panes/contexts.js";
 import { KeysPane } from "./panes/keys.js";
 import { DidsPane } from "./panes/dids.js";
+import { DidTemplatesPane } from "./panes/did-templates.js";
 import { AccessPane } from "./panes/access.js";
 import { SessionsPane } from "./panes/sessions.js";
 import { ApprovalsPane } from "./panes/approvals.js";
@@ -43,6 +44,7 @@ export type SectionId =
   | "contexts"
   | "keys"
   | "dids"
+  | "did-templates"
   | "credentials"
   | "persona"
   | "memory"
@@ -97,6 +99,11 @@ const ACTS: Act[] = [
       { id: "contexts", label: "Contexts", icon: "contexts", contextScoped: true },
       { id: "keys", label: "Keys", icon: "keys", contextScoped: true },
       { id: "dids", label: "DIDs", icon: "dids", contextScoped: true },
+      // Scoped, and the selection is part of a template's address rather than a
+      // filter: a template lives in the global namespace or in one context, and
+      // the same name in both is two different documents. The pane shows both
+      // sets at once and the tree decides which context's it can reach.
+      { id: "did-templates", label: "DID templates", icon: "did-templates", contextScoped: true },
     ],
   },
   {
@@ -485,6 +492,15 @@ export function ManagerShell() {
       case "dids":
         return (
           <DidsPane
+            parties={parties}
+            authority={vta.authority}
+            contextId={selected}
+            contextHeading={heading}
+          />
+        );
+      case "did-templates":
+        return (
+          <DidTemplatesPane
             parties={parties}
             authority={vta.authority}
             contextId={selected}

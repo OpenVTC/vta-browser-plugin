@@ -101,8 +101,21 @@ export interface WebvhDidCreateParams extends WebvhCall {
   serverId?: string;
   /** Where the log will be served, for the serverless case. */
   url?: string;
-  /** How the path under the host is chosen. */
+  /**
+   * How the path under the host is chosen. Absent means `autoAssign` — the
+   * hosting server allocates one.
+   *
+   * The specification also accepts a bare `path` as shorthand for
+   * `{ mode: "explicit", path }`, and **sending both is an error**. Only the
+   * structured member is exposed here, so there is one way to say it and no
+   * way to say it twice.
+   */
   pathMode?: WebvhPathMode;
+  /** Hosting domain to publish under, where the server serves more than one. */
+  domain?: string;
+  /** A human-readable label for the agent's own record. Not published — it
+   *  does not reach the DID document or the log. */
+  label?: string;
   /** Allow the DID to move location later. Cannot be added afterwards. */
   portable?: boolean;
   /**
@@ -116,6 +129,14 @@ export interface WebvhDidCreateParams extends WebvhCall {
    */
   setPrimary?: boolean;
   /**
+   * Publish a `DIDCommMessaging` entry naming the agent's own mediator.
+   *
+   * The mediator is the agent's, not the caller's to choose: this says *whether*
+   * the DID advertises one, and the agent fills in which. A DID with no such
+   * entry is reachable only by whoever already knows how to reach it.
+   */
+  addMediatorService?: boolean;
+  /**
    * Publish a `TSPTransport` entry at the mediator the document names for
    * DIDComm, beside that entry.
    *
@@ -124,6 +145,29 @@ export interface WebvhDidCreateParams extends WebvhCall {
    * use.
    */
   addTspService?: boolean;
+  /**
+   * Further service entries, written into the document verbatim.
+   *
+   * **The agent does not compose these and does not check them.** Whatever is
+   * here is published as-is and is then part of a log entry, which is append-only
+   * — a malformed entry is corrected by a further update rather than removed. A
+   * caller building these from a form validates before it sends.
+   */
+  additionalServices?: Record<string, unknown>[];
+  /**
+   * How many successor keys to commit in advance.
+   *
+   * **`0` disables pre-rotation**, and disabling it is not merely a smaller
+   * commitment: with no successor committed, a thief holding the current key can
+   * rotate to their own as convincingly as the owner can, so a compromise cannot
+   * be recovered from. Absent leaves the agent's default, which is the answer a
+   * caller with no reason to differ should give.
+   */
+  preRotationCount?: number;
+  /** An existing key to sign log entries with. Absent mints a fresh one. */
+  signingKeyId?: string;
+  /** An existing key-agreement key to publish. Absent mints a fresh one. */
+  kaKeyId?: string;
   /**
    * Render the document from a stored or built-in DID template.
    *
@@ -180,7 +224,19 @@ export async function webvhDidCreate(
     // keeping the context's identity, and dropping it lets the agent's `true`
     // default replace it.
     ...(rest.setPrimary !== undefined ? { setPrimary: rest.setPrimary } : {}),
+    ...(rest.domain ? { domain: rest.domain } : {}),
+    ...(rest.label ? { label: rest.label } : {}),
+    ...(rest.addMediatorService !== undefined
+      ? { addMediatorService: rest.addMediatorService }
+      : {}),
     ...(rest.addTspService !== undefined ? { addTspService: rest.addTspService } : {}),
+    ...(rest.additionalServices?.length ? { additionalServices: rest.additionalServices } : {}),
+    // `!== undefined` rather than truthy: `0` is the caller switching
+    // pre-rotation off, and a truthy test would drop it and silently leave the
+    // agent's default on.
+    ...(rest.preRotationCount !== undefined ? { preRotationCount: rest.preRotationCount } : {}),
+    ...(rest.signingKeyId ? { signingKeyId: rest.signingKeyId } : {}),
+    ...(rest.kaKeyId ? { kaKeyId: rest.kaKeyId } : {}),
     ...(rest.template ? { template: rest.template } : {}),
     ...(rest.templateContext ? { templateContext: rest.templateContext } : {}),
     ...(rest.templateVars ? { templateVars: rest.templateVars } : {}),

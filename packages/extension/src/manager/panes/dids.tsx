@@ -7,137 +7,31 @@
 // A DID here is a *published* identifier: its log lives on a hosting server and
 // anyone can resolve it. That is why deletion is treated as the sharpest action
 // in this console — see the confirm copy.
+//
+// A row opens into `did-detail.tsx`, which fetches the log. It is fetched on
+// open rather than with the listing because `includeLog` is opt-in at the agent
+// for a reason: the log is the DID's whole history and can be large, and a
+// listing that pulled every one would be the whole history of every identifier
+// to draw a table.
 
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import {
-  webvhDidCreate,
   webvhDidDelete,
   webvhDidList,
   webvhDidRealignKeys,
   type WebvhDidRecord,
 } from "@openvtc/pnm-core/webvh";
-import { Button, Did, Note, Panel, Pill } from "../../ui.js";
+import { Button, Did, Panel, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
-import { ConsentRequiredError } from "../carrier.js";
-import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
+import { Destructive } from "../destructive.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
 import { formatDate } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 import type { ContextSelection } from "../context-column.js";
-
-const fieldStyle: React.CSSProperties = {
-  boxSizing: "border-box",
-  padding: "6px 9px",
-  background: c.ground,
-  color: c.text,
-  border: `1px solid ${c.line}`,
-  borderRadius: "var(--w-r-sm)",
-  fontSize: t.sm,
-};
-
-function CreateDid({
-  parties,
-  contextId,
-  authority,
-  onCreated,
-}: {
-  parties: Parties;
-  contextId: ContextSelection;
-  authority: Authority | null;
-  onCreated: () => void;
-}) {
-  const [serverId, setServerId] = useState("");
-  const [portable, setPortable] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<ConsentRequiredError | null>(null);
-
-  const denied = authority && !hasRole(authority, "admin", "super-admin", "operator")
-    ? "Creating a DID needs an administrative role at this agent."
-    : !contextId
-      ? "Select a context in the tree first — a DID is created inside one."
-      : null;
-
-  const submit = useCallback(async () => {
-    if (!contextId) return;
-    setBusy(true);
-    setError(null);
-    setPending(null);
-    const ok = await runMutation(
-      async () => {
-        await webvhDidCreate(managerSender, {
-          ...parties,
-          contextId,
-          portable,
-          ...(serverId.trim() ? { serverId: serverId.trim() } : {}),
-        });
-      },
-      { onConsent: setPending, onError: setError },
-    );
-    setBusy(false);
-    if (ok) {
-      setServerId("");
-      onCreated();
-    }
-  }, [parties, contextId, serverId, portable, onCreated]);
-
-  return (
-    <Panel
-      title="New DID"
-      description={
-        contextId ? (
-          <>
-            Created in <code style={{ fontFamily: font.mono }}>{contextId}</code> and published as
-            a <code style={{ fontFamily: font.mono }}>did:webvh</code> log on a hosting server.
-            Once published it is resolvable by anyone.
-          </>
-        ) : (
-          "Select a context in the tree to create a DID inside it."
-        )
-      }
-    >
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
-        <label style={{ display: "grid", gap: 4 }}>
-          <span style={{ fontSize: t.xs, color: c.muted }}>SERVER ID (optional)</span>
-          <input
-            style={fieldStyle}
-            value={serverId}
-            onChange={(e) => setServerId(e.target.value)}
-            placeholder="your agent's default"
-          />
-        </label>
-        <label style={{ display: "flex", gap: 7, alignItems: "center", fontSize: t.sm, paddingBottom: 7 }}>
-          <input type="checkbox" checked={portable} onChange={(e) => setPortable(e.target.checked)} />
-          Portable
-        </label>
-      </div>
-
-      {portable && (
-        <Note tone="warn">
-          A portable DID can be moved to another hosting domain later. That flexibility is decided
-          now and cannot be added afterwards — but it also means the DID's identifier does not pin
-          it to one host.
-        </Note>
-      )}
-      {error && <Note tone="danger">{error}</Note>}
-      {pending && <ConsentCeremony pending={pending} />}
-
-      <div>
-        <Button
-          kind="primary"
-          disabled={busy || Boolean(denied)}
-          {...(denied ? { title: denied } : {})}
-          onClick={() => void submit()}
-        >
-          {busy ? "Creating…" : "Create DID"}
-        </Button>
-      </div>
-      {denied && <span style={{ fontSize: t.sm, color: c.muted }}>{denied}</span>}
-    </Panel>
-  );
-}
+import { CreateDid } from "./did-create.js";
+import { DidDetail } from "./did-detail.js";
 
 /** What the agent said a realignment would do, or did. */
 type RealignPlan = Awaited<ReturnType<typeof webvhDidRealignKeys>>;
@@ -258,6 +152,11 @@ export function DidsPane({
     [parties.holder.did, parties.service.did, contextId],
   );
 
+  // Which row is open, by DID rather than by index: the list is refetched after
+  // every realignment and deletion, and an index would reopen whichever DID had
+  // moved into that position.
+  const [opened, setOpened] = useState<string | null>(null);
+
   const denied = authority && !hasRole(authority, "admin", "super-admin")
     ? "Deleting a DID needs the admin role at this agent."
     : null;
@@ -272,7 +171,26 @@ export function DidsPane({
       key: "did",
       header: "DID",
       width: "26ch",
-      render: (d) => <Did value={d.did} />,
+      // The identifier is the control. An operator wanting to read a DID's
+      // history clicks the DID — a separate "View" button beside it would be a
+      // second thing to find for the gesture they already tried.
+      render: (d) => (
+        <button
+          onClick={() => setOpened(opened === d.did ? null : d.did)}
+          aria-expanded={opened === d.did}
+          title={opened === d.did ? "Close" : "Open this DID and read its log"}
+          style={{
+            border: "none",
+            background: "transparent",
+            padding: 0,
+            textAlign: "left",
+            cursor: "pointer",
+            minWidth: 0,
+          }}
+        >
+          <Did value={d.did} />
+        </button>
+      ),
     },
     {
       key: "context",
@@ -292,7 +210,12 @@ export function DidsPane({
     {
       key: "log",
       header: "Log entries",
-      render: (d) => <span style={{ color: c.muted }}>{d.logEntryCount}</span>,
+      render: (d) => (
+        <span style={{ color: c.muted }}>
+          {d.logEntryCount}
+          {opened === d.did ? "" : " ·\u00a0read"}
+        </span>
+      ),
     },
     {
       key: "created",
@@ -352,6 +275,9 @@ export function DidsPane({
             columns={columns}
             rows={list.data.dids}
             rowKey={(d) => d.did}
+            expanded={(d) =>
+              opened === d.did ? <DidDetail parties={parties} record={d} /> : null
+            }
             empty={
               contextId
                 ? `No DIDs in ${contextId}. Identifiers published from this context appear here.`
