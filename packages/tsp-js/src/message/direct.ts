@@ -23,15 +23,19 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { unpack as unpackRev2, type Rev2UnpackKeys } from "../rev2/reader.js";
 import {
   pack as packRev3,
+  packAccept as packAcceptRev3,
+  packCancel as packCancelRev3,
+  packInvite as packInviteRev3,
   packWithHops as packWithHopsRev3,
   unpack as unpackRev3,
   type PackKeys,
   type PackedMessage,
 } from "../rev3/direct.js";
-import type { ControlType, MessageType } from "../rev3/payload.js";
+import type { ApplicationKind, ControlMessage, ControlType } from "../rev3/payload.js";
+import type { MessageType } from "../rev3/payload.js";
 import { describeRevision, peekRevision, TspRevisionError, type Revision } from "../revision.js";
 
-export type { ControlType, MessageType, PackKeys, PackedMessage };
+export type { ApplicationKind, ControlMessage, ControlType, MessageType, PackKeys, PackedMessage };
 
 /** Keys needed to unpack a message of either revision.
  *
@@ -61,9 +65,13 @@ export interface UnpackedMessage {
   receiver: string;
   /** The message kind recovered from the payload frame. */
   messageType: MessageType;
-  /** Which control message, when `messageType` is `"control"`. Rev 3 only —
-   *  Rev 2 messages never decode to a control frame here. */
-  controlType?: ControlType;
+  /** The recovered relationship-forming message, when there is one (§7.2).
+   *
+   *  Rev 3 only: Rev 2 messages never decode to one here. Its self-addressing
+   *  digest has already been verified against the frame, so a `control` that is
+   *  present identified itself correctly — but *what to do about it* is the
+   *  caller's, via `relationship.ts`. */
+  control?: ControlMessage;
   /** Remaining route for a Routed message (empty otherwise). */
   hops: string[];
   /** SHA-256 of the payload frame — the TSP thread digest. */
@@ -87,13 +95,51 @@ export function pack(
  *  payload frame. `hops` must be empty for Direct/Nested. */
 export function packWithHops(
   body: Uint8Array,
-  kind: "direct" | "nested" | "routed",
+  kind: ApplicationKind,
   hops: string[],
   senderVid: string,
   receiverVid: string,
   keys: PackKeys,
 ): Promise<PackedMessage> {
   return packWithHopsRev3(body, kind, hops, senderVid, receiverVid, keys);
+}
+
+/**
+ * Pack a relationship-forming invite (`XRFI`, §7.2).
+ *
+ * `PackedMessage.threadDigest` is the invite's self-addressing digest, and the
+ * caller must keep it: it is what the accept echoes back, and what a later
+ * cancellation names. It cannot be known before packing — the derivation covers
+ * the envelope this call builds.
+ */
+export function packInvite(
+  senderVid: string,
+  receiverVid: string,
+  keys: PackKeys,
+  opts: { route?: string[]; nonce?: Uint8Array } = {},
+): Promise<PackedMessage> {
+  return packInviteRev3(senderVid, receiverVid, keys, opts);
+}
+
+/** Pack a relationship-forming accept (`XRFA`) answering `inviteDigest`. */
+export function packAccept(
+  inviteDigest: Uint8Array,
+  senderVid: string,
+  receiverVid: string,
+  keys: PackKeys,
+): Promise<PackedMessage> {
+  return packAcceptRev3(inviteDigest, senderVid, receiverVid, keys);
+}
+
+/** Pack a relationship cancellation (`XRFD`) naming either half of the
+ *  relationship it ends (§7.2.1, §7.3). */
+export function packCancel(
+  relationshipDigest: Uint8Array,
+  senderVid: string,
+  receiverVid: string,
+  keys: PackKeys,
+): Promise<PackedMessage> {
+  return packCancelRev3(relationshipDigest, senderVid, receiverVid, keys);
 }
 
 /**

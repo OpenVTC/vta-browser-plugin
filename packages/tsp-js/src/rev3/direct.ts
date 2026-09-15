@@ -27,7 +27,16 @@ import * as wire from "../cesr/wire.js";
 import * as hpke from "../crypto/hpke.js";
 import * as sign from "../crypto/sign.js";
 import { decodeEnvelope, encodeFields, finalizeFrame } from "./envelope.js";
-import { decodePayloadFrame, encodePayloadFrame, type ControlType, type MessageType } from "./payload.js";
+import {
+  decodePayloadFrame,
+  encodeControlFrame,
+  encodePayloadFrame,
+  type ApplicationKind,
+  type ControlMessage,
+  type ControlType,
+  type MessageType,
+} from "./payload.js";
+import { generateNonce } from "./fields.js";
 
 const ENC_LEN = 32;
 const TAG_LEN = 16;
@@ -41,7 +50,7 @@ const ATTACH_GROUP_QUADLETS = SIG_GROUP_QUADLETS + 1;
 /** Only index 0 can be verified: a VID names one signing key here. */
 const SIG_INDEX = 0;
 
-export type { ControlType, MessageType };
+export type { ApplicationKind, ControlMessage, ControlType, MessageType };
 
 /** Raw key material needed to pack. All keys are raw 32-byte. */
 export interface PackKeys {
@@ -70,8 +79,10 @@ export interface UnpackedMessage {
   sender: string;
   receiver: string;
   messageType: MessageType;
-  /** Set only when `messageType` is `"control"`. */
-  controlType?: ControlType;
+  /** The recovered relationship-forming message, when there is one. Its
+   *  self-addressing digest has already been verified against the frame, so a
+   *  `control` that is present is one that identified itself correctly. */
+  control?: ControlMessage;
   hops: string[];
   threadDigest: Uint8Array;
 }
@@ -108,26 +119,22 @@ function decodeSignatureFrame(data: Uint8Array, cur: wire.Cursor): Uint8Array {
   return sig;
 }
 
-/** Pack a Rev 3 message of any kind. */
-export async function packWithHops(
-  body: Uint8Array,
-  kind: "direct" | "nested" | "routed",
-  hops: string[],
-  senderVid: string,
-  receiverVid: string,
+/** Seal a payload frame into a complete, signed `-E` message.
+ *
+ *  The one place the envelope, the ciphertext and the signature come together,
+ *  shared by the application and control paths — a control message differs only
+ *  in the frame it hands over, and nothing below this line should know which it
+ *  was given. */
+async function sealFrame(
+  fields: Uint8Array,
+  frame: Uint8Array,
   keys: PackKeys,
-): Promise<PackedMessage> {
-  // 1. Envelope fields — these are the HPKE-Base AAD.
-  const fields = encodeFields(senderVid, receiverVid);
-
-  // 2. Plaintext payload frame, and the thread digest over it.
-  const { frame, threadDigest } = encodePayloadFrame(body, kind, hops, senderVid);
-
-  // 3. Seal. `aad` binds the ciphertext to the version and both VIDs; `info`
-  //    is the fixed protocol code.
+): Promise<Uint8Array> {
+  // `aad` binds the ciphertext to the version and both VIDs; `info` is the
+  // fixed protocol code.
   const sealed = await hpke.sealBase(frame, fields, keys.receiverEncryptionKey, wire.TSP_INFO);
 
-  // 4. Ciphertext field: `enc ‖ ct`, with the AEAD tag inside `ct`.
+  // Ciphertext field: `enc ‖ ct`, with the AEAD tag inside `ct`.
   const ciphertext = new Uint8Array(sealed.enc.length + sealed.ciphertext.length);
   ciphertext.set(sealed.enc, 0);
   ciphertext.set(sealed.ciphertext, sealed.enc.length);
@@ -135,13 +142,110 @@ export async function packWithHops(
   const field: number[] = [];
   wire.encodeVariableData(wire.TSP_HPKE_BASE_CIPHERTEXT, ciphertext, field);
 
-  // 5. Close the `-E` frame over the fields and the body, then sign it.
+  // Close the `-E` frame over the fields and the body, then sign it.
   const wireBytes = finalizeFrame(fields, new Uint8Array(field));
   const signature = sign.sign(wireBytes, keys.senderSigningKey);
   const out = Array.from(wireBytes);
   encodeSignatureFrame(signature, out);
+  return new Uint8Array(out);
+}
 
-  return { bytes: new Uint8Array(out), threadDigest };
+/** Pack a Rev 3 application message of any kind. */
+export async function packWithHops(
+  body: Uint8Array,
+  kind: ApplicationKind,
+  hops: string[],
+  senderVid: string,
+  receiverVid: string,
+  keys: PackKeys,
+): Promise<PackedMessage> {
+  const fields = encodeFields(senderVid, receiverVid);
+  const { frame, threadDigest } = encodePayloadFrame(body, kind, hops, senderVid);
+  return { bytes: await sealFrame(fields, frame, keys), threadDigest };
+}
+
+/**
+ * Pack a relationship-forming control message (§7.2, §9.3).
+ *
+ * The digest is computed here rather than by the caller, and cannot be
+ * otherwise: it is self-addressing over the envelope, which does not exist
+ * until this function builds it. That is why `threadDigest` comes back on the
+ * result — an inviter needs it to recognise the accept that answers it, and
+ * cannot know it in advance.
+ */
+export async function packControl(
+  control: ControlMessage,
+  senderVid: string,
+  receiverVid: string,
+  keys: PackKeys,
+): Promise<PackedMessage> {
+  const fields = encodeFields(senderVid, receiverVid);
+  const { frame, threadDigest } = encodeControlFrame(control, senderVid, fields);
+  return { bytes: await sealFrame(fields, frame, keys), threadDigest };
+}
+
+/**
+ * Pack a relationship-forming invite (`XRFI`).
+ *
+ * `route` is the §7.2.4 `Reply_Path` — a route to send the accept back over,
+ * empty for a direct reply. The nonce is generated here unless one is supplied;
+ * supplying one is for tests and for replaying a known invite, not for reuse.
+ */
+export function packInvite(
+  senderVid: string,
+  receiverVid: string,
+  keys: PackKeys,
+  opts: { route?: string[]; nonce?: Uint8Array } = {},
+): Promise<PackedMessage> {
+  return packControl(
+    {
+      controlType: "invite",
+      nonce: opts.nonce ?? generateNonce(),
+      route: opts.route ?? [],
+    },
+    senderVid,
+    receiverVid,
+    keys,
+  );
+}
+
+/**
+ * Pack a relationship-forming accept (`XRFA`) answering `inviteDigest`.
+ *
+ * The digest echoed here is the invite's, verbatim — it is what tells the
+ * inviter which exchange is being accepted, and an accept that echoes the wrong
+ * one is indistinguishable from an accept to a message we never sent.
+ */
+export function packAccept(
+  inviteDigest: Uint8Array,
+  senderVid: string,
+  receiverVid: string,
+  keys: PackKeys,
+): Promise<PackedMessage> {
+  return packControl(
+    { controlType: "accept", inReplyTo: inviteDigest, route: [] },
+    senderVid,
+    receiverVid,
+    keys,
+  );
+}
+
+/**
+ * Pack a relationship cancellation (`XRFD`) naming `relationshipDigest` — the
+ * digest of either half of the relationship being ended (§7.2.1).
+ */
+export function packCancel(
+  relationshipDigest: Uint8Array,
+  senderVid: string,
+  receiverVid: string,
+  keys: PackKeys,
+): Promise<PackedMessage> {
+  return packControl(
+    { controlType: "cancel", inReplyTo: relationshipDigest, route: [] },
+    senderVid,
+    receiverVid,
+    keys,
+  );
 }
 
 /** Pack a Rev 3 direct message. */
@@ -207,13 +311,13 @@ export async function unpack(
     wire.TSP_INFO,
   );
 
-  const frame = decodePayloadFrame(payloadFrame, decoded.envelope.sender);
+  const frame = decodePayloadFrame(payloadFrame, decoded.envelope.sender, aad);
   return {
     payload: frame.body,
     sender: decoded.envelope.sender,
     receiver: decoded.envelope.receiver,
     messageType: frame.kind,
-    ...(frame.controlType ? { controlType: frame.controlType } : {}),
+    ...(frame.control ? { control: frame.control } : {}),
     hops: frame.hops,
     threadDigest: frame.threadDigest,
   };

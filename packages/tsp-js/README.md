@@ -41,6 +41,46 @@ So this package is deliberately asymmetric:
 Remembering that per peer belongs above this package — a codec has no business
 holding state about who it has talked to.
 
+## Relationships
+
+Rev 3 §7.2.2: an endpoint SHOULD **drop** an application message from a VID it
+holds no relationship with. Dropped, not refused — nothing comes back — so a
+client that skips the handshake sees a timeout, not an error.
+
+```ts
+import { packInvite, packAccept, transition, canSend } from "@openvtc/vti-tsp-js";
+
+const invite = await packInvite(ourVid, theirVid, keys);
+// `invite.threadDigest` is the exchange's thread id. Keep it: the accept echoes
+// it back, and a later cancellation names it. It cannot be known in advance —
+// the digest is self-addressing over the envelope this call builds.
+
+// …on receiving their accept:
+const accept = await unpack(bytes, unpackKeys);
+accept.control.inReplyTo; // equals invite.threadDigest
+```
+
+The state machine (`transition`, `canSend`, `admitsApplicationMessage`,
+`resolveInviteRace`, `resolveCancel`) is **pure** — state and event in, state or
+a refusal out. No storage, no clock, no keys. That is the line: this package
+owns what the protocol says happens next, and the client owns where that is
+written down.
+
+`unpack` deliberately does **not** apply it. A codec that mutated relationship
+state would make receiving a message a side effect, and the one thing a client
+must be able to do is look at an invite before answering it.
+
+Two rules worth knowing before you use it:
+
+- **An accept's two digests are not interchangeable.** The wire order is
+  `Digest` then `Reply_Digest`, and — counter to how those read — the first is
+  the *invite's* digest echoed and the second is the accept's own. This package
+  names them `inReplyTo` and `digest` so the trap cannot spring.
+- **The invite race (§7.2.3) is decided on bytes.** Both endpoints keep the
+  invite with the lexicographically lower digest, so simultaneous invites
+  converge on one exchange. No timestamps, no "ours wins" — either would let the
+  two sides disagree and form two half-relationships.
+
 ## What it does
 
 A TSP message is **encrypted-then-signed** (ETS): the payload is HPKE sealed to
@@ -59,6 +99,10 @@ Routed messages.
   `I`; markers `YTSP`, `XSCS`/`XHOP`, `XRFI`/`XRFA`/`XRFD`/`XCTL`/`XPAD`).
 - **Message modes** — Direct, Nested (metadata privacy), and Routed (multi-hop
   through a relay/mediator).
+- **Relationships** — `XRFI` / `XRFA` / `XRFD`, the §7.2.1 self-addressing
+  digest, and the §7.2/§7.3 state machine. Rev 3 gates application messages on
+  a relationship, so this is a precondition for sending anything, not an
+  optional extra.
 
 Byte-compatibility is proven in three ways, because a round trip proves none of
 it — encoder and decoder agree with each other whatever they both get wrong,
@@ -158,7 +202,7 @@ omission:
 | Not here | Why |
 | --- | --- |
 | The libsodium sealed box (§8.3) | §8 tells new implementations not to use it. A `C`-coded ciphertext is *recognised* and refused by name, so it never reads as a corrupt `F`. |
-| Relationship control messages (§7.2/§7.3) | `XRFI`/`XRFA`/`XRFD` are recognised and reported as `messageType: "control"`, but the state machine — gating, the invite race, cancellation — is protocol behaviour that belongs above a codec. **Note that Rev 3 gates application messages on a relationship by default**, so a peer enforcing §7.2.2 will drop what this package sends until that layer exists. |
+| Composing a referral (§7.2.5) | A referral's `Signature_new` covers the invite's digest, so composing one needs the *introduced* VID's signing key at pack time. A wallet holding another VID's private key is not a shape this package should invite. Referrals are decoded and exposed unverified, with `referralSignedData` for a caller that can resolve `VID_new` and check. |
 | Fillable padding (§7.5) | The field is always written, always empty. Conformant, and leaves the traffic-analysis defence unimplemented rather than half-implemented. |
 | Packing Rev 2 | See *Revisions* above. |
 

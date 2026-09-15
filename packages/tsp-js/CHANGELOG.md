@@ -29,10 +29,29 @@ message says what it is, an outbound one has nothing to read, and a dual
 - `revision` on every `unpack` result, and on `decodeEnvelope`. How a caller
   learns what a peer speaks; persisting it per peer belongs above this package.
 - `isTsp`, accepting both `0xF8` and the long framing's `0xFB`.
-- Control payloads (`XRFI`/`XRFA`/`XRFD`/`XCTL`/`XPAD`) are **recognised** and
-  reported as `messageType: "control"` with a `controlType`. The relationship
-  state machine is not implemented — see the README's scope table, and note
-  that Rev 3 gates application messages on a relationship by default.
+- **Relationship control messages** (§7.2, §7.3): `packInvite`, `packAccept`,
+  `packCancel`, and `unpack` returning a verified `control` message. Rev 3 gates
+  application messages on a relationship, so without these a peer enforcing
+  §7.2.2 drops everything a client sends — silently, since a dropped message
+  answers nothing.
+
+  The §7.2.1 `TSP_Digest` is the substance of it: self-addressing over the
+  message's own envelope and payload with its own slot filled by 33 dummy
+  bytes, carried on the wire, and recomputed by the receiver, which refuses the
+  message on a mismatch. Rev 2 correlated on a hash of the encrypted payload
+  that was never transmitted and so could never be checked. The three published
+  control vectors exercise the derivation directly.
+
+- **The §7.2/§7.3 state machine** (`relationship.ts`): `transition`, `canSend`,
+  `admitsApplicationMessage`, `resolveInviteRace`, `resolveCancel`. Pure — state
+  and event in, state or a refusal out — with no storage, clock or keys, so the
+  rules can be tested against the specification rather than against a mock.
+  `unpack` does not apply them: a codec that mutated relationship state would
+  make receiving a message a side effect.
+
+- `XCTL` and `XPAD` are recognised and reported rather than refused as unknown
+  type codes. `XCTL` carries an upper-layer control payload and is opaque to
+  TSP, sharing nothing with a relationship-forming message but the word.
 - The specification's own Appendix A vectors run as a test suite
   (`tests/interop.spec-vectors.mjs`). Every published vector is either
   exercised or named as uncovered.

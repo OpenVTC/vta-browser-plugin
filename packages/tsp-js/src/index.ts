@@ -17,7 +17,8 @@
 //   revision         — the keyless version-marker discriminator
 //   crypto/hpke      — HPKE Base + Auth seal/open via @noble
 //   crypto/sign      — Ed25519 sign/verify via @noble
-//   rev3/            — Rev 3 envelope, payload frame, pack/unpack
+//   relationship     — the §7.2/§7.3 state machine, pure and storage-free
+//   rev3/            — Rev 3 envelope, fields, payload frame, control, pack/unpack
 //   rev2/            — Rev 2 reader; frozen, decode-only
 //   message/         — the public API and the dispatcher
 
@@ -47,8 +48,13 @@ export {
 export {
   pack,
   packWithHops,
+  packInvite,
+  packAccept,
+  packCancel,
   unpack,
   sha256,
+  type ApplicationKind,
+  type ControlMessage,
   type ControlType,
   type MessageType,
   type PackKeys,
@@ -56,6 +62,21 @@ export {
   type PackedMessage,
   type UnpackedMessage,
 } from "./message/direct.js";
+export {
+  admitsApplicationMessage,
+  canSend,
+  compareBytes,
+  InvalidTransitionError,
+  resolveCancel,
+  resolveInviteRace,
+  transition,
+  type CancelOutcome,
+  type InviteRaceOutcome,
+  type RelationshipEvent,
+  type RelationshipState,
+} from "./relationship.js";
+export { referralSignedData, type Referral } from "./rev3/control.js";
+export { generateNonce } from "./rev3/fields.js";
 export {
   packRouted,
   packNested,

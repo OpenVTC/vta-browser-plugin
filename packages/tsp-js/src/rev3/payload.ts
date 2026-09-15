@@ -11,11 +11,9 @@
 //   Accept  -Z<n> XRFA  sndr  Digest  Reply_Digest                 pad
 //   Cancel  -Z<n> XRFD  sndr  Digest                               pad
 //
-// Three of those we compose and read in full; the control layouts we
-// *recognise* and no more — see `ControlType`. That is a deliberate stopping
-// point, not an oversight: the relationship state machine (§7.2.2's gating,
-// §7.2.3's invite race, §7.3's cancellations) is protocol behaviour that
-// belongs above a codec, and half of one would be worse than none.
+// This module owns the type-code dispatch and the three application layouts;
+// `control.ts` owns the three relationship-forming ones, because their digest
+// derivation is a body of protocol in its own right.
 //
 // ── The ESSR sender field ──
 //
@@ -38,20 +36,37 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 
 import * as wire from "../cesr/wire.js";
+import {
+  decodeControlBody,
+  encodeControlBody,
+  type ControlMessage,
+  type ControlType,
+} from "./control.js";
+import {
+  decodePadding,
+  decodeVidList,
+  encodeEmptyPadding,
+  encodeSenderField,
+  encodeVidList,
+  senderFieldBytes,
+} from "./fields.js";
 
-const utf8 = new TextEncoder();
 const fromUtf8 = new TextDecoder("utf-8", { fatal: true });
 
 /** What kind of message a payload frame carries. */
 export type MessageType = "direct" | "nested" | "routed" | "control" | "padding";
 
-/** Which control message, when `messageType` is `"control"`. */
-export type ControlType = "invite" | "accept" | "cancel" | "generic";
+export type { ControlMessage, ControlType };
+
+/** The application layouts this module composes. A control frame is built from
+ *  a {@link ControlMessage} instead, which is why it is not in this union. */
+export type ApplicationKind = "direct" | "nested" | "routed";
 
 export interface DecodedFrame {
   kind: MessageType;
-  /** Set only when `kind` is `"control"`. */
-  controlType?: ControlType;
+  /** The recovered control message, when `kind` is `"control"`. Its digest has
+   *  already been verified against the frame. */
+  control?: ControlMessage;
   /** Remaining route (Routed only). */
   hops: string[];
   /** The plaintext body: the upper-layer payload for Direct, the raw inner
@@ -59,7 +74,8 @@ export interface DecodedFrame {
   body: Uint8Array;
   /** The ESSR sender VID as carried, or `""` for the NULL VID. */
   senderVid: string;
-  /** SHA-256 over the whole `-Z` frame — the thread digest. */
+  /** The thread digest: SHA-256 over the whole `-Z` frame for an application
+   *  message, and the carried `TSP_Digest` for a control one. */
   threadDigest: Uint8Array;
 }
 
@@ -69,54 +85,21 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
-/** Encode a `-J` VID list. The count is the group's **byte length** in
- *  quadlets, not the number of VIDs — Rev 2 counted VIDs. An empty list is
- *  `-JAA`, which is how an absent reply path, an absent referral and a
- *  non-routed nesting are all spelled. */
-function encodeHops(hops: string[], out: number[]): void {
-  const body: number[] = [];
-  for (const hop of hops) wire.encodeVariableData(wire.TSP_VID, utf8.encode(hop), body);
-  if (body.length % 3 !== 0) throw new Error("tsp: -J VID list not a multiple of 3 bytes");
-  wire.encodeCount(wire.TSP_HOP_LIST, body.length / 3, out);
-  for (const b of body) out.push(b);
-}
-
-/** Decode a `-J` VID list. The group's declared byte length is authoritative:
- *  VIDs are read until it is exactly consumed, and a list whose fields overrun
- *  or underrun it is rejected rather than truncated. */
-function decodeHops(stream: Uint8Array, cur: wire.Cursor): Uint8Array[] {
-  const quadlets = wire.decodeCount(wire.TSP_HOP_LIST, stream, cur);
-  if (quadlets === undefined) throw new Error("tsp: missing -J VID list");
-  const groupLen = quadlets * 3;
-  if (groupLen > wire.MAX_FIELD_SIZE) throw new Error("tsp: -J VID list too long");
-  const groupEnd = cur.pos + groupLen;
-  if (groupEnd > stream.length) throw new Error("tsp: -J VID list overruns message");
-
-  const hops: Uint8Array[] = [];
-  while (cur.pos < groupEnd) {
-    if (hops.length >= wire.MAX_HOPS) throw new Error("tsp: too many hops");
-    const hop = wire.decodeVariableData(wire.TSP_VID, stream, cur);
-    if (hop === undefined) throw new Error("tsp: malformed hop VID");
-    hops.push(hop);
+/** Wrap a frame body in its `-Z` count code. */
+function frameFromBody(frameBody: number[]): Uint8Array {
+  if (frameBody.length % 3 !== 0) {
+    throw new Error("tsp: payload frame not a multiple of 3 bytes");
   }
-  if (cur.pos !== groupEnd) throw new Error("tsp: -J VID list does not fill its declared length");
-  return hops;
+  const out: number[] = [];
+  wire.encodeCount(wire.TSP_PAYLOAD, frameBody.length / 3, out);
+  for (const b of frameBody) out.push(b);
+  return new Uint8Array(out);
 }
 
-/** Write the padding field — always empty. @see the module note. */
-function encodeEmptyPadding(out: number[]): void {
-  wire.encodeVariableData(wire.TSP_PLAINTEXT, new Uint8Array(0), out);
-}
-
-/**
- * Build the payload frame that gets sealed, and the thread digest over it.
- *
- * `kind` must be `"direct"`, `"nested"` or `"routed"` — we do not compose
- * control messages.
- */
+/** Build an application payload frame, and the thread digest over it. */
 export function encodePayloadFrame(
   body: Uint8Array,
-  kind: "direct" | "nested" | "routed",
+  kind: ApplicationKind,
   hops: string[],
   senderVid: string,
 ): { frame: Uint8Array; threadDigest: Uint8Array } {
@@ -124,7 +107,7 @@ export function encodePayloadFrame(
 
   if (kind === "direct") {
     for (const b of wire.XSCS) frameBody.push(b);
-    wire.encodeVariableData(wire.TSP_VID, utf8.encode(senderVid), frameBody);
+    encodeSenderField(senderVid, frameBody);
     encodeEmptyPadding(frameBody);
     // §9.2.3: the upper-layer payload is a generic CESR stream holding a Bytes
     // primitive. We carry the caller's bytes opaquely and deliberately do NOT
@@ -138,8 +121,8 @@ export function encodePayloadFrame(
     for (const b of stream) frameBody.push(b);
   } else {
     for (const b of wire.XHOP) frameBody.push(b);
-    wire.encodeVariableData(wire.TSP_VID, utf8.encode(senderVid), frameBody);
-    encodeHops(kind === "nested" ? [] : hops, frameBody);
+    encodeSenderField(senderVid, frameBody);
+    encodeVidList(kind === "nested" ? [] : hops, frameBody);
     encodeEmptyPadding(frameBody);
     // The inner message is self-framing and carried raw — Rev 3 drops Rev 2's
     // enclosing `B` var-data field. Every TSP message is quadlet-aligned, so
@@ -151,15 +134,21 @@ export function encodePayloadFrame(
     for (const b of body) frameBody.push(b);
   }
 
-  if (frameBody.length % 3 !== 0) {
-    throw new Error("tsp: payload frame not a multiple of 3 bytes");
-  }
-  const out: number[] = [];
-  wire.encodeCount(wire.TSP_PAYLOAD, frameBody.length / 3, out);
-  for (const b of frameBody) out.push(b);
-
-  const frame = new Uint8Array(out);
+  const frame = frameFromBody(frameBody);
   return { frame, threadDigest: sha256(frame) };
+}
+
+/** Build a control payload frame, and the `TSP_Digest` it carries.
+ *
+ *  `envelopeFields` is part of the digest derivation, which is why a control
+ *  message cannot be composed independently of the message carrying it. */
+export function encodeControlFrame(
+  control: ControlMessage,
+  senderVid: string,
+  envelopeFields: Uint8Array,
+): { frame: Uint8Array; threadDigest: Uint8Array } {
+  const { body, threadDigest } = encodeControlBody(control, senderVid, envelopeFields);
+  return { frame: frameFromBody(body), threadDigest };
 }
 
 /**
@@ -167,9 +156,14 @@ export function encodePayloadFrame(
  *
  * `envelopeSender` is checked against the ESSR sender field: a non-NULL field
  * that disagrees with the envelope is a message claiming two senders, which is
- * a verification failure and not a parse one.
+ * a verification failure and not a parse one. `envelopeFields` is needed to
+ * recompute a control message's self-addressing digest.
  */
-export function decodePayloadFrame(frame: Uint8Array, envelopeSender: string): DecodedFrame {
+export function decodePayloadFrame(
+  frame: Uint8Array,
+  envelopeSender: string,
+  envelopeFields: Uint8Array,
+): DecodedFrame {
   const cur: wire.Cursor = { pos: 0 };
   const quadlets = wire.decodeCount(wire.TSP_PAYLOAD, frame, cur);
   if (quadlets === undefined) throw new Error("tsp: missing -Z payload frame");
@@ -177,15 +171,17 @@ export function decodePayloadFrame(frame: Uint8Array, envelopeSender: string): D
   if (frameEnd > frame.length) {
     throw new Error("tsp: -Z frame declares more content than the payload");
   }
-  const threadDigest = sha256(frame.slice(0, frameEnd));
+  const frameDigest = sha256(frame.slice(0, frameEnd));
 
   if (cur.pos + 3 > frame.length) throw new Error("tsp: truncated payload type code");
   const typeCode = frame.slice(cur.pos, cur.pos + 3);
   cur.pos += 3;
 
   // Every Rev 3 layout carries the ESSR sender field next.
+  const senderFieldBegin = cur.pos;
   const senderBytes = wire.decodeVariableData(wire.TSP_VID, frame, cur);
   if (senderBytes === undefined) throw new Error("tsp: missing ESSR sender VID field");
+  const senderField = frame.slice(senderFieldBegin, cur.pos);
   let senderVid: string;
   try {
     senderVid = fromUtf8.decode(senderBytes);
@@ -196,18 +192,8 @@ export function decodePayloadFrame(frame: Uint8Array, envelopeSender: string): D
     throw new Error("tsp: ESSR sender VID does not match the envelope sender");
   }
 
-  const control = (controlType: ControlType): DecodedFrame => ({
-    kind: "control",
-    controlType,
-    hops: [],
-    body: new Uint8Array(0),
-    senderVid,
-    threadDigest,
-  });
-
   if (bytesEqual(typeCode, wire.XSCS) || bytesEqual(typeCode, wire.XCTL)) {
-    const pad = wire.decodeVariableData(wire.TSP_PLAINTEXT, frame, cur);
-    if (pad === undefined) throw new Error("tsp: missing padding field");
+    decodePadding(frame, cur);
     const streamQuadlets = wire.decodeCount(wire.TSP_GENERIC_STREAM, frame, cur);
     if (streamQuadlets === undefined) throw new Error("tsp: missing -A payload stream");
     const streamEnd = cur.pos + streamQuadlets * 3;
@@ -215,32 +201,65 @@ export function decodePayloadFrame(frame: Uint8Array, envelopeSender: string): D
     const body = wire.decodeVariableData(wire.TSP_PLAINTEXT, frame, cur);
     if (body === undefined) throw new Error("tsp: missing payload body");
     if (cur.pos > streamEnd) throw new Error("tsp: payload body overruns the -A stream");
-    return bytesEqual(typeCode, wire.XSCS)
-      ? { kind: "direct", hops: [], body, senderVid, threadDigest }
-      : { ...control("generic"), body };
+    // `XCTL` carries an upper-layer control payload — opaque to TSP, exactly
+    // like `XSCS`. It is not a relationship-forming message and shares nothing
+    // with one but the word "control".
+    return {
+      kind: bytesEqual(typeCode, wire.XSCS) ? "direct" : "control",
+      hops: [],
+      body,
+      senderVid,
+      threadDigest: frameDigest,
+    };
   }
 
   if (bytesEqual(typeCode, wire.XHOP)) {
-    const hopBytes = decodeHops(frame, cur);
-    const pad = wire.decodeVariableData(wire.TSP_PLAINTEXT, frame, cur);
-    if (pad === undefined) throw new Error("tsp: missing padding field");
-    let hops: string[];
-    try {
-      hops = hopBytes.map((h) => fromUtf8.decode(h));
-    } catch {
-      throw new Error("tsp: hop VID not UTF-8");
-    }
+    const hops = decodeVidList(frame, cur);
+    decodePadding(frame, cur);
     // The inner message runs raw to the end of the declared frame.
     const body = frame.slice(cur.pos, frameEnd);
-    return { kind: hops.length === 0 ? "nested" : "routed", hops, body, senderVid, threadDigest };
+    return {
+      kind: hops.length === 0 ? "nested" : "routed",
+      hops,
+      body,
+      senderVid,
+      threadDigest: frameDigest,
+    };
   }
 
-  if (bytesEqual(typeCode, wire.XRFI)) return control("invite");
-  if (bytesEqual(typeCode, wire.XRFA)) return control("accept");
-  if (bytesEqual(typeCode, wire.XRFD)) return control("cancel");
+  const controlType = relationshipType(typeCode);
+  if (controlType) {
+    const { control, threadDigest } = decodeControlBody(
+      controlType,
+      frame,
+      cur,
+      senderField,
+      envelopeFields,
+    );
+    return { kind: "control", control, hops: [], body: new Uint8Array(0), senderVid, threadDigest };
+  }
+
   if (bytesEqual(typeCode, wire.XPAD)) {
-    return { kind: "padding", hops: [], body: new Uint8Array(0), senderVid, threadDigest };
+    // A padding-only message carries a nonce so two of them between the same
+    // pair are not identical on the wire — which would make them recognisable
+    // as padding, the opposite of the point.
+    return {
+      kind: "padding",
+      hops: [],
+      body: new Uint8Array(0),
+      senderVid,
+      threadDigest: frameDigest,
+    };
   }
 
   throw new Error("tsp: unsupported payload type marker");
 }
+
+function relationshipType(typeCode: Uint8Array): ControlType | undefined {
+  if (bytesEqual(typeCode, wire.XRFI)) return "invite";
+  if (bytesEqual(typeCode, wire.XRFA)) return "accept";
+  if (bytesEqual(typeCode, wire.XRFD)) return "cancel";
+  return undefined;
+}
+
+export { senderFieldBytes };
