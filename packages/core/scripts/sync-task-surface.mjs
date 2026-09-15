@@ -45,7 +45,20 @@ import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from "
 import { join, resolve } from "node:path";
 
 const PKG_ROOT = resolve(import.meta.dirname, "..");
-const OUT = join(PKG_ROOT, "task-surface.json");
+
+// Where the snapshot is written. The checked-in file by default; a second
+// argument overrides it.
+//
+// **The override is what lets `tests/task-surface-sync.mjs` run this script
+// without touching the real snapshot**, and that is a correctness constraint
+// rather than a convenience. `node --test` runs test FILES in parallel
+// processes, and `tests/task-surface.mjs` reads the checked-in snapshot at
+// module scope — so a sync test that wrote the real file and restored it
+// afterwards raced the test next door, which read either the fixture's handful
+// of tasks or a half-written file. It failed as "task-surface.json looks
+// truncated" in CI and passed on every developer machine, because whether the
+// two files overlap depends on core count.
+const OUT = process.argv[3] ? resolve(process.argv[3]) : join(PKG_ROOT, "task-surface.json");
 
 const DEFAULT_SDK = resolve(
   PKG_ROOT,
