@@ -43,6 +43,23 @@ export default defineConfig({
     // to vite's default low targets (chrome87/es2020). Safe for an MV3
     // extension, whose runtime is a current Chromium.
     target: "es2022",
+    // No `<link rel="modulepreload">` in the emitted HTML. Chrome refuses to
+    // use them here — "A preload for '…' is found, but is not used because it
+    // is a cross-world extension resource mismatch" — so each preloaded chunk
+    // was fetched once as a discarded hint and again for real, and the
+    // chrome://extensions Errors page filled with one warning per chunk per
+    // page (18 across popup, options, confirm and offscreen).
+    //
+    // Nothing was broken by them: the `<script type="module">` is what
+    // actually loads the graph. The cost is that the Errors page is where a
+    // *real* fault has to be noticed, and a page of benign warnings is how one
+    // gets scrolled past — the same reasoning as R7.2 for lost prompts.
+    //
+    // Preloading buys nothing in an extension anyway: every asset is read from
+    // local disk, not a network with latency to hide. `manager.html` never had
+    // these, because `codeSplitting: false` leaves it no shared chunks to
+    // preload.
+    modulePreload: false,
     rollupOptions: {
       input: {
         popup: resolve(__dirname, "popup.html"),
