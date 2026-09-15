@@ -8,6 +8,71 @@ For history before this file, see `git log` on `packages/tsp-js`.
 
 ## [Unreleased]
 
+## [0.3.0] — Trust Spanning Protocol specification Rev 3
+
+**Breaking. This package now packs Rev 3, and a Rev 2 peer cannot read what it
+sends.** There is no negotiation and no fallback. Rev 3 changed the crypto mode,
+the version byte, the long count-code prefix, the ciphertext code and layout,
+the `-E` count's meaning, the signature code and every payload layout at once,
+so the two revisions share no frame either side can classify.
+
+Reading is dual. `unpack` dispatches on the version marker every message
+carries — a fixed offset, no keys — and a Rev 2 message is read by a frozen,
+decode-only codec in `src/rev2/`. The asymmetry is the design: an inbound
+message says what it is, an outbound one has nothing to read, and a dual
+*packer* could only be a guess dressed as a protocol.
+
+### Added
+
+- `peekRevision` / `describeRevision` — the keyless discriminator, and
+  `TspRevisionError` (`code: "E_TSP_REVISION"`) with `isRevisionError`.
+- `revision` on every `unpack` result, and on `decodeEnvelope`. How a caller
+  learns what a peer speaks; persisting it per peer belongs above this package.
+- `isTsp`, accepting both `0xF8` and the long framing's `0xFB`.
+- Control payloads (`XRFI`/`XRFA`/`XRFD`/`XCTL`/`XPAD`) are **recognised** and
+  reported as `messageType: "control"` with a `controlType`. The relationship
+  state machine is not implemented — see the README's scope table, and note
+  that Rev 3 gates application messages on a relationship by default.
+- The specification's own Appendix A vectors run as a test suite
+  (`tests/interop.spec-vectors.mjs`). Every published vector is either
+  exercised or named as uncovered.
+
+### Changed — wire format
+
+- **HPKE-Auth → HPKE-Base.** The sender's key leaves the KEM, so `PackKeys` and
+  `UnpackKeys` each lost `senderEncryptionKey` — it survives on `UnpackKeys` as
+  an **optional, Rev 2-only** member, because HPKE-Auth cannot *open* a message
+  without it. `info` is the fixed code `YTSP-`; the AAD is
+  `TSP_Version ‖ VID_sndr ‖ VID_rcvr`, where Rev 2 passed the envelope frame as
+  `info` with empty AAD.
+- **Version `YTSP-AAB` → `YTSP-AAC`**, MAJOR.MINOR with MINOR filling the
+  12-bit count. Only MAJOR gates processability, so any other MINOR at MAJOR 0
+  — including upstream's `ABA` (64) — reads as Rev 3.
+- **Ciphertext code `G` → `F`**, and the field is `enc ‖ ct`; Rev 2 put `enc`
+  last. A `C`-coded sealed box (§8.3) is recognised and refused by name.
+- **Long count codes `-0X#####` → `--X#####`.**
+- **The `-E` count covers all signable content**, so the frame is finalized
+  after sealing. `encodeEnvelope` is gone; Rev 3's `encodeFields` +
+  `finalizeFrame` replace it, and the split is where the AAD boundary falls.
+- **The trailing `X 00 00` marker is deleted**; the receiver field is always
+  written, with `4BAA` meaning absent.
+- **The signature is indexed** (`B#`) under length-based counts `-C23 -K22`.
+- **Payload layouts** carry an ESSR sender VID and a padding field; a direct
+  body sits in a `-A` generic stream; `-J` counts bytes rather than VIDs; a
+  nested inner message is carried raw, so it must be quadlet-aligned.
+
+### Fixed
+
+- **`decodeCount` returned long-form counts with the identifier bits still in
+  them**, so every long-framed message decoded to a wrong length. The test that
+  covered it asserted the wrong behaviour on purpose, calling it "a reference
+  quirk ... benign, TSP frames by cursor position and discards this value".
+  That reasoning was wrong and Rev 3 makes it fatal: the `-E` and `-Z` counts
+  are now load-bearing lengths. `affinidi-tsp` fixed the same bug independently.
+- `MAX_HOPS` was 16 on the packing side against a decoder that stopped at 10, so
+  a 12-hop route packed cleanly and could not be read back by this library.
+
+
 ### Added
 
 - **Pluggable key custody for HPKE-Auth and Ed25519 signing.** Two capability

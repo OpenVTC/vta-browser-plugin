@@ -1,22 +1,45 @@
 // @openvtc/vti-tsp-js — pure-TS TSP primitives, byte-compatible with
-// affinidi-tsp (the crate the VTA links). v1 = HPKE-Auth only (RFC 9180,
-// DHKEM-X25519 + HKDF-SHA256 + ChaCha20Poly1305) + binary CESR framing.
-// No WebCrypto dependency: runs identically in browser, Node, and React
-// Native (only `crypto.getRandomValues` is required of the runtime).
+// affinidi-tsp (the crate the VTA links). Binary CESR framing + RFC 9180 HPKE
+// on @noble. No WebCrypto dependency: runs identically in browser, Node, and
+// React Native (only `crypto.getRandomValues` is required of the runtime).
 //
-// Layers (built incrementally):
-//   cesr/wire       — binary CESR frame primitives          [done]
-//   message/envelope — the -E envelope (HPKE info)          [done]
-//   crypto/hpke     — HPKE-Auth seal/open via @noble        [done]
-//   crypto/sign     — Ed25519 sign/verify via @noble        [done]
-//   message/direct  — pack/unpack (seal+sign / verify+open) [done]
-//   vid             — VID → keys resolution                 [todo]
+// ── Revisions ──
+//
+// This package **packs spec Rev 3** (`YTSP-AAC`: HPKE-Base, `F` ciphertext,
+// ESSR sender field, `--X` long counts, indexed signatures) and **reads Rev 3
+// and Rev 2**. `unpack` dispatches on the version marker every message carries;
+// `pack` has nothing to dispatch on and does not try. See `revision.ts` for why
+// that asymmetry is the whole design, and `rev2/reader.ts` for what a Rev 2
+// message costs us to read.
+//
+// Layers:
+//   cesr/wire        — binary CESR frame primitives, shared by both revisions
+//   revision         — the keyless version-marker discriminator
+//   crypto/hpke      — HPKE Base + Auth seal/open via @noble
+//   crypto/sign      — Ed25519 sign/verify via @noble
+//   rev3/            — Rev 3 envelope, payload frame, pack/unpack
+//   rev2/            — Rev 2 reader; frozen, decode-only
+//   message/         — the public API and the dispatcher
 
 export * as cesr from "./cesr/wire.js";
 export * as hpke from "./crypto/hpke.js";
 export * as sign from "./crypto/sign.js";
 export {
-  encodeEnvelope,
+  isTsp,
+  TSP_MAGIC_BYTE,
+  TSP_MAGIC_BYTE_LONG,
+} from "./cesr/wire.js";
+export {
+  describeRevision,
+  isRevisionError,
+  peekRevision,
+  KNOWN_MINORS,
+  SUPPORTED_MAJOR,
+  TspRevisionError,
+  type PeekedRevision,
+  type Revision,
+} from "./revision.js";
+export {
   decodeEnvelope,
   type Envelope,
   type DecodedEnvelope,
@@ -26,6 +49,7 @@ export {
   packWithHops,
   unpack,
   sha256,
+  type ControlType,
   type MessageType,
   type PackKeys,
   type UnpackKeys,

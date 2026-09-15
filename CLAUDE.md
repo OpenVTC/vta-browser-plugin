@@ -32,6 +32,23 @@ Rules that bite hardest here:
   issue rather than absorbing the old shape here. This is also why a request to
   another repo should not ask for a deprecation window on this repo's behalf.
 
+  **The one exception is TSP Rev 2, and the reason it is one is worth reading
+  before citing it for anything else.** The rule above rests on "our peers cut
+  over with us", which is true of the VTA and the mediator and false of the
+  Trust Spanning Protocol: it is a ToIP specification with implementations
+  nobody here controls, and the reference `tsp_sdk` shipped Rev 3 in 0.10.0
+  while others are still on Rev 2. So `@openvtc/vti-tsp-js` **reads** both and
+  **packs** only Rev 3. That asymmetry is what keeps it from being the pattern
+  this rule bans: there is no dual-accept *arm* anywhere on the Rev 3 path, no
+  `if (rev === 2)` branch, and no negotiation. Rev 2 is a frozen decode-only
+  codec in its own directory, reached by dispatching on a version marker the
+  wire actually carries — and it is deleted whole, with its arm of the
+  dispatcher, the day the last Rev 2 peer is gone. A fold you can delete in one
+  `rm` is not a fold. **Nothing else in this repo has that shape**; if you are
+  reaching for this paragraph to justify a second version arm, the honest test
+  is whether a peer you do not control is on the far side, and for the VTA and
+  the mediator the answer is no.
+
 - **R3.7 — match errors on stable machine-readable codes, never on strings,
   and parse error *bodies* before throwing on status.** Any condition this
   wallet must detect needs a stable field agreed with the Rust side —

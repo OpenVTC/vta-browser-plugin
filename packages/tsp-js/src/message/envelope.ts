@@ -1,77 +1,58 @@
-// TSP message envelope — the binary-CESR `-E` (encrypted-then-signed) header.
-// TS port of affinidi-tsp `src/message/envelope.rs`.
+// The public, revision-dispatching envelope decode.
 //
-// The envelope is the cleartext outer frame: TSP version + sender VID +
-// receiver VID + a 2-byte TMP marker. Its encoded bytes are used verbatim as
-// the HPKE **`info`** (see `direct.ts`), binding sender/receiver to the
-// ciphertext. Byte-compatible with tsp-sdk.
+// A relay routes on the cleartext envelope and never opens the message, so this
+// has to work for both revisions with no keys at all. It reads the version
+// marker first (`../revision.ts`) and hands the frame to the matching codec.
 //
-//   -E<count>  ·  YTSP<ver>  ·  B sender-VID  ·  B receiver-VID  ·  X 00 00
+// There is no public envelope *encode* here: we pack Rev 3 and nothing else, so
+// the Rev 3 codec's `encodeFields`/`finalizeFrame` pair is the only way to
+// build one, and it is deliberately not reachable through a name that suggests
+// a revision-neutral envelope exists.
 
-import * as wire from "../cesr/wire.js";
-
-const utf8 = new TextEncoder();
-const fromUtf8 = new TextDecoder("utf-8", { fatal: true });
+import { decodeEnvelope as decodeRev3 } from "../rev3/envelope.js";
+import { decodeRev2Envelope } from "../rev2/reader.js";
+import { peekRevision, type Revision } from "../revision.js";
 
 export interface Envelope {
   sender: string;
+  /** Empty string is Rev 3's NULL VID (`4BAA`) — "no receiver named". Rev 2
+   *  had no such spelling and always names one. */
   receiver: string;
 }
 
 export interface DecodedEnvelope {
   envelope: Envelope;
-  /** Bytes consumed by the `-E` frame — i.e. the HPKE `info` length. */
+  /** Bytes consumed by the envelope fields.
+   *
+   *  The number means different things per revision and is reported for
+   *  diagnostics, not for arithmetic across them: in Rev 2 it is the whole `-E`
+   *  frame, which is also the HPKE `info`; in Rev 3 it is the offset at which
+   *  the ciphertext field begins, and the AAD is those bytes minus the count
+   *  code. Code that needs either should use the revision's own codec. */
   headerLen: number;
+  /** Which revision framed this message. */
+  revision: Revision;
+  /** MINOR as carried, unjudged. */
+  minor: number;
 }
 
-/** Encode an envelope to its binary-CESR `-E` frame. The returned bytes are the
- *  HPKE `info` for the message. */
-export function encodeEnvelope(sender: string, receiver: string): Uint8Array {
-  const body: number[] = [];
-  wire.encodeVersion(body);
-  wire.encodeVariableData(wire.TSP_VID, utf8.encode(sender), body);
-  wire.encodeVariableData(wire.TSP_VID, utf8.encode(receiver), body);
-  wire.encodeFixedData(wire.TSP_TMP, new Uint8Array([0, 0]), body);
-
-  if (body.length % 3 !== 0) {
-    throw new Error("tsp: envelope body not a multiple of 3 bytes");
-  }
-
-  const out: number[] = [];
-  wire.encodeCount(wire.TSP_ETS_WRAPPER, body.length / 3, out);
-  for (const b of body) out.push(b);
-  return new Uint8Array(out);
-}
-
-/** Decode an envelope from the start of `data`, reporting the `-E` frame length
- *  (the HPKE `info` byte length). Throws on a malformed frame. */
+/** Decode the cleartext envelope of a TSP message of either revision. */
 export function decodeEnvelope(data: Uint8Array): DecodedEnvelope {
-  const cur: wire.Cursor = { pos: 0 };
-
-  if (wire.decodeCount(wire.TSP_ETS_WRAPPER, data, cur) === undefined) {
-    throw new Error("tsp: missing -E envelope wrapper");
+  const peeked = peekRevision(data);
+  if (peeked.revision === "rev2") {
+    const rev2 = decodeRev2Envelope(data);
+    return {
+      envelope: { sender: rev2.sender, receiver: rev2.receiver },
+      headerLen: rev2.headerLen,
+      revision: "rev2",
+      minor: peeked.minor,
+    };
   }
-  if (!wire.decodeVersion(data, cur)) {
-    throw new Error("tsp: missing or malformed version marker");
-  }
-
-  const senderBytes = wire.decodeVariableData(wire.TSP_VID, data, cur);
-  if (senderBytes === undefined) throw new Error("tsp: missing sender VID");
-  const receiverBytes = wire.decodeVariableData(wire.TSP_VID, data, cur);
-  if (receiverBytes === undefined) throw new Error("tsp: missing receiver VID");
-
-  let sender: string;
-  let receiver: string;
-  try {
-    sender = fromUtf8.decode(senderBytes);
-    receiver = fromUtf8.decode(receiverBytes);
-  } catch {
-    throw new Error("tsp: invalid VID encoding");
-  }
-
-  // Consume the 2-byte TMP marker if present (the reference emits it
-  // unconditionally for encrypted messages).
-  wire.decodeFixedData(wire.TSP_TMP, 2, data, cur);
-
-  return { envelope: { sender, receiver }, headerLen: cur.pos };
+  const rev3 = decodeRev3(data);
+  return {
+    envelope: rev3.envelope,
+    headerLen: rev3.headerLen,
+    revision: "rev3",
+    minor: rev3.minor,
+  };
 }

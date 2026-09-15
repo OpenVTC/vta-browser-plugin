@@ -6,15 +6,26 @@
 // addressed intermediary reads it. Nested mode is the degenerate wrapper: an
 // inner packed message carried opaquely to a single intermediary.
 //
+// Rev 3 only, like everything on the packing side. Two changes from Rev 2 reach
+// callers: the inner message is carried **raw** rather than inside a `B`
+// var-data field, which makes it a caller error to hand one that is not
+// quadlet-aligned; and the `-J` count is the hop group's byte length rather
+// than the number of hops.
+//
 // Wallet → mediator → VTA is a routed send: pack the trust-task as a Direct
 // message to the VTA (sealed end-to-end), then `packRouted` it to the mediator
 // with `route = [vtaVid]`. The mediator opens the routing layer, sees the VTA
 // as the next (and last) hop, and forwards the opaque inner to it.
 
+import { MAX_HOPS as WIRE_MAX_HOPS } from "../cesr/wire.js";
 import { packWithHops, type PackKeys, type PackedMessage } from "./direct.js";
 
-/** Max hops in a route — bounds memory + forwarding loops. */
-export const MAX_HOPS = 16;
+/** Max hops in a route — bounds memory + forwarding loops.
+ *
+ *  The same number the decoder enforces, deliberately: this used to be 16
+ *  against a decoder that stopped at 10, so a 12-hop route packed cleanly and
+ *  could not be read back by this very library. */
+export const MAX_HOPS = WIRE_MAX_HOPS;
 
 /**
  * Pack a routed message addressed to `firstHopVid`, carrying `remainingRoute`

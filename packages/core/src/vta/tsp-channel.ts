@@ -11,11 +11,18 @@
 // sender VID over TSP; we unpack it and decode with the shared
 // `parseTrustTaskReply`.
 //
-// pack/unpack + CESR framing + HPKE-Auth live in `@openvtc/vti-tsp-js` (proven
+// pack/unpack + CESR framing + HPKE live in `@openvtc/vti-tsp-js` (proven
 // byte-compatible with affinidi-tsp, the crate the VTA links). This class owns
 // only the trust-task binding + transport dispatch; the actual send/receive of
 // packed bytes is an injected `TspTransport` (mediator-backed in production, a
 // simulator in tests).
+//
+// **We send spec Rev 3 and read Rev 3 or Rev 2.** The revision is not
+// negotiated and cannot be: an inbound message carries a version marker that
+// says what it is, an outbound one has nothing to read. So `unpack` here still
+// passes the VTA's X25519 public key — which Rev 3 ignores and Rev 2 needs to
+// open a message at all — and `pack` does not. A VTA still on affinidi-tsp
+// 0.1.x cannot read what we send; that is the cutover, not a bug.
 
 import { pack, unpack } from "@openvtc/vti-tsp-js";
 
@@ -39,9 +46,17 @@ export interface TspHolderIdentity {
   vid: string;
   /** Ed25519 private key — signs the outer TSP signature. */
   signingPrivateKey: Uint8Array;
-  /** X25519 private key — HPKE-Auth sender authentication + decrypts replies. */
+  /** X25519 private key — decrypts replies sealed to us.
+   *
+   *  Under Rev 3 that is all it does: HPKE-Base does not put the sender's key
+   *  in the KEM, so this is no longer half of our outbound authenticity. */
   encryptionPrivateKey: Uint8Array;
-  /** X25519 public key — the VTA verifies our sender-auth against this. */
+  /** X25519 public key.
+   *
+   *  A Rev 3 counterparty never needs it — it is kept because it is the key a
+   *  peer resolves from our DID, and because a Rev 2 peer's `unpack` cannot
+   *  open our messages without it. Rev 2 is read-only here, so nothing in this
+   *  package sends under it. */
   encryptionPublicKey: Uint8Array;
 }
 
@@ -164,9 +179,13 @@ export class TspChannel implements TrustTaskChannel {
     // document, so anything that reshaped it here would invalidate every
     // signature while looking identical on screen.
     const plaintext = utf8.encode(wrapTspEnvelope(envelope));
+    // Rev 3 (spec) seals under HPKE-**Base**, so the holder's own X25519 secret
+    // no longer enters the KEM and is not passed here. Sender authenticity is
+    // the ESSR sender field plus the outer Ed25519 signature instead — see
+    // `@openvtc/vti-tsp-js`'s `rev3/direct.ts`. Adding the key back would not
+    // be ignored; `PackKeys` does not have the member, which is the point.
     const packed = await pack(plaintext, this.holder.vid, this.vta.vid, {
       senderSigningKey: this.holder.signingPrivateKey,
-      senderEncryptionKey: this.holder.encryptionPrivateKey,
       receiverEncryptionKey: this.vta.encryptionPublicKey,
     });
     return packed.bytes;
