@@ -17,6 +17,9 @@ For history before this file, see `git log` on `packages/tsp-js`.
 
 ### Fixed
 
+- `MAX_HOPS` is 64 (was 10). The specification sets no maximum, and 12-hop
+  routes packed by every other implementation were refused on decode. The same
+  bound applies when packing a route and when decoding a hop list or reply path.
 - An XSCS/XCTL body that is not exactly one Bytes primitive is refused. It was
   read as its first primitive, silently dropping the rest of the `-A##` stream,
   and data after the stream was ignored. See
