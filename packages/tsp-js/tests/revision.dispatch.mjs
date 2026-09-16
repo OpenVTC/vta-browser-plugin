@@ -73,7 +73,7 @@ test("an unrecognised MINOR at MAJOR 0 still reads as Rev 3", () => {
   // MINOR a field no implementation may reject on, and the reference discards
   // it entirely.
   const frame = Uint8Array.from(b64u(VECTORS.vectors["direct-hpke-base"].message));
-  frame[8] = 0x0d; // MINOR 64 → 13, a value nothing has ever shipped
+  frame[8] = 0x0d; // MINOR 2 → 13, a value nothing has ever shipped
   const peeked = peekRevision(frame);
   assert.equal(peeked.revision, "rev3");
   assert.equal(peeked.recognised, false, "unrecognised, but not refused");
@@ -104,6 +104,27 @@ test("a Rev 2 message without the sender's X25519 key is refused by name", async
       }),
     (err) => isRevisionError(err) && /Rev 2/.test(err.message),
   );
+});
+
+test("a pre-merge `YTSP-ABA` message still reads as Rev 3, and opens", async () => {
+  // Appendix A's `direct-hpke-base` as it stood before the specification merged
+  // (spec commit 66a1580), when the vectors carried `ABA` — MINOR 64 under the
+  // MAJOR.MINOR reading. The merged vectors moved to `AAC`, so this is pinned
+  // here: messages packed against the draft exist, and MINOR must never gate
+  // processing. Same published keys as the current fixture.
+  const aba = b64u(
+    "-EBFYTSP-ABA4BATZGlkOnBlZXI6NHpRbVVMNjFOYzFGN2lvaUt4SE5xd25KWFg0c3JoRnNLS1BvNlRyQ21oTTNkZnBx4BATZGlkOnBlZXI6NHpRbVptQ0FzRzdqMWV3VGpYanRkZHd1amlrMzNDRTJjTWJZU1BhZ3BNaVludDFB4FAa1T4oA1pSbehBiIwnoXFGA24kgHowT34VdE95wF9qjStBsok4fIkbu8IKODF2nsZMUAmS5BqxDbbYrvl_TNGpz2omwJgYX4bSYoTeKse4-CAX-KAWBADHuTmj_7jyUCkkalySPOFiy5pTbNtjEODiwwJZlI5DqMk5Wutx4LIOWkAAa3uee2b_0Kh5SXaFq65MedyO5VYJ",
+  );
+  const peeked = peekRevision(aba);
+  assert.equal(peeked.revision, "rev3");
+  assert.equal(peeked.minor, 64);
+  assert.equal(peeked.recognised, true);
+  const out = await unpack(aba, {
+    receiverDecryptionKey: b64u(VECTORS.identifiers.bob.skE),
+    senderSigningKey: b64u(VECTORS.identifiers.alice.pkS),
+  });
+  assert.equal(out.revision, "rev3");
+  assert.equal(dec.decode(out.payload), "hello world");
 });
 
 test("a Rev 3 message needs no sender encryption key at all", async () => {

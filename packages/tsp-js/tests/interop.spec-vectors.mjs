@@ -6,9 +6,11 @@ import { unpack, peekRevision } from "../dist/index.js";
 
 // ── The specification's own Appendix A test vectors ──
 //
-// Fixture lifted verbatim from affinidi-tsp's `tests/vectors/rev3.json`, which
-// was extracted from spec commit 66a1580 and checked value by value against
-// `tsp_sdk` 0.10.0's own copy — the file the appendix was rendered from.
+// Fixture extracted from Appendix A of the merged specification
+// (trustoverip/tswg-tsp-specification f5b8668), which packs `YTSP-AAC`. It
+// replaced the pre-merge `YTSP-ABA` vectors from spec commit 66a1580: the
+// version is inside the signed envelope, the AAD and every SAID, so every
+// message changed with it.
 //
 // These check something neither a round trip nor a two-implementation interop
 // run can. A round trip passes whenever the encoder and decoder share a
@@ -16,11 +18,11 @@ import { unpack, peekRevision } from "../dist/index.js";
 // unpacks with the other passes whenever *both* share one. These bytes are
 // fixed, external, and were produced by neither of us.
 //
-// Three of the ten are runnable here. `direct-sealed-box` and
-// `control-rfi-sealed-box` need the libsodium sealed box (§8.3), which we
-// deliberately do not implement; `direct-signed-only` is an unencrypted `-E`
-// frame we never receive; the three control vectors need the relationship state
-// machine; `direct-hpke-base-pq` needs ML-KEM and ML-DSA. Each is skipped by
+// Three of the ten are exercised here and the three HPKE-Base control vectors in
+// `control.spec-vectors.mjs`. `direct-sealed-box` and `control-rfi-sealed-box`
+// need the libsodium sealed box (§8.3), which we deliberately do not implement;
+// `direct-signed-only` is an unencrypted `-E` frame we never receive;
+// `direct-hpke-base-pq` needs ML-KEM and ML-DSA. Each is skipped by
 // name below rather than silently absent, so the list says what is missing
 // instead of looking complete.
 const VECTORS = JSON.parse(
@@ -41,16 +43,20 @@ const openVector = (name) => {
   });
 };
 
-test("the published vectors declare a revision we read as Rev 3", () => {
-  // They carry `YTSP-ABA` — MINOR 64 under the MAJOR.MINOR reading this package
-  // and affinidi-tsp both use, where our own packing emits `AAC` (MINOR 2).
-  // Both must read as Rev 3, which is the whole reason `peekRevision` matches
-  // Rev 2 exactly and treats everything else at MAJOR 0 as current.
-  const peeked = peekRevision(b64u(VECTORS.vectors["direct-hpke-base"].message));
-  assert.equal(peeked.revision, "rev3");
-  assert.equal(peeked.major, 0);
-  assert.equal(peeked.minor, 64);
-  assert.equal(peeked.recognised, true);
+test("the published vectors declare Rev 3 as we pack it: YTSP-AAC", () => {
+  // The merged Appendix A carries `YTSP-AAC` — MINOR 2 under the MAJOR.MINOR
+  // reading this package and affinidi-tsp both use, the same marker our own
+  // packing emits. Pre-merge drafts carried `ABA` (MINOR 64), which still reads
+  // as Rev 3 (see `revision.dispatch.mjs`); `peekRevision` matches Rev 2 exactly
+  // and treats everything else at MAJOR 0 as current.
+  for (const [name, v] of Object.entries(VECTORS.vectors)) {
+    const peeked = peekRevision(b64u(v.message));
+    assert.equal(peeked.revision, "rev3", name);
+    assert.equal(peeked.major, 0, name);
+    assert.equal(peeked.minor, 2, name);
+    assert.equal(peeked.recognised, true, name);
+    assert.equal(v.message.slice(4, 12), "YTSP-AAC", `${name} carries YTSP-AAC in qb64`);
+  }
 });
 
 test("direct-hpke-base — opens, verifies, and carries the published payload", async () => {
@@ -118,15 +124,21 @@ test("vectors this implementation does not cover are named, not omitted", () => 
     "direct-sealed-box": "libsodium sealed box (§8.3) — deliberately not implemented",
     "control-rfi-sealed-box": "libsodium sealed box (§8.3)",
     "direct-signed-only": "unencrypted -E frame; we neither send nor expect one",
-    "control-rfi-direct": "relationship state machine (§7.2)",
-    "control-rfa-direct": "relationship state machine (§7.2)",
-    "control-rfd": "relationship state machine (§7.3)",
     "direct-hpke-base-pq": "ML-KEM-768/X25519 + ML-DSA-65 (§8.1/§8.2.1)",
   };
   for (const name of Object.keys(uncovered)) {
     assert.ok(VECTORS.vectors[name], `vector ${name} is in the fixture`);
   }
-  const covered = ["direct-hpke-base", "nested-direct", "routed"];
+  // The HPKE-Base control vectors are opened, and their digests re-derived, in
+  // `control.spec-vectors.mjs`.
+  const covered = [
+    "direct-hpke-base",
+    "nested-direct",
+    "routed",
+    "control-rfi-direct",
+    "control-rfa-direct",
+    "control-rfd",
+  ];
   assert.deepEqual(
     new Set([...covered, ...Object.keys(uncovered)]),
     new Set(Object.keys(VECTORS.vectors)),

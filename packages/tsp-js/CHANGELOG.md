@@ -15,6 +15,15 @@ For history before this file, see `git log` on `packages/tsp-js`.
   only the state, so until now every client had to compare the digests itself
   or adopt an accept for an invite it never sent.
 
+### Changed
+
+- The Appendix A test vectors are the merged specification's
+  ([tswg-tsp-specification@f5b8668](https://github.com/trustoverip/tswg-tsp-specification/commit/f5b8668952aabe8e541b535fcbdf589484ffc4f4)),
+  which carry `YTSP-AAC` — the marker this package packs — in place of the
+  pre-merge `YTSP-ABA` set. Every message and the control vectors' digests
+  changed; all still open and verify. A pre-merge `ABA` message stays pinned in
+  the tests: reading it is unchanged. Test-only; no library behaviour changed.
+
 ### Fixed
 
 - `MAX_HOPS` is 64 (was 10). The specification sets no maximum, and 12-hop
