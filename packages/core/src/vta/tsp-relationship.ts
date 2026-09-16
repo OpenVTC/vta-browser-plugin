@@ -38,6 +38,7 @@
 
 import {
   packInvite,
+  resolveAccept,
   unpack,
   transition,
   type ControlMessage,
@@ -110,9 +111,6 @@ export class MemoryRelationshipStore implements RelationshipStore {
 
 const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-
-const bytesEqual = (a: Uint8Array, b: Uint8Array): boolean =>
-  a.length === b.length && a.every((v, i) => v === b[i]);
 
 export interface EnsureRelationshipOpts {
   transport: TspTransport;
@@ -203,8 +201,9 @@ export async function ensureRelationship(
       declined = `a ${control.controlType}, not an accept`;
       return false;
     }
-    if (!control.inReplyTo || !bytesEqual(control.inReplyTo, invite.threadDigest)) {
-      declined = "an accept to an invite we did not send";
+    const outcome = resolveAccept(pending, control.inReplyTo, invite.threadDigest);
+    if (outcome.action === "ignore") {
+      declined = `an accept that ${outcome.reason}`;
       return false;
     }
     return true;

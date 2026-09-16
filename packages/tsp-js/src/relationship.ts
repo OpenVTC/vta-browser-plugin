@@ -146,6 +146,40 @@ export function compareBytes(a: Uint8Array, b: Uint8Array): number {
   return a.length - b.length;
 }
 
+/** What a received accept calls for, per §7.2.2. */
+export type AcceptOutcome =
+  /** It answers our outstanding invite: apply `receiveAccept`. */
+  | { action: "adopt" }
+  /** Drop it silently — it answers nothing we sent. */
+  | { action: "ignore"; reason: string };
+
+/**
+ * Decide whether a received accept answers our invite (§7.2.2).
+ *
+ * An accept's Digest is copied verbatim from the invite it answers, so it must
+ * equal the digest of the invite we have outstanding. Anything else — no invite
+ * outstanding, or a digest naming an invite we never sent — is ignored rather
+ * than answered, for the same reason {@link resolveCancel} ignores an unknown
+ * cancellation. {@link transition} alone cannot make this check: it sees the
+ * state, not the digests.
+ *
+ * `answeredDigest` is the accept's Digest; `ourInviteDigest` is the digest of
+ * the invite we sent, or `undefined` if we hold none.
+ */
+export function resolveAccept(
+  state: RelationshipState,
+  answeredDigest: Uint8Array | undefined,
+  ourInviteDigest: Uint8Array | undefined,
+): AcceptOutcome {
+  if (state !== "pending" || ourInviteDigest === undefined) {
+    return { action: "ignore", reason: "answers no invite we have outstanding" };
+  }
+  if (answeredDigest === undefined || compareBytes(answeredDigest, ourInviteDigest) !== 0) {
+    return { action: "ignore", reason: "answers an invite we did not send" };
+  }
+  return { action: "adopt" };
+}
+
 /** What a cancellation calls for, per §7.3. */
 export type CancelOutcome =
   /** Ignore it entirely — we hold nothing it could be about. */

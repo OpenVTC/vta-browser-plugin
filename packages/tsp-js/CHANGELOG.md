@@ -8,6 +8,13 @@ For history before this file, see `git log` on `packages/tsp-js`.
 
 ## [Unreleased]
 
+### Added
+
+- `resolveAccept(state, answeredDigest, ourInviteDigest)`: whether a received
+  accept answers the invite we have outstanding (§7.2.2). `transition` sees
+  only the state, so until now every client had to compare the digests itself
+  or adopt an accept for an invite it never sent.
+
 ### Fixed
 
 - An XSCS/XCTL body that is not exactly one Bytes primitive is refused. It was
