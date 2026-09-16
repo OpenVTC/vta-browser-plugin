@@ -25,6 +25,7 @@
 
 import * as wire from "../cesr/wire.js";
 import * as hpke from "../crypto/hpke.js";
+import * as noble from "../crypto/hpke-noble.js";
 import * as sign from "../crypto/sign.js";
 import { decodeEnvelope, encodeFields, finalizeFrame } from "./envelope.js";
 import {
@@ -87,6 +88,35 @@ export interface UnpackedMessage {
   threadDigest: Uint8Array;
 }
 
+/**
+ * Test-only knobs that make a pack byte-reproducible. **Never use outside
+ * tests.**
+ *
+ * Internal to the package: reached only through the `./unsafe-testing` subpath,
+ * and the public wrappers in `message/` deliberately do not forward it — the
+ * same arrangement as the `__unsafeFixedEphemeralSk` hook in `hpke-noble.ts`.
+ *
+ * Fixing the HPKE ephemeral key makes every message packed with it to the same
+ * recipient share one (key, base_nonce) pair. Under ChaCha20Poly1305 that leaks
+ * the XOR of the plaintexts and the Poly1305 one-time key: confidentiality and
+ * integrity both go. It exists so that the specification's Appendix A vectors,
+ * which publish their ephemeral as `ikmE`, can be reproduced byte for byte.
+ */
+export interface UnsafeDeterministicPack {
+  /** RFC 9180 §7.1.3 `DeriveKeyPair` input for the HPKE-Base ephemeral — the
+   *  `ikmE` Appendix A prints. At least 32 bytes. */
+  __unsafeIkmE: Uint8Array;
+  /** Write the NULL VID `4BAA` in the ESSR sender field instead of the sender's
+   *  VID. §9.2 permits it under HPKE-Base, and the published vectors use it;
+   *  this package's own stance is to always write the VID (see `payload.ts`),
+   *  so it is offered only here, for reproducing those vectors. */
+  nullPayloadSender?: boolean;
+}
+
+/** The ESSR sender field's content for this pack. */
+const payloadSender = (senderVid: string, unsafe?: UnsafeDeterministicPack): string =>
+  unsafe?.nullPayloadSender === true ? "" : senderVid;
+
 /** Encode the signature attachment: `-C23 -K22 B0 sig(64)`. */
 function encodeSignatureFrame(signature: Uint8Array, out: number[]): void {
   wire.encodeCount(wire.TSP_ATTACH_GRP, ATTACH_GROUP_QUADLETS, out);
@@ -129,10 +159,16 @@ async function sealFrame(
   fields: Uint8Array,
   frame: Uint8Array,
   keys: PackKeys,
+  unsafe?: UnsafeDeterministicPack,
 ): Promise<Uint8Array> {
   // `aad` binds the ciphertext to the version and both VIDs; `info` is the
   // fixed protocol code.
-  const sealed = await hpke.sealBase(frame, fields, keys.receiverEncryptionKey, wire.TSP_INFO);
+  const sealed =
+    unsafe === undefined
+      ? await hpke.sealBase(frame, fields, keys.receiverEncryptionKey, wire.TSP_INFO)
+      : await noble.sealBase(frame, fields, keys.receiverEncryptionKey, wire.TSP_INFO, {
+          __unsafeFixedEphemeralSk: noble.deriveKeyPair(unsafe.__unsafeIkmE).sk,
+        });
 
   // Ciphertext field: `enc ‖ ct`, with the AEAD tag inside `ct`.
   const ciphertext = new Uint8Array(sealed.enc.length + sealed.ciphertext.length);
@@ -158,10 +194,11 @@ export async function packWithHops(
   senderVid: string,
   receiverVid: string,
   keys: PackKeys,
+  unsafe?: UnsafeDeterministicPack,
 ): Promise<PackedMessage> {
   const fields = encodeFields(senderVid, receiverVid);
-  const { frame, threadDigest } = encodePayloadFrame(body, kind, hops, senderVid);
-  return { bytes: await sealFrame(fields, frame, keys), threadDigest };
+  const { frame, threadDigest } = encodePayloadFrame(body, kind, hops, payloadSender(senderVid, unsafe));
+  return { bytes: await sealFrame(fields, frame, keys, unsafe), threadDigest };
 }
 
 /**
@@ -178,10 +215,11 @@ export async function packControl(
   senderVid: string,
   receiverVid: string,
   keys: PackKeys,
+  unsafe?: UnsafeDeterministicPack,
 ): Promise<PackedMessage> {
   const fields = encodeFields(senderVid, receiverVid);
-  const { frame, threadDigest } = encodeControlFrame(control, senderVid, fields);
-  return { bytes: await sealFrame(fields, frame, keys), threadDigest };
+  const { frame, threadDigest } = encodeControlFrame(control, payloadSender(senderVid, unsafe), fields);
+  return { bytes: await sealFrame(fields, frame, keys, unsafe), threadDigest };
 }
 
 /**
@@ -196,6 +234,7 @@ export function packInvite(
   receiverVid: string,
   keys: PackKeys,
   opts: { route?: string[]; nonce?: Uint8Array } = {},
+  unsafe?: UnsafeDeterministicPack,
 ): Promise<PackedMessage> {
   return packControl(
     {
@@ -206,6 +245,7 @@ export function packInvite(
     senderVid,
     receiverVid,
     keys,
+    unsafe,
   );
 }
 
@@ -221,12 +261,14 @@ export function packAccept(
   senderVid: string,
   receiverVid: string,
   keys: PackKeys,
+  unsafe?: UnsafeDeterministicPack,
 ): Promise<PackedMessage> {
   return packControl(
     { controlType: "accept", inReplyTo: inviteDigest, route: [] },
     senderVid,
     receiverVid,
     keys,
+    unsafe,
   );
 }
 
@@ -239,12 +281,14 @@ export function packCancel(
   senderVid: string,
   receiverVid: string,
   keys: PackKeys,
+  unsafe?: UnsafeDeterministicPack,
 ): Promise<PackedMessage> {
   return packControl(
     { controlType: "cancel", inReplyTo: relationshipDigest, route: [] },
     senderVid,
     receiverVid,
     keys,
+    unsafe,
   );
 }
 
@@ -254,8 +298,9 @@ export function pack(
   senderVid: string,
   receiverVid: string,
   keys: PackKeys,
+  unsafe?: UnsafeDeterministicPack,
 ): Promise<PackedMessage> {
-  return packWithHops(body, "direct", [], senderVid, receiverVid, keys);
+  return packWithHops(body, "direct", [], senderVid, receiverVid, keys, unsafe);
 }
 
 /** Unpack a Rev 3 message. */

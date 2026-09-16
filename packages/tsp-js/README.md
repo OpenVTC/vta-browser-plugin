@@ -108,15 +108,23 @@ Byte-compatibility is proven in three ways, because a round trip proves none of
 it — encoder and decoder agree with each other whatever they both get wrong,
 which is exactly the failure mode Rev 3's one-character changes produce:
 
-- **The specification's own Appendix A vectors** run as a test suite
-  (`tests/interop.spec-vectors.mjs`), fixed and external and produced by the
-  ToIP reference implementation. Every published vector is either exercised or
-  named as uncovered, so the list cannot quietly shrink.
+- **The specification's own Appendix A vectors** (`YTSP-AAC`, as merged at
+  [tswg-tsp-specification@f5b8668](https://github.com/trustoverip/tswg-tsp-specification/commit/f5b8668952aabe8e541b535fcbdf589484ffc4f4))
+  run as a test suite, fixed and external and produced by the ToIP reference
+  implementation. Every HPKE-Base vector both opens
+  (`tests/interop.spec-vectors.mjs`, `tests/control.spec-vectors.mjs`) and
+  **re-packs byte for byte** from its published `ikmE`
+  (`tests/interop.spec-vectors-repack.mjs`). Every published vector is either
+  exercised or named as uncovered, so the list cannot quietly shrink.
 - **Both directions against `affinidi-tsp`** — its Rev 2 vector unpacks here
   (`tests/interop.rust-vector.mjs`), and a message packed here unpacks there,
   thread digest included.
 - **Pinned bytes** for the deterministic parts of what we emit, since the sealed
-  message itself is not reproducible (HPKE draws a fresh ephemeral key).
+  message itself is not reproducible (HPKE draws a fresh ephemeral key). The
+  vector re-pack fixes that key through a test-only subpath,
+  `@openvtc/vti-tsp-js/unsafe-testing`, which is deliberately not part of the
+  API above: a fixed ephemeral key destroys confidentiality, and nothing but a
+  test reproducing a published vector has a reason to import it.
 
 The HPKE implementation is pinned three ways on every CI run: the official CFRG
 RFC 9180 `mode_auth` vector asserted in-tree (`tests/crypto.cfrg-vector.mjs` —

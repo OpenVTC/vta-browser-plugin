@@ -13,6 +13,10 @@
     "./hpke": {
       "types": "./dist/crypto/hpke.d.ts",
       "import": "./dist/crypto/hpke.js"
+    },
+    "./unsafe-testing": {
+      "types": "./dist/unsafe-testing.d.ts",
+      "import": "./dist/unsafe-testing.js"
     }
   },
   "files": [
