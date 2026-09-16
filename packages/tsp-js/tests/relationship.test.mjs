@@ -6,6 +6,7 @@ import {
   canSend,
   admitsApplicationMessage,
   resolveInviteRace,
+  resolveAccept,
   resolveCancel,
   compareBytes,
   InvalidTransitionError,
@@ -119,4 +120,14 @@ test("a cancellation may name either half of the relationship", () => {
   const accept = digest(0xbb);
   assert.equal(resolveCancel("bidirectional", invite, [invite, accept]).action, "removeAndReply");
   assert.equal(resolveCancel("bidirectional", accept, [invite, accept]).action, "removeAndReply");
+});
+
+test("an accept is adopted only when it answers our outstanding invite", () => {
+  const ours = digest(0xaa);
+  assert.equal(resolveAccept("pending", ours, ours).action, "adopt");
+  assert.equal(resolveAccept("pending", digest(0xbb), ours).action, "ignore", "an invite we never sent");
+  assert.equal(resolveAccept("pending", undefined, ours).action, "ignore");
+  assert.equal(resolveAccept("pending", ours, undefined).action, "ignore", "no invite on record");
+  assert.equal(resolveAccept("none", ours, ours).action, "ignore");
+  assert.equal(resolveAccept("bidirectional", ours, ours).action, "ignore");
 });

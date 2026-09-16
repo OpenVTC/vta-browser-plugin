@@ -61,7 +61,7 @@ accept.control.inReplyTo; // equals invite.threadDigest
 ```
 
 The state machine (`transition`, `canSend`, `admitsApplicationMessage`,
-`resolveInviteRace`, `resolveCancel`) is **pure** — state and event in, state or
+`resolveInviteRace`, `resolveAccept`, `resolveCancel`) is **pure** — state and event in, state or
 a refusal out. No storage, no clock, no keys. That is the line: this package
 owns what the protocol says happens next, and the client owns where that is
 written down.

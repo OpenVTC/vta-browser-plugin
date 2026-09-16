@@ -30,7 +30,7 @@ function tspIdentity(vid) {
  * an application message from a VID it holds no relationship with is **dropped
  * silently**, which on this transport means the reply never resolves.
  */
-function relationshipVta(vta, holder, { gating = true, answerInvites = true } = {}) {
+function relationshipVta(vta, holder, { gating = true, answerInvites = true, acceptDigest } = {}) {
   const sent = [];
   let related = false;
   return {
@@ -53,7 +53,7 @@ function relationshipVta(vta, holder, { gating = true, answerInvites = true } = 
         if (req.control.controlType !== "invite") throw new Error("unexpected control message");
         if (!answerInvites) throw new Error("timeout: this VTA does not answer invites");
         related = true;
-        const accept = await packAccept(req.control.digest, vta.vid, holder.vid, {
+        const accept = await packAccept(acceptDigest ?? req.control.digest, vta.vid, holder.vid, {
           senderSigningKey: vta.signSk,
           receiverEncryptionKey: holder.encPk,
         });
@@ -163,6 +163,20 @@ test("a VTA that never answers an invite still gets the application message", as
 
   assert.equal(outcomes[0].kind, "notAnswered");
   assert.equal(transport.sent[1].messageType, "direct", "sent anyway");
+});
+
+test("an accept that answers an invite we never sent does not establish the relationship", async () => {
+  // §7.2.2: the accept's Digest must be the one our invite carried.
+  const { channel, outcomes, store, holder } = makeChannel({
+    gating: false,
+    acceptDigest: new Uint8Array(32).fill(7),
+  });
+
+  await channel.send(task(), { expectedResponseType: LIST_RESP });
+
+  assert.equal(outcomes[0].kind, "notAnswered");
+  assert.match(outcomes[0].reason, /answers an invite we did not send/);
+  assert.equal((await store.get(holder.vid, VTA_VID)).state, "pending");
 });
 
 test("a VTA restart is recovered from by re-inviting, not by failing forever", async () => {
