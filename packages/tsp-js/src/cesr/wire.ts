@@ -58,10 +58,11 @@ export const LONG_COUNT_REV3 = DASH;
 /** TSP version `(major, minor)` this package **packs** — Rev 3, `YTSP-AAC`.
  *
  *  MAJOR.MINOR, two components rather than three: MINOR occupies the whole
- *  12-bit count. The published §9.1 text reads the three characters as MAJOR,
- *  MINOR, PATCH and gives `YTSP-ABA`; affinidi-tsp deliberately does not follow
+ *  12-bit count. Pre-merge drafts of §9.1 read the three characters as MAJOR,
+ *  MINOR, PATCH and gave `YTSP-ABA`; affinidi-tsp deliberately does not follow
  *  that reading, and neither do we — see that crate's `TSP_VERSION` for the
- *  argument. Nothing about interoperating depends on the choice: only MAJOR
+ *  argument. The merged specification's Appendix A vectors carry `YTSP-AAC`,
+ *  the marker packed here. Nothing about interoperating depends on the choice: only MAJOR
  *  gates processability, it is the same character either way, and no
  *  implementation refuses a message on MINOR. */
 export const TSP_VERSION = { major: 0, minor: 2 } as const;

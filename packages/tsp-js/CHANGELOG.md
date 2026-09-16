@@ -14,6 +14,25 @@ For history before this file, see `git log` on `packages/tsp-js`.
   accept answers the invite we have outstanding (§7.2.2). `transition` sees
   only the state, so until now every client had to compare the digests itself
   or adopt an accept for an invite it never sent.
+- `@openvtc/vti-tsp-js/unsafe-testing`, a **test-only** subpath for
+  byte-reproducible packing: `__unsafeDeterministicPack`, `…PackInvite`,
+  `…PackAccept`, `…PackCancel`, `…PackNested` and `…PackRouted` take an
+  `__unsafeIkmE` (RFC 9180 DeriveKeyPair input) for the HPKE-Base ephemeral and
+  can write the NULL VID in the ESSR sender field. A fixed ephemeral key breaks
+  confidentiality; the subpath exists so the Appendix A vectors can be
+  reproduced and is not part of the documented API. The main entry point's
+  packers are unchanged and never take either knob. With it, all six HPKE-Base
+  vectors (`direct-hpke-base`, `control-rfi-direct`, `control-rfa-direct`,
+  `control-rfd`, `nested-direct`, `routed`) re-pack byte for byte.
+
+### Changed
+
+- The Appendix A test vectors are the merged specification's
+  ([tswg-tsp-specification@f5b8668](https://github.com/trustoverip/tswg-tsp-specification/commit/f5b8668952aabe8e541b535fcbdf589484ffc4f4)),
+  which carry `YTSP-AAC` — the marker this package packs — in place of the
+  pre-merge `YTSP-ABA` set. Every message and the control vectors' digests
+  changed; all still open and verify. A pre-merge `ABA` message stays pinned in
+  the tests: reading it is unchanged. Test-only; no library behaviour changed.
 
 ### Fixed
 

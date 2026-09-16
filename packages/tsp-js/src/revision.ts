@@ -19,9 +19,10 @@
 // Rev 2 is the only MINOR we match exactly. Everything else at MAJOR 0 is read
 // as Rev 3, because §9.1 makes MAJOR the field that gates processability and
 // MINOR one that no implementation may refuse a message on — the ToIP reference
-// discards MINOR entirely. Upstream Rev 3 ships `YTSP-ABA`, which is MINOR 64
-// under this (MAJOR.MINOR) reading and MINOR 1 / PATCH 0 under the published
-// three-component one; affinidi-tsp emits `AAC` = 2. Both must parse as Rev 3,
+// discards MINOR entirely. Pre-merge drafts of Rev 3 shipped `YTSP-ABA`, which
+// is MINOR 64 under this (MAJOR.MINOR) reading and MINOR 1 / PATCH 0 under the
+// three-component one; the merged specification's Appendix A vectors, like
+// affinidi-tsp and this package, carry `AAC` = 2. Both must parse as Rev 3,
 // and so must whatever the resolution of that argument turns out to be, so
 // enumerating known-good MINORs would be the wrong shape. See
 // `KNOWN_MINORS` for what the list is actually for.

@@ -91,7 +91,7 @@ test("the public decodeEnvelope dispatches, and reports which revision it read",
   // Rev 3, from the published vectors.
   const rev3 = decodeEnvelope(b64u(VECTORS.vectors["direct-hpke-base"].message));
   assert.equal(rev3.revision, "rev3");
-  assert.equal(rev3.minor, 64); // the vectors carry `ABA`
+  assert.equal(rev3.minor, 2); // the merged vectors carry `AAC`
   assert.equal(rev3.envelope.sender, VECTORS.identifiers.alice.id);
   assert.equal(rev3.envelope.receiver, VECTORS.identifiers.bob.id);
 
