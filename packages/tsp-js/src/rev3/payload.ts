@@ -196,11 +196,17 @@ export function decodePayloadFrame(
     decodePadding(frame, cur);
     const streamQuadlets = wire.decodeCount(wire.TSP_GENERIC_STREAM, frame, cur);
     if (streamQuadlets === undefined) throw new Error("tsp: missing -A payload stream");
+    // The body is an `-A##` stream that ends the frame and holds exactly one
+    // Bytes primitive — the form the spec's vectors and the ToIP reference
+    // use. Anything else is refused, never truncated to its first primitive
+    // (trustoverip/tswg-tsp-specification#77).
     const streamEnd = cur.pos + streamQuadlets * 3;
-    if (streamEnd > frameEnd) throw new Error("tsp: -A stream overruns the payload frame");
+    if (streamEnd !== frameEnd) throw new Error("tsp: -A stream does not end the payload frame");
     const body = wire.decodeVariableData(wire.TSP_PLAINTEXT, frame, cur);
     if (body === undefined) throw new Error("tsp: missing payload body");
-    if (cur.pos > streamEnd) throw new Error("tsp: payload body overruns the -A stream");
+    if (cur.pos !== streamEnd) {
+      throw new Error("tsp: -A stream must hold exactly one Bytes primitive");
+    }
     // `XCTL` carries an upper-layer control payload — opaque to TSP, exactly
     // like `XSCS`. It is not a relationship-forming message and shares nothing
     // with one but the word "control".

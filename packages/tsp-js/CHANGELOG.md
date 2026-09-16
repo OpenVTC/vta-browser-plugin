@@ -8,6 +8,13 @@ For history before this file, see `git log` on `packages/tsp-js`.
 
 ## [Unreleased]
 
+### Fixed
+
+- An XSCS/XCTL body that is not exactly one Bytes primitive is refused. It was
+  read as its first primitive, silently dropping the rest of the `-A##` stream,
+  and data after the stream was ignored. See
+  [tswg-tsp-specification#77](https://github.com/trustoverip/tswg-tsp-specification/issues/77).
+
 ## [0.3.0] — Trust Spanning Protocol specification Rev 3
 
 **Breaking. This package now packs Rev 3, and a Rev 2 peer cannot read what it
