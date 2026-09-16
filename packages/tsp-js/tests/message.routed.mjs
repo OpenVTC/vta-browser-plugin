@@ -48,6 +48,17 @@ test("packRouted rejects empty and over-long routes", async () => {
   await assert.rejects(packRouted(enc.encode("x"), tooMany, alice.vid, hop1.vid, packKeys(alice, hop1)));
 });
 
+test("a route at MAX_HOPS packs and opens with its hops intact", async () => {
+  // 12 hops was refused when the limit was 10.
+  const alice = party("did:web:alice");
+  const hop1 = party("did:web:hop1");
+  const route = Array.from({ length: MAX_HOPS }, (_, i) => `did:web:h${i}`);
+  const packed = await packRouted(enc.encode("abc"), route, alice.vid, hop1.vid, packKeys(alice, hop1));
+  const opened = await unpack(packed.bytes, unpackKeys(hop1, alice));
+  assert.equal(opened.messageType, "routed");
+  assert.deepEqual(opened.hops, route);
+});
+
 test("routed multi-hop round-trip: alice → hop1 → hop2 → final (inner opaque)", async () => {
   const alice = party("did:web:alice");
   const hop1 = party("did:web:hop1");

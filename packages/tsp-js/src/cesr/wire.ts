@@ -388,8 +388,11 @@ export function decodeVariableData(
   return stream.slice(range.begin, range.end);
 }
 
-/** Max hops accepted in a routed message's hop list (bounds a hostile count). */
-export const MAX_HOPS = 10;
+/** Max hops accepted in a routed message's hop list or reply path (bounds a
+ *  hostile count). The spec sets no maximum, so this is a local choice that
+ *  caps interoperability: 64 matches the other affinidi TSP implementations.
+ *  It was 10, which refused 12-hop routes every other implementation opens. */
+export const MAX_HOPS = 64;
 
 /** Read the `YTSP` genus marker and its version count code. Advances `cur`.
  *
