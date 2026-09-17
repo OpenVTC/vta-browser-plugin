@@ -48,6 +48,17 @@ test("packRouted rejects empty and over-long routes", async () => {
   await assert.rejects(packRouted(enc.encode("x"), tooMany, alice.vid, hop1.vid, packKeys(alice, hop1)));
 });
 
+test("a route at MAX_HOPS packs and opens with its hops intact", async () => {
+  // 12 hops was refused when the limit was 10.
+  const alice = party("did:web:alice");
+  const hop1 = party("did:web:hop1");
+  const route = Array.from({ length: MAX_HOPS }, (_, i) => `did:web:h${i}`);
+  const packed = await packRouted(enc.encode("abc"), route, alice.vid, hop1.vid, packKeys(alice, hop1));
+  const opened = await unpack(packed.bytes, unpackKeys(hop1, alice));
+  assert.equal(opened.messageType, "routed");
+  assert.deepEqual(opened.hops, route);
+});
+
 test("routed multi-hop round-trip: alice → hop1 → hop2 → final (inner opaque)", async () => {
   const alice = party("did:web:alice");
   const hop1 = party("did:web:hop1");
@@ -97,8 +108,26 @@ test("an intermediary cannot open a layer addressed to a different hop", async (
   const alice = party("did:web:alice");
   const hop1 = party("did:web:hop1");
   const hop2 = party("did:web:hop2");
-  const layer = await packRouted(enc.encode("inner"), ["did:web:hop2"], alice.vid, hop1.vid, packKeys(alice, hop1));
+  const exit = party("did:web:exit");
+  // The inner is a real packed message, not arbitrary bytes: Rev 3 carries it
+  // raw rather than inside a `B` var-data field, so it must be quadlet-aligned
+  // — and a TSP message always is.
+  const inner = await pack(enc.encode("inner"), alice.vid, exit.vid, packKeys(alice, exit));
+  const layer = await packRouted(inner.bytes, ["did:web:hop2"], alice.vid, hop1.vid, packKeys(alice, hop1));
   await assert.rejects(unpack(layer.bytes, unpackKeys(hop2, alice)));
+});
+
+test("a raw inner that is not quadlet-aligned is refused when packed", async () => {
+  // Rev 2 wrapped the inner message in a `B` field, which padded anything to
+  // alignment. Rev 3 drops the wrapper, so alignment stops being the framing's
+  // problem and becomes the caller's — and a misaligned frame would otherwise
+  // go out and desynchronise the far side's parse rather than fail here.
+  const alice = party("did:web:alice");
+  const hop1 = party("did:web:hop1");
+  await assert.rejects(
+    () => packRouted(enc.encode("inner"), ["did:web:hop2"], alice.vid, hop1.vid, packKeys(alice, hop1)),
+    /quadlet-aligned/,
+  );
 });
 
 test("nested wrapper: mediator forwards an opaque inner it can't read", async () => {

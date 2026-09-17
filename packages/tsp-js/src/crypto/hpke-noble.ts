@@ -115,6 +115,27 @@ function dh(sk: Uint8Array, pk: Uint8Array): Uint8Array {
 // public `hpke.ts` wrappers deliberately do not forward it.
 type UnsafeFixedEphemeral = { __unsafeFixedEphemeralSk?: Uint8Array };
 
+/**
+ * §7.1.3 DeriveKeyPair for DHKEM(X25519, HKDF-SHA256): `ikm` → `(skE, pkE)`.
+ *
+ * Exported for test-vector verification only. RFC 9180 and TSP Appendix A
+ * publish the ephemeral as `ikmE`, the input to this function, so a vector's
+ * `enc` can only be reproduced by running it. X25519 needs no rejection
+ * sampling: every 32-byte string is a valid scalar (clamped at use).
+ *
+ * Nothing on a production path calls this. A random ephemeral is drawn from
+ * `x25519.utils.randomSecretKey()` directly, and deriving one from caller
+ * input is exactly the reuse the `__unsafe…` hooks warn about.
+ */
+export function deriveKeyPair(ikm: Uint8Array): { sk: Uint8Array; pk: Uint8Array } {
+  if (ikm.length < NX25519) {
+    throw new Error(`tsp: DeriveKeyPair input must be at least ${NX25519} bytes`);
+  }
+  const dkpPrk = labeledExtract(KEM_SUITE_ID, EMPTY, "dkp_prk", ikm);
+  const sk = labeledExpand(KEM_SUITE_ID, dkpPrk, "sk", EMPTY, NX25519);
+  return { sk, pk: x25519.getPublicKey(sk) };
+}
+
 /** §4.1 Encap (base mode). Exported for test-vector verification. */
 export function encap(recipientPk: Uint8Array, unsafe?: UnsafeFixedEphemeral): {
   sharedSecret: Uint8Array;

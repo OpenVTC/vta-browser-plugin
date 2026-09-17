@@ -11,11 +11,18 @@
 // sender VID over TSP; we unpack it and decode with the shared
 // `parseTrustTaskReply`.
 //
-// pack/unpack + CESR framing + HPKE-Auth live in `@openvtc/vti-tsp-js` (proven
+// pack/unpack + CESR framing + HPKE live in `@openvtc/vti-tsp-js` (proven
 // byte-compatible with affinidi-tsp, the crate the VTA links). This class owns
 // only the trust-task binding + transport dispatch; the actual send/receive of
 // packed bytes is an injected `TspTransport` (mediator-backed in production, a
 // simulator in tests).
+//
+// **We send spec Rev 3 and read Rev 3 or Rev 2.** The revision is not
+// negotiated and cannot be: an inbound message carries a version marker that
+// says what it is, an outbound one has nothing to read. So `unpack` here still
+// passes the VTA's X25519 public key — which Rev 3 ignores and Rev 2 needs to
+// open a message at all — and `pack` does not. A VTA still on affinidi-tsp
+// 0.1.x cannot read what we send; that is the cutover, not a bug.
 
 import { pack, unpack } from "@openvtc/vti-tsp-js";
 
@@ -29,6 +36,13 @@ import type { TrustTask } from "./protocol.js";
 import { parseTrustTaskReply, signOutboundTask, verifyTrustTaskReply } from "./trust-task.js";
 import { asTaskSigner, type ChannelSigner, type TaskSigner } from "./trust-task.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
+import {
+  ensureRelationship,
+  forgetOnFailure,
+  MemoryRelationshipStore,
+  type RelationshipOutcome,
+  type RelationshipStore,
+} from "./tsp-relationship.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -39,9 +53,17 @@ export interface TspHolderIdentity {
   vid: string;
   /** Ed25519 private key — signs the outer TSP signature. */
   signingPrivateKey: Uint8Array;
-  /** X25519 private key — HPKE-Auth sender authentication + decrypts replies. */
+  /** X25519 private key — decrypts replies sealed to us.
+   *
+   *  Under Rev 3 that is all it does: HPKE-Base does not put the sender's key
+   *  in the KEM, so this is no longer half of our outbound authenticity. */
   encryptionPrivateKey: Uint8Array;
-  /** X25519 public key — the VTA verifies our sender-auth against this. */
+  /** X25519 public key.
+   *
+   *  A Rev 3 counterparty never needs it — it is kept because it is the key a
+   *  peer resolves from our DID, and because a Rev 2 peer's `unpack` cannot
+   *  open our messages without it. Rev 2 is read-only here, so nothing in this
+   *  package sends under it. */
   encryptionPublicKey: Uint8Array;
 }
 
@@ -128,6 +150,19 @@ export interface TspChannelOptions {
   signing: ChannelSigner;
   /** Per-request timeout (default 30s). */
   timeoutMs?: number;
+  /**
+   * Where relationship records live. Defaults to {@link MemoryRelationshipStore}.
+   *
+   * Rev 3 gates application messages on a relationship (7.2.2), so this is not
+   * optional behaviour that can be left off — a gated peer silently drops
+   * everything until an invite has been accepted. See `tsp-relationship.ts` for
+   * why the default is deliberately no more durable than the far side's.
+   */
+  relationships?: RelationshipStore;
+  /** How long to wait for an accept before sending anyway (default 5s). */
+  handshakeTimeoutMs?: number;
+  /** Reports each handshake outcome, for diagnostics. */
+  onRelationship?: (outcome: RelationshipOutcome) => void;
 }
 
 const utf8 = new TextEncoder();
@@ -145,6 +180,13 @@ export class TspChannel implements TrustTaskChannel {
   private readonly vta: TspRemoteEndpoint;
   private readonly signer: TaskSigner;
   private readonly timeoutMs: number;
+  private readonly relationships: RelationshipStore;
+  private readonly handshakeTimeoutMs: number | undefined;
+  private readonly onRelationship: ((outcome: RelationshipOutcome) => void) | undefined;
+  /** In-flight handshake, so N concurrent sends produce one invite rather than
+   *  N — which a peer's state machine would refuse as repeated `sendInvite`
+   *  from `pending`, failing every request after the first. */
+  private handshake: Promise<unknown> | undefined;
 
   constructor(opts: TspChannelOptions) {
     this.signer = asTaskSigner(opts.signing);
@@ -152,6 +194,45 @@ export class TspChannel implements TrustTaskChannel {
     this.holder = opts.holder;
     this.vta = opts.vta;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.relationships = opts.relationships ?? new MemoryRelationshipStore();
+    this.handshakeTimeoutMs = opts.handshakeTimeoutMs;
+    this.onRelationship = opts.onRelationship;
+  }
+
+  /**
+   * Form the relationship a Rev 3 peer requires, at most once at a time.
+   *
+   * Never throws: `ensureRelationship` reports and returns, and the caller
+   * sends regardless. A peer that does not gate takes the message; a peer that
+   * does has accepted by now. Refusing to send because a courtesy round trip
+   * went unanswered would break the wallet against the more permissive peer,
+   * which is the wrong way round.
+   */
+  private async ensureRelated(): Promise<void> {
+    if (!this.handshake) {
+      this.handshake = ensureRelationship({
+        transport: this.transport,
+        holder: this.holder,
+        vta: this.vta,
+        store: this.relationships,
+        ...(this.handshakeTimeoutMs !== undefined
+          ? { handshakeTimeoutMs: this.handshakeTimeoutMs }
+          : {}),
+        ...(this.onRelationship ? { onOutcome: this.onRelationship } : {}),
+      }).finally(() => {
+        this.handshake = undefined;
+      });
+    }
+    await this.handshake;
+  }
+
+  /** Drop the cached relationship after a failed send.
+   *
+   *  A send that went nowhere is most often a VTA that restarted and forgot us
+   *  — its store is in-memory by default — so the next attempt should re-invite
+   *  rather than keep posting into the same silence. */
+  private async forgetRelationship(): Promise<void> {
+    await forgetOnFailure(this.relationships, this.holder.vid, this.vta.vid);
   }
 
   /** Seal the envelope to the VTA. Shared by both directions. */
@@ -164,9 +245,13 @@ export class TspChannel implements TrustTaskChannel {
     // document, so anything that reshaped it here would invalidate every
     // signature while looking identical on screen.
     const plaintext = utf8.encode(wrapTspEnvelope(envelope));
+    // Rev 3 (spec) seals under HPKE-**Base**, so the holder's own X25519 secret
+    // no longer enters the KEM and is not passed here. Sender authenticity is
+    // the ESSR sender field plus the outer Ed25519 signature instead — see
+    // `@openvtc/vti-tsp-js`'s `rev3/direct.ts`. Adding the key back would not
+    // be ignored; `PackKeys` does not have the member, which is the point.
     const packed = await pack(plaintext, this.holder.vid, this.vta.vid, {
       senderSigningKey: this.holder.signingPrivateKey,
-      senderEncryptionKey: this.holder.encryptionPrivateKey,
       receiverEncryptionKey: this.vta.encryptionPublicKey,
     });
     return packed.bytes;
@@ -188,10 +273,21 @@ export class TspChannel implements TrustTaskChannel {
         `${opts.operationLabel ?? envelope.type}: this TSP transport has no one-way send`,
       );
     }
-    await this.transport.send(await this.packForVta(envelope));
+    await this.ensureRelated();
+    const packed = await this.packForVta(envelope);
+    try {
+      await this.transport.send(packed);
+    } catch (err) {
+      await this.forgetRelationship();
+      throw err;
+    }
   }
 
   async send<Res>(envelope: TrustTask<unknown>, opts: SendOpts = {}): Promise<Res> {
+    // 7.2.2: a gated peer drops an application message from a VID it holds no
+    // relationship with, and drops it *silently*. Doing this first turns what
+    // would be an unexplained 30-second timeout into a round trip.
+    await this.ensureRelated();
     const packed = { bytes: await this.packForVta(envelope) };
 
     // Set by `claims` when it recognises a frame as this request's reply, so
@@ -264,6 +360,9 @@ export class TspChannel implements TrustTaskChannel {
       // the only evidence is a silent 30s wait, and the difference between
       // "the VTA never answered" and "it answered something I did not
       // recognise" is the whole diagnosis.
+      // The most likely cause of silence is a peer that no longer holds the
+      // relationship, so drop ours and let the next attempt re-invite.
+      await this.forgetRelationship();
       if (lastDecline) {
         throw new VtaClientError(
           (err as VtaClientError).code ?? "e.client.network",

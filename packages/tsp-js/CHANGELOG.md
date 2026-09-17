@@ -10,6 +10,126 @@ For history before this file, see `git log` on `packages/tsp-js`.
 
 ### Added
 
+- `resolveAccept(state, answeredDigest, ourInviteDigest)`: whether a received
+  accept answers the invite we have outstanding (§7.2.2). `transition` sees
+  only the state, so until now every client had to compare the digests itself
+  or adopt an accept for an invite it never sent.
+- `@openvtc/vti-tsp-js/unsafe-testing`, a **test-only** subpath for
+  byte-reproducible packing: `__unsafeDeterministicPack`, `…PackInvite`,
+  `…PackAccept`, `…PackCancel`, `…PackNested` and `…PackRouted` take an
+  `__unsafeIkmE` (RFC 9180 DeriveKeyPair input) for the HPKE-Base ephemeral and
+  can write the NULL VID in the ESSR sender field. A fixed ephemeral key breaks
+  confidentiality; the subpath exists so the Appendix A vectors can be
+  reproduced and is not part of the documented API. The main entry point's
+  packers are unchanged and never take either knob. With it, all six HPKE-Base
+  vectors (`direct-hpke-base`, `control-rfi-direct`, `control-rfa-direct`,
+  `control-rfd`, `nested-direct`, `routed`) re-pack byte for byte.
+
+### Changed
+
+- The Appendix A test vectors are the merged specification's
+  ([tswg-tsp-specification@f5b8668](https://github.com/trustoverip/tswg-tsp-specification/commit/f5b8668952aabe8e541b535fcbdf589484ffc4f4)),
+  which carry `YTSP-AAC` — the marker this package packs — in place of the
+  pre-merge `YTSP-ABA` set. Every message and the control vectors' digests
+  changed; all still open and verify. A pre-merge `ABA` message stays pinned in
+  the tests: reading it is unchanged. Test-only; no library behaviour changed.
+
+### Fixed
+
+- `MAX_HOPS` is 64 (was 10). The specification sets no maximum, and 12-hop
+  routes packed by every other implementation were refused on decode. The same
+  bound applies when packing a route and when decoding a hop list or reply path.
+- An XSCS/XCTL body that is not exactly one Bytes primitive is refused. It was
+  read as its first primitive, silently dropping the rest of the `-A##` stream,
+  and data after the stream was ignored. See
+  [tswg-tsp-specification#77](https://github.com/trustoverip/tswg-tsp-specification/issues/77).
+
+## [0.3.0] — Trust Spanning Protocol specification Rev 3
+
+**Breaking. This package now packs Rev 3, and a Rev 2 peer cannot read what it
+sends.** There is no negotiation and no fallback. Rev 3 changed the crypto mode,
+the version byte, the long count-code prefix, the ciphertext code and layout,
+the `-E` count's meaning, the signature code and every payload layout at once,
+so the two revisions share no frame either side can classify.
+
+Reading is dual. `unpack` dispatches on the version marker every message
+carries — a fixed offset, no keys — and a Rev 2 message is read by a frozen,
+decode-only codec in `src/rev2/`. The asymmetry is the design: an inbound
+message says what it is, an outbound one has nothing to read, and a dual
+*packer* could only be a guess dressed as a protocol.
+
+### Added
+
+- `peekRevision` / `describeRevision` — the keyless discriminator, and
+  `TspRevisionError` (`code: "E_TSP_REVISION"`) with `isRevisionError`.
+- `revision` on every `unpack` result, and on `decodeEnvelope`. How a caller
+  learns what a peer speaks; persisting it per peer belongs above this package.
+- `isTsp`, accepting both `0xF8` and the long framing's `0xFB`.
+- **Relationship control messages** (§7.2, §7.3): `packInvite`, `packAccept`,
+  `packCancel`, and `unpack` returning a verified `control` message. Rev 3 gates
+  application messages on a relationship, so without these a peer enforcing
+  §7.2.2 drops everything a client sends — silently, since a dropped message
+  answers nothing.
+
+  The §7.2.1 `TSP_Digest` is the substance of it: self-addressing over the
+  message's own envelope and payload with its own slot filled by 33 dummy
+  bytes, carried on the wire, and recomputed by the receiver, which refuses the
+  message on a mismatch. Rev 2 correlated on a hash of the encrypted payload
+  that was never transmitted and so could never be checked. The three published
+  control vectors exercise the derivation directly.
+
+- **The §7.2/§7.3 state machine** (`relationship.ts`): `transition`, `canSend`,
+  `admitsApplicationMessage`, `resolveInviteRace`, `resolveCancel`. Pure — state
+  and event in, state or a refusal out — with no storage, clock or keys, so the
+  rules can be tested against the specification rather than against a mock.
+  `unpack` does not apply them: a codec that mutated relationship state would
+  make receiving a message a side effect.
+
+- `XCTL` and `XPAD` are recognised and reported rather than refused as unknown
+  type codes. `XCTL` carries an upper-layer control payload and is opaque to
+  TSP, sharing nothing with a relationship-forming message but the word.
+- The specification's own Appendix A vectors run as a test suite
+  (`tests/interop.spec-vectors.mjs`). Every published vector is either
+  exercised or named as uncovered.
+
+### Changed — wire format
+
+- **HPKE-Auth → HPKE-Base.** The sender's key leaves the KEM, so `PackKeys` and
+  `UnpackKeys` each lost `senderEncryptionKey` — it survives on `UnpackKeys` as
+  an **optional, Rev 2-only** member, because HPKE-Auth cannot *open* a message
+  without it. `info` is the fixed code `YTSP-`; the AAD is
+  `TSP_Version ‖ VID_sndr ‖ VID_rcvr`, where Rev 2 passed the envelope frame as
+  `info` with empty AAD.
+- **Version `YTSP-AAB` → `YTSP-AAC`**, MAJOR.MINOR with MINOR filling the
+  12-bit count. Only MAJOR gates processability, so any other MINOR at MAJOR 0
+  — including upstream's `ABA` (64) — reads as Rev 3.
+- **Ciphertext code `G` → `F`**, and the field is `enc ‖ ct`; Rev 2 put `enc`
+  last. A `C`-coded sealed box (§8.3) is recognised and refused by name.
+- **Long count codes `-0X#####` → `--X#####`.**
+- **The `-E` count covers all signable content**, so the frame is finalized
+  after sealing. `encodeEnvelope` is gone; Rev 3's `encodeFields` +
+  `finalizeFrame` replace it, and the split is where the AAD boundary falls.
+- **The trailing `X 00 00` marker is deleted**; the receiver field is always
+  written, with `4BAA` meaning absent.
+- **The signature is indexed** (`B#`) under length-based counts `-C23 -K22`.
+- **Payload layouts** carry an ESSR sender VID and a padding field; a direct
+  body sits in a `-A` generic stream; `-J` counts bytes rather than VIDs; a
+  nested inner message is carried raw, so it must be quadlet-aligned.
+
+### Fixed
+
+- **`decodeCount` returned long-form counts with the identifier bits still in
+  them**, so every long-framed message decoded to a wrong length. The test that
+  covered it asserted the wrong behaviour on purpose, calling it "a reference
+  quirk ... benign, TSP frames by cursor position and discards this value".
+  That reasoning was wrong and Rev 3 makes it fatal: the `-E` and `-Z` counts
+  are now load-bearing lengths. `affinidi-tsp` fixed the same bug independently.
+- `MAX_HOPS` was 16 on the packing side against a decoder that stopped at 10, so
+  a 12-hop route packed cleanly and could not be read back by this library.
+
+
+### Added
+
 - **Pluggable key custody for HPKE-Auth and Ed25519 signing.** Two capability
   interfaces — `KeyAgreement` (the raw X25519 ECDH half of AuthEncap/AuthDecap)
   and `SigningKey` — let a backend that never exports a private key drive

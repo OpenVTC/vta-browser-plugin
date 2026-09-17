@@ -74,3 +74,57 @@ test("JS-packed message uses the same fixed keys and self-unpacks", async () => 
   });
   assert.equal(new TextDecoder().decode(unpacked.payload), "hello from js tsp");
 });
+
+// ── Rev 3, the other direction ──
+//
+// The vector above and the published Appendix A vectors in
+// `interop.spec-vectors.mjs` both check our *decoder*. Nothing in a JS-only
+// suite can check the encoder: a round trip passes whenever pack and unpack
+// share a misreading, which is precisely the failure mode the one-character
+// changes in Rev 3 produce.
+//
+// So the encoder was checked by running affinidi-tsp against it. A message
+// packed here with the fixed keys below was handed to `direct::unpack` on the
+// crate's `tsp-rev3` branch (worktree at fb4e23a), which recovered the sender,
+// the receiver, the plaintext and a byte-identical thread digest.
+//
+// What is pinned here is what that run cannot: the deterministic parts of what
+// we emit. The sealed message itself is not reproducible — HPKE draws a fresh
+// ephemeral key every time — but the payload frame and the envelope fields are,
+// and between them they carry every layout decision Rev 3 changed. If either
+// moves, the cross-implementation run above is stale and has to be redone.
+test("Rev 3 — the envelope fields we emit are byte-exact", async () => {
+  const { encodeFields } = await import("../dist/rev3/envelope.js");
+  const fields = encodeFields("did:web:alice.example", "did:web:bob.example");
+  assert.equal(
+    toHex(fields),
+    "61348f" + // YTSP
+      "f80002" + // YTSP-AAC
+      "e010076469643a7765623a616c6963652e6578616d706c65" + // alice, 0 lead
+      "e81007" + "0000" + "6469643a7765623a626f622e6578616d706c65", // bob, 2 lead
+  );
+});
+
+test("Rev 3 — the payload frame we emit is byte-exact", async () => {
+  const { encodePayloadFrame } = await import("../dist/rev3/payload.js");
+  const { frame, threadDigest } = encodePayloadFrame(
+    new TextEncoder().encode("hello from js tsp rev3"),
+    "direct",
+    [],
+    "did:web:alice.example",
+  );
+  assert.equal(
+    toHex(frame),
+    "f99014" + // -Z, 20 quadlets
+      "5d2092" + // XSCS
+      "e010076469643a7765623a616c6963652e6578616d706c65" + // ESSR sender VID
+      "e01000" + // padding: empty field — present, not omitted
+      "f80009" + // -A generic stream, 9 quadlets
+      "e81008" + "0000" + "68656c6c6f2066726f6d206a73207473702072657633", // B: the body
+  );
+  // The digest affinidi-tsp independently recomputed from these bytes.
+  assert.equal(
+    toHex(threadDigest),
+    "625026c6e4a2f5061e2403777cbb2bc3d1595f4c8593d5d88a61f89c9a9b4232",
+  );
+});
