@@ -139,6 +139,26 @@ type on a path that skips it), or relaxing the `vti-didcomm-js` floor below
 outstanding?" A message can be both, which is why the drain path bypasses the
 dedup check.
 
+**A second `vti-didcomm-js` floor, for an unrelated reason: `^0.10.0` is a
+correctness constraint too.** Since the Rev 3 cutover the wallet reads
+long-framed TSP replies — spec Rev 3 widened the `-E` count to cover the
+ciphertext, so any TSP message past ~12 KB is framed with the six-byte long
+count code and its qb64 text starts `--E`, not `-E`. Through 0.8.x the inbound
+demux (`_onFrame` in `mediator-transport.js`) classified TSP by
+`text.startsWith("-E")`, so a large reply was handed to the DIDComm unpacker,
+thrown out as a poison frame, and — because the throw returns before the ack —
+**never acked**, so the mediator redelivered it on every reconnect forever while
+the waiter timed out. This is not hypothetical: a `keys/list` with no context
+filter returns a full page of records, crosses the threshold, and was silently
+lost (the VTA logged the reply sent; the wallet saw nothing). 0.10.0 moved the
+test into `isTspFrameText`, which matches both `-E` and `--E`. Below it, every
+TSP reply over ~12 KB vanishes. `tests/did.egress-socket.mjs`'s control was
+rewritten for the same release's *other* change — 0.9+ runs the resolver's own
+`net-guard` on `did:webvh` resolution by default, so a bare `vtiResolve(did, {})`
+is refused before it dials; the control now relaxes the dependency's policy to
+keep proving the fixture is reachable, and the production path (guard first, then
+`vtiResolve(did, {})`) is unchanged.
+
 ## Every outbound Trust-Task document is signed (SPEC §7.2 item 7a)
 
 The VTA enforces the four checks a Trust Task specification declares for
