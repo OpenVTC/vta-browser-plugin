@@ -18,8 +18,12 @@
 //
 // ── Why these spellings and not the headline ones ───────────────────────────
 //
-// The vectors below are the ones where **this repo's guard is the only thing
-// that can refuse them**, which is the whole point of the file.
+// The vectors below are the ones where **this repo's guard is provably the
+// thing exercised at the socket**, which is the whole point of the file. (Since
+// `@openvtc/vti-didcomm-js` 0.9 the resolver's own net-guard also refuses them
+// by default — defense in depth — so this repo's guard is no longer the *only*
+// refusal; the control below relaxes the dependency's policy to keep proving
+// the fixture is reachable at all.)
 //
 // `didwebvh-ts@2.8.0` — the resolver under `@openvtc/vti-didcomm-js` — has its
 // own `isIPAddress()` check that throws "IP addresses are not allowed as hosts"
@@ -160,13 +164,22 @@ test("deriveSigningKeyId opens no socket either — the second entry point", asy
 test("the resolver does dial the listener when the guard is not in front of it", async (t) => {
   // The control the two tests above are worth nothing without.
   //
-  // It calls the resolver the way `verifyDid` would — same DID, same default
-  // resolver, same real `fetch` — but without going through `verifyDid`, so the
-  // ONE difference between this and the tests above is
-  // `assertResolvableWebvhHost`. A connection arriving here says the listener
-  // counts, the port is reachable, and the DID does derive to it; an empty
-  // count above therefore means refused, and not "this fixture never pointed
-  // anywhere".
+  // It calls the resolver with the same DID and the same real `fetch`, but
+  // without going through `verifyDid`. What it isolates is `verifyDid`'s guard,
+  // `assertResolvableWebvhHost` — a connection arriving here says the listener
+  // counts, the port is reachable, and the DID does derive to it, so an empty
+  // count above means refused and not "this fixture never pointed anywhere".
+  //
+  // Since `@openvtc/vti-didcomm-js` 0.9 the resolver applies its OWN net-guard
+  // to did:webvh resolution by default, so a bare `vtiResolve(did, {})` is now
+  // refused before it dials — defense in depth with this repo's guard, and the
+  // reason a no-policy call here would prove nothing but the dependency's
+  // refusal. To reach the socket the control relaxes *the dependency's* policy
+  // with `allowInsecure` + `allowPrivate` (both, since 0.8 made them
+  // independent — `allowPrivate` alone keeps the `https:` requirement and a
+  // loopback listener speaks neither TLS nor a public scheme). The real tests
+  // need no such relaxation: their production `vtiResolve(did, {})` is exactly
+  // what ships, and `assertResolvableWebvhHost` refuses first regardless.
   t.mock.method(console, "error", () => {});
   connections = [];
 
@@ -175,7 +188,7 @@ test("the resolver does dial the listener when the guard is not in front of it",
   // resolver answers something else.
   const did = dialsListener("0x7f000001");
   await assert.rejects(
-    () => vtiResolve(did, {}),
+    () => vtiResolve(did, { netPolicy: { allowInsecure: true, allowPrivate: true } }),
     // Whatever the reset surfaces as. The claim is about the socket, not this.
     () => true,
   );
