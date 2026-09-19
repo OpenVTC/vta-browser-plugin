@@ -27,7 +27,7 @@
     "esbuild": "^0.28.2",
     "happy-dom": "^20.14.0",
     "typescript": "^7.0.2",
-    "vite": "^8.1.5",
+    "vite": "^8.3.0",
     "vite-plugin-top-level-await": "^1.4.4",
     "vite-plugin-wasm": "^3.3.0"
   }
