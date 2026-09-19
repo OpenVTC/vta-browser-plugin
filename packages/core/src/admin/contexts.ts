@@ -30,11 +30,19 @@ export interface ContextDeleteParams {
 
 /** The delete response, from the binding. The hand-written copy omitted
  *  `ext`, which SPEC §4.5.1 lets any agent send. */
-export type ContextDeleteResult = VTAContextsDeleteResponsePayload;
+export type ContextDeleteResult = VTAContextsDeleteResponsePayload & {
+  /** DIDs whose host copy the agent could not confirm removing. Empty is the
+   *  ordinary case; non-empty means the deletion is not finished. */
+  daemonCleanupErrors: string[];
+};
 
 /** What deleting a context would destroy, as the agent reports it. */
 export interface ContextDeletePreview {
   id: string;
+  /** Sub-contexts that go with it, deepest first. Every other array here is
+   *  the union over these and the named context, because that is what the
+   *  deletion acts on. Empty for a leaf. */
+  subContexts: string[];
   keys: string[];
   webvhDids: string[];
   /** Subjects whose ACL entry disappears entirely — this context (or the
@@ -54,9 +62,9 @@ export interface ContextDeletePreview {
  *
  * **Every array covers the whole subtree**, because the deletion does — the
  * agent counts the sub-contexts' keys, DIDs and grants alongside this
- * context's own. What it does not yet report is *which* sub-contexts those
- * are; `vta/contexts/preview-delete/1.0` has no member for that, so a
- * consumer wanting to name them derives them from the context list.
+ * context's own, and `subContexts` names them. Consumers used to derive that
+ * list from the context list; the agent reports it as of trust-tasks 0.21.4,
+ * and the agent is the one that decides what the cascade reaches.
  *
  * This returned three of the six arrays until now. `aclEntriesRemoved` in
  * particular is the one an operator most needs — it names the subjects about
@@ -76,12 +84,14 @@ export async function contextPreviewDelete(
     id: string;
     keys?: string[];
     webvhDids?: string[];
+    subContexts?: string[];
     aclEntriesRemoved?: string[];
     aclEntriesUpdated?: string[];
     didTemplates?: string[];
     /** Pre-fold spellings, still sent by an agent that has not taken the
      *  camelCase change. Accepted on read; never emitted. */
     webvh_dids?: string[];
+    sub_contexts?: string[];
     acl_entries_removed?: string[];
     acl_entries_updated?: string[];
     did_templates?: string[];
@@ -91,6 +101,7 @@ export async function contextPreviewDelete(
   });
   return {
     id: payload.id,
+    subContexts: payload.subContexts ?? payload.sub_contexts ?? [],
     keys: payload.keys ?? [],
     webvhDids: payload.webvhDids ?? payload.webvh_dids ?? [],
     aclEntriesRemoved: payload.aclEntriesRemoved ?? payload.acl_entries_removed ?? [],
@@ -109,9 +120,22 @@ export async function contextDelete(
     { id: params.id, force: params.force ?? false },
     { issuer: params.holder.did, recipient: params.service.did },
   );
-  const payload = await sender.send<{ id: string; deleted?: boolean }>(envelope, {
+  const payload = await sender.send<{
+    id: string;
+    deleted?: boolean;
+    daemonCleanupErrors?: string[];
+    daemon_cleanup_errors?: string[];
+  }>(envelope, {
     expectedResponseType: `${TASK_CONTEXTS_DELETE}#response`,
     operationLabel: "vta/contexts/delete/1.0",
   });
-  return { id: payload.id, deleted: payload.deleted ?? false };
+  return {
+    id: payload.id,
+    deleted: payload.deleted ?? false,
+    // A success that is not the whole story: these DIDs' records are gone
+    // and their published logs may still be served. The spec says a consumer
+    // MUST surface it rather than report the deletion as complete, so it is
+    // returned rather than dropped here.
+    daemonCleanupErrors: payload.daemonCleanupErrors ?? payload.daemon_cleanup_errors ?? [],
+  };
 }

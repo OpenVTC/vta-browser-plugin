@@ -35,12 +35,15 @@ const ctx = (id: string) => ({
 });
 
 /** A subtree: `acme` over `acme/eng` over `acme/eng/ci`, plus an unrelated
- *  `acme-corp` that must not be read as a child of `acme`. */
+ *  `acme-corp`. The agent decides what the cascade reaches and says so in
+ *  `subContexts`; the console no longer derives it, so `acme-corp`'s absence
+ *  here is the agent's answer rather than the console's path matching. */
 const RECORDS = [ctx("acme"), ctx("acme/eng"), ctx("acme/eng/ci"), ctx("acme-corp")];
+const SUBTREE = ["acme/eng/ci", "acme/eng"];
 
 const mount = async (preview: Record<string, unknown>, records = RECORDS) => {
   const a = agent({
-    [PREVIEW]: { id: "acme", keys: [], webvhDids: [], ...preview },
+    [PREVIEW]: { id: "acme", keys: [], webvhDids: [], subContexts: SUBTREE, ...preview },
     [DELETE]: { id: "acme", deleted: true },
     [LIST_DIDS]: { dids: [] },
   });
@@ -69,7 +72,11 @@ test("the sub-contexts that go with it are named, not merely implied", async () 
   const text = (screen as never as { text: () => string }).text();
   assert.match(text, /acme\/eng\/ci/, "the deepest sub-context is not on screen");
   assert.match(text, /acme\/eng(?!\/)/, "the intermediate sub-context is not on screen");
-  assert.doesNotMatch(text, /acme-corp/, "a sibling whose id merely shares a prefix is not a child");
+  assert.doesNotMatch(
+    text,
+    /acme-corp/,
+    "only what the agent named is shown — the console does not add to it",
+  );
 });
 
 test("a context holding nothing itself still asks, because its children go too", async () => {
@@ -88,7 +95,7 @@ test("a context holding nothing itself still asks, because its children go too",
 });
 
 test("a leaf holding nothing says so, and does not ask for force", async () => {
-  const { screen } = await mount({}, [ctx("acme"), ctx("acme-corp")]);
+  const { screen } = await mount({ subContexts: [] }, [ctx("acme"), ctx("acme-corp")]);
   await openPreview(screen as never);
   const text = (screen as never as { text: () => string }).text();
   assert.match(text, /holds nothing, and has no sub-contexts/);
@@ -100,6 +107,7 @@ test("grants and templates count as contents, not only keys and DIDs", async () 
   // the force control entirely.
   const { screen } = await mount(
     {
+      subContexts: [],
       aclEntriesRemoved: ["did:key:z6MkBankBot"],
       didTemplates: ["bank-persona"],
     },
