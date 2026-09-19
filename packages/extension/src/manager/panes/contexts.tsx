@@ -290,20 +290,11 @@ function Destroyed({
 function DeleteContext({
   parties,
   record,
-  subContexts,
   authority,
   onDeleted,
 }: {
   parties: Parties;
   record: ContextRecord;
-  /** The subtree going with it, deepest first.
-   *
-   *  Derived by the caller from the context list rather than read off the
-   *  preview, because `vta/contexts/preview-delete/1.0` has no member naming
-   *  them. It still has to be shown: the preview's own arrays already *count*
-   *  what the sub-contexts hold, so without this the operator sees keys and
-   *  DIDs that belong to contexts the panel never mentions. */
-  subContexts: string[];
   authority: Authority | null;
   onDeleted: () => void;
 }) {
@@ -327,7 +318,7 @@ function DeleteContext({
         // used to read as empty here, so the panel sent `force: false` and the
         // agent refused with nothing on screen explaining why.
         needsForce={(p) =>
-          subContexts.length > 0 ||
+          p.subContexts.length > 0 ||
           p.keys.length > 0 ||
           p.webvhDids.length > 0 ||
           p.aclEntriesRemoved.length > 0 ||
@@ -337,7 +328,7 @@ function DeleteContext({
         forceLabel="Delete anyway, destroying everything listed above"
         renderPreview={(p) => {
           const nothing =
-            subContexts.length === 0 &&
+            p.subContexts.length === 0 &&
             p.keys.length === 0 &&
             p.webvhDids.length === 0 &&
             p.aclEntriesRemoved.length === 0 &&
@@ -354,10 +345,10 @@ function DeleteContext({
                   {/* First, because it changes what every list below means:
                       those are the subtree's contents, not this context's. */}
                   <Destroyed
-                    count={subContexts.length}
-                    caption={`${plural(subContexts.length, "sub-context")} deleted with it — everything below is theirs too:`}
+                    count={p.subContexts.length}
+                    caption={`${plural(p.subContexts.length, "sub-context")} deleted with it — everything below is theirs too:`}
                   >
-                    {subContexts.map((id) => (
+                    {p.subContexts.map((id) => (
                       <li key={id} style={{ fontFamily: font.mono }}>
                         {id}
                       </li>
@@ -580,21 +571,6 @@ function ContextDid({
   );
 }
 
-/**
- * The contexts strictly below `id`, deepest first.
- *
- * Path-derived, because a context id *is* its path — `acme/eng/ci` is under
- * `acme`, and the agent builds its own cascade the same way. Segment-wise so
- * that `acme-corp` is not read as a child of `acme`.
- */
-function descendantsOf(id: string, records: ContextRecord[]): string[] {
-  const prefix = `${id}/`;
-  return records
-    .map((r) => r.id)
-    .filter((cid) => cid !== id && cid.startsWith(prefix))
-    .sort((a, b) => b.split("/").length - a.split("/").length || a.localeCompare(b));
-}
-
 export function ContextsPane({
   parties,
   authority,
@@ -653,7 +629,6 @@ export function ContextsPane({
           <DeleteContext
             parties={parties}
             record={record}
-            subContexts={descendantsOf(record.id, records)}
             authority={authority}
             onDeleted={onChanged}
           />
