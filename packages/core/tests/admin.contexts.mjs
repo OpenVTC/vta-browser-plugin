@@ -51,14 +51,54 @@ test("a delete the agent refused reports deleted:false rather than throwing", as
   assert.equal(result.deleted, false);
 });
 
-test("preview translates webvh_dids across the casing boundary", async () => {
-  const channel = recorder({ id: "demo", keys: ["key-1"], webvh_dids: ["did:webvh:QmX:h"] });
+test("preview translates every snake_case list across the casing boundary", async () => {
+  const channel = recorder({
+    id: "demo",
+    keys: ["key-1"],
+    webvh_dids: ["did:webvh:QmX:h"],
+    acl_entries_removed: ["did:key:zGone"],
+    acl_entries_updated: ["did:key:zNarrowed"],
+    did_templates: ["persona"],
+  });
   const result = await contextPreviewDelete(channel, { holder: HOLDER, service: SERVICE, id: "demo" });
-  assert.deepEqual(result, { id: "demo", keys: ["key-1"], webvhDids: ["did:webvh:QmX:h"] });
+  assert.deepEqual(result, {
+    id: "demo",
+    keys: ["key-1"],
+    webvhDids: ["did:webvh:QmX:h"],
+    aclEntriesRemoved: ["did:key:zGone"],
+    aclEntriesUpdated: ["did:key:zNarrowed"],
+    didTemplates: ["persona"],
+  });
 });
 
-test("preview defaults both lists when the context holds nothing", async () => {
+test("preview reads the camelCase spellings the spec actually declares", async () => {
+  // The snake_case arms above are the compatibility path, for an agent that
+  // has not taken the camelCase change. These are what a conforming agent
+  // sends, and reading them was what the client was missing: three of the six
+  // lists were dropped on the floor, so no consumer could show them.
+  const channel = recorder({
+    id: "demo",
+    keys: [],
+    webvhDids: [],
+    aclEntriesRemoved: ["did:key:zGone"],
+    aclEntriesUpdated: ["did:key:zNarrowed"],
+    didTemplates: ["persona"],
+  });
+  const result = await contextPreviewDelete(channel, { holder: HOLDER, service: SERVICE, id: "demo" });
+  assert.deepEqual(result.aclEntriesRemoved, ["did:key:zGone"]);
+  assert.deepEqual(result.aclEntriesUpdated, ["did:key:zNarrowed"]);
+  assert.deepEqual(result.didTemplates, ["persona"]);
+});
+
+test("preview defaults every list when the context holds nothing", async () => {
   const channel = recorder({ id: "demo" });
   const result = await contextPreviewDelete(channel, { holder: HOLDER, service: SERVICE, id: "demo" });
-  assert.deepEqual(result, { id: "demo", keys: [], webvhDids: [] });
+  assert.deepEqual(result, {
+    id: "demo",
+    keys: [],
+    webvhDids: [],
+    aclEntriesRemoved: [],
+    aclEntriesUpdated: [],
+    didTemplates: [],
+  });
 });
