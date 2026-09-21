@@ -115,3 +115,28 @@ test("severity is never touched by any of this", () => {
   assert.equal(ranked.find((r) => r.crossing === "within")!.finding.severity, "high");
   assert.equal(ranked.find((r) => r.crossing === "crosses")!.finding.severity, "low");
 });
+
+test("a finding with no attribute is kept out of the card map and names its faces", async () => {
+  const { faceOnly, facesNamed, facesWords } = await import("../src/manager/correlation-model.ts");
+  const onCard = finding({ attributeId: "01A", why: "card" });
+  const faces = finding({
+    why: "faces",
+    sharedWith: [
+      { profileId: "01F", contextId: "ctx-a", personaDid: "did:x" },
+      { profileId: "01F", contextId: "ctx-c", personaDid: "did:y" },
+      { profileId: "01L", contextId: "ctx-b" },
+    ],
+  });
+  const ranked = rankFindings([onCard, faces], WORLDS);
+  assert.deepEqual(faceOnly(ranked).map((r) => r.finding.why), ["faces"]);
+
+  const named = facesNamed(faces, [{ profileId: "01F", name: "Market" }]);
+  assert.deepEqual(named, [
+    // Worn in two contexts, named once: the holder is being told which faces.
+    { profileId: "01F", name: "Market", contextId: null },
+    // Not a face the console lists — a context-local one — so its context is
+    // the handle.
+    { profileId: "01L", name: null, contextId: "ctx-b" },
+  ]);
+  assert.equal(facesWords(named), "Market and a face kept only in ctx-b");
+});

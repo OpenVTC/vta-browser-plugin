@@ -56,7 +56,15 @@ import type { PoolFacet } from "@openvtc/pnm-core/admin";
 import { familyOf, familyStyle, FAMILY_ORDER, type Family } from "../attribute-family.js";
 import { worldHue } from "../world-colour.js";
 import { worldsOfAttribute, worldOfFace, movePlan } from "../world-model.js";
-import { rankFindings, tallyCrossings, crossingWords, type RankedFinding } from "../correlation-model.js";
+import {
+  rankFindings,
+  tallyCrossings,
+  crossingWords,
+  faceOnly,
+  facesNamed,
+  facesWords,
+  type RankedFinding,
+} from "../correlation-model.js";
 import { provenanceWords, labelSaysSomethingElse, staleWords } from "../attribute-words.js";
 import { unappliedClaimTypes } from "@openvtc/pnm-core/persona";
 import {
@@ -900,7 +908,7 @@ export function IdentityMap({
       </div>
       {checking && checking !== "Asking your agent…" && <Note tone="danger">{checking}</Note>}
       {findings && findings.length === 0 && (
-        <Note tone="accent">Your agent finds no two attributes holding the same value. That is an answer, not an empty result.</Note>
+        <Note tone="accent">Your agent finds no value shown in two places — not by two attributes, and not typed into two faces. That is an answer, not an empty result.</Note>
       )}
       {findings && findings.length > 0 && (() => {
         // Counted from one place, so the numbers cannot disagree with the rows
@@ -933,6 +941,18 @@ export function IdentityMap({
                   a world. Making some worlds is what answers that.
                 </span>
               )}
+              {/* A value only faces hold has no attribute card to sit on, so it
+                  is listed here or it is counted above and shown nowhere. */}
+              {faceOnly(ranked).map((r, i) => {
+                const words = crossingWords(r);
+                return (
+                  <span key={`face-link-${i}`}>
+                    <strong>{facesWords(facesNamed(r.finding, profiles))}</strong> show the same
+                    value, typed into each rather than drawn from your attributes.{" "}
+                    {words ?? "Anyone who sees both knows they are the same person."}
+                  </span>
+                );
+              })}
             </div>
           </Note>
         );
