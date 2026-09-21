@@ -602,6 +602,9 @@ export interface BindingSetParams extends PersonaHolderParams {
   profileId?: string | null;
   /** Entry ids this binding may reveal without a per-disclosure decision. */
   publicEntries?: string[];
+  /** What the context may call the face worn there. The context is never given
+   *  the holder's own name for the face; omitted, it is given no name at all. */
+  label?: string;
   expectedVersion?: number;
 }
 
@@ -632,6 +635,7 @@ export async function personaBindingSet(
     personaDid: params.personaDid,
     ...(params.profileId !== undefined ? { profileId: params.profileId } : {}),
     ...(params.publicEntries !== undefined ? { publicEntries: params.publicEntries } : {}),
+    ...(params.label !== undefined ? { label: params.label } : {}),
     ...(params.expectedVersion !== undefined ? { expectedVersion: params.expectedVersion } : {}),
   };
   return holderCall<PersonaBindingSetPayload, PersonaBindingSetResponsePayload>(

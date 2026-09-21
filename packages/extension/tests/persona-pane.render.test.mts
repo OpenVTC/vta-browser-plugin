@@ -1466,3 +1466,61 @@ test("a holder who already keeps a world is not nudged toward worlds", async () 
   assert.doesNotMatch(screen.text(), /Worlds group them/);
   await screen.unmount();
 });
+
+// ── What a context may call a face ──────────────────────────────────────────
+
+test("changing a face keeps the name the context was given, and sends it", async () => {
+  // `binding/set` replaces the binding. A form that opened with an empty name
+  // field would clear the label on every face change, silently — the context
+  // would go from "Ada at the co-op" to no name at all because someone swapped
+  // which face is worn.
+  const a = agent({
+    "vta/webvh/dids/list/1.0": { dids: [] },
+    "persona/binding/list/1.0": {
+      personas: [{ personaDid: "did:key:zP", bound: true, claimCount: 1, label: "Ada at the co-op" }],
+    },
+    "vta/webvh/servers/list/1.0": { servers: [] },
+    "persona/binding/get/1.0": {
+      contextId: "vta",
+      personaDid: "did:key:zP",
+      bound: true,
+      profileId: "p1",
+      label: "Ada at the co-op",
+      claimCount: 1,
+    },
+    "persona/binding/set/1.0": (p: { profileId: string }) => ({
+      contextId: "vta",
+      personaDid: "did:key:zP",
+      profileId: p.profileId,
+      version: 3,
+      materialisedClaimCount: 1,
+    }),
+  });
+  const ui = await render(
+    h(BindingForm, {
+      parties: PARTIES,
+      authority: HOLDER,
+      contextId: "vta",
+      contextLabel: "Verifiable Trust Agent",
+      profiles: [face("p1", "the divorce", ["f1"]), face("p2", "Work", ["f2"])],
+      personaDid: "did:key:zP",
+      onDone: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.settle();
+
+  const named = ui.all("input").find((i) => (i as HTMLInputElement).value === "Ada at the co-op");
+  assert.ok(named, "the form opened without the name the context already has");
+  assert.match(ui.text(), /never sees your own name for this face/);
+
+  const wears = ui.all("select").find((s) => [...s.querySelectorAll("option")].some((o) => o.value === "p2"))!;
+  await ui.select(wears, "p2");
+  await ui.click(ui.button("Change face"));
+  await ui.settle();
+
+  const sent = a.of("persona/binding/set")[0]?.payload as { profileId: string; label?: string };
+  assert.equal(sent.profileId, "p2");
+  assert.equal(sent.label, "Ada at the co-op", "a face change cleared the context's name for it");
+  await ui.unmount();
+});

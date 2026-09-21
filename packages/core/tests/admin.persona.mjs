@@ -241,6 +241,31 @@ test("profileId null unbinds; omitting it leaves the binding alone", async () =>
   assert.ok(!("profileId" in untouched.sent[0].envelope.payload));
 });
 
+test("a binding label is sent when given and absent when not", async () => {
+  // The context is given this name and never the holder's own name for the
+  // face. Absent is a real choice — "give the context no name" — so an
+  // undefined label must not arrive as an empty string or a null.
+  const reply = { contextId: "demo", personaDid: "did:key:zP", version: 2, boundAt: "x" };
+  const named = recorder(reply);
+  await personaBindingSet(named, {
+    ...PARTIES,
+    contextId: "demo",
+    personaDid: "did:key:zP",
+    profileId: "01P",
+    label: "Ada at the co-op",
+  });
+  assert.equal(named.sent[0].envelope.payload.label, "Ada at the co-op");
+
+  const unnamed = recorder(reply);
+  await personaBindingSet(unnamed, {
+    ...PARTIES,
+    contextId: "demo",
+    personaDid: "did:key:zP",
+    profileId: "01P",
+  });
+  assert.ok(!("label" in unnamed.sent[0].envelope.payload));
+});
+
 test("deleting a profile does not unbind unless asked", async () => {
   const bare = recorder({ profileId: "01P", existed: true });
   await personaProfileDelete(bare, { ...PARTIES, profileId: "01P" });
