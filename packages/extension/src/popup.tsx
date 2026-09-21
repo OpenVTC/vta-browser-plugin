@@ -13,6 +13,7 @@ import {
   useActiveConnection,
   useConnectionStore,
   useLockStateStore,
+  withRefreshedTransports,
   type Connection,
 } from "./store.js";
 import {
@@ -819,18 +820,7 @@ function Popup() {
     const tspChanged = (fresh.tspMediatorDid ?? null) !== (current.tspMediatorDid ?? null);
     if (!restChanged && !medChanged && !tspChanged) return;
 
-    // Rebuild the connection without unset transports — JS spread keeps
-    // the old value if the new field is absent; building fresh lets us
-    // CLEAR a transport the VTA stopped advertising.
-    const updated: Connection = {
-      vtaDid: current.vtaDid,
-      holderDid: current.holderDid,
-      role: current.role,
-      connectedAt: current.connectedAt,
-      ...(fresh.restBaseUrl ? { restBaseUrl: fresh.restBaseUrl } : {}),
-      ...(fresh.mediatorDid ? { mediatorDid: fresh.mediatorDid } : {}),
-      ...(fresh.tspMediatorDid ? { tspMediatorDid: fresh.tspMediatorDid } : {}),
-    };
+    const updated = withRefreshedTransports(current, fresh);
     console.info(
       "[pnm] VTA transports refreshed:",
       { tsp: !!fresh.tspMediatorDid, rest: !!fresh.restBaseUrl, didcomm: !!fresh.mediatorDid },

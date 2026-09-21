@@ -268,3 +268,30 @@ test("what gets stored is what the agent said, not what the wallet asked for", a
   assert.equal(stored.homeContext, "where-it-actually-landed");
   await view.unmount();
 });
+
+test("adding another agent stores it before the encrypt prompt, not after", async () => {
+  // The regression this exists for. With `onCancel` (the setup page's "+
+  // Connect another trust agent"), a successful connect used to hold the
+  // connection in component state until the operator clicked Encrypt or Skip.
+  // "Wallet onboarded ✓" reads as the end, so people closed the tab there —
+  // and the agent kept the ACL entry while the wallet's list never gained it.
+  const stub = stubChrome({ contexts: [{ id: "only", name: "Only" }] });
+  let cancelled = 0;
+  const view = await mount(stub, { standalone: true, onCancel: () => void cancelled++ });
+  await view.click(view.all('input[type="radio"]')[1]!);
+  await toGrantScreen(view);
+  await view.click(view.button("I've run it — Connect"));
+  await view.settle();
+
+  assert.match(view.text(), /Wallet onboarded/, "the optional encrypt prompt is still offered");
+  const { useConnectionStore } = await import("../src/store.js");
+  const { connections } = useConnectionStore.getState();
+  assert.ok(connections.vtas[AGENT], "stored while the prompt is on screen, before any click");
+  assert.equal(connections.activeVtaDid, AGENT);
+
+  // Skip now only leaves the prompt; it has nothing left to commit.
+  await view.click(view.button("Skip for now (leave wallet unencrypted)"));
+  await view.settle();
+  assert.equal(cancelled, 1, "leaving the prompt closes the add-another panel");
+  await view.unmount();
+});

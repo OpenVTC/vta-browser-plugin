@@ -46,6 +46,28 @@ export interface Connection {
   connectedAt: number;
 }
 
+/** A connection with its three advertised transports replaced by what the
+ *  VTA's DID document says now.
+ *
+ *  The transport members are dropped before the fresh ones are spread in, so
+ *  one the VTA stopped advertising is CLEARED rather than kept by the spread.
+ *  Everything else is carried over untouched — this used to be rebuilt from a
+ *  hand-picked list that omitted `homeContext` and `agentScope`, so any
+ *  transport drift silently erased what the agent had said about the wallet's
+ *  authority, and the setup page then read "not recorded". */
+export function withRefreshedTransports(
+  current: Connection,
+  fresh: { restBaseUrl?: string; mediatorDid?: string; tspMediatorDid?: string },
+): Connection {
+  const { restBaseUrl: _rest, mediatorDid: _med, tspMediatorDid: _tsp, ...kept } = current;
+  return {
+    ...kept,
+    ...(fresh.restBaseUrl ? { restBaseUrl: fresh.restBaseUrl } : {}),
+    ...(fresh.mediatorDid ? { mediatorDid: fresh.mediatorDid } : {}),
+    ...(fresh.tspMediatorDid ? { tspMediatorDid: fresh.tspMediatorDid } : {}),
+  };
+}
+
 /** Multi-VTA connection state.
  *
  *  `vtas` is a dict keyed by `vtaDid` containing every VTA the wallet
@@ -84,6 +106,14 @@ interface State {
  * `chrome.storage.local` via a small adapter. (The popup has
  * `chrome.storage` access; the offscreen document does not.)
  */
+/** The persisted blob's key. `active-vta.ts` and the background read it
+ *  directly, so it is a wire name, not an implementation detail. */
+const CONNECTION_KEY = "pnm-connection/v3";
+
+/** The last value this page wrote, so our own writes coming back through
+ *  `storage.onChanged` are not mistaken for another page's. */
+let lastWritten: string | undefined;
+
 const chromeStorage = {
   getItem: (key: string): Promise<string | null> =>
     new Promise((resolve) => {
@@ -99,6 +129,7 @@ const chromeStorage = {
     }),
   setItem: (key: string, value: string): Promise<void> =>
     new Promise((resolve) => {
+      if (key === CONNECTION_KEY) lastWritten = value;
       chrome.storage.local.set({ [key]: value }, () => resolve());
     }),
   removeItem: (key: string): Promise<void> =>
@@ -156,7 +187,7 @@ export const useConnectionStore = create<State>()(
       // one existing connection becomes `vtas[vtaDid]` with `activeVtaDid`
       // set to it. v2 records that don't carry a `vtaDid` (pre-M2C) are
       // dropped; the operator re-onboards.
-      name: "pnm-connection/v3",
+      name: CONNECTION_KEY,
       storage: createJSONStorage(() => chromeStorage),
       version: 3,
       migrate: (persisted: unknown, version: number) => {
@@ -183,6 +214,20 @@ export const useConnectionStore = create<State>()(
     },
   ),
 );
+
+// Every extension page (popup, setup tab, console) holds its own copy of this
+// store, hydrated once on load, and every write replaces the WHOLE blob. A page
+// opened before another one added a VTA would otherwise write its stale map
+// back on its next action — the popup's transport refresh runs on every open —
+// and the new VTA would disappear from the list while its holder key and the
+// agent's ACL entry stayed. Re-reading on another page's write closes that.
+// `hydrate` sets state without persisting, so this cannot echo back.
+if (typeof chrome !== "undefined") chrome.storage?.onChanged?.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  const change = changes[CONNECTION_KEY];
+  if (!change || change.newValue === lastWritten) return;
+  void useConnectionStore.persist.rehydrate();
+});
 
 /** The active VTA's Connection, or `null` if no VTA is active. */
 export function useActiveConnection(): Connection | null {
