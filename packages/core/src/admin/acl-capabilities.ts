@@ -70,6 +70,8 @@ export const ACL_CAPABILITIES = [
   "memory-write",
   "room-present",
   "room-open",
+  "key-export",
+  "persona-holder",
 ] as const;
 
 export type AclCapability = (typeof ACL_CAPABILITIES)[number];
@@ -105,8 +107,11 @@ export const DERIVED_CAPABILITIES: Readonly<Record<AclRole, readonly AclCapabili
     "sign",
     "sign-trust-task",
     "key-mint",
+    "key-export",
   ],
-  // Everything `admin` has except `policy-admin`.
+  // Everything `admin` has except `policy-admin` and `key-export` — exporting a
+  // key is gated separately from using it (VTI-VTA-003), and only `admin`
+  // derives it.
   initiator: [
     "vault-read",
     "vault-write",
@@ -140,6 +145,23 @@ export const DERIVED_CAPABILITIES: Readonly<Record<AclRole, readonly AclCapabili
   reader: ["vault-read", "memory-read"],
   monitor: [],
 };
+
+/**
+ * Capabilities **no role derives**, held only where an entry was granted them
+ * by name. They do not narrow: an entry's effective set is its role's set
+ * narrowed by the *other* names on it, and these are then added on top.
+ *
+ * `persona-holder` gates the persona pool, which sits above every trust
+ * context; deriving it from `admin` would have handed it to every
+ * context-scoped administrator. Granting one is super-admin-only at the agent,
+ * a check on the *granter* this console cannot make, so the agent's refusal is
+ * the authority there.
+ */
+export const ADDITIVE_CAPABILITIES: readonly AclCapability[] = ["persona-holder"];
+
+export function isAdditiveCapability(name: string): boolean {
+  return (ADDITIVE_CAPABILITIES as readonly string[]).includes(name);
+}
 
 export function isAclCapability(name: string): name is AclCapability {
   return (ACL_CAPABILITIES as readonly string[]).includes(name);
@@ -211,10 +233,18 @@ export function entryNarrowing(entry: AclEntry): string[] | undefined {
 export interface EffectiveCapabilities {
   /** The role's ceiling. */
   derived: readonly AclCapability[];
-  /** The ceiling intersected with the entry's own set. */
+  /**
+   * The ceiling intersected with the entry's own non-additive names, plus any
+   * {@link ADDITIVE_CAPABILITIES} it was granted.
+   */
   effective: readonly AclCapability[];
-  /** True when the entry names no narrowing, so `effective` is the whole ceiling. */
+  /**
+   * True when the entry names nothing that narrows, so `effective` holds the
+   * whole ceiling. An entry granted only additive names is unnarrowed.
+   */
   unnarrowed: boolean;
+  /** The {@link ADDITIVE_CAPABILITIES} the entry was granted (also in `effective`). */
+  additive: readonly AclCapability[];
   /**
    * Names in the stored narrowing this build does not recognise.
    *
@@ -240,14 +270,23 @@ export function effectiveCapabilities(
 ): EffectiveCapabilities | undefined {
   if (!isAclRole(role)) return undefined;
   const derived = DERIVED_CAPABILITIES[role];
-  if (narrowing === undefined || narrowing.length === 0) {
-    return { derived, effective: derived, unnarrowed: true, unrecognised: [] };
-  }
+  const named = narrowing ?? [];
+  // The agent's `effective_capabilities`: only the non-additive names narrow.
+  // Without that split an entry granted `persona-holder` and nothing else would
+  // intersect its role with a list naming none of it, and read as holding
+  // nothing — when the agent gives it the whole role and the pool besides.
+  const narrowingNames = named.filter((n) => !isAdditiveCapability(n));
+  const additive = ADDITIVE_CAPABILITIES.filter((c) => named.includes(c));
+  const unnarrowed = narrowingNames.length === 0;
   return {
     derived,
-    effective: derived.filter((c) => narrowing.includes(c)),
-    unnarrowed: false,
-    unrecognised: narrowing.filter((n) => !isAclCapability(n)),
+    effective: [
+      ...(unnarrowed ? derived : derived.filter((c) => narrowingNames.includes(c))),
+      ...additive,
+    ],
+    unnarrowed,
+    additive,
+    unrecognised: named.filter((n) => !isAclCapability(n)),
   };
 }
 
@@ -283,7 +322,13 @@ export function checkNarrowing(
       reason: `unknown role \`${role}\`; this console cannot tell what it may be narrowed to`,
     };
   }
-  const beyond = requested.filter((n) => !(DERIVED_CAPABILITIES[role] as readonly string[]).includes(n));
+  // Additive names are exempt, as they are at the agent: no role carries them,
+  // so measuring them against one would refuse every grant. Whether *this
+  // caller* may confer one is the agent's check, on the granter.
+  const beyond = requested.filter(
+    (n) =>
+      !isAdditiveCapability(n) && !(DERIVED_CAPABILITIES[role] as readonly string[]).includes(n),
+  );
   if (beyond.length > 0) {
     return {
       ok: false,
@@ -293,4 +338,40 @@ export function checkNarrowing(
     };
   }
   return { ok: true };
+}
+
+/**
+ * The list to send when an editor keeps `kept` of a role's derived set, for an
+ * entry whose stored list is `stored`.
+ *
+ * The stored list carries two things, and an editor over the role's set can
+ * only see one of them. The additive grants are carried through untouched, so
+ * narrowing an entry — or clearing its narrowing — never silently revokes its
+ * `persona-holder`.
+ *
+ * Refuses the one edit the list cannot express: narrowing to **nothing**. The
+ * agent narrows by the non-additive names alone and reads none as "the whole
+ * role" — `[]` is the clear instruction, and `["persona-holder"]` is the whole
+ * role plus the pool. Either way, a list sent to mean "nothing" would leave the
+ * entry holding everything its role allows. Taking all of a role's authority
+ * away is a role change, not a narrowing.
+ */
+export function narrowingToSend(
+  kept: readonly string[],
+  stored: readonly string[] | undefined,
+  intent: "narrow" | "clear",
+): { ok: true; capabilities: string[] } | { ok: false; reason: string } {
+  const heldAdditive = (stored ?? []).filter(isAdditiveCapability);
+  if (intent === "clear") return { ok: true, capabilities: heldAdditive };
+  const narrowing = kept.filter((n) => !isAdditiveCapability(n));
+  if (narrowing.length === 0) {
+    return {
+      ok: false,
+      reason:
+        "a narrowing cannot keep nothing: the agent reads a list naming none of the role's " +
+        "capabilities as the whole role, so sending one would grant everything instead. " +
+        "To take the role's authority away, change the role",
+    };
+  }
+  return { ok: true, capabilities: [...narrowing, ...heldAdditive] };
 }

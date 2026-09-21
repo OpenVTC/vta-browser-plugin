@@ -8,6 +8,29 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+### Added
+
+- `key-export` (VTI#1619) and `persona-holder` join `ACL_CAPABILITIES`;
+  `key-export` is derived by `admin` alone. `ADDITIVE_CAPABILITIES` and
+  `isAdditiveCapability` name the capabilities no role derives, and
+  `acl-capabilities.json` now snapshots them.
+- `narrowingToSend(kept, stored, intent)` — the list an editor over a role's
+  set should send, carrying any additive grant through.
+
+### Fixed
+
+- **An entry granted `persona-holder` read as holding nothing.** The agent
+  narrows by an entry's non-additive names alone and adds the additive ones on
+  top; this computed the role intersected with the whole list, so an entry
+  granted only `persona-holder` intersected to the empty set. It now matches the
+  agent, and `EffectiveCapabilities` reports the grant as `additive`.
+  `checkNarrowing` no longer refuses an additive name for want of a role that
+  carries it — whether the caller may confer one is the agent's check.
+- **A narrowing to nothing cannot be sent, because the agent reads it as
+  everything.** `[]` is the agent's instruction to clear a narrowing, and a
+  list of additive names alone narrows nothing either. `narrowingToSend` refuses
+  it rather than widening the entry to its whole role.
+
 ## [0.9.1] - 2026-09-07
 
 ### Fixed
