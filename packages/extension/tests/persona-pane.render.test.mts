@@ -1524,3 +1524,46 @@ test("changing a face keeps the name the context was given, and sends it", async
   assert.equal(sent.label, "Ada at the co-op", "a face change cleared the context's name for it");
   await ui.unmount();
 });
+
+// ── An old value kept for a pinned face ─────────────────────────────────────
+
+test("an attribute kept for a pinned face says so, and removing it asks first", async () => {
+  // A holder who changed their name may reasonably believe the old one gone.
+  // Selecting the attribute is where they learn it is kept, and for whom.
+  const kept = [
+    { ...FACTS[0], retainedVersions: [{ version: 1, updatedAt: "x", pinnedBy: ["p9"] }] },
+    FACTS[1],
+  ];
+  const bank = face("p9", "Bank", []);
+  const graph = buildGraph(kept as never, [DEV, bank], [knownAs("openvtc", "OpenVTC")]);
+  const a = agent({
+    "persona/attribute/list/1.0": { attributes: kept },
+    "persona/attribute/purge-version/1.0": (p: { attributeId: string }) => ({
+      attributeId: p.attributeId,
+      purged: [1],
+      stalePins: [{ profileId: "p9", pinVersion: 1 }],
+    }),
+  });
+  const ui = await render(
+    h(IdentityMap, {
+      registry: REGISTRY,
+      parties: PARTIES,
+      authority: HOLDER,
+      graph,
+      attributes: kept as never,
+      profiles: [DEV, bank],
+      records: CONTEXTS,
+      history: [],
+      onChanged: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.click(ui.byText("div", "name.legal")!);
+  assert.match(ui.text(), /An earlier value is still kept, because Bank is pinned to it/);
+
+  await ui.click(ui.button("Remove the old value for good"));
+  await ui.settle();
+  assert.match(ui.text(), /Bank will show nothing for this afterwards/);
+  assert.equal(a.of("purge-version").length, 0, "it purged before the holder confirmed");
+  await ui.unmount();
+});

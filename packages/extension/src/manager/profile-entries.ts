@@ -86,3 +86,74 @@ export function composeEntries(
     .map((ref) => ({ ref }));
   return [...live, ...preserved];
 }
+
+// ── Slots ───────────────────────────────────────────────────────────────────
+//
+// Any entry may carry a `slot` naming the role it plays in the face —
+// `displayName` answers "what does this face call itself", which a face holding
+// a legal name and a preferred one cannot answer by claim type. `profile/put`
+// replaces the whole face, so the rules that keep a preserved entry from
+// vanishing apply to a slot too: rebuilding live entries as bare `{ref}` would
+// strip every slot on them, silently, on the first edit.
+
+/** The slot `displayName`. */
+export const DISPLAY_NAME = "displayName";
+
+function slotOf(entry: PoolProfileEntry): string | undefined {
+  return (entry as { slot?: string }).slot;
+}
+
+function withSlot<E extends PoolProfileEntry>(entry: E, slot: string | undefined): E {
+  const { slot: _drop, ...rest } = entry as E & { slot?: string };
+  return (slot === undefined ? rest : { ...rest, slot }) as E;
+}
+
+/** The attribute the face calls itself by, or null when no entry says. An
+ *  inline name has no attribute, and reads as null here too. */
+export function displayNameOf(entries: readonly PoolProfileEntry[]): string | null {
+  const e = entries.find((x) => slotOf(x) === DISPLAY_NAME);
+  return e ? refOf(e) : null;
+}
+
+/** Whether a face names itself with a value typed only into the face — a
+ *  choice the tick list cannot make, and so must not overwrite. */
+export function displayNameIsInline(entries: readonly PoolProfileEntry[]): boolean {
+  return entries.some((x) => slotOf(x) === DISPLAY_NAME && refOf(x) === null);
+}
+
+/**
+ * {@link composeEntries}, carrying slots through and setting `displayName`.
+ *
+ * `displayName` is the attribute to mark, `null` to mark none, or `undefined`
+ * to leave whatever the face already says. Every other slot is kept where it
+ * was: a live entry keeps the slot its attribute had, a preserved entry keeps
+ * its own. The one slot moved is `displayName`, and it moves whole — one entry
+ * holds it afterwards, or none, never two (the agent would refuse two).
+ */
+export function composeEntriesWithSlots(
+  existing: readonly PoolProfileEntry[],
+  ticked: Iterable<string>,
+  displayName?: string | null,
+): PoolProfileEntry[] {
+  const liveSlots = new Map<string, string>();
+  for (const e of existing) {
+    const s = slotOf(e);
+    if (isPlainRef(e) && s !== undefined) liveSlots.set(refOf(e) as string, s);
+  }
+  const composed = composeEntries(existing, ticked).map((e) =>
+    isPlainRef(e) ? withSlot(e, liveSlots.get(refOf(e) as string)) : e,
+  );
+  if (displayName === undefined) return composed;
+
+  // Clear it everywhere, then set it on the first entry naming the attribute.
+  let placed = false;
+  return composed.map((e) => {
+    const s = slotOf(e);
+    const cleared = s === DISPLAY_NAME ? withSlot(e, undefined) : e;
+    if (!placed && displayName !== null && refOf(e) === displayName && slotOf(cleared) === undefined) {
+      placed = true;
+      return withSlot(cleared, DISPLAY_NAME);
+    }
+    return cleared;
+  });
+}

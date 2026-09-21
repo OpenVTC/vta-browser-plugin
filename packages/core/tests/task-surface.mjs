@@ -360,7 +360,12 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // resolve them. So this is not the agent growing seven families — it is a
   // snapshot that had been under-counting the denominator, and with it the gap
   // this number exists to keep reviewable.
-  const expected = 205;
+  //
+  // 205 → 206 is `persona/attribute/purge-version/1.0` — removing an earlier
+  // value the agent kept for a pinned face (dtgwg-trust-tasks-tf#538). The
+  // canonical total moves 235 → 240 with the snapshot resynced from vta-sdk
+  // 0.45.1; the other four are families the agent gained since, not this one.
+  const expected = 206;
   assert.equal(
     implemented.size,
     expected,

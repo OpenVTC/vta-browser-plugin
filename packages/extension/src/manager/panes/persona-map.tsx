@@ -20,6 +20,8 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   personaAttributeDelete,
+  personaAttributeList,
+  personaAttributePurgeVersion,
   personaCorrelationAnalyze,
   personaFacetPut,
   personaFacetDelete,
@@ -29,6 +31,7 @@ import {
   type PoolAttribute,
   type PoolProfile,
 } from "@openvtc/pnm-core/admin";
+import { keptVersions, keptWords, purgeConsequence } from "../kept-versions.js";
 import type { ContextRecord } from "@openvtc/pnm-core";
 import { Button, Note, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
@@ -1679,6 +1682,48 @@ function DetailStrip({
           ))}
           {col("Last left", lastLeft((d) => d.claimTypes.includes(attribute.type)))}
         </div>
+        {raw && keptWords(keptVersions(raw, profiles)) && (
+          <Note tone="accent">
+            <div style={{ display: "grid", gap: 6 }}>
+              <span>{keptWords(keptVersions(raw, profiles))}</span>
+              <span style={{ fontSize: t.sm, color: c.muted }}>
+                That is what pinning is for — a counterparty that verified the old value keeps
+                seeing it until you tell them otherwise.
+              </span>
+              <div>
+                <Destructive<ReturnType<typeof keptVersions>>
+                  label="Remove the old value for good"
+                  preview={async () => {
+                    // Asked again so the decision is about what is kept now.
+                    const fresh = await personaAttributeList(managerSender, {
+                      ...parties,
+                      typePrefix: raw.type,
+                    });
+                    const now = fresh.find((a) => a.attributeId === raw.attributeId);
+                    return now ? keptVersions(now, profiles) : [];
+                  }}
+                  renderPreview={(kept) =>
+                    kept.length === 0 ? (
+                      <span>Nothing is kept any more.</span>
+                    ) : (
+                      <>
+                        <strong>This cannot be undone.</strong>
+                        <span>{purgeConsequence(kept)}</span>
+                      </>
+                    )
+                  }
+                  commit={async () => {
+                    await personaAttributePurgeVersion(managerSender, {
+                      ...parties,
+                      attributeId: raw.attributeId,
+                    });
+                  }}
+                  onDone={onChanged}
+                />
+              </div>
+            </div>
+          </Note>
+        )}
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           <Button kind="quiet" onClick={(e) => onEdit({ kind: "attribute", existing: raw, anchor: e.currentTarget })}>Edit</Button>
           <Destructive<PoolProfile[]>

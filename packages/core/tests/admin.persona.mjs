@@ -16,6 +16,7 @@ import {
   personaAttributeList,
   personaAttributePut,
   personaAttributeDelete,
+  personaAttributePurgeVersion,
   personaProfileList,
   personaProfileGet,
   personaProfilePut,
@@ -67,6 +68,12 @@ test("every task names its 1.0 URI, request and response", async () => {
       { ...PARTIES, attributeId: "01J" },
       "persona/attribute/delete/1.0",
       { attributeId: "01J", existed: true },
+    ],
+    [
+      personaAttributePurgeVersion,
+      { ...PARTIES, attributeId: "01J", versions: [3] },
+      "persona/attribute/purge-version/1.0",
+      { attributeId: "01J", purged: [3] },
     ],
     [personaProfileList, { ...PARTIES }, "persona/profile/list/1.0", { profiles: [] }],
     [
@@ -604,4 +611,12 @@ test("deleting a facet sends only the facet — there is no cascade to send", as
   const payload = channel.sent[0].envelope.payload ?? channel.sent[0].envelope.body;
   assert.deepEqual(Object.keys(payload).sort(), ["facetId"]);
   assert.equal(res.releasedFaces, 2, "the released-face count is what a screen reads");
+});
+
+test("purging every kept version sends no versions member at all", async () => {
+  // Omitted is "all of them"; an empty array would be a schema violation, and
+  // a client that sent one for "all" would be refused for doing the obvious.
+  const all = recorder({ attributeId: "01J", purged: [3, 5] });
+  await personaAttributePurgeVersion(all, { ...PARTIES, attributeId: "01J" });
+  assert.deepEqual(all.sent[0].envelope.payload, { attributeId: "01J" });
 });

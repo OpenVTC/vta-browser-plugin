@@ -45,7 +45,14 @@ import { holderGate } from "../holder-gate.js";
 import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 import { maskedValue, treatmentFor, type Sensitivity } from "../claim-sensitivity.js";
 import { revealAttributeValue } from "../reveal-value.js";
-import { composeEntries, lockedRefs, preservedEntries, tickedFrom } from "../profile-entries.js";
+import {
+  composeEntriesWithSlots,
+  displayNameIsInline,
+  displayNameOf,
+  lockedRefs,
+  preservedEntries,
+  tickedFrom,
+} from "../profile-entries.js";
 import { personaCandidates } from "../persona-candidates.js";
 import { currencyOf, currencyWords, editReachWords, outdatedHolders } from "../disclosure-currency.js";
 
@@ -765,6 +772,9 @@ export function AttributeEditor({
 }
 
 
+/** The `CALLS ITSELF` option meaning "leave the inline name as it is". */
+const KEEP_INLINE = "\u0000inline";
+
 export function ProfileEditor({
   parties,
   authority,
@@ -798,6 +808,13 @@ export function ProfileEditor({
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(tickedFrom(existing?.entries ?? [])),
   );
+  /** The attribute this face calls itself by — its `displayName` slot. `""`
+   *  is "no name". An inline name, typed into the face and not in the pool, is
+   *  kept as it is unless the holder picks something else. */
+  const inlineName = useMemo(() => displayNameIsInline(existing?.entries ?? []), [existing]);
+  const [nameAttr, setNameAttr] = useState<string>(
+    () => displayNameOf(existing?.entries ?? []) ?? (inlineName ? KEEP_INLINE : ""),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<ConsentRequiredError | null>(null);
@@ -816,7 +833,13 @@ export function ProfileEditor({
     setBusy(true);
     setError(null);
     setPending(null);
-    const entries = composeEntries(existing?.entries ?? [], selected);
+    // `undefined` leaves the name as the face has it — the inline case, which
+    // the tick list cannot express and so must not overwrite.
+    const entries = composeEntriesWithSlots(
+      existing?.entries ?? [],
+      selected,
+      nameAttr === KEEP_INLINE ? undefined : nameAttr === "" ? null : nameAttr,
+    );
     const ok = await runMutation(
       async () => {
         await personaProfilePut(managerSender, {
@@ -838,7 +861,7 @@ export function ProfileEditor({
     );
     setBusy(false);
     if (ok) onDone();
-  }, [parties, name, selected, existing, onDone]);
+  }, [parties, name, selected, nameAttr, existing, onDone]);
 
   // Reported from a ref, not from the dependency list. `onPreview` is nearly
   // always an inline arrow, so keying the effect on it would fire on every
@@ -875,7 +898,8 @@ export function ProfileEditor({
             placeholder="work"
           />
           <span style={{ fontSize: t.xs, color: c.faint }}>
-            Contexts see this name too. Pick one that says who you are there, not where you use it.
+            Only you see this name. A community is told whatever you choose when a persona there
+            wears this face — or nothing.
           </span>
         </label>
 
@@ -920,6 +944,38 @@ export function ProfileEditor({
             it changes with it.
           </span>
         </div>
+
+        {(() => {
+          // Offered from what the face actually shows: naming it by an
+          // attribute it does not present would be a name nobody is shown.
+          const shown = attributes.filter(
+            (a) => selected.has(a.attributeId) || preservedRefs.has(a.attributeId),
+          );
+          return (
+            <label style={{ display: "grid", gap: 4 }}>
+              <Label>CALLS ITSELF</Label>
+              <select
+                style={fieldStyle}
+                value={nameAttr}
+                onChange={(e) => setNameAttr(e.target.value)}
+              >
+                <option value="">— no name —</option>
+                {inlineName && (
+                  <option value={KEEP_INLINE}>the name typed into this face (kept)</option>
+                )}
+                {shown.map((a) => (
+                  <option key={a.attributeId} value={a.attributeId}>
+                    {a.label ? `${a.label} (${a.type})` : a.type}
+                  </option>
+                ))}
+              </select>
+              <span style={{ fontSize: t.xs, color: c.faint }}>
+                A face can show more than one name — a legal one and the one it goes by. This says
+                which one is the face's own.
+              </span>
+            </label>
+          );
+        })()}
 
         {preserved.length > 0 && (
           <Note tone="accent">

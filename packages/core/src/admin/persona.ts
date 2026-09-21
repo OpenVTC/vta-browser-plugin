@@ -58,6 +58,12 @@ import {
   type PersonaAttributeDeleteResponsePayload,
 } from "@openvtc/trust-tasks/persona/attribute/delete/1.0/payload";
 import {
+  TYPE_URI as ATTRIBUTE_PURGE_VERSION,
+  RESPONSE_TYPE_URI as ATTRIBUTE_PURGE_VERSION_RESPONSE,
+  type PersonaAttributePurgeVersionPayload,
+  type PersonaAttributePurgeVersionResponsePayload,
+} from "@openvtc/trust-tasks/persona/attribute/purge-version/1.0/payload";
+import {
   TYPE_URI as PROFILE_PUT,
   RESPONSE_TYPE_URI as PROFILE_PUT_RESPONSE,
   type PersonaProfilePutPayload,
@@ -414,6 +420,40 @@ export async function personaAttributeDelete(
     ATTRIBUTE_DELETE,
     ATTRIBUTE_DELETE_RESPONSE,
     "persona/attribute/delete/1.0",
+    payload,
+  );
+}
+
+export interface AttributePurgeVersionParams extends PersonaHolderParams {
+  attributeId: string;
+  /** Kept versions to remove. Omit to remove every one. The current value is
+   *  never removed here — the agent refuses it with `currentVersion`. */
+  versions?: NonNullable<PersonaAttributePurgeVersionPayload["versions"]>;
+}
+
+/**
+ * Permanently remove earlier versions of an attribute that the agent kept
+ * because a face pins them — an old name after a name change.
+ *
+ * The holder's override on retention. The faces that pinned a removed version
+ * come back in `stalePins`: they now show **nothing** for that entry, never the
+ * current value, because a pin exists so a counterparty is not shown a value
+ * the holder did not choose for them. `purged` empty is a successful no-op.
+ */
+export async function personaAttributePurgeVersion(
+  sender: TrustTaskSender,
+  params: AttributePurgeVersionParams,
+): Promise<PersonaAttributePurgeVersionResponsePayload> {
+  const payload: PersonaAttributePurgeVersionPayload = {
+    attributeId: params.attributeId,
+    ...(params.versions !== undefined ? { versions: params.versions } : {}),
+  };
+  return holderCall<PersonaAttributePurgeVersionPayload, PersonaAttributePurgeVersionResponsePayload>(
+    sender,
+    params,
+    ATTRIBUTE_PURGE_VERSION,
+    ATTRIBUTE_PURGE_VERSION_RESPONSE,
+    "persona/attribute/purge-version/1.0",
     payload,
   );
 }
