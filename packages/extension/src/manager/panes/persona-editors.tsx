@@ -47,6 +47,7 @@ import { maskedValue, treatmentFor, type Sensitivity } from "../claim-sensitivit
 import { revealAttributeValue } from "../reveal-value.js";
 import { composeEntries, lockedRefs, preservedEntries, tickedFrom } from "../profile-entries.js";
 import { personaCandidates } from "../persona-candidates.js";
+import { currencyOf, currencyWords, editReachWords, outdatedHolders } from "../disclosure-currency.js";
 
 export const fieldStyle: React.CSSProperties = {
   boxSizing: "border-box",
@@ -456,6 +457,8 @@ export function AttributeEditor({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<ConsentRequiredError | null>(null);
   const [correlation, setCorrelation] = useState<string | null>(null);
+  /** Whether the note after a save warns of a link, or only reports where the edit landed. */
+  const [linksWarned, setLinksWarned] = useState(false);
 
   const denied = holderGate(authority);
 
@@ -560,10 +563,18 @@ export function AttributeEditor({
         // refusing on correlation grounds would be the agent deciding who the
         // holder is allowed to be. Shown, never acted on.
         const shared = res.correlation?.sharedWithProfileCount ?? 0;
-        if (res.correlation?.severity === "high" || shared > 0) {
-          linked =
-            `Saved. ${shared} other attribute(s) hold this exact value — anyone who sees both ` +
-            `knows they are the same person, permanently.`;
+        // Where the edit landed. Kept on screen with the correlation warning
+        // rather than closing the editor, for the same reason: a change that
+        // reached nine counterparties is worth one more glance.
+        const reach = editReachWords(res);
+        const warning =
+          res.correlation?.severity === "high" || shared > 0
+            ? `${shared} other attribute(s) hold this exact value — anyone who sees both ` +
+              `knows they are the same person, permanently.`
+            : null;
+        if (warning || reach) {
+          linked = ["Saved.", reach, warning].filter(Boolean).join(" ");
+          setLinksWarned(warning !== null);
           setCorrelation(linked);
         }
       },
@@ -720,7 +731,7 @@ export function AttributeEditor({
         {error && <Note tone="danger">{error}</Note>}
         {pending && <ConsentCeremony pending={pending} />}
         {correlation && (
-          <Note tone="warn">
+          <Note tone={linksWarned ? "warn" : "accent"}>
             <div style={{ display: "grid", gap: 8 }}>
               <span>{correlation}</span>
               <div>
@@ -1364,6 +1375,18 @@ export function DisclosureHistoryPanel({
       render: (d) => (
         <div style={{ display: "grid", gap: 3 }}>
           <span>{d.claimTypes.join(", ")}</span>
+          {/* Per claim, and only where there is something to say: a current
+              value needs no words, and a row of "current" is noise. */}
+          {currencyOf(d)
+            .filter((cl) => cl.currency !== "current")
+            .map((cl) => (
+              <span
+                key={cl.claimType}
+                style={{ fontSize: t.xs, color: cl.currency === "changed" ? c.warn : c.faint }}
+              >
+                {cl.claimType}: {currencyWords(cl.currency)}
+              </span>
+            ))}
           {d.rungs && d.rungs.length > 0 && (
             <span style={{ color: c.muted, fontSize: t.xs }}>as {d.rungs.join(", ")}</span>
           )}
@@ -1412,6 +1435,37 @@ export function DisclosureHistoryPanel({
 
         {history.error && <LoadError what="what has left" error={history.error} />}
         {history.loading && !history.data && <Loading what="what has left" />}
+        {history.data && (() => {
+          // Who holds a value you have since changed. Stated above the table
+          // because it is the question after a change, and the table answers
+          // it only row by row. A disclosure cannot be recalled; what can be
+          // done is to present the new value to them again, from that context.
+          const outdated = outdatedHolders(history.data.disclosures);
+          if (outdated.length === 0) return null;
+          return (
+            <Note tone="warn">
+              <div style={{ display: "grid", gap: 6 }}>
+                <strong>
+                  {outdated.length === 1
+                    ? "One party holds a value you have since changed."
+                    : `${outdated.length} parties hold values you have since changed.`}
+                </strong>
+                {outdated.map((o) => (
+                  <span key={`${o.verifierDid} ${o.contextId} ${o.personaDid}`} style={{ fontSize: t.sm }}>
+                    <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
+                      {o.verifierDid}
+                    </span>{" "}
+                    in {o.contextId} — {o.claimTypes.join(", ")}
+                  </span>
+                ))}
+                <span style={{ fontSize: t.sm, color: c.muted }}>
+                  They keep what they were given. To bring them up to date, present the new value to
+                  them again from that context.
+                </span>
+              </div>
+            </Note>
+          );
+        })()}
         {history.data && (
           <>
             <Table
@@ -1682,6 +1736,10 @@ export function BindingForm({
 }) {
   const [personaDid, setPersonaDid] = useState(initialDid ?? "");
   const [profileId, setProfileId] = useState<string>(profiles[0]?.profileId ?? "");
+  /** What this context may call the face. Never the face's own name: that is
+   *  the holder's, and wearing a face is not consent to share it. Empty gives
+   *  the context no name at all. */
+  const [nameForContext, setNameForContext] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<ConsentRequiredError | null>(null);
@@ -1699,7 +1757,12 @@ export function BindingForm({
     [parties.holder.did, parties.service.did, contextId, initialDid],
   );
   useEffect(() => {
-    if (current.data) setProfileId(current.data.profileId ?? "");
+    if (current.data) {
+      setProfileId(current.data.profileId ?? "");
+      // `binding/set` replaces the binding, so the label it already has must
+      // be sent back or a face change silently clears it.
+      setNameForContext(current.data.label ?? "");
+    }
   }, [current.data]);
 
   const isKnown = known?.personas.find((b) => b.personaDid === personaDid.trim());
@@ -1720,6 +1783,7 @@ export function BindingForm({
           // An empty selection is an explicit take-off, not an omission: `null`
           // clears the binding, an absent member leaves it as it stands.
           profileId: profileId === "" ? null : profileId,
+          ...(profileId !== "" && nameForContext.trim() ? { label: nameForContext.trim() } : {}),
         });
         const also = res.correlation?.alsoBoundPersonaCount ?? 0;
         outcome =
@@ -1734,7 +1798,7 @@ export function BindingForm({
     );
     setBusy(false);
     if (ok) onDone(outcome);
-  }, [parties, contextId, contextLabel, personaDid, profileId, onDone]);
+  }, [parties, contextId, contextLabel, personaDid, profileId, nameForContext, onDone]);
 
   return (
     <Panel
@@ -1776,6 +1840,22 @@ export function BindingForm({
             ))}
           </select>
         </label>
+
+        {profileId !== "" && (
+          <label style={{ display: "grid", gap: 4 }}>
+            <Label>WHAT {contextLabel.toUpperCase()} MAY CALL IT</Label>
+            <input
+              style={fieldStyle}
+              value={nameForContext}
+              maxLength={128}
+              onChange={(e) => setNameForContext(e.target.value)}
+              placeholder="leave empty to give it no name"
+            />
+            <span style={{ fontSize: t.xs, color: c.faint }}>
+              {contextLabel} never sees your own name for this face. It sees this, or nothing.
+            </span>
+          </label>
+        )}
 
         {error && <Note tone="danger">{error}</Note>}
         {pending && <ConsentCeremony pending={pending} />}
