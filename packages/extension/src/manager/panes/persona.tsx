@@ -70,6 +70,7 @@ import { GuidedSetup } from "./persona-setup.js";
 import { showsGuide, suggestsWorlds } from "../persona-flow.js";
 import { revealAttributeValue, type RevealTarget } from "../reveal-value.js";
 import { RetiredFaces, AttributeEditor, DisclosureHistoryPanel } from "./persona-editors.js";
+import { FormatsPanel } from "./persona-formats.js";
 
 /**
  * Who is known in each context, with the face they wear resolved to an id.
@@ -436,7 +437,13 @@ export function PersonaPane({
         <LoadError what="your worlds" error={worlds.error} />
       )}
       {view === "released" ? (
-        <DisclosureHistoryPanel parties={parties} authority={authority} records={records} />
+        <>
+          <DisclosureHistoryPanel parties={parties} authority={authority} records={records} />
+          {/* What left, then what shape it left in. The second is only worth
+              reading beside the first: a format's losses are abstract until
+              they are the losses on a disclosure that already happened. */}
+          <FormatsPanel parties={parties} />
+        </>
       ) : view === "list" ? (
         editing ? (
           <AttributeEditor
