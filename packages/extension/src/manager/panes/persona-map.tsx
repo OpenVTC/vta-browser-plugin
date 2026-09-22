@@ -83,6 +83,7 @@ import {
   ProfileEditor,
   ResolvedProfile,
 } from "./persona-editors.js";
+import { PeoplePanel } from "./persona-people.js";
 import { holderGate } from "../holder-gate.js";
 import { Popover } from "../popover.js";
 import { WorldEditor } from "./worlds.js";
@@ -1888,7 +1889,24 @@ function DetailStrip({
             Make a face for {ctx.label}
           </Button>
         </div>
-        {col("Faces made here", <LocalFaces parties={parties} contextId={ctx.id} onChanged={() => onChanged()} />)}
+        {col(
+          "Faces made here",
+          <LocalFaces
+            parties={parties}
+            contextId={ctx.id}
+            // Who wears a face made here: the persona this context already
+            // holds a binding for. `null` when none does, and then a face can
+            // be made but not worn — there is nobody here to wear it.
+            personaDid={ctx.personas[0]?.did ?? null}
+            onChanged={() => onChanged()}
+          />,
+        )}
+        <PeoplePanel
+          parties={parties}
+          contextId={ctx.id}
+          contextLabel={ctx.label}
+          personaDid={ctx.personas[0]?.did ?? null}
+        />
       </>,
     );
   }

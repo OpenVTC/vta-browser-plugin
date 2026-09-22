@@ -37,14 +37,22 @@ import {
   type PoolProfileEntry,
   type FaceReach,
 } from "@openvtc/pnm-core/admin";
-import { getBinding, getLocalProfile, listBindings, listLocalProfiles } from "@openvtc/pnm-core/persona";
+import {
+  deleteLocalProfile,
+  getBinding,
+  getLocalProfile,
+  listBindings,
+  listLocalProfiles,
+  putLocalProfile,
+  setLocalBinding,
+} from "@openvtc/pnm-core/persona";
 import { webvhDidCreate, webvhDidList, webvhServerList } from "@openvtc/pnm-core/webvh";
 import type { ContextRecord } from "@openvtc/pnm-core";
 import { Button, Note, Panel, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { ConsentRequiredError, RelayTaskError } from "../carrier.js";
-import { ConsentCeremony, runMutation } from "../destructive.js";
+import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
 import { Loading, LoadError, Table, Truncated, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
 import { contextHeading, formatInstant } from "../format.js";
@@ -2464,10 +2472,14 @@ export function ComposeFace({
 export function LocalFaces({
   parties,
   contextId,
+  personaDid,
   onChanged,
 }: {
   parties: Parties;
   contextId: string;
+  /** The persona this context knows, which is who wears a face made here.
+   *  `null` when none is bound yet — then a face can be made but not worn. */
+  personaDid?: string | null;
   onChanged: (outcome: string) => void;
 }) {
   // The listing carries names and counts; promotion addresses entries by
@@ -2513,10 +2525,66 @@ export function LocalFaces({
     [parties, contextId, chosen, faces, onChanged],
   );
 
+  const wear = useCallback(
+    async (profileId: string) => {
+      if (!personaDid) return;
+      setBusy(profileId);
+      setError(null);
+      const ok = await runMutation(
+        async () => {
+          await setLocalBinding(managerSender, { ...parties, contextId, personaDid, profileId });
+        },
+        { onConsent: () => setError("Your agent asked for an approval first — try again once it is given."), onError: setError },
+      );
+      setBusy(null);
+      if (ok) {
+        faces.reload();
+        onChanged("Put on here. Nothing from your pool went with it — a face made here has nothing of yours in it.");
+      }
+    },
+    [parties, contextId, personaDid, faces, onChanged],
+  );
+
+  const remove = useCallback(
+    async (profileId: string) => {
+      setBusy(profileId);
+      setError(null);
+      const ok = await runMutation(
+        async () => {
+          // `unbind` because the question the holder answered said the face
+          // comes off as it goes. Without it the agent refuses while it is
+          // worn, which would make delete work only sometimes.
+          await deleteLocalProfile(managerSender, { ...parties, contextId, profileId, unbind: true });
+        },
+        { onConsent: () => setError("Your agent asked for an approval first — try again once it is given."), onError: setError },
+      );
+      setBusy(null);
+      if (ok) {
+        faces.reload();
+        onChanged("Deleted. Anyone wearing it here now shows nothing.");
+      }
+    },
+    [parties, contextId, faces, onChanged],
+  );
+
   if (faces.loading) return <Loading what="faces made here" />;
   if (faces.error) return <LoadError what="faces made here" error={faces.error} />;
   const list = faces.data ?? [];
-  if (list.length === 0) return <span style={{ color: c.faint, fontSize: t.sm }}>No face was made here.</span>;
+  if (list.length === 0) {
+    return (
+      <div style={{ display: "grid", gap: 8, fontSize: t.sm }}>
+        <span style={{ color: c.faint }}>No face was made here.</span>
+        <MakeLocalFace
+          parties={parties}
+          contextId={contextId}
+          onDone={(outcome) => {
+            faces.reload();
+            onChanged(outcome);
+          }}
+        />
+      </div>
+    );
+  }
   return (
     <div style={{ display: "grid", gap: 10, fontSize: t.sm }}>
       {list.map((f) => (
@@ -2558,10 +2626,160 @@ export function LocalFaces({
             >
               {busy === f.profileId ? "Working…" : "Make reusable"}
             </Button>
+            <Button
+              kind="quiet"
+              disabled={busy !== null || !personaDid}
+              {...(personaDid
+                ? {}
+                : { title: "No persona of yours is known here yet, so there is nobody to wear it." })}
+              onClick={() => void wear(f.profileId)}
+            >
+              Wear it here
+            </Button>
+            <Destructive<{ name: string }>
+              label="Delete"
+              preview={() => Promise.resolve({ name: f.name })}
+              renderPreview={(p) => (
+                <span>
+                  Deleting &ldquo;{p.name}&rdquo; takes it off here as it goes, so anyone wearing it
+                  shows nothing afterwards. Its values were only ever here, so nothing in your pool
+                  changes.
+                </span>
+              )}
+              commit={() => remove(f.profileId)}
+              onDone={() => undefined}
+            />
           </div>
         </div>
       ))}
+      <MakeLocalFace
+        parties={parties}
+        contextId={contextId}
+        onDone={(outcome) => {
+          faces.reload();
+          onChanged(outcome);
+        }}
+      />
       {error && <Note tone="danger">{error}</Note>}
+    </div>
+  );
+}
+
+/**
+ * Making a face inside one context.
+ *
+ * Inline values only, and that is the boundary rather than a shortcut: a
+ * context-local face has nowhere in its wire type to name a pool attribute, so
+ * there is nothing here to tick. Making one of these values reusable is the
+ * separate, one-way promote step above.
+ */
+function MakeLocalFace({
+  parties,
+  contextId,
+  onDone,
+}: {
+  parties: Parties;
+  contextId: string;
+  onDone: (outcome: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [rows, setRows] = useState<{ type: string; value: string }[]>([{ type: "", value: "" }]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!open) {
+    return (
+      <div>
+        <Button kind="quiet" onClick={() => setOpen(true)}>
+          Make a face here
+        </Button>
+      </div>
+    );
+  }
+
+  const submit = async () => {
+    const filled = rows.filter((r) => r.type.trim() !== "" || r.value.trim() !== "");
+    if (filled.some((r) => r.type.trim() === "" || r.value.trim() === "")) {
+      setError("Each value needs both what it is and what it says.");
+      return;
+    }
+    if (!name.trim() || filled.length === 0) {
+      setError("A face needs a name and at least one value.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const ok = await runMutation(
+      async () => {
+        await putLocalProfile(managerSender, {
+          ...parties,
+          contextId,
+          name: name.trim(),
+          entries: filled.map((r) => ({
+            inline: {
+              type: r.type.trim(),
+              value: r.value.trim(),
+              valueType: "string" as const,
+              // Typed here by the holder, about themselves. A local face has
+              // no other provenance available: a credential-backed value lives
+              // in the pool, which is the half this face cannot reach.
+              provenance: "selfAsserted" as const,
+            },
+          })),
+        });
+      },
+      { onConsent: () => setError("Your agent asked for an approval first — try again once it is given."), onError: setError },
+    );
+    setBusy(false);
+    if (ok) {
+      setOpen(false);
+      setName("");
+      setRows([{ type: "", value: "" }]);
+      onDone("Made. It lives in this context and shows nothing from your pool.");
+    }
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <Note tone="accent">
+        What you type here stays in this context. It cannot show anything from your attributes —
+        that is what a face made here means.
+      </Note>
+      <label style={{ display: "grid", gap: 4 }}>
+        <Label>YOUR NAME FOR IT</Label>
+        <input style={fieldStyle} value={name} maxLength={64} onChange={(e) => setName(e.target.value)} />
+      </label>
+      {rows.map((r, i) => (
+        <div key={i} style={{ display: "flex", gap: 8 }}>
+          <input
+            style={{ ...fieldStyle, fontFamily: font.mono, flex: 1 }}
+            placeholder="what it is (name.display)"
+            value={r.type}
+            onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, type: e.target.value } : x)))}
+          />
+          <input
+            style={{ ...fieldStyle, flex: 1 }}
+            placeholder="value"
+            value={r.value}
+            onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
+          />
+        </div>
+      ))}
+      <div>
+        <Button kind="quiet" onClick={() => setRows([...rows, { type: "", value: "" }])}>
+          Add a value
+        </Button>
+      </div>
+      {error && <Note tone="danger">{error}</Note>}
+      <div style={{ display: "flex", gap: 8 }}>
+        <Button kind="primary" disabled={busy} onClick={() => void submit()}>
+          {busy ? "Making…" : "Make it"}
+        </Button>
+        <Button kind="quiet" disabled={busy} onClick={() => setOpen(false)}>
+          Cancel
+        </Button>
+      </div>
     </div>
   );
 }
