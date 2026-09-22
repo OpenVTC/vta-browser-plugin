@@ -69,7 +69,7 @@ import { AttributeList } from "./persona-list.js";
 import { GuidedSetup } from "./persona-setup.js";
 import { showsGuide, suggestsWorlds } from "../persona-flow.js";
 import { revealAttributeValue, type RevealTarget } from "../reveal-value.js";
-import { AttributeEditor, DisclosureHistoryPanel } from "./persona-editors.js";
+import { RetiredFaces, AttributeEditor, DisclosureHistoryPanel } from "./persona-editors.js";
 
 /**
  * Who is known in each context, with the face they wear resolved to an id.
@@ -216,6 +216,16 @@ export function PersonaPane({
     async () => personaProfileList(managerSender, parties),
     [parties.holder.did, parties.service.did],
   );
+  // Retired faces are left out of the listing above, as they are out of every
+  // picker — that is what retiring is for. This is the one place they are
+  // shown, so a holder can bring one back.
+  const retired = useAsync(
+    async () =>
+      (await personaProfileList(managerSender, { ...parties, includeRetired: true })).filter(
+        (p) => p.status === "retired",
+      ),
+    [parties.holder.did, parties.service.did],
+  );
   // Its own load, and its failure is its own. A worlds listing that refused
   // must not blank the map: an arrangement the console could not read is not
   // an absence of arrangement, and drawing one as the other is the same error
@@ -250,6 +260,7 @@ export function PersonaPane({
   const reloadAll = useCallback(() => {
     attributes.reload();
     profiles.reload();
+    retired.reload();
     contexts.reload();
     worlds.reload();
     history.reload();
@@ -418,6 +429,9 @@ export function PersonaPane({
         </Note>
       )}
       <ViewToggle view={view} onView={setView} />
+      {(retired.data?.length ?? 0) > 0 && (
+        <RetiredFaces parties={parties} faces={retired.data ?? []} onChanged={reloadAll} />
+      )}
       {worlds.error && view === "map" && (
         <LoadError what="your worlds" error={worlds.error} />
       )}

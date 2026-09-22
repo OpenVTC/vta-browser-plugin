@@ -74,6 +74,10 @@ import {
   AttributeEditor,
   BindingForm,
   DeleteProfile,
+  FaceHistory,
+  RetireFace,
+  ComposeFace,
+  LocalFaces,
   AttributeValue,
   PersonaClaims,
   ProfileEditor,
@@ -85,6 +89,7 @@ import { WorldEditor } from "./worlds.js";
 import { Icon } from "../icons.js";
 import { isSensitiveFor, maskedValue } from "../claim-sensitivity.js";
 import type { RevealTarget } from "../reveal-value.js";
+import { reachWords } from "../face-lifecycle.js";
 
 // ── Words for what the agent knows ──────────────────────────────────────────
 
@@ -655,6 +660,8 @@ type Editing = (
   | { kind: "face"; existing?: PoolProfile }
   /** `contextId: null` means "somewhere" — the form asks which context first. */
   | { kind: "bind"; contextId: string | null; personaDid?: string }
+  /** Make a face for this context, where it is asked for. */
+  | { kind: "compose"; contextId: string }
 ) & { anchor: HTMLElement | null };
 
 export function IdentityMap({
@@ -699,7 +706,7 @@ export function IdentityMap({
   const [selection, setSelection] = useState<Selection | null>(null);
   const [showLinks, setShowLinks] = useState(true);
   const [editing, setEditing] = useState<Editing | null>(null);
-  const [showing, setShowing] = useState<"claims" | null>(null);
+  const [showing, setShowing] = useState<"claims" | "history" | null>(null);
   const [findings, setFindings] = useState<CorrelationFinding[] | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
   const [showEmpty, setShowEmpty] = useState(false);
@@ -1400,7 +1407,27 @@ export function IdentityMap({
             parties={parties}
             authority={authority}
             attributes={attributes}
+            contexts={graph.contexts.map((ctx) => ({ id: ctx.id, label: ctx.label }))}
             {...(editing.existing ? { existing: editing.existing } : {})}
+            onDone={done}
+            onCancel={() => setEditing(null)}
+          />
+        </Popover>
+      )}
+      {editing?.kind === "compose" && (
+        <Popover
+          anchor={{ current: editing.anchor }}
+          onClose={() => setEditing(null)}
+          title={`A face for ${graph.contexts.find((x) => x.id === editing.contextId)?.label ?? editing.contextId}`}
+          width={560}
+        >
+          <ComposeFace
+            parties={parties}
+            authority={authority}
+            contextId={editing.contextId}
+            contextLabel={graph.contexts.find((x) => x.id === editing.contextId)?.label ?? editing.contextId}
+            attributes={attributes}
+            personas={graph.contexts.find((x) => x.id === editing.contextId)?.personas.map((p) => p.did) ?? []}
             onDone={done}
             onCancel={() => setEditing(null)}
           />
@@ -1502,9 +1529,9 @@ function DetailStrip({
   /** The finding for the selected attribute, ranked against the holder's
    *  worlds — `crossing` is the second axis and is never read off `severity`. */
   finding: RankedFinding | null;
-  showing: "claims" | null;
+  showing: "claims" | "history" | null;
   onReveal: (target: RevealTarget) => Promise<unknown>;
-  onShow: (s: "claims" | null) => void;
+  onShow: (s: "claims" | "history" | null) => void;
   onEdit: (e: Editing) => void;
   /** Clear the selection. The strip is pinned now, so it needs a way out that
    *  is not "find the card again and click it a second time". */
@@ -1614,7 +1641,12 @@ function DetailStrip({
             <span style={{ fontFamily: font.mono, fontSize: t.md, fontWeight: 640 }}>{attribute.type}</span>
             <span style={{ fontSize: t.sm, color: c.faint }}>
               {attribute.label ? `${attribute.label} · ` : ""}{prov.text}
-              {attribute.provenance.kind === "credentialBacked" ? " — provable, and the same signature to everyone who sees it" : attribute.provenance.kind === "selfAsserted" ? " — passed on, never proven" : ""}
+              {attribute.provenance.kind === "credentialBacked" ? " — provable, and the same signature to everyone who sees it" : attribute.provenance.kind === "selfAsserted" ? " — passed on, never proven" : attribute.provenance.kind === "derived" ? " — taken from a source you connected, never proven" : ""}
+              {/* Inventory, not evidence: an endorsement never makes the value
+                  attested, and it is not shown to anyone the value is. */}
+              {attribute.endorsements && attribute.endorsements.length > 0
+                ? ` · vouched for in ${attribute.endorsements.length} credential${attribute.endorsements.length === 1 ? "" : "s"} you hold — not shown with it`
+                : ""}
             </span>
             {/* The one place with room to say what the mask is and is not —
                 and the two cases are not the same sentence. A value the agent
@@ -1775,6 +1807,7 @@ function DetailStrip({
             <span style={{ fontSize: t.sm, color: c.faint }}>
               shows {face.entries.length} attribute{face.entries.length === 1 ? "" : "s"}{face.preserved > 0 ? ` (${face.preserved} pinned, shown differently, or only here)` : ""}
             </span>
+            <span style={{ fontSize: t.sm, color: c.faint }}>{reachWords(raw.reach)}</span>
           </div>
           {col("Worn by", wearers.length === 0 ? (
             <span>Nobody yet. No context receives these attributes.</span>
@@ -1798,12 +1831,17 @@ function DetailStrip({
           <Button kind="quiet" onClick={() => onShow(showing === "claims" ? null : "claims")}>
             {showing === "claims" ? "Hide" : "What it shows"}
           </Button>
+          <Button kind="quiet" onClick={() => onShow(showing === "history" ? null : "history")}>
+            {showing === "history" ? "Hide history" : "Where and when"}
+          </Button>
           <Button kind="quiet" onClick={(e) => onEdit({ kind: "face", existing: raw, anchor: e.currentTarget })}>Edit</Button>
+          <RetireFace parties={parties} profile={raw} onDone={() => onChanged()} />
           <DeleteProfile parties={parties} profile={raw} onDone={onChanged} />
         </div>
         {showing === "claims" && (
           <ResolvedProfile registry={registry} parties={parties} profileId={face.id} name={face.name} pool={attributes} />
         )}
+        {showing === "history" && <FaceHistory parties={parties} profileId={face.id} contextName={labelOf} />}
       </>,
     );
   }
@@ -1841,7 +1879,16 @@ function DetailStrip({
           >
             Be known here as…
           </Button>
+          <Button
+            kind="quiet"
+            disabled={Boolean(denied)}
+            {...(denied ? { title: denied } : {})}
+            onClick={(e) => onEdit({ kind: "compose", contextId: ctx.id, anchor: e.currentTarget })}
+          >
+            Make a face for {ctx.label}
+          </Button>
         </div>
+        {col("Faces made here", <LocalFaces parties={parties} contextId={ctx.id} onChanged={() => onChanged()} />)}
       </>,
     );
   }
