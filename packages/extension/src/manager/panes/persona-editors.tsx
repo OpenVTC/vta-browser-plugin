@@ -19,6 +19,13 @@ import {
   personaDisclosureHistory,
   personaProfileDelete,
   personaProfileGet,
+  personaProfileRetire,
+  personaProfileReinstate,
+  personaProfileTimeline,
+  personaProfileUsage,
+  personaProfileCompose,
+  personaAttributePromote,
+  personaCorrelationAnalyze,
   personaProfilePut,
   personasBlockingDelete,
   PROFILE_DELETE_BOUND,
@@ -28,8 +35,9 @@ import {
   type PoolAttribute,
   type PoolProfile,
   type PoolProfileEntry,
+  type FaceReach,
 } from "@openvtc/pnm-core/admin";
-import { getBinding, listBindings } from "@openvtc/pnm-core/persona";
+import { getBinding, getLocalProfile, listBindings, listLocalProfiles } from "@openvtc/pnm-core/persona";
 import { webvhDidCreate, webvhDidList, webvhServerList } from "@openvtc/pnm-core/webvh";
 import type { ContextRecord } from "@openvtc/pnm-core";
 import { Button, Note, Panel, Pill } from "../../ui.js";
@@ -55,6 +63,9 @@ import {
 } from "../profile-entries.js";
 import { personaCandidates } from "../persona-candidates.js";
 import { currencyOf, currencyWords, editReachWords, outdatedHolders } from "../disclosure-currency.js";
+import { untilFromLocalInput, untilToLocalInput, untilWords } from "../binding-until.js";
+import { reachWords, retiredWords, timelineWords, unTellWords } from "../face-lifecycle.js";
+import { composeClaimsFrom, composedWords, type ComposeRow } from "../compose-claims.js";
 
 export const fieldStyle: React.CSSProperties = {
   boxSizing: "border-box",
@@ -515,7 +526,7 @@ export function AttributeEditor({
   // sends back the object the agent gave us, and a credential-backed attribute
   // does not quietly become self-asserted because someone fixed its label.
   const provenance: AttributeProvenance = existing?.provenance ?? { kind: "selfAsserted" };
-  const derived = provenance.kind === "credentialBacked";
+  const backedByCredential = provenance.kind === "credentialBacked";
 
   const save = useCallback(async () => {
     // The guard, and it is deliberately separate from the fetch above: a save
@@ -563,6 +574,10 @@ export function AttributeEditor({
           // resolved default — see `Decision` above.
           ...(sensitivity ? { sensitivity } : {}),
           ...(release ? { release } : {}),
+          // A put replaces the record, so endorsements the editor loaded go
+          // back unchanged — this editor has no control for them, and one it
+          // silently dropped would be a vouch the holder lost by fixing a label.
+          ...(existing?.endorsements?.length ? { endorsements: existing.endorsements } : {}),
           ...(existing ? { attributeId: existing.attributeId, expectedVersion: existing.version } : {}),
         });
         // Advisory, and it arrives with the write rather than before it: the
@@ -726,7 +741,7 @@ export function AttributeEditor({
           </span>
         </label>
 
-        {derived && (
+        {backedByCredential && (
           <Note tone="warn">
             This attribute is backed by a <strong>credential</strong>, and that is kept as it stands —
             nothing here can turn an attribute you can prove into one you merely said.
@@ -780,6 +795,7 @@ export function ProfileEditor({
   authority,
   attributes,
   existing,
+  contexts,
   onPreview,
   onDone,
   onCancel,
@@ -789,6 +805,12 @@ export function ProfileEditor({
   authority: Authority | null;
   attributes: PoolAttribute[];
   existing?: PoolProfile;
+  /**
+   * The contexts this agent has, to offer as a face's reach. Absent hides the
+   * control and leaves any reach the face already has exactly as it is — the
+   * editor omits `reach`, and the agent keeps the stored one.
+   */
+  contexts?: readonly { id: string; label: string }[] | undefined;
   /**
    * The current name and ticks, reported as they change, so a caller can show
    * what this face would hand over. The guided setup renders its card from it.
@@ -805,6 +827,12 @@ export function ProfileEditor({
   cancelLabel?: string | undefined;
 }) {
   const [name, setName] = useState(existing?.name ?? "");
+  // Where the face may be worn. Held as edited, and sent only when it differs
+  // from what was loaded: an omitted reach keeps the stored one, so an editor
+  // that always sent its own copy could only ever be a way to lose one.
+  const loadedReach: FaceReach = existing?.reach ?? { kind: "anywhere" };
+  const [reach, setReach] = useState<FaceReach>(loadedReach);
+  const reachChanged = JSON.stringify(reach) !== JSON.stringify(loadedReach);
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(tickedFrom(existing?.entries ?? [])),
   );
@@ -846,6 +874,7 @@ export function ProfileEditor({
           ...parties,
           name: name.trim(),
           entries,
+          ...(reachChanged ? { reach } : {}),
           ...(existing
             ? {
                 profileId: existing.profileId,
@@ -861,7 +890,7 @@ export function ProfileEditor({
     );
     setBusy(false);
     if (ok) onDone();
-  }, [parties, name, selected, nameAttr, existing, onDone]);
+  }, [parties, name, selected, nameAttr, existing, reach, reachChanged, onDone]);
 
   // Reported from a ref, not from the dependency list. `onPreview` is nearly
   // always an inline arrow, so keying the effect on it would fire on every
@@ -977,6 +1006,56 @@ export function ProfileEditor({
           );
         })()}
 
+        {contexts && contexts.length > 0 && (
+          <div style={{ display: "grid", gap: 4 }}>
+            <Label>MAY BE WORN</Label>
+            <select
+              style={fieldStyle}
+              value={reach.kind}
+              onChange={(e) =>
+                setReach(
+                  e.target.value === "only"
+                    ? { kind: "only", contextIds: [contexts[0]!.id] }
+                    : { kind: "anywhere" },
+                )
+              }
+            >
+              <option value="anywhere">anywhere</option>
+              <option value="only">only in the contexts I choose</option>
+            </select>
+            {reach.kind === "only" && (
+              <div style={{ display: "grid", gap: 2, paddingLeft: 4 }}>
+                {contexts.map((ctx) => {
+                  const on = reach.contextIds.includes(ctx.id);
+                  const last = on && reach.contextIds.length === 1;
+                  return (
+                    <label key={ctx.id} style={{ display: "flex", gap: 6, fontSize: t.sm }}>
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        // At least one: "nowhere" is not a reach, it is a
+                        // retired face, and the wire refuses an empty list.
+                        disabled={last}
+                        onChange={() => {
+                          const ids = on
+                            ? reach.contextIds.filter((id) => id !== ctx.id)
+                            : [...reach.contextIds, ctx.id];
+                          if (ids.length > 0) setReach({ kind: "only", contextIds: [ids[0]!, ...ids.slice(1)] });
+                        }}
+                      />
+                      {ctx.label}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            <span style={{ fontSize: t.xs, color: c.faint }}>
+              Your agent refuses to wear this face anywhere else. Narrowing it past a context it is worn
+              in now is refused too — take it off there first.
+            </span>
+          </div>
+        )}
+
         {preserved.length > 0 && (
           <Note tone="accent">
             <div style={{ display: "grid", gap: 6 }}>
@@ -1061,6 +1140,41 @@ export function DeleteProfile({
     | { kind: "error"; message: string };
 
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+  const [retired, setRetired] = useState<string | null>(null);
+
+  // How far this face has spoken, read once the holder is on the way to
+  // deleting it: a delete does not un-tell anyone, and the moment to say so is
+  // before, not after. Not read while idle — it is a read of the holder's
+  // disclosure history, and nothing is being decided yet.
+  const spoken = useAsync(
+    async () =>
+      phase.kind === "confirm" || phase.kind === "blocked"
+        ? personaProfileGet(managerSender, { ...parties, profileId: profile.profileId })
+        : null,
+    [parties.holder.did, parties.service.did, profile.profileId, phase.kind === "confirm" || phase.kind === "blocked"],
+  );
+  const unTell = unTellWords(spoken.data?.disclosedTo);
+
+  // The middle of three ways to remove a face — "not anywhere, but keep it".
+  // Offered beside delete because it is usually what someone reaching for
+  // delete means.
+  const retire = useCallback(async () => {
+    setPhase({ kind: "working" });
+    const ok = await runMutation(
+      async () => {
+        const res = await personaProfileRetire(managerSender, { ...parties, profileId: profile.profileId });
+        setRetired(retiredWords(res.unbound));
+      },
+      {
+        onConsent: (pending) => setPhase({ kind: "consent", pending }),
+        onError: (message) => setPhase({ kind: "error", message }),
+      },
+    );
+    if (ok) {
+      setPhase({ kind: "idle" });
+      onDone();
+    }
+  }, [parties, profile.profileId, onDone]);
 
   const run = useCallback(
     async (unbind: boolean) => {
@@ -1096,12 +1210,14 @@ export function DeleteProfile({
 
   if (phase.kind === "idle") {
     return (
-      <Button
-        kind="danger"
-        onClick={() => setPhase({ kind: "confirm" })}
-      >
-        Delete
-      </Button>
+      <div style={{ display: "grid", gap: 6 }}>
+        {retired && <Note tone="accent">{retired}</Note>}
+        <div>
+          <Button kind="danger" onClick={() => setPhase({ kind: "confirm" })}>
+            Delete
+          </Button>
+        </div>
+      </div>
     );
   }
 
@@ -1162,9 +1278,13 @@ export function DeleteProfile({
               That is a legal state, and one you will not be warned about again. Nothing already
               shared is affected — that has left.
             </span>
+            {unTell && <strong>{unTell}</strong>}
           </div>
         </Note>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Button kind="primary" onClick={() => void retire()}>
+            Retire it instead
+          </Button>
           <Button kind="danger" onClick={() => void run(true)}>
             Take it off {phase.personas === null ? "them" : `${phase.personas.length}`} and delete
           </Button>
@@ -1190,9 +1310,17 @@ export function DeleteProfile({
             If any persona is still wearing it, your agent will refuse and name them, and you can
             decide then.
           </span>
+          {unTell && <strong>{unTell}</strong>}
+          <span>
+            To stop being this face without losing it, retire it instead: it comes off everywhere, is
+            kept with its history, and can be reinstated.
+          </span>
         </div>
       </Note>
       <div style={{ display: "flex", gap: 8 }}>
+        <Button kind="primary" disabled={busy} onClick={() => void retire()}>
+          Retire instead
+        </Button>
         <Button kind="danger" disabled={busy} onClick={() => void run(false)}>
           {busy ? "Working…" : "Delete face"}
         </Button>
@@ -1796,6 +1924,8 @@ export function BindingForm({
    *  the holder's, and wearing a face is not consent to share it. Empty gives
    *  the context no name at all. */
   const [nameForContext, setNameForContext] = useState("");
+  /** When wearing it here ends on its own, as the `datetime-local` value. */
+  const [ends, setEnds] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<ConsentRequiredError | null>(null);
@@ -1816,8 +1946,10 @@ export function BindingForm({
     if (current.data) {
       setProfileId(current.data.profileId ?? "");
       // `binding/set` replaces the binding, so the label it already has must
-      // be sent back or a face change silently clears it.
+      // be sent back or a face change silently clears it. The same for its end:
+      // changing a face must not quietly turn a weekend into forever.
       setNameForContext(current.data.label ?? "");
+      setEnds(untilToLocalInput(current.data.until));
     }
   }, [current.data]);
 
@@ -1826,6 +1958,11 @@ export function BindingForm({
   const refusal = denied ?? (wouldNoOp ? "This persona wears nothing already — choose a face to put on." : null);
 
   const submit = useCallback(async () => {
+    const end = profileId === "" ? { ok: true as const, until: null } : untilFromLocalInput(ends);
+    if (!end.ok) {
+      setError(end.why);
+      return;
+    }
     setBusy(true);
     setError(null);
     setPending(null);
@@ -1840,12 +1977,16 @@ export function BindingForm({
           // clears the binding, an absent member leaves it as it stands.
           profileId: profileId === "" ? null : profileId,
           ...(profileId !== "" && nameForContext.trim() ? { label: nameForContext.trim() } : {}),
+          ...(end.until ? { until: end.until } : {}),
         });
         const also = res.correlation?.alsoBoundPersonaCount ?? 0;
         outcome =
           profileId === ""
             ? "Taken off. That persona now shows nothing here."
             : `Done. ${res.materialisedClaimCount ?? 0} attribute(s) were copied into ${contextLabel}.` +
+              (end.until
+                ? ` It ${untilWords(end.until)}; then it comes off, and the face is retired if it is worn nowhere else.`
+                : "") +
               (also > 0
                 ? ` ${also} other persona(s) already wear this face — anyone who sees two of them knows they are the same person, and no later change undoes that.`
                 : "");
@@ -1854,7 +1995,7 @@ export function BindingForm({
     );
     setBusy(false);
     if (ok) onDone(outcome);
-  }, [parties, contextId, contextLabel, personaDid, profileId, nameForContext, onDone]);
+  }, [parties, contextId, contextLabel, personaDid, profileId, nameForContext, ends, onDone]);
 
   return (
     <Panel
@@ -1913,6 +2054,22 @@ export function BindingForm({
           </label>
         )}
 
+        {profileId !== "" && (
+          <label style={{ display: "grid", gap: 4 }}>
+            <Label>ENDS</Label>
+            <input
+              type="datetime-local"
+              style={fieldStyle}
+              value={ends}
+              onChange={(e) => setEnds(e.target.value)}
+            />
+            <span style={{ fontSize: t.xs, color: c.faint }}>
+              Optional. For a face worn for a weekend — a conference, a listing. At this time it comes off
+              here by itself, and the face is retired if nothing else wears it. Never deleted.
+            </span>
+          </label>
+        )}
+
         {error && <Note tone="danger">{error}</Note>}
         {pending && <ConsentCeremony pending={pending} />}
 
@@ -1935,4 +2092,486 @@ export function BindingForm({
       </div>
     </Panel>
   );
+}
+
+/**
+ * Where a face is worn now, where it may be, and what it has done — the
+ * holder's own history of one face, oldest first. Design note
+ * `persona-context-first.md` §5.4, §9.6.
+ *
+ * Safe to render whole: no timeline event carries a value or a private label,
+ * so there is nothing here to mask.
+ */
+export function FaceHistory({
+  parties,
+  profileId,
+  contextName,
+}: {
+  parties: Parties;
+  profileId: string;
+  contextName: (id: string) => string;
+}) {
+  const usage = useAsync(
+    async () => personaProfileUsage(managerSender, { ...parties, profileId }),
+    [parties.holder.did, parties.service.did, profileId],
+  );
+  const timeline = useAsync(
+    async () => personaProfileTimeline(managerSender, { ...parties, profileId }),
+    [parties.holder.did, parties.service.did, profileId],
+  );
+  return (
+    <div style={{ display: "grid", gap: 10, fontSize: t.sm }}>
+      <div style={{ display: "grid", gap: 3 }}>
+        <Label>WORN NOW</Label>
+        {usage.loading ? (
+          <Loading what="where this face is worn" />
+        ) : usage.error ? (
+          <LoadError what="where this face is worn" error={usage.error} />
+        ) : (
+          <>
+            <span style={{ color: c.faint }}>This face {reachWords(usage.data?.reach)}.</span>
+            {(usage.data?.usage ?? []).length === 0 ? (
+              <span>Nowhere.</span>
+            ) : (
+              (usage.data?.usage ?? []).map((u) => (
+                <span key={`${u.contextId}\u0000${u.personaDid}`}>
+                  in <strong>{contextName(u.contextId)}</strong>{" "}
+                  <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{u.personaDid}</span>
+                  {u.until ? <span style={{ color: c.faint }}> · {untilWords(u.until)}</span> : null}
+                </span>
+              ))
+            )}
+          </>
+        )}
+      </div>
+      <div style={{ display: "grid", gap: 3 }}>
+        <Label>WHAT IT HAS DONE</Label>
+        {timeline.loading ? (
+          <Loading what="this face's history" />
+        ) : timeline.error ? (
+          <LoadError what="this face's history" error={timeline.error} />
+        ) : (
+          (timeline.data ?? []).map((e, i) => (
+            <span key={i}>
+              <span style={{ color: c.faint }}>{formatInstant(e.at)}</span> — {timelineWords(e, contextName)}
+            </span>
+          ))
+        )}
+        <span style={{ fontSize: t.xs, color: c.faint }}>
+          Types and parties only. The history never holds a value, or a name you gave something.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Retire a face, or reinstate a retired one. Retiring takes it off every
+ * context and keeps it; reinstating makes it wearable and wears it nowhere.
+ */
+export function RetireFace({
+  parties,
+  profile,
+  onDone,
+}: {
+  parties: Parties;
+  profile: PoolProfile;
+  onDone: (outcome: string) => void;
+}) {
+  const retired = profile.status === "retired";
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<ConsentRequiredError | null>(null);
+  const run = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    let outcome = "";
+    const ok = await runMutation(
+      async () => {
+        if (retired) {
+          await personaProfileReinstate(managerSender, { ...parties, profileId: profile.profileId });
+          outcome = "Reinstated. It is wearable again, and worn nowhere until you wear it somewhere.";
+        } else {
+          const res = await personaProfileRetire(managerSender, { ...parties, profileId: profile.profileId });
+          outcome = retiredWords(res.unbound);
+        }
+      },
+      { onConsent: setPending, onError: setError },
+    );
+    setBusy(false);
+    setConfirming(false);
+    if (ok) onDone(outcome);
+  }, [parties, profile.profileId, retired, onDone]);
+
+  if (retired) {
+    return (
+      <Button kind="quiet" disabled={busy} onClick={() => void run()}>
+        {busy ? "Working…" : "Reinstate"}
+      </Button>
+    );
+  }
+  if (!confirming) {
+    return (
+      <Button kind="quiet" onClick={() => setConfirming(true)}>
+        Retire
+      </Button>
+    );
+  }
+  return (
+    <div style={{ display: "grid", gap: 8, maxWidth: 460 }}>
+      <Note tone="warn">
+        Retiring “{profile.name}” takes it off every context it is worn in. It is kept — values and
+        history — and hidden from pickers until you reinstate it. Nothing already shared is affected.
+      </Note>
+      {error && <Note tone="danger">{error}</Note>}
+      {pending && <ConsentCeremony pending={pending} />}
+      <div style={{ display: "flex", gap: 8 }}>
+        <Button kind="primary" disabled={busy} onClick={() => void run()}>
+          {busy ? "Working…" : "Retire it"}
+        </Button>
+        <Button kind="quiet" disabled={busy} onClick={() => setConfirming(false)}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Faces the holder has retired: kept, worn nowhere, out of every picker.
+ * Listed here — and only here — so one can be brought back.
+ */
+export function RetiredFaces({
+  parties,
+  faces,
+  onChanged,
+}: {
+  parties: Parties;
+  faces: readonly PoolProfile[];
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ display: "grid", gap: 6, fontSize: t.sm, color: c.muted }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{ border: "none", background: "none", padding: 0, color: "var(--w-accent)", cursor: "pointer", font: "inherit", textAlign: "left" }}
+      >
+        {open ? "Hide" : "Show"} {faces.length} retired face{faces.length === 1 ? "" : "s"}
+      </button>
+      {open &&
+        faces.map((f) => (
+          <div key={f.profileId} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <strong style={{ color: c.text }}>{f.name}</strong>
+            {f.retiredAt && <span style={{ color: c.faint }}>retired {formatInstant(f.retiredAt)}</span>}
+            <RetireFace parties={parties} profile={f} onDone={() => onChanged()} />
+          </div>
+        ))}
+    </div>
+  );
+}
+
+/**
+ * Make a face for one context, where it is asked for — `persona/profile/compose`.
+ *
+ * Local by default: a typed value stays in this face unless the holder ticks
+ * "use in my other faces too". Each typed value is checked against the rest of
+ * the holder's identity as it is entered (`correlation/analyze` with a
+ * candidate), because the warning that changes a mind is the one before the
+ * write. Design note `persona-context-first.md` §5.3.
+ */
+export function ComposeFace({
+  parties,
+  authority,
+  contextId,
+  contextLabel,
+  attributes,
+  personas,
+  onDone,
+  onCancel,
+}: {
+  parties: Parties;
+  authority: Authority | null;
+  contextId: string;
+  contextLabel: string;
+  attributes: PoolAttribute[];
+  /** Persona DIDs already known in this context, to offer as the wearer. */
+  personas: readonly string[];
+  onDone: (outcome: string) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [rows, setRows] = useState<ComposeRow[]>([{ kind: "new", type: "name.display", value: "", share: false }]);
+  const [linked, setLinked] = useState<Record<number, string>>({});
+  const [personaDid, setPersonaDid] = useState(personas[0] ?? "");
+  const [label, setLabel] = useState("");
+  const [ends, setEnds] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<ConsentRequiredError | null>(null);
+  const denied = holderGate(authority);
+
+  const setRow = (i: number, row: ComposeRow) => setRows(rows.map((r, j) => (j === i ? row : r)));
+
+  // The pre-write warning: is this value already held somewhere else?
+  const check = useCallback(
+    async (i: number, type: string, value: string) => {
+      if (!value.trim() || !type.trim()) return;
+      try {
+        const findings = await personaCorrelationAnalyze(managerSender, {
+          ...parties,
+          candidate: { type: type.trim(), valueType: "string", value: value.trim() },
+        });
+        setLinked((prev) => {
+          const next = { ...prev };
+          const hit = findings[0];
+          if (hit) next[i] = hit.why;
+          else delete next[i];
+          return next;
+        });
+      } catch {
+        // Advisory: a failed check says nothing, rather than a false all-clear.
+      }
+    },
+    [parties],
+  );
+
+  const submit = useCallback(async () => {
+    const claims = composeClaimsFrom(rows);
+    if (!claims.ok) {
+      setError(claims.why);
+      return;
+    }
+    const wear = personaDid.trim();
+    const end = wear ? untilFromLocalInput(ends) : ({ ok: true, until: null } as const);
+    if (!end.ok) {
+      setError(end.why);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    let outcome = "";
+    const ok = await runMutation(
+      async () => {
+        const res = await personaProfileCompose(managerSender, {
+          ...parties,
+          contextId,
+          name: name.trim(),
+          claims: claims.claims,
+          ...(wear ? { personaDid: wear } : {}),
+          ...(wear && label.trim() ? { label: label.trim() } : {}),
+          ...(wear && end.until ? { until: end.until } : {}),
+        });
+        outcome = composedWords(res);
+      },
+      { onConsent: setPending, onError: setError },
+    );
+    setBusy(false);
+    if (ok) onDone(outcome);
+  }, [parties, contextId, name, rows, personaDid, label, ends, onDone]);
+
+  return (
+    <div style={{ display: "grid", gap: 10, maxWidth: 560 }}>
+      <label style={{ display: "grid", gap: 4 }}>
+        <Label>YOUR NAME FOR IT</Label>
+        <input style={fieldStyle} value={name} maxLength={128} onChange={(e) => setName(e.target.value)} placeholder={`e.g. ${contextLabel}`} />
+      </label>
+      <div style={{ display: "grid", gap: 6 }}>
+        <Label>SHOWS</Label>
+        {rows.map((row, i) =>
+          row.kind === "held" ? (
+            <div key={i} style={{ display: "flex", gap: 6 }}>
+              <select style={fieldStyle} value={row.attributeId} onChange={(e) => setRow(i, { kind: "held", attributeId: e.target.value })}>
+                {attributes.map((a) => (
+                  <option key={a.attributeId} value={a.attributeId}>
+                    {a.label ? `${a.label} (${a.type})` : a.type}
+                  </option>
+                ))}
+              </select>
+              <Button kind="quiet" onClick={() => setRows(rows.filter((_, j) => j !== i))}>Remove</Button>
+            </div>
+          ) : (
+            <div key={i} style={{ display: "grid", gap: 4 }}>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <input style={{ ...fieldStyle, width: 160 }} value={row.type} onChange={(e) => setRow(i, { ...row, type: e.target.value })} placeholder="name.display" />
+                <input
+                  style={{ ...fieldStyle, flex: 1, minWidth: 140 }}
+                  value={row.value}
+                  onChange={(e) => setRow(i, { ...row, value: e.target.value })}
+                  onBlur={() => void check(i, row.type, row.value)}
+                  placeholder="value"
+                />
+                <Button kind="quiet" onClick={() => setRows(rows.filter((_, j) => j !== i))}>Remove</Button>
+              </div>
+              <label style={{ display: "flex", gap: 6, fontSize: t.xs, color: c.muted }}>
+                <input type="checkbox" checked={row.share} onChange={(e) => setRow(i, { ...row, share: e.target.checked })} />
+                use in my other faces too (it becomes reusable; otherwise it stays in this face alone)
+              </label>
+              {linked[i] && <Note tone="warn">{linked[i]}</Note>}
+            </div>
+          ),
+        )}
+        <div style={{ display: "flex", gap: 6 }}>
+          <Button kind="quiet" onClick={() => setRows([...rows, { kind: "new", type: "", value: "", share: false }])}>
+            Type a value
+          </Button>
+          {attributes.length > 0 && (
+            <Button kind="quiet" onClick={() => setRows([...rows, { kind: "held", attributeId: attributes[0]!.attributeId }])}>
+              Use one I keep
+            </Button>
+          )}
+        </div>
+      </div>
+      <label style={{ display: "grid", gap: 4 }}>
+        <Label>WEAR IT NOW AS</Label>
+        <input style={fieldStyle} list={`personas-${contextId}`} value={personaDid} onChange={(e) => setPersonaDid(e.target.value)} placeholder="a persona DID in this context — or leave empty" />
+        <datalist id={`personas-${contextId}`}>
+          {personas.map((d) => (
+            <option key={d} value={d} />
+          ))}
+        </datalist>
+      </label>
+      {personaDid.trim() && (
+        <>
+          <label style={{ display: "grid", gap: 4 }}>
+            <Label>WHAT {contextLabel.toUpperCase()} MAY CALL IT</Label>
+            <input style={fieldStyle} value={label} maxLength={128} onChange={(e) => setLabel(e.target.value)} placeholder="leave empty to give it no name" />
+          </label>
+          <label style={{ display: "grid", gap: 4 }}>
+            <Label>ENDS</Label>
+            <input type="datetime-local" style={fieldStyle} value={ends} onChange={(e) => setEnds(e.target.value)} />
+            <span style={{ fontSize: t.xs, color: c.faint }}>Optional. At this time it comes off here by itself.</span>
+          </label>
+        </>
+      )}
+      {error && <Note tone="danger">{error}</Note>}
+      {pending && <ConsentCeremony pending={pending} />}
+      <div style={{ display: "flex", gap: 8 }}>
+        <Button kind="primary" disabled={busy || !name.trim() || Boolean(denied)} {...(denied ? { title: denied } : {})} onClick={() => void submit()}>
+          {busy ? "Making…" : "Make this face"}
+        </Button>
+        <Button kind="quiet" disabled={busy} onClick={onCancel}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The faces made inside one context — values typed there and kept there — and
+ * the one-way step that makes a value reusable (`persona/attribute/promote`).
+ */
+export function LocalFaces({
+  parties,
+  contextId,
+  onChanged,
+}: {
+  parties: Parties;
+  contextId: string;
+  onChanged: (outcome: string) => void;
+}) {
+  // The listing carries names and counts; promotion addresses entries by
+  // position against a version, so each face is read whole.
+  const faces = useAsync(
+    async () => {
+      const summaries = (await listLocalProfiles(managerSender, { ...parties, contextId, limit: 500 })).profiles ?? [];
+      return Promise.all(
+        summaries.map(async (s) => (await getLocalProfile(managerSender, { ...parties, contextId, profileId: s.profileId })).profile),
+      );
+    },
+    [parties.holder.did, parties.service.did, contextId],
+  );
+  const [chosen, setChosen] = useState<Record<string, number[]>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const promote = useCallback(
+    async (profileId: string, version: number) => {
+      const positions = chosen[profileId] ?? [];
+      const [first, ...rest] = positions;
+      if (first === undefined) return;
+      setBusy(profileId);
+      setError(null);
+      const ok = await runMutation(
+        async () => {
+          await personaAttributePromote(managerSender, {
+            ...parties,
+            contextId,
+            profileId,
+            entries: [first, ...rest],
+            expectedVersion: version,
+          });
+        },
+        { onConsent: () => setError("Your agent asked for an approval first — try again once it is given."), onError: setError },
+      );
+      setBusy(null);
+      if (ok) {
+        faces.reload();
+        onChanged("Made reusable. The face now lives in your pool, with the same id and everyone who wore it.");
+      }
+    },
+    [parties, contextId, chosen, faces, onChanged],
+  );
+
+  if (faces.loading) return <Loading what="faces made here" />;
+  if (faces.error) return <LoadError what="faces made here" error={faces.error} />;
+  const list = faces.data ?? [];
+  if (list.length === 0) return <span style={{ color: c.faint, fontSize: t.sm }}>No face was made here.</span>;
+  return (
+    <div style={{ display: "grid", gap: 10, fontSize: t.sm }}>
+      {list.map((f) => (
+        <div key={f.profileId} style={{ display: "grid", gap: 4 }}>
+          <strong>{f.name}</strong>
+          {f.entries.map((e, i) => {
+            const inline = inlineOf(e);
+            if (!inline) return null;
+            const on = (chosen[f.profileId] ?? []).includes(i);
+            return (
+              <label key={i} style={{ display: "flex", gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() =>
+                    setChosen({
+                      ...chosen,
+                      [f.profileId]: on
+                        ? (chosen[f.profileId] ?? []).filter((x) => x !== i)
+                        : [...(chosen[f.profileId] ?? []), i],
+                    })
+                  }
+                />
+                <span style={{ fontFamily: font.mono }}>{inline.type}</span>
+              </label>
+            );
+          })}
+          {(chosen[f.profileId] ?? []).length > 0 && (
+            <Note tone="warn">
+              Making these reusable lets your other faces show them, and moves this face into your pool.
+              It cannot be undone — a value other faces may come to show cannot be made local again.
+            </Note>
+          )}
+          <div>
+            <Button
+              kind="quiet"
+              disabled={busy !== null || (chosen[f.profileId] ?? []).length === 0}
+              onClick={() => void promote(f.profileId, f.version)}
+            >
+              {busy === f.profileId ? "Working…" : "Make reusable"}
+            </Button>
+          </div>
+        </div>
+      ))}
+      {error && <Note tone="danger">{error}</Note>}
+    </div>
+  );
+}
+
+/** The inline value of a context-local entry, read defensively: the listing
+ *  types entries loosely, and a local face is inline-only by construction. */
+function inlineOf(entry: unknown): { type: string } | null {
+  if (typeof entry !== "object" || entry === null || !("inline" in entry)) return null;
+  const inline = (entry as { inline: unknown }).inline;
+  if (typeof inline !== "object" || inline === null) return null;
+  const type = (inline as { type?: unknown }).type;
+  return typeof type === "string" ? { type } : null;
 }

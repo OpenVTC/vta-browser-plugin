@@ -112,9 +112,18 @@ const CONST_DECL_OPEN = /(?:pub\s+)?const\s+([A-Z0-9_]+)\s*:\s*&'?\w*\s*str\s*=\
 const COMPUTED_TYPE_URI =
   /<\s*([A-Za-z0-9_:]+)::(v\d+_\d+)::(?:Payload|Response)\s+as\s+[A-Za-z0-9_:]*Payload\s*>::TYPE_URI/;
 
-/** A `&str` const built from a file rather than from a task. Recognised so the
- *  unresolved-value stop below does not fire on one. */
-const NOT_A_TASK_VALUE = /^\s*(?:include_str!|concat!)/;
+/**
+ * A `&str` const that is not a task: built from a file, or an error code.
+ * Recognised so the unresolved-value stop below does not fire on one.
+ *
+ * `vta-sdk` now takes a specification-declared error code from the generated
+ * module (`…::error_codes::ATTRIBUTES_MISSING.code`) rather than writing the
+ * `slug:localName` string out. Its value is a code, never a task URI — the
+ * literal form of the same constant was always dropped by `record` for that
+ * reason — so it is skipped here rather than resolved. `.code` is optional
+ * because rustfmt moves it to the next line once the path is long enough.
+ */
+const NOT_A_TASK_VALUE = /^\s*(?:include_str!|concat!)|::error_codes::[A-Z0-9_]+(?:\.code)?\s*;?\s*$/;
 
 /**
  * Spec-module aliases in one file: `manifest` → `vtc/join_requests/manifest`.

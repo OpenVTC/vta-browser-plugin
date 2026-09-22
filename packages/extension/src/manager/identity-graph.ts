@@ -30,6 +30,9 @@ export interface AttributeNode {
   sensitivity?: PoolAttribute["sensitivity"];
   release?: PoolAttribute["release"];
   provenance: PoolAttribute["provenance"];
+  /** Credentials in which someone vouches for this value. Inventory, not
+   *  evidence — the provenance says what the value is. */
+  endorsements?: readonly string[];
   stale: boolean;
   staleReason?: string | undefined;
   version: number;
@@ -128,6 +131,7 @@ export function buildGraph(
     sensitivity: a.sensitivity,
     release: a.release,
     provenance: a.provenance,
+    ...(a.endorsements?.length ? { endorsements: a.endorsements } : {}),
     stale: a.stale === true,
     staleReason: a.staleReason,
     version: a.version,

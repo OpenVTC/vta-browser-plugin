@@ -365,7 +365,15 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // value the agent kept for a pinned face (dtgwg-trust-tasks-tf#538). The
   // canonical total moves 235 → 240 with the snapshot resynced from vta-sdk
   // 0.45.1; the other four are families the agent gained since, not this one.
-  const expected = 206;
+  //
+  // 206 → 212 is the face lifecycle: `persona/profile/compose/1.0` and
+  // `persona/attribute/promote/1.0` (dtgwg-trust-tasks-tf#569),
+  // `persona/profile/{retire,reinstate}/1.0` (#570) and
+  // `persona/profile/{usage,timeline}/1.0` (#577). The canonical total moves
+  // 240 → 246 with the snapshot resynced from vta-sdk 0.47.0 — exactly these
+  // six. The resync also taught the scanner that a constant taken from a
+  // generated `error_codes::NAME.code` is an error code, not a task.
+  const expected = 212;
   assert.equal(
     implemented.size,
     expected,

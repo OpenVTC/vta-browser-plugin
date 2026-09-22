@@ -17,6 +17,12 @@ import {
   personaAttributePut,
   personaAttributeDelete,
   personaAttributePurgeVersion,
+  personaAttributePromote,
+  personaProfileCompose,
+  personaProfileRetire,
+  personaProfileReinstate,
+  personaProfileUsage,
+  personaProfileTimeline,
   personaProfileList,
   personaProfileGet,
   personaProfilePut,
@@ -74,6 +80,47 @@ test("every task names its 1.0 URI, request and response", async () => {
       { ...PARTIES, attributeId: "01J", versions: [3] },
       "persona/attribute/purge-version/1.0",
       { attributeId: "01J", purged: [3] },
+    ],
+    [
+      personaAttributePromote,
+      { ...PARTIES, contextId: "ctx", profileId: "01P", entries: [1], expectedVersion: 4 },
+      "persona/attribute/promote/1.0",
+      { profileId: "01P", version: 5, promoted: [{ entry: 1, attributeId: "01J", created: true }] },
+    ],
+    [
+      personaProfileCompose,
+      {
+        ...PARTIES,
+        contextId: "ctx",
+        name: "Co-op",
+        claims: [{ type: "name.display", valueType: "string", value: "Ada" }],
+      },
+      "persona/profile/compose/1.0",
+      { profileId: "01P", scope: "local", version: 3 },
+    ],
+    [
+      personaProfileRetire,
+      { ...PARTIES, profileId: "01P" },
+      "persona/profile/retire/1.0",
+      { profileId: "01P", version: 4, retiredAt: "2026-01-01T00:00:00Z" },
+    ],
+    [
+      personaProfileReinstate,
+      { ...PARTIES, profileId: "01P" },
+      "persona/profile/reinstate/1.0",
+      { profileId: "01P", version: 5 },
+    ],
+    [
+      personaProfileUsage,
+      { ...PARTIES, profileId: "01P" },
+      "persona/profile/usage/1.0",
+      { profileId: "01P", usage: [] },
+    ],
+    [
+      personaProfileTimeline,
+      { ...PARTIES, profileId: "01P" },
+      "persona/profile/timeline/1.0",
+      { profileId: "01P", events: [] },
     ],
     [personaProfileList, { ...PARTIES }, "persona/profile/list/1.0", { profiles: [] }],
     [
@@ -619,4 +666,54 @@ test("purging every kept version sends no versions member at all", async () => {
   const all = recorder({ attributeId: "01J", purged: [3, 5] });
   await personaAttributePurgeVersion(all, { ...PARTIES, attributeId: "01J" });
   assert.deepEqual(all.sent[0].envelope.payload, { attributeId: "01J" });
+});
+
+test("a put that omits reach sends no reach — the agent keeps the face's", async () => {
+  // Omission is the one that must NOT reset here: a reach is a restriction the
+  // holder set, and an editor that dropped it would widen the face to anywhere.
+  const r = recorder({ profileId: "01P", version: 2, created: false, updatedAt: "2026-01-01T00:00:00Z" });
+  await personaProfilePut(r, { ...PARTIES, profileId: "01P", name: "Work", entries: [] });
+  assert.equal("reach" in r.sent[0].envelope.payload, false);
+  await personaProfilePut(r, {
+    ...PARTIES,
+    profileId: "01P",
+    name: "Work",
+    entries: [],
+    reach: { kind: "only", contextIds: ["ctx"] },
+  });
+  assert.deepEqual(r.sent[1].envelope.payload.reach, { kind: "only", contextIds: ["ctx"] });
+});
+
+test("a binding carries until, and a listing asks for retired faces only when told", async () => {
+  const b = recorder({ contextId: "ctx", personaDid: "did:key:zP", version: 3, boundAt: "2026-01-01T00:00:00Z" });
+  await personaBindingSet(b, {
+    ...PARTIES,
+    contextId: "ctx",
+    personaDid: "did:key:zP",
+    profileId: "01P",
+    until: "2026-10-05T18:00:00Z",
+  });
+  assert.equal(b.sent[0].envelope.payload.until, "2026-10-05T18:00:00Z");
+
+  const l = recorder({ profiles: [] });
+  await personaProfileList(l, { ...PARTIES });
+  await personaProfileList(l, { ...PARTIES, includeRetired: true });
+  assert.equal("includeRetired" in l.sent[0].envelope.payload, false);
+  assert.equal(l.sent[1].envelope.payload.includeRetired, true);
+});
+
+test("an attribute put sends endorsements only when there are some", async () => {
+  const r = recorder({ attributeId: "01J", version: 1, created: true, updatedAt: "2026-01-01T00:00:00Z" });
+  const base = {
+    ...PARTIES,
+    type: "skill.language",
+    valueType: "string",
+    value: "Rust",
+    provenance: { kind: "derived", source: "github", derivedAt: "2026-09-01T00:00:00Z" },
+  };
+  await personaAttributePut(r, { ...base, endorsements: [] });
+  await personaAttributePut(r, { ...base, endorsements: ["cred-1"] });
+  assert.equal("endorsements" in r.sent[0].envelope.payload, false);
+  assert.deepEqual(r.sent[1].envelope.payload.endorsements, ["cred-1"]);
+  assert.equal(r.sent[1].envelope.payload.provenance.kind, "derived");
 });

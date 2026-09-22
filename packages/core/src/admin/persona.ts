@@ -7,7 +7,7 @@
 // is deliberately incomplete: a wallet's holder identity is scoped to a
 // context, so every task in this file would come back `e.p.msg.forbidden` if a
 // wallet surface called it. That module says so in its own header, and CI greps
-// the built extension bundles for the thirteen task URIs below to keep the statement
+// the built extension bundles for every task URI below to keep the statement
 // true rather than merely written down.
 //
 // So this module is the other half, and it lives beside the console's other
@@ -19,7 +19,7 @@
 //
 // ## The gate
 //
-// The agent refuses all thirteen unless the caller is an **unscoped holder** —
+// The agent refuses every one of them unless the caller is an **unscoped holder** —
 // `Admin` *and* unrestricted scope (`require_super_admin`, not `role ==
 // Admin`). That distinction is the whole design: an administrator scoped to one
 // context who could read the pool would be reading identity data belonging to
@@ -124,6 +124,44 @@ import {
   type PersonaDisclosureHistoryPayload,
   type PersonaDisclosureHistoryResponsePayload,
 } from "@openvtc/trust-tasks/persona/disclosure/history/1.0/payload";
+import {
+  TYPE_URI as PROFILE_COMPOSE,
+  RESPONSE_TYPE_URI as PROFILE_COMPOSE_RESPONSE,
+  type PersonaProfileComposePayload,
+  type PersonaProfileComposeResponsePayload,
+  type ComposeClaim,
+} from "@openvtc/trust-tasks/persona/profile/compose/1.0/payload";
+import {
+  TYPE_URI as ATTRIBUTE_PROMOTE,
+  RESPONSE_TYPE_URI as ATTRIBUTE_PROMOTE_RESPONSE,
+  type PersonaAttributePromotePayload,
+  type PersonaAttributePromoteResponsePayload,
+} from "@openvtc/trust-tasks/persona/attribute/promote/1.0/payload";
+import {
+  TYPE_URI as PROFILE_RETIRE,
+  RESPONSE_TYPE_URI as PROFILE_RETIRE_RESPONSE,
+  type PersonaProfileRetirePayload,
+  type PersonaProfileRetireResponsePayload,
+} from "@openvtc/trust-tasks/persona/profile/retire/1.0/payload";
+import {
+  TYPE_URI as PROFILE_REINSTATE,
+  RESPONSE_TYPE_URI as PROFILE_REINSTATE_RESPONSE,
+  type PersonaProfileReinstatePayload,
+  type PersonaProfileReinstateResponsePayload,
+} from "@openvtc/trust-tasks/persona/profile/reinstate/1.0/payload";
+import {
+  TYPE_URI as PROFILE_USAGE,
+  RESPONSE_TYPE_URI as PROFILE_USAGE_RESPONSE,
+  type PersonaProfileUsagePayload,
+  type PersonaProfileUsageResponsePayload,
+} from "@openvtc/trust-tasks/persona/profile/usage/1.0/payload";
+import {
+  TYPE_URI as PROFILE_TIMELINE,
+  RESPONSE_TYPE_URI as PROFILE_TIMELINE_RESPONSE,
+  type PersonaProfileTimelinePayload,
+  type PersonaProfileTimelineResponsePayload,
+  type TimelineEvent,
+} from "@openvtc/trust-tasks/persona/profile/timeline/1.0/payload";
 
 /**
  * The two DIDs an envelope names, and **no `contextId`**.
@@ -171,6 +209,13 @@ export type PoolFacet = PersonaFacetListResponsePayload["facets"][number];
  * compares the two.
  */
 export type { FacetColour };
+
+/** One claim of a face being composed: a value typed now, or an attribute held. */
+export type { ComposeClaim };
+/** One thing that happened to a face — never a value, never a private label. */
+export type { TimelineEvent };
+/** Where a pool face may be worn. Absent on a context-local face. */
+export type FaceReach = NonNullable<PersonaProfilePutPayload["reach"]>;
 
 /** One place the holder's identities link, and what can be done about it. */
 export type CorrelationFinding = PersonaCorrelationAnalyzeResponsePayload["findings"][number];
@@ -341,6 +386,13 @@ export interface AttributePutParams extends PersonaHolderParams {
    * because "each time" bound to a session degrades into "once per login".
    */
   release?: AttributeRelease;
+  /**
+   * Vault ids of credentials in which someone endorses this value. Inventory,
+   * not evidence: the value stays whatever its `provenance` says, and the
+   * endorsements are not disclosed with it. Replaced whole by each put, like
+   * everything else here — an editor sends back what it loaded.
+   */
+  endorsements?: string[];
   /** Optimistic concurrency: the attribute must be at exactly this version.
    *  The agent's conflict rejection carries its own view of the record, so a
    *  caller does not have to re-read to find out what it lost to. */
@@ -382,6 +434,9 @@ export async function personaAttributePut(
     // edit away from freezing a resolved default into the record.
     ...(params.sensitivity !== undefined ? { sensitivity: params.sensitivity } : {}),
     ...(params.release !== undefined ? { release: params.release } : {}),
+    ...(params.endorsements !== undefined && params.endorsements.length > 0
+      ? { endorsements: params.endorsements }
+      : {}),
     ...(params.expectedVersion !== undefined ? { expectedVersion: params.expectedVersion } : {}),
   };
   return holderCall<PersonaAttributePutPayload, PersonaAttributePutResponsePayload>(
@@ -466,11 +521,18 @@ export async function personaAttributePurgeVersion(
  *  page size to ask for, not a cap on the result. */
 export async function personaProfileList(
   sender: TrustTaskSender,
-  params: PersonaHolderParams & { limit?: PersonaProfileListPayload["limit"]; cursor?: string },
+  params: PersonaHolderParams & {
+    limit?: PersonaProfileListPayload["limit"];
+    cursor?: string;
+    /** Include retired faces. Off by default, as at the agent: a picker that
+     *  offered a retired face back would undo the holder's decision. */
+    includeRetired?: boolean;
+  },
 ): Promise<PoolProfile[]> {
   const payload: PersonaProfileListPayload = {
     ...(params.limit !== undefined ? { limit: params.limit } : {}),
     ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
+    ...(params.includeRetired ? { includeRetired: true } : {}),
   };
   return collectPages("persona/profile/list", async (cursor) => {
     const res = await holderCall<PersonaProfileListPayload, PersonaProfileListResponsePayload>(
@@ -539,6 +601,12 @@ export interface ProfilePutParams extends PersonaHolderParams {
    */
   entries: PoolProfileEntry[];
   credentialRefs?: string[];
+  /**
+   * Where the face may be worn. **Omit to keep the face's current reach** —
+   * the one member a put does not reset by omission, because a reach is a
+   * restriction the holder set. To widen, send `{ kind: "anywhere" }`.
+   */
+  reach?: FaceReach;
   expectedVersion?: number;
 }
 
@@ -552,6 +620,7 @@ export async function personaProfilePut(
     entries: params.entries,
     ...(params.profileId !== undefined ? { profileId: params.profileId } : {}),
     ...(params.credentialRefs !== undefined ? { credentialRefs: params.credentialRefs } : {}),
+    ...(params.reach !== undefined ? { reach: params.reach } : {}),
     ...(params.expectedVersion !== undefined ? { expectedVersion: params.expectedVersion } : {}),
   };
   return holderCall<PersonaProfilePutPayload, PersonaProfilePutResponsePayload>(
@@ -645,6 +714,10 @@ export interface BindingSetParams extends PersonaHolderParams {
   /** What the context may call the face worn there. The context is never given
    *  the holder's own name for the face; omitted, it is given no name at all. */
   label?: string;
+  /** When wearing the face here ends on its own (RFC 3339). At it the binding
+   *  clears, and the face is retired if it is then worn nowhere — never
+   *  deleted. Must be in the future, and only with a face. */
+  until?: string;
   expectedVersion?: number;
 }
 
@@ -676,6 +749,7 @@ export async function personaBindingSet(
     ...(params.profileId !== undefined ? { profileId: params.profileId } : {}),
     ...(params.publicEntries !== undefined ? { publicEntries: params.publicEntries } : {}),
     ...(params.label !== undefined ? { label: params.label } : {}),
+    ...(params.until !== undefined ? { until: params.until } : {}),
     ...(params.expectedVersion !== undefined ? { expectedVersion: params.expectedVersion } : {}),
   };
   return holderCall<PersonaBindingSetPayload, PersonaBindingSetResponsePayload>(
@@ -909,4 +983,185 @@ export async function personaFacetDelete(
     "persona/facet/delete/1.0",
     payload,
   );
+}
+
+// ── A face's life: made where it is asked for, widened, ended, and read back ─
+
+export interface ProfileComposeParams extends PersonaHolderParams {
+  /** The context the face is composed for. */
+  contextId: string;
+  /** The holder's own name for the face. Never disclosed. */
+  name: string;
+  /** Typed values (local unless `share: "pool"`) and attributes already held.
+   *  At least one — the type says so. */
+  claims: PersonaProfileComposePayload["claims"];
+  /** Wear the new face as this persona in `contextId`, in the same act. */
+  personaDid?: string;
+  /** What the context may call the face. Only with `personaDid`. */
+  label?: string;
+  /** When wearing it there ends on its own. Only with `personaDid`. */
+  until?: string;
+}
+
+/**
+ * Compose a face for one context, where it is asked for.
+ *
+ * **Local by default**: a typed value stays in this face unless its claim says
+ * `share: "pool"`. Where the face lives follows from the claims — `scope` in
+ * the response says which — so there is no scope to pass and get wrong. Check
+ * each typed value with {@link personaCorrelationAnalyze}'s `candidate` while
+ * the holder is still typing; the response's count arrives after the write.
+ */
+export async function personaProfileCompose(
+  sender: TrustTaskSender,
+  params: ProfileComposeParams,
+): Promise<PersonaProfileComposeResponsePayload> {
+  const payload: PersonaProfileComposePayload = {
+    contextId: params.contextId,
+    name: params.name,
+    claims: params.claims,
+    ...(params.personaDid !== undefined ? { personaDid: params.personaDid } : {}),
+    ...(params.label !== undefined ? { label: params.label } : {}),
+    ...(params.until !== undefined ? { until: params.until } : {}),
+  };
+  return holderCall<PersonaProfileComposePayload, PersonaProfileComposeResponsePayload>(
+    sender,
+    params,
+    PROFILE_COMPOSE,
+    PROFILE_COMPOSE_RESPONSE,
+    "persona/profile/compose/1.0",
+    payload,
+  );
+}
+
+export interface AttributePromoteParams extends PersonaHolderParams {
+  contextId: string;
+  /** The context-local face. */
+  profileId: string;
+  /** Zero-based positions of the entries to make reusable. At least one. */
+  entries: PersonaAttributePromotePayload["entries"];
+  /** The face's version as read. Required: a position into a face edited
+   *  since would promote a different value than the holder chose. */
+  expectedVersion: number;
+}
+
+/**
+ * Make values a context-local face carries reusable across the holder's faces.
+ *
+ * **One-way.** The face moves into the pool with its id and every persona
+ * wearing it; a caller says so before sending and offers no undo.
+ */
+export async function personaAttributePromote(
+  sender: TrustTaskSender,
+  params: AttributePromoteParams,
+): Promise<PersonaAttributePromoteResponsePayload> {
+  const payload: PersonaAttributePromotePayload = {
+    contextId: params.contextId,
+    profileId: params.profileId,
+    entries: params.entries,
+    expectedVersion: params.expectedVersion,
+  };
+  return holderCall<PersonaAttributePromotePayload, PersonaAttributePromoteResponsePayload>(
+    sender,
+    params,
+    ATTRIBUTE_PROMOTE,
+    ATTRIBUTE_PROMOTE_RESPONSE,
+    "persona/attribute/promote/1.0",
+    payload,
+  );
+}
+
+export interface FaceParams extends PersonaHolderParams {
+  profileId: string;
+  /** The context of a context-local face. Omit for a pool face. */
+  contextId?: string;
+}
+
+/**
+ * Stop wearing a face anywhere, and keep it. Every binding to it is cleared
+ * (`unbound` names them); its values and disclosure history stay. Reversible
+ * with {@link personaProfileReinstate}.
+ */
+export async function personaProfileRetire(
+  sender: TrustTaskSender,
+  params: FaceParams & { expectedVersion?: number },
+): Promise<PersonaProfileRetireResponsePayload> {
+  const payload: PersonaProfileRetirePayload = {
+    profileId: params.profileId,
+    ...(params.contextId !== undefined ? { contextId: params.contextId } : {}),
+    ...(params.expectedVersion !== undefined ? { expectedVersion: params.expectedVersion } : {}),
+  };
+  return holderCall<PersonaProfileRetirePayload, PersonaProfileRetireResponsePayload>(
+    sender,
+    params,
+    PROFILE_RETIRE,
+    PROFILE_RETIRE_RESPONSE,
+    "persona/profile/retire/1.0",
+    payload,
+  );
+}
+
+/** Make a retired face wearable again. It is worn nowhere afterwards. */
+export async function personaProfileReinstate(
+  sender: TrustTaskSender,
+  params: FaceParams & { expectedVersion?: number },
+): Promise<PersonaProfileReinstateResponsePayload> {
+  const payload: PersonaProfileReinstatePayload = {
+    profileId: params.profileId,
+    ...(params.contextId !== undefined ? { contextId: params.contextId } : {}),
+    ...(params.expectedVersion !== undefined ? { expectedVersion: params.expectedVersion } : {}),
+  };
+  return holderCall<PersonaProfileReinstatePayload, PersonaProfileReinstateResponsePayload>(
+    sender,
+    params,
+    PROFILE_REINSTATE,
+    PROFILE_REINSTATE_RESPONSE,
+    "persona/profile/reinstate/1.0",
+    payload,
+  );
+}
+
+/** Where a face is worn now, with each binding's `until` and the face's reach. */
+export async function personaProfileUsage(
+  sender: TrustTaskSender,
+  params: FaceParams,
+): Promise<PersonaProfileUsageResponsePayload> {
+  const payload: PersonaProfileUsagePayload = {
+    profileId: params.profileId,
+    ...(params.contextId !== undefined ? { contextId: params.contextId } : {}),
+  };
+  return holderCall<PersonaProfileUsagePayload, PersonaProfileUsageResponsePayload>(
+    sender,
+    params,
+    PROFILE_USAGE,
+    PROFILE_USAGE_RESPONSE,
+    "persona/profile/usage/1.0",
+    payload,
+  );
+}
+
+/**
+ * A face's history, oldest first — **to the end**, like the listings above.
+ * No event carries a value or a private label, so it is safe to render whole.
+ */
+export async function personaProfileTimeline(
+  sender: TrustTaskSender,
+  params: FaceParams & { since?: string },
+): Promise<TimelineEvent[]> {
+  const payload: PersonaProfileTimelinePayload = {
+    profileId: params.profileId,
+    ...(params.contextId !== undefined ? { contextId: params.contextId } : {}),
+    ...(params.since !== undefined ? { since: params.since } : {}),
+  };
+  return collectPages("persona/profile/timeline", async (cursor) => {
+    const res = await holderCall<PersonaProfileTimelinePayload, PersonaProfileTimelineResponsePayload>(
+      sender,
+      params,
+      PROFILE_TIMELINE,
+      PROFILE_TIMELINE_RESPONSE,
+      "persona/profile/timeline/1.0",
+      cursor === undefined ? payload : { ...payload, cursor },
+    );
+    return { items: res.events ?? [], nextCursor: res.nextCursor };
+  });
 }

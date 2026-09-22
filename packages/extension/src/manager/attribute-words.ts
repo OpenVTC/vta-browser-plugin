@@ -37,6 +37,11 @@ export function provenanceWords(p: AttributeNode["provenance"]): {
     }
     case "generated":
       return { text: p.perVerifier ? "made per verifier" : "generated", tone: "ok" };
+    // Taken from a source the holder connected — nobody signed it, so it reads
+    // with the typed values rather than beside a credential. The source is a
+    // kind (`github`, `cvUpload`), never a handle, so it is safe to print.
+    case "derived":
+      return { text: `from ${p.source}`, tone: "off" };
     default:
       return { text: "you said so", tone: "off" };
   }
