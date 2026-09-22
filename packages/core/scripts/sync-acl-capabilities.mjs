@@ -99,6 +99,24 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
+// `ADDITIVE_CAPABILITIES`: held only where granted by name, never derived by a
+// role, and added on top of the narrowed set rather than narrowing it. Parsed
+// out of the const rather than assumed empty, because a console that did not
+// know one existed would compute an entry granted only that name as holding
+// nothing at all.
+const additiveDecl = /pub const ADDITIVE_CAPABILITIES: &\[Capability\] = &\[([\s\S]*?)\];/.exec(rust);
+if (!additiveDecl) {
+  console.error(
+    `no \`ADDITIVE_CAPABILITIES\` in ${aclSrc}.\n` +
+      `If the agent stopped declaring it, this script needs rewriting with it ` +
+      `rather than shipping a snapshot that silently says there are none.`,
+  );
+  process.exit(1);
+}
+const additive = [...additiveDecl[1].matchAll(/Capability::([A-Z][A-Za-z0-9]*)/g)].map((c) =>
+  kebab(c[1]),
+);
+
 const extMember =
   /CAPABILITIES_EXT_MEMBER: &str = "([^"]+)"/.exec(
     existsSync(join(commonRoot, "../vta-sdk/src/protocols/acl_management/entry.rs"))
@@ -126,6 +144,7 @@ const snapshot = {
   capabilities,
   roles,
   derived,
+  additive,
 };
 
 writeFileSync(OUT, `${JSON.stringify(snapshot, null, 2)}\n`);

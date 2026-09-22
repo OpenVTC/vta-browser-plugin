@@ -30,6 +30,8 @@ import {
   checkNarrowing,
   effectiveCapabilities,
   entryNarrowing,
+  narrowingToSend,
+  isAdditiveCapability,
   DERIVED_CAPABILITIES,
   isAclRole,
   type AclEntry,
@@ -116,11 +118,22 @@ function Capabilities({ entry }: { entry: AclEntry }) {
     );
   }
 
+  // Additive grants (`persona-holder`) sit outside the role, so they are named
+  // on their own line rather than folded into a count of the role's set.
+  const additive =
+    eff.additive.length > 0 ? (
+      <span style={{ fontFamily: font.mono, fontSize: t.xs }}>+ {eff.additive.join(", ")}</span>
+    ) : null;
+  const fromRole = eff.effective.filter((cap) => !isAdditiveCapability(cap));
+
   if (eff.unnarrowed) {
     return (
-      <span style={{ color: c.muted, fontSize: t.xs }}>
-        everything <strong>{entry.role}</strong> allows ({eff.derived.length})
-      </span>
+      <div style={{ display: "grid", gap: 2 }}>
+        <span style={{ color: c.muted, fontSize: t.xs }}>
+          everything <strong>{entry.role}</strong> allows ({eff.derived.length})
+        </span>
+        {additive}
+      </div>
     );
   }
 
@@ -129,10 +142,10 @@ function Capabilities({ entry }: { entry: AclEntry }) {
       <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "baseline" }}>
         <Pill tone="warn">narrowed</Pill>
         <span style={{ color: c.faint, fontSize: t.xs }}>
-          {eff.effective.length} of {eff.derived.length}
+          {fromRole.length} of {eff.derived.length}
         </span>
       </div>
-      {eff.effective.length === 0 ? (
+      {fromRole.length === 0 ? (
         // Reachable without anyone asking for it: `acl/change-role` moves the
         // role and leaves the stored narrowing alone, so an entry narrowed
         // within its old role can intersect to nothing under its new one.
@@ -141,9 +154,10 @@ function Capabilities({ entry }: { entry: AclEntry }) {
         </span>
       ) : (
         <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-word" }}>
-          {eff.effective.join(", ")}
+          {fromRole.join(", ")}
         </span>
       )}
+      {additive}
       {eff.unrecognised.length > 0 && (
         <span style={{ color: c.warn, fontSize: t.xs }}>
           not enforced here: {eff.unrecognised.join(", ")} — this agent is newer than this console
@@ -183,8 +197,10 @@ function NarrowCapabilities({
     // Preselect what the entry holds now, so opening the form and saving is a
     // no-op. An editor that opens on a blank selection turns "let me look" into
     // "narrow to nothing" for anyone who clicks the wrong button.
+    // Only the role's set is editable here; an additive grant is carried
+    // through by `narrowingToSend`, never ticked or unticked.
     const eff = effectiveCapabilities(entry.role, stored.names);
-    setKept(eff ? [...eff.effective] : []);
+    setKept(eff ? eff.effective.filter((cap) => !isAdditiveCapability(cap)) : []);
     setError(null);
     setOpen(true);
   };
@@ -221,7 +237,16 @@ function NarrowCapabilities({
     );
   }
 
-  const submit = (capabilities: string[]) => {
+  const heldAdditive = (stored.names ?? []).filter(isAdditiveCapability);
+  const narrowed = (stored.names ?? []).some((n) => !isAdditiveCapability(n));
+
+  const submit = (intent: "narrow" | "clear") => {
+    const plan = narrowingToSend(kept, stored.names, intent);
+    if (!plan.ok) {
+      setError(plan.reason);
+      return;
+    }
+    const capabilities = plan.capabilities;
     const check = checkNarrowing(entry.role, capabilities);
     if (!check.ok) {
       setError(check.reason);
@@ -270,10 +295,20 @@ function NarrowCapabilities({
         ))}
       </div>
       {kept.length === 0 && (
+        // Not expressible, and the reason is worth saying: the agent reads a
+        // list naming none of the role's capabilities as the whole role, so
+        // sending one would widen the entry, not empty it.
         <Note tone="danger">
-          Nothing ticked. This entry would keep its <strong>{entry.role}</strong> role and be able
-          to do none of what the role allows.
+          Nothing ticked. A narrowing cannot keep nothing — the agent would read it as everything
+          the <strong>{entry.role}</strong> role allows. To take that authority away, change the
+          role.
         </Note>
+      )}
+      {heldAdditive.length > 0 && (
+        <span style={{ fontSize: t.xs, color: c.faint }}>
+          Also holds <code>{heldAdditive.join(", ")}</code>, which sits outside the role and is kept
+          whichever button you press.
+        </span>
       )}
       {kept.length === derived.length && (
         // Not the same as clearing, and the difference only shows up later: an
@@ -288,7 +323,7 @@ function NarrowCapabilities({
       {error && <Note tone="danger">{error}</Note>}
       {pending && <ConsentCeremony pending={pending} />}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        <Button disabled={busy} onClick={() => submit(kept)}>
+        <Button disabled={busy || kept.length === 0} onClick={() => submit("narrow")}>
           {busy ? "Saving…" : "Narrow"}
         </Button>
         <Button
@@ -297,8 +332,9 @@ function NarrowCapabilities({
           // whatever the role implies. Offered only when there is a narrowing
           // to clear, so the widening button is absent on entries it would
           // silently no-op against.
-          disabled={busy || stored.names === undefined}
-          onClick={() => submit([])}
+          // An entry holding only an additive grant has nothing to clear.
+          disabled={busy || !narrowed}
+          onClick={() => submit("clear")}
         >
           Clear narrowing
         </Button>

@@ -23,11 +23,13 @@ import {
   ACL_CAPABILITIES,
   ACL_ROLES,
   DERIVED_CAPABILITIES,
+  ADDITIVE_CAPABILITIES,
   CAPABILITIES_EXT_MEMBER,
   capabilitiesFromExt,
   capabilitiesIntoExt,
   effectiveCapabilities,
   checkNarrowing,
+  narrowingToSend,
   entryNarrowing,
   aclUpdate,
 } from "../dist/admin/index.js";
@@ -75,6 +77,25 @@ test("every role derives what the agent says it derives", () => {
   }
 });
 
+test("the additive capabilities are the agent's", () => {
+  // A console that did not know `persona-holder` was additive computed an entry
+  // granted only that name as holding nothing — the snapshot predates it.
+  assert.deepEqual(sorted(ADDITIVE_CAPABILITIES), sorted(SNAPSHOT.additive));
+  for (const cap of ADDITIVE_CAPABILITIES) {
+    for (const role of ACL_ROLES) {
+      assert.ok(!DERIVED_CAPABILITIES[role].includes(cap), `${role} must not derive ${cap}`);
+    }
+  }
+});
+
+test("key-export is admin's alone", () => {
+  // VTI-VTA-003: export is gated separately from use. `initiator` keeps
+  // `key-mint` and does not get `key-export` with it.
+  for (const role of ACL_ROLES) {
+    assert.equal(DERIVED_CAPABILITIES[role].includes("key-export"), role === "admin", role);
+  }
+});
+
 test("the ext member is spelled the way the agent spells it", () => {
   // The one string that has to match byte for byte across two languages: a
   // narrowing under a misspelled namespace is silently ignored by the agent,
@@ -91,6 +112,58 @@ test("monitor derives nothing, and that is load-bearing", () => {
 });
 
 // ── Intersection ────────────────────────────────────────────────────────────
+
+test("an additive grant alone keeps the whole role, and adds itself", () => {
+  // The agent's rule: only non-additive names narrow. The earlier console read
+  // this entry as narrowed to nothing.
+  const e = effectiveCapabilities("admin", ["persona-holder"]);
+  assert.equal(e.unnarrowed, true);
+  assert.deepEqual(sorted(e.effective), sorted([...DERIVED_CAPABILITIES.admin, "persona-holder"]));
+  assert.deepEqual(e.unrecognised, []);
+});
+
+test("an additive grant beside a narrowing: narrowed, then added", () => {
+  const e = effectiveCapabilities("initiator", ["sign", "persona-holder"]);
+  assert.equal(e.unnarrowed, false);
+  assert.deepEqual(sorted(e.effective), ["persona-holder", "sign"]);
+});
+
+test("editing a narrowing carries an additive grant through", () => {
+  const stored = ["sign", "persona-holder"];
+  assert.deepEqual(narrowingToSend(["vault-read"], stored, "narrow"), {
+    ok: true,
+    capabilities: ["vault-read", "persona-holder"],
+  });
+  // Clearing widens back to the role and does NOT revoke the pool grant.
+  assert.deepEqual(narrowingToSend([], stored, "clear"), {
+    ok: true,
+    capabilities: ["persona-holder"],
+  });
+  // Without an additive grant, clearing is the empty list it always was.
+  assert.deepEqual(narrowingToSend([], ["sign"], "clear"), { ok: true, capabilities: [] });
+});
+
+test("narrowing to nothing is refused, because the agent would read it as everything", () => {
+  // `[]` is the agent's clear instruction and `["persona-holder"]` is the whole
+  // role plus the pool: neither means "nothing", and sending either to mean it
+  // would widen the entry instead. The earlier pane did exactly that.
+  assert.equal(narrowingToSend([], ["sign"], "narrow").ok, false);
+  assert.equal(narrowingToSend([], ["persona-holder"], "narrow").ok, false);
+  assert.equal(narrowingToSend(["persona-holder"], undefined, "narrow").ok, false);
+  // Keeping one is expressible, and is sent as asked.
+  assert.deepEqual(narrowingToSend(["sign"], undefined, "narrow"), {
+    ok: true,
+    capabilities: ["sign"],
+  });
+});
+
+test("an additive name is not refused for want of a role that carries it", () => {
+  // Paired with the refusal below it: the same role, a derived-set name it
+  // lacks, still refused. Whether the caller may confer `persona-holder` is the
+  // agent's check on the granter.
+  assert.deepEqual(checkNarrowing("reader", ["persona-holder"]), { ok: true });
+  assert.equal(checkNarrowing("reader", ["key-export"]).ok, false);
+});
 
 test("an entry with no narrowing holds its whole role", () => {
   const e = effectiveCapabilities("reader", undefined);
