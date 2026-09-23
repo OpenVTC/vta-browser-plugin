@@ -946,6 +946,35 @@ custom headers, so no preflight, and any status is a pass because reading a
 status at all proves the origin was allowed. Swapping it for a health endpoint
 would test a different policy than the one that breaks.
 
+## A consent window reports its decision before it closes (VTI-40)
+
+Every consent surface — site consent, task consent, the WebAuthn approver and
+persona disclosure — is a `confirm.html` popup, and the background reads the
+window's **removal** as a denial. The result message and `windows.onRemoved` are
+two events Chrome does not order, so a popup that sent its result and closed in
+the same tick could have an **Approve settled as a Deny**, silently (Keyring
+VTI-40). Two halves hold it, layered on purpose:
+
+- **The popup awaits the acknowledgement, then closes** (`consent-result.ts`),
+  and the background answers `sendResponse` only **after** settling
+  (`deliverConsentResult`). A popup following the protocol cannot be removed
+  before its decision lands.
+- **Close-means-deny waits `CLOSE_GRACE_MS`** (`consent-window.ts`), so a result
+  already in flight still wins. A microtask or zero timeout is not enough — the
+  result is a separate task on the worker's queue. The grace can only turn a
+  would-be denial into the decision actually sent; nothing but a result carrying
+  `approved: true` settles as approved.
+
+**Every consent window is opened through `openConsentWindow`**, which also
+settles as a denial when the window could not be opened.
+`tests/consent-window-race.test.mts` fails on a `chrome.windows.create(` or
+`chrome.windows.onRemoved` anywhere in `background.ts`.
+
+**What breaks it:** closing the popup without awaiting the send; acknowledging
+before settling, or not at all; denying on `onRemoved` without the grace; or a
+consent surface that opens its own window — the disclosure prompt did, with no
+`onRemoved` at all, and a closed one hung forever.
+
 ## Repo mechanics worth knowing before you start
 
 - **Build `core` before typechecking anything that depends on it.** Each

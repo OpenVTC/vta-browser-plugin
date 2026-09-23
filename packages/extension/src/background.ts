@@ -219,6 +219,7 @@ import {
 } from "./host-permissions.js";
 import { vetEgressUrl } from "./proxy-url.js";
 import { ConsentReplayLedger, replayKey } from "./consent-replay.js";
+import { deliverConsentResult, openConsentWindow, type ConsentDecision } from "./consent-window.js";
 
 /** Consent-gated requests awaiting their one exempt replay. In-memory by
  *  design: a service-worker restart loses it, and losing it costs one extra
@@ -700,10 +701,7 @@ chrome.runtime.onConnect.addListener((port) => {
 // ─── Consent coordination ───
 // A login request opens a consent popup and parks here until the popup
 // reports the user's decision (or is closed, which counts as a denial).
-const pendingConsents = new Map<
-  string,
-  (approved: boolean, remember: boolean, prfOutputB64u?: string, selectedDid?: string) => void
->();
+const pendingConsents = new Map<string, ConsentDecision>();
 
 /**
  * Size a consent popup as wide as the display sensibly allows.
@@ -820,52 +818,15 @@ async function requestConsent(args: {
       settle(approved, remember, selectedDid),
     );
 
-    chrome.windows.create({ url, type: "popup", ...bounds }, (win) => {
-      const winId = win?.id;
-      if (winId === undefined) {
-        // The window could not be opened. This used to `return` without
-        // settling, leaving the promise pending forever: the caller's `await`
-        // never resolved, no decision was ever produced, and nothing was logged
-        // in any context. From the outside that is indistinguishable from a
-        // request that never arrived — which is exactly how it presented, after
-        // the message had already been verified, de-duplicated, and acked to
-        // the mediator (so its queued copy was gone too).
-        //
-        // Settle as a DENIAL, never assent. A prompt the user never saw must
-        // not become an approval, and the rest of this file is built on
-        // "silence is not agreement".
-        //
-        // `lastError` is read inside the callback because that is the only
-        // place it exists; leaving it unread also emits an "unchecked
-        // runtime.lastError" warning that buries the real reason.
-        const why = chrome.runtime.lastError?.message ?? "no window was created";
-        console.error(
-          "[pnm consent] could not open the consent window — treating as a denial:",
-          why,
-        );
-        settle(false, false);
-        return;
-      }
-      // A window id proves creation succeeded; it does NOT prove the window is
-      // visible. `consentWindowBounds` derives left/top from
-      // `chrome.windows.getLastFocused()`, so a minimised window, a second
-      // display, or an undocked DevTools window can place the prompt somewhere
-      // the user never looks — and that is indistinguishable from no prompt at
-      // all, which is precisely the ambiguity that made the silent hang above
-      // so hard to find. Log where it went so "I see no popup" is answerable.
-      console.info(
-        "[pnm consent] consent window opened",
-        "id=", winId,
-        "bounds=", JSON.stringify(bounds),
-      );
-      // Closing the window without a decision is a denial.
-      const onClosed = (closedId: number) => {
-        if (closedId === winId) {
-          chrome.windows.onRemoved.removeListener(onClosed);
-          settle(false, false);
-        }
-      };
-      chrome.windows.onRemoved.addListener(onClosed);
+    // Closing the window without a decision is a denial; failing to open it
+    // is one too. `openConsentWindow` owns both, and the grace that keeps a
+    // decision already in flight from being overtaken by the close (VTI-40).
+    openConsentWindow({
+      url,
+      bounds,
+      deny: () => settle(false, false),
+      tag: "[pnm consent]",
+      what: "consent window",
     });
   });
 }
@@ -1134,15 +1095,16 @@ async function raiseDisclosureConsent(consentId: string): Promise<boolean> {
     };
     pendingConsents.set(consentId, (approved: boolean) => settle(approved));
 
-    chrome.windows.create({ url, type: "popup", ...bounds }, (win) => {
-      if (win?.id === undefined) {
-        const why = chrome.runtime.lastError?.message ?? "no window was created";
-        console.error(
-          "[pnm disclose] could not open the disclosure window — treating as a denial:",
-          why,
-        );
-        settle(false);
-      }
+    // Closing the window is a denial here too. This surface used to register no
+    // `onRemoved` at all, so a disclosure prompt closed with the X left the
+    // request pending forever — the page's promise never settled and the
+    // session copy of the request was never removed.
+    openConsentWindow({
+      url,
+      bounds,
+      deny: () => settle(false),
+      tag: "[pnm disclose]",
+      what: "disclosure window",
     });
   });
 }
@@ -1195,54 +1157,17 @@ async function requestTaskConsent(
       settle(approved, prfOutputB64u),
     );
 
-    chrome.windows.create({ url, type: "popup", ...bounds }, (win) => {
-      const winId = win?.id;
-      if (winId === undefined) {
-        // The window could not be opened. This used to `return` without
-        // settling, leaving the promise pending forever: the caller's `await`
-        // never resolved, no decision was ever produced, and nothing was logged
-        // in any context. From the outside that is indistinguishable from a
-        // request that never arrived — which is exactly how it presented, after
-        // the message had already been verified, de-duplicated, and acked to
-        // the mediator (so its queued copy was gone too).
-        //
-        // Settle as a DENIAL, never assent. A prompt the user never saw must
-        // not become an approval, and the rest of this file is built on
-        // "silence is not agreement".
-        //
-        // `lastError` is read inside the callback because that is the only
-        // place it exists; leaving it unread also emits an "unchecked
-        // runtime.lastError" warning that buries the real reason.
-        const why = chrome.runtime.lastError?.message ?? "no window was created";
-        console.error(
-          "[pnm consent] could not open the consent window — treating as a denial:",
-          why,
-        );
-        settle(false);
-        return;
-      }
-      // A window id proves creation succeeded; it does NOT prove the window is
-      // visible. `consentWindowBounds` derives left/top from
-      // `chrome.windows.getLastFocused()`, so a minimised window, a second
-      // display, or an undocked DevTools window can place the prompt somewhere
-      // the user never looks — and that is indistinguishable from no prompt at
-      // all, which is precisely the ambiguity that made the silent hang above
-      // so hard to find. Log where it went so "I see no popup" is answerable.
-      console.info(
-        "[pnm consent] consent window opened",
-        "id=", winId,
-        "bounds=", JSON.stringify(bounds),
-      );
-      // Closing the window without deciding is a denial. Never assent: silence
-      // is not agreement, and a task-consent prompt that timed out into an
-      // approval would be the single worst bug in this system.
-      const onClosed = (closedId: number) => {
-        if (closedId === winId) {
-          chrome.windows.onRemoved.removeListener(onClosed);
-          settle(false);
-        }
-      };
-      chrome.windows.onRemoved.addListener(onClosed);
+    // Closing the window without deciding is a denial, and so is a window that
+    // could not be opened. Never assent: silence is not agreement, and a
+    // task-consent prompt that timed out into an approval would be the single
+    // worst bug in this system. The grace in `openConsentWindow` only lets a
+    // decision the operator actually sent land first (VTI-40).
+    openConsentWindow({
+      url,
+      bounds,
+      deny: () => settle(false),
+      tag: "[pnm consent]",
+      what: "consent window",
     });
   });
 }
@@ -3304,9 +3229,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if ((message as { type?: string })?.type === RUNTIME_CONSENT_RESULT) {
-    const { consentId, approved, remember, prfOutputB64u, selectedDid } =
-      message as RuntimeConsentResult;
-    pendingConsents.get(consentId)?.(approved, !!remember, prfOutputB64u, selectedDid);
+    // Settle first, then acknowledge. The popup awaits this response before it
+    // closes, so its window cannot be removed — which reads as a denial — until
+    // the decision has already landed (VTI-40).
+    const matched = deliverConsentResult(pendingConsents, message as RuntimeConsentResult);
+    sendResponse({ ok: true, matched });
     return false;
   }
 

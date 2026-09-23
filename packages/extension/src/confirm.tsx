@@ -8,7 +8,6 @@ import { HOLDER_IDENTITY } from "./site-identity.js";
 import { extractAgentNames, withoutScheme } from "./agent-name.js";
 import "./theme.css";
 import {
-  RUNTIME_CONSENT_RESULT,
   RUNTIME_LIST_DIDS,
   RUNTIME_VERIFY_RP_DID,
   type DidRecordView,
@@ -26,6 +25,7 @@ import {
 import { base64url } from "@openvtc/vti-didcomm-js";
 import { runApproverUnlockCeremony } from "./webauthn-prf-unlock.js";
 import { DisclosureConsent } from "./disclosure-consent.js";
+import { consentResultSender } from "./consent-result.js";
 
 // Consent prompt shown in a popup window before the wallet logs into an RP.
 // The background opens it with the request details as query params and
@@ -85,21 +85,24 @@ const allowsHolder = params.get("allowHolder") === "1";
 // whether to approve it.
 const changedFromRpDid = params.get("changedFrom");
 
+// Sends the decision, waits for the background to acknowledge it, and only then
+// closes the window. Closing in the same tick let the window's removal overtake
+// the result and turn an Approve into a Deny (Keyring VTI-40) — see
+// `consent-result.ts` and `consent-window.ts`.
+const sendConsentResult = consentResultSender(consentId);
+
 function decide(
   approved: boolean,
   remember = false,
   prfOutputB64u?: string,
   selectedDid?: string,
 ): void {
-  chrome.runtime.sendMessage({
-    type: RUNTIME_CONSENT_RESULT,
-    consentId,
+  void sendConsentResult({
     approved,
     remember,
     ...(prfOutputB64u ? { prfOutputB64u } : {}),
     ...(selectedDid ? { selectedDid } : {}),
   });
-  window.close();
 }
 
 /** `collapseDid` as a plain string.
