@@ -76,6 +76,7 @@ import {
 } from "./host-permissions.js";
 import { encryptHolderSecretInPopup } from "./encrypt-holder.js";
 import { button, c, microLabel, t } from "./theme.js";
+import { DidQrButton } from "./did-qr-view.js";
 
 /** `chrome.storage.session` key holding the VTA DID of an onboarding that a
  *  host-permission dialog interrupted. Session-scoped: a UI breadcrumb that
@@ -468,7 +469,8 @@ export function OnboardView({
       <div style={box}>
         <h3 style={{ margin: 0 }}>Wallet onboarded ✓</h3>
         <small>
-          Your wallet&apos;s long-term identity is now <code style={mono}>{pendingConnect.holderDid}</code>.
+          Your wallet&apos;s long-term identity is now <code style={mono}>{pendingConnect.holderDid}</code>
+          <DidQrButton value={pendingConnect.holderDid} />.
         </small>
         <small style={{ color: "var(--w-muted)" }}>
           It&apos;s currently stored on this device <strong>without encryption</strong>. Anyone with
@@ -852,7 +854,10 @@ export function OnboardView({
           <span style={{ fontSize: t.xs, color: c.muted }}>
             That DID&apos;s own record claims this name. Connecting to:
           </span>
-          <code style={{ ...mono, fontSize: t.xs }}>{resolvedFrom.did}</code>
+          <span>
+            <code style={{ ...mono, fontSize: t.xs }}>{resolvedFrom.did}</code>
+            <DidQrButton value={resolvedFrom.did} />
+          </span>
         </div>
       )}
 

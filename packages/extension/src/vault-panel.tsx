@@ -38,6 +38,7 @@ import {
 } from "./bridge-protocol.js";
 import { useActiveConnection } from "./store.js";
 import { c, t } from "./theme.js";
+import { DidQrButton } from "./did-qr-view.js";
 
 const box: React.CSSProperties = { padding: 12, display: "grid", gap: 8 };
 const mono: React.CSSProperties = {
@@ -343,6 +344,7 @@ export function VaultPanel() {
                   title="DID the VTA will act AS when you click Use"
                 >
                   acts as: <code style={mono}>{e.principalDid}</code>
+                  <DidQrButton value={e.principalDid} />
                   <CopyButton text={e.principalDid} />
                 </div>
               )}

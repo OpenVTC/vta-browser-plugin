@@ -74,6 +74,7 @@ import { currencyOf, currencyWords, editReachWords, outdatedHolders } from "../d
 import { untilFromLocalInput, untilToLocalInput, untilWords } from "../binding-until.js";
 import { reachWords, retiredWords, timelineWords, unTellWords } from "../face-lifecycle.js";
 import { composeClaimsFrom, composedWords, type ComposeRow } from "../compose-claims.js";
+import { DidQrButton } from "../../did-qr-view.js";
 
 export const fieldStyle: React.CSSProperties = {
   boxSizing: "border-box",
@@ -1278,6 +1279,7 @@ export function DeleteProfile({
                 {phase.personas.map((did) => (
                   <span key={did} style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
                     {did}
+                    <DidQrButton value={did} />
                   </span>
                 ))}
               </>
@@ -1547,6 +1549,7 @@ export function DisclosureHistoryPanel({
         <div style={{ display: "grid", gap: 3 }}>
           <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
             {d.verifierDid}
+            <DidQrButton value={d.verifierDid} />
           </span>
           <span style={{ color: c.faint, fontSize: t.xs }}>in {d.contextId}</span>
         </div>
@@ -1558,6 +1561,7 @@ export function DisclosureHistoryPanel({
       render: (d) => (
         <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
           {d.personaDid}
+          <DidQrButton value={d.personaDid} />
         </span>
       ),
     },
@@ -1646,6 +1650,7 @@ export function DisclosureHistoryPanel({
                   <span key={`${o.verifierDid} ${o.contextId} ${o.personaDid}`} style={{ fontSize: t.sm }}>
                     <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
                       {o.verifierDid}
+                      <DidQrButton value={o.verifierDid} />
                     </span>{" "}
                     in {o.contextId} — {o.claimTypes.join(", ")}
                   </span>
@@ -2017,6 +2022,7 @@ export function BindingForm({
             <Label>PERSONA</Label>
             <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all", padding: "6px 0" }}>
               {initialDid}
+              <DidQrButton value={initialDid} />
             </span>
           </div>
         ) : (
@@ -2144,7 +2150,7 @@ export function FaceHistory({
               (usage.data?.usage ?? []).map((u) => (
                 <span key={`${u.contextId}\u0000${u.personaDid}`}>
                   in <strong>{contextName(u.contextId)}</strong>{" "}
-                  <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{u.personaDid}</span>
+                  <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{u.personaDid}</span><DidQrButton value={u.personaDid} />
                   {u.until ? <span style={{ color: c.faint }}> · {untilWords(u.until)}</span> : null}
                 </span>
               ))
