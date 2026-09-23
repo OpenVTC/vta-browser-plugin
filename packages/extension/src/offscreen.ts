@@ -2469,6 +2469,18 @@ async function mediatorVersion(
     if (typeof body.version === "string" && body.version) return { version: body.version };
     return { versionError: `${originOf(url) ?? url} answered readyz without a version` };
   } catch (e) {
+    // A fetch that fails at the network layer while this wallet holds a live
+    // session with the same mediator is a CORS refusal, not an outage: the
+    // mediator's health routes sit outside its CORS layer (fixed upstream,
+    // tdk-rs — health routes answer browsers from 0.29.3). Said structurally,
+    // never read off the message (R3.7).
+    if (e instanceof TypeError) {
+      return {
+        versionError:
+          "the mediator's /readyz does not answer a browser (it sends no CORS headers), " +
+          "so its release cannot be read from here",
+      };
+    }
     return { versionError: e instanceof Error ? e.message : String(e) };
   }
 }

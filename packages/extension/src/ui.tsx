@@ -31,16 +31,37 @@ export function Did({
   value,
   verified = false,
   size = t.sm,
+  href,
+  title,
 }: {
   value: string;
   verified?: boolean;
   size?: string;
+  /** Make the DID a link — the console points it at the DID's mail. A click
+   *  does not also reach a row or card it sits in. */
+  href?: string;
+  title?: string;
 }) {
   const parts = splitDid(value);
   const host = didHost(value);
+  const Tag = href ? "a" : "span";
   return (
-    <span
-      style={{ fontFamily: font.mono, fontSize: size, wordBreak: "break-all", lineHeight: 1.45 }}
+    <Tag
+      {...(href
+        ? {
+            href,
+            title: title ?? undefined,
+            onClick: (e: MouseEvent<HTMLAnchorElement>) => e.stopPropagation(),
+            className: "did-link",
+          }
+        : {})}
+      style={{
+        fontFamily: font.mono,
+        fontSize: size,
+        wordBreak: "break-all",
+        lineHeight: 1.45,
+        ...(href ? { color: "inherit", textDecoration: "none", borderBottom: `1px dotted ${c.faint}` } : {}),
+      }}
       // Screen readers get the same emphasis the visual treatment gives:
       // lead with the host rather than reading fifty opaque characters first.
       aria-label={host ? `DID at ${host}: ${value}` : value}
@@ -57,7 +78,7 @@ export function Did({
           {p.text}
         </span>
       ))}
-    </span>
+    </Tag>
   );
 }
 

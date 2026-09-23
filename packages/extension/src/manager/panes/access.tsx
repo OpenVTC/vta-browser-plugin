@@ -46,6 +46,7 @@ import { useAsync } from "../use-async.js";
 import { formatDate, isPast } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 import type { ContextSelection } from "../context-column.js";
+import { MailDid } from "../mail-did.js";
 
 const fieldStyle: React.CSSProperties = {
   boxSizing: "border-box",
@@ -570,7 +571,7 @@ export function AccessPane({
       header: "Subject",
       render: (e) => (
         <div style={{ display: "grid", gap: 2 }}>
-          <Did value={e.subject} />
+          <MailDid value={e.subject} />
           {e.label && <span style={{ color: c.muted, fontSize: t.xs }}>{e.label}</span>}
         </div>
       ),
@@ -609,7 +610,7 @@ export function AccessPane({
               <>
                 <strong>Revoking this entry takes away all of its authority.</strong>
                 <span>
-                  <Did value={p.subject} size={t.xs} /> loses the <strong>{p.role}</strong> role
+                  <MailDid value={p.subject} size={t.xs} /> loses the <strong>{p.role}</strong> role
                   {p.scopes?.length ? ` in ${p.scopes.join(", ")}` : " everywhere"}. Anything
                   running as that subject stops working immediately — including, if it is a
                   device or an agent you rely on, one you may not be watching.

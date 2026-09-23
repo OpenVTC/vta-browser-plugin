@@ -19,7 +19,7 @@
 // the wallet has a session record for; `probe` and `account/get` are what say
 // the mediator is actually answering.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   accountBook,
   accountHash,
@@ -64,6 +64,7 @@ import {
   bytesText,
   capTape,
   countText,
+  didLabel,
   directionGlyph,
   isTrouble,
   lensHref,
@@ -95,21 +96,33 @@ function useRoute(): LensRoute {
   return route;
 }
 
-function hostOf(did: string): string {
-  const parts = did.split(":");
-  const host = parts.length > 3 ? parts[3] : parts[2];
-  return host ? decodeURIComponent(host) : did;
-}
 
-/** An account, by the name the wallet knows it by or by its hash. */
+/** The relay the tables below are about, so an account in one can link to its
+ *  own mail on that relay. */
+const PairContext = createContext<{ mediatorDid: string; vtaDid: string } | null>(null);
+
+/** An account, by the name the wallet knows it by or by its hash — and a link
+ *  to that account's mail on this relay. */
 function Account({ hash, names }: { hash: string | undefined; names: Names }) {
+  const pair = useContext(PairContext);
   if (!hash) return <span style={{ color: c.faint }}>—</span>;
   const name = names.get(hash);
-  return (
-    <span title={hash} style={{ display: "inline-flex", gap: 6, alignItems: "baseline" }}>
+  const body = (
+    <>
       {name && <span style={{ fontWeight: 600 }}>{name}</span>}
       <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.faint }}>{shortHash(hash)}</span>
-    </span>
+    </>
+  );
+  const style = { display: "inline-flex", gap: 6, alignItems: "baseline" } as const;
+  if (!pair) return <span title={hash} style={style}>{body}</span>;
+  return (
+    <a
+      href={lensHref({ ...pair, account: hash })}
+      title={`${hash} — show this account's mail`}
+      style={{ ...style, color: "inherit", textDecoration: "none" }}
+    >
+      {body}
+    </a>
   );
 }
 
@@ -195,6 +208,8 @@ export function MediatorPane({ parties }: { parties: Parties }) {
     return pick ? { mediatorDid: pick.mediatorDid, vtaDid: pick.vtaDid } : undefined;
   }, [route.mediatorDid, route.vtaDid, relays.data, parties.service.did]);
 
+  const focus = route.did || route.account;
+
   return (
     <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
       <Panel
@@ -206,13 +221,27 @@ export function MediatorPane({ parties }: { parties: Parties }) {
       >
         {relays.error && <LoadError what="the relays this wallet uses" error={relays.error} />}
         {relays.loading && !relays.data && <Loading what="the relays this wallet uses" />}
-        {relays.data && (
+        {relays.data && !focus && (
           <RelayPicker relays={relays.data} selected={pair} onReload={relays.reload} />
         )}
-        <Locator relays={relays.data ?? []} initial={route.locate} />
+        <Locator initial={route.did} />
       </Panel>
-      {pair ? (
-        <RelayView key={`${pair.mediatorDid}|${pair.vtaDid}`} mediatorDid={pair.mediatorDid} vtaDid={pair.vtaDid} parties={parties} />
+      {route.did ? (
+        relays.data && (
+          <DidMail key={route.did} did={route.did} relays={relays.data} parties={parties} />
+        )
+      ) : pair ? (
+        route.account ? (
+          <AccountMail
+            key={`${pair.mediatorDid}|${pair.vtaDid}|${route.account}`}
+            mediatorDid={pair.mediatorDid}
+            vtaDid={pair.vtaDid}
+            account={route.account}
+            parties={parties}
+          />
+        ) : (
+          <RelayView key={`${pair.mediatorDid}|${pair.vtaDid}`} mediatorDid={pair.mediatorDid} vtaDid={pair.vtaDid} parties={parties} />
+        )
       ) : (
         relays.data && (
           <Note tone="warn">
@@ -253,7 +282,7 @@ function RelayPicker({
       >
         {relays.map((r) => (
           <option key={key(r)} value={key(r)}>
-            {hostOf(r.mediatorDid)} — {r.isInbox ? "inbox" : "outbound"} for {hostOf(r.vtaDid)}
+            {didLabel(r.mediatorDid)} — {r.isInbox ? "inbox" : "outbound"} for {didLabel(r.vtaDid)}
             {r.state === "live" ? "" : ` (${r.state})`}
           </option>
         ))}
@@ -265,90 +294,292 @@ function RelayPicker({
   );
 }
 
-/** "Where does this DID's mail go?" — resolve its DIDCommMessaging service. */
-function Locator({ relays, initial }: { relays: KnownRelay[]; initial: string | undefined }) {
+/** Show any DID's mail: its mediator, and what that mediator holds for it. */
+function Locator({ initial }: { initial: string | undefined }) {
   const [did, setDid] = useState(initial ?? "");
-  const [busy, setBusy] = useState(false);
-  const [found, setFound] = useState<MediatorLocation | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const locate = useCallback(async (value: string) => {
-    const v = value.trim();
+  useEffect(() => setDid(initial ?? ""), [initial]);
+  const go = () => {
+    const v = did.trim();
     if (!v.startsWith("did:")) {
       setError("That is not a DID.");
       return;
     }
-    setBusy(true);
     setError(null);
-    setFound(null);
-    try {
-      setFound(await mediatorOp<MediatorLocation>({ kind: "locate", did: v }));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (initial) {
-      setDid(initial);
-      void locate(initial);
-    }
-  }, [initial, locate]);
-
-  const standing = found?.mediatorDid ? relays.filter((r) => r.mediatorDid === found.mediatorDid) : [];
-
+    location.hash = lensHref({ did: v });
+  };
   return (
     <div style={{ display: "grid", gap: 8, borderTop: `1px solid ${c.lineSoft}`, paddingTop: 10 }}>
       <label htmlFor="lens-locate" style={{ fontSize: t.sm, fontWeight: 600 }}>
-        Where does a DID's mail go?
+        A DID's mail
       </label>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <input
           id="lens-locate"
           value={did}
           onChange={(e) => setDid(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && void locate(did)}
+          onKeyDown={(e) => e.key === "Enter" && go()}
           placeholder="did:webvh:…"
           style={{ flex: "1 1 320px", minWidth: 0, font: "inherit", fontFamily: font.mono, fontSize: t.sm, padding: "5px 8px" }}
         />
-        <Button onClick={() => void locate(did)} disabled={busy}>
-          {busy ? "Resolving…" : "Find its mediator"}
-        </Button>
+        <Button onClick={go}>Show its mail</Button>
+        {initial && (
+          <Button kind="quiet" onClick={() => (location.hash = lensHref({}))}>
+            Back to the relay
+          </Button>
+        )}
       </div>
       {error && <Note tone="danger">{error}</Note>}
-      {found && !found.mediatorDid && (
-        <Note tone="warn">
-          This DID names no mediator. Its document has no <code>DIDCommMessaging</code> service
-          that points at one, so nothing is relayed to it through a mediator.
-        </Note>
-      )}
-      {found?.mediatorDid && (
-        <div style={{ display: "grid", gap: 6, fontSize: t.sm }}>
+    </div>
+  );
+}
+
+// ── One DID's mail ──────────────────────────────────────────────────────────
+
+/**
+ * A DID's mail: find the mediator its document names, then — through a relay
+ * this wallet already uses there — show what that mediator holds for it.
+ *
+ * Never opens standing anywhere new (see `mayOperateMediator`): a DID whose
+ * mail goes somewhere this wallet is not signed in is answered by naming the
+ * mediator and saying so.
+ */
+function DidMail({ did, relays, parties }: { did: string; relays: KnownRelay[]; parties: Parties }) {
+  const found = useAsync(() => mediatorOp<MediatorLocation>({ kind: "locate", did }), [did]);
+  const [hash, setHash] = useState<string>();
+  useEffect(() => {
+    void accountHash(did).then(setHash);
+  }, [did]);
+
+  if (found.error) return <LoadError what="where this DID's mail goes" error={found.error} />;
+  if (!found.data || !hash) return <Loading what="where this DID's mail goes" />;
+  const mediatorDid = found.data.mediatorDid;
+  if (!mediatorDid) {
+    return (
+      <Note tone="warn">
+        <Did value={did} size={t.xs} /> names no mediator — its document has no{" "}
+        <code>DIDCommMessaging</code> service pointing at one — so no mediator holds mail for it.
+      </Note>
+    );
+  }
+  const here = relays.filter((r) => r.mediatorDid === mediatorDid);
+  const pair = here.find((r) => r.vtaDid === parties.service.did) ?? here[0];
+  if (!pair) {
+    return (
+      <Note tone="accent">
+        <div style={{ display: "grid", gap: 6 }}>
           <span>
-            Its mail goes to <Did value={found.mediatorDid} size={t.xs} />
+            Mail for <Did value={did} size={t.xs} /> goes to <Did value={mediatorDid} size={t.xs} />.
           </span>
-          {standing.length > 0 ? (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {standing.map((r) => (
-                <a
-                  key={r.vtaDid}
-                  href={lensHref({ mediatorDid: r.mediatorDid, vtaDid: r.vtaDid })}
-                  style={{ color: c.accent }}
-                >
-                  Look through it as {hostOf(r.vtaDid)}'s holder →
-                </a>
-              ))}
-            </div>
-          ) : (
-            <span style={{ color: c.muted }}>
-              Your wallet holds no session there, so it has no standing to look. The lens never
-              signs in to a relay your wallet does not already use.
+          <span style={{ color: c.muted }}>
+            This wallet holds no session there, so it has no standing to look. The lens never signs
+            in to a relay the wallet does not already use.
+          </span>
+        </div>
+      </Note>
+    );
+  }
+  return (
+    <AccountMail
+      mediatorDid={pair.mediatorDid}
+      vtaDid={pair.vtaDid}
+      account={hash}
+      did={did}
+      parties={parties}
+    />
+  );
+}
+
+/** One account's mail at one relay, looked through as `vtaDid`'s holder. */
+function AccountMail({
+  mediatorDid,
+  vtaDid,
+  account,
+  did,
+  parties,
+}: {
+  mediatorDid: string;
+  vtaDid: string;
+  account: string;
+  did?: string;
+  parties: Parties;
+}) {
+  const probe = useAsync(() => mediatorOp<MediatorProbe>({ kind: "probe", mediatorDid, vtaDid }), [mediatorDid, vtaDid]);
+  const sender = useMemo(() => new MediatorTaskSender(mediatorDid, vtaDid), [mediatorDid, vtaDid]);
+  if (probe.error) return <LoadError what="the relay" error={probe.error} />;
+  if (!probe.data) return <Loading what="the relay" />;
+  const caller: MediatorCaller = { holder: { did: probe.data.holderDid }, mediator: { did: mediatorDid } };
+  return (
+    <PairContext.Provider value={{ mediatorDid, vtaDid }}>
+      <AccountMailBody sender={sender} caller={caller} account={account} did={did} vtaDid={vtaDid} parties={parties} />
+    </PairContext.Provider>
+  );
+}
+
+function AccountMailBody({
+  sender,
+  caller,
+  account,
+  did,
+  vtaDid,
+  parties,
+}: {
+  sender: MediatorTaskSender;
+  caller: MediatorCaller;
+  account: string;
+  did: string | undefined;
+  vtaDid: string;
+  parties: Parties;
+}) {
+  const names = useNames(caller, vtaDid, parties);
+  const mine = useAsync(() => mediatorAccountGet(sender, caller, {}), [sender]);
+  const [ownHash, setOwnHash] = useState<string>();
+  useEffect(() => {
+    void accountHash(caller.holder.did).then(setOwnHash);
+  }, [caller.holder.did]);
+
+  if (mine.error) return <LoadError what="this wallet's standing at the relay" error={mine.error} />;
+  if (!mine.data || !ownHash) return <Loading what="this wallet's standing at the relay" />;
+  const own = account === ownHash;
+  const wide = standingOf(mine.data).mediatorWide;
+  const label = did ? didLabel(did) : (names.get(account) ?? shortHash(account));
+  const relayHref = lensHref({ mediatorDid: caller.mediator.did, vtaDid });
+
+  const header = (
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: t.sm }}>
+      <strong style={{ fontSize: t.md }}>Mail for {label}</strong>
+      <span style={{ color: c.muted }}>at {didLabel(caller.mediator.did)}</span>
+      <a href={relayHref} style={{ color: c.accent, fontSize: t.xs }}>
+        The whole relay →
+      </a>
+    </div>
+  );
+
+  if (!own && !wide) {
+    return (
+      <div style={{ display: "grid", gap: 12 }}>
+        {header}
+        <Note tone="accent">
+          <div style={{ display: "grid", gap: 8 }}>
+            <span>
+              The mediator records this wallet as a <strong>{mine.data.accountType}</strong> account
+              here, and a standard account sees only its own mail. To see another account's, the
+              mediator's administrator promotes this wallet's account to <code>admin</code>:
             </span>
-          )}
+            <GrantLine holderDid={caller.holder.did} mediatorDid={caller.mediator.did} />
+          </div>
+        </Note>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      {header}
+      <MailOf sender={sender} caller={caller} account={account} own={own} names={names} />
+      <LiveTraffic
+        mediatorDid={caller.mediator.did}
+        vtaDid={vtaDid}
+        names={names}
+        wide={false}
+        followDids={[account]}
+      />
+    </div>
+  );
+}
+
+/** What the mediator holds for one account: its queues, who has not collected
+ *  what it sent, and what is waiting for it. Read-only for anyone but the
+ *  wallet's own account — clearing someone else's queue belongs in the whole
+ *  relay's view, not behind a DID someone clicked. */
+function MailOf({
+  sender,
+  caller,
+  account,
+  own,
+  names,
+}: {
+  sender: MediatorTaskSender;
+  caller: MediatorCaller;
+  account: string;
+  own: boolean;
+  names: Names;
+}) {
+  const acct = useAsync(
+    () => mediatorAccountGet(sender, caller, { did: account, includeStats: true, includeActivity: true }),
+    [sender, account],
+  );
+  const status = useAsync(
+    () => mediatorQueueStatus(sender, caller, { ...(own ? {} : { did: account }), includePeers: 8 }),
+    [sender, account, own],
+  );
+  if (acct.error) {
+    return (
+      <Note tone="warn">
+        The mediator has no account it will describe for this DID ({acct.error}). A DID whose
+        document names this mediator but that has never signed in to it has no mail held there.
+      </Note>
+    );
+  }
+  if (!acct.data) return <Loading what="the account" />;
+  const a = acct.data as Account & {
+    lastReceivedAt?: number;
+    lastAuthenticatedAt?: number;
+    stats?: { messagesReceived?: number; messagesSent?: number };
+  };
+  return (
+    <Panel title="Its mail" description="What the mediator is holding for this account, and what this account sent that has not been collected.">
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", fontSize: t.sm }}>
+        <Pill tone="off">{a.accountType}</Pill>
+        {a.acl.blocked && <Pill tone="danger">blocked</Pill>}
+        {a.lastAuthenticatedAt !== undefined && (
+          <span style={{ color: c.muted }}>last signed in {formatInstant(a.lastAuthenticatedAt * 1000)}</span>
+        )}
+        {a.lastReceivedAt !== undefined && (
+          <span style={{ color: c.muted }}>· last message in {formatInstant(a.lastReceivedAt * 1000)}</span>
+        )}
+        {a.stats && (
+          <span style={{ color: c.muted }}>
+            · {countText(a.stats.messagesReceived)} received, {countText(a.stats.messagesSent)} sent, lifetime
+          </span>
+        )}
+      </div>
+      {status.error && <LoadError what="the queues" error={status.error} />}
+      {status.data && (
+        <div style={{ display: "grid", gap: 6 }}>
+          <DepthLine label="receive" depth={status.data.queues.receive} />
+          <DepthLine label="send" depth={status.data.queues.send} />
         </div>
       )}
+      {status.data?.receivePeers && status.data.receivePeers.length > 0 && (
+        <ReadOnlyPeers title="Waiting to be collected, from" peers={status.data.receivePeers} names={names} />
+      )}
+      {status.data?.sendPeers && status.data.sendPeers.length > 0 && (
+        <ReadOnlyPeers title="Sent, and not yet collected by" peers={status.data.sendPeers} names={names} />
+      )}
+      {status.data && !status.data.sendPeers?.length && !status.data.receivePeers?.length && (
+        <span style={{ color: c.faint, fontSize: t.sm }}>
+          Nothing is waiting in either direction.
+        </span>
+      )}
+    </Panel>
+  );
+}
+
+function ReadOnlyPeers({ title, peers, names }: { title: string; peers: PeerDepth[]; names: Names }) {
+  return (
+    <div style={{ display: "grid", gap: 6 }}>
+      <span style={{ fontSize: t.sm, fontWeight: 600 }}>{title}</span>
+      <Table<PeerDepth>
+        columns={[
+          { key: "peer", header: "Account", render: (r) => <Account hash={r.peer} names={names} /> },
+          { key: "count", header: "Waiting", render: (r) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{r.count}</span> },
+          { key: "bytes", header: "Size", render: (r) => bytesText(r.bytes) },
+          { key: "oldest", header: "Oldest", render: (r) => ageText(r.oldestAgeSeconds) },
+        ]}
+        rows={peers}
+        rowKey={(r) => r.peer}
+        empty="Nothing waiting."
+      />
     </div>
   );
 }
@@ -368,12 +599,21 @@ function RelayView({ mediatorDid, vtaDid, parties }: { mediatorDid: string; vtaD
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: t.sm }}>
-        <strong style={{ fontSize: t.md }}>{hostOf(mediatorDid)}</strong>
-        {p.version ? <Pill tone="off">release {p.version}</Pill> : <Pill tone="warn">version unknown</Pill>}
+        <strong style={{ fontSize: t.md }}>{didLabel(mediatorDid)}</strong>
+        {p.version ? (
+          <Pill tone="off">release {p.version}</Pill>
+        ) : (
+          // Not a warning: the lens does not need the release to work, and a
+          // mediator that refuses a task it cannot serve says so itself. The
+          // reason is kept for anyone who wants it.
+          <span title={p.versionError ?? ""} style={{ color: c.faint, fontSize: t.xs }}>
+            release not shown
+          </span>
+        )}
         <Pill tone={p.isInbox ? "ok" : "off"}>{p.isInbox ? "inbox" : "outbound hop"}</Pill>
         <span style={{ color: c.muted }}>
           as holder <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{shortHash(p.holderDid.split(":").pop() ?? "")}</span>{" "}
-          for {hostOf(vtaDid)}
+          for {didLabel(vtaDid)}
         </span>
       </div>
       {tooOld && (
@@ -383,13 +623,11 @@ function RelayView({ mediatorDid, vtaDid, parties }: { mediatorDid: string; vtaD
           threads a refusal back to the request that caused it. Nothing below would answer.
         </Note>
       )}
-      {p.versionError && (
-        <Note tone="warn">
-          The mediator's release could not be read ({p.versionError}). The lens carries on and
-          lets the mediator answer for itself.
-        </Note>
+      {!tooOld && (
+        <PairContext.Provider value={{ mediatorDid, vtaDid }}>
+          <Standing sender={sender} caller={caller} parties={parties} vtaDid={vtaDid} />
+        </PairContext.Provider>
       )}
-      {!tooOld && <Standing sender={sender} caller={caller} parties={parties} vtaDid={vtaDid} />}
     </div>
   );
 }
@@ -400,10 +638,10 @@ function useNames(caller: MediatorCaller, vtaDid: string, parties: Parties): Nam
     let live = true;
     const labelled: Array<[string, string]> = [
       [caller.holder.did, "this wallet"],
-      [vtaDid, `${hostOf(vtaDid)} (agent)`],
+      [vtaDid, `${didLabel(vtaDid)} (agent)`],
       [caller.mediator.did, "the mediator"],
     ];
-    if (parties.service.did !== vtaDid) labelled.push([parties.service.did, `${hostOf(parties.service.did)} (agent)`]);
+    if (parties.service.did !== vtaDid) labelled.push([parties.service.did, `${didLabel(parties.service.did)} (agent)`]);
     void accountBook(labelled.map(([d]) => d)).then((book) => {
       if (!live) return;
       const byDid = new Map(labelled);

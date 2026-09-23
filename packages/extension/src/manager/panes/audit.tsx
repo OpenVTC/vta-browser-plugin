@@ -36,6 +36,7 @@ import { useAsync } from "../use-async.js";
 import { formatInstant } from "../format.js";
 import type { Parties } from "../use-vta.js";
 import type { ContextSelection } from "../context-column.js";
+import { MailDid } from "../mail-did.js";
 
 const PAGE = 50;
 
@@ -117,7 +118,7 @@ function EntryDetail({ entry }: { entry: AuditEnvelope }) {
         <Field label="Actor">
           {entry.actor ? (
             entry.actor.startsWith("did:") ? (
-              <Did value={entry.actor} size={t.xs} />
+              <MailDid value={entry.actor} size={t.xs} />
             ) : (
               // Not every actor is a DID — a live agent records things like
               // `internal:webvh-rest-auth`. Rendering that through the DID
@@ -131,7 +132,7 @@ function EntryDetail({ entry }: { entry: AuditEnvelope }) {
         <Field label="Target">
           {entry.target ? (
             entry.target.startsWith("did:") ? (
-              <Did value={entry.target} size={t.xs} />
+              <MailDid value={entry.target} size={t.xs} />
             ) : (
               <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{entry.target}</span>
             )

@@ -94,10 +94,10 @@ export function DidDetail({
           <Did value={record.did} />
           <CopyButton value={record.did} title={`Copy ${record.did}`} />
           <a
-            href={lensHref({ locate: record.did })}
+            href={lensHref({ did: record.did })}
             style={{ color: c.accent, fontSize: t.xs, alignSelf: "center" }}
           >
-            Where does its mail go? →
+            Show its mail →
           </a>
         </div>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: t.xs, color: c.muted }}>

@@ -31,6 +31,7 @@ import { Destructive, ConsentCeremony, runMutation } from "../destructive.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 import { formatInstant } from "../format.js";
 import type { ContextSelection } from "../context-column.js";
+import { MailDid } from "../mail-did.js";
 
 const fieldStyle: React.CSSProperties = {
   width: "100%",
@@ -227,7 +228,7 @@ function EditContext({
         <dd style={{ margin: 0, fontFamily: font.mono }}>{record.id}</dd>
         <dt style={{ color: c.muted }}>DID</dt>
         <dd style={{ margin: 0 }}>
-          {record.did ? <Did value={record.did} /> : <span style={{ color: c.faint }}>none bound</span>}
+          {record.did ? <MailDid value={record.did} /> : <span style={{ color: c.faint }}>none bound</span>}
         </dd>
         <dt style={{ color: c.muted }}>Created</dt>
         <dd style={{ margin: 0, color: c.muted }}>{formatInstant(record.createdAt)}</dd>
