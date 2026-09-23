@@ -2716,15 +2716,22 @@ function MakeLocalFace({
           ...parties,
           contextId,
           name: name.trim(),
+          // No `provenance`, and its absence is the rule rather than an
+          // omission: the schema has no such member for a context-local entry
+          // and refuses one (`additionalProperties: false`). A value authored
+          // inside a context is self-asserted by construction — a
+          // credentialBacked provenance names a credentialId and a claimPath,
+          // and a context has nowhere to put either.
+          //
+          // It was sent here until a round-trip against a real agent returned
+          // "Additional properties are not allowed ('provenance' was
+          // unexpected)". TypeScript did not catch it: excess-property checking
+          // does not reach through the inferred return type of a `.map()`.
           entries: filled.map((r) => ({
             inline: {
               type: r.type.trim(),
               value: r.value.trim(),
               valueType: "string" as const,
-              // Typed here by the holder, about themselves. A local face has
-              // no other provenance available: a credential-backed value lives
-              // in the pool, which is the half this face cannot reach.
-              provenance: "selfAsserted" as const,
             },
           })),
         });
