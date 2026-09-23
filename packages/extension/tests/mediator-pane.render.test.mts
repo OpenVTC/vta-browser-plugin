@@ -103,7 +103,7 @@ test("mail the agent has not collected is named as the agent's, not left as a ha
   });
   const screen = await mount(l);
   assert.match(screen.text(), /Sent, and not yet collected by/);
-  assert.match(screen.text(), /agent agent\.example/);
+  assert.match(screen.text(), /agent\.example \(agent\)/);
   assert.match(screen.text(), /4m/, "the oldest message's age is shown");
 });
 

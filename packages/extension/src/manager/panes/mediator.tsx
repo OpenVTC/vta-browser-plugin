@@ -399,10 +399,10 @@ function useNames(caller: MediatorCaller, vtaDid: string, parties: Parties): Nam
     let live = true;
     const labelled: Array<[string, string]> = [
       [caller.holder.did, "this wallet"],
-      [vtaDid, `agent ${hostOf(vtaDid)}`],
+      [vtaDid, `${hostOf(vtaDid)} (agent)`],
       [caller.mediator.did, "the mediator"],
     ];
-    if (parties.service.did !== vtaDid) labelled.push([parties.service.did, `agent ${hostOf(parties.service.did)}`]);
+    if (parties.service.did !== vtaDid) labelled.push([parties.service.did, `${hostOf(parties.service.did)} (agent)`]);
     void accountBook(labelled.map(([d]) => d)).then((book) => {
       if (!live) return;
       const byDid = new Map(labelled);
@@ -445,6 +445,13 @@ function Standing({
   return (
     <>
       <OwnAccount sender={sender} caller={caller} account={account.data} names={names} onChanged={account.reload} />
+      <LiveTraffic
+        mediatorDid={caller.mediator.did}
+        vtaDid={vtaDid}
+        names={names}
+        wide={standing.mediatorWide}
+        followDids={vtaHash ? [account.data.did, vtaHash] : [account.data.did]}
+      />
       {standing.mediatorWide ? (
         <>
           <MediatorWide sender={sender} caller={caller} names={names} />
@@ -461,13 +468,6 @@ function Standing({
           <code style={{ wordBreak: "break-all" }}>{account.data.did}</code>.
         </Note>
       )}
-      <LiveTraffic
-        mediatorDid={caller.mediator.did}
-        vtaDid={vtaDid}
-        names={names}
-        wide={standing.mediatorWide}
-        followDids={vtaHash ? [account.data.did, vtaHash] : [account.data.did]}
-      />
     </>
   );
 }
@@ -971,7 +971,7 @@ function TapeRow({ line, names }: { line: TapeLine; names: Names }) {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "64px 14px 78px 92px 1fr",
+        gridTemplateColumns: "64px 14px 78px 150px 1fr",
         gap: 6,
         padding: "2px 10px",
         alignItems: "baseline",
@@ -981,7 +981,7 @@ function TapeRow({ line, names }: { line: TapeLine; names: Names }) {
       <span style={{ color: c.faint }}>{time}</span>
       <span>{directionGlyph(e.direction)}</span>
       <span style={{ color: trouble ? c.danger : c.text, fontWeight: trouble ? 650 : 400 }}>{e.stage}</span>
-      <span style={{ color: c.muted }}>
+      <span style={{ color: c.muted, whiteSpace: "nowrap" }}>
         {e.channel} {e.protocol}
       </span>
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
