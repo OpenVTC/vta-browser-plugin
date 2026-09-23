@@ -624,7 +624,9 @@ export function CreateDid({
                     ? "Your agent routes nothing through a mediator, so ticking this publishes no endpoint it can name."
                     : "Your agent's own mediator, which it names itself. Without this entry the DID is reachable only by whoever already knows how."}
               </span>
-              {mediatorDid ? <Did value={mediatorDid} size={t.xs} /> : null}
+              {/* Inside the checkbox's label: no QR button, which would be a
+                  control inside a control. */}
+              {mediatorDid ? <Did value={mediatorDid} size={t.xs} qr={false} /> : null}
             </span>
           </label>
           <label style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: t.sm, cursor: "pointer" }}>

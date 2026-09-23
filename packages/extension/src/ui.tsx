@@ -9,6 +9,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState
 import { splitDid, didHost, type DidPart } from "./did-display.js";
 import { displayAgentName, type AgentName } from "./agent-name.js";
 import { c, t, font, button, pill, type ButtonKind, type PillTone } from "./theme.js";
+import { DidQrButton } from "./did-qr-view.js";
 
 const ROLE_STYLE: Record<DidPart["role"], CSSProperties> = {
   // The method prefix is identical on every DID the user will ever see, so it
@@ -26,6 +27,10 @@ const ROLE_STYLE: Record<DidPart["role"], CSSProperties> = {
  * `verified` tints the host with the semantic "verified" colour, for use only
  * where resolution actually succeeded — it is a claim about cryptographic
  * state, not decoration.
+ *
+ * Every DID carries a QR button after it (`did-qr-view.tsx`), so a phone can
+ * scan any identifier this extension shows. `qr={false}` drops it — only for a
+ * DID that sits inside another control, where a nested button is invalid.
  */
 export function Did({
   value,
@@ -33,6 +38,7 @@ export function Did({
   size = t.sm,
   href,
   title,
+  qr = true,
 }: {
   value: string;
   verified?: boolean;
@@ -41,6 +47,33 @@ export function Did({
    *  does not also reach a row or card it sits in. */
   href?: string;
   title?: string;
+  /** Show the QR button. Off only inside a `<button>` or `<label>`. */
+  qr?: boolean;
+}) {
+  const did = <DidText value={value} verified={verified} size={size} href={href} title={title} />;
+  if (!qr) return did;
+  // One wrapper, so a flex or grid parent still sees a single item — the
+  // button trails the DID's last line rather than becoming a column of its own.
+  return (
+    <span style={{ minWidth: 0 }}>
+      {did}
+      <DidQrButton value={value} />
+    </span>
+  );
+}
+
+function DidText({
+  value,
+  verified,
+  size,
+  href,
+  title,
+}: {
+  value: string;
+  verified: boolean;
+  size: string;
+  href: string | undefined;
+  title: string | undefined;
 }) {
   const parts = splitDid(value);
   const host = didHost(value);
