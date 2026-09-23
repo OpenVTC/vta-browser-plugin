@@ -116,7 +116,8 @@ export function mediatorGrantCommand({
     ["holder", holderDid],
     ["mediator", mediatorDid],
   ] as const) {
-    if (!/^did:[a-z0-9]+:\S+$/.test(did)) {
+    // The DID-syntax characters only: this string is pasted into a shell.
+    if (!/^did:[a-z0-9]+:[A-Za-z0-9._:%-]+$/.test(did)) {
       throw new Error(`the ${what} is not a DID, so there is no command to print for it`);
     }
   }

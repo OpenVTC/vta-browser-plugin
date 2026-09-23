@@ -158,9 +158,10 @@ test("the offscreen document gates the monitor port on an extension-page sender"
     offscreen,
     /port\.name !== MEDIATOR_MONITOR_PORT\)[\s\S]{0,80}?if \(!isExtensionPagePort\(port\)\)/,
   );
+  assert.match(offscreen, /function isExtensionPagePort[\s\S]{0,120}?isExtensionContextSender\(port\.sender/);
   assert.match(
     offscreen,
-    /function isExtensionPagePort[\s\S]{0,200}?chrome\.runtime\.getURL\(""\)[\s\S]{0,120}?startsWith/,
+    /function isExtensionContextSender[\s\S]{0,200}?chrome\.runtime\.getURL\(""\)[\s\S]{0,120}?startsWith/,
   );
 });
 
@@ -229,4 +230,26 @@ test("verification mode is read from config, and anything else is unknown", () =
   assert.equal(verificationModeOf([{ key: "security.trust_task_verification", value: "enforce" }]), "enforce");
   assert.equal(verificationModeOf([]), "unknown");
   assert.equal(verificationModeOf(undefined), "unknown");
+});
+
+test("the offscreen document re-checks the sender for a lens op — a content script reaches it directly", () => {
+  const offscreen = src("offscreen.ts");
+  const branch = /msg\.type === OFFSCREEN_MEDIATOR\)\s*\{([\s\S]*?)doMediatorOp/.exec(offscreen);
+  assert.ok(branch);
+  assert.match(branch[1]!, /if \(!isExtensionContextSender\(sender\)\)/);
+});
+
+test("a monitor port's disconnect is heard before the session handshake, not after it", () => {
+  // Chrome does not replay a disconnect to a listener added later; a console
+  // closed during the handshake would otherwise leave a lease renewing forever.
+  const offscreen = src("offscreen.ts");
+  const onConnect = /port\.name !== MEDIATOR_MONITOR_PORT[\s\S]*?void runMonitor/.exec(offscreen)?.[0] ?? "";
+  assert.match(onConnect, /port\.onDisconnect\.addListener/);
+});
+
+test("a purge commits the plan the person was shown, not a fresh preview", () => {
+  const pane = src("manager/panes/mediator.tsx");
+  const commit = /commit=\{async \(\) => \{([\s\S]*?)\}\}/.exec(pane)?.[1] ?? "";
+  assert.match(commit, /shown\.current/);
+  assert.doesNotMatch(commit, /purgePreview\(/, "re-previewing in commit compares two fresh counts and always passes");
 });

@@ -608,27 +608,12 @@ function PeerTable({
             key: "clear",
             header: "",
             render: (r) => (
-              <Destructive<PurgePlan>
-                label="Clear"
-                preview={() => purgePreview(sender, caller, { queue, peer: r.peer })}
-                renderPreview={(plan) => (
-                  <>
-                    <strong>
-                      Remove {plan.matched} message{plan.matched === 1 ? "" : "s"} ({bytesText(plan.matchedBytes)}) from this
-                      wallet's {queue} queue{queue === "send" ? " addressed to" : " from"} {names.get(r.peer) ?? shortHash(r.peer)}.
-                    </strong>
-                    <span>
-                      {queue === "send"
-                        ? "They were never collected, and removing them means they never will be. If that account comes back, it will not receive them."
-                        : "They have not been read by this wallet. Anything among them — an approval request included — is gone."}{" "}
-                      If the queue changes before you confirm, nothing is removed and you are asked again.
-                    </span>
-                  </>
-                )}
-                commit={async () => {
-                  const plan = await purgePreview(sender, caller, { queue, peer: r.peer });
-                  await purgeWithPlan(sender, caller, plan);
-                }}
+              <PurgePeer
+                queue={queue}
+                peer={r.peer}
+                names={names}
+                sender={sender}
+                caller={caller}
                 onDone={onDone}
               />
             ),
@@ -639,6 +624,63 @@ function PeerTable({
         empty="Nothing waiting."
       />
     </div>
+  );
+}
+
+/**
+ * Clear one peer's messages from a queue — preview, then confirm, and the
+ * confirmation is bound to the preview the person read.
+ *
+ * `Destructive` hands `commit` only the force flag, so the plan it showed is
+ * kept here. Re-previewing inside `commit` would compare two counts taken a
+ * moment apart and pass, removing whatever arrived while the person was
+ * reading — an approval request among them, on the receive queue.
+ */
+function PurgePeer({
+  queue,
+  peer,
+  names,
+  sender,
+  caller,
+  onDone,
+}: {
+  queue: Queue;
+  peer: string;
+  names: Names;
+  sender: MediatorTaskSender;
+  caller: MediatorCaller;
+  onDone: () => void;
+}) {
+  const shown = useRef<PurgePlan | null>(null);
+  return (
+    <Destructive<PurgePlan>
+      label="Clear"
+      preview={async () => {
+        const plan = await purgePreview(sender, caller, { queue, peer });
+        shown.current = plan;
+        return plan;
+      }}
+      renderPreview={(plan) => (
+        <>
+          <strong>
+            Remove {plan.matched} message{plan.matched === 1 ? "" : "s"} ({bytesText(plan.matchedBytes)}) from this
+            wallet's {queue} queue{queue === "send" ? " addressed to" : " from"} {names.get(peer) ?? shortHash(peer)}.
+          </strong>
+          <span>
+            {queue === "send"
+              ? "They were never collected, and removing them means they never will be. If that account comes back, it will not receive them."
+              : "They have not been read by this wallet. Anything among them — an approval request included — is gone."}{" "}
+            If the queue changes before you confirm, nothing is removed and you are asked again.
+          </span>
+        </>
+      )}
+      commit={async () => {
+        const plan = shown.current;
+        if (!plan) throw new Error("there is no preview to confirm — preview it again");
+        await purgeWithPlan(sender, caller, plan);
+      }}
+      onDone={onDone}
+    />
   );
 }
 

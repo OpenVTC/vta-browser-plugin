@@ -523,6 +523,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_MEDIATOR) {
+    // The background gates the console on `sender.url`; this listener is also
+    // reachable directly by any content script (it carries our extension id),
+    // so the gate is repeated here rather than trusted to have happened.
+    if (!isExtensionContextSender(sender)) {
+      sendResponse({ ok: false, error: "mediator surface is not page-reachable" });
+      return false;
+    }
     doMediatorOp((message as OffscreenMediatorRequest).op)
       .then((result) => sendResponse({ ok: true, result } satisfies RuntimeMediatorResponse))
       .catch((e: unknown) => sendResponse(mediatorFailure(e)));
@@ -2533,8 +2540,14 @@ const MONITOR_LEASE_SECONDS = 60;
 const MONITOR_RENEW_MARGIN_MS = 20_000;
 
 function isExtensionPagePort(port: chrome.runtime.Port): boolean {
+  return isExtensionContextSender(port.sender ?? {});
+}
+
+/** A sender inside this extension — an extension page or the service worker —
+ *  rather than a content script, which carries our id but a web page's URL. */
+function isExtensionContextSender(sender: chrome.runtime.MessageSender): boolean {
   const base = chrome.runtime.getURL("");
-  return typeof port.sender?.url === "string" && port.sender.url.startsWith(base);
+  return typeof sender.url === "string" && sender.url.startsWith(base);
 }
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -2544,6 +2557,16 @@ chrome.runtime.onConnect.addListener((port) => {
     port.disconnect();
     return;
   }
+  // Registered now, not after the session is up: Chrome does not replay a
+  // disconnect to a listener added later, and a console closed during the
+  // handshake would otherwise leave a subscription renewing with nobody
+  // listening — holding one of the mediator's three slots for as long as this
+  // document lives.
+  const gone = { closed: false, onClose: [] as Array<() => void> };
+  port.onDisconnect.addListener(() => {
+    gone.closed = true;
+    for (const f of gone.onClose.splice(0)) f();
+  });
   const onFirst = (msg: unknown) => {
     port.onMessage.removeListener(onFirst);
     const open = msg as MonitorOpen;
@@ -2551,19 +2574,32 @@ chrome.runtime.onConnect.addListener((port) => {
       port.disconnect();
       return;
     }
-    void runMonitor(port, open);
+    void runMonitor(port, open, gone);
   };
   port.onMessage.addListener(onFirst);
 });
 
-async function runMonitor(port: chrome.runtime.Port, open: MonitorOpen): Promise<void> {
-  let connected = true;
+async function runMonitor(
+  port: chrome.runtime.Port,
+  open: MonitorOpen,
+  gone: { closed: boolean; onClose: Array<() => void> },
+): Promise<void> {
+  let connected = !gone.closed;
+  // Filled in once the session is up; until then a disconnect only marks it.
+  let stopNow: ((reason: string) => void) | undefined;
+  gone.onClose.push(() => {
+    connected = false;
+    stopNow?.("the console closed the feed");
+  });
   const post = (m: MonitorMessage) => {
     if (!connected) return;
     try {
       port.postMessage(m);
     } catch {
+      // A port that cannot be written to has no reader; keeping the
+      // subscription would only hold a slot at the mediator for nobody.
       connected = false;
+      stopNow?.("the console is no longer listening");
     }
   };
 
@@ -2628,12 +2664,14 @@ async function runMonitor(port: chrome.runtime.Port, open: MonitorOpen): Promise
       port.disconnect();
     }
   };
-  port.onDisconnect.addListener(() => {
-    connected = false;
+  stopNow = stop;
+  if (!connected) {
     stop("the console closed the feed");
-  });
+    return;
+  }
 
   const scheduleRenew = (expiresAt: string) => {
+    if (ended) return;
     const lapse = Date.parse(expiresAt);
     const wait = Number.isFinite(lapse)
       ? Math.max(5_000, lapse - Date.now() - MONITOR_RENEW_MARGIN_MS)

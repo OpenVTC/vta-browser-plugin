@@ -102,3 +102,8 @@ test("the mediator grant refuses to print a command for something that is not a 
   assert.throws(() => mediatorGrantCommand({ holderDid: "", mediatorDid: "did:webvh:x:y" }));
   assert.throws(() => mediatorGrantCommand({ holderDid: "did:key:z6Mk", mediatorDid: "https://relay" }));
 });
+
+test("the mediator grant refuses shell metacharacters in what it is told is a DID", () => {
+  assert.throws(() => mediatorGrantCommand({ holderDid: "did:key:z6Mk;rm", mediatorDid: "did:webvh:x:y" }));
+  assert.throws(() => mediatorGrantCommand({ holderDid: "did:key:z6Mk$(id)", mediatorDid: "did:webvh:x:y" }));
+});

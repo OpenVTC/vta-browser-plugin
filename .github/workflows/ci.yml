@@ -229,7 +229,7 @@ jobs:
       # confirm, options — must stay clean.
       - name: Assert the mediator operations surface is confined to the console and its signer
         run: |
-          for task in 'messaging/stats/show/0.1' 'messaging/queue/list/0.1' 'messaging/queue/status/0.1' 'messaging/queue/purge/0.1' 'messaging/account/list/0.1' 'messaging/account/update/0.1' 'messaging/message/list/0.1' 'messaging/message/delete/0.1' 'messaging/monitor/subscribe/0.1' 'messaging/monitor/unsubscribe/0.1'; do
+          for task in 'messaging/stats/show/0.1' 'messaging/queue/list/0.1' 'messaging/queue/status/0.1' 'messaging/queue/purge/0.1' 'messaging/account/get/0.1' 'messaging/account/list/0.1' 'messaging/account/update/0.1' 'messaging/message/list/0.1' 'messaging/message/delete/0.1' 'messaging/monitor/subscribe/0.1' 'messaging/monitor/unsubscribe/0.1'; do
             leaked=$(grep -rlF "$task" packages/extension/dist/ | grep -v -e '^packages/extension/dist/manager\.js$' -e '^packages/extension/dist/assets/offscreen-[A-Za-z0-9_-]*\.js$' || true)
             if [ -n "$leaked" ]; then
               echo "::error::$leaked contains $task — the mediator operations surface must not be reachable from a wallet surface. Only the console (manager.js) composes these and only the offscreen document signs them. Check for an import of @openvtc/pnm-core/mediator from a wallet entry, or a shared chunk."

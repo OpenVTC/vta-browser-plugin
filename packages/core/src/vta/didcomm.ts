@@ -184,7 +184,8 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
     // not carry a message says so on the hop it refused. Anyone else's report
     // is not an answer to this call.
     if (msg.type === PROBLEM_REPORT_TYPE) {
-      if (msg.from !== this.vta.did && msg.from !== this.mediator?.did) {
+      const from = typeof msg.from === "string" ? msg.from : undefined;
+      if (!from || (from !== this.vta.did && from !== this.mediator?.did)) {
         throw new VtaClientError(
           "e.p.msg.unauthorized",
           `problem report from ${msg.from ?? "(none)"} != ${this.vta.did}`,

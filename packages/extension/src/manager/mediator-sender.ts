@@ -52,6 +52,9 @@ export class MediatorTaskSender implements TrustTaskSender {
   }
 }
 
+/** Longer than two of the mediator's 30-second heartbeats. */
+const QUIET_MS = 75_000;
+
 /**
  * Open a live traffic feed. The feed lives as long as the returned `close` is
  * not called and the tab stays open; the offscreen document holds the
@@ -63,19 +66,50 @@ export function openMonitorPort(
 ): () => void {
   const port = chrome.runtime.connect({ name: MEDIATOR_MONITOR_PORT });
   let closed = false;
-  port.onMessage.addListener((m) => onMessage(m as MonitorMessage));
-  port.onDisconnect.addListener(() => {
+  let quiet: ReturnType<typeof setTimeout> | undefined;
+  const end = (reason: string) => {
     if (closed) return;
     closed = true;
-    // `lastError` is read so Chrome does not log it as unchecked; the ended
-    // message, when there was one, already said why.
+    if (quiet) clearTimeout(quiet);
+    onMessage({ kind: "ended", reason });
+    try {
+      port.disconnect();
+    } catch {
+      /* already gone */
+    }
+  };
+  // A port's disconnect reaches this page only when EVERY other end has
+  // closed, and the service worker holds one too — so an offscreen document
+  // torn down mid-feed can leave this port open and silent. The mediator sends
+  // a heartbeat every 30 s, so a feed quiet for much longer than that has ended
+  // whether or not anyone said so.
+  const arm = () => {
+    if (quiet) clearTimeout(quiet);
+    quiet = setTimeout(() => end("the feed went quiet — nothing, not even a heartbeat, for 75 s"), QUIET_MS);
+  };
+  port.onMessage.addListener((m) => {
+    const msg = m as MonitorMessage;
+    if (closed) return;
+    if (msg.kind === "ended") {
+      closed = true;
+      if (quiet) clearTimeout(quiet);
+      onMessage(msg);
+      return;
+    }
+    arm();
+    onMessage(msg);
+  });
+  port.onDisconnect.addListener(() => {
+    // `lastError` is read so Chrome does not log it as unchecked.
     void chrome.runtime.lastError;
-    onMessage({ kind: "ended", reason: "the feed disconnected" });
+    end("the feed disconnected");
   });
   port.postMessage({ kind: "open", ...open } satisfies MonitorOpen);
+  arm();
   return () => {
     if (closed) return;
     closed = true;
+    if (quiet) clearTimeout(quiet);
     port.disconnect();
   };
 }
