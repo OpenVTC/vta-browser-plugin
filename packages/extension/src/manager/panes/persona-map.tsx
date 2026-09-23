@@ -91,6 +91,7 @@ import { Icon } from "../icons.js";
 import { isSensitiveFor, maskedValue } from "../claim-sensitivity.js";
 import type { RevealTarget } from "../reveal-value.js";
 import { reachWords } from "../face-lifecycle.js";
+import { DidQrButton } from "../../did-qr-view.js";
 
 // ── Words for what the agent knows ──────────────────────────────────────────
 
@@ -1285,7 +1286,7 @@ export function IdentityMap({
                               )}
                               {linked && <Pill tone="danger">linked</Pill>}
                             </div>
-                            <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.faint, wordBreak: "break-all" }}>{p.did}</span>
+                            <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.faint, wordBreak: "break-all" }}>{p.did}<DidQrButton value={p.did} /></span>
                           </div>
                         );
                       })}
@@ -1614,7 +1615,7 @@ function DetailStrip({
     if (!hit) return <span>Never.</span>;
     return (
       <>
-        <span>{formatInstant(hit.disclosedAt)} → <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{hit.verifierDid}</span></span>
+        <span>{formatInstant(hit.disclosedAt)} → <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{hit.verifierDid}</span><DidQrButton value={hit.verifierDid} /></span>
         <span>as {personaLabel(hit.personaDid)} in {labelOf(hit.contextId)}{hit.purpose ? ` · “${hit.purpose}”` : ""}</span>
       </>
     );
@@ -1922,7 +1923,7 @@ function DetailStrip({
         <div style={{ display: "grid", gap: 3 }}>
           <span style={{ fontSize: t.xs, color: c.faint, textTransform: "uppercase", letterSpacing: 0.4 }}>In {ctx.label} you are</span>
           <span style={{ fontSize: t.md, fontWeight: 640 }}>{personaLabel(p.did)}</span>
-          <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.faint, wordBreak: "break-all" }}>{p.did}</span>
+          <span style={{ fontFamily: font.mono, fontSize: t.xs, color: c.faint, wordBreak: "break-all" }}>{p.did}<DidQrButton value={p.did} /></span>
         </div>
         {col("Wears", p.faceId ? (
           <>

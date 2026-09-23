@@ -164,6 +164,7 @@ function VtaSwitcher({
       >
         <span style={{ color: "var(--w-muted)" }}>
           VTA: <code style={mono}>{truncateDid(activeConnection.vtaDid)}</code>
+          <DidQrButton value={activeConnection.vtaDid} />
           {vtaList.length > 1 && (
             <span style={{ color: "var(--w-muted)", marginLeft: 6 }}>
               ({vtaList.length} configured)
@@ -853,7 +854,8 @@ function Popup() {
         ⚠ VTA advertises no transports
       </strong>
       <small style={{ color: "var(--w-danger)" }}>
-        <code style={mono}>{connection.vtaDid}</code> currently advertises neither{" "}
+        <code style={mono}>{connection.vtaDid}</code>
+        <DidQrButton value={connection.vtaDid} /> currently advertises neither{" "}
         <code>#vta-rest</code> nor <code>#vta-didcomm</code>. Wallet operations will fail until
         the VTA re-enables at least one transport (<code>vta services {`{rest,didcomm}`} enable</code>).
       </small>

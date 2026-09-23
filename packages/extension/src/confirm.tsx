@@ -26,6 +26,7 @@ import { base64url } from "@openvtc/vti-didcomm-js";
 import { runApproverUnlockCeremony } from "./webauthn-prf-unlock.js";
 import { DisclosureConsent } from "./disclosure-consent.js";
 import { consentResultSender } from "./consent-result.js";
+import { DidQrButton } from "./did-qr-view.js";
 
 // Consent prompt shown in a popup window before the wallet logs into an RP.
 // The background opens it with the request details as query params and
@@ -334,6 +335,7 @@ function DidField({
         <button type="button" onClick={copy} style={linkButtonStyle}>
           {copied ? "Copied ✓" : "Copy"}
         </button>
+        <DidQrButton value={value} />
       </div>
     </div>
   );

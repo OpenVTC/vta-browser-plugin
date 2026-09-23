@@ -120,6 +120,7 @@ import {
   type AgentMediator,
   type PathChoice,
 } from "./rooms-create-parts.js";
+import { DidQrButton } from "../../did-qr-view.js";
 
 /** The two halves of a room's identity. Neither is useful alone. */
 export interface RoomIdentity {
@@ -227,7 +228,7 @@ function Minted({ identity }: { identity: RoomIdentity }) {
         in this room's name.
       </p>
       <div style={{ display: "grid", gap: 3, fontFamily: font.mono, fontSize: t.xs }}>
-        <span style={{ wordBreak: "break-all" }}>{identity.did}</span>
+        <span style={{ wordBreak: "break-all" }}>{identity.did}<DidQrButton value={identity.did} /></span>
         <span style={{ wordBreak: "break-all" }}>{identity.signingKeyId}</span>
       </div>
     </Note>

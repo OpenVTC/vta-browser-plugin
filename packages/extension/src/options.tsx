@@ -24,6 +24,7 @@ import { AppShell } from "./app-shell.js";
 import { sendToBackground } from "./send-message.js";
 import { VaultPanel } from "./vault-panel.js";
 import { releaseSelectAfterPointerChange } from "./select-wheel.js";
+import { DidQrButton } from "./did-qr-view.js";
 import "./theme.css";
 
 const inputStyle: React.CSSProperties = {
@@ -479,6 +480,7 @@ export function AdvancedPane() {
               >
                 Copy DID
               </button>
+              <DidQrButton value={approverDidValue} size={16} />
               {/* State, not a button that always says the same thing. The
                   session is in-memory in the offscreen document, so it is
                   re-read rather than remembered — MV3 can evict it at any
