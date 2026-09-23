@@ -50,7 +50,8 @@ import type {
   MediatorProbe,
   MonitorMessage,
 } from "../../bridge-protocol.js";
-import { Button, Did, Note, Panel, Pill } from "../../ui.js";
+import { Button, CopyButton, Did, Note, Panel, Pill } from "../../ui.js";
+import { mediatorGrantCommand } from "../../grant-command.js";
 import { c, font, t } from "../../theme.js";
 import { Destructive } from "../destructive.js";
 import { Loading, LoadError, Table } from "../table.js";
@@ -462,13 +463,33 @@ function Standing({
         </>
       ) : (
         <Note tone="accent">
-          The mediator records this wallet as a <strong>{account.data.accountType}</strong> account,
-          so it shows this wallet's own queues and traffic and nothing mediator-wide. To see the
-          whole relay, its operator promotes this account to <code>admin</code> — the account is{" "}
-          <code style={{ wordBreak: "break-all" }}>{account.data.did}</code>.
+          <div style={{ display: "grid", gap: 8 }}>
+            <span>
+              The mediator records this wallet as a <strong>{account.data.accountType}</strong>{" "}
+              account, so it shows this wallet's own queues and traffic and nothing mediator-wide.
+              To see the whole relay, the mediator's administrator promotes this account to{" "}
+              <code>admin</code>:
+            </span>
+            <GrantLine holderDid={caller.holder.did} mediatorDid={caller.mediator.did} />
+            <span style={{ color: c.muted }}>
+              That makes this wallet's key for this agent an administrator of the relay — it can
+              then see every account's queues and traffic. It is never offered{" "}
+              <code>rootAdmin</code>.
+            </span>
+          </div>
         </Note>
       )}
     </>
+  );
+}
+
+function GrantLine({ holderDid, mediatorDid }: { holderDid: string; mediatorDid: string }) {
+  const cmd = mediatorGrantCommand({ holderDid, mediatorDid });
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+      <code style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all", flex: 1 }}>{cmd}</code>
+      <CopyButton value={cmd} title="Copy the command" />
+    </div>
   );
 }
 

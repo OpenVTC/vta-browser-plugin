@@ -84,3 +84,41 @@ export function grantCommand({ ephemeralDid, adminScope, context }: GrantCommand
 export function needsSuperAdminOperator(adminScope: AdminScope): boolean {
   return adminScope === "unrestricted";
 }
+
+/**
+ * The command a mediator's administrator runs to let this wallet see the whole
+ * relay: promote the account the wallet signs in as — this agent's holder — to
+ * `admin`.
+ *
+ * Built here beside the agent grant for the same reason that one is: a printed
+ * command is a security decision. Two ways to get it wrong are silent:
+ *
+ *  - **the wrong DID.** The mediator account is the per-agent *holder*, not the
+ *    agent and not the relay. Printing the agent's DID promotes the agent — a
+ *    different account, and one the operator may well not intend to make an
+ *    administrator of anything.
+ *  - **the wrong role.** `rootAdmin` would let whatever holds this key read
+ *    other accounts' message bodies and change the running mediator. The lens
+ *    needs `admin` and nothing more, and `pnm messaging grant` does not offer
+ *    `rootAdmin` at all.
+ *
+ * `--mediator` is always named: an operator running this from a pnm configured
+ * for a different mediator would otherwise promote the account there.
+ */
+export function mediatorGrantCommand({
+  holderDid,
+  mediatorDid,
+}: {
+  holderDid: string;
+  mediatorDid: string;
+}): string {
+  for (const [what, did] of [
+    ["holder", holderDid],
+    ["mediator", mediatorDid],
+  ] as const) {
+    if (!/^did:[a-z0-9]+:\S+$/.test(did)) {
+      throw new Error(`the ${what} is not a DID, so there is no command to print for it`);
+    }
+  }
+  return `pnm messaging grant ${holderDid} --role admin --mediator ${mediatorDid}`;
+}

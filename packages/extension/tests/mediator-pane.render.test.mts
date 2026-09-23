@@ -89,6 +89,11 @@ test("a standard account sees its own queues and is told how to see more — and
   assert.match(screen.text(), /This wallet's account/);
   assert.match(screen.text(), /records this wallet as a standard account/);
   assert.match(screen.text(), /promotes this account to admin/);
+  assert.match(
+    screen.text(),
+    new RegExp(`pnm messaging grant ${HOLDER} --role admin --mediator ${RELAY}`),
+    "the grant names the holder (the account), not the agent",
+  );
   assert.ok(!l.tasks.includes("messaging/stats/show/0.1"), "a standard account was asked for mediator statistics");
   assert.ok(!l.tasks.includes("messaging/queue/list/0.1"));
   assert.doesNotMatch(screen.text(), /Queue pressure/);
