@@ -44,7 +44,7 @@ export type IconName =
   // Sections, one per `SectionId`.
   | "contexts" | "keys" | "dids" | "did-templates"
   | "credentials" | "persona" | "memory" | "app-state" | "rooms"
-  | "services" | "maintenance" | "audit"
+  | "services" | "mediator" | "maintenance" | "audit"
   | "access" | "approvals" | "policy" | "sessions"
   // Attribute families, one per `AttributeFamily`.
   | "fam-identity" | "fam-contact" | "fam-public" | "fam-gated" | "fam-unregistered"
@@ -81,6 +81,9 @@ const PATHS: Record<IconName, string> = {
     "M12 8.5V6.9M12 17.1v-1.6M8.5 12H6.9M17.1 12h-1.6",
   services:
     "M7.9 6.4h5.9a2.9 2.9 0 0 1 0 5.8h-3.6a2.9 2.9 0 0 0 0 5.8h5.9",
+  // A hub with three spokes: a relay, and the accounts whose mail it carries.
+  mediator:
+    "M10 10.5 6.8 7.3M14 10.5l3.2-3.2M12 14.6v3.4",
   maintenance:
     "M20 5.2 16.9 8.3a1.4 1.4 0 0 1-2 0l-.7-.7a1.4 1.4 0 0 1 0-2L17.3 2.5a5.4 5.4 0 0 0-6.6 7.3l-7.1 7.1a2 2 0 0 0 2.8 2.8l7.1-7.1A5.4 5.4 0 0 0 20 5.2z",
   audit:
@@ -129,6 +132,7 @@ const SHAPES: Partial<Record<IconName, string>> = {
   "app-state": `<rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2.6"/><circle cx="6.7" cy="6.85" r=".75" fill="currentColor" stroke="none"/><circle cx="9.2" cy="6.85" r=".75" fill="currentColor" stroke="none"/>`,
   rooms: `<rect x="3.6" y="4.4" width="16.8" height="15.2" rx="2.4"/><circle cx="12" cy="12" r="3.5"/>`,
   services: `<circle cx="5.6" cy="6.4" r="2.3"/><circle cx="18.4" cy="17.6" r="2.3"/>`,
+  mediator: `<circle cx="12" cy="12" r="2.6"/><circle cx="5.3" cy="5.8" r="2"/><circle cx="18.7" cy="5.8" r="2"/><circle cx="12" cy="20" r="2"/>`,
   audit: `<circle cx="7" cy="7.5" r="1.7"/><circle cx="7" cy="12" r="1.7"/><circle cx="7" cy="16.5" r="1.7"/>`,
   access: `<circle cx="7.4" cy="8.1" r="2.9"/>`,
   approvals: `<circle cx="12" cy="12" r="8.3"/>`,

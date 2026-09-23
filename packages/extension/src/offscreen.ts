@@ -76,6 +76,8 @@ import {
   vtaListDids,
   VtaSession,
   verifyDid,
+  buildTrustTask,
+  verifyTrustTaskReply,
 } from "@openvtc/pnm-core";
 import {
   verifyDisclosureStepUp,
@@ -172,7 +174,27 @@ import {
   type SignTrustTaskResult,
   type VerifyRpDidResult,
 } from "./bridge-protocol.js";
+import {
+  MEDIATOR_MONITOR_PORT,
+  OFFSCREEN_MEDIATOR,
+  type KnownRelay,
+  type MediatorOp,
+  type MediatorOpResult,
+  type MonitorMessage,
+  type MonitorOpen,
+  type OffscreenMediatorRequest,
+  type RuntimeMediatorResponse,
+} from "./bridge-protocol.js";
 import { relayFailure } from "./relay-failure.js";
+import { isLensTask, knownRelays, mayOperateMediator } from "./mediator-standing.js";
+import {
+  MonitorSequencer,
+  monitorBatchOf,
+  monitorSubscribe,
+  monitorUnsubscribe,
+  type MediatorCaller,
+  type MonitorFilter,
+} from "@openvtc/pnm-core/mediator";
 
 // Request durable IndexedDB on offscreen-document load. The wallet's
 // irreplaceable key material (the v4 holder records) lives in
@@ -498,6 +520,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_MEDIATOR) {
+    doMediatorOp((message as OffscreenMediatorRequest).op)
+      .then((result) => sendResponse({ ok: true, result } satisfies RuntimeMediatorResponse))
+      .catch((e: unknown) => sendResponse(mediatorFailure(e)));
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_REQUEST_TASK) {
@@ -2347,6 +2375,310 @@ async function createWarmSession(
     );
   }
   return conn;
+}
+
+// ─── Mediator Lens ───────────────────────────────────────────────────────────
+//
+// The console's view of a mediator, over the session the wallet already holds
+// with it. A mediator answers Trust Tasks addressed to its own DID, so the
+// channel below is an ordinary `DidcommVtaTransport` whose "VTA" is the
+// mediator and which has no forward wrap: the authcrypt goes straight to the
+// relay that terminates it. Everything else is inherited — the holder signs the
+// document (SPEC §7.2 item 7a), the reply is matched by `thid` and its proof
+// checked against the mediator's DID, and a refusal arrives as a coded error.
+
+/** A refusal the lens raises itself, before any mediator is asked. */
+class MediatorLensError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "MediatorLensError";
+  }
+}
+
+function mediatorFailure(e: unknown): RuntimeMediatorResponse {
+  if (e instanceof MediatorLensError) return { ok: false, error: e.message, code: e.code };
+  return relayFailure(e);
+}
+
+/** Every (relay, agent) pair this document has opened a session for. */
+function pooledPairs(): { mediatorDid: string; vtaDid: string }[] {
+  return statusSnapshot().map(({ mediatorDid, vtaDid }) => ({ mediatorDid, vtaDid }));
+}
+
+interface LensSession {
+  conn: MediatorConnection;
+  channel: DidcommVtaTransport;
+  caller: MediatorCaller;
+  isInbox: boolean;
+}
+
+/**
+ * The channel to `mediatorDid`, authenticated as `vtaDid`'s holder — refused
+ * unless the wallet already uses that relay for that agent (`mayOperateMediator`
+ * says why that is the whole boundary).
+ */
+async function lensSession(mediatorDid: string, vtaDid: string): Promise<LensSession> {
+  const settings = await getSettings();
+  const decision = mayOperateMediator(
+    { mediatorDid, vtaDid },
+    { inboxes: settings.inboxes ?? {}, pooled: pooledPairs() },
+  );
+  if (!decision.ok) throw new MediatorLensError(decision.code, decision.reason);
+  const conn = await getWarmSession(mediatorDid, vtaDid);
+  const { identity: holder, signing } = await loadHolder(vtaDid);
+  const channel = new DidcommVtaTransport({
+    bridge: new MediatorSessionBridge(conn),
+    holder,
+    signing,
+    // The mediator is the counterparty: its key-agreement key is the authcrypt
+    // recipient and its DID the audience the proof binds. No `mediator` option,
+    // so no forward wrap — this message is for the relay itself.
+    vta: conn.mediator,
+    timeoutMs: 20_000,
+  });
+  return {
+    conn,
+    channel,
+    caller: { holder: { did: holder.did }, mediator: { did: conn.mediator.did } },
+    isInbox: decision.isInbox,
+  };
+}
+
+/** The mediator's release, from its public `readyz`. Best effort: a failure is
+ *  reported, never thrown, because the lens can still say what it found. */
+async function mediatorVersion(
+  mediatorDid: string,
+): Promise<{ version?: string; versionError?: string }> {
+  try {
+    const { restEndpoint } = await resolveMediatorEndpoint(mediatorDid, {
+      netPolicy: walletNetPolicy(),
+    });
+    const url = `${restEndpoint.replace(/\/+$/, "")}/readyz`;
+    const res = await withFetchTimeout(undefined, 5_000)(url, { redirect: "error" });
+    const body = (await res.json().catch(() => ({}))) as { version?: unknown };
+    if (typeof body.version === "string" && body.version) return { version: body.version };
+    return { versionError: `${originOf(url) ?? url} answered readyz without a version` };
+  } catch (e) {
+    return { versionError: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+async function doMediatorOp(op: MediatorOp): Promise<MediatorOpResult> {
+  switch (op.kind) {
+    case "task": {
+      // An allow-list on top of the mediator's own authorisation — see
+      // `LENS_TASK_TYPES` for what is absent and why.
+      if (!isLensTask(op.params.type)) {
+        throw new MediatorLensError(
+          "mediator/task-not-offered",
+          `${op.params.type} is not something the lens runs.`,
+        );
+      }
+      const { channel, caller } = await lensSession(op.mediatorDid, op.vtaDid);
+      // Minted here, from the two members the carrier may carry: the device
+      // decides issuer, recipient, id and time, and the channel signs.
+      const envelope = buildTrustTask(op.params.type, op.params.payload, {
+        issuer: caller.holder.did,
+        recipient: caller.mediator.did,
+      });
+      const result = await channel.send<Record<string, unknown>>(envelope, {
+        expectedResponseType: `${op.params.type}#response`,
+      });
+      return { kind: "accepted", result };
+    }
+    case "probe": {
+      const { caller, isInbox } = await lensSession(op.mediatorDid, op.vtaDid);
+      return {
+        mediatorDid: op.mediatorDid,
+        vtaDid: op.vtaDid,
+        holderDid: caller.holder.did,
+        isInbox,
+        ...(await mediatorVersion(op.mediatorDid)),
+      };
+    }
+    case "locate": {
+      const services = await resolveVtaServices(op.did);
+      const mediatorDid = services.didcomm?.mediatorDid ?? services.tsp?.mediatorDid;
+      return { did: op.did, ...(mediatorDid ? { mediatorDid } : {}) };
+    }
+    case "relays": {
+      const settings = await getSettings();
+      const states = new Map(statusSnapshot().map((s) => [`${s.mediatorDid}|${s.vtaDid}`, s.state]));
+      return knownRelays(
+        { inboxes: settings.inboxes ?? {}, pooled: pooledPairs() },
+        (p) => states.get(`${p.mediatorDid}|${p.vtaDid}`),
+      ) satisfies KnownRelay[];
+    }
+  }
+}
+
+// ── Live traffic ────────────────────────────────────────────────────────────
+//
+// One subscription per console port, owned here. The port's lifetime is the
+// subscription's: the console tab closing disconnects it and the lease is
+// released at once, and this document being torn down (normal MV3 operation)
+// lets it lapse within one short lease — a closed tab must not hold one of the
+// mediator's three per-account slots for long.
+//
+// Batches arrive as frames *from the mediator* on the session, which
+// `onMediatorFrame` delivers without ever touching the inbound pending store:
+// they are live-only telemetry the mediator never stores, so there is nothing
+// for persist-before-ack to protect.
+
+const MONITOR_LEASE_SECONDS = 60;
+/** Renew this long before the lease lapses. */
+const MONITOR_RENEW_MARGIN_MS = 20_000;
+
+function isExtensionPagePort(port: chrome.runtime.Port): boolean {
+  const base = chrome.runtime.getURL("");
+  return typeof port.sender?.url === "string" && port.sender.url.startsWith(base);
+}
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== MEDIATOR_MONITOR_PORT) return;
+  if (!isExtensionPagePort(port)) {
+    console.warn(`[mediator lens] refusing monitor port from ${port.sender?.url}`);
+    port.disconnect();
+    return;
+  }
+  const onFirst = (msg: unknown) => {
+    port.onMessage.removeListener(onFirst);
+    const open = msg as MonitorOpen;
+    if (open?.kind !== "open") {
+      port.disconnect();
+      return;
+    }
+    void runMonitor(port, open);
+  };
+  port.onMessage.addListener(onFirst);
+});
+
+async function runMonitor(port: chrome.runtime.Port, open: MonitorOpen): Promise<void> {
+  let connected = true;
+  const post = (m: MonitorMessage) => {
+    if (!connected) return;
+    try {
+      port.postMessage(m);
+    } catch {
+      connected = false;
+    }
+  };
+
+  let session: LensSession;
+  try {
+    session = await lensSession(open.mediatorDid, open.vtaDid);
+  } catch (e) {
+    const f = mediatorFailure(e);
+    post({ kind: "ended", reason: f.ok ? "" : f.error, ...(!f.ok && f.code ? { code: f.code } : {}) });
+    port.disconnect();
+    return;
+  }
+  const { conn, channel, caller } = session;
+  const mediatorDid = caller.mediator.did;
+
+  const sequencer = new MonitorSequencer();
+  let subscriptionId: string | undefined;
+  const early: Record<string, unknown>[] = [];
+  let ended = false;
+  let renewTimer: ReturnType<typeof setTimeout> | undefined;
+  // Batches are verified one at a time, in arrival order, so a slow check on
+  // one cannot let the next overtake it and scramble the sequence.
+  let chain: Promise<void> = Promise.resolve();
+
+  const deliver = (doc: Record<string, unknown>) => {
+    chain = chain.then(async () => {
+      const batch = monitorBatchOf(doc);
+      if (!batch || batch.subscriptionId !== subscriptionId || ended) return;
+      try {
+        // A batch is the mediator's signed document like any reply; one that
+        // does not verify is not the mediator's account of its traffic.
+        await verifyTrustTaskReply(doc, mediatorDid);
+      } catch (e) {
+        console.warn("[mediator lens] dropped a monitor batch that did not verify:", e);
+        return;
+      }
+      for (const update of sequencer.push(batch)) post({ kind: "update", update });
+    });
+  };
+
+  const unlisten = conn.onMediatorFrame((message) => {
+    if (message.type !== TRUST_TASK_ENVELOPE_TYPE || message.from !== mediatorDid) return;
+    const doc = message.body as Record<string, unknown> | undefined;
+    if (!doc || !monitorBatchOf(doc)) return;
+    // A batch can beat the subscribe reply to us; hold it until we know the id.
+    if (subscriptionId === undefined) early.push(doc);
+    else deliver(doc);
+  });
+
+  const stop = (reason: string, code?: string) => {
+    if (ended) return;
+    ended = true;
+    if (renewTimer) clearTimeout(renewTimer);
+    unlisten();
+    post({ kind: "ended", reason, ...(code ? { code } : {}) });
+    if (subscriptionId && conn.isOpen) {
+      // Best effort: a lease that is not released lapses on its own.
+      void monitorUnsubscribe(channel, caller, subscriptionId).catch(() => undefined);
+    }
+    if (connected) {
+      connected = false;
+      port.disconnect();
+    }
+  };
+  port.onDisconnect.addListener(() => {
+    connected = false;
+    stop("the console closed the feed");
+  });
+
+  const scheduleRenew = (expiresAt: string) => {
+    const lapse = Date.parse(expiresAt);
+    const wait = Number.isFinite(lapse)
+      ? Math.max(5_000, lapse - Date.now() - MONITOR_RENEW_MARGIN_MS)
+      : (MONITOR_LEASE_SECONDS * 1000) / 2;
+    renewTimer = setTimeout(() => void renew(), wait);
+  };
+  const renew = async () => {
+    if (ended || !subscriptionId) return;
+    // Batches ride this socket. If it dropped, a renewal on a fresh one would
+    // keep a lease alive whose batches go somewhere nobody is listening.
+    if (!conn.isOpen) return stop("the session with the mediator dropped");
+    try {
+      const g = await monitorSubscribe(channel, caller, {
+        subscriptionId,
+        leaseSeconds: MONITOR_LEASE_SECONDS,
+      });
+      scheduleRenew(g.expiresAt);
+    } catch (e) {
+      const f = mediatorFailure(e);
+      stop(`the lease could not be renewed: ${f.ok ? "" : f.error}`, f.ok ? undefined : f.code);
+    }
+  };
+
+  try {
+    const grant = await monitorSubscribe(channel, caller, {
+      ...(open.filter ? { filter: open.filter as MonitorFilter } : {}),
+      leaseSeconds: MONITOR_LEASE_SECONDS,
+    });
+    subscriptionId = grant.subscriptionId;
+    if (ended) {
+      void monitorUnsubscribe(channel, caller, grant.subscriptionId).catch(() => undefined);
+      return;
+    }
+    post({
+      kind: "granted",
+      subscriptionId: grant.subscriptionId,
+      filter: grant.filter as Record<string, unknown>,
+      expiresAt: grant.expiresAt,
+    });
+    for (const doc of early.splice(0)) deliver(doc);
+    scheduleRenew(grant.expiresAt);
+  } catch (e) {
+    const f = mediatorFailure(e);
+    stop(f.ok ? "subscription refused" : f.error, f.ok ? undefined : f.code);
+  }
 }
 
 // ─── Approver identity (Phase 2): a second, biometric-gated inbox ───

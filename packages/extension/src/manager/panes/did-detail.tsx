@@ -22,6 +22,7 @@ import { webvhDidGet, type WebvhDidRecord } from "@openvtc/pnm-core/webvh";
 import { CopyButton, Did, Note, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
+import { lensHref } from "../mediator-lens-model.js";
 import { Loading, LoadError } from "../table.js";
 import { formatDate } from "../format.js";
 import { parseDidLog, servicesOf, methodsOf, type LogEntry } from "../did-log.js";
@@ -92,6 +93,12 @@ export function DidDetail({
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
           <Did value={record.did} />
           <CopyButton value={record.did} title={`Copy ${record.did}`} />
+          <a
+            href={lensHref({ locate: record.did })}
+            style={{ color: c.accent, fontSize: t.xs, alignSelf: "center" }}
+          >
+            Where does its mail go? →
+          </a>
         </div>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: t.xs, color: c.muted }}>
           <span>

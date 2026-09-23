@@ -619,6 +619,18 @@ export interface MediatorConnection {
    *  stored — not when the work is finished. A throw withholds the ack and the
    *  mediator redelivers, so handlers must de-duplicate. */
   onInboundTsp(handler: (bytes: Uint8Array) => void | Promise<void>): void;
+  /** Listen for frames the **mediator itself** sent that no waiter claimed —
+   *  traffic-monitor batches, and replies whose waiter already gave up.
+   *  Returns an unsubscribe function. Any number may listen.
+   *
+   *  These never reach {@link onInbound}. That handler persists everything it
+   *  is given before the ack (R1.6), which is right for mail from a peer and
+   *  wrong for telemetry arriving once a second — and the mediator's frames
+   *  need no such protection: a monitor batch is never stored, so there is no
+   *  queued copy for an ack to delete (vti-didcomm-js >=0.11.0). */
+  onMediatorFrame(
+    listener: (message: Record<string, unknown>) => void,
+  ): () => void;
   /** Resolved VTA key-agreement endpoint (inner authcrypt target). */
   vta: ResolvedKeyAgreement;
   /** Resolved mediator key-agreement endpoint (forward-envelope target). */
@@ -712,6 +724,7 @@ export async function connectMediatorSession(
     timer: ReturnType<typeof setTimeout>;
   }> = [];
   let inboundTspHandler: ((bytes: Uint8Array) => void | Promise<void>) | undefined;
+  const mediatorListeners = new Set<(message: Record<string, unknown>) => void>();
   const rejectTspWaiters = (err: Error) => {
     while (tspWaiters.length) {
       const w = tspWaiters.shift()!;
@@ -765,6 +778,18 @@ export async function connectMediatorSession(
       // Awaited so a handler that persists finishes before the ack.
       if (inboundTspHandler) await inboundTspHandler(bytes);
     },
+    // Frames from the mediator's own DID go to their listeners and never to
+    // `onMessage`, whose handler persists before acking. A throwing listener
+    // is isolated so one bad consumer cannot starve the rest.
+    onMediatorMessage: (message: object) => {
+      for (const l of mediatorListeners) {
+        try {
+          l(message as Record<string, unknown>);
+        } catch (err) {
+          console.warn("[mediator] a mediator-frame listener threw:", err);
+        }
+      }
+    },
     // The same policy the auth handshake ran under. The session checks
     // `wsEndpoint` when it is constructed and again before every socket open,
     // so a document whose WebSocket URL names a private host is refused here
@@ -805,6 +830,12 @@ export async function connectMediatorSession(
     },
     onInboundTsp: (handler) => {
       inboundTspHandler = handler;
+    },
+    onMediatorFrame: (listener) => {
+      mediatorListeners.add(listener);
+      return () => {
+        mediatorListeners.delete(listener);
+      };
     },
     vta,
     mediator: {
