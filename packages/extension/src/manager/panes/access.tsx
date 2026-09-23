@@ -488,7 +488,7 @@ function GrantAccess({
             style={{ ...fieldStyle, fontFamily: font.mono }}
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
-            placeholder="did:key:z6Mk…"
+            placeholder="did:key:z6Mk… or did:peer:2…"
           />
         </label>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
