@@ -51,7 +51,9 @@ export type IconName =
   // Context standing, one per `Standing` that can be drawn.
   | "st-known" | "st-identified" | "st-absent" | "st-unreadable"
   // Furniture.
-  | "chevron" | "close" | "plus" | "eye" | "eye-off" | "search" | "drag" | "info" | "released";
+  | "chevron" | "close" | "plus" | "eye" | "eye-off" | "search" | "drag" | "info" | "released"
+  // Actions.
+  | "qr";
 
 /** The path data for each glyph. Kept as a plain record rather than a
  *  component per icon: they are data, and a 30-component file is 30 places to
@@ -117,6 +119,8 @@ const PATHS: Record<IconName, string> = {
   drag: "",
   info: "M12 11.2v5.2M12 7.8h.01",
   released: "M12 4.2v11.4M7.6 11.2 12 15.6l4.4-4.4M4.8 19.2h14.4",
+  // The data corner of a code; the three finder squares are shapes below.
+  qr: "M14.2 14.2h2.4M18.6 14.2v2.4M14.2 18.6v1.6h2.4M18.6 19.8v.4",
 };
 
 /** Circles and rectangles that cannot be expressed as a single path string
@@ -152,6 +156,9 @@ const SHAPES: Partial<Record<IconName, string>> = {
   "st-unreadable": `<path d="M12 3.6 21.2 19.6H2.8z" stroke-linejoin="round"/>`,
   search: `<circle cx="11" cy="11" r="6.6"/>`,
   info: `<circle cx="12" cy="12" r="8.3"/>`,
+  // Three finder squares, each with its centre filled: the one part of a QR
+  // code every reader recognises at 14px.
+  qr: `<rect x="3.4" y="3.4" width="7" height="7" rx="1.2"/><rect x="13.6" y="3.4" width="7" height="7" rx="1.2"/><rect x="3.4" y="13.6" width="7" height="7" rx="1.2"/><rect x="5.9" y="5.9" width="2" height="2" fill="currentColor" stroke="none"/><rect x="16.1" y="5.9" width="2" height="2" fill="currentColor" stroke="none"/><rect x="5.9" y="16.1" width="2" height="2" fill="currentColor" stroke="none"/>`,
   drag: `<circle cx="9" cy="6.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="6.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="17.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="17.5" r="1.2" fill="currentColor" stroke="none"/>`,
 };
 

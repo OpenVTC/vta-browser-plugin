@@ -8,6 +8,7 @@ import { c, t } from "./theme.js";
 import { encryptHolderSecretInPopup } from "./encrypt-holder.js";
 import { readActiveVtaDid } from "./active-vta.js";
 import { CopyButton, VaultPanel } from "./vault-panel.js";
+import { DidQrButton } from "./did-qr-view.js";
 import { releaseSelectAfterPointerChange } from "./select-wheel.js";
 import {
   useActiveConnection,
@@ -228,6 +229,7 @@ function VtaSwitcher({
                   {isActive ? "●" : "○"}
                 </span>
                 <code style={{ ...mono, flex: 1 }}>{c.vtaDid}</code>
+                <DidQrButton value={c.vtaDid} />
               </div>
               <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                 {!isActive && (
@@ -421,12 +423,14 @@ function ConnectedView({
       <div style={{ fontSize: 12, color: "var(--w-muted)" }}>VTA</div>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
         <code style={{ ...mono, flex: 1 }}>{connection.vtaDid}</code>
+        <DidQrButton value={connection.vtaDid} />
         <CopyButton text={connection.vtaDid} />
       </div>
 
       <div style={{ fontSize: 12, color: "var(--w-muted)" }}>Holder (your wallet DID)</div>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
         <code style={{ ...mono, flex: 1 }}>{connection.holderDid}</code>
+        <DidQrButton value={connection.holderDid} />
         <CopyButton text={connection.holderDid} />
       </div>
 

@@ -22,6 +22,7 @@ import {
   type WebvhDidRecord,
 } from "@openvtc/pnm-core/webvh";
 import { Button, Did, Panel, Pill } from "../../ui.js";
+import { DidQrButton } from "../../did-qr-view.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { Destructive } from "../destructive.js";
@@ -175,6 +176,9 @@ export function DidsPane({
       // history clicks the DID — a separate "View" button beside it would be a
       // second thing to find for the gesture they already tried.
       render: (d) => (
+        // The QR button sits beside the opening button, not inside it: a
+        // button inside a button is invalid, and would open the log too.
+        <span style={{ display: "inline-flex", alignItems: "flex-start", minWidth: 0 }}>
         <button
           onClick={() => setOpened(opened === d.did ? null : d.did)}
           aria-expanded={opened === d.did}
@@ -188,8 +192,10 @@ export function DidsPane({
             minWidth: 0,
           }}
         >
-          <Did value={d.did} />
+          <Did value={d.did} qr={false} />
         </button>
+        <DidQrButton value={d.did} />
+        </span>
       ),
     },
     {
