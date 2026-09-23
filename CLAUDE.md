@@ -856,6 +856,15 @@ promoting it would take. The account is the per-agent holder `did:key`, so
 admin standing belongs to one (relay, agent) pair — how `settings.inboxes` and
 the warm pool are keyed.
 
+**A grant is `pnm messaging grant <holder> --role admin --mediator <relay>`**,
+printed by `mediatorGrantCommand` (`grant-command.ts`) for a `standard`
+account — the holder, never the agent, and never `rootAdmin`. Before
+affinidi-messaging-mediator 0.29.2 (tdk-rs #888) a socket kept the role it
+authenticated with until its token expired (≤ 15 minutes), so a fresh grant
+was refused on the wallet's existing inbox socket — and, worse, a demotion or
+block did not reach a live socket either. Nothing in the wallet works around
+that; the mediator was fixed.
+
 **The lens only looks through a session the wallet already holds.**
 `mayOperateMediator` (`mediator-standing.ts`) admits an agent's inbox or a relay
 already in the warm pool for that agent, and nothing else — authenticating to a
