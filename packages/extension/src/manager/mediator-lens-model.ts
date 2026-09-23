@@ -3,25 +3,37 @@
 // Free of relative imports so it can be unit-tested in plain Node — the same
 // constraint `carrier.ts` observes.
 
-/** Where the lens is pointed: a relay, and the agent whose holder looks through it. */
+/**
+ * Where the lens is pointed.
+ *
+ * A relay and the agent whose holder looks through it (`relay` + `agent`), and
+ * optionally one account on it to focus on — named by DID (`did`, from a click
+ * anywhere in the console; the relay is then the DID's own mediator) or by the
+ * hash the mediator knows it by (`account`, from a row in one of the lens's own
+ * tables, where only the hash is known).
+ */
 export interface LensRoute {
   mediatorDid?: string;
   vtaDid?: string;
-  /** A DID whose mediator the lens should find (the "where does its mail go" entry). */
-  locate?: string;
+  /** A DID whose mail to show. */
+  did?: string;
+  /** An account hash on the chosen relay whose mail to show. */
+  account?: string;
 }
 
-/** `#mediator?relay=…&agent=…` → the route. Unknown members are ignored. */
+/** `#mediator?relay=…&agent=…&did=…&account=…` → the route. Unknown members are ignored. */
 export function parseLensRoute(hash: string): LensRoute {
   const q = hash.replace(/^#/, "").split("?")[1] ?? "";
   const params = new URLSearchParams(q);
   const out: LensRoute = {};
   const relay = params.get("relay");
   const agent = params.get("agent");
-  const locate = params.get("locate");
+  const did = params.get("did");
+  const account = params.get("account");
   if (relay) out.mediatorDid = relay;
   if (agent) out.vtaDid = agent;
-  if (locate) out.locate = locate;
+  if (did) out.did = did;
+  if (account && /^[0-9a-f]{64}$/.test(account)) out.account = account;
   return out;
 }
 
@@ -30,7 +42,8 @@ export function lensHref(route: LensRoute): string {
   const params = new URLSearchParams();
   if (route.mediatorDid) params.set("relay", route.mediatorDid);
   if (route.vtaDid) params.set("agent", route.vtaDid);
-  if (route.locate) params.set("locate", route.locate);
+  if (route.did) params.set("did", route.did);
+  if (route.account) params.set("account", route.account);
   const q = params.toString();
   return q ? `#mediator?${q}` : "#mediator";
 }
@@ -129,4 +142,32 @@ export function verificationModeOf(
   if (f?.value === "enforce") return "enforce";
   if (f?.value === "warn") return "warn";
   return "unknown";
+}
+
+/**
+ * A short name for a DID that tells two DIDs on one host apart.
+ *
+ * A mediator and the agents it carries are often hosted by the same webvh
+ * service, so the host alone names the *hosting*, not the party:
+ * `did:webvh:…:webvh.example:mediator` and `…:webvh.example:agent` both read
+ * "webvh.example". The path is what differs, so it is kept (`/`-joined, the
+ * way the DID resolves to a URL). A DID with no host — `did:key`, `did:peer` —
+ * is shortened head-and-tail.
+ */
+export function didLabel(did: string): string {
+  const seg = did.split(":");
+  if (seg[0] === "did" && seg[1] === "webvh" && seg.length >= 4) {
+    const host = safeDecode(seg[3]!);
+    const path = seg.slice(4).map(safeDecode);
+    return path.length ? `${host}/${path.join("/")}` : host;
+  }
+  return did.length > 28 ? `${did.slice(0, 16)}…${did.slice(-6)}` : did;
+}
+
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
 }

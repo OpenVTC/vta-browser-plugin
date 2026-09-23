@@ -27,6 +27,7 @@ import {
   ageText,
   bytesText,
   capTape,
+  didLabel,
   isTrouble,
   lensHref,
   parseLensRoute,
@@ -193,7 +194,11 @@ test("monitor batches never touch the inbound pending store", () => {
 test("a lens route round-trips through the hash, DIDs and all", () => {
   const route = { mediatorDid: INBOX, vtaDid: AGENT };
   assert.deepEqual(parseLensRoute(lensHref(route)), route);
-  assert.deepEqual(parseLensRoute(lensHref({ locate: "did:key:z6Mk?x=1" })), { locate: "did:key:z6Mk?x=1" });
+  assert.deepEqual(parseLensRoute(lensHref({ did: "did:key:z6Mk?x=1" })), { did: "did:key:z6Mk?x=1" });
+  const account = "a".repeat(64);
+  assert.deepEqual(parseLensRoute(lensHref({ ...route, account })), { ...route, account });
+  // Only a hash is an account: anything else in that slot is dropped, not sent.
+  assert.deepEqual(parseLensRoute("#mediator?account=did:key:x"), {});
   assert.deepEqual(parseLensRoute("#mediator"), {});
 });
 
@@ -252,4 +257,15 @@ test("a purge commits the plan the person was shown, not a fresh preview", () =>
   const commit = /commit=\{async \(\) => \{([\s\S]*?)\}\}/.exec(pane)?.[1] ?? "";
   assert.match(commit, /shown\.current/);
   assert.doesNotMatch(commit, /purgePreview\(/, "re-previewing in commit compares two fresh counts and always passes");
+});
+
+test("a DID is named by host AND path, so a relay and an agent on one host read differently", () => {
+  assert.equal(didLabel("did:webvh:QmA:webvh.storm.ws:mediator"), "webvh.storm.ws/mediator");
+  assert.equal(didLabel("did:webvh:QmB:webvh.storm.ws:agents:keyring"), "webvh.storm.ws/agents/keyring");
+  assert.equal(didLabel("did:webvh:QmC:localhost%3A8080"), "localhost:8080");
+  assert.notEqual(
+    didLabel("did:webvh:QmA:webvh.storm.ws:mediator"),
+    didLabel("did:webvh:QmB:webvh.storm.ws:agent"),
+  );
+  assert.match(didLabel("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"), /^did:key:z6Mkha\w*…\w*a2doK$/);
 });

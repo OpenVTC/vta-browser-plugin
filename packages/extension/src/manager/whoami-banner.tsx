@@ -16,6 +16,7 @@ import { displayAgentName, type AgentName } from "../agent-name.js";
 import { readAllVtaDids, setActiveVtaDid } from "../active-vta.js";
 import { useEffect, useState } from "react";
 import { Icon } from "./icons.js";
+import { MailDid } from "./mail-did.js";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -205,7 +206,7 @@ export function WhoamiBanner({
       {open && authority && (
         <div style={{ display: "flex", gap: 28, flexWrap: "wrap", paddingBottom: 4 }}>
           <Field label="Acting as">
-            <Did value={authority.session.subject} />
+            <MailDid value={authority.session.subject} />
           </Field>
           <Field label="Scopes">
             <span style={{ color: c.muted }}>

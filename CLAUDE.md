@@ -865,6 +865,25 @@ was refused on the wallet's existing inbox socket — and, worse, a demotion or
 block did not reach a live socket either. Nothing in the wallet works around
 that; the mediator was fixed.
 
+**Clicking a DID opens that DID's mail**, not the relay. `MailDid`
+(`manager/mail-did.tsx`) is the console's `Did` with an `href` to
+`#mediator?did=…`; the lens resolves the DID's mediator, picks a relay the
+wallet already uses there, and draws that one account — its queues, who is
+waiting on it, what it sent that was not collected, its live traffic — through
+`account/get` / `queue/status` on its **hash**. Account rows in the lens's own
+tables link the same way by hash (`?account=…`, validated as 64 hex). Another
+account's mail needs `admin` at that relay; a standard account is shown the
+grant instead of being sent requests that would be refused. Clearing a queue is
+offered only on the wallet's own account — never behind a DID someone clicked.
+A DID in the DIDs list stays a button (it opens the DID's detail, which links
+here), and DIDs in a destructive preview stay plain text.
+
+**The release comes from `readyz`, which a browser could not read** before
+affinidi-messaging-mediator 0.29.3 (tdk-rs #889: the health routes sat outside
+the CORS layer). An unreadable release is a quiet "release not shown", never a
+warning — the lens does not need it, and a mediator that cannot serve a task
+refuses it with a code.
+
 **The lens only looks through a session the wallet already holds.**
 `mayOperateMediator` (`mediator-standing.ts`) admits an agent's inbox or a relay
 already in the warm pool for that agent, and nothing else — authenticating to a

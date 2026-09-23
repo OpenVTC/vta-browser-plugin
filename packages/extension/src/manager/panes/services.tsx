@@ -29,6 +29,7 @@ import { lensHref } from "../mediator-lens-model.js";
 import { useTransportHealth } from "../../use-transport-health.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 import type { Transport, TransportObservation } from "../../transports.js";
+import { MailDid } from "../mail-did.js";
 
 /** `ServiceKind` → the name `TransportHealth` records observations under. */
 const OBSERVED_AS: Partial<Record<ServiceState["kind"], Transport>> = {
@@ -152,7 +153,7 @@ export function ServicesPane({
         <div style={{ display: "grid", gap: 2, maxWidth: 380 }}>
           {s.mediatorDid && (
             <>
-              <Did value={s.mediatorDid} size={t.xs} />
+              <MailDid value={s.mediatorDid} size={t.xs} />
               <a
                 href={lensHref({ mediatorDid: s.mediatorDid, vtaDid: parties.service.did })}
                 style={{ color: c.accent, fontSize: t.xs }}
@@ -282,7 +283,7 @@ export function ServicesPane({
               header: "Mediator",
               render: (s) => (
                 <div style={{ display: "grid", gap: 2 }}>
-                  <Did value={s.mediatorDid} />
+                  <MailDid value={s.mediatorDid} />
                   <a
                     href={lensHref({ mediatorDid: s.mediatorDid, vtaDid: s.vtaDid })}
                     style={{ color: c.accent, fontSize: t.xs }}
@@ -292,7 +293,7 @@ export function ServicesPane({
                 </div>
               ),
             },
-            { key: "vta", header: "For agent", render: (s) => <Did value={s.vtaDid} /> },
+            { key: "vta", header: "For agent", render: (s) => <MailDid value={s.vtaDid} /> },
             {
               key: "inbox",
               header: "Role",

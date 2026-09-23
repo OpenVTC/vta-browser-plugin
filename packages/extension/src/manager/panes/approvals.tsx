@@ -29,6 +29,7 @@ import { useAsync } from "../use-async.js";
 import { formatDate } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
 import type { ContextSelection } from "../context-column.js";
+import { MailDid } from "../mail-did.js";
 
 const fieldStyle: React.CSSProperties = {
   boxSizing: "border-box",
@@ -183,7 +184,7 @@ export function ApprovalsPane({
       header: "Context",
       render: (a) => <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{a.context}</span>,
     },
-    { key: "approver", header: "Approver", render: (a) => <Did value={a.approver} /> },
+    { key: "approver", header: "Approver", render: (a) => <MailDid value={a.approver} /> },
     {
       key: "route",
       header: "Route",
@@ -211,7 +212,7 @@ export function ApprovalsPane({
         </div>
       ),
     },
-    { key: "agent", header: "Agent", render: (g) => <Did value={g.subject.agent} /> },
+    { key: "agent", header: "Agent", render: (g) => <MailDid value={g.subject.agent} /> },
     {
       key: "effect",
       header: "Effect",

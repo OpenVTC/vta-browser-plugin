@@ -63,6 +63,7 @@ import { Loading, LoadError, Table, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
 import { formatDate, isPast } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
+import { MailDid } from "../mail-did.js";
 
 const DAY = 86400;
 
@@ -494,7 +495,7 @@ function HeldCredentials({
     {
       key: "issuer",
       header: "Issuer",
-      render: (r) => (r.issuerDid ? <Did value={r.issuerDid} size={t.xs} /> : <span style={{ color: c.faint }}>—</span>),
+      render: (r) => (r.issuerDid ? <MailDid value={r.issuerDid} size={t.xs} /> : <span style={{ color: c.faint }}>—</span>),
     },
     {
       key: "purpose",
@@ -892,7 +893,7 @@ function IssuedList({
         </div>
       ),
     },
-    { key: "holder", header: "Issued to", render: (r) => <Did value={r.holder} size={t.xs} /> },
+    { key: "holder", header: "Issued to", render: (r) => <MailDid value={r.holder} size={t.xs} /> },
     { key: "status", header: "Status", render: (r) => <IssuedStatus row={r} /> },
     {
       key: "issued",
