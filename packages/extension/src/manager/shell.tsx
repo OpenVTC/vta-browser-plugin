@@ -35,6 +35,7 @@ import { MemoryPane } from "./panes/memory.js";
 import { PersonaPane } from "./panes/persona.js";
 import { AppStatePane } from "./panes/app-state.js";
 import { RoomsPane } from "./panes/rooms.js";
+import { MediatorPane } from "./panes/mediator.js";
 import { managerSender } from "./sender.js";
 import { useVta, type Parties } from "./use-vta.js";
 import { contextHeading } from "./format.js";
@@ -51,6 +52,7 @@ export type SectionId =
   | "app-state"
   | "rooms"
   | "services"
+  | "mediator"
   | "maintenance"
   | "audit"
   | "access"
@@ -144,6 +146,9 @@ const ACTS: Act[] = [
       // Transports are agent-wide: `servicesList` takes no context, because a
       // transport is not owned by one.
       { id: "services", label: "Transports", icon: "services", contextScoped: false },
+      // The relay behind a transport, seen from inside. Asks the *mediator*,
+      // not the agent, so there is nothing a context could narrow.
+      { id: "mediator", label: "Mediator", icon: "mediator", contextScoped: false },
       // Operations whose subject is the agent itself rather than anything it
       // holds — backup and restart. Agent-wide by definition, so no context.
       { id: "maintenance", label: "Maintenance", icon: "maintenance", contextScoped: false },
@@ -173,7 +178,9 @@ function isContextScoped(section: SectionId): boolean {
 }
 
 function sectionFromHash(): SectionId {
-  const raw = location.hash.replace(/^#/, "");
+  // A pane may carry its own query after the id (`#mediator?relay=…`); the
+  // section is what precedes it.
+  const raw = location.hash.replace(/^#/, "").split("?")[0] ?? "";
   const known = SECTIONS.map((s) => s.id);
   return (known as string[]).includes(raw) ? (raw as SectionId) : "contexts";
 }
@@ -545,6 +552,8 @@ export function ManagerShell() {
         return <RoomsPane parties={parties} contexts={contexts.records} />;
       case "services":
         return <ServicesPane parties={parties} authority={vta.authority} />;
+      case "mediator":
+        return <MediatorPane parties={parties} />;
       case "maintenance":
         return <MaintenancePane parties={parties} authority={vta.authority} />;
       case "audit":

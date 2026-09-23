@@ -10,7 +10,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { grantCommand, needsSuperAdminOperator } from "../src/grant-command.js";
+import { grantCommand, mediatorGrantCommand, needsSuperAdminOperator } from "../src/grant-command.js";
 
 const EPH = "did:key:z6MkExampleEphemeralKeyForTests";
 
@@ -82,4 +82,28 @@ test("the grant expires, so an abandoned onboarding leaves nothing permanent", (
 test("only the unrestricted scope asks more of the operator running it", () => {
   assert.equal(needsSuperAdminOperator("unrestricted"), true);
   assert.equal(needsSuperAdminOperator("context"), false);
+});
+
+// ── The mediator grant ──────────────────────────────────────────────────────
+
+test("the mediator grant promotes the holder, to admin, at that mediator", () => {
+  const cmd = mediatorGrantCommand({
+    holderDid: "did:key:z6MkHolder",
+    mediatorDid: "did:webvh:QmRelay:relay.example",
+  });
+  assert.equal(
+    cmd,
+    "pnm messaging grant did:key:z6MkHolder --role admin --mediator did:webvh:QmRelay:relay.example",
+  );
+  assert.doesNotMatch(cmd, /rootAdmin/);
+});
+
+test("the mediator grant refuses to print a command for something that is not a DID", () => {
+  assert.throws(() => mediatorGrantCommand({ holderDid: "", mediatorDid: "did:webvh:x:y" }));
+  assert.throws(() => mediatorGrantCommand({ holderDid: "did:key:z6Mk", mediatorDid: "https://relay" }));
+});
+
+test("the mediator grant refuses shell metacharacters in what it is told is a DID", () => {
+  assert.throws(() => mediatorGrantCommand({ holderDid: "did:key:z6Mk;rm", mediatorDid: "did:webvh:x:y" }));
+  assert.throws(() => mediatorGrantCommand({ holderDid: "did:key:z6Mk$(id)", mediatorDid: "did:webvh:x:y" }));
 });

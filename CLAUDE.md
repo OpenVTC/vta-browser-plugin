@@ -802,6 +802,108 @@ VTA; drawing a failed listing as an empty one ("this agent holds keys to no
 rooms" is a claim, and an agent that did not answer has made none); or rendering
 one epoch and calling it the answer.
 
+## The Mediator Lens: the relay, seen from inside
+
+`manager/panes/mediator.tsx` asks the **mediator**, not the agent. An Affinidi
+mediator serves its own operations surface — `messaging/*`: statistics, every
+account's queues, one account's messages, a live traffic monitor — as Trust
+Tasks addressed to **its own DID**, and the wallet already holds an
+authenticated session with it for each agent's inbox. The lens runs those tasks
+over that session, as that agent's holder. No new socket, no second CORS
+allowance, and no key export — the terminal equivalent (`pnm messaging
+console`) has to export the DID's secrets with `keys/export-secret` to do the
+same. `@openvtc/pnm-core/mediator` is the client, subpath-only like `admin` and
+`rooms`.
+
+**The channel is an ordinary `DidcommVtaTransport` whose "VTA" is the
+mediator**, built with no `mediator` option so there is no forward wrap: the
+authcrypt goes to the relay that terminates it. Everything else is inherited —
+the holder signs (SPEC §7.2 item 7a), the reply's proof is verified against the
+mediator's DID, and a refusal comes back typed. A mediator refuses with a DIDComm
+**problem report** threaded by `pthid` rather than a `trust-task-error`;
+`problemReportError` puts its descriptor (`authorization.admin_required`,
+`message.trust_task.proof_required`) in `details.code`, where `relayFailure`
+already reads a Trust-Task code (R3.7).
+
+**Three kinds of frame come back from the mediator on the inbox socket, and
+0.10 of `vti-didcomm-js` got all three wrong** — which is why **`^0.11.0` is the
+third correctness floor on that dependency**, beside `^0.6.2` and `^0.10.0`:
+
+- a **task reply** is *stored* in the caller's receive queue as well as pushed
+  live (the Rust SDK deletes it on receipt). 0.10 never acked a frame from the
+  mediator, so every reply stayed in the queue that carries consent requests,
+  and replayed into `onInboundMessage` on every reconnect. Measured against a
+  real mediator: seven replies left queued after one screen.
+- a **refusal** is a problem report threaded by `pthid`, which 0.10's `waitFor`
+  never matched — an 8-second hang reported as a timeout, instead of the code in
+  14 ms.
+- a **monitor batch** is live-only and unthreaded. 0.10 handed it to
+  `onMessage`, whose handler persists before acking (R1.6) — an IndexedDB write
+  and delete per second for telemetry the mediator never stored.
+
+0.11 acks threaded envelope replies (`isStoredMediatorReply`), matches a problem
+report by `pthid` (`threadOf`), and delivers mediator-originated frames to
+`onMediatorMessage`, which core exposes as `MediatorConnection.onMediatorFrame`.
+**Those frames never reach `onInbound`**, and that is safe for exactly one
+reason: they are never acked, so there is no queued copy for persist-before-ack
+to protect. A frame from any *other* sender still goes the R1.6 path.
+
+**Standing is the mediator's decision, from its own record.** `standingOf` reads
+`accountType` off `account/get`'s reply and decides only what the pane *offers*;
+the mediator authorises every task. Mediator-wide views are offered to `admin`
+and `rootAdmin`; a `standard` account sees its own queues and is told what
+promoting it would take. The account is the per-agent holder `did:key`, so
+admin standing belongs to one (relay, agent) pair — how `settings.inboxes` and
+the warm pool are keyed.
+
+**A grant is `pnm messaging grant <holder> --role admin --mediator <relay>`**,
+printed by `mediatorGrantCommand` (`grant-command.ts`) for a `standard`
+account — the holder, never the agent, and never `rootAdmin`. Before
+affinidi-messaging-mediator 0.29.2 (tdk-rs #888) a socket kept the role it
+authenticated with until its token expired (≤ 15 minutes), so a fresh grant
+was refused on the wallet's existing inbox socket — and, worse, a demotion or
+block did not reach a live socket either. Nothing in the wallet works around
+that; the mediator was fixed.
+
+**The lens only looks through a session the wallet already holds.**
+`mayOperateMediator` (`mediator-standing.ts`) admits an agent's inbox or a relay
+already in the warm pool for that agent, and nothing else — authenticating to a
+mediator can create an account there, so a console that could name any relay
+could establish this holder anywhere. "Where does this DID's mail go?" resolves
+a DID's `DIDCommMessaging` service and says so honestly when the wallet has no
+standing at the answer.
+
+**An allow-list sits on top of the mediator's authorisation**
+(`LENS_TASK_TYPES`, enforced in the offscreen document). Absent on purpose:
+`config/patch` and `config/reload` (they change a running mediator and need
+`rootAdmin`, which this design never grants a browser-held key — the pane shows
+config read-only), and `message/get` (the wallet can decrypt only its own mail,
+which already arrives through the inbox). The monitor is not on it either: its
+lease is owned by the offscreen document per console **Port**
+(`MEDIATOR_MONITOR_PORT`), 60 s, renewed while the port is attached and released
+when it disconnects — the mediator allows three subscriptions per account, and a
+closed tab must not hold one past a lease.
+
+**One version floor, `MEDIATOR_VERSION_FLOOR` = 0.28.36**, read from `readyz`
+— not the TDK console's gate per member. There is no older mediator anyone here
+runs.
+
+**A fourth CI guard, with two permitted files.** The mediator's operations URIs
+are banned from `dist/` except `manager.js` (composes) and the offscreen entry
+chunk (signs, holds the allow-list, owns the lease). The background forwards the
+lens op opaquely and names no task. A presence check asserts both still carry
+what they are the exception for. `page-task-policy.ts` refuses the whole
+`messaging/` prefix — the monitor is a live feed of whom the holder talks to.
+
+**What breaks it:** relaxing the `vti-didcomm-js` floor below 0.11; routing
+mediator frames through `onInbound`; acking every mediator frame (the status
+ping-pong) or none; letting the console name a relay the wallet does not already
+use; adding `config/patch` to the allow-list; a monitor lease not tied to a
+port; or the console composing a task the offscreen document then signs without
+the allow-list check. `tests/mediator-lens.test.mts`,
+`tests/mediator-pane.render.test.mts`, `packages/core/tests/mediator.ops.mjs`
+and `vti-didcomm-js`'s mediator-transport tests pin these.
+
 ## Key material never reaches a browser, and that is enforced
 
 `vta/seeds/*` — `list`, `rotate`, `export-mnemonic` — is the one task family

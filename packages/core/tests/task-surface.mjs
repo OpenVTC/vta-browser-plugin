@@ -38,6 +38,11 @@ const CANONICAL = new Map(SURFACE.tasks.map((t) => [t.uri, t]));
  * boundary list: every entry is justified, and the test fails when one stops
  * being needed, so it can only shrink.
  */
+const MEDIATOR_SERVED =
+  "Mediator-served: addressed to the mediator's own DID and answered by " +
+  "affinidi-messaging-mediator about itself (trust_tasks.rs served_tasks!). The VTA " +
+  "is not the counterparty.";
+
 const NOT_IN_SDK = [
   {
     prefix: "https://trusttasks.org/spec/trust-task-error/",
@@ -89,6 +94,31 @@ const NOT_IN_SDK = [
       "Host-served: the host records that an epoch advanced and serves the key " +
       "chain. It never learns a key — the rung it carries is sealed under the " +
       "incoming epoch, which only members hold.",
+  },
+  // The mediator's own operations surface (`@openvtc/pnm-core/mediator`). These
+  // are addressed to the MEDIATOR's DID and served by affinidi-messaging-mediator
+  // about itself — its statistics, its accounts' queues and messages, its
+  // traffic monitor. A VTA serves none of them, so a vta-sdk constant for one
+  // would mean the recipient had moved.
+  {
+    prefix: "https://trusttasks.org/spec/messaging/stats/",
+    why: MEDIATOR_SERVED,
+  },
+  {
+    prefix: "https://trusttasks.org/spec/messaging/queue/",
+    why: MEDIATOR_SERVED,
+  },
+  {
+    prefix: "https://trusttasks.org/spec/messaging/message/",
+    why: MEDIATOR_SERVED,
+  },
+  {
+    prefix: "https://trusttasks.org/spec/messaging/monitor/",
+    why: MEDIATOR_SERVED,
+  },
+  {
+    prefix: "https://trusttasks.org/spec/messaging/account/",
+    why: MEDIATOR_SERVED,
   },
 ];
 

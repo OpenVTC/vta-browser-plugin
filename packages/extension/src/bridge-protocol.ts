@@ -2066,6 +2066,114 @@ export type RuntimeManagerTaskResponse =
   | { ok: true; result: RequestTaskResult }
   | RelayTaskFailure;
 
+// ── Mediator Lens ────────────────────────────────────────────────────────────
+//
+// The console's view of a **mediator** — the relay carrying an agent's mail —
+// rather than of the agent. A mediator serves its own operations surface
+// (`messaging/*`: statistics, queues, accounts, a traffic monitor) as Trust
+// Tasks addressed to its own DID, and the wallet already holds an authenticated
+// session with it for each agent's inbox. These messages run those tasks over
+// that session: no new socket, and no key leaves the offscreen document.
+//
+// Operator surface, like `RUNTIME_MANAGER_TASK`: NOT page-facing, absent from
+// `content.ts`, and gated on `sender.url` in the background.
+
+/** manager console → background → offscreen: one Mediator Lens operation. */
+export const RUNTIME_MEDIATOR = "vta-wallet/mediator-lens" as const;
+export const OFFSCREEN_MEDIATOR = "offscreen/mediator" as const;
+
+/**
+ * What the console may ask of a mediator.
+ *
+ * `mediatorDid` + `vtaDid` name a (relay, agent) pair — the session is
+ * authenticated as that agent's holder, and the mediator decides what that
+ * holder may see. The offscreen document runs the operation only over a
+ * session the wallet already holds for its own traffic; it never opens
+ * standing at a mediator the console points it at.
+ */
+export type MediatorOp =
+  /** Run one `messaging/*` task. Same carrier rule as the manager relay: only
+   *  `type` and `payload` travel; the device mints and signs the envelope. */
+  | { kind: "task"; mediatorDid: string; vtaDid: string; params: RequestTaskParams }
+  /** Who the session is (holder DID) and what the mediator is (its release,
+   *  read from its public `readyz`). */
+  | { kind: "probe"; mediatorDid: string; vtaDid: string }
+  /** Where a DID's mail goes: the mediator its `DIDCommMessaging` service names. */
+  | { kind: "locate"; did: string }
+  /** Every (relay, agent) pair the wallet holds a session for. */
+  | { kind: "relays" };
+
+export interface RuntimeMediatorRequest {
+  type: typeof RUNTIME_MEDIATOR;
+  op: MediatorOp;
+}
+
+export interface OffscreenMediatorRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_MEDIATOR;
+  op: MediatorOp;
+}
+
+export interface MediatorProbe {
+  mediatorDid: string;
+  vtaDid: string;
+  /** The DID the session is authenticated as — the mediator account. */
+  holderDid: string;
+  /** Whether this relay is the agent's inbox (vs. a hop it only sends through). */
+  isInbox: boolean;
+  /** The mediator's release, when its `readyz` answered with one. */
+  version?: string;
+  /** Why the version could not be read, when it could not. */
+  versionError?: string;
+}
+
+export interface MediatorLocation {
+  did: string;
+  /** Absent when the DID names no mediator — it may not receive DIDComm at all. */
+  mediatorDid?: string;
+}
+
+export interface KnownRelay {
+  mediatorDid: string;
+  vtaDid: string;
+  isInbox: boolean;
+  state: "connecting" | "live" | "closed";
+}
+
+export type MediatorOpResult = RequestTaskResult | MediatorProbe | MediatorLocation | KnownRelay[];
+
+export type RuntimeMediatorResponse = { ok: true; result: MediatorOpResult } | RelayTaskFailure;
+
+/**
+ * Port name for the live traffic monitor, console → offscreen.
+ *
+ * A port rather than a message pair because the feed is a stream, and because
+ * its lifetime *is* the subscription's: the offscreen document unsubscribes the
+ * moment the console tab's port disconnects, so a closed tab never holds one of
+ * the mediator's three subscription slots for longer than a lease. The offscreen
+ * document gates the connection on `sender.url`, exactly as the background gates
+ * `RUNTIME_MEDIATOR`.
+ */
+export const MEDIATOR_MONITOR_PORT = "vta-wallet/mediator-monitor" as const;
+
+/** console → offscreen, once, as the port's first message. */
+export interface MonitorOpen {
+  kind: "open";
+  mediatorDid: string;
+  vtaDid: string;
+  /** A `MonitorFilter`. Typed loosely here so this module stays free of the
+   *  core import; the offscreen document passes it through to the mediator,
+   *  which validates it against the schema and narrows it. */
+  filter?: Record<string, unknown>;
+}
+
+/** offscreen → console. */
+export type MonitorMessage =
+  | { kind: "granted"; subscriptionId: string; filter: Record<string, unknown>; expiresAt: string }
+  /** One sequenced update: `events`, `gap` or `heartbeat`. */
+  | { kind: "update"; update: Record<string, unknown> & { kind: string } }
+  | { kind: "ended"; reason: string; code?: string };
+
 /**
  * Every runtime message type a *web page* can originate through the content
  * script — the exact set whose origin must be the browser's, not the message

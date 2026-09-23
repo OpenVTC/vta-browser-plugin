@@ -70,6 +70,20 @@ const REFUSED: { prefix: string; why: string }[] = [
       "to admit or promote. A member drives their rooms from their own wallet, " +
       "where the screen can say which room, which epoch, and what is being given.",
   },
+  // A mediator's own operations surface (`@openvtc/pnm-core/mediator`). A page
+  // routing one of these to an agent would be misaddressed anyway — they are
+  // served by the relay, not the agent — but the refusal is about what they
+  // disclose, and is the same whichever party answered: the traffic monitor is
+  // a live feed of who this holder talks to, and the queue views say who has
+  // not collected what.
+  {
+    prefix: "https://trusttasks.org/spec/messaging/",
+    why:
+      "The messaging family is the relay's operations surface: its queues, its " +
+      "accounts and a live feed of whom the holder exchanges messages with. A page " +
+      "has no use for any of it that the holder should be asked to approve; the " +
+      "holder inspects their own relay from the wallet's console.",
+  },
 ];
 
 /**

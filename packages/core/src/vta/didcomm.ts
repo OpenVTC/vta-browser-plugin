@@ -17,6 +17,7 @@ import {
 } from "./protocol.js";
 import {
   buildTrustTask,
+  coerceTrustTaskCode,
   parseTrustTaskReply,
   signOutboundTask,
   verifyTrustTaskReply,
@@ -59,6 +60,40 @@ export interface DidcommVtaTransportOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** DIDComm's problem report: how a mediator refuses a request addressed to it. */
+export const PROBLEM_REPORT_TYPE = "https://didcomm.org/report-problem/2.0/problem-report";
+
+/**
+ * Turn a DIDComm problem report into the typed error a Trust-Task refusal
+ * would have been.
+ *
+ * A mediator refuses a Trust Task addressed to *itself* with a problem report
+ * rather than a `trust-task-error` document, threaded to the request by
+ * `pthid`. Its `code` is `<sorter>.<scope>.<descriptor>` — `e.p.permissionDenied`,
+ * `e.p.message.trust_task.proof_required` — and the descriptor is the stable
+ * part (R3.7): it lands in `details.code`, exactly where a Trust-Task refusal's
+ * own code goes, so one reader handles both. The sorter and scope are DIDComm's
+ * framing and are kept verbatim in `details.details.problemCode`.
+ */
+export function problemReportError(message: {
+  body?: unknown;
+}): VtaClientError {
+  const body = (message.body ?? {}) as { code?: unknown; comment?: unknown; args?: unknown };
+  const problemCode = typeof body.code === "string" ? body.code : "";
+  const descriptor = problemCode.split(".").slice(2).join(".") || problemCode;
+  const comment = typeof body.comment === "string" && body.comment ? body.comment : problemCode;
+  return new VtaClientError(coerceTrustTaskCode(descriptor), comment || "refused", {
+    details: {
+      code: descriptor,
+      message: comment,
+      details: {
+        problemCode,
+        ...(Array.isArray(body.args) ? { args: body.args } : {}),
+      },
+    },
+  });
+}
 
 /**
  * VTA transport over DIDComm v2 — the DIDComm {@link TrustTaskChannel}.
@@ -143,6 +178,21 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
     const msg = await this.bridge.sendAndAwaitReply(outer, requestId, {
       timeoutMs: opts.timeoutMs ?? this.timeoutMs,
     });
+    // A refusal. The bridge matched it by `pthid` to this request (a problem
+    // report opens its own thread). Two parties may refuse it: the one we
+    // addressed, and the relay we handed the forward to — a mediator that will
+    // not carry a message says so on the hop it refused. Anyone else's report
+    // is not an answer to this call.
+    if (msg.type === PROBLEM_REPORT_TYPE) {
+      const from = typeof msg.from === "string" ? msg.from : undefined;
+      if (!from || (from !== this.vta.did && from !== this.mediator?.did)) {
+        throw new VtaClientError(
+          "e.p.msg.unauthorized",
+          `problem report from ${msg.from ?? "(none)"} != ${this.vta.did}`,
+        );
+      }
+      throw problemReportError(msg);
+    }
     if (msg.type !== TRUST_TASK_ENVELOPE_TYPE) {
       throw new VtaClientError(
         "e.client.parse",

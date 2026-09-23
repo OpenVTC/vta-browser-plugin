@@ -117,6 +117,10 @@ import {
   type RuntimeDiscloseRequest,
   type RuntimeDiscloseResponse,
   RUNTIME_MANAGER_TASK,
+  RUNTIME_MEDIATOR,
+  OFFSCREEN_MEDIATOR,
+  type RuntimeMediatorRequest,
+  type RuntimeMediatorResponse,
   RUNTIME_SIGN_TRUST_TASK,
   RUNTIME_TASK_CONSENT,
   CONSENT_KEEPALIVE_PORT,
@@ -3021,6 +3025,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // number leaves.
       .catch(() =>
         sendResponse({ approved: false } satisfies RuntimeDisclosureStepUpConsentResponse),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_MEDIATOR) {
+    // The same gate as the manager relay below, for the same reason: this does
+    // not prompt, so the sender check is the whole boundary. Which mediator the
+    // op may reach is decided in the offscreen document, which alone knows what
+    // sessions the wallet holds.
+    if (!isExtensionPageSender(sender)) {
+      // eslint-disable-next-line no-console
+      console.warn(`[background] rejecting ${RUNTIME_MEDIATOR} from non-extension sender url=${sender.url}`);
+      sendResponse({ ok: false, error: "mediator surface is not page-reachable" });
+      return false;
+    }
+    void (async () => {
+      await ensureOffscreenDocument();
+      return (await chrome.runtime.sendMessage({
+        target: OFFSCREEN_TARGET,
+        type: OFFSCREEN_MEDIATOR,
+        op: (message as RuntimeMediatorRequest).op,
+      })) as RuntimeMediatorResponse;
+    })()
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
     return true; // async sendResponse
   }

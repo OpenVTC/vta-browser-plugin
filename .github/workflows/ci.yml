@@ -207,6 +207,52 @@ jobs:
           done
           echo "OK: the console carries all twenty holder-scoped persona tasks"
 
+      # A fourth guard: the mediator's operations surface (`messaging/*`, via
+      # `@openvtc/pnm-core/mediator`) — the Mediator Lens.
+      #
+      # These run at a *mediator*, over the session the wallet holds with it for
+      # an agent's inbox, and an admin standing there sees every account's
+      # queues and a live feed of who talks to whom. That is operator surface,
+      # so it is banned from every wallet bundle — with TWO permitted files
+      # rather than one, and the second is not a relaxation:
+      #
+      #   manager.js    composes the tasks (the lens pane).
+      #   offscreen     (`assets/offscreen-<hash>.js`, the entry chunk
+      #                 `offscreen.html` loads) is the one place that signs, and it owns the traffic
+      #                 monitor's lease — subscribing, renewing and releasing it
+      #                 has to live where MV3 teardown is observable, or a closed
+      #                 tab holds one of the mediator's three slots. It also
+      #                 enforces the lens's task allow-list.
+      #
+      # Every page-reachable surface — the service worker (which forwards the
+      # lens op opaquely and never names a task), content, page-world, popup,
+      # confirm, options — must stay clean.
+      - name: Assert the mediator operations surface is confined to the console and its signer
+        run: |
+          for task in 'messaging/stats/show/0.1' 'messaging/queue/list/0.1' 'messaging/queue/status/0.1' 'messaging/queue/purge/0.1' 'messaging/account/get/0.1' 'messaging/account/list/0.1' 'messaging/account/update/0.1' 'messaging/message/list/0.1' 'messaging/message/delete/0.1' 'messaging/monitor/subscribe/0.1' 'messaging/monitor/unsubscribe/0.1'; do
+            leaked=$(grep -rlF "$task" packages/extension/dist/ | grep -v -e '^packages/extension/dist/manager\.js$' -e '^packages/extension/dist/assets/offscreen-[A-Za-z0-9_-]*\.js$' || true)
+            if [ -n "$leaked" ]; then
+              echo "::error::$leaked contains $task — the mediator operations surface must not be reachable from a wallet surface. Only the console (manager.js) composes these and only the offscreen document signs them. Check for an import of @openvtc/pnm-core/mediator from a wallet entry, or a shared chunk."
+              exit 1
+            fi
+          done
+          echo "OK: mediator operations task URIs appear only in manager.js and the offscreen entry"
+
+      # …and present where the exception is claimed, for the reason the persona
+      # presence check gives: a lens pane whose tasks were tree-shaken out is a
+      # green build and a pane that does nothing.
+      - name: Assert the lens still carries the mediator surface it is the exception for
+        run: |
+          for task in 'messaging/stats/show/0.1' 'messaging/queue/list/0.1' 'messaging/queue/status/0.1' 'messaging/queue/purge/0.1' 'messaging/account/get/0.1' 'messaging/account/list/0.1'; do
+            grep -qF "$task" packages/extension/dist/manager.js || { echo "::error::manager.js no longer contains $task — the lens pane cannot do what it offers"; exit 1; }
+          done
+          offscreen=$(grep -o 'src="/assets/offscreen-[^"]*\.js"' packages/extension/dist/offscreen.html | sed 's|src="/||; s|"$||')
+          test -n "$offscreen" || { echo "::error::offscreen.html loads no assets/offscreen-*.js — the guard above names a file that no longer exists"; exit 1; }
+          for task in 'messaging/monitor/subscribe/0.1' 'messaging/monitor/unsubscribe/0.1'; do
+            grep -qF "$task" "packages/extension/dist/$offscreen" || { echo "::error::$offscreen no longer contains $task — the live traffic feed has no one to hold its lease"; exit 1; }
+          done
+          echo "OK: the lens and its signer carry the mediator surface"
+
       # The console's isolation rests on it being one self-contained file: the
       # guard above names exactly one exception, so a second chunk would be a
       # file nothing checks. Losing `codeSplitting: false` in a future upgrade

@@ -10,6 +10,29 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Added
 
+- **`@openvtc/pnm-core/mediator`** — a client for a mediator's own
+  `messaging/*` operations surface (statistics, queue ranking and status,
+  accounts, message listing and deletion, preview-then-confirm purge, the
+  traffic monitor), addressed to the mediator's DID over a holder's existing
+  session. Subpath-only, like `admin` and `rooms`. Carries `accountHash`,
+  `standingOf`, `MEDIATOR_VERSION_FLOOR` (0.28.36), `MonitorSequencer` and
+  `PurgePlanStaleError`.
+- `MediatorConnection.onMediatorFrame(listener)` — frames the mediator itself
+  sent (monitor batches, replies that outlived their waiter), delivered apart
+  from `onInbound` so they never reach a persist-before-ack handler.
+- `problemReportError` / `PROBLEM_REPORT_TYPE`: `DidcommVtaTransport` turns a
+  DIDComm problem report threaded to the request into a typed `VtaClientError`
+  whose `details.code` is the report's descriptor, instead of a parse error.
+
+### Changed
+
+- **`@openvtc/vti-didcomm-js` floor raised to `^0.11.0`, and it is a
+  correctness constraint.** Below it a mediator's Trust-Task replies are never
+  acked (they accumulate in the holder's receive queue), a refusal threaded by
+  `pthid` times out instead of arriving, and monitor batches reach `onInbound`.
+- `@openvtc/trust-tasks` floor raised to `^0.20.1`, the first binding carrying
+  `includeStats` / `includeActivity` on `messaging/account/*`.
+
 - `key-export` (VTI#1619) and `persona-holder` join `ACL_CAPABILITIES`;
   `key-export` is derived by `admin` alone. `ADDITIVE_CAPABILITIES` and
   `isAdditiveCapability` name the capabilities no role derives, and
