@@ -625,19 +625,27 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 // login and reuse it thereafter.
 let creatingOffscreen: Promise<void> | null = null;
 async function ensureOffscreenDocument(): Promise<void> {
-  if (await chrome.offscreen.hasDocument()) return;
-  if (!creatingOffscreen) {
-    creatingOffscreen = chrome.offscreen
-      .createDocument({
-        url: "offscreen.html",
-        reasons: [chrome.offscreen.Reason.WORKERS],
-        justification:
-          "Run the DIDComm mediator session (WebSocket + did:webvh resolution) for wallet login.",
-      })
-      .finally(() => {
-        creatingOffscreen = null;
-      });
-  }
+  // The in-flight creation is checked before `hasDocument()`, and again after
+  // it. `hasDocument()` turns true as soon as creation starts — before the
+  // document has loaded and registered its `onMessage` listener — so a caller
+  // that trusted it returned early and sent into a document with no receiver
+  // ("Could not establish connection. Receiving end does not exist."), losing
+  // e.g. the boot-time START_INBOUND and leaving every inbox dark. The second
+  // check covers a creation that began while `hasDocument()` was answering.
+  if (creatingOffscreen) return creatingOffscreen;
+  const exists = await chrome.offscreen.hasDocument();
+  if (creatingOffscreen) return creatingOffscreen;
+  if (exists) return;
+  creatingOffscreen = chrome.offscreen
+    .createDocument({
+      url: "offscreen.html",
+      reasons: [chrome.offscreen.Reason.WORKERS],
+      justification:
+        "Run the DIDComm mediator session (WebSocket + did:webvh resolution) for wallet login.",
+    })
+    .finally(() => {
+      creatingOffscreen = null;
+    });
   await creatingOffscreen;
 }
 
