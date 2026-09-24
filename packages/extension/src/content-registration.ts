@@ -57,6 +57,9 @@ async function registeredMatches(): Promise<string[]> {
   }
 }
 
+/** The reconcile in flight, if any — see `syncProviderRegistration`. */
+let syncChain: Promise<unknown> = Promise.resolve();
+
 /**
  * Reconcile the registration with the current grants.
  *
@@ -64,8 +67,21 @@ async function registeredMatches(): Promise<string[]> {
  * and after an update. Returns the patterns now in force, which the caller can
  * log — a wallet that quietly stops working on a site is a support problem,
  * and this is the line that explains it.
+ *
+ * Calls are **serialised**, and that is not an optimisation. The reconcile is
+ * a read-then-write, and the triggers overlap: an extension reload runs the
+ * cold-start call and `onInstalled` in the same tick. Run concurrently, both
+ * read "nothing registered", both call `registerContentScripts`, and the
+ * second throws `Duplicate script ID`. Chaining makes each run read the state
+ * the previous one left.
  */
-export async function syncProviderRegistration(): Promise<string[]> {
+export function syncProviderRegistration(): Promise<string[]> {
+  const run = syncChain.then(reconcileProvider, reconcileProvider);
+  syncChain = run.catch(() => undefined);
+  return run;
+}
+
+async function reconcileProvider(): Promise<string[]> {
   const all = await chrome.permissions.getAll();
   const matches = providerMatches(all.origins ?? []);
   const current = await registeredMatches();
