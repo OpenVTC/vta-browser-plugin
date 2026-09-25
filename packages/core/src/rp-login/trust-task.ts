@@ -19,9 +19,9 @@
 // of the VID. That is what makes this identical over three transports rather
 // than three rules — the guarantee rides with the document, not the pipe.
 //
-// **The authenticate proof declares `proofPurpose: authentication`.** The
-// channel chooses it from the document type (`outboundProofPurpose`): this is
-// the one document whose signature is the signer proving control of its VID.
+// **Both proofs declare `proofPurpose: authentication`.** The channel chooses
+// it from the document type (`outboundProofPurpose`), as it does for every
+// request; on the authenticate it is literally the sign-in.
 //
 // Requires an RP that dispatches the auth family as Trust Tasks
 // (affinidi-webvh-service #171). Against one that does not, the challenge comes

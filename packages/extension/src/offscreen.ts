@@ -3721,9 +3721,9 @@ async function doDisclosureStepUp(
   // is a denial. A prompt the holder never saw must not become an approval.
   if (decision?.approved !== true) return { ok: false, error: "user declined the step-up approval" };
 
-  // An ordinary Trust Task: the channel signs it as the holder with
-  // `assertionMethod`, which IS the gate the approve-response requires, so the
-  // payload carries no proof of its own.
+  // An ordinary Trust Task: the channel signs it as the holder, with the
+  // `assertionMethod` purpose the approve-response spec pins
+  // (`outboundProofPurpose`), so the payload carries no proof of its own.
   await doRequestTask({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_REQUEST_TASK,

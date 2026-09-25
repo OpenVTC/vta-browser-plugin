@@ -17,7 +17,8 @@
 // deals with transport concerns.
 
 import { isStandardCode, normalizeCode } from "@openvtc/trust-tasks/_runtime/codes";
-import { TYPE_URI as AUTH_AUTHENTICATE } from "@openvtc/trust-tasks/auth/authenticate/0.1/payload";
+import { TYPE_URI as APPROVE_RESPONSE_0_2 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.2/payload";
+import { TYPE_URI as APPROVE_RESPONSE_0_3 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.3/payload";
 
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
@@ -118,6 +119,23 @@ export async function signOutboundTask(
       `${envelope.type}: envelope issuer ${envelope.issuer} is not the signing identity ${signer.did}`,
     );
   }
+  // What a consumer binds the proof to, filled or refused *before* signing,
+  // because the proof covers them and nothing may change after it. The VTA and
+  // the RPs act on a DIDComm or TSP document only when it names its issuer (the
+  // proven signer), and key their replay window on (issuer, id); `recipient`
+  // is the audience the proof is bound to (SPEC §4.8.2), and `issuedAt` places
+  // it inside the freshness window. `buildTrustTask` sets all but the issuer on
+  // every document it builds; these catch one composed some other way.
+  if (envelope.issuer === undefined) envelope.issuer = signer.did;
+  if (!envelope.id) envelope.id = globalThis.crypto.randomUUID();
+  if (!envelope.issuedAt) envelope.issuedAt = new Date().toISOString();
+  if (!envelope.recipient) {
+    throw new VtaClientError(
+      "e.client.identity",
+      `${envelope.type}: the document names no recipient. A signed document with no audience ` +
+        `is replayable at any other party, and the consumer refuses it`,
+    );
+  }
   await signer.sign(envelope, { proofPurpose: outboundProofPurpose(envelope.type) });
 }
 
@@ -125,21 +143,42 @@ export async function signOutboundTask(
 export type OutboundProofPurpose = "assertionMethod" | "authentication";
 
 /**
+ * The step-up approvals, whose specifications pin the purpose: "The
+ * `proof.proofPurpose` MUST be `assertionMethod`" (approve-response 0.2 and
+ * 0.3, the two versions this wallet mints). The proof there is the approver attesting to a decision, which is
+ * what `assertionMethod` says.
+ */
+const ASSERTION_PURPOSE_TYPES: ReadonlySet<string> = new Set([
+  APPROVE_RESPONSE_0_2,
+  APPROVE_RESPONSE_0_3,
+]);
+
+/**
  * Which `proofPurpose` the proof on an outbound document declares.
  *
- * `auth/authenticate` is the one task whose signature *is* the signer proving
- * control of its identity, rather than vouching for a payload: the RP issues a
- * session on the strength of it and nothing else. That is what the
- * `authentication` purpose says, and it is the verification relationship the
- * holder's `did:peer:2` key is published under (`V`). Every other document
- * attests to its payload, so it keeps `assertionMethod`.
+ * **`authentication`, except where a specification pins another.** The VTA,
+ * the VTC and the RPs no longer take a DIDComm or TSP sender's word for who
+ * composed a document: they act on it only when its proof verifies as its
+ * `issuer` and that issuer is the sender. The proof on an outbound request is
+ * therefore this wallet authenticating as the issuer, which is what
+ * `authentication` declares — and it is the relationship the holder's
+ * `did:peer:2` key is published under (`V`). `auth/authenticate`, where the
+ * signature is the sign-in, is the plainest case of the rule, not an exception
+ * to it.
+ *
+ * The exceptions are the types in {@link ASSERTION_PURPOSE_TYPES}, whose
+ * specifications say `assertionMethod` in a MUST.
+ *
+ * None of the consumers enforces a purpose on an inbound request (their
+ * verification-method resolvers accept a key listed under either
+ * relationship), so this is a statement of what the proof is for rather than
+ * a key that opens a different door.
  *
  * Decided here, from the document's type, for the reason the channel signs at
- * all: a login that runs over any of the three transports gets the same proof
- * without its caller knowing which purpose to ask for.
+ * all: every transport gets the same proof without its caller choosing.
  */
 export function outboundProofPurpose(type: string): OutboundProofPurpose {
-  return type === AUTH_AUTHENTICATE ? "authentication" : "assertionMethod";
+  return ASSERTION_PURPOSE_TYPES.has(type) ? "assertionMethod" : "authentication";
 }
 
 /** What {@link signOutboundTask} asks of a {@link TaskSigner}. */
@@ -173,9 +212,9 @@ export interface TaskSigner {
   /**
    * Put a proof on `envelope`, in place. A signer that cannot choose the
    * purpose (the VTA's `vault/sign-trust-task` signs `assertionMethod` and
-   * takes no option) ignores `opts`. The resulting `assertionMethod` proof
-   * still verifies at an RP that resolves the verification method under
-   * either relationship, as the Rust `trust-tasks-proof` resolver does.
+   * takes no option, and its specification pins `assertionMethod`) ignores
+   * `opts`. The resulting proof still verifies at the VTA, the VTC and the
+   * RPs, whose resolvers accept a key under either relationship.
    */
   sign(envelope: TrustTask<unknown>, opts?: TaskSignOptions): Promise<void>;
 }

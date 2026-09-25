@@ -197,8 +197,9 @@ export interface DisclosureApprovalPayload {
  * did-hosting RP, which is answered outside the channels and so must carry its
  * own proof. A disclosure step-up is answered by dispatching an ordinary Trust
  * Task to the agent, and the channel signs every outbound document as the
- * holder with `proofPurpose: "assertionMethod"` — which is exactly the gate the
- * approve-response requires. Building a second proof here would duplicate or
+ * holder — with `proofPurpose: "assertionMethod"` for an approve-response,
+ * which is exactly the gate that specification requires
+ * (`outboundProofPurpose`). Building a second proof here would duplicate or
  * overwrite that one, which is the reason `provision/integration` is called out
  * in this repo's guide as the case that must bypass a channel.
  *

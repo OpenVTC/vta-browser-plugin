@@ -32,6 +32,7 @@ import {
   buildTrustTask,
   generateSigningIdentity,
   localTaskSigner,
+  outboundProofPurpose,
   signOutboundTask,
   verifyTrustTaskProof,
 } from "../dist/index.js";
@@ -44,11 +45,20 @@ import { openTspEnvelope, wrapTspEnvelope } from "../dist/vta/tsp-binding.js";
 const utf8 = new TextEncoder();
 const fromUtf8 = new TextDecoder();
 
-/** Assert `doc` carries a proof that verifies as its own `issuer`. */
+/**
+ * Assert `doc` is what the VTA, the VTC and the RPs now require of a document
+ * arriving over DIDComm or TSP: a proof that verifies as its own `issuer`,
+ * declaring `authentication`, over a document that names its audience, is
+ * placed in time and has an id to key the replay window on.
+ */
 async function assertSignedBy(doc, expectedIssuer) {
   assert.ok(doc, "no document reached the counterparty");
+  assert.equal(typeof doc.id, "string");
+  assert.ok(doc.id.length > 0, "the document has an id");
+  assert.ok(!Number.isNaN(Date.parse(doc.issuedAt)), `issuedAt ${doc.issuedAt}`);
+  assert.equal(typeof doc.recipient, "string", "the document names its audience");
   const res = await verifyTrustTaskProof(doc, {
-    expectedProofPurpose: "assertionMethod",
+    expectedProofPurpose: "authentication",
   });
   assert.equal(res.verified, true, `proof did not verify: ${res.reason}`);
   // SPEC §7.2 item 6 — a valid proof by some *other* DID establishes only that
@@ -273,4 +283,55 @@ test("re-signing a document that already carries a proof does not sign over it",
   await signOutboundTask(envelope, localTaskSigner(signing));
 
   await assertSignedBy(envelope, signing.did);
+});
+
+// ── what the signer fills, refuses and declares ─────────────────────────────
+
+test("a document with no issuer is issued by the signer", async () => {
+  // The consumers refuse an issuer-less document outright over DIDComm and
+  // TSP, so the signer names itself rather than letting one go out bare.
+  const signing = generateSigningIdentity();
+  const envelope = buildTrustTask(VAULT_DELETE, { id: "e-5" }, { recipient: "did:key:zVta" });
+  await signOutboundTask(envelope, localTaskSigner(signing));
+  assert.equal(envelope.issuer, signing.did);
+  await assertSignedBy(envelope, signing.did);
+});
+
+test("a document with no recipient is refused before it is signed", async () => {
+  const signing = generateSigningIdentity();
+  const envelope = buildTrustTask(VAULT_DELETE, { id: "e-6" }, { issuer: signing.did });
+  await assert.rejects(
+    () => signOutboundTask(envelope, localTaskSigner(signing)),
+    (err) => err.code === "e.client.identity" && /no recipient/.test(err.message),
+  );
+  assert.equal(envelope.proof, undefined);
+});
+
+test("a document missing its id or issuedAt gets both before the proof covers them", async () => {
+  const signing = generateSigningIdentity();
+  const envelope = {
+    type: VAULT_DELETE,
+    issuer: signing.did,
+    recipient: "did:key:zVta",
+    payload: { id: "e-7" },
+  };
+  await signOutboundTask(envelope, localTaskSigner(signing));
+  await assertSignedBy(envelope, signing.did);
+});
+
+test("every request declares authentication; a step-up approval keeps the purpose its spec pins", async () => {
+  assert.equal(outboundProofPurpose(VAULT_DELETE), "authentication");
+  assert.equal(outboundProofPurpose("https://trusttasks.org/spec/auth/authenticate/0.1"), "authentication");
+  assert.equal(outboundProofPurpose("https://trusttasks.org/spec/task-consent/decision/0.1"), "authentication");
+  // "The `proof.proofPurpose` MUST be `assertionMethod`."
+  for (const v of ["0.2", "0.3"]) {
+    const type = `https://trusttasks.org/spec/auth/step-up/approve-response/${v}`;
+    assert.equal(outboundProofPurpose(type), "assertionMethod", type);
+
+    const signing = generateSigningIdentity();
+    const envelope = buildTrustTask(type, {}, { issuer: signing.did, recipient: "did:key:zRp" });
+    await signOutboundTask(envelope, localTaskSigner(signing));
+    const res = await verifyTrustTaskProof(envelope, { expectedProofPurpose: "assertionMethod" });
+    assert.equal(res.verified, true, `${type}: ${res.reason}`);
+  }
 });

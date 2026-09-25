@@ -19,7 +19,7 @@
 // - **The document says who it is from.** `buildTrustTask` gives each document
 //   a fresh `id` and an `issuedAt`; `issuer` is the signing DID and `recipient`
 //   the RP's DID. `signOutboundTask` refuses an issuer that is not the signer,
-//   and signs `auth/authenticate` with `proofPurpose: authentication`.
+//   and signs both documents with `proofPurpose: authentication`.
 // - **The answer comes from the RP.** `DidcommVtaTransport.send` waits with
 //   the bridge's `{ from }` filter set to the RP's DID (plus the mediator, whose
 //   only admissible answer is a problem report refusing the hop), requires the

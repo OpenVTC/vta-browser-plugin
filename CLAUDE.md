@@ -223,13 +223,37 @@ a proof where one is merely RECOMMENDED is legal and strictly more
 attributable, and a 141-entry table of which tasks need one goes stale
 invisibly.
 
-**The purpose is chosen by type, in the same place.** `signOutboundTask`
-passes `outboundProofPurpose(envelope.type)` to the signer: `authentication`
-for `auth/authenticate` (the signature *is* the sign-in, and the holder's
-`did:peer:2` key is published under `V`), `assertionMethod` for everything
-else. `vaultTaskSigner` cannot choose and signs `assertionMethod`. RP sign-in
-over DIDComm (`loginViaDidcomm`) is `loginViaTrustTask` over a
+**The document is bound to its sender, and that is now enforced remotely.**
+The VTA and VTC (VTI #1739) and the did-hosting RP (affinidi-webvh-service
+#213) act on a DIDComm or TSP document only when its proof verifies as its
+`issuer` **and that issuer is the transport's sender**. So `signOutboundTask`
+also names the signer as `issuer` when a document has none, fills a missing
+`id` / `issuedAt`, and refuses a document with no `recipient` — all before the
+proof, which covers them.
+
+**The purpose is chosen by type, in the same place.** `outboundProofPurpose`
+gives `authentication` to every request — the proof is this wallet
+authenticating as the issuer, under the relationship its `did:peer:2` key is
+published in (`V`) — except the step-up `approve-response` 0.2/0.3, whose
+specs say `assertionMethod` in a MUST. No consumer enforces a purpose on an
+inbound request today, so this is what the proof says, not a door it opens.
+Documents signed outside a channel (`task-consent/decision`,
+`buildStepUpApproval`) use the same rule. `vaultTaskSigner` cannot choose, and
+`vault/sign-trust-task` pins `assertionMethod`, so a persona-signed document
+always declares `assertionMethod`.
+
+**Known gap: a document whose signer is not the transport sender.** A persona
+(vault signer) and the same-browser approver sign as a DID other than the
+holder identity the DIDComm/TSP envelope is sent from. Under the binding rule
+above such a document is refused with `identityMismatch` unless the consumer
+treats it as the answer to a thread it is waiting on. Fixing that means sending
+as the signer, not relaxing anything here.
+
+RP sign-in over DIDComm (`loginViaDidcomm`) is `loginViaTrustTask` over a
 `DidcommVtaTransport` — keep it that way rather than growing a second login.
+The RP step-up (`performStepUpVta`) is REST start, a locally signed
+approve-response, REST finish; nothing goes to the VTA, whose DIDComm
+`approve-request` route was removed.
 
 **What is deliberately NOT signed:** the `/auth/` handshake
 (`vta/auth.ts`). That route is bespoke — it authenticates by the authcrypt

@@ -89,11 +89,9 @@
       <!-- ── Step-up · VTA approval ── -->
       <section class="panel">
         <h2>Step-up · VTA approval</h2>
-        <div class="sub">Elevates the current <code>aal1</code> session to <code>aal2</code>: the RP issues a nonce, your VTA signs an approval over DIDComm, the RP swaps it for a higher-assurance token. Needs a base login first.</div>
-        <label>VTA DID <span style="text-transform:none">— paste your VTA DID + mediator DID</span></label>
+        <div class="sub">Elevates the current <code>aal1</code> session to <code>aal2</code>: the RP returns a signed approve-request, the wallet verifies it, asks you, and signs an approve-response, and the RP swaps it for a higher-assurance token. Needs a base login first.</div>
+        <label>VTA DID <span style="text-transform:none">— the agent whose enrolled executors may sign the approve-request</span></label>
         <input id="su-vtaDid" value="" placeholder="did:webvh:…  (paste your VTA DID)" />
-        <label>VTA mediator DID</label>
-        <input id="su-mediatorDid" value="" placeholder="did:webvh:…  (paste your VTA mediator DID)" />
         <button id="su-go" disabled>Step up via VTA</button>
         <button id="su-check" disabled>Call sensitive op</button>
         <ol class="log" id="su-log"></ol>
@@ -170,8 +168,6 @@
         try {
           const d = await window.vtaWallet.walletDefaults();
           if (d.stepUpVtaDid && !$("su-vtaDid").value) $("su-vtaDid").value = d.stepUpVtaDid;
-          if (d.stepUpVtaMediatorDid && !$("su-mediatorDid").value)
-            $("su-mediatorDid").value = d.stepUpVtaMediatorDid;
         } catch {
           /* no defaults configured — leave the inputs as-is */
         }
@@ -278,7 +274,7 @@
             controlDid: rpDid,
             mediatorDid: $("dc-mediatorDid").value.trim(),
           }),
-          ["wallet.loginDidcomm({ controlDid, mediatorDid })", "authcrypt MSG_AUTHENTICATE → mediator → RP"],
+          ["wallet.loginDidcomm({ controlDid, mediatorDid })", "auth/challenge → signed auth/authenticate (Trust Tasks) → RP"],
           stashBase(rpDid, baseUrl),
         );
       });
@@ -288,14 +284,13 @@
         if (!baseSession) { resetLog("su"); log("su", "no base session — log in via REST or DIDComm first", "err"); return; }
         const { rpDid, baseUrl, accessToken } = baseSession;
         const vtaDid = $("su-vtaDid").value.trim();
-        const vtaMediatorDid = $("su-mediatorDid").value.trim();
-        if (!vtaDid || !vtaMediatorDid) { resetLog("su"); log("su", "paste your VTA DID + mediator DID first", "err"); return; }
+        if (!vtaDid) { resetLog("su"); log("su", "paste your VTA DID first", "err"); return; }
         return run("su", "su-go",
-          () => window.vtaWallet.stepUpVta({ baseUrl, rpDid, accessToken, vtaDid, vtaMediatorDid }),
+          () => window.vtaWallet.stepUpVta({ baseUrl, rpDid, accessToken, vtaDid }),
           [
-            "wallet.stepUpVta({ baseUrl, rpDid, accessToken, vtaDid, vtaMediatorDid })",
-            "POST /auth/step-up/vta/start → nonce",
-            "DIDComm approve-request → VTA → approval_token",
+            "wallet.stepUpVta({ baseUrl, rpDid, accessToken, vtaDid })",
+            "POST /auth/step-up/vta/start → signed approve-request",
+            "verify, ask you, sign approve-response (Trust Task)",
             "POST /auth/step-up/vta/finish → elevated session (aal2)",
           ],
           (r) => {

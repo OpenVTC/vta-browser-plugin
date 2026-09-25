@@ -2095,9 +2095,6 @@ async function handleWalletDefaults(): Promise<RuntimeWalletDefaultsResponse> {
     ok: true,
     result: {
       ...(s.defaultStepUpVtaDid ? { stepUpVtaDid: s.defaultStepUpVtaDid } : {}),
-      ...(s.defaultStepUpVtaMediatorDid
-        ? { stepUpVtaMediatorDid: s.defaultStepUpVtaMediatorDid }
-        : {}),
     },
   };
 }

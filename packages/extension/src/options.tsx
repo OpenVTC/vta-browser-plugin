@@ -44,7 +44,6 @@ export function AdvancedPane() {
   // The mediator DID the existing holder was minted with — changing away from
   // this is what forces a re-mint.
   const [vtaDid, setVtaDid] = useState("");
-  const [vtaMediatorDid, setVtaMediatorDid] = useState("");
   // Additional enrolled executor DIDs (one per line) — executors beyond the
   // onboarded VTA(s) whose signed approval requests this wallet will render
   // (e.g. a did:webvh DID-hosting control plane).
@@ -72,7 +71,6 @@ export function AdvancedPane() {
     void (async () => {
       const s = await getSettings();
       setVtaDid(s.defaultStepUpVtaDid ?? "");
-      setVtaMediatorDid(s.defaultStepUpVtaMediatorDid ?? "");
       setEnrolledExecutors((s.enrolledExecutorDids ?? []).join("\n"));
       setPushGatewayUrl(s.pushGatewayUrl ?? "");
       setPushGatewayVapidPublicKey(s.pushGatewayVapidPublicKey ?? "");
@@ -264,7 +262,6 @@ export function AdvancedPane() {
       // saving an unrelated setting.
       await setSettings({
         ...(vtaDid.trim() ? { defaultStepUpVtaDid: vtaDid.trim() } : {}),
-        ...(vtaMediatorDid.trim() ? { defaultStepUpVtaMediatorDid: vtaMediatorDid.trim() } : {}),
         // Always written (an empty list is a valid state): un-enrolling an
         // executor must actually revoke it, not linger as a stale merge.
         enrolledExecutorDids: enrolledExecutors
@@ -303,14 +300,6 @@ export function AdvancedPane() {
         value={vtaDid}
         placeholder="did:webvh:…"
         onChange={(e) => setVtaDid(e.target.value)}
-      />
-
-      <label style={labelStyle}>Default step-up VTA mediator DID (optional)</label>
-      <input
-        style={inputStyle}
-        value={vtaMediatorDid}
-        placeholder="did:webvh:…"
-        onChange={(e) => setVtaMediatorDid(e.target.value)}
       />
 
       <label style={labelStyle}>Enrolled executor DIDs (optional — one per line)</label>

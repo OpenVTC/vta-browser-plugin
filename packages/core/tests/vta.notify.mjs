@@ -21,6 +21,7 @@ import { decodeTrustTaskHttpAck } from "../dist/vta/rest-channel.js";
 const ENVELOPE = {
   id: "req-1",
   type: "https://trusttasks.org/spec/credential-exchange/offer/0.1",
+  recipient: "did:webvh:QmAgent:agent.example",
   payload: { credential_offer: {} },
 };
 

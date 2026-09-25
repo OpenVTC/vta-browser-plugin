@@ -34,12 +34,20 @@ For history before this file, see `git log` on `packages/core`.
   there is one login implementation for every transport and every RP. It takes
   a REQUIRED `signing` input (whose DID signs in) and an optional `scope`, and
   returns an `RpSession`; `DidcommLoginResult` is removed.
-- **`auth/authenticate` is signed with `proofPurpose: authentication`.**
-  `signOutboundTask` picks the purpose from the document type
-  (`outboundProofPurpose`) and passes it to `TaskSigner.sign`, which gains an
-  optional `TaskSignOptions` argument. Every other document keeps
-  `assertionMethod`. `vaultTaskSigner` cannot choose a purpose and still signs
-  `assertionMethod`.
+- **Every outbound Trust Task declares `proofPurpose: authentication`**, for
+  VTI #1739 and affinidi-webvh-service #213: the VTA, VTC and did-hosting RP
+  act on a DIDComm or TSP document only when its proof verifies as its
+  `issuer` and that issuer is the sender. `signOutboundTask` picks the purpose
+  from the document type (`outboundProofPurpose`) and passes it to
+  `TaskSigner.sign`, which gains an optional `TaskSignOptions` argument. The
+  exceptions are `auth/step-up/approve-response` 0.2 and 0.3, whose specs pin
+  `assertionMethod`. `task-consent/decision`, signed outside a channel, follows
+  the same rule. `vaultTaskSigner` cannot choose, so persona-signed documents
+  still declare `assertionMethod`.
+- **`signOutboundTask` binds the document before signing it.** It names the
+  signer as `issuer` when none is set, fills a missing `id` or `issuedAt`, and
+  refuses (`e.client.identity`) a document with no `recipient`.
+- `buildStepUpApproval` sets `issuedAt` on the approve-response.
 - **`@openvtc/vti-didcomm-js` floor raised to `^0.11.0`, and it is a
   correctness constraint.** Below it a mediator's Trust-Task replies are never
   acked (they accumulate in the holder's receive queue), a refusal threaded by

@@ -264,9 +264,14 @@ export async function buildStepUpApproval(
     type: args.responseVersion === "0.3" ? MSG_APPROVE_RESPONSE_0_3 : MSG_APPROVE_RESPONSE_0_2,
     issuer: args.signing.did,
     recipient: args.rpDid,
+    // Places the approval inside the RP's freshness window; covered by the
+    // proof like every other member.
+    issuedAt: new Date().toISOString(),
     payload,
   };
 
+  // `assertionMethod` because the approve-response specifications say so in a
+  // MUST — see `outboundProofPurpose`, which makes the same exception.
   await signTrustTask({
     envelope: document as unknown as Record<string, unknown> & { proof?: unknown },
     signing: args.signing,

@@ -243,6 +243,13 @@ test("the decision echoes the challenge and digest verbatim, and is signed", asy
   // The proof IS the authorization — the VTA takes the approver's identity from
   // it, not from the session that carried it.
   assert.ok(doc.proof, "an unsigned decision authorizes nothing");
+  // Issued by the signer and declaring `authentication`, like every document
+  // the channels send; placed in time and uniquely identified for the VTA's
+  // freshness and replay checks.
+  assert.equal(doc.issuer, DEVICE.did);
+  assert.equal(doc.proof.proofPurpose, "authentication");
+  assert.ok(!Number.isNaN(Date.parse(doc.issuedAt)));
+  assert.match(doc.id, /^urn:uuid:/);
 });
 
 test("a denial is an explicit decision, not an absent one", async () => {

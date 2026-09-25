@@ -153,17 +153,18 @@ test("the authenticate document is what the RP now requires of it", async () => 
   assert.equal(res.signer, w.signing.did);
 });
 
-test("only the authenticate is signed for authentication", async () => {
-  // The challenge request attests to nothing; its proof keeps the purpose
-  // every other outbound document declares.
+test("both documents are signed for authentication", async () => {
+  // The RP acts on neither unless its proof verifies as its issuer and that
+  // issuer is the sender; the proof is this wallet authenticating as it.
   assert.equal(outboundProofPurpose(AUTHENTICATE), "authentication");
-  assert.equal(outboundProofPurpose(CHALLENGE), "assertionMethod");
-  assert.equal(outboundProofPurpose("https://trusttasks.org/spec/vault/delete/0.1"), "assertionMethod");
+  assert.equal(outboundProofPurpose(CHALLENGE), "authentication");
 
   const w = world();
   await loginViaDidcomm(opts(w));
-  assert.equal(w.received[0].doc.proof.proofPurpose, "assertionMethod");
-  assert.equal(w.received[1].doc.proof.proofPurpose, "authentication");
+  for (const { doc } of w.received) {
+    const res = await verifyTrustTaskProof(doc, { expectedProofPurpose: "authentication" });
+    assert.equal(res.verified, true, `${doc.type}: ${res.reason}`);
+  }
 });
 
 test("the signer's DID is who signs in, on both documents", async () => {
