@@ -17,6 +17,7 @@
 // deals with transport concerns.
 
 import { isStandardCode, normalizeCode } from "@openvtc/trust-tasks/_runtime/codes";
+import { TYPE_URI as AUTH_AUTHENTICATE } from "@openvtc/trust-tasks/auth/authenticate/0.1/payload";
 
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
@@ -117,7 +118,34 @@ export async function signOutboundTask(
       `${envelope.type}: envelope issuer ${envelope.issuer} is not the signing identity ${signer.did}`,
     );
   }
-  await signer.sign(envelope);
+  await signer.sign(envelope, { proofPurpose: outboundProofPurpose(envelope.type) });
+}
+
+/** The `proofPurpose` a Data Integrity proof on an outbound document declares. */
+export type OutboundProofPurpose = "assertionMethod" | "authentication";
+
+/**
+ * Which `proofPurpose` the proof on an outbound document declares.
+ *
+ * `auth/authenticate` is the one task whose signature *is* the signer proving
+ * control of its identity, rather than vouching for a payload: the RP issues a
+ * session on the strength of it and nothing else. That is what the
+ * `authentication` purpose says, and it is the verification relationship the
+ * holder's `did:peer:2` key is published under (`V`). Every other document
+ * attests to its payload, so it keeps `assertionMethod`.
+ *
+ * Decided here, from the document's type, for the reason the channel signs at
+ * all: a login that runs over any of the three transports gets the same proof
+ * without its caller knowing which purpose to ask for.
+ */
+export function outboundProofPurpose(type: string): OutboundProofPurpose {
+  return type === AUTH_AUTHENTICATE ? "authentication" : "assertionMethod";
+}
+
+/** What {@link signOutboundTask} asks of a {@link TaskSigner}. */
+export interface TaskSignOptions {
+  /** The purpose the proof declares — see {@link outboundProofPurpose}. */
+  proofPurpose: OutboundProofPurpose;
 }
 
 /**
@@ -142,7 +170,14 @@ export async function signOutboundTask(
  */
 export interface TaskSigner {
   readonly did: string;
-  sign(envelope: TrustTask<unknown>): Promise<void>;
+  /**
+   * Put a proof on `envelope`, in place. A signer that cannot choose the
+   * purpose (the VTA's `vault/sign-trust-task` signs `assertionMethod` and
+   * takes no option) ignores `opts`. The resulting `assertionMethod` proof
+   * still verifies at an RP that resolves the verification method under
+   * either relationship, as the Rust `trust-tasks-proof` resolver does.
+   */
+  sign(envelope: TrustTask<unknown>, opts?: TaskSignOptions): Promise<void>;
 }
 
 /** A signer backed by a key this process holds — the holder's own identity,
@@ -150,10 +185,11 @@ export interface TaskSigner {
 export function localTaskSigner(signing: SigningIdentity): TaskSigner {
   return {
     did: signing.did,
-    sign: async (envelope) => {
+    sign: async (envelope, opts) => {
       await signTrustTask({
         envelope: envelope as unknown as Record<string, unknown> & { proof?: unknown },
         signing,
+        ...(opts ? { proofPurpose: opts.proofPurpose } : {}),
       });
     },
   };

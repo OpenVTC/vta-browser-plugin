@@ -26,6 +26,20 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Changed
 
+- **`loginViaDidcomm` signs in with `auth/challenge` then a signed
+  `auth/authenticate`** (breaking). It used to authcrypt a bare
+  `auth/authenticate` message with an empty body and take a session issued to
+  the authcrypt sender; affinidi-webvh-service #213 removes that route. It now
+  runs `loginViaTrustTask` over a `DidcommVtaTransport` addressed to the RP, so
+  there is one login implementation for every transport and every RP. It takes
+  a REQUIRED `signing` input (whose DID signs in) and an optional `scope`, and
+  returns an `RpSession`; `DidcommLoginResult` is removed.
+- **`auth/authenticate` is signed with `proofPurpose: authentication`.**
+  `signOutboundTask` picks the purpose from the document type
+  (`outboundProofPurpose`) and passes it to `TaskSigner.sign`, which gains an
+  optional `TaskSignOptions` argument. Every other document keeps
+  `assertionMethod`. `vaultTaskSigner` cannot choose a purpose and still signs
+  `assertionMethod`.
 - **`@openvtc/vti-didcomm-js` floor raised to `^0.11.0`, and it is a
   correctness constraint.** Below it a mediator's Trust-Task replies are never
   acked (they accumulate in the holder's receive queue), a refusal threaded by

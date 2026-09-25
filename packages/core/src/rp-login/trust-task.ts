@@ -4,13 +4,13 @@
 // `TrustTaskSender` — so a login runs on whichever transport the RP advertises,
 // priority TSP > DIDComm > REST, exactly as every VTA operation has since #79.
 //
-// **What this replaces.** `didcomm.ts` sends a bespoke DIDComm message and the
-// RP authenticates on the authcrypt sender, reading nothing from the body. That
-// works, but it is a different rule than the RP applies over HTTPS, it exists
-// only on one transport, and it makes the `challenge` the canonical task
-// declares REQUIRED into a field nobody checks. A challenge that is never
-// checked is not a weaker guarantee than one that is — it is no guarantee, and
-// the difference is invisible from the client.
+// **What this replaced.** `didcomm.ts` used to send a bespoke DIDComm message
+// and the RP authenticated on the authcrypt sender, reading nothing from the
+// body. That was a different rule than the RP applies over HTTPS, it existed
+// only on one transport, and it made the `challenge` the canonical task
+// declares REQUIRED into a field nobody checked. `loginViaDidcomm` is now this
+// function over a DIDComm channel, and affinidi-webvh-service #213 removes the
+// bare route on the RP side.
 //
 // **The proof is the authentication.** The channel signs every outbound
 // document (`signOutboundTask`, SPEC §7.2 item 7a) and the RP establishes the
@@ -19,9 +19,13 @@
 // of the VID. That is what makes this identical over three transports rather
 // than three rules — the guarantee rides with the document, not the pipe.
 //
+// **The authenticate proof declares `proofPurpose: authentication`.** The
+// channel chooses it from the document type (`outboundProofPurpose`): this is
+// the one document whose signature is the signer proving control of its VID.
+//
 // Requires an RP that dispatches the auth family as Trust Tasks
 // (affinidi-webvh-service #171). Against one that does not, the challenge comes
-// back `unsupportedType` and the caller can fall back to `loginViaDidcomm`.
+// back `unsupportedType`; there is no other sign-in to fall back to.
 
 import { authenticateSession, requestAuthChallenge } from "../vta/auth-tasks.js";
 import type { TrustTaskSender } from "../vta/channel.js";

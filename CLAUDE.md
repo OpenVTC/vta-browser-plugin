@@ -223,6 +223,14 @@ a proof where one is merely RECOMMENDED is legal and strictly more
 attributable, and a 141-entry table of which tasks need one goes stale
 invisibly.
 
+**The purpose is chosen by type, in the same place.** `signOutboundTask`
+passes `outboundProofPurpose(envelope.type)` to the signer: `authentication`
+for `auth/authenticate` (the signature *is* the sign-in, and the holder's
+`did:peer:2` key is published under `V`), `assertionMethod` for everything
+else. `vaultTaskSigner` cannot choose and signs `assertionMethod`. RP sign-in
+over DIDComm (`loginViaDidcomm`) is `loginViaTrustTask` over a
+`DidcommVtaTransport` — keep it that way rather than growing a second login.
+
 **What is deliberately NOT signed:** the `/auth/` handshake
 (`vta/auth.ts`). That route is bespoke — it authenticates by the authcrypt
 sender and never reaches the dispatch spine — and `provision/integration`,
