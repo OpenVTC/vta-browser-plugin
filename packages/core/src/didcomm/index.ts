@@ -21,6 +21,7 @@ import {
   unpack as vtiUnpack,
   buildForward as vtiBuildForward,
   resolveX25519KeyAgreement as vtiResolveKeyAgreement,
+  resolveX25519KeyAgreementKey as vtiResolveKeyAgreementKey,
   resolveMediator as vtiResolveMediator,
   resolve as vtiResolve,
   authenticateToMediator as vtiAuthenticateToMediator,
@@ -170,7 +171,13 @@ export type UnpackResult =
       kind: "encrypted";
       message: Record<string, unknown>;
       authenticated: boolean;
+      /** The authcrypt sender key id (`skid`). Absent for anoncrypt. */
       sender_kid?: string;
+      /** The DID of `sender_kid` — the sender the envelope authenticated,
+       *  and the identity to authorise on. Absent for anoncrypt. The library
+       *  (vti-didcomm-js >=0.12) refuses an authcrypt message whose `from` is
+       *  not this DID, but `message.from` remains sender-written plaintext. */
+      sender_did?: string;
       recipient_kid: string;
     }
   | {
@@ -346,6 +353,7 @@ export async function unpackMessage(
     recipient_kid: recipientKid,
   };
   if (result.senderKid) out.sender_kid = result.senderKid;
+  if (result.senderDid) out.sender_did = result.senderDid;
   return out;
 }
 
@@ -554,13 +562,31 @@ export type WebSocketCtor = new (
 ) => unknown;
 
 /**
+ * The sender an inbound DIDComm message was authenticated as: the DID and key
+ * id of the authcrypt envelope's sender key (`skid`). This — not the message's
+ * `from`, which the sender writes itself — is who sent it.
+ */
+export interface InboundSender {
+  readonly did: string;
+  readonly kid: string;
+}
+
+/**
  * A live, authenticated mediator session plus the resolved endpoints
  * the DIDComm transport needs. `waitFor` resolves with the decrypted,
  * sender-authenticated reply correlated by `thid`.
  */
 export interface MediatorConnection {
   send(jwe: string): void;
-  waitFor(thid: string, timeoutMs: number): Promise<Record<string, unknown>>;
+  /** Resolve with the reply threaded to `thid`. Given `from`, only a reply
+   *  whose envelope authenticated it as that DID (or one of those DIDs) is
+   *  accepted: a thread id is a message id this wallet sent through the
+   *  mediator, not a secret. */
+  waitFor(
+    thid: string,
+    timeoutMs: number,
+    options?: { from?: string | readonly string[] },
+  ): Promise<Record<string, unknown>>;
   /** Send a raw TSP message (qb2 bytes) over the SAME socket as DIDComm. The
    *  mediator sniffs the 0xF8 magic and routes it to its TSP handler — so TSP
    *  and DIDComm share one socket per holder DID (no second socket, so no
@@ -601,9 +627,16 @@ export interface MediatorConnection {
    *  mediator would redeliver throughout.
    *
    *  Delivery is at-least-once: the same message can arrive again after a
-   *  reconnect, so handlers must de-duplicate. */
+   *  reconnect, so handlers must de-duplicate.
+   *
+   *  `sender` is who the envelope authenticated. Authorise on `sender.did`,
+   *  never on `message.from`. */
   onInbound(
-    handler: (message: Record<string, unknown>, thid: string) => void | Promise<void>,
+    handler: (
+      message: Record<string, unknown>,
+      thid: string,
+      sender: InboundSender,
+    ) => void | Promise<void>,
   ): void;
   /** Register a handler for inbound **TSP** frames no waiter claimed — the
    *  executor-initiated requests (`task-consent`, step-up) that arrive over
@@ -708,9 +741,11 @@ export async function connectMediatorSession(
   const vta = await resolveKeyAgreement(opts.vtaDid);
 
   // Seed the VTA's key so its replies unpack by skid; resolve any other
-  // sender on demand.
-  const senderKeys = new Map<string, { publicJwk: PublicJwk }>([
-    [opts.vtaDid, { publicJwk: vta.keyAgreementPublicJwk }],
+  // sender on demand. Each key carries its full id: the library selects the
+  // sender key by the exact `skid` (vti-didcomm-js >=0.12), so the key id it
+  // reports is the one the envelope was authenticated with.
+  const senderKeys = new Map<string, { kid: string; publicJwk: PublicJwk }>([
+    [opts.vtaDid, { kid: vta.keyAgreementKid, publicJwk: vta.keyAgreementPublicJwk }],
   ]);
 
   // FIFO queue of TSP-reply waiters. A TSP frame the mediator multiplexes onto
@@ -743,9 +778,11 @@ export async function connectMediatorSession(
       publicKey: clientPublic,
     },
     senderKeys,
-    resolveSender: async (did: string) => {
-      const r = await vtiResolveKeyAgreement(did);
-      return { publicJwk: x25519PublicJwk(r.x25519Pub) };
+    // Called with the frame's `skid`; returns that exact keyAgreement key of
+    // the DID, or throws.
+    resolveSender: async (did: string, skid: string) => {
+      const r = await vtiResolveKeyAgreementKey(did, skid);
+      return { kid: r.kid, publicJwk: x25519PublicJwk(r.x25519Pub) };
     },
     // Awaited by the transport before it acks (vti-didcomm-js >=0.7.0), so
     // everything this does happens while the mediator still holds its copy —
@@ -803,8 +840,10 @@ export async function connectMediatorSession(
   const liveSession = session as unknown as { isOpen: boolean };
   return {
     send: (jwe: string) => session.send(jwe),
-    waitFor: (thid: string, timeoutMs: number) =>
-      session.waitFor(thid, timeoutMs) as Promise<Record<string, unknown>>,
+    waitFor: async (thid, timeoutMs, options) => {
+      const { message } = await session.waitFor(thid, timeoutMs, options?.from ? { from: options.from } : {});
+      return message as Record<string, unknown>;
+    },
     sendBinary: (bytes: Uint8Array) => session.sendBinary(bytes),
     awaitTspFrame: (timeoutMs: number, claims: TspFrameClaim) =>
       new Promise<Uint8Array>((resolve, reject) => {

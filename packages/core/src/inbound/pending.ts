@@ -36,6 +36,11 @@ export interface PendingInbound {
   id: string;
   /** The full message, so the interaction can be re-driven from scratch. */
   message: Record<string, unknown>;
+  /** Who the transport authenticated as the sender (the authcrypt `skid`'s
+   *  DID, or the proven TSP VID). Stored beside the message because a
+   *  re-driven message has no transport left to ask, and the message's own
+   *  `from` is sender-written. */
+  senderDid: string;
   /** Which VTA's session this arrived on: a decision is signed to that VTA,
    *  and the drain must not attribute a message to the wrong one. */
   vtaDid: string;
@@ -65,6 +70,7 @@ export async function putPendingInbound(
   const record: PendingInbound = {
     id: entry.id,
     message: entry.message,
+    senderDid: entry.senderDid,
     vtaDid: entry.vtaDid,
     isApprover: entry.isApprover,
     receivedAt: existing?.receivedAt ?? entry.receivedAt ?? Date.now(),

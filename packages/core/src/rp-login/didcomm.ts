@@ -103,7 +103,12 @@ export async function loginViaDidcomm(opts: DidcommLoginOptions): Promise<Didcom
     ]);
   }
 
-  const reply = await bridge.sendAndAwaitReply(outer, requestId, { timeoutMs });
+  // Only the RP answers a login: a reply on this thread from anyone else is
+  // never handed back.
+  const reply = await bridge.sendAndAwaitReply(outer, requestId, {
+    timeoutMs,
+    from: service.did,
+  });
 
   if (reply.thid !== requestId) {
     throw new Error(`didcomm login: reply thid ${reply.thid ?? "(none)"} != request ${requestId}`);

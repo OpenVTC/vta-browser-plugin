@@ -48,13 +48,27 @@ export interface DidcommReply {
  * registers a reply expectation by `thid`; `send` is fire-and-forget
  * for DIDComm notifications.
  */
+/** Options for {@link DidcommMessageBridge.sendAndAwaitReply}. */
+export interface SendAndAwaitReplyOptions {
+  timeoutMs?: number;
+  /**
+   * The peer(s) whose reply this is: the DID (or DIDs) the reply's envelope
+   * must authenticate as. **Required** — a thread id is the id of a message
+   * this wallet sent through the mediator, not a secret, so a waiter that
+   * accepted any sender on its thread could be answered by anyone. Name the
+   * party the request was addressed to, plus the relaying mediator when a
+   * refusal of the hop is an answer the caller handles.
+   */
+  from: string | readonly string[];
+}
+
 export interface DidcommMessageBridge {
   sendAndAwaitReply(
     /** Outer JWE (forward envelope) to push to the mediator. */
     outerPackedJwe: string,
     /** Expected `thid` of the reply, so the bridge can demultiplex. */
     expectThreadId: string,
-    options?: { timeoutMs?: number },
+    options: SendAndAwaitReplyOptions,
   ): Promise<DidcommReply>;
 
   /**

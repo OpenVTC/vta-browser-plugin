@@ -35,6 +35,7 @@ import {
   requestTask,
   buildTaskConsentDecision,
   parseTaskConsentOutcome,
+  taskConsentOutcomeThread,
   loadApproverIdentity,
   approverDid,
   TRUST_TASK_ENVELOPE_TYPE,
@@ -1285,6 +1286,9 @@ const activeConsentDigests = new Set<string>();
 // document leaks.
 const MAX_AWAITING_DECISIONS = 64;
 interface AwaitingDecision {
+  /** The executor the decision was sent to — the only party whose answer is
+   *  believed (see `parseTaskConsentOutcome`). */
+  executorDid: string;
   payloadDigest: string;
   decision: "approve" | "deny";
   taskType: string;
@@ -1330,16 +1334,21 @@ function notifyApprovalRefused(summary: string): void {
 async function handleTaskConsentOutcome(
   vtaDid: string,
   message: Record<string, unknown>,
+  senderDid: string,
 ): Promise<boolean> {
-  const outcome = parseTaskConsentOutcome(message, {
-    enrolledExecutorDids: await enrolledExecutorDids(vtaDid),
-  });
-  if (!outcome) return false;
-
   // The decision this answers, when we still remember sending it. Absent after
   // an MV3 teardown, or if the executor answered something we never sent — the
-  // outcome is still reported, just without the local detail.
-  const sent = outcome.thid ? awaitingDecisions.get(outcome.thid) : undefined;
+  // outcome is then believed only from this session's own VTA, and reported
+  // without the local detail.
+  const thid = taskConsentOutcomeThread(message);
+  const sent = thid ? awaitingDecisions.get(thid) : undefined;
+  // Only the executor the decision went to may answer it, as authenticated by
+  // the transport — not whoever the message's `from` names.
+  const outcome = await parseTaskConsentOutcome(message, {
+    senderDid,
+    expectedExecutorDid: sent?.executorDid ?? vtaDid,
+  });
+  if (!outcome) return false;
   if (outcome.thid) awaitingDecisions.delete(outcome.thid);
   const what = sent
     ? `${sent.decision} of ${sent.taskType} (digest ${sent.payloadDigest.slice(0, 12)}…)`
@@ -1515,6 +1524,7 @@ async function maybeRelayConsentLocally(
     });
     conn.send(outer.packed);
     recordDecisionSent(outer.id, {
+      executorDid: vtaDid,
       payloadDigest: parsed.parsed.request.payloadDigest,
       decision: "approve",
       taskType: parsed.parsed.request.taskType,
@@ -2371,7 +2381,9 @@ async function createWarmSession(
   if (isInbox) {
     // Return the promise: the transport awaits it and acks only once the
     // message is durably recorded (R1.6).
-    conn.onInbound((message) => onInboundMessage(conn, identity, signing, vtaDid, message));
+    conn.onInbound((message, _thid, sender) =>
+      onInboundMessage(conn, identity, signing, vtaDid, message, sender.did),
+    );
     // The same inbox over TSP. One socket carries both, so an executor that
     // pushes over TSP reaches the identical pipeline — same proof check, same
     // dedup, same persist-before-ack — with `unpackInboundTsp` supplying the
@@ -2857,8 +2869,8 @@ async function createApproverWarmSession(vtaDid: string): Promise<MediatorConnec
   conn.onInboundTsp((bytes) =>
     onInboundTspFrame(conn, approver.identity, approver.signing, vtaDid, bytes, true),
   );
-  conn.onInbound((message) =>
-    onInboundMessage(conn, approver.identity, approver.signing, vtaDid, message, true),
+  conn.onInbound((message, _thid, sender) =>
+    onInboundMessage(conn, approver.identity, approver.signing, vtaDid, message, sender.did, true),
   );
   console.info("[pnm approver] inbox listening as", approver.did);
   return conn;
@@ -3079,6 +3091,7 @@ async function drainPendingInbound(vtaDids: readonly string[]): Promise<void> {
           approver.signing,
           entry.vtaDid,
           entry.message,
+          entry.senderDid,
           true,
           true,
         );
@@ -3093,6 +3106,7 @@ async function drainPendingInbound(vtaDids: readonly string[]): Promise<void> {
           signing,
           entry.vtaDid,
           entry.message,
+          entry.senderDid,
           false,
           true,
         );
@@ -3183,7 +3197,8 @@ async function onInboundTspFrame(
     );
     throw err;
   }
-  await onInboundMessage(conn, identity, signing, vtaDid, message, isApprover);
+  // `message.from` here is the sender `unpackInboundTsp` proved, not a claim.
+  await onInboundMessage(conn, identity, signing, vtaDid, message, message.from, isApprover);
 }
 
 async function onInboundMessage(
@@ -3192,6 +3207,10 @@ async function onInboundMessage(
   signing: SigningIdentity,
   vtaDid: string,
   message: Record<string, unknown>,
+  // Who the transport authenticated as the sender: the authcrypt `skid`'s DID
+  // (DIDComm) or the proven VID (TSP). Carried beside the message, and
+  // persisted with it, because the message's own `from` is sender-written.
+  senderDid: string,
   isApprover = false,
 ): Promise<void> {
   const id = typeof message.id === "string" ? message.id : undefined;
@@ -3210,7 +3229,7 @@ async function onInboundMessage(
     isApprover ? "(approver inbox)" : "(worker inbox)",
     "type=", message.type,
     "id=", id ?? "(none)",
-    "from=", message.from,
+    "sender=", senderDid,
     "to=", message.to,
   );
   let persistError: unknown;
@@ -3219,6 +3238,7 @@ async function onInboundMessage(
       await putPendingInbound(new IndexedDBKVStore(), {
         id,
         message,
+        senderDid,
         vtaDid,
         isApprover,
       });
@@ -3233,7 +3253,7 @@ async function onInboundMessage(
     }
   }
   // Deliberately not awaited — see above.
-  void handleInbound(conn, identity, signing, vtaDid, message, isApprover);
+  void handleInbound(conn, identity, signing, vtaDid, message, senderDid, isApprover);
   if (persistError) throw persistError;
 }
 
@@ -3252,11 +3272,12 @@ async function handleInbound(
   signing: SigningIdentity,
   vtaDid: string,
   message: Record<string, unknown>,
+  senderDid: string,
   isApprover = false,
   fromDrain = false,
 ): Promise<void> {
   try {
-    await dispatchInbound(conn, identity, signing, vtaDid, message, isApprover, fromDrain);
+    await dispatchInbound(conn, identity, signing, vtaDid, message, senderDid, isApprover, fromDrain);
   } catch (err) {
     // There was no catch here, and the call site is `void handleInbound(...)`.
     // So anything dispatch threw — rather than returned as a refusal — became an
@@ -3293,6 +3314,8 @@ async function dispatchInbound(
   signing: SigningIdentity,
   vtaDid: string,
   message: Record<string, unknown>,
+  // The transport-authenticated sender (see `onInboundMessage`).
+  senderDid: string,
   // True when this is the approver's own inbox session: the decision is signed
   // as the approver, and the popup demands a per-decision biometric.
   isApprover = false,
@@ -3307,7 +3330,7 @@ async function dispatchInbound(
   // — accepted only from our enrolled VTA, carries no secret, and the page
   // re-checks the digest against its outstanding approval before acting — so we
   // just relay it to the background, which broadcasts it as a page event.
-  const granted = parseTaskConsentGranted(message, vtaDid);
+  const granted = parseTaskConsentGranted(message, vtaDid, senderDid);
   if (granted) {
     void chrome.runtime.sendMessage({
       type: RUNTIME_EMIT_WALLET_EVENT,
@@ -3322,7 +3345,7 @@ async function dispatchInbound(
   // reply on the same envelope type, and `parseTaskConsentRequest` can only
   // report it as `not-a-task-consent-request`, which is the one reason a caller
   // is allowed to ignore. That is exactly how a refused approval used to vanish.
-  if (await handleTaskConsentOutcome(vtaDid, message)) {
+  if (await handleTaskConsentOutcome(vtaDid, message, senderDid)) {
     return;
   }
 
@@ -3467,6 +3490,7 @@ async function handleTaskConsent(
     // Sending is not the end of the ceremony — a refusal means the human agreed
     // to a change that did not happen, and they have to be told which one.
     recordDecisionSent(outer.id, {
+      executorDid: parsed.executorDid,
       payloadDigest: parsed.request.payloadDigest,
       decision,
       taskType: parsed.request.taskType,

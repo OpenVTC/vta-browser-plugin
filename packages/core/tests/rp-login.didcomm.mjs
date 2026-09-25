@@ -50,8 +50,8 @@ function bridge(reply) {
   const calls = [];
   return {
     calls,
-    async sendAndAwaitReply(packed, requestId) {
-      calls.push({ packed, requestId });
+    async sendAndAwaitReply(packed, requestId, options) {
+      calls.push({ packed, requestId, options });
       return typeof reply === "function" ? reply(requestId) : { ...reply, thid: requestId };
     },
   };
@@ -146,4 +146,17 @@ test("the request goes out under the canonical authenticate type", async () => {
   // sender and reads nothing here. See the note in didcomm.ts about the
   // conformance gap this leaves against the canonical schema.
   assert.deepEqual(opened.message.body, {});
+});
+
+test("the bridge is told only the RP may answer", async () => {
+  // A thread id is not a secret; the waiter must refuse anyone else's frame on
+  // it rather than rely on the check after it has already been handed one.
+  const b = bridge({
+    type: AUTH_RESPONSE,
+    from: RP_DID,
+    body: { session_id: "s", access_token: "a", refresh_token: "r", access_expires_at: 1 },
+  });
+  await loginViaDidcomm(opts(b));
+  assert.equal(b.calls.length, 1);
+  assert.equal(b.calls[0].options.from, RP_DID);
 });

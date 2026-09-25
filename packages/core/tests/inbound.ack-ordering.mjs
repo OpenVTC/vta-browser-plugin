@@ -80,7 +80,7 @@ async function harness(onMessage) {
     },
     mediatorJwt: "med.jwt",
     client,
-    senderKeys: new Map([[vta.did, { publicJwk: jwk.publicJwk("X25519", vta.publicKey) }]]),
+    senderKeys: new Map([[vta.did, { kid: vta.kid, publicJwk: jwk.publicJwk("X25519", vta.publicKey) }]]),
     WebSocketImpl: FakeWebSocket,
     onMessage,
   });

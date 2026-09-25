@@ -3,7 +3,11 @@ import {
   unpackMessage,
   type PublicJwk,
 } from "../didcomm/index.js";
-import type { DidcommMessageBridge, DidcommReply } from "./transport.js";
+import type {
+  DidcommMessageBridge,
+  DidcommReply,
+  SendAndAwaitReplyOptions,
+} from "./transport.js";
 
 /**
  * Parse a JWE protected-header `skid` without decrypting. Authcrypt
@@ -119,12 +123,21 @@ export class InMemoryDidcommBridge implements DidcommMessageBridge {
   async sendAndAwaitReply(
     outerPackedJwe: string,
     _expectThreadId: string,
-    _options?: { timeoutMs?: number },
+    options: SendAndAwaitReplyOptions,
   ): Promise<DidcommReply> {
     const reply = await this.process(outerPackedJwe);
     if (reply === null) {
       throw new Error(
         "bridge: handler returned no reply (notification) but caller awaited one",
+      );
+    }
+    // Mirror the real bridge: a reply from a peer the caller did not name is
+    // not its answer. (The session leaves such a frame for other consumers
+    // and the caller times out; the simulator fails fast instead.)
+    const expected = typeof options.from === "string" ? [options.from] : options.from;
+    if (!reply.from || !expected.includes(reply.from)) {
+      throw new Error(
+        `bridge: reply from ${reply.from ?? "(none)"} is not from ${expected.join(" or ")}`,
       );
     }
     return reply;
