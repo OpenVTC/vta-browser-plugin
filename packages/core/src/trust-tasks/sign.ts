@@ -26,11 +26,13 @@ export interface SignTrustTaskOptions {
   signing: SigningIdentity;
   /** Proof purpose written into the Data Integrity proof.
    *
-   *  Defaults to `"assertionMethod"` — the right choice for trust-task
-   *  envelopes vouching for a claim. Set to `"authentication"` when the
-   *  signature *is* the holder proving control of an identity rather than
-   *  attesting to a separate claim — e.g. a VP-framed bootstrap request
-   *  (the provision-integration flow) or a SIOP-shaped self-attestation. */
+   *  Defaults to `"authentication"`: a Trust Task this wallet sends is its
+   *  own operational message, and the VTA, the VTC and the did-hosting RP
+   *  sign theirs the same way (VTI #1740, affinidi-webvh-service #213).
+   *  `"assertionMethod"` is for the human approver's own decision (a step-up
+   *  approve-response, a task-consent decision), which the did-hosting RP
+   *  refuses under any other purpose; those callers pass it explicitly (see
+   *  `outboundProofPurpose`). */
   proofPurpose?: "assertionMethod" | "authentication";
   /** Milliseconds to back-date the proof's `created` timestamp, absorbing
    *  clock skew between this wallet and the verifier.
@@ -62,7 +64,7 @@ const DEFAULT_CLOCK_SKEW_MS = 60_000;
 export async function signTrustTask({
   envelope,
   signing,
-  proofPurpose = "assertionMethod",
+  proofPurpose = "authentication",
   clockSkewMs = DEFAULT_CLOCK_SKEW_MS,
 }: SignTrustTaskOptions): Promise<TrustTaskEnvelope> {
   const proofConfig: Record<string, unknown> = {

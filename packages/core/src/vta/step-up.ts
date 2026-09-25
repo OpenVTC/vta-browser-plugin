@@ -100,7 +100,8 @@ export interface VerifyStepUpApproveRequestOptions {
  *    reason}` path was removed deliberately; the control plane now always
  *    returns a signed document);
  *  - its Data-Integrity proof must verify (`eddsa-jcs-2022`,
- *    `assertionMethod`), the in-band `issuer` must equal the proven signer,
+ *    `authentication`, by a key the executor lists under `authentication`),
+ *    the in-band `issuer` must equal the proven signer,
  *    and that signer must be an executor this wallet is enrolled with;
  *  - when the legacy top-level fields are also present they must agree with
  *    the verified payload (a mismatch means someone altered the unsigned
@@ -124,8 +125,10 @@ export async function verifyStepUpApproveRequest(
     return refuse(`document type ${String(type)} is not a step-up approve-request`);
   }
 
+  // The executor's own operational message: `authentication`, by a key it
+  // lists under `authentication` (VTI #1740; affinidi-webvh-service #213).
   const verification = await verifyTrustTaskProof(doc, {
-    expectedProofPurpose: "assertionMethod",
+    expectedProofPurpose: "authentication",
   });
   if (!verification.verified || !verification.signer) {
     return refuse(verification.reason ?? "proof did not verify");

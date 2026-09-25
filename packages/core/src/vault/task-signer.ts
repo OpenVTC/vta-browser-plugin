@@ -53,7 +53,7 @@ export interface VaultTaskSignerOptions {
 export function vaultTaskSigner(opts: VaultTaskSignerOptions): TaskSigner {
   return {
     did: opts.did,
-    sign: async (envelope) => {
+    sign: async (envelope, signOpts) => {
       const { signedEnvelope } = await vaultSignTrustTask(opts.session, {
         holder: opts.holder,
         service: opts.service,
@@ -67,6 +67,18 @@ export function vaultTaskSigner(opts: VaultTaskSignerOptions): TaskSigner {
         // with nothing pointing at the step that dropped it.
         throw new Error(
           `vault/sign-trust-task: the VTA returned an envelope with no proof for ${opts.did}`,
+        );
+      }
+      // `vault/sign-trust-task/0.2` takes no purpose and signs `assertionMethod`.
+      // A consumer that enforces the purpose (the did-hosting RP,
+      // affinidi-webvh-service #213) refuses that on an operational document,
+      // so a proof that is not the purpose asked for is refused here, naming
+      // the step, rather than sent to be refused there.
+      const purpose = (proof as { proofPurpose?: unknown }).proofPurpose;
+      if (signOpts && purpose !== signOpts.proofPurpose) {
+        throw new Error(
+          `vault/sign-trust-task: the VTA signed as ${opts.did} for ${String(purpose)}, ` +
+            `but this document needs ${signOpts.proofPurpose}. Nothing was sent`,
         );
       }
       // Mutate in place: `signOutboundTask` returns void because every channel

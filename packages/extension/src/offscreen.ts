@@ -1636,10 +1636,23 @@ async function doVerifyDid(did: string): Promise<VerifyRpDidResult> {
 //    canonicalises + signs + returns the signed envelope. Same
 //    eddsa-jcs-2022 proof shape, just signed by a different key.
 //
-// Falls back to holder-signing on `asDid` set BUT no matching vault
-// entry — easier on the caller than failing, and the resulting
-// proof's verificationMethod ≠ asDid will surface as a clear RP-side
-// rejection the operator can diagnose.
+// `asDid` set but no matching vault entry is refused. Signing as the holder
+// instead would hand the page a document its consumer refuses anyway (the
+// proof's signer is not the issuer it asked for), after the human approved a
+// signature by a different identity than the one they were shown.
+//
+// **A holder-signed proof is `authentication`, and names the holder as
+// `issuer`.** The did-hosting RP (affinidi-webvh-service #213) acts on a
+// document only when its proof is an operational `authentication` proof by
+// the in-band `issuer`. A page cannot choose `assertionMethod`: that purpose
+// marks the human approver's own decision (a step-up approve-response, a
+// task-consent decision), which this wallet mints only from its own approval
+// surfaces. A page that could obtain one here would be minting approvals.
+//
+// The persona path cannot choose either: `vault/sign-trust-task/0.2` pins
+// `assertionMethod`, so a consumer that requires `authentication` refuses a
+// persona-signed operational document until the VTA can sign one under
+// `authentication`.
 async function doSignTrustTask(
   vtaDid: string,
   params: SignTrustTaskParams,
@@ -1684,28 +1697,33 @@ async function doSignTrustTask(
       });
       return { signedEnvelope, holderDid: params.asDid };
     }
-    // Fall through to holder-signing with a warning the operator
-    // can spot in the offscreen console.
-    console.warn(
-      `[pnm] signTrustTask: asDid=${params.asDid} requested but no matching vault entry found; falling back to holder-signed proof (the RP will likely reject)`,
+    throw new Error(
+      `signTrustTask: no did-self-issued or didcomm-peer vault entry signs as ${params.asDid}; nothing was signed`,
     );
-    const { signing } = await loadHolder(vtaDid);
-    const signedEnvelope = await signTrustTask({
-      envelope: { ...envelope },
-      signing,
-    });
-    return { signedEnvelope, holderDid: signing.did };
+  }
+  if (params.asDid) {
+    throw new Error(
+      `signTrustTask: signing as ${params.asDid} needs the VTA's REST endpoint, and this connection has none; nothing was signed`,
+    );
   }
 
   // Holder-signed path: existing default.
   const { signing } = await loadHolder(vtaDid);
+  const issuer = (envelope as { issuer?: unknown }).issuer;
+  if (issuer !== undefined && issuer !== signing.did) {
+    throw new Error(
+      `signTrustTask: envelope.issuer (${String(issuer)}) is not this wallet's holder (${signing.did}); ` +
+        "a proof by one DID over a document issued by another is refused by every consumer",
+    );
+  }
   // signTrustTask mutates in place and returns the same reference; clone
   // first so the caller's input is preserved across the IPC boundary
   // (chrome.runtime.sendMessage serializes — a defensive copy is cheap and
   // makes the contract clear).
   const signedEnvelope = await signTrustTask({
-    envelope: { ...envelope },
+    envelope: { ...envelope, issuer: signing.did },
     signing,
+    proofPurpose: "authentication",
   });
   return { signedEnvelope, holderDid: signing.did };
 }

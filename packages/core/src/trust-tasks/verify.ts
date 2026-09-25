@@ -40,7 +40,10 @@ export interface VerifyTrustTaskProofResult {
 
 export interface VerifyTrustTaskProofOptions {
   /** The proof purpose the caller requires (e.g. `"assertionMethod"`). When
-   *  set, a proof with a different `proofPurpose` fails verification. */
+   *  set, a proof with a different `proofPurpose` fails verification, **and so
+   *  does one whose `verificationMethod` the signer's DID document does not
+   *  list under that relationship**. A proof that says `authentication` is an
+   *  authentication by the DID only when its controller put the key there. */
   expectedProofPurpose?: "assertionMethod" | "authentication";
   /** Resolve a DID to its DID document. Defaults to the wallet's built-in
    *  resolver ({@link resolveDidDocument}, covers did:key / did:peer / did:webvh).
@@ -79,10 +82,18 @@ export async function verifyTrustTaskProof(
   const controller = vm.slice(0, vm.indexOf("#"));
 
   let publicKey: Uint8Array;
+  let didDocument: Record<string, unknown>;
   try {
-    publicKey = await resolveEd25519Key(vm, controller, opts.resolveDid);
+    ({ key: publicKey, doc: didDocument } = await resolveEd25519Key(vm, controller, opts.resolveDid));
   } catch (e) {
     return { verified: false, signer: controller, reason: `verificationMethod resolution failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (opts.expectedProofPurpose && !listsMethodUnder(didDocument, vm, opts.expectedProofPurpose)) {
+    return {
+      verified: false,
+      signer: controller,
+      reason: `${vm} is not listed under ${opts.expectedProofPurpose} in the DID document of ${controller}`,
+    };
   }
 
   // Reconstruct the signing input exactly as sign.ts built it: the proofConfig
@@ -109,12 +120,35 @@ export async function verifyTrustTaskProof(
     : { verified: false, signer: controller, reason: "signature verification failed" };
 }
 
-/** Resolve a `verificationMethod` DID URL to its Ed25519 public-key bytes. */
+/**
+ * Whether `doc` lists the verification method `vm` under `relationship`: by
+ * absolute DID URL, by relative `#fragment`, or as an embedded method.
+ */
+export function listsMethodUnder(
+  doc: Record<string, unknown>,
+  vm: string,
+  relationship: "assertionMethod" | "authentication",
+): boolean {
+  const hash = vm.indexOf("#");
+  const fragment = hash >= 0 ? vm.slice(hash) : undefined;
+  const names = (id: unknown): boolean =>
+    typeof id === "string" && (id === vm || (fragment !== undefined && id === fragment));
+  const entries = doc[relationship];
+  if (!Array.isArray(entries)) return false;
+  return entries.some((entry) =>
+    typeof entry === "string"
+      ? names(entry)
+      : typeof entry === "object" && entry !== null && names((entry as { id?: unknown }).id),
+  );
+}
+
+/** Resolve a `verificationMethod` DID URL to its Ed25519 public-key bytes, and
+ *  return the DID document it was read from. */
 async function resolveEd25519Key(
   vm: string,
   controller: string,
   resolveDid?: (did: string) => Promise<Record<string, unknown>>,
-): Promise<Uint8Array> {
+): Promise<{ key: Uint8Array; doc: Record<string, unknown> }> {
   const doc = controller.startsWith("did:key:")
     ? (didKey.resolve(controller).didDocument as Record<string, unknown>)
     : await (resolveDid ?? resolveDidDocument)(controller);
@@ -128,5 +162,5 @@ async function resolveEd25519Key(
   if (codec[0] !== ED25519_PUB[0] || codec[1] !== ED25519_PUB[1]) {
     throw new Error("verificationMethod key is not Ed25519");
   }
-  return key;
+  return { key, doc };
 }

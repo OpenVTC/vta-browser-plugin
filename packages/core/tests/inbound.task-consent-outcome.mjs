@@ -103,37 +103,6 @@ test("a missing retryable reads as not-retryable, never as optimism", async () =
   assert.equal(outcome.retryable, false);
 });
 
-test("an accepted decision reports the status and the tally", async () => {
-  const outcome = await parseTaskConsentOutcome(
-    envelope({
-      id: "urn:uuid:ok-1",
-      type: TASK_CONSENT_DECISION_RESPONSE_TYPE,
-      threadId: THID,
-      payload: { status: "granted", payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ", approvals: 1 },
-    }),
-    OPTS,
-  );
-  assert.equal(outcome.accepted, true);
-  assert.equal(outcome.status, "granted");
-  assert.equal(outcome.approvals, 1);
-  assert.equal(outcome.payloadDigest, "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ");
-});
-
-test("a partial approval is accepted, and says how many more are needed", async () => {
-  const outcome = await parseTaskConsentOutcome(
-    envelope({
-      id: "urn:uuid:ok-2",
-      type: TASK_CONSENT_DECISION_RESPONSE_TYPE,
-      threadId: THID,
-      payload: { status: "pending", payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ", approvals: 1, needed: 2 },
-    }),
-    OPTS,
-  );
-  assert.equal(outcome.accepted, true);
-  assert.equal(outcome.status, "pending");
-  assert.equal(outcome.needed, 2);
-});
-
 test("a refusal whose `from` names the VTA but whose sender is someone else is not believed", async () => {
   // The forged notice: an attacker authcrypts with its own key and writes the
   // VTA's DID into `from`. Believing it would tell the human their approval
@@ -189,17 +158,70 @@ const SIGNED_VTA = generateSigningIdentity();
 const ATTACKER = generateSigningIdentity();
 const SIGNED_OPTS = { senderDid: SIGNED_VTA.did, expectedExecutorDid: SIGNED_VTA.did };
 
-async function signedResponse({ signer = SIGNED_VTA, issuer = SIGNED_VTA.did } = {}) {
+const DIGEST = "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ";
+
+async function signedResponse({
+  signer = SIGNED_VTA,
+  issuer = SIGNED_VTA.did,
+  payload = { status: "granted", payloadDigest: DIGEST },
+  proofPurpose,
+} = {}) {
   const doc = {
     id: "urn:uuid:ok-signed",
     type: TASK_CONSENT_DECISION_RESPONSE_TYPE,
     issuer,
     threadId: THID,
-    payload: { status: "granted", payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ" },
+    payload,
   };
-  await signTrustTask({ envelope: doc, signing: signer });
+  await signTrustTask({ envelope: doc, signing: signer, ...(proofPurpose ? { proofPurpose } : {}) });
   return envelope(doc, { from: SIGNED_VTA.did });
 }
+
+test("an accepted decision reports the status and the tally", async () => {
+  const outcome = await parseTaskConsentOutcome(
+    await signedResponse({ payload: { status: "granted", payloadDigest: DIGEST, approvals: 1 } }),
+    SIGNED_OPTS,
+  );
+  assert.equal(outcome.accepted, true);
+  assert.equal(outcome.status, "granted");
+  assert.equal(outcome.approvals, 1);
+  assert.equal(outcome.payloadDigest, DIGEST);
+});
+
+test("a partial approval is accepted, and says how many more are needed", async () => {
+  const outcome = await parseTaskConsentOutcome(
+    await signedResponse({ payload: { status: "pending", payloadDigest: DIGEST, approvals: 1, needed: 2 } }),
+    SIGNED_OPTS,
+  );
+  assert.equal(outcome.accepted, true);
+  assert.equal(outcome.status, "pending");
+  assert.equal(outcome.needed, 2);
+});
+
+test("an unsigned success response is dropped, even from the right sender", async () => {
+  // The VTA and the did-hosting RP sign every non-error reply; an unsigned
+  // "granted" is a claim nobody made.
+  const outcome = await parseTaskConsentOutcome(
+    envelope({
+      id: "urn:uuid:ok-1",
+      type: TASK_CONSENT_DECISION_RESPONSE_TYPE,
+      issuer: VTA,
+      threadId: THID,
+      payload: { status: "granted", payloadDigest: DIGEST },
+    }),
+    OPTS,
+  );
+  assert.equal(outcome, null);
+});
+
+test("a success response signed for assertionMethod is dropped", async () => {
+  // An executor's reply is its operational message: `authentication`.
+  const outcome = await parseTaskConsentOutcome(
+    await signedResponse({ proofPurpose: "assertionMethod" }),
+    SIGNED_OPTS,
+  );
+  assert.equal(outcome, null);
+});
 
 test("a reply signed by the executor is believed", async () => {
   const outcome = await parseTaskConsentOutcome(await signedResponse(), SIGNED_OPTS);

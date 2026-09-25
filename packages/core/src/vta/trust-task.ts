@@ -19,6 +19,7 @@
 import { isStandardCode, normalizeCode } from "@openvtc/trust-tasks/_runtime/codes";
 import { TYPE_URI as APPROVE_RESPONSE_0_2 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.2/payload";
 import { TYPE_URI as APPROVE_RESPONSE_0_3 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.3/payload";
+import { TYPE_URI as TASK_CONSENT_DECISION_0_1 } from "@openvtc/trust-tasks/task-consent/decision/0.1/payload";
 
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
@@ -159,14 +160,18 @@ export async function signOutboundTask(
 export type OutboundProofPurpose = "assertionMethod" | "authentication";
 
 /**
- * The step-up approvals, whose specifications pin the purpose: "The
- * `proof.proofPurpose` MUST be `assertionMethod`" (approve-response 0.2 and
- * 0.3, the two versions this wallet mints). The proof there is the approver attesting to a decision, which is
- * what `assertionMethod` says.
+ * The human approver's own decisions: the step-up approve-response (0.2 and
+ * 0.3, whose specifications pin "The `proof.proofPurpose` MUST be
+ * `assertionMethod`") and the task-consent decision. The proof there is the
+ * approver attesting to a decision, which is what `assertionMethod` says, and
+ * the did-hosting RP (affinidi-webvh-service #213, `verify_approval`) refuses
+ * either one signed for `authentication` or with a key not listed under
+ * `assertionMethod`.
  */
 const ASSERTION_PURPOSE_TYPES: ReadonlySet<string> = new Set([
   APPROVE_RESPONSE_0_2,
   APPROVE_RESPONSE_0_3,
+  TASK_CONSENT_DECISION_0_1,
 ]);
 
 /**
@@ -182,13 +187,14 @@ const ASSERTION_PURPOSE_TYPES: ReadonlySet<string> = new Set([
  * signature is the sign-in, is the plainest case of the rule, not an exception
  * to it.
  *
- * The exceptions are the types in {@link ASSERTION_PURPOSE_TYPES}, whose
- * specifications say `assertionMethod` in a MUST.
+ * The exceptions are the approver's own decisions in
+ * {@link ASSERTION_PURPOSE_TYPES}, which are attestations.
  *
- * None of the consumers enforces a purpose on an inbound request (their
- * verification-method resolvers accept a key listed under either
- * relationship), so this is a statement of what the proof is for rather than
- * a key that opens a different door.
+ * **The purpose is enforced.** The did-hosting RP (affinidi-webvh-service
+ * #213) refuses an operational document signed for `assertionMethod`, and an
+ * approver decision signed for `authentication`, and checks the key is listed
+ * under the relationship the proof names. So a wrong purpose here is a refused
+ * document, not a label.
  *
  * Decided here, from the document's type, for the reason the channel signs at
  * all: every transport gets the same proof without its caller choosing.
@@ -226,11 +232,12 @@ export interface TaskSignOptions {
 export interface TaskSigner {
   readonly did: string;
   /**
-   * Put a proof on `envelope`, in place. A signer that cannot choose the
-   * purpose (the VTA's `vault/sign-trust-task` signs `assertionMethod` and
-   * takes no option, and its specification pins `assertionMethod`) ignores
-   * `opts`. The resulting proof still verifies at the VTA, the VTC and the
-   * RPs, whose resolvers accept a key under either relationship.
+   * Put a proof on `envelope`, in place, under `opts.proofPurpose`. A signer
+   * that cannot produce that purpose throws rather than sign under another:
+   * the did-hosting RP refuses a proof whose purpose is not the one the
+   * document needs, so a wrong one is only a later, vaguer refusal. The VTA's
+   * `vault/sign-trust-task/0.2` takes no purpose and signs `assertionMethod`,
+   * so `vaultTaskSigner` can sign only the approver's decisions today.
    */
   sign(envelope: TrustTask<unknown>, opts?: TaskSignOptions): Promise<void>;
 }
@@ -340,7 +347,13 @@ export async function verifyTrustTaskReply(
 ): Promise<void> {
   if (isTrustTaskErrorType(doc.type)) return;
 
-  const result = await verifyTrustTaskProof(doc as Record<string, unknown>);
+  // Every agent this wallet talks to signs its replies with its operational
+  // key under `authentication` (VTI #1740, VTI-KEY-106; affinidi-webvh-service
+  // #213), and that key must be listed there: the resolver finds a key under
+  // either relationship, so the relationship is checked here.
+  const result = await verifyTrustTaskProof(doc as Record<string, unknown>, {
+    expectedProofPurpose: "authentication",
+  });
   if (!result.verified) {
     throw new VtaClientError(
       "e.client.parse",

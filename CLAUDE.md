@@ -231,16 +231,33 @@ also names the signer as `issuer` when a document has none, fills a missing
 `id` / `issuedAt`, and refuses a document with no `recipient` — all before the
 proof, which covers them.
 
-**The purpose is chosen by type, in the same place.** `outboundProofPurpose`
-gives `authentication` to every request — the proof is this wallet
-authenticating as the issuer, under the relationship its `did:peer:2` key is
-published in (`V`) — except the step-up `approve-response` 0.2/0.3, whose
-specs say `assertionMethod` in a MUST. No consumer enforces a purpose on an
-inbound request today, so this is what the proof says, not a door it opens.
-Documents signed outside a channel (`task-consent/decision`,
-`buildStepUpApproval`) use the same rule. `vaultTaskSigner` cannot choose, and
-`vault/sign-trust-task` pins `assertionMethod`, so a persona-signed document
-always declares `assertionMethod`.
+**The purpose is chosen by type, in the same place, and it is enforced.**
+`outboundProofPurpose` gives `authentication` to every request — the proof is
+this wallet authenticating as the issuer — except the human approver's own
+decisions: the step-up `approve-response` 0.2/0.3 (whose specs say
+`assertionMethod` in a MUST) and the `task-consent/decision`. Those are
+attestations. The did-hosting RP (affinidi-webvh-service #213) refuses an
+operational document under `assertionMethod`, and an approver decision under
+anything else, and checks the key is listed under the relationship the proof
+names. Documents signed outside a channel (`task-consent/decision`,
+`buildStepUpApproval`) use the same rule; `signTrustTask` defaults to
+`authentication`. `vault/sign-trust-task/0.2` pins `assertionMethod`, so
+`vaultTaskSigner` refuses to sign anything that needs `authentication` rather
+than produce a proof the consumer will refuse. The page-facing
+`window.vtaWallet.signTrustTask` signs as the holder under `authentication`
+only, and refuses an `issuer` that is not the signer: a page must never be able
+to mint an approver's `assertionMethod` decision.
+
+**What this wallet verifies is held to the same rule.** The VTA (VTI #1740),
+the VTC and the did-hosting RP sign every reply, and every consent / step-up
+request they push, with their operational key under `authentication`.
+`verifyTrustTaskReply`, `parseTaskConsentRequest`, `verifyStepUpApproveRequest`
+and `parseTaskConsentOutcome` require `authentication`, and
+`verifyTrustTaskProof` (given an `expectedProofPurpose`) requires the key to be
+listed under that relationship in the signer's DID document — the resolver
+finds a key under either, so the relationship is ours to check. A
+`task-consent/decision#response` must be signed; only error documents may be
+unsigned.
 
 **A DIDComm or TSP document is sent by its signer, and the channel checks.**
 `DidcommVtaTransport` and `TspChannel` pass their sender DID to
@@ -256,8 +273,23 @@ Two paths used to break that rule, and each is settled differently:
   keyAgreement included, live at the VTA and never leave it, so the wallet
   cannot send as it. `doDidcommLogin` refuses a persona up front; persona
   sign-in is REST, where the VTA mints the id_token (`vault/proxy-login`).
-  Making it work over DIDComm/TSP needs a consumer-side change (a delegation
-  the signer grants the sender), not a relaxed check here.
+  Do not "fix" this by relaxing the binding. What was checked and why each
+  route is closed today:
+  - The vault signer is sign-only (`vault/sign-trust-task`); the VTA has no
+    key-agreement, pack or send operation for a persona, and it signs only
+    `assertionMethod`, which the RP refuses on `auth/authenticate`.
+  - A plugin-held keyAgreement key published in the persona's DID document
+    (`vta/webvh/dids/update` accepts external keys) would let the wallet
+    authcrypt as the persona, but it moves persona custody to the device (it
+    decrypts everything sent to the persona), needs a mediator session as each
+    persona for replies, and does nothing for TSP, whose sender proof is a
+    signature by the VID's signing key.
+  - The route that keeps the rule is a `sender-delegation/0.1` (draft spec,
+    dtgwg-trust-tasks-tf): the persona, through the VTA, signs a short-lived,
+    audience- and document-bound delegation naming the wallet's (pairwise)
+    transport identity, and the consumer checks it before accepting
+    signer ≠ sender. It needs the VTA to sign it (and the persona's documents
+    under `authentication`) and the consumers to verify it.
 
 RP sign-in over DIDComm (`loginViaDidcomm`) is `loginViaTrustTask` over a
 `DidcommVtaTransport` — keep it that way rather than growing a second login.

@@ -48,6 +48,19 @@ For history before this file, see `git log` on `packages/core`.
   signer as `issuer` when none is set, fills a missing `id` or `issuedAt`, and
   refuses (`e.client.identity`) a document with no `recipient`.
 - `buildStepUpApproval` sets `issuedAt` on the approve-response.
+- **Proof purposes are enforced both ways** (breaking). The approver's own
+  decisions — step-up `approve-response` and `task-consent/decision` — are
+  signed `assertionMethod`, which the did-hosting RP now requires
+  (affinidi-webvh-service #213); every other outbound document is
+  `authentication`, and `signTrustTask` now defaults to `authentication`.
+  Replies (`verifyTrustTaskReply`), pushed `task-consent/request` and step-up
+  approve-requests, and `task-consent/decision#response` must be signed
+  `authentication` by a key the signer lists under `authentication` (VTI
+  #1740). `verifyTrustTaskProof` checks the verification method is listed
+  under `expectedProofPurpose` in the signer's DID document. A
+  `task-consent/decision#response` without a proof is dropped.
+  `vaultTaskSigner` refuses a document whose purpose the VTA's
+  `vault/sign-trust-task/0.2` cannot produce.
 - **A DIDComm or TSP document is sent by its signer.** `signOutboundTask`
   takes the channel's sender DID and refuses a signer that is not it;
   `DidcommVtaTransport` and `TspChannel` pass theirs. `buildTaskConsentDecision`

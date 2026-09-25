@@ -58,7 +58,14 @@ function payload(over = {}) {
  * refused for tampering rather than for being unaddressed, which is a different
  * test that already exists.
  */
-async function inbound({ as = VTA, over = {}, drop = [], recipient = HOLDER, unsigned = false } = {}) {
+async function inbound({
+  as = VTA,
+  over = {},
+  drop = [],
+  recipient = HOLDER,
+  unsigned = false,
+  proofPurpose,
+} = {}) {
   const p = payload(over);
   for (const k of drop) delete p[k];
   const doc = {
@@ -70,7 +77,7 @@ async function inbound({ as = VTA, over = {}, drop = [], recipient = HOLDER, uns
     payload: p,
   };
   if (!unsigned) {
-    await signTrustTask({ envelope: doc, signing: as });
+    await signTrustTask({ envelope: doc, signing: as, ...(proofPurpose ? { proofPurpose } : {}) });
   }
   return { id: doc.id, type: TRUST_TASK_ENVELOPE_TYPE, from: as.did, body: doc };
 }
@@ -88,6 +95,16 @@ test("a request signed by any enrolled executor (e.g. a control plane) is accept
   const res = await parseTaskConsentRequest(await inbound({ as: CONTROL_PLANE }), opts);
   assert.equal(res.ok, true);
   assert.equal(res.parsed.executorDid, CONTROL_PLANE.did);
+});
+
+test("a request signed for assertionMethod never reaches a human", async () => {
+  // A consent request is the executor's operational message, signed with its
+  // operational key under `authentication` (VTI #1740; affinidi-webvh-service
+  // #213). An `assertionMethod` proof is refused before anything is shown.
+  const res = await parseTaskConsentRequest(await inbound({ proofPurpose: "assertionMethod" }), opts);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "untrusted_issuer");
+  assert.match(res.detail, /authentication/);
 });
 
 test("an unsigned request never reaches a human", async () => {
@@ -245,11 +262,12 @@ test("the decision echoes the challenge and digest verbatim, and is signed", asy
   // The proof IS the authorization — the VTA takes the approver's identity from
   // it, not from the session that carried it.
   assert.ok(doc.proof, "an unsigned decision authorizes nothing");
-  // Issued by the signer and declaring `authentication`, like every document
-  // the channels send; placed in time and uniquely identified for the VTA's
-  // freshness and replay checks.
+  // Issued by the signer and declaring `assertionMethod`: the approver's own
+  // decision is an attestation, which the did-hosting RP requires
+  // (affinidi-webvh-service #213). Placed in time and uniquely identified for
+  // the executor's freshness and replay checks.
   assert.equal(doc.issuer, DEVICE.did);
-  assert.equal(doc.proof.proofPurpose, "authentication");
+  assert.equal(doc.proof.proofPurpose, "assertionMethod");
   assert.ok(!Number.isNaN(Date.parse(doc.issuedAt)));
   assert.match(doc.id, /^urn:uuid:/);
 });

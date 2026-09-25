@@ -143,11 +143,14 @@ export type TaskConsentOutcome =
  * plaintext, so matching on it would make the check exactly as strong as the
  * weakest link that ever carried the message.
  *
- * When the reply document carries a Data Integrity proof, it must verify, be
- * signed by `expectedExecutorDid`, and name that DID as `issuer`. The executor
- * signs its success responses; its error documents are unsigned (the framework
- * makes their proof RECOMMENDED), so a missing proof is not by itself a
- * refusal — the authenticated sender is then the evidence.
+ * A `#response` MUST carry a Data Integrity proof by `expectedExecutorDid`
+ * under `authentication` (a key it lists there), and name that DID as
+ * `issuer`: the VTA (VTI #1740) and the did-hosting RP (affinidi-webvh-service
+ * #213) sign every non-error reply with their operational key, the RP's
+ * decision response included. An unsigned success is dropped. Error documents
+ * may be unsigned (the framework makes their proof RECOMMENDED), so for those
+ * a missing proof is not by itself a refusal — the authenticated sender is then
+ * the evidence — but a proof that is present must still verify.
  */
 export async function parseTaskConsentOutcome(
   message: Record<string, unknown>,
@@ -172,9 +175,10 @@ export async function parseTaskConsentOutcome(
   }
   // An in-band issuer that names someone else contradicts the transport.
   if (doc.issuer !== undefined && doc.issuer !== opts.expectedExecutorDid) return null;
+  if (doc.type === TASK_CONSENT_DECISION_RESPONSE_TYPE && doc.proof === undefined) return null;
   if (doc.proof !== undefined) {
     const proof = await verifyTrustTaskProof(doc as Record<string, unknown>, {
-      expectedProofPurpose: "assertionMethod",
+      expectedProofPurpose: "authentication",
       ...(opts.resolveDid ? { resolveDid: opts.resolveDid } : {}),
     });
     if (!proof.verified || proof.signer !== opts.expectedExecutorDid) return null;
@@ -453,8 +457,13 @@ export async function parseTaskConsentRequest(
   // not authenticate the *content*: a mediator, or anything else on the path,
   // delivers what it is given. The Data-Integrity proof is what ties these
   // effects to the VTA, and it is the reason a human may be shown them.
+  //
+  // `authentication`, with the key under the executor's `authentication`: a
+  // consent request is the executor's own operational message, signed with its
+  // operational key (VTI #1740, VTI-KEY-106; affinidi-webvh-service #213). Only
+  // the approver's answer is an `assertionMethod` attestation.
   const verification = await verifyTrustTaskProof(doc as Record<string, unknown>, {
-    expectedProofPurpose: "assertionMethod",
+    expectedProofPurpose: "authentication",
   });
   if (!verification.verified) {
     return reject("untrusted_issuer", verification.reason ?? "proof did not verify");
