@@ -591,7 +591,21 @@ export function describeEffects(request: TaskConsentRequestPayload): {
 }
 
 export interface BuildTaskConsentDecisionArgs {
+  /** The identity whose mediator session carries the message: the sender of
+   *  the outer forward to the mediator. */
   holder: Identity;
+  /**
+   * The DIDComm identity the decision is **sent as**: the authcrypt sender of
+   * the inner message the executor unpacks. Defaults to `holder`.
+   *
+   * It MUST be the signer's own DID. The executor acts on a DIDComm document
+   * only when its proof verifies as its `issuer` and that issuer is the
+   * transport's sender (VTI #1739), so an approver decision signed as the
+   * approver and authcrypted by the worker is refused as `identityMismatch`.
+   * The same-browser relay, which carries the approver's decision over the
+   * worker's session, passes the approver's own identity here.
+   */
+  sender?: Identity;
   signing: SigningIdentity;
   vta: RemoteDidcommEndpoint;
   mediator: RemoteDidcommEndpoint;
@@ -657,18 +671,25 @@ export interface BuiltTaskConsentDecision {
 export async function buildTaskConsentDecision(
   args: BuildTaskConsentDecisionArgs,
 ): Promise<BuiltTaskConsentDecision> {
+  const sender = args.sender ?? args.holder;
+  if (sender.did !== args.signing.did) {
+    throw new Error(
+      `task-consent/decision: sent as ${sender.did} but signed as ${args.signing.did}. ` +
+        "The executor requires the document's signer to be its sender; send it as the signer",
+    );
+  }
   const document = await buildTaskConsentDecisionDocument(args);
 
   const message = {
     id: document.id,
     type: TRUST_TASK_ENVELOPE_TYPE,
-    from: args.holder.did,
+    from: sender.did,
     to: [args.vta.did],
     thid: args.thid,
     body: document,
   };
 
-  const inner = await packAuthcrypt(message, args.holder, [
+  const inner = await packAuthcrypt(message, sender, [
     { kid: args.vta.keyAgreementKid, jwk: args.vta.keyAgreementPublicJwk },
   ]);
   const forwardJson = wrapForward(args.vta.did, args.holder.did, args.mediator.did, inner);

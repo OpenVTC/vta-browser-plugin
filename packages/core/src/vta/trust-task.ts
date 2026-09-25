@@ -109,7 +109,23 @@ export function buildTrustTask<P>(
 export async function signOutboundTask(
   envelope: TrustTask<unknown>,
   signer: TaskSigner,
+  transportSender?: string,
 ): Promise<void> {
+  // The DID a DIDComm or TSP channel sends as. The VTA, the VTC and the RPs act
+  // on a document from those transports only when its proven signer is that
+  // sender (VTI #1739, affinidi-webvh-service #213), so a signer that is not
+  // the sender — a persona whose key lives at the VTA, on a channel that sends
+  // as the holder — is a document every consumer refuses. Refused here, naming
+  // both, rather than remotely as `identityMismatch`. REST passes nothing: it
+  // has no sender identity of its own, and the consumer binds the issuer to the
+  // bearer instead.
+  if (transportSender !== undefined && signer.did !== transportSender) {
+    throw new VtaClientError(
+      "e.client.identity",
+      `${envelope.type}: signed as ${signer.did} but sent as ${transportSender}. ` +
+        `A DIDComm or TSP document must be sent by its signer`,
+    );
+  }
   // SPEC §7.2 item 6 — the in-band issuer must be the party that signed. A
   // consumer rejects the mismatch, so catching it here turns a remote
   // `identityMismatch` into a local error naming both DIDs.

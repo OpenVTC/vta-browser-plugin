@@ -335,3 +335,24 @@ test("every request declares authentication; a step-up approval keeps the purpos
     assert.equal(res.verified, true, `${type}: ${res.reason}`);
   }
 });
+
+test("a DIDComm or TSP channel refuses a signer that is not its sender", async () => {
+  // The consumers bind the proven signer to the transport sender. REST passes
+  // no sender and is not checked here: the consumer binds it to the bearer.
+  const signing = generateSigningIdentity();
+  const other = generateSigningIdentity();
+  const envelope = buildTrustTask(VAULT_DELETE, { id: "e-8" }, {
+    issuer: other.did,
+    recipient: "did:key:zVta",
+  });
+  await assert.rejects(
+    () => signOutboundTask(envelope, localTaskSigner(other), signing.did),
+    (err) => err.code === "e.client.identity" && /must be sent by its signer/.test(err.message),
+  );
+  assert.equal(envelope.proof, undefined);
+
+  // And the same signer as the sender passes.
+  const ok = buildTrustTask(VAULT_DELETE, { id: "e-9" }, { issuer: signing.did, recipient: "did:key:zVta" });
+  await signOutboundTask(ok, localTaskSigner(signing), signing.did);
+  await assertSignedBy(ok, signing.did);
+});

@@ -48,6 +48,13 @@ For history before this file, see `git log` on `packages/core`.
   signer as `issuer` when none is set, fills a missing `id` or `issuedAt`, and
   refuses (`e.client.identity`) a document with no `recipient`.
 - `buildStepUpApproval` sets `issuedAt` on the approve-response.
+- **A DIDComm or TSP document is sent by its signer.** `signOutboundTask`
+  takes the channel's sender DID and refuses a signer that is not it;
+  `DidcommVtaTransport` and `TspChannel` pass theirs. `buildTaskConsentDecision`
+  gains `sender` (the DIDComm identity the decision is authcrypted as) and
+  refuses one that is not the signer, so the same-browser relay sends the
+  approver's decision as the approver. A persona can no longer sign in over
+  DIDComm or TSP (its keys stay at the VTA); it signs in over REST.
 - **`@openvtc/vti-didcomm-js` floor raised to `^0.11.0`, and it is a
   correctness constraint.** Below it a mediator's Trust-Task replies are never
   acked (they accumulate in the holder's receive queue), a refusal threaded by

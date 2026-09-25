@@ -167,19 +167,18 @@ test("both documents are signed for authentication", async () => {
   }
 });
 
-test("the signer's DID is who signs in, on both documents", async () => {
-  // A persona signs with its own key; the challenge is requested for it and the
-  // authenticate is issued by it, or the RP refuses on its subject check.
+test("a signer that is not the sender is refused before anything is sent", async () => {
+  // A persona signs with a key the wallet does not hold as a DIDComm identity,
+  // so its document would go out authcrypted by the holder. The RP acts on a
+  // DIDComm document only when its signer is its sender, so that is refused
+  // here, naming both, rather than remotely as `identityMismatch`.
   const w = world();
   const persona = generateSigningIdentity();
-  await loginViaDidcomm(opts(w, { signing: localTaskSigner(persona) }));
-
-  const [challenge, authenticate] = w.received.map((r) => r.doc);
-  assert.equal(challenge.issuer, persona.did);
-  assert.equal(challenge.payload.subject, persona.did);
-  assert.equal(authenticate.issuer, persona.did);
-  const res = await verifyTrustTaskProof(authenticate, { expectedProofPurpose: "authentication" });
-  assert.equal(res.signer, persona.did);
+  await assert.rejects(
+    () => loginViaDidcomm(opts(w, { signing: localTaskSigner(persona) })),
+    (e) => e.code === "e.client.identity" && e.message.includes(persona.did) && e.message.includes(w.holder.did),
+  );
+  assert.equal(w.received.length, 0, "nothing reached the RP");
 });
 
 test("the reply is awaited from the RP alone", async () => {

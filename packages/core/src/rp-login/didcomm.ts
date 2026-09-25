@@ -42,9 +42,10 @@ export interface DidcommLoginOptions {
    * Signs both auth documents. REQUIRED, as on every channel.
    *
    * Its DID is who signs in: it is the `issuer` of the challenge request and of
-   * the authenticate document, and the challenge is requested for it. The
-   * holder's own signing identity logs in as the holder; a persona's
-   * `TaskSigner` logs in as the persona.
+   * the authenticate document, and the challenge is requested for it. It MUST
+   * be `holder`'s DID — the RP acts on a DIDComm document only when its signer
+   * is its sender, and the channel refuses the mismatch before sending. A
+   * persona, whose keys stay at the VTA, signs in over REST instead.
    */
   signing: ChannelSigner;
   /** The RP's DID + its keyAgreement key: the authcrypt recipient, and the

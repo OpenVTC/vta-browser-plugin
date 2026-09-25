@@ -242,12 +242,22 @@ Documents signed outside a channel (`task-consent/decision`,
 `vault/sign-trust-task` pins `assertionMethod`, so a persona-signed document
 always declares `assertionMethod`.
 
-**Known gap: a document whose signer is not the transport sender.** A persona
-(vault signer) and the same-browser approver sign as a DID other than the
-holder identity the DIDComm/TSP envelope is sent from. Under the binding rule
-above such a document is refused with `identityMismatch` unless the consumer
-treats it as the answer to a thread it is waiting on. Fixing that means sending
-as the signer, not relaxing anything here.
+**A DIDComm or TSP document is sent by its signer, and the channel checks.**
+`DidcommVtaTransport` and `TspChannel` pass their sender DID to
+`signOutboundTask`, which refuses a signer that is not it (`e.client.identity`).
+Two paths used to break that rule, and each is settled differently:
+
+- **The same-browser approver** holds its own X25519 key (the `did:key`'s
+  Montgomery form), so its `task-consent/decision` is authcrypted *as the
+  approver* (`buildTaskConsentDecision`'s `sender`) while the worker's session
+  only carries the forward. `buildTaskConsentDecision` refuses a sender that is
+  not the signer.
+- **A per-site persona cannot sign in over DIDComm or TSP.** Its keys,
+  keyAgreement included, live at the VTA and never leave it, so the wallet
+  cannot send as it. `doDidcommLogin` refuses a persona up front; persona
+  sign-in is REST, where the VTA mints the id_token (`vault/proxy-login`).
+  Making it work over DIDComm/TSP needs a consumer-side change (a delegation
+  the signer grants the sender), not a relaxed check here.
 
 RP sign-in over DIDComm (`loginViaDidcomm`) is `loginViaTrustTask` over a
 `DidcommVtaTransport` — keep it that way rather than growing a second login.
