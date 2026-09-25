@@ -17,10 +17,8 @@ import {
   loginViaTrustTask,
   loginViaSiop,
   selfIssuedMinter,
-  vaultTaskSigner,
   type ChannelSigner,
   type SiopIdTokenMinter,
-  type TaskSigner,
   claimInboundDocument,
   type MediatorConnection,
   MediatorSessionBridge,
@@ -626,22 +624,11 @@ interface SessionIdentity {
    *  it, the mediator authenticates it — and, by default, what signs outbound
    *  documents too. */
   signing: SigningIdentity;
-  /**
-   * Signs the documents, when that is not the holder.
-   *
-   * Transport sender and document signer are different things, and the RP
-   * treats them as different things: it establishes the caller from the proof
-   * on the document (`session.did != input.signer_did` in vti-common's
-   * `handle_authenticate`), not from who delivered it. A per-site persona
-   * login rides the wallet's own transport — there is no second mediator
-   * session, and the persona has no key here to open one with — while the
-   * documents are issued by, and signed as, the persona.
-   *
-   * Kept out of `signing` deliberately: widening that field would have handed
-   * a keyless signer to `tspHolderIdentityFromSecret`, which needs the actual
-   * private key and would have failed at a distance from the cause.
-   */
-  documentSigner?: TaskSigner;
+  // There is deliberately no separate document signer. The VTA, the VTC and
+  // the RPs act on a DIDComm or TSP document only when its proven signer is the
+  // transport sender, and a session sends as `holder` — so it signs as the
+  // holder too. A per-site persona, whose keys live at the VTA, therefore has
+  // no DIDComm or TSP session here; it signs in over REST (`vault/proxy-login`).
 }
 
 /** How an identity reaches a mediator.
@@ -1084,9 +1071,7 @@ async function buildVtaSession(
   } = {},
 ): Promise<VtaSessionHandle> {
   const { holder, signing } = who;
-  // Documents are signed by the persona when there is one; the transport
-  // stays the wallet's own either way.
-  const documentSigner: ChannelSigner = who.documentSigner ?? signing;
+  const documentSigner: ChannelSigner = signing;
   const restBaseUrl = opts.restBaseUrl;
   const service = await resolveKeyAgreement(vtaDid);
   const services = opts.services ?? (await resolveVtaServices(vtaDid));
@@ -1513,7 +1498,11 @@ async function maybeRelayConsentLocally(
     }
 
     const outer = await buildTaskConsentDecision({
-      holder, // worker identity — the enrolled channel to the mediator
+      holder, // worker identity — carries the forward over its mediator session
+      // Sent AS the approver. The VTA acts on the decision only when its
+      // proven signer is the DIDComm sender (VTI #1739); authcrypting it as
+      // the worker would be refused as `identityMismatch`.
+      sender: approver.identity,
       signing: approver.signing, // approver — the authority the VTA reads from the proof
       vta,
       mediator: conn.mediator,
@@ -1647,10 +1636,23 @@ async function doVerifyDid(did: string): Promise<VerifyRpDidResult> {
 //    canonicalises + signs + returns the signed envelope. Same
 //    eddsa-jcs-2022 proof shape, just signed by a different key.
 //
-// Falls back to holder-signing on `asDid` set BUT no matching vault
-// entry — easier on the caller than failing, and the resulting
-// proof's verificationMethod ≠ asDid will surface as a clear RP-side
-// rejection the operator can diagnose.
+// `asDid` set but no matching vault entry is refused. Signing as the holder
+// instead would hand the page a document its consumer refuses anyway (the
+// proof's signer is not the issuer it asked for), after the human approved a
+// signature by a different identity than the one they were shown.
+//
+// **A holder-signed proof is `authentication`, and names the holder as
+// `issuer`.** The did-hosting RP (affinidi-webvh-service #213) acts on a
+// document only when its proof is an operational `authentication` proof by
+// the in-band `issuer`. A page cannot choose `assertionMethod`: that purpose
+// marks the human approver's own decision (a step-up approve-response, a
+// task-consent decision), which this wallet mints only from its own approval
+// surfaces. A page that could obtain one here would be minting approvals.
+//
+// The persona path cannot choose either: `vault/sign-trust-task/0.2` pins
+// `assertionMethod`, so a consumer that requires `authentication` refuses a
+// persona-signed operational document until the VTA can sign one under
+// `authentication`.
 async function doSignTrustTask(
   vtaDid: string,
   params: SignTrustTaskParams,
@@ -1695,28 +1697,33 @@ async function doSignTrustTask(
       });
       return { signedEnvelope, holderDid: params.asDid };
     }
-    // Fall through to holder-signing with a warning the operator
-    // can spot in the offscreen console.
-    console.warn(
-      `[pnm] signTrustTask: asDid=${params.asDid} requested but no matching vault entry found; falling back to holder-signed proof (the RP will likely reject)`,
+    throw new Error(
+      `signTrustTask: no did-self-issued or didcomm-peer vault entry signs as ${params.asDid}; nothing was signed`,
     );
-    const { signing } = await loadHolder(vtaDid);
-    const signedEnvelope = await signTrustTask({
-      envelope: { ...envelope },
-      signing,
-    });
-    return { signedEnvelope, holderDid: signing.did };
+  }
+  if (params.asDid) {
+    throw new Error(
+      `signTrustTask: signing as ${params.asDid} needs the VTA's REST endpoint, and this connection has none; nothing was signed`,
+    );
   }
 
   // Holder-signed path: existing default.
   const { signing } = await loadHolder(vtaDid);
+  const issuer = (envelope as { issuer?: unknown }).issuer;
+  if (issuer !== undefined && issuer !== signing.did) {
+    throw new Error(
+      `signTrustTask: envelope.issuer (${String(issuer)}) is not this wallet's holder (${signing.did}); ` +
+        "a proof by one DID over a document issued by another is refused by every consumer",
+    );
+  }
   // signTrustTask mutates in place and returns the same reference; clone
   // first so the caller's input is preserved across the IPC boundary
   // (chrome.runtime.sendMessage serializes — a defensive copy is cheap and
   // makes the contract clear).
   const signedEnvelope = await signTrustTask({
-    envelope: { ...envelope },
+    envelope: { ...envelope, issuer: signing.did },
     signing,
+    proofPurpose: "authentication",
   });
   return { signedEnvelope, holderDid: signing.did };
 }
@@ -3554,25 +3561,6 @@ async function doRestLogin(
  * something the wallet never chose, and the challenge must be requested for
  * whatever actually signs or the RP refuses on `signer_did` mismatch.
  */
-/** A {@link TaskSigner} for a vault entry's persona, plus the VTA session it
- *  signs through. The persona DID is read from the entry rather than assumed,
- *  for the same reason `personaMinter` reads it: `principalDid` is
- *  maintainer-derived, and the RP checks the signer against the challenge
- *  subject. */
-async function personaTaskSigner(
-  vtaDid: string,
-  restBaseUrl: string | undefined,
-  entryId: string,
-): Promise<TaskSigner> {
-  const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-  const listed = await vaultList(session, { holder, service });
-  const entry = listed.entries.find((e) => e.id === entryId);
-  if (!entry?.principalDid) {
-    throw new Error(`vault entry ${entryId} names no persona DID`);
-  }
-  return vaultTaskSigner({ session, holder, service, entryId, did: entry.principalDid });
-}
-
 async function personaMinter(
   vtaDid: string,
   restBaseUrl: string | undefined,
@@ -3628,17 +3616,26 @@ async function doDidcommLogin(
   };
   sw.mark("resolve rp services");
 
-  // A persona signs the documents when this origin has one; the transport
-  // stays the wallet's own either way. The signer talks to the **VTA** over the
-  // wallet's own session — a different channel from the RP one being built here
-  // — because that is where the persona's key lives.
-  const documentSigner = req.entryId
-    ? await personaTaskSigner(req.vtaDid, req.restBaseUrl, req.entryId)
-    : undefined;
+  // A persona cannot sign in over DIDComm or TSP. The RP acts on a document
+  // from those transports only when its proven signer is the transport sender
+  // (affinidi-webvh-service #213; the VTA and VTC apply the same rule), and the
+  // wallet cannot send as the persona: the persona's keys, keyAgreement
+  // included, live at the VTA and never leave it. Refused here, before the vault
+  // is asked to sign anything, rather than at the channel's own check. Sign in
+  // as a persona over REST, where the VTA mints the id_token
+  // (`vault/proxy-login`).
+  if (req.entryId) {
+    return {
+      ok: false,
+      error:
+        "a persona cannot sign in over DIDComm or TSP: the document must be sent by its signer, " +
+        "and the persona's keys stay at the agent. Use the REST sign-in for this site",
+    };
+  }
 
   const { session } = await buildVtaSession(
     req.params.controlDid,
-    { holder: identity, signing, ...(documentSigner ? { documentSigner } : {}) },
+    { holder: identity, signing },
     (mediatorDid) => getWarmSession(mediatorDid, req.vtaDid),
     { services },
   );
@@ -3656,7 +3653,6 @@ async function doDidcommLogin(
     sender: session,
     holder: identity,
     service,
-    ...(documentSigner ? { subject: documentSigner.did } : {}),
     ...(req.params.scope ? { scope: req.params.scope } : {}),
   });
   sw.mark("authenticate (trust-task)");
@@ -3669,8 +3665,7 @@ async function doDidcommLogin(
       // a fabricated value would.
       refreshToken: rpSession.refreshToken ?? "",
       sessionId: rpSession.sessionId,
-      // The DID the RP authenticated, not the wallet's own — see doRestLogin.
-      holderDid: documentSigner?.did ?? signing.did,
+      holderDid: signing.did,
       timings: sw.marks,
     },
   };
@@ -3721,9 +3716,9 @@ async function doDisclosureStepUp(
   // is a denial. A prompt the holder never saw must not become an approval.
   if (decision?.approved !== true) return { ok: false, error: "user declined the step-up approval" };
 
-  // An ordinary Trust Task: the channel signs it as the holder with
-  // `assertionMethod`, which IS the gate the approve-response requires, so the
-  // payload carries no proof of its own.
+  // An ordinary Trust Task: the channel signs it as the holder, with the
+  // `assertionMethod` purpose the approve-response spec pins
+  // (`outboundProofPurpose`), so the payload carries no proof of its own.
   await doRequestTask({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_REQUEST_TASK,

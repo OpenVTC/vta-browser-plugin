@@ -26,6 +26,48 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Changed
 
+- **`loginViaDidcomm` signs in with `auth/challenge` then a signed
+  `auth/authenticate`** (breaking). It used to authcrypt a bare
+  `auth/authenticate` message with an empty body and take a session issued to
+  the authcrypt sender; affinidi-webvh-service #213 removes that route. It now
+  runs `loginViaTrustTask` over a `DidcommVtaTransport` addressed to the RP, so
+  there is one login implementation for every transport and every RP. It takes
+  a REQUIRED `signing` input (whose DID signs in) and an optional `scope`, and
+  returns an `RpSession`; `DidcommLoginResult` is removed.
+- **Every outbound Trust Task declares `proofPurpose: authentication`**, for
+  VTI #1739 and affinidi-webvh-service #213: the VTA, VTC and did-hosting RP
+  act on a DIDComm or TSP document only when its proof verifies as its
+  `issuer` and that issuer is the sender. `signOutboundTask` picks the purpose
+  from the document type (`outboundProofPurpose`) and passes it to
+  `TaskSigner.sign`, which gains an optional `TaskSignOptions` argument. The
+  exceptions are `auth/step-up/approve-response` 0.2 and 0.3, whose specs pin
+  `assertionMethod`. `task-consent/decision`, signed outside a channel, follows
+  the same rule. `vaultTaskSigner` cannot choose, so persona-signed documents
+  still declare `assertionMethod`.
+- **`signOutboundTask` binds the document before signing it.** It names the
+  signer as `issuer` when none is set, fills a missing `id` or `issuedAt`, and
+  refuses (`e.client.identity`) a document with no `recipient`.
+- `buildStepUpApproval` sets `issuedAt` on the approve-response.
+- **Proof purposes are enforced both ways** (breaking). The approver's own
+  decisions — step-up `approve-response` and `task-consent/decision` — are
+  signed `assertionMethod`, which the did-hosting RP now requires
+  (affinidi-webvh-service #213); every other outbound document is
+  `authentication`, and `signTrustTask` now defaults to `authentication`.
+  Replies (`verifyTrustTaskReply`), pushed `task-consent/request` and step-up
+  approve-requests, and `task-consent/decision#response` must be signed
+  `authentication` by a key the signer lists under `authentication` (VTI
+  #1740). `verifyTrustTaskProof` checks the verification method is listed
+  under `expectedProofPurpose` in the signer's DID document. A
+  `task-consent/decision#response` without a proof is dropped.
+  `vaultTaskSigner` refuses a document whose purpose the VTA's
+  `vault/sign-trust-task/0.2` cannot produce.
+- **A DIDComm or TSP document is sent by its signer.** `signOutboundTask`
+  takes the channel's sender DID and refuses a signer that is not it;
+  `DidcommVtaTransport` and `TspChannel` pass theirs. `buildTaskConsentDecision`
+  gains `sender` (the DIDComm identity the decision is authcrypted as) and
+  refuses one that is not the signer, so the same-browser relay sends the
+  approver's decision as the approver. A persona can no longer sign in over
+  DIDComm or TSP (its keys stay at the VTA); it signs in over REST.
 - **`@openvtc/vti-didcomm-js` floor raised to `^0.11.0`, and it is a
   correctness constraint.** Below it a mediator's Trust-Task replies are never
   acked (they accumulate in the holder's receive queue), a refusal threaded by

@@ -239,7 +239,7 @@ export class TspChannel implements TrustTaskChannel {
   private async packForVta(envelope: TrustTask<unknown>): Promise<Uint8Array> {
     // Both `send` and `notify` seal through here, so this is the one place the
     // proof has to be attached — before the JSON the seal is taken over.
-    await signOutboundTask(envelope, this.signer);
+    await signOutboundTask(envelope, this.signer, this.holder.vid);
     // TSP plaintext = the binding envelope, with the signed document inside it.
     // The wrapper goes on *after* signing, and must: the proof is taken over the
     // document, so anything that reshaped it here would invalidate every

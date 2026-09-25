@@ -32,9 +32,11 @@ import {
   buildTrustTask,
   generateSigningIdentity,
   localTaskSigner,
+  outboundProofPurpose,
   signOutboundTask,
   verifyTrustTaskProof,
 } from "../dist/index.js";
+import { verifyTrustTaskReply } from "../dist/vta/trust-task.js";
 
 // `vault/delete/0.1` is one of the 93 — a mutation, and proof REQUIRED.
 const VAULT_DELETE = "https://trusttasks.org/spec/vault/delete/0.1";
@@ -44,11 +46,20 @@ import { openTspEnvelope, wrapTspEnvelope } from "../dist/vta/tsp-binding.js";
 const utf8 = new TextEncoder();
 const fromUtf8 = new TextDecoder();
 
-/** Assert `doc` carries a proof that verifies as its own `issuer`. */
+/**
+ * Assert `doc` is what the VTA, the VTC and the RPs now require of a document
+ * arriving over DIDComm or TSP: a proof that verifies as its own `issuer`,
+ * declaring `authentication`, over a document that names its audience, is
+ * placed in time and has an id to key the replay window on.
+ */
 async function assertSignedBy(doc, expectedIssuer) {
   assert.ok(doc, "no document reached the counterparty");
+  assert.equal(typeof doc.id, "string");
+  assert.ok(doc.id.length > 0, "the document has an id");
+  assert.ok(!Number.isNaN(Date.parse(doc.issuedAt)), `issuedAt ${doc.issuedAt}`);
+  assert.equal(typeof doc.recipient, "string", "the document names its audience");
   const res = await verifyTrustTaskProof(doc, {
-    expectedProofPurpose: "assertionMethod",
+    expectedProofPurpose: "authentication",
   });
   assert.equal(res.verified, true, `proof did not verify: ${res.reason}`);
   // SPEC §7.2 item 6 — a valid proof by some *other* DID establishes only that
@@ -273,4 +284,158 @@ test("re-signing a document that already carries a proof does not sign over it",
   await signOutboundTask(envelope, localTaskSigner(signing));
 
   await assertSignedBy(envelope, signing.did);
+});
+
+// ── what the signer fills, refuses and declares ─────────────────────────────
+
+test("a document with no issuer is issued by the signer", async () => {
+  // The consumers refuse an issuer-less document outright over DIDComm and
+  // TSP, so the signer names itself rather than letting one go out bare.
+  const signing = generateSigningIdentity();
+  const envelope = buildTrustTask(VAULT_DELETE, { id: "e-5" }, { recipient: "did:key:zVta" });
+  await signOutboundTask(envelope, localTaskSigner(signing));
+  assert.equal(envelope.issuer, signing.did);
+  await assertSignedBy(envelope, signing.did);
+});
+
+test("a document with no recipient is refused before it is signed", async () => {
+  const signing = generateSigningIdentity();
+  const envelope = buildTrustTask(VAULT_DELETE, { id: "e-6" }, { issuer: signing.did });
+  await assert.rejects(
+    () => signOutboundTask(envelope, localTaskSigner(signing)),
+    (err) => err.code === "e.client.identity" && /no recipient/.test(err.message),
+  );
+  assert.equal(envelope.proof, undefined);
+});
+
+test("a document missing its id or issuedAt gets both before the proof covers them", async () => {
+  const signing = generateSigningIdentity();
+  const envelope = {
+    type: VAULT_DELETE,
+    issuer: signing.did,
+    recipient: "did:key:zVta",
+    payload: { id: "e-7" },
+  };
+  await signOutboundTask(envelope, localTaskSigner(signing));
+  await assertSignedBy(envelope, signing.did);
+});
+
+test("every request declares authentication; the approver's own decisions are assertions", async () => {
+  assert.equal(outboundProofPurpose(VAULT_DELETE), "authentication");
+  assert.equal(outboundProofPurpose("https://trusttasks.org/spec/auth/authenticate/0.1"), "authentication");
+  // The approve-response specs pin `assertionMethod`, and the did-hosting RP
+  // (affinidi-webvh-service #213) refuses a consent decision or approve-response
+  // under any other purpose.
+  for (const type of [
+    "https://trusttasks.org/spec/auth/step-up/approve-response/0.2",
+    "https://trusttasks.org/spec/auth/step-up/approve-response/0.3",
+    "https://trusttasks.org/spec/task-consent/decision/0.1",
+  ]) {
+    assert.equal(outboundProofPurpose(type), "assertionMethod", type);
+
+    const signing = generateSigningIdentity();
+    const envelope = buildTrustTask(type, {}, { issuer: signing.did, recipient: "did:key:zRp" });
+    await signOutboundTask(envelope, localTaskSigner(signing));
+    const res = await verifyTrustTaskProof(envelope, { expectedProofPurpose: "assertionMethod" });
+    assert.equal(res.verified, true, `${type}: ${res.reason}`);
+  }
+});
+
+test("a DIDComm or TSP channel refuses a signer that is not its sender", async () => {
+  // The consumers bind the proven signer to the transport sender. REST passes
+  // no sender and is not checked here: the consumer binds it to the bearer.
+  const signing = generateSigningIdentity();
+  const other = generateSigningIdentity();
+  const envelope = buildTrustTask(VAULT_DELETE, { id: "e-8" }, {
+    issuer: other.did,
+    recipient: "did:key:zVta",
+  });
+  await assert.rejects(
+    () => signOutboundTask(envelope, localTaskSigner(other), signing.did),
+    (err) => err.code === "e.client.identity" && /must be sent by its signer/.test(err.message),
+  );
+  assert.equal(envelope.proof, undefined);
+
+  // And the same signer as the sender passes.
+  const ok = buildTrustTask(VAULT_DELETE, { id: "e-9" }, { issuer: signing.did, recipient: "did:key:zVta" });
+  await signOutboundTask(ok, localTaskSigner(signing), signing.did);
+  await assertSignedBy(ok, signing.did);
+});
+
+// ── Purpose and relationship on what the wallet verifies ──────────────────
+
+test("a proof counts for a purpose only when the signer lists the key under it", async () => {
+  // The resolver finds a key under either relationship, so the relationship is
+  // the verifier's to check: an `authentication` proof by a key its DID lists
+  // only under `assertionMethod` is not an authentication by that DID.
+  const key = generateSigningIdentity();
+  const did = "did:web:agent.example";
+  const vm = `${did}#k1`;
+  const signing = { ...key, did, kid: vm };
+  const publicKeyMultibase = key.kid.slice(key.kid.indexOf("#") + 1);
+  const docFor = (relationships) => async () => ({
+    id: did,
+    verificationMethod: [{ id: vm, type: "Multikey", controller: did, publicKeyMultibase }],
+    ...relationships,
+  });
+  const envelope = buildTrustTask(VAULT_DELETE, { id: "e-9" }, { issuer: did, recipient: "did:key:zRp" });
+  await signTrustTask({ envelope, signing, proofPurpose: "authentication" });
+
+  const listed = await verifyTrustTaskProof(envelope, {
+    expectedProofPurpose: "authentication",
+    resolveDid: docFor({ authentication: ["#k1"] }),
+  });
+  assert.equal(listed.verified, true, listed.reason);
+
+  const assertionOnly = await verifyTrustTaskProof(envelope, {
+    expectedProofPurpose: "authentication",
+    resolveDid: docFor({ assertionMethod: [vm] }),
+  });
+  assert.equal(assertionOnly.verified, false);
+  assert.match(assertionOnly.reason, /not listed under authentication/);
+});
+
+test("a reply is evidence only under authentication", async () => {
+  // The VTA, the VTC and the did-hosting RP sign every reply with their
+  // operational key under `authentication` (VTI #1740; affinidi-webvh-service
+  // #213). A reply signed for `assertionMethod` is refused.
+  const agent = generateSigningIdentity();
+  const reply = (purpose) => {
+    const doc = buildTrustTask(`${VAULT_DELETE}#response`, {}, { issuer: agent.did, recipient: "did:key:zMe" });
+    return signTrustTask({ envelope: doc, signing: agent, proofPurpose: purpose }).then(() => doc);
+  };
+  await verifyTrustTaskReply(await reply("authentication"), agent.did);
+  await assert.rejects(verifyTrustTaskReply(await reply("assertionMethod"), agent.did), /authentication/);
+});
+
+test("a persona signer that cannot sign for the purpose a document needs sends nothing", async () => {
+  // `vault/sign-trust-task/0.2` signs `assertionMethod` only. An operational
+  // document needs `authentication`, so the persona signer refuses it rather
+  // than hand the consumer a proof it will refuse.
+  const { vaultTaskSigner } = await import("../dist/vault/task-signer.js");
+  const persona = "did:webvh:zPersona:vta.example:shop";
+  const channel = {
+    async send(request) {
+      const unsigned = request.payload.unsignedEnvelope;
+      return { signedEnvelope: { ...unsigned, proof: { proofPurpose: "assertionMethod" } } };
+    },
+  };
+  const signer = vaultTaskSigner({
+    session: channel,
+    holder: { did: "did:key:zHolder" },
+    service: { did: "did:key:zVta" },
+    entryId: "entry-1",
+    did: persona,
+  });
+  const operational = buildTrustTask(VAULT_DELETE, { id: "e-10" }, { issuer: persona, recipient: "did:key:zRp" });
+  await assert.rejects(signOutboundTask(operational, signer), /needs authentication/);
+  assert.equal(operational.proof, undefined);
+
+  const approval = buildTrustTask(
+    "https://trusttasks.org/spec/auth/step-up/approve-response/0.3",
+    {},
+    { issuer: persona, recipient: "did:key:zRp" },
+  );
+  await signOutboundTask(approval, signer);
+  assert.equal(approval.proof.proofPurpose, "assertionMethod");
 });

@@ -172,36 +172,38 @@ test("a decision response with a status outside the enum is reported malformed",
   // trusting when something eventually does branch on it.
   const { parseTaskConsentOutcome } = await import("../dist/inbound/index.js");
   const { TRUST_TASK_ENVELOPE_TYPE } = await import("../dist/vta/index.js");
-  const reply = (payload) => ({
-    type: TRUST_TASK_ENVELOPE_TYPE,
-    from: "did:webvh:QmVta:vta.example",
-    thid: "t-1",
-    body: {
+  const { generateSigningIdentity } = await import("../dist/siop/self-issued.js");
+  const { signTrustTask } = await import("../dist/trust-tasks/sign.js");
+  // A success response is only believed signed by the executor.
+  const vta = generateSigningIdentity();
+  const reply = async (payload) => {
+    const body = {
+      id: "urn:uuid:ok-schema",
       type: "https://trusttasks.org/spec/task-consent/decision/0.1#response",
+      issuer: vta.did,
       payload,
-    },
-  });
-  const opts = {
-    senderDid: "did:webvh:QmVta:vta.example",
-    expectedExecutorDid: "did:webvh:QmVta:vta.example",
+    };
+    await signTrustTask({ envelope: body, signing: vta });
+    return { type: TRUST_TASK_ENVELOPE_TYPE, from: vta.did, thid: "t-1", body };
   };
+  const opts = { senderDid: vta.did, expectedExecutorDid: vta.did };
 
   const good = await parseTaskConsentOutcome(
-    reply({ status: "granted", payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ" }),
+    await reply({ status: "granted", payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ" }),
     opts,
   );
   assert.equal(good.accepted, true);
   assert.equal(good.status, "granted");
 
   const bad = await parseTaskConsentOutcome(
-    reply({ status: "granted-ish", payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ" }),
+    await reply({ status: "granted-ish", payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ" }),
     opts,
   );
   assert.equal(bad.accepted, false, "an out-of-enum status is not an acceptance");
   assert.match(bad.message ?? "", /status/);
 
   // `payloadDigest` is REQUIRED; the hand-read silently omitted it.
-  const missing = await parseTaskConsentOutcome(reply({ status: "granted" }), opts);
+  const missing = await parseTaskConsentOutcome(await reply({ status: "granted" }), opts);
   assert.equal(missing.accepted, false);
   assert.match(missing.message ?? "", /payloadDigest/);
 });

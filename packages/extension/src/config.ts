@@ -60,8 +60,6 @@ export interface WalletSettings {
 
   /** Optional default VTA DID prefilled into the step-up flow. */
   defaultStepUpVtaDid?: string;
-  /** Optional default VTA mediator DID prefilled into the step-up flow. */
-  defaultStepUpVtaMediatorDid?: string;
   /**
    * Additional executor DIDs this wallet is enrolled with, beyond its
    * onboarded VTA(s) — e.g. a did:webvh DID-hosting control plane that signs
@@ -232,9 +230,6 @@ export async function getSettings(): Promise<WalletSettings> {
       ? { mediatorDidSource: s.mediatorDidSource }
       : {}),
     ...(s?.defaultStepUpVtaDid ? { defaultStepUpVtaDid: s.defaultStepUpVtaDid } : {}),
-    ...(s?.defaultStepUpVtaMediatorDid
-      ? { defaultStepUpVtaMediatorDid: s.defaultStepUpVtaMediatorDid }
-      : {}),
     ...(Array.isArray(s?.enrolledExecutorDids)
       ? {
           enrolledExecutorDids: s.enrolledExecutorDids.filter(

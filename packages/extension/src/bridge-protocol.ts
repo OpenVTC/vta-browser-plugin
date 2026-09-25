@@ -70,10 +70,11 @@ export interface StepUpVtaParams {
   rpDid: string;
   /** The existing `aal1` session access token to elevate. */
   accessToken: string;
-  /** The holder's VTA DID — approves the step-up over DIDComm. */
+  /** The holder's VTA DID: selects the holder identity, and the enrolled
+   *  executors whose signature on the RP's approve-request is accepted. The
+   *  step-up itself is REST start, a locally signed approve-response, REST
+   *  finish — nothing is sent to the VTA. */
   vtaDid: string;
-  /** The VTA's mediator DID (for the forward envelope). */
-  vtaMediatorDid: string;
 }
 
 /** Parameters for `window.vtaWallet.apiGet(...)` — an authenticated GET the
@@ -118,7 +119,6 @@ export interface MediatorStatusResult {
  *  defaults a page can prefill (e.g. the step-up VTA). */
 export interface WalletDefaultsResult {
   stepUpVtaDid?: string;
-  stepUpVtaMediatorDid?: string;
 }
 
 /** Parameters for `window.vtaWallet.signTrustTask(...)`. */

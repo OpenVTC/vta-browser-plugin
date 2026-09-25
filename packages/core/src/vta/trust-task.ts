@@ -17,6 +17,9 @@
 // deals with transport concerns.
 
 import { isStandardCode, normalizeCode } from "@openvtc/trust-tasks/_runtime/codes";
+import { TYPE_URI as APPROVE_RESPONSE_0_2 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.2/payload";
+import { TYPE_URI as APPROVE_RESPONSE_0_3 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.3/payload";
+import { TYPE_URI as TASK_CONSENT_DECISION_0_1 } from "@openvtc/trust-tasks/task-consent/decision/0.1/payload";
 
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
@@ -107,7 +110,23 @@ export function buildTrustTask<P>(
 export async function signOutboundTask(
   envelope: TrustTask<unknown>,
   signer: TaskSigner,
+  transportSender?: string,
 ): Promise<void> {
+  // The DID a DIDComm or TSP channel sends as. The VTA, the VTC and the RPs act
+  // on a document from those transports only when its proven signer is that
+  // sender (VTI #1739, affinidi-webvh-service #213), so a signer that is not
+  // the sender — a persona whose key lives at the VTA, on a channel that sends
+  // as the holder — is a document every consumer refuses. Refused here, naming
+  // both, rather than remotely as `identityMismatch`. REST passes nothing: it
+  // has no sender identity of its own, and the consumer binds the issuer to the
+  // bearer instead.
+  if (transportSender !== undefined && signer.did !== transportSender) {
+    throw new VtaClientError(
+      "e.client.identity",
+      `${envelope.type}: signed as ${signer.did} but sent as ${transportSender}. ` +
+        `A DIDComm or TSP document must be sent by its signer`,
+    );
+  }
   // SPEC §7.2 item 6 — the in-band issuer must be the party that signed. A
   // consumer rejects the mismatch, so catching it here turns a remote
   // `identityMismatch` into a local error naming both DIDs.
@@ -117,7 +136,77 @@ export async function signOutboundTask(
       `${envelope.type}: envelope issuer ${envelope.issuer} is not the signing identity ${signer.did}`,
     );
   }
-  await signer.sign(envelope);
+  // What a consumer binds the proof to, filled or refused *before* signing,
+  // because the proof covers them and nothing may change after it. The VTA and
+  // the RPs act on a DIDComm or TSP document only when it names its issuer (the
+  // proven signer), and key their replay window on (issuer, id); `recipient`
+  // is the audience the proof is bound to (SPEC §4.8.2), and `issuedAt` places
+  // it inside the freshness window. `buildTrustTask` sets all but the issuer on
+  // every document it builds; these catch one composed some other way.
+  if (envelope.issuer === undefined) envelope.issuer = signer.did;
+  if (!envelope.id) envelope.id = globalThis.crypto.randomUUID();
+  if (!envelope.issuedAt) envelope.issuedAt = new Date().toISOString();
+  if (!envelope.recipient) {
+    throw new VtaClientError(
+      "e.client.identity",
+      `${envelope.type}: the document names no recipient. A signed document with no audience ` +
+        `is replayable at any other party, and the consumer refuses it`,
+    );
+  }
+  await signer.sign(envelope, { proofPurpose: outboundProofPurpose(envelope.type) });
+}
+
+/** The `proofPurpose` a Data Integrity proof on an outbound document declares. */
+export type OutboundProofPurpose = "assertionMethod" | "authentication";
+
+/**
+ * The human approver's own decisions: the step-up approve-response (0.2 and
+ * 0.3, whose specifications pin "The `proof.proofPurpose` MUST be
+ * `assertionMethod`") and the task-consent decision. The proof there is the
+ * approver attesting to a decision, which is what `assertionMethod` says, and
+ * the did-hosting RP (affinidi-webvh-service #213, `verify_approval`) refuses
+ * either one signed for `authentication` or with a key not listed under
+ * `assertionMethod`.
+ */
+const ASSERTION_PURPOSE_TYPES: ReadonlySet<string> = new Set([
+  APPROVE_RESPONSE_0_2,
+  APPROVE_RESPONSE_0_3,
+  TASK_CONSENT_DECISION_0_1,
+]);
+
+/**
+ * Which `proofPurpose` the proof on an outbound document declares.
+ *
+ * **`authentication`, except where a specification pins another.** The VTA,
+ * the VTC and the RPs no longer take a DIDComm or TSP sender's word for who
+ * composed a document: they act on it only when its proof verifies as its
+ * `issuer` and that issuer is the sender. The proof on an outbound request is
+ * therefore this wallet authenticating as the issuer, which is what
+ * `authentication` declares — and it is the relationship the holder's
+ * `did:peer:2` key is published under (`V`). `auth/authenticate`, where the
+ * signature is the sign-in, is the plainest case of the rule, not an exception
+ * to it.
+ *
+ * The exceptions are the approver's own decisions in
+ * {@link ASSERTION_PURPOSE_TYPES}, which are attestations.
+ *
+ * **The purpose is enforced.** The did-hosting RP (affinidi-webvh-service
+ * #213) refuses an operational document signed for `assertionMethod`, and an
+ * approver decision signed for `authentication`, and checks the key is listed
+ * under the relationship the proof names. So a wrong purpose here is a refused
+ * document, not a label.
+ *
+ * Decided here, from the document's type, for the reason the channel signs at
+ * all: every transport gets the same proof without its caller choosing.
+ */
+export function outboundProofPurpose(type: string): OutboundProofPurpose {
+  return ASSERTION_PURPOSE_TYPES.has(type) ? "assertionMethod" : "authentication";
+}
+
+/** What {@link signOutboundTask} asks of a {@link TaskSigner}. */
+export interface TaskSignOptions {
+  /** The purpose the proof declares — see {@link outboundProofPurpose}. */
+  proofPurpose: OutboundProofPurpose;
 }
 
 /**
@@ -142,7 +231,15 @@ export async function signOutboundTask(
  */
 export interface TaskSigner {
   readonly did: string;
-  sign(envelope: TrustTask<unknown>): Promise<void>;
+  /**
+   * Put a proof on `envelope`, in place, under `opts.proofPurpose`. A signer
+   * that cannot produce that purpose throws rather than sign under another:
+   * the did-hosting RP refuses a proof whose purpose is not the one the
+   * document needs, so a wrong one is only a later, vaguer refusal. The VTA's
+   * `vault/sign-trust-task/0.2` takes no purpose and signs `assertionMethod`,
+   * so `vaultTaskSigner` can sign only the approver's decisions today.
+   */
+  sign(envelope: TrustTask<unknown>, opts?: TaskSignOptions): Promise<void>;
 }
 
 /** A signer backed by a key this process holds — the holder's own identity,
@@ -150,10 +247,11 @@ export interface TaskSigner {
 export function localTaskSigner(signing: SigningIdentity): TaskSigner {
   return {
     did: signing.did,
-    sign: async (envelope) => {
+    sign: async (envelope, opts) => {
       await signTrustTask({
         envelope: envelope as unknown as Record<string, unknown> & { proof?: unknown },
         signing,
+        ...(opts ? { proofPurpose: opts.proofPurpose } : {}),
       });
     },
   };
@@ -249,7 +347,13 @@ export async function verifyTrustTaskReply(
 ): Promise<void> {
   if (isTrustTaskErrorType(doc.type)) return;
 
-  const result = await verifyTrustTaskProof(doc as Record<string, unknown>);
+  // Every agent this wallet talks to signs its replies with its operational
+  // key under `authentication` (VTI #1740, VTI-KEY-106; affinidi-webvh-service
+  // #213), and that key must be listed there: the resolver finds a key under
+  // either relationship, so the relationship is checked here.
+  const result = await verifyTrustTaskProof(doc as Record<string, unknown>, {
+    expectedProofPurpose: "authentication",
+  });
   if (!result.verified) {
     throw new VtaClientError(
       "e.client.parse",

@@ -7,12 +7,14 @@ import {
   parseTaskConsentGranted,
   describeEffects,
   buildTaskConsentDecisionDocument,
+  buildTaskConsentDecision,
   TASK_CONSENT_REQUEST_TYPE,
   TASK_CONSENT_DECISION_TYPE,
   TASK_CONSENT_GRANTED_TYPE,
 } from "../dist/inbound/task-consent.js";
 import { signTrustTask } from "../dist/trust-tasks/sign.js";
 import { TRUST_TASK_ENVELOPE_TYPE } from "../dist/vta/protocol.js";
+import { Identity, unpackMessage } from "../dist/didcomm/index.js";
 
 // Real did:key identities — the wallet's own minting helper, so the DID, the
 // verification method and the key actually agree with what the verifier resolves.
@@ -56,7 +58,14 @@ function payload(over = {}) {
  * refused for tampering rather than for being unaddressed, which is a different
  * test that already exists.
  */
-async function inbound({ as = VTA, over = {}, drop = [], recipient = HOLDER, unsigned = false } = {}) {
+async function inbound({
+  as = VTA,
+  over = {},
+  drop = [],
+  recipient = HOLDER,
+  unsigned = false,
+  proofPurpose,
+} = {}) {
   const p = payload(over);
   for (const k of drop) delete p[k];
   const doc = {
@@ -68,7 +77,7 @@ async function inbound({ as = VTA, over = {}, drop = [], recipient = HOLDER, uns
     payload: p,
   };
   if (!unsigned) {
-    await signTrustTask({ envelope: doc, signing: as });
+    await signTrustTask({ envelope: doc, signing: as, ...(proofPurpose ? { proofPurpose } : {}) });
   }
   return { id: doc.id, type: TRUST_TASK_ENVELOPE_TYPE, from: as.did, body: doc };
 }
@@ -86,6 +95,16 @@ test("a request signed by any enrolled executor (e.g. a control plane) is accept
   const res = await parseTaskConsentRequest(await inbound({ as: CONTROL_PLANE }), opts);
   assert.equal(res.ok, true);
   assert.equal(res.parsed.executorDid, CONTROL_PLANE.did);
+});
+
+test("a request signed for assertionMethod never reaches a human", async () => {
+  // A consent request is the executor's operational message, signed with its
+  // operational key under `authentication` (VTI #1740; affinidi-webvh-service
+  // #213). An `assertionMethod` proof is refused before anything is shown.
+  const res = await parseTaskConsentRequest(await inbound({ proofPurpose: "assertionMethod" }), opts);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "untrusted_issuer");
+  assert.match(res.detail, /authentication/);
 });
 
 test("an unsigned request never reaches a human", async () => {
@@ -243,6 +262,14 @@ test("the decision echoes the challenge and digest verbatim, and is signed", asy
   // The proof IS the authorization — the VTA takes the approver's identity from
   // it, not from the session that carried it.
   assert.ok(doc.proof, "an unsigned decision authorizes nothing");
+  // Issued by the signer and declaring `assertionMethod`: the approver's own
+  // decision is an attestation, which the did-hosting RP requires
+  // (affinidi-webvh-service #213). Placed in time and uniquely identified for
+  // the executor's freshness and replay checks.
+  assert.equal(doc.issuer, DEVICE.did);
+  assert.equal(doc.proof.proofPurpose, "assertionMethod");
+  assert.ok(!Number.isNaN(Date.parse(doc.issuedAt)));
+  assert.match(doc.id, /^urn:uuid:/);
 });
 
 test("a denial is an explicit decision, not an absent one", async () => {
@@ -342,4 +369,79 @@ test("parseTaskConsentGranted rejects the pre-spec bare body", () => {
     body: { status: "granted", payloadDigest: "abc123", taskType: "t" },
   };
   assert.equal(parseTaskConsentGranted(msg, VTA.did, VTA.did), null);
+});
+
+// ── The decision is sent by its signer ──────────────────────────────────────
+//
+// The executor acts on a DIDComm document only when its proven signer is the
+// authcrypt sender (VTI #1739). The same-browser relay carries the approver's
+// decision over the worker's mediator session, so the inner message has to be
+// authcrypted by the approver, not the worker.
+
+function endpoint(identity) {
+  return {
+    did: identity.did,
+    keyAgreementKid: identity.publicJwk().kid,
+    keyAgreementPublicJwk: identity.publicJwk().jwk,
+  };
+}
+
+test("the relay sends the approver's decision as the approver", async () => {
+  const worker = Identity.generate(DEVICE.did);
+  const approverSigning = generateSigningIdentity();
+  const approver = Identity.generate(approverSigning.did);
+  const vta = Identity.generate(VTA.did);
+  const mediator = Identity.generate("did:key:zMediatorExample");
+
+  const built = await buildTaskConsentDecision({
+    holder: worker,
+    sender: approver,
+    signing: approverSigning,
+    vta: endpoint(vta),
+    mediator: endpoint(mediator),
+    decision: "approve",
+    challenge: "9c1f4b7a2e6d80f35a4c9b1e7d2f6083",
+    payloadDigest: "3b0c",
+    thid: "thread-1",
+  });
+
+  // The hop to the mediator is the worker's; the message the VTA opens is the
+  // approver's.
+  const outer = await unpackMessage(
+    { input: built.packed, sender_public_jwk: worker.publicJwk().jwk },
+    mediator,
+  );
+  assert.equal(outer.authenticated, true);
+  const innerJwe = outer.message.attachments[0].data.json;
+  const inner = await unpackMessage(
+    {
+      input: typeof innerJwe === "string" ? innerJwe : JSON.stringify(innerJwe),
+      sender_public_jwk: approver.publicJwk().jwk,
+    },
+    vta,
+  );
+  assert.equal(inner.authenticated, true, "authcrypted by the approver");
+  assert.equal(inner.message.from, approverSigning.did);
+  assert.equal(inner.message.body.issuer, approverSigning.did, "sender == issuer");
+});
+
+test("a decision sent by anyone but its signer is refused before packing", async () => {
+  const worker = Identity.generate(DEVICE.did);
+  const approverSigning = generateSigningIdentity();
+  const vta = Identity.generate(VTA.did);
+  const mediator = Identity.generate("did:key:zMediatorExample");
+  await assert.rejects(
+    () =>
+      buildTaskConsentDecision({
+        holder: worker,
+        signing: approverSigning,
+        vta: endpoint(vta),
+        mediator: endpoint(mediator),
+        decision: "approve",
+        challenge: "c",
+        payloadDigest: "d",
+        thid: "t",
+      }),
+    /send it as the signer/,
+  );
 });

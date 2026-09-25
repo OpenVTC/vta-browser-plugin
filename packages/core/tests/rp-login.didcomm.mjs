@@ -1,162 +1,249 @@
-// The RP login's wire contract, pinned.
+// RP login over DIDComm: `auth/challenge`, then a signed `auth/authenticate`.
 //
-// This had drifted: the package sent `affinidi.com/webvh/1.0/authenticate` to a
-// control plane whose DIDComm router binds
-// `trusttasks.org/spec/auth/authenticate/0.1`, so the request did not route and
-// login could not succeed at all. Nothing caught it because nothing tested this
-// module — the type URIs were two string constants no assertion ever read.
-//
-// The values below are the RP's own, from `did-hosting-common`'s
-// `didcomm_types.rs`:
-//
-//     pub const MSG_AUTHENTICATE:  &str = "https://trusttasks.org/spec/auth/authenticate/0.1";
-//     pub const MSG_AUTH_RESPONSE: &str = "https://trusttasks.org/spec/auth/authenticate/0.1#response";
+// This module used to authcrypt a bare `auth/authenticate` message with an
+// empty body, and the RP issued a session to whoever the authcrypt layer said
+// had sent it. affinidi-webvh-service #213 removes that route: the RP acts only
+// on a proof inside the document. These tests pin what the RP now checks, by
+// unpacking each request as the RP would and running the real verifier over
+// the document it receives.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import { signTrustTask } from "../dist/trust-tasks/sign.js";
 import { loginViaDidcomm } from "../dist/rp-login/index.js";
-import { unpack } from "@openvtc/vti-didcomm-js/unpack";
-import { Identity } from "../dist/didcomm/index.js";
-import { x25519 } from "@noble/curves/ed25519.js";
+import {
+  Identity,
+  InMemoryDidcommBridge,
+  TRUST_TASK_ENVELOPE_TYPE,
+  generateSigningIdentity,
+  localTaskSigner,
+  outboundProofPurpose,
+  verifyTrustTaskProof,
+} from "../dist/index.js";
 
+const CHALLENGE = "https://trusttasks.org/spec/auth/challenge/0.1";
 const AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
-const AUTH_RESPONSE = `${AUTHENTICATE}#response`;
-const RP_DID = "did:web:rp.example";
+const ERROR = "https://trusttasks.org/spec/trust-task-error/0.1";
 
-function party(did) {
-  const sk = x25519.utils.randomSecretKey();
-  const pk = x25519.getPublicKey(sk);
+function endpointOf(identity) {
   return {
-    did,
-    kid: `${did}#key-1`,
-    secretJwk: {
-      kty: "OKP",
-      crv: "X25519",
-      d: Buffer.from(sk).toString("base64url"),
-      x: Buffer.from(pk).toString("base64url"),
-    },
-    publicJwk: { kty: "OKP", crv: "X25519", x: Buffer.from(pk).toString("base64url") },
+    did: identity.did,
+    keyAgreementKid: identity.publicJwk().kid,
+    keyAgreementPublicJwk: identity.publicJwk().jwk,
   };
 }
 
-const holderParty = party("did:peer:2holder");
-const rpParty = party(RP_DID);
+/**
+ * A holder and an RP that speak DIDComm to each other.
+ *
+ * The RP is a real `did:key` whose key signs its replies: the channel verifies
+ * each reply's proof against the RP's DID, so a stub DID would not resolve.
+ * `answer` decides the reply per request document (returning `undefined` falls
+ * back to the default, which issues a challenge and then a session).
+ */
+function world({ answer } = {}) {
+  const signing = generateSigningIdentity();
+  const holder = Identity.generate(signing.did);
+  const rpSigning = generateSigningIdentity();
+  const rp = Identity.generate(rpSigning.did);
 
-/** A bridge that unpacks nothing — it reports what was asked of it and replies
- *  with whatever the test supplies. The crypto is covered elsewhere; what is
- *  under test here is the contract. */
-function bridge(reply) {
-  const calls = [];
-  return {
-    calls,
-    async sendAndAwaitReply(packed, requestId, options) {
-      calls.push({ packed, requestId, options });
-      return typeof reply === "function" ? reply(requestId) : { ...reply, thid: requestId };
-    },
+  const received = [];
+  const reply = async (doc) => {
+    const { sign = true, ...fields } = answer?.(doc) ?? defaultAnswer(doc);
+    const document = {
+      id: globalThis.crypto.randomUUID(),
+      threadId: doc.id,
+      issuer: rp.did,
+      recipient: doc.issuer,
+      issuedAt: new Date().toISOString(),
+      ...fields,
+    };
+    if (sign) await signTrustTask({ envelope: document, signing: rpSigning });
+    return document;
   };
-}
 
-function opts(b) {
-  return {
-    bridge: b,
-    holder: Identity.fromSecretJwk({
-      did: holderParty.did,
-      kid: holderParty.kid,
-      jwk: holderParty.secretJwk,
-    }),
-    service: {
-      did: RP_DID,
-      keyAgreementKid: rpParty.kid,
-      keyAgreementPublicJwk: rpParty.publicJwk,
-    },
-  };
-}
-
-test("a canonical authenticate-response yields the RP's session tokens", async () => {
-  const b = bridge({
-    from: RP_DID,
-    type: AUTH_RESPONSE,
-    body: {
-      session_id: "s1",
-      access_token: "at",
-      refresh_token: "rt",
-      access_expires_at: 111,
-      refresh_expires_at: 222,
+  const bridge = new InMemoryDidcommBridge({
+    vta: rp,
+    holderPublicJwk: holder.publicJwk(),
+    vtaHandlers: {
+      [TRUST_TASK_ENVELOPE_TYPE]: async (req) => {
+        received.push({ from: req.from, doc: req.body });
+        return { type: TRUST_TASK_ENVELOPE_TYPE, body: await reply(req.body) };
+      },
     },
   });
 
-  const out = await loginViaDidcomm(opts(b));
-  assert.equal(out.sessionId, "s1");
-  assert.equal(out.accessToken, "at");
-  assert.equal(out.refreshToken, "rt");
-  assert.equal(out.accessExpiresAt, 111);
-  assert.equal(out.refreshExpiresAt, 222);
+  return { signing, holder, rp, bridge, received };
+}
+
+function defaultAnswer(doc) {
+  if (doc.type === CHALLENGE) {
+    return {
+      type: `${CHALLENGE}#response`,
+      payload: {
+        challenge: "nonce-xyz",
+        sessionId: "sess-abc",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    };
+  }
+  if (doc.type === AUTHENTICATE) {
+    return {
+      type: `${AUTHENTICATE}#response`,
+      payload: {
+        session: { id: "sess-abc", subject: doc.issuer },
+        tokens: { accessToken: "at", refreshToken: "rt", tokenType: "Bearer", expiresIn: 900 },
+      },
+    };
+  }
+  throw new Error(`unexpected task ${doc.type}`);
+}
+
+function opts(w, over = {}) {
+  return {
+    bridge: w.bridge,
+    holder: w.holder,
+    signing: w.signing,
+    service: endpointOf(w.rp),
+    ...over,
+  };
+}
+
+test("sign-in is a challenge, then an authenticate spending it", async () => {
+  const w = world();
+  const session = await loginViaDidcomm(opts(w));
+
+  assert.deepEqual(
+    w.received.map((r) => r.doc.type),
+    [CHALLENGE, AUTHENTICATE],
+  );
+  const [challenge, authenticate] = w.received.map((r) => r.doc);
+  assert.equal(challenge.payload.purpose, "login");
+  assert.equal(challenge.payload.subject, w.signing.did);
+  // Echoed verbatim: the RP looks the binding up by exactly these.
+  assert.equal(authenticate.payload.challenge, "nonce-xyz");
+  assert.equal(authenticate.payload.sessionId, "sess-abc");
+
+  assert.equal(session.accessToken, "at");
+  assert.equal(session.refreshToken, "rt");
+  assert.equal(session.sessionId, "sess-abc");
+  assert.equal(session.expiresIn, 900);
 });
 
-test("the retired response type is refused — no both-spellings fold", async () => {
-  const b = bridge({
-    from: RP_DID,
-    type: "https://affinidi.com/webvh/1.0/authenticate-response",
-    body: { session_id: "s", access_token: "a", refresh_token: "r" },
+test("the authenticate document is what the RP now requires of it", async () => {
+  const w = world();
+  await loginViaDidcomm(opts(w));
+  const { doc, from } = w.received[1];
+
+  // Issued by the signing DID, addressed to the RP, placed in time, and
+  // uniquely identified — the RP keys its replay window on (issuer, id).
+  assert.equal(doc.issuer, w.signing.did);
+  assert.equal(doc.recipient, w.rp.did);
+  assert.ok(!Number.isNaN(Date.parse(doc.issuedAt)), `issuedAt ${doc.issuedAt}`);
+  assert.equal(typeof doc.id, "string");
+  assert.notEqual(doc.id, w.received[0].doc.id, "each document has its own id");
+  // The transport's sender agrees with the proof, as the RP requires.
+  assert.equal(from, w.holder.did);
+
+  // The proof verifies over the document as the RP received it, as the issuer,
+  // and declares that it is an authentication.
+  const res = await verifyTrustTaskProof(doc, { expectedProofPurpose: "authentication" });
+  assert.equal(res.verified, true, `proof did not verify: ${res.reason}`);
+  assert.equal(res.signer, w.signing.did);
+});
+
+test("both documents are signed for authentication", async () => {
+  // The RP acts on neither unless its proof verifies as its issuer and that
+  // issuer is the sender; the proof is this wallet authenticating as it.
+  assert.equal(outboundProofPurpose(AUTHENTICATE), "authentication");
+  assert.equal(outboundProofPurpose(CHALLENGE), "authentication");
+
+  const w = world();
+  await loginViaDidcomm(opts(w));
+  for (const { doc } of w.received) {
+    const res = await verifyTrustTaskProof(doc, { expectedProofPurpose: "authentication" });
+    assert.equal(res.verified, true, `${doc.type}: ${res.reason}`);
+  }
+});
+
+test("a signer that is not the sender is refused before anything is sent", async () => {
+  // A persona signs with a key the wallet does not hold as a DIDComm identity,
+  // so its document would go out authcrypted by the holder. The RP acts on a
+  // DIDComm document only when its signer is its sender, so that is refused
+  // here, naming both, rather than remotely as `identityMismatch`.
+  const w = world();
+  const persona = generateSigningIdentity();
+  await assert.rejects(
+    () => loginViaDidcomm(opts(w, { signing: localTaskSigner(persona) })),
+    (e) => e.code === "e.client.identity" && e.message.includes(persona.did) && e.message.includes(w.holder.did),
+  );
+  assert.equal(w.received.length, 0, "nothing reached the RP");
+});
+
+test("the reply is awaited from the RP alone", async () => {
+  // A thread id is the id of a message this wallet sent, not a secret, so the
+  // bridge is told whose answer it is.
+  const w = world();
+  const seen = [];
+  const bridge = {
+    sendAndAwaitReply(packed, requestId, o) {
+      seen.push(o.from);
+      return w.bridge.sendAndAwaitReply(packed, requestId, o);
+    },
+    send: (packed) => w.bridge.send(packed),
+  };
+  await loginViaDidcomm(opts(w, { bridge }));
+  assert.deepEqual(seen, [[w.rp.did], [w.rp.did]]);
+});
+
+test("a reply sent by anyone other than the RP is refused", async () => {
+  const w = world();
+  const bridge = {
+    async sendAndAwaitReply(packed, requestId, o) {
+      const reply = await w.bridge.sendAndAwaitReply(packed, requestId, o);
+      return { ...reply, from: "did:web:imposter.example" };
+    },
+    send: (packed) => w.bridge.send(packed),
+  };
+  await assert.rejects(
+    () => loginViaDidcomm(opts(w, { bridge })),
+    (e) => e.code === "e.p.msg.unauthorized",
+  );
+  assert.equal(w.received.length, 1, "it must not go on to authenticate");
+});
+
+test("an unsigned answer is refused", async () => {
+  const w = world({
+    answer: (doc) => (doc.type === CHALLENGE ? { ...defaultAnswer(doc), sign: false } : undefined),
+  });
+  await assert.rejects(() => loginViaDidcomm(opts(w)), /unsigned or its proof does not verify/);
+  assert.equal(w.received.length, 1);
+});
+
+test("a refused challenge surfaces as the RP's own code", async () => {
+  const w = world({
+    answer: (doc) =>
+      doc.type === CHALLENGE
+        ? { type: ERROR, payload: { code: "permission_denied", message: "not in the ACL" } }
+        : undefined,
   });
   await assert.rejects(
-    () => loginViaDidcomm(opts(b)),
-    /authenticate-response/,
-    "the legacy type must not be accepted alongside the canonical one",
+    () => loginViaDidcomm(opts(w)),
+    (e) => e.details?.code === "permission_denied",
   );
+  assert.equal(w.received.length, 1, "it must not go on to authenticate");
 });
 
-test("a reply from someone other than the RP is refused", async () => {
-  const b = bridge({
-    from: "did:web:imposter.example",
-    type: AUTH_RESPONSE,
-    body: { session_id: "s", access_token: "a", refresh_token: "r" },
+test("a refused authenticate surfaces as the RP's own code", async () => {
+  const w = world({
+    answer: (doc) =>
+      doc.type === AUTHENTICATE
+        ? { type: ERROR, payload: { code: "auth/authenticate:challengeMismatch", message: "no" } }
+        : undefined,
   });
-  await assert.rejects(() => loginViaDidcomm(opts(b)), /!= RP/);
-});
-
-test("a response missing a token is refused rather than half-returned", async () => {
-  const b = bridge({ from: RP_DID, type: AUTH_RESPONSE, body: { session_id: "s" } });
-  await assert.rejects(() => loginViaDidcomm(opts(b)), /malformed/);
-});
-
-test("the request goes out under the canonical authenticate type", async () => {
-  // The assertion that would have caught the drift. Everything above tests the
-  // reply; the request type is what the RP's router binds, and sending the
-  // retired one meant the message never reached a handler at all.
-  const b = bridge({
-    from: RP_DID,
-    type: AUTH_RESPONSE,
-    body: { session_id: "s", access_token: "a", refresh_token: "r" },
-  });
-  await loginViaDidcomm(opts(b));
-
-  // Unpack as the RP would: the authcrypt recipient, with the holder as the
-  // verified sender.
-  const opened = await unpack(
-    b.calls[0].packed,
-    { kid: rpParty.kid, privateJwk: rpParty.secretJwk },
-    { publicJwk: holderParty.publicJwk },
+  await assert.rejects(
+    () => loginViaDidcomm(opts(w)),
+    (e) => e.details?.code === "auth/authenticate:challengeMismatch",
   );
-  assert.equal(opened.message.type, AUTHENTICATE);
-  assert.equal(opened.message.from, holderParty.did);
-  assert.deepEqual(opened.message.to, [RP_DID]);
-  // Empty by contract: the RP's DIDComm handler authenticates on the authcrypt
-  // sender and reads nothing here. See the note in didcomm.ts about the
-  // conformance gap this leaves against the canonical schema.
-  assert.deepEqual(opened.message.body, {});
-});
-
-test("the bridge is told only the RP may answer", async () => {
-  // A thread id is not a secret; the waiter must refuse anyone else's frame on
-  // it rather than rely on the check after it has already been handed one.
-  const b = bridge({
-    type: AUTH_RESPONSE,
-    from: RP_DID,
-    body: { session_id: "s", access_token: "a", refresh_token: "r", access_expires_at: 1 },
-  });
-  await loginViaDidcomm(opts(b));
-  assert.equal(b.calls.length, 1);
-  assert.equal(b.calls[0].options.from, RP_DID);
 });

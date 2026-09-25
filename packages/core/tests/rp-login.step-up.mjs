@@ -31,6 +31,7 @@ test("buildStepUpApproval: signed approved response echoes the request and verif
   assert.equal(doc.type, APPROVE_RESPONSE_TYPE);
   assert.equal(doc.issuer, holder.did);
   assert.equal(doc.recipient, rpDid); // audience binding (SPEC §4.8.2)
+  assert.ok(!Number.isNaN(Date.parse(doc.issuedAt)), "placed in time, under the proof");
   assert.equal(doc.payload.subject, holder.did);
   assert.equal(doc.payload.sessionId, "sess-1");
   assert.equal(doc.payload.challenge, request.challenge);
@@ -102,6 +103,7 @@ async function startResponse({
   unsigned = false,
   legacy = true,
   withDocument = true,
+  proofPurpose,
 } = {}) {
   const payload = requestPayload(over);
   const document = {
@@ -112,7 +114,9 @@ async function startResponse({
     issuedAt: new Date().toISOString(),
     payload,
   };
-  if (!unsigned) await signTrustTask({ envelope: document, signing: as });
+  if (!unsigned) {
+    await signTrustTask({ envelope: document, signing: as, ...(proofPurpose ? { proofPurpose } : {}) });
+  }
   return {
     ...(legacy
       ? { subject: payload.subject, sessionId: payload.sessionId, challenge: payload.challenge }
@@ -150,6 +154,18 @@ test("verifyStepUpApproveRequest: a signer the wallet is not enrolled with is re
   const res = await verifyStepUpApproveRequest(await startResponse({ as: STRANGER }), enrolled);
   assert.equal(res.ok, false);
   assert.match(res.reason, /not an executor this wallet is enrolled with/);
+});
+
+test("verifyStepUpApproveRequest: a request signed for assertionMethod is refused", async () => {
+  // The executor's approve-request is its operational message: `authentication`
+  // (VTI #1740; affinidi-webvh-service #213). Only the approver's answer is an
+  // `assertionMethod` attestation.
+  const res = await verifyStepUpApproveRequest(
+    await startResponse({ proofPurpose: "assertionMethod" }),
+    enrolled,
+  );
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /authentication/);
 });
 
 test("verifyStepUpApproveRequest: an unsigned document is refused", async () => {
@@ -281,6 +297,16 @@ test("performStepUpVta: consent sees the reason from INSIDE the signed document,
   });
   assert.equal(proofCheck.verified, true, proofCheck.reason);
   assert.equal(proofCheck.signer, holder.did);
+
+  // The whole flow is the RP's two REST calls. The VTA removed the DIDComm
+  // `approve-request` route this flow once used (VTI #1739), and nothing here
+  // takes a bridge or a channel that could reach it: the approval is a Trust
+  // Task the wallet signs itself.
+  assert.deepEqual(
+    calls.map((c) => c.url.replace(/^.*\/auth\/step-up\/vta\//, "")),
+    ["start", "finish"],
+  );
+  assert.ok(!Number.isNaN(Date.parse(finish.body.issuedAt)), "the approval is placed in time");
 });
 
 test("performStepUpVta: a document with no reason still prompts — with no reason member", async () => {

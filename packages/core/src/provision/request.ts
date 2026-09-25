@@ -112,7 +112,7 @@ export async function buildBootstrapRequest(
   // The wallet's existing eddsa-jcs-2022 signer covers JCS canonicalisation
   // + SHA-256(proofConfig) || SHA-256(doc-minus-proof) + Ed25519 sign +
   // multibase proofValue exactly as the Rust side does. Here we pass
-  // `authentication` rather than the default `assertionMethod` because the
+  // `authentication` (also the default, stated here because it matters) because the
   // VP holder is proving CONTROL of the ephemeral did:key, not vouching
   // for a claim about it — same distinction the Rust `BootstrapRequest::
   // sign` makes via `SignOptions::with_proof_purpose("authentication")`.
