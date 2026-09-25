@@ -128,29 +128,59 @@ export type TaskConsentOutcome =
  *
  * ## What is trusted
  *
- * Only the authcrypt sender, and only to decide whether to *believe* the
- * reply — it is diagnostic, and grants nothing. A reply whose sender is not an
- * enrolled executor is dropped: an unauthenticated party must not be able to
- * tell this device that its approval failed (a lie that invites the human to
- * approve a second time), nor that it succeeded.
+ * The sender the **transport authenticated** — `senderDid`, which the caller
+ * takes from the mediator session (the authcrypt `skid`'s DID) or from the TSP
+ * unpack — and only to decide whether to *believe* the reply: it is
+ * diagnostic, and grants nothing. It must be exactly the executor the decision
+ * was sent to (`expectedExecutorDid`). Anyone else — including another
+ * enrolled executor — is dropped: a party that did not receive the decision
+ * must not be able to tell this device that its approval failed (a lie that
+ * invites the human to approve a second time, and that makes the wallet forget
+ * the decision it is waiting on), nor that it succeeded.
+ *
+ * `message.from` is **not** consulted. It is a value the sender writes into the
+ * plaintext, so matching on it would make the check exactly as strong as the
+ * weakest link that ever carried the message.
+ *
+ * When the reply document carries a Data Integrity proof, it must verify, be
+ * signed by `expectedExecutorDid`, and name that DID as `issuer`. The executor
+ * signs its success responses; its error documents are unsigned (the framework
+ * makes their proof RECOMMENDED), so a missing proof is not by itself a
+ * refusal — the authenticated sender is then the evidence.
  */
-export function parseTaskConsentOutcome(
+export async function parseTaskConsentOutcome(
   message: Record<string, unknown>,
-  opts: { enrolledExecutorDids: readonly string[] },
-): TaskConsentOutcome | null {
+  opts: {
+    /** Who the transport authenticated as the sender. `null`/absent → dropped. */
+    senderDid: string | null | undefined;
+    /** The executor the decision this answers was sent to. */
+    expectedExecutorDid: string;
+    /** Resolve a DID document for proof verification (test seam). */
+    resolveDid?: (did: string) => Promise<Record<string, unknown>>;
+  },
+): Promise<TaskConsentOutcome | null> {
   if (message.type !== TRUST_TASK_ENVELOPE_TYPE) return null;
 
-  // A missing `from` means the transport could not authenticate the sender.
-  // Unlike the `granted` nudge — which is cross-checked against a digest the
-  // page already holds — nothing downstream re-verifies this, so an
-  // unattributable reply is dropped rather than believed.
-  const from = typeof message.from === "string" ? message.from : null;
-  if (!from || !opts.enrolledExecutorDids.includes(from)) return null;
+  if (!opts.senderDid || opts.senderDid !== opts.expectedExecutorDid) return null;
 
-  const doc = (message.body ?? {}) as Partial<TrustTask<Record<string, unknown>>>;
-  const thid =
-    (typeof message.thid === "string" ? message.thid : undefined) ??
-    (typeof doc.threadId === "string" ? doc.threadId : undefined);
+  const doc = (message.body ?? {}) as Partial<TrustTask<Record<string, unknown>>> & {
+    proof?: unknown;
+  };
+  if (!isTrustTaskErrorType(doc.type) && doc.type !== TASK_CONSENT_DECISION_RESPONSE_TYPE) {
+    return null;
+  }
+  // An in-band issuer that names someone else contradicts the transport.
+  if (doc.issuer !== undefined && doc.issuer !== opts.expectedExecutorDid) return null;
+  if (doc.proof !== undefined) {
+    const proof = await verifyTrustTaskProof(doc as Record<string, unknown>, {
+      expectedProofPurpose: "assertionMethod",
+      ...(opts.resolveDid ? { resolveDid: opts.resolveDid } : {}),
+    });
+    if (!proof.verified || proof.signer !== opts.expectedExecutorDid) return null;
+    if (doc.issuer !== opts.expectedExecutorDid) return null;
+  }
+
+  const thid = taskConsentOutcomeThread(message);
 
   if (isTrustTaskErrorType(doc.type)) {
     // **Deliberately not schema-validated.** This branch carries the executor
@@ -210,6 +240,20 @@ export function parseTaskConsentOutcome(
 }
 
 /**
+ * The decision a reply to a `task-consent/decision` answers: the DIDComm
+ * `thid`, or the document's `threadId`. Read before
+ * {@link parseTaskConsentOutcome} so the caller can look up which executor the
+ * decision went to — the executor the reply must come from.
+ */
+export function taskConsentOutcomeThread(message: Record<string, unknown>): string | undefined {
+  const doc = (message.body ?? {}) as { threadId?: unknown };
+  return (
+    (typeof message.thid === "string" ? message.thid : undefined) ??
+    (typeof doc.threadId === "string" ? doc.threadId : undefined)
+  );
+}
+
+/**
  * Parse a VTA→requester `task-consent/granted` notice.
  *
  * The VTA sends a **full Trust Task document inside a DIDComm envelope**, the
@@ -220,8 +264,9 @@ export function parseTaskConsentOutcome(
  * It is a **non-load-bearing nudge**: it only tells the requester to re-submit
  * now instead of polling, and the single-use grant check on that re-submit is
  * the real gate — so this needs no Data-Integrity proof. We still accept it only
- * from this device's enrolled VTA (the authcrypt sender), and the page re-checks
- * the digest against its outstanding approval before acting.
+ * from this device's VTA, as the transport authenticated the sender
+ * (`senderDid` — never the message's own `from`), and the page re-checks the
+ * digest against its outstanding approval before acting.
  *
  * # It used to read the pre-spec shape
  *
@@ -247,12 +292,13 @@ export function parseTaskConsentOutcome(
 export function parseTaskConsentGranted(
   message: Record<string, unknown>,
   expectedVtaDid: string,
+  senderDid: string | null | undefined,
 ): { payloadDigest: string } | null {
   if (message.type !== TRUST_TASK_ENVELOPE_TYPE) return null;
-  const from = typeof message.from === "string" ? message.from : null;
-  // If the transport surfaced a sender, it must be our VTA; a missing sender
-  // is tolerated (the page-side digest match is the ultimate guard).
-  if (from && from !== expectedVtaDid) return null;
+  // The transport-authenticated sender must be our VTA. Every transport this
+  // wallet receives on authenticates its sender, so an unattributed notice is
+  // dropped rather than tolerated.
+  if (!senderDid || senderDid !== expectedVtaDid) return null;
   const doc = (message.body ?? {}) as {
     type?: unknown;
     issuer?: unknown;

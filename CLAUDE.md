@@ -159,6 +159,31 @@ is refused before it dials; the control now relaxes the dependency's policy to
 keep proving the fixture is reachable, and the production path (guard first, then
 `vtiResolve(did, {})`) is unchanged.
 
+## Inbound is attributed to the sender the transport proved, never to `from`
+
+A DIDComm message's `from` is plaintext its sender writes. What the envelope
+proves is the authcrypt sender key (`skid`), and `@openvtc/vti-didcomm-js`
+0.12 hands that to us as a `VerifiedSender` — the third argument of the
+`onInbound` handler (`connectMediatorSession` passes it through) — after
+refusing any authcrypt message whose `from` is not the `skid`'s DID. On the TSP
+path `unpackInboundTsp` proves the sender itself. `onInboundMessage` takes that
+DID as `senderDid`, **persists it with the message** (`PendingInbound.senderDid`,
+because a re-driven message has no transport left to ask), and every parser
+that decides whether to believe an unsigned notice keys on it:
+`parseTaskConsentOutcome` believes a reply only from the executor the decision
+was sent to (`AwaitingDecision.executorDid`, else the session's VTA) and, when
+the reply carries a proof, only if it verifies as that executor;
+`parseTaskConsentGranted` only from this session's VTA.
+
+**The `^0.12.0` floor is a correctness constraint too**: below it `from` is
+unbound and the verified sender is not delivered at all.
+
+**What breaks it:** reading `message.from` to decide anything; dropping
+`senderDid` from the pending record; or widening an outcome's accepted sender
+to "any enrolled executor" — a party that never received the decision would
+then be able to tell a human their approval failed, and make this wallet forget
+the decision it is waiting on.
+
 ## Every outbound Trust-Task document is signed (SPEC §7.2 item 7a)
 
 The VTA enforces the four checks a Trust Task specification declares for

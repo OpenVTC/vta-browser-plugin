@@ -290,40 +290,46 @@ function grantedEnvelope({ digest = "zQmGrantedDigest", from = VTA.did, issuer =
 }
 
 test("parseTaskConsentGranted accepts the enveloped notice the VTA sends", () => {
-  assert.deepEqual(parseTaskConsentGranted(grantedEnvelope(), VTA.did), {
+  assert.deepEqual(parseTaskConsentGranted(grantedEnvelope(), VTA.did, VTA.did), {
     payloadDigest: "zQmGrantedDigest",
   });
 });
 
 test("parseTaskConsentGranted ignores a non-envelope message type", () => {
   const msg = { type: "other", from: VTA.did, body: { payloadDigest: "x" } };
-  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
+  assert.equal(parseTaskConsentGranted(msg, VTA.did, VTA.did), null);
 });
 
 test("parseTaskConsentGranted ignores an envelope carrying another task", () => {
   const msg = grantedEnvelope();
   msg.body.type = TASK_CONSENT_REQUEST_TYPE;
-  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
+  assert.equal(parseTaskConsentGranted(msg, VTA.did, VTA.did), null);
 });
 
-test("parseTaskConsentGranted rejects a sender that is not our VTA", () => {
-  assert.equal(parseTaskConsentGranted(grantedEnvelope({ from: IMPOSTOR.did }), VTA.did), null);
+test("parseTaskConsentGranted rejects an authenticated sender that is not our VTA", () => {
+  assert.equal(parseTaskConsentGranted(grantedEnvelope({ from: IMPOSTOR.did }), VTA.did, IMPOSTOR.did), null);
+});
+
+test("parseTaskConsentGranted goes by the authenticated sender, not `from`", () => {
+  // `from` names the VTA; the transport authenticated someone else.
+  assert.equal(parseTaskConsentGranted(grantedEnvelope(), VTA.did, IMPOSTOR.did), null);
 });
 
 test("parseTaskConsentGranted rejects an in-band issuer that is not our VTA", () => {
   const msg = grantedEnvelope({ from: null, issuer: IMPOSTOR.did });
-  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
+  assert.equal(parseTaskConsentGranted(msg, VTA.did, VTA.did), null);
 });
 
-test("parseTaskConsentGranted tolerates a missing sender (page re-checks the digest)", () => {
+test("parseTaskConsentGranted drops a notice with no authenticated sender", () => {
   const msg = grantedEnvelope({ from: null, issuer: null });
-  assert.deepEqual(parseTaskConsentGranted(msg, VTA.did), { payloadDigest: "zQmGrantedDigest" });
+  assert.equal(parseTaskConsentGranted(msg, VTA.did, null), null);
+  assert.equal(parseTaskConsentGranted(grantedEnvelope(), VTA.did, undefined), null);
 });
 
 test("parseTaskConsentGranted requires a string payloadDigest", () => {
   const msg = grantedEnvelope();
   delete msg.body.payload.payloadDigest;
-  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
+  assert.equal(parseTaskConsentGranted(msg, VTA.did, VTA.did), null);
 });
 
 // The regression, stated as the shape it was: a bare pre-spec body must not be
@@ -335,5 +341,5 @@ test("parseTaskConsentGranted rejects the pre-spec bare body", () => {
     from: VTA.did,
     body: { status: "granted", payloadDigest: "abc123", taskType: "t" },
   };
-  assert.equal(parseTaskConsentGranted(msg, VTA.did), null);
+  assert.equal(parseTaskConsentGranted(msg, VTA.did, VTA.did), null);
 });

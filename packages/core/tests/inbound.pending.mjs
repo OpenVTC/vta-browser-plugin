@@ -43,6 +43,7 @@ test("a persisted message survives to be re-driven", async () => {
   await putPendingInbound(store, {
     id: CONSENT.id,
     message: CONSENT,
+    senderDid: "did:webvh:example:vta",
     vtaDid: "did:webvh:example:vta",
     isApprover: false,
   });
@@ -50,6 +51,9 @@ test("a persisted message survives to be re-driven", async () => {
   const [entry] = await listPendingInbound(store);
   assert.equal(entry.id, CONSENT.id);
   assert.equal(entry.vtaDid, "did:webvh:example:vta");
+  // The transport-authenticated sender travels with the message: a re-driven
+  // message has no transport left to ask, and its own `from` is sender-written.
+  assert.equal(entry.senderDid, "did:webvh:example:vta");
   assert.equal(entry.isApprover, false);
   assert.ok(entry.receivedAt > 0);
   // The WHOLE message, not just its id — the challenge and digest it was

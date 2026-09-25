@@ -181,16 +181,19 @@ test("a decision response with a status outside the enum is reported malformed",
       payload,
     },
   });
-  const opts = { enrolledExecutorDids: ["did:webvh:QmVta:vta.example"] };
+  const opts = {
+    senderDid: "did:webvh:QmVta:vta.example",
+    expectedExecutorDid: "did:webvh:QmVta:vta.example",
+  };
 
-  const good = parseTaskConsentOutcome(
+  const good = await parseTaskConsentOutcome(
     reply({ status: "granted", payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ" }),
     opts,
   );
   assert.equal(good.accepted, true);
   assert.equal(good.status, "granted");
 
-  const bad = parseTaskConsentOutcome(
+  const bad = await parseTaskConsentOutcome(
     reply({ status: "granted-ish", payloadDigest: "zQmSK9pGKFnmc77pqyNAPJyPKt8rMqctngfg3vwuMArwGYZ" }),
     opts,
   );
@@ -198,7 +201,7 @@ test("a decision response with a status outside the enum is reported malformed",
   assert.match(bad.message ?? "", /status/);
 
   // `payloadDigest` is REQUIRED; the hand-read silently omitted it.
-  const missing = parseTaskConsentOutcome(reply({ status: "granted" }), opts);
+  const missing = await parseTaskConsentOutcome(reply({ status: "granted" }), opts);
   assert.equal(missing.accepted, false);
   assert.match(missing.message ?? "", /payloadDigest/);
 });
