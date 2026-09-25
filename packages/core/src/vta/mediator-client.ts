@@ -151,8 +151,10 @@ export class MediatorClient {
     const { outer, requestId } = await this.buildOutbound(requestType, body);
 
     // The bridge returns the decrypted, sender-authenticated reply.
+    // These requests are addressed to the mediator itself; only it answers.
     const msg = await this.bridge.sendAndAwaitReply(outer, requestId, {
       timeoutMs: this.timeoutMs,
+      from: this.mediator.did,
     });
     if (msg.type === "https://didcomm.org/report-problem/2.0/problem-report") {
       const pr = (msg.body ?? {}) as ProblemReportBody;

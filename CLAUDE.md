@@ -175,6 +175,15 @@ was sent to (`AwaitingDecision.executorDid`, else the session's VTA) and, when
 the reply carries a proof, only if it verifies as that executor;
 `parseTaskConsentGranted` only from this session's VTA.
 
+The same holds for replies. `DidcommMessageBridge.sendAndAwaitReply` takes a
+**required** `from` — the peer(s) whose reply it is — and
+`MediatorSessionBridge` hands it to the session's `waitFor` filter, so a frame
+on the thread from anyone else is never returned as the answer. A thread id is
+a message id this wallet sent through the mediator, not a secret. Name the
+addressee: the VTA (plus the forwarding mediator, whose refusal of the hop is
+an answer) in `DidcommVtaTransport`, the mediator in `MediatorClient`, the RP in
+`loginViaDidcomm`.
+
 **The `^0.12.0` floor is a correctness constraint too**: below it `from` is
 unbound and the verified sender is not delivered at all.
 

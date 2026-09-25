@@ -1,5 +1,9 @@
 import type { MediatorConnection } from "../didcomm/index.js";
-import type { DidcommMessageBridge, DidcommReply } from "./transport.js";
+import type {
+  DidcommMessageBridge,
+  DidcommReply,
+  SendAndAwaitReplyOptions,
+} from "./transport.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -12,8 +16,11 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  *
  * Because the session only surfaces successfully sender-authenticated
  * authcrypt frames (anoncrypt is dropped), every reply this bridge
- * returns is already authenticated; callers validate `from` / `thid` /
- * `type` on the decrypted message.
+ * returns is already authenticated — and only as one of the peers the
+ * caller named in `options.from`: the session's `waitFor` filter refuses
+ * to hand the waiter a frame on its thread from anyone else, so a party
+ * that learns the thread id cannot answer in the peer's place. Callers
+ * still validate `thid` / `type` on the decrypted message.
  */
 export class MediatorSessionBridge implements DidcommMessageBridge {
   private readonly connection: MediatorConnection;
@@ -27,14 +34,15 @@ export class MediatorSessionBridge implements DidcommMessageBridge {
   async sendAndAwaitReply(
     outerPackedJwe: string,
     expectThreadId: string,
-    options?: { timeoutMs?: number },
+    options: SendAndAwaitReplyOptions,
   ): Promise<DidcommReply> {
     // Register the waiter before sending so a fast reply can't race
     // ahead of the correlation (the session also buffers unclaimed
     // frames, but registering first is unconditionally safe).
     const reply = this.connection.waitFor(
       expectThreadId,
-      options?.timeoutMs ?? this.defaultTimeoutMs,
+      options.timeoutMs ?? this.defaultTimeoutMs,
+      { from: options.from },
     );
     this.connection.send(outerPackedJwe);
     return (await reply) as DidcommReply;
