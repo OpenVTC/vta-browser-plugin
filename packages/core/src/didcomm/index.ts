@@ -21,6 +21,7 @@ import {
   unpack as vtiUnpack,
   buildForward as vtiBuildForward,
   resolveX25519KeyAgreement as vtiResolveKeyAgreement,
+  resolveX25519KeyAgreementKey as vtiResolveKeyAgreementKey,
   resolveMediator as vtiResolveMediator,
   resolve as vtiResolve,
   authenticateToMediator as vtiAuthenticateToMediator,
@@ -740,9 +741,11 @@ export async function connectMediatorSession(
   const vta = await resolveKeyAgreement(opts.vtaDid);
 
   // Seed the VTA's key so its replies unpack by skid; resolve any other
-  // sender on demand.
-  const senderKeys = new Map<string, { publicJwk: PublicJwk }>([
-    [opts.vtaDid, { publicJwk: vta.keyAgreementPublicJwk }],
+  // sender on demand. Each key carries its full id: the library selects the
+  // sender key by the exact `skid` (vti-didcomm-js >=0.12), so the key id it
+  // reports is the one the envelope was authenticated with.
+  const senderKeys = new Map<string, { kid: string; publicJwk: PublicJwk }>([
+    [opts.vtaDid, { kid: vta.keyAgreementKid, publicJwk: vta.keyAgreementPublicJwk }],
   ]);
 
   // FIFO queue of TSP-reply waiters. A TSP frame the mediator multiplexes onto
@@ -775,9 +778,11 @@ export async function connectMediatorSession(
       publicKey: clientPublic,
     },
     senderKeys,
-    resolveSender: async (did: string) => {
-      const r = await vtiResolveKeyAgreement(did);
-      return { publicJwk: x25519PublicJwk(r.x25519Pub) };
+    // Called with the frame's `skid`; returns that exact keyAgreement key of
+    // the DID, or throws.
+    resolveSender: async (did: string, skid: string) => {
+      const r = await vtiResolveKeyAgreementKey(did, skid);
+      return { kid: r.kid, publicJwk: x25519PublicJwk(r.x25519Pub) };
     },
     // Awaited by the transport before it acks (vti-didcomm-js >=0.7.0), so
     // everything this does happens while the mediator still holds its copy —
