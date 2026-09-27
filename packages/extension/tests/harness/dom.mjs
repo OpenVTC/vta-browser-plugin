@@ -229,7 +229,9 @@ export async function render(element, { chrome: chromeStub } = {}) {
      * shows the text, the component's state stays empty, and the assertion that
      * follows fails somewhere far away with a screen that looks right.
      * Clearing the tracker's cached value makes the dispatch read as a real
-     * edit.
+     * edit. The cached value must differ from the one being typed, so clearing
+     * a field (`type(el, "")`) resets it to a sentinel rather than to `""` —
+     * otherwise the one edit that empties a field is the one React ignores.
      */
     type: async (el, value) => {
       await act(async () => {
@@ -237,7 +239,7 @@ export async function render(element, { chrome: chromeStub } = {}) {
           el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement : window.HTMLInputElement;
         const setter = Object.getOwnPropertyDescriptor(proto.prototype, "value")?.set;
         setter ? setter.call(el, value) : (el.value = value);
-        el._valueTracker?.setValue("");
+        el._valueTracker?.setValue(value === "" ? "\u0000" : "");
         el.dispatchEvent(new window.Event("input", { bubbles: true }));
         el.dispatchEvent(new window.Event("change", { bubbles: true }));
       });

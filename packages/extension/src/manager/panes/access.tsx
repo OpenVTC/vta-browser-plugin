@@ -414,6 +414,148 @@ function ChangeRole({
   );
 }
 
+/** The local calendar day of an instant, as a date input spells it. */
+function localDay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
+ * What an edit asks `acl/update` to change — only the members that moved.
+ *
+ * `acl/update` is a partial update, so an omitted member is left alone and a
+ * `null` one is cleared. Sending every member the form shows would rewrite an
+ * untouched expiry at end-of-day precision, and a label resent unchanged is an
+ * audit record of a change nobody made. So a member goes out only when the
+ * operator altered it, and emptying a field that held something is a `null`,
+ * never an omission — the two are opposite instructions.
+ */
+export function aclEditToSend(
+  entry: Pick<AclEntry, "label" | "expiresAt">,
+  form: { label: string; expiresDay: string },
+): { label?: string | null; expiresAt?: string | null } {
+  const out: { label?: string | null; expiresAt?: string | null } = {};
+  const label = form.label.trim();
+  const was = entry.label ?? "";
+  if (label !== was) out.label = label ? label : null;
+
+  const wasDay = entry.expiresAt ? localDay(entry.expiresAt) : "";
+  if (form.expiresDay !== wasDay) {
+    // A date input gives a local day; the wire wants an instant. Clearing it
+    // makes the entry permanent — a privilege increase the agent gates.
+    out.expiresAt = form.expiresDay
+      ? new Date(`${form.expiresDay}T23:59:59`).toISOString()
+      : null;
+  }
+  return out;
+}
+
+/**
+ * Change an entry's label and expiry.
+ *
+ * Role, scopes and capabilities are deliberately not here: each has its own
+ * task with its own name in the audit trail (`acl/change-role`, `acl/revoke`,
+ * the narrowing editor), and folding them into one Save would make a reduction
+ * in authority look like a tidy-up.
+ */
+function EditEntry({
+  parties,
+  entry,
+  onClose,
+  onDone,
+}: {
+  parties: Parties;
+  entry: AclEntry;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  // Opened on what the entry holds, so Save without a change sends nothing.
+  const [label, setLabel] = useState(entry.label ?? "");
+  const [expiresDay, setExpiresDay] = useState(entry.expiresAt ? localDay(entry.expiresAt) : "");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<ConsentRequiredError | null>(null);
+
+  const change = aclEditToSend(entry, { label, expiresDay });
+  const changed = Object.keys(change).length > 0;
+  const makesPermanent = change.expiresAt === null;
+
+  const submit = () => {
+    setBusy(true);
+    setError(null);
+    setPending(null);
+    void runMutation(
+      async () => {
+        await aclUpdate(managerSender, {
+          ...parties,
+          subject: entry.subject,
+          ...change,
+          ...(reason.trim() ? { reason: reason.trim() } : {}),
+        });
+      },
+      { onConsent: setPending, onError: setError },
+    ).then((ok) => {
+      setBusy(false);
+      if (ok) {
+        onClose();
+        onDone();
+      }
+    });
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 10, maxWidth: 620, paddingTop: 4 }}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <label style={{ display: "grid", gap: 4, flex: "1 1 220px" }}>
+          <span style={{ fontSize: t.xs, color: c.muted }}>LABEL</span>
+          <input
+            style={fieldStyle}
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="What this subject is — a device, a person, a service"
+          />
+        </label>
+        <label style={{ display: "grid", gap: 4 }}>
+          <span style={{ fontSize: t.xs, color: c.muted }}>EXPIRES</span>
+          <input
+            type="date"
+            style={fieldStyle}
+            value={expiresDay}
+            onChange={(e) => setExpiresDay(e.target.value)}
+          />
+        </label>
+      </div>
+      <label style={{ display: "grid", gap: 4 }}>
+        <span style={{ fontSize: t.xs, color: c.muted }}>REASON (optional, recorded with the change)</span>
+        <input style={fieldStyle} value={reason} onChange={(e) => setReason(e.target.value)} />
+      </label>
+      {makesPermanent && (
+        <Note tone="warn">
+          Clearing the expiry makes this a standing grant — it lasts until someone revokes it. Your
+          agent treats that as an increase in authority and may ask for approval.
+        </Note>
+      )}
+      <span style={{ fontSize: t.xs, color: c.faint }}>
+        To change the role, the contexts or what it can do, use the row&rsquo;s own actions — each
+        is recorded as the change it is.
+      </span>
+      {error && <Note tone="danger">{error}</Note>}
+      {pending && <ConsentCeremony pending={pending} />}
+      <div style={{ display: "flex", gap: 6 }}>
+        <Button disabled={busy || !changed} onClick={submit}>
+          {busy ? "Saving…" : "Save"}
+        </Button>
+        <Button kind="quiet" onClick={onClose}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function GrantAccess({
   parties,
   contextId,
@@ -543,6 +685,85 @@ function GrantAccess({
   );
 }
 
+/**
+ * Split a context's access list into what was granted in it and what reaches
+ * it from outside.
+ *
+ * `acl/list` filtered by scope answers "who can act here", which rightly
+ * includes every agent-wide entry — but shown as one list under a context's
+ * name, an admin granted everywhere reads as though it had been granted in this
+ * context, and revoking it "here" takes it away everywhere. Membership is read
+ * from the entry's own `scopes`, never from the filter that returned it.
+ */
+export function partitionByContext(
+  entries: AclEntry[],
+  contextId: string,
+): { granted: AclEntry[]; inherited: AclEntry[] } {
+  const granted: AclEntry[] = [];
+  const inherited: AclEntry[] = [];
+  for (const e of entries) (e.scopes?.includes(contextId) ? granted : inherited).push(e);
+  return { granted, inherited };
+}
+
+function GroupHeading({ title, note }: { title: string; note: React.ReactNode }) {
+  return (
+    <div style={{ display: "grid", gap: 2, margin: "4px 0 2px" }}>
+      <span
+        style={{
+          fontSize: t.xs,
+          fontWeight: 640,
+          letterSpacing: 0.4,
+          textTransform: "uppercase",
+          color: c.muted,
+        }}
+      >
+        {title}
+      </span>
+      <span style={{ fontSize: t.xs, color: c.faint, lineHeight: 1.5 }}>{note}</span>
+    </div>
+  );
+}
+
+function Grouped({
+  contextId,
+  contextHeading,
+  entries,
+  renderTable,
+}: {
+  contextId: string;
+  contextHeading: string;
+  entries: AclEntry[];
+  renderTable: (rows: AclEntry[], empty: React.ReactNode) => React.ReactNode;
+}) {
+  const { granted, inherited } = partitionByContext(entries, contextId);
+  return (
+    <div style={{ display: "grid", gap: 18 }}>
+      <div style={{ display: "grid", gap: 6 }}>
+        <GroupHeading
+          title={`Granted in ${contextHeading} (${granted.length})`}
+          note={<>Entries that name this context. Their authority here is what they were given for it.</>}
+        />
+        {renderTable(granted, `Nobody holds an entry scoped to ${contextHeading}.`)}
+      </div>
+      {inherited.length > 0 && (
+        <div style={{ display: "grid", gap: 6 }}>
+          <GroupHeading
+            title={`From outside this context (${inherited.length})`}
+            note={
+              <>
+                These were not granted in {contextHeading} — they reach it because they are not
+                confined to it. Editing or revoking one here changes it{" "}
+                <strong>everywhere it applies</strong>, not just in this context.
+              </>
+            }
+          />
+          {renderTable(inherited, null)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AccessPane({
   parties,
   authority,
@@ -561,9 +782,12 @@ export function AccessPane({
     [parties.holder.did, parties.service.did, contextId],
   );
 
-  const revokeDenied = authority && !hasRole(authority, "admin", "super-admin")
-    ? "Revoking access needs the admin role at this agent."
-    : null;
+  const isAdmin = !authority || hasRole(authority, "admin", "super-admin");
+  const revokeDenied = isAdmin ? null : "Revoking access needs the admin role at this agent.";
+  const editDenied = isAdmin ? null : "Editing access needs the admin role at this agent.";
+  // Which row's editor is open. One at a time, keyed by subject — the list's
+  // own row key — so a reload that reorders rows keeps it under the right one.
+  const [editing, setEditing] = useState<string | null>(null);
 
   const columns: Column<AclEntry>[] = [
     {
@@ -600,6 +824,14 @@ export function AccessPane({
       header: "",
       render: (e) => (
         <div style={{ display: "grid", gap: 8, minWidth: 200 }}>
+          <Button
+            kind="quiet"
+            disabled={Boolean(editDenied)}
+            {...(editDenied ? { title: editDenied } : {})}
+            onClick={() => setEditing(editing === e.subject ? null : e.subject)}
+          >
+            Edit…
+          </Button>
           <ChangeRole parties={parties} entry={e} onDone={list.reload} />
           <NarrowCapabilities parties={parties} entry={e} onDone={list.reload} />
           <Destructive<AclEntry>
@@ -627,6 +859,28 @@ export function AccessPane({
     },
   ];
 
+  const renderTable = (rows: AclEntry[], empty: React.ReactNode) => (
+    <Table
+      columns={columns}
+      rows={rows}
+      rowKey={(e) => e.subject}
+      // Under the row, not in the actions column: that column is the narrowest
+      // in the table and a label field there shows a handful of characters.
+      expanded={(e) =>
+        editing === e.subject ? (
+          <EditEntry
+            key={e.subject}
+            parties={parties}
+            entry={e}
+            onClose={() => setEditing(null)}
+            onDone={list.reload}
+          />
+        ) : null
+      }
+      empty={empty}
+    />
+  );
+
   return (
     <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
       <Panel
@@ -640,16 +894,19 @@ export function AccessPane({
         {list.data && (
           <>
             <Redacted fields={list.data.redactedFields} />
-            <Table
-              columns={columns}
-              rows={list.data.entries}
-              rowKey={(e) => e.subject}
-              empty={
-                contextId
-                  ? `Nobody holds an entry scoped to ${contextId}.`
-                  : "No entries you can read. Grants you administer appear here."
-              }
-            />
+            {contextId ? (
+              <Grouped
+                contextId={contextId}
+                contextHeading={contextHeading ?? contextId}
+                entries={list.data.entries}
+                renderTable={renderTable}
+              />
+            ) : (
+              renderTable(
+                list.data.entries,
+                "No entries you can read. Grants you administer appear here.",
+              )
+            )}
             {list.data.truncated && <Truncated what="the access list" />}
           </>
         )}
