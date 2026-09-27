@@ -318,6 +318,22 @@ test("stepUpVtaStart: refuses an approve-request naming a different subject", as
   await assert.rejects(stepUpVtaStart(startArgs(holder, fetchFn)), /names subject/);
 });
 
+test("stepUpVtaStart: refuses an approve-request addressed to someone else", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn } = honestRp(holder, {
+    request: await approveRequest(holder, { envelope: { recipient: STRANGER.did } }),
+  });
+  await assert.rejects(stepUpVtaStart(startArgs(holder, fetchFn)), /not this wallet/);
+});
+
+test("stepUpVtaStart: refuses an approve-request whose payload has lapsed", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn } = honestRp(holder, {
+    request: await approveRequest(holder, { over: { expiresAt: new Date(Date.now() - 1000).toISOString() } }),
+  });
+  await assert.rejects(stepUpVtaStart(startArgs(holder, fetchFn)), /lapsed/);
+});
+
 test("stepUpVtaStart: refuses an approve-request signed by another enrolled executor", async () => {
   const holder = generateSigningIdentity();
   const other = generateSigningIdentity();

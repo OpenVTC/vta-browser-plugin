@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { pageTaskRefusal } from "../src/page-task-policy.ts";
+import { pageSignRefusal, pageTaskRefusal } from "../src/page-task-policy.ts";
 
 const P = "https://trusttasks.org/spec/persona/";
 
@@ -135,4 +135,56 @@ test("a site cannot choose which face answers", () => {
   // profile entry for this origin.
   params.contextId = "ctx-of-my-choosing";
   assert.ok(!keys.has("personaDid") && !keys.has("contextId"));
+});
+
+// ── What a page may ask the wallet to sign ──────────────────────────────────
+//
+// A page-signed document carries an `authentication` proof: at a relying party
+// it is the holder's own request. These are the shapes refused before any
+// prompt is raised.
+const AGENT = "did:webvh:agent.example";
+const RP = "did:webvh:hosting.example";
+const DM = "https://trusttasks.org/spec/did-management/";
+
+test("a page may have the wallet sign its request to a relying party", () => {
+  assert.equal(pageSignRefusal({ type: `${DM}did/list/0.1`, recipient: RP }, AGENT), null);
+});
+
+test("a page cannot have the wallet sign an unaddressed document", () => {
+  for (const recipient of [undefined, ""]) {
+    const why = pageSignRefusal({ type: `${DM}did/delete/0.1`, recipient }, AGENT);
+    assert.notEqual(why, null);
+    assert.match(why, /no recipient/);
+  }
+});
+
+test("a page cannot have the wallet sign a document to the holder's own agent", () => {
+  const why = pageSignRefusal({ type: "https://trusttasks.org/spec/acl/grant/0.1", recipient: AGENT }, AGENT);
+  assert.notEqual(why, null);
+  assert.match(why, /own agent/);
+});
+
+test("a page cannot have the wallet sign a step-up approval", () => {
+  for (const t of [
+    "https://trusttasks.org/spec/auth/step-up/approve-response/0.5",
+    "https://trusttasks.org/spec/auth/step-up/approve-response/0.3",
+    "https://trusttasks.org/spec/auth/step-up/approve-request/0.3",
+  ]) {
+    const why = pageSignRefusal({ type: t, recipient: RP }, AGENT);
+    assert.notEqual(why, null, t);
+    assert.match(why, /stepUpVta/);
+  }
+});
+
+test("a page cannot have the wallet sign a family it may not request", () => {
+  assert.notEqual(
+    pageSignRefusal({ type: `${P}disclosure/present/1.0`, recipient: RP }, AGENT),
+    null,
+  );
+});
+
+test("a page cannot have the wallet sign something that is not a document", () => {
+  for (const env of [undefined, null, "doc", [], { recipient: RP }]) {
+    assert.notEqual(pageSignRefusal(env, AGENT), null, JSON.stringify(env));
+  }
 });

@@ -97,3 +97,48 @@ export function pageTaskRefusal(typeUri: string): string | null {
   const hit = REFUSED.find((r) => typeUri.startsWith(r.prefix));
   return hit ? `${typeUri} cannot be requested by a page. ${hit.why}` : null;
 }
+
+// ── What a page may ask the wallet to *sign* ────────────────────────────────
+//
+// `window.vtaWallet.signTrustTask({ envelope })` signs a page-built document
+// with the holder key, for `proofPurpose: authentication` — the holder's own
+// request to a relying party. A relying party that binds proofs to key roles
+// accepts that as the holder speaking, so a signature a page obtains is a
+// request the holder has made. The per-call prompt names the task type and the
+// recipient; this refuses the shapes no prompt could make safe:
+//
+// - **No recipient.** An unaddressed signature is good at every party that
+//   accepts the holder's key; the recipient is what binds it to one audience.
+// - **The holder's own agent.** A page drives the agent through `requestTask`,
+//   where the agent's policy engine and the refusals above apply. A signed
+//   document addressed straight to the agent would step around both.
+// - **Approvals.** A step-up approve-request or approve-response is only ever
+//   built by the wallet's own step-up ceremony, after it has verified the
+//   relying party's signed request and asked the human on its verified reason.
+// - **The families a page may not request** (above), for the same reasons.
+
+const APPROVAL_PREFIX = "https://trusttasks.org/spec/auth/step-up/approve-";
+
+/**
+ * Why a page may not have the wallet sign `envelope`, or `null` when it may.
+ * `ownAgentDid` is the active connection's agent DID.
+ */
+export function pageSignRefusal(envelope: unknown, ownAgentDid: string): string | null {
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+    return "signTrustTask needs a Trust Task document to sign.";
+  }
+  const { type, recipient } = envelope as { type?: unknown; recipient?: unknown };
+  if (typeof type !== "string" || type === "") {
+    return "signTrustTask needs a document with a type.";
+  }
+  if (typeof recipient !== "string" || recipient === "") {
+    return `${type} names no recipient. A page-signed document must be addressed to the party it is for, or the signature is good at any party that accepts the holder's key.`;
+  }
+  if (recipient === ownAgentDid) {
+    return `${type} is addressed to the holder's own agent. A page asks the agent through requestTask, where the agent's policy applies; the wallet does not sign documents to it on a page's behalf.`;
+  }
+  if (type.startsWith(APPROVAL_PREFIX)) {
+    return `${type} cannot be signed for a page. A step-up approval is built only by the wallet's step-up flow (stepUpVta), which verifies the relying party's request and asks the holder first.`;
+  }
+  return pageTaskRefusal(type);
+}
