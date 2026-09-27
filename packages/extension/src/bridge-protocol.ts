@@ -61,19 +61,24 @@ export interface DidcommLoginParams {
   scope?: string[];
 }
 
-/** Parameters for `window.vtaWallet.stepUpVta(...)` (VTA-approval step-up).
- *  Elevates an existing `aal1` session (its `accessToken`) to `aal2`. */
+/** Parameters for `window.vtaWallet.stepUpVta(...)`: raise an existing RP
+ *  session to `aal2`. The wallet sends `auth/step-up/start/0.1`, verifies the
+ *  RP's signed reply and the approve-request inside it, asks the human, sends
+ *  a signed `approve-response/0.5`, and renews the session with
+ *  `auth/refresh/0.1` — all to `{baseUrl}/trust-tasks`. The holder that signs
+ *  is the active connection's; the page does not choose it. */
 export interface StepUpVtaParams {
-  /** Base URL of the RP's auth API (same one used for the base login). */
+  /** The RP's Trust Task base (the same one used for the base login). */
   baseUrl: string;
-  /** The RP's DID — bound into the approval the VTA signs. */
+  /** The RP's DID — every document is addressed to it, and every reply and the
+   *  approve-request must be signed by it. */
   rpDid: string;
-  /** The existing `aal1` session access token to elevate. */
+  /** The session's current access token. */
   accessToken: string;
-  /** The holder's VTA DID — approves the step-up over DIDComm. */
-  vtaDid: string;
-  /** The VTA's mediator DID (for the forward envelope). */
-  vtaMediatorDid: string;
+  /** The session's refresh token, spent on the renewal once it is elevated. */
+  refreshToken: string;
+  /** The session to elevate. The approve-request must be bound to it. */
+  sessionId: string;
 }
 
 /** Parameters for `window.vtaWallet.apiGet(...)` — an authenticated GET the
@@ -1869,6 +1874,9 @@ export interface RuntimeDisclosureStepUpConsentResponse {
 export interface OffscreenStepUpVtaRequest {
   target: typeof OFFSCREEN_TARGET;
   type: typeof OFFSCREEN_STEP_UP_VTA;
+  /** The active connection's VTA — whose holder signs. Set by the background,
+   *  never by the page. */
+  vtaDid: string;
   params: StepUpVtaParams;
   /** The RP page's origin — threaded through so the mid-flow consent prompt
    *  can show it (and honour per-origin trust). Display only, never auth. */

@@ -8,7 +8,7 @@
 // REST flow: content → RUNTIME_LOGIN → consent → offscreen REST login → tokens.
 // DIDComm flow: content → RUNTIME_LOGIN_DIDCOMM → consent → offscreen doc.
 
-import { pageTaskRefusal } from "./page-task-policy.js";
+import { pageSignRefusal, pageTaskRefusal } from "./page-task-policy.js";
 import {
   disclosureStepUpFrom,
   type DisclosureStepUpRequired,
@@ -1422,18 +1422,25 @@ async function handleStepUpVta(
   if (!holderDid) return { ok: false, error: "no active VTA connection — connect first" };
 
   // NO consent prompt here. The step-up prompt fires mid-flow instead: the
-  // offscreen fetches the RP `start` response, verifies the signed
-  // approve-request (proof + enrolled-executor signer + issuer == rpDid), and
+  // offscreen sends `auth/step-up/start`, verifies the RP's signed reply and
+  // the approve-request in it (proof + enrolled-executor signer + issuer ==
+  // rpDid + bound to this session), and
   // only then asks back via RUNTIME_STEP_UP_CONSENT — so the prompt can show
   // the human the VERIFIED `reason` from inside the signature. Prompting
   // before the fetch (the old shape) showed origin/rpDid only and left the
   // signed reason unread, which defeated the point of signing it (the spec's
   // rule is verify-BEFORE-surfacing, not verify-instead-of-surfacing).
   // Nothing is signed or sent unless that prompt approves.
+  //
+  // The signer is the active connection's holder — the identity the base login
+  // used — never one the page names.
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
   await ensureOffscreenDocument();
   const offscreenRequest: OffscreenStepUpVtaRequest = {
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_STEP_UP_VTA,
+    vtaDid: active.conn.vtaDid,
     params: req.params,
     origin: req.origin,
   };
@@ -2051,8 +2058,14 @@ async function handleManagerTask(
 async function handleSignTrustTask(
   req: RuntimeSignTrustTaskRequest,
 ): Promise<RuntimeSignTrustTaskResponse> {
-  const typeUri = (req.params.envelope as { type?: unknown } | undefined)?.type;
-  const label = typeof typeUri === "string" ? typeUri : "an unidentified Trust Task";
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
+  // Refused before any prompt: shapes no answer to the prompt could make safe
+  // (unaddressed, addressed to the holder's own agent, an approval, a family a
+  // page may not drive). See `pageSignRefusal`.
+  const refusal = pageSignRefusal(req.params.envelope, active.conn.vtaDid);
+  if (refusal) return { ok: false, error: refusal };
+  const { type: label, recipient } = req.params.envelope as { type: string; recipient: string };
   // `requestConsent`, NOT `gatedConsent`.
   //
   // `gatedConsent` short-circuits for a remembered origin and prompts for
@@ -2064,8 +2077,12 @@ async function handleSignTrustTask(
   //
   // Origin trust is not capability trust. There is no envelope worth signing
   // unprompted, so this always asks, and offers no "remember".
+  //
+  // The recipient is shown as the relying party: the signature is the holder's
+  // request to that party, and to no other.
   const approved = await requestConsent({
     origin: req.origin,
+    rpDid: recipient,
     ...(req.params.asDid ? { holderDid: req.params.asDid } : {}),
     action: `Sign ${label}`,
     noRemember: true,
@@ -2077,8 +2094,6 @@ async function handleSignTrustTask(
   // only uses it on the `asDid` branch (which needs to call
   // `vault/sign-trust-task/0.1` against the VTA). On the holder-signed
   // path the restBaseUrl is harmless overhead.
-  const active = await readActiveConnection();
-  if (!active.ok) return { ok: false, error: active.error };
   return (await chrome.runtime.sendMessage({
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_SIGN_TRUST_TASK,

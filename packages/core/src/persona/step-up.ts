@@ -40,6 +40,7 @@
 
 import { VtaClientError } from "../vta/errors.js";
 import {
+  AGENT_APPROVE_REQUEST_TYPES,
   buildStepUpApproval,
   verifyStepUpApproveRequest,
   type StepUpApproveRequest,
@@ -244,10 +245,10 @@ export async function verifyDisclosureStepUp(
   refusal: DisclosureStepUpRequired,
   opts: VerifyDisclosureStepUpOptions,
 ): Promise<VerifyDisclosureStepUpResult> {
-  const verified = await verifyStepUpApproveRequest(
-    { document: refusal.unverifiedApproveRequest },
-    opts,
-  );
+  const verified = await verifyStepUpApproveRequest(refusal.unverifiedApproveRequest, {
+    ...opts,
+    acceptTypes: AGENT_APPROVE_REQUEST_TYPES,
+  });
   if (!verified.ok) return verified;
 
   const payload = (refusal.unverifiedApproveRequest.payload ?? {}) as {
@@ -316,7 +317,7 @@ export async function verifyDisclosureStepUp(
  *
  * The agent has accepted 0.3 since VTI #1316; it had to, before this could
  * send it. Nothing else in this wallet mints 0.3 — `rp-login` answers a
- * different relying party and stays on 0.2.
+ * different relying party, the did-hosting control plane, in 0.5.
  */
 export async function approveDisclosureStepUp(args: {
   signing: SigningIdentity;

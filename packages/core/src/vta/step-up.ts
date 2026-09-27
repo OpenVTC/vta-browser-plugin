@@ -1,44 +1,42 @@
-// The half of the step-up ceremony that is not the RP's HTTP flow: verifying
-// an approve-request that arrives signed, and building the signed
+// The half of the step-up ceremony that is not the relying party's exchange:
+// verifying an approve-request that arrives signed, and building the signed
 // approve-response that answers it.
 //
 // **It lives here, one layer below `rp-login/`, because two unrelated callers
-// need it.** The did-hosting RP obtains its approve-request from a REST
-// `start` call; `persona/`'s disclosure gate gets one back inside a Trust-Task
-// *refusal*. Same document, same verification rules, same response — and
-// `rp-login/` and `persona/` are the same layer, so neither can import the
-// other. Moving it down is the guide's answer to that, rather than a boundary
-// exception or a second copy.
+// need it.** The did-hosting control plane answers `auth/step-up/start` with an
+// approve-request; `persona/`'s disclosure gate gets one back inside a
+// Trust-Task *refusal* from the agent. Same document family, same verification
+// rules, same response — and `rp-login/` and `persona/` are the same layer, so
+// neither can import the other.
 //
-// `rp-login/step-up.ts` re-exports every name here, so nothing that imported
-// it from there had to change.
+// `rp-login/step-up.ts` re-exports every name here.
 //
-// The rule that makes this security-relevant rather than plumbing: per
-// `auth/step-up/approve-request/0.2`, a consumer MUST verify the proof BEFORE
-// surfacing the reason. Everything a human is shown, and everything the wallet
-// signs over, comes out of the verified payload — never the unsigned copy that
-// travelled beside it.
+// The rule that makes this security-relevant rather than plumbing: a consumer
+// MUST verify the approve-request's proof BEFORE surfacing its reason.
+// Everything a human is shown, and everything the wallet signs over, comes out
+// of the verified payload.
 
 import { signTrustTask } from "../trust-tasks/sign.js";
 import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import type { TrustTask } from "./protocol.js";
 
-import { TYPE_URI as MSG_APPROVE_RESPONSE_0_2 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.2/payload";
 import { TYPE_URI as MSG_APPROVE_RESPONSE_0_3 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.3/payload";
+import { TYPE_URI as MSG_APPROVE_RESPONSE_0_5 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.5/payload";
+import { TYPE_URI as APPROVE_REQUEST_0_3 } from "@openvtc/trust-tasks/auth/step-up/approve-request/0.3/payload";
 import { TYPE_URI as APPROVE_REQUEST_0_2 } from "@openvtc/trust-tasks/auth/step-up/approve-request/0.2/payload";
 import { TYPE_URI as APPROVE_REQUEST_0_1 } from "@openvtc/trust-tasks/auth/step-up/approve-request/0.1/payload";
 
-/** The RP→approver request halves this wallet accepts. 0.2 is what the
- *  did-hosting control plane mints on `start`; 0.1 is the VTA-pushed flavor
- *  (same required payload members) — both are gated identically. */
-export const STEP_UP_APPROVE_REQUEST_TYPES = [
-  APPROVE_REQUEST_0_2,
-  APPROVE_REQUEST_0_1,
-] as const;
+/** The approve-request versions the agent mints: 0.2 in a disclosure
+ *  step-up refusal, 0.1 when it pushes one. Gated identically. */
+export const AGENT_APPROVE_REQUEST_TYPES = [APPROVE_REQUEST_0_2, APPROVE_REQUEST_0_1] as const;
 
-/** The RP's `approve-request/0.2` payload, verified out of the signed
- *  Trust-Task document by {@link verifyStepUpApproveRequest}. */
+/** The approve-request version the did-hosting control plane answers
+ *  `auth/step-up/start/0.1` with. */
+export const RP_APPROVE_REQUEST_TYPES = [APPROVE_REQUEST_0_3] as const;
+
+/** The approve-request payload, verified out of the signed Trust-Task
+ *  document by {@link verifyStepUpApproveRequest}. */
 export interface StepUpApproveRequest {
   /** The VID whose session is being elevated — the wallet must speak for it. */
   subject: string;
@@ -50,27 +48,10 @@ export interface StepUpApproveRequest {
   reason?: string;
 }
 
-/** Raw body of the RP's step-up `start` response: the legacy top-level fields
- *  plus the signed `auth/step-up/approve-request/0.2` Trust-Task `document`.
- *  Nothing here is trusted until {@link verifyStepUpApproveRequest} passes —
- *  in particular the legacy fields exist only for the cross-check; every value
- *  the wallet acts on comes out of the verified document. */
-export interface StepUpStartResponse {
-  subject?: string;
-  sessionId?: string;
-  challenge?: string;
-  reason?: string;
-  /** The full signed `auth/step-up/approve-request/0.2` document. REQUIRED —
-   *  a start response without it is refused (the proofless legacy path was
-   *  removed deliberately once the control plane began signing requests). */
-  document?: Record<string, unknown>;
-}
-
 export type VerifyStepUpApproveRequestResult =
   | {
       ok: true;
-      /** Built ONLY from the verified document's payload — never from the
-       *  legacy top-level fields. */
+      /** Built ONLY from the verified document's payload. */
       request: StepUpApproveRequest;
       /** The proven signer (== the document's `issuer`). */
       issuer: string;
@@ -83,6 +64,13 @@ export interface VerifyStepUpApproveRequestOptions {
    *  operator-enrolled executor DIDs, e.g. the webvh control plane). The
    *  approve-request's proven signer must be in this set. */
   enrolledExecutorDids: readonly string[];
+  /**
+   * The approve-request versions this caller's relying party mints —
+   * {@link RP_APPROVE_REQUEST_TYPES} or {@link AGENT_APPROVE_REQUEST_TYPES}.
+   * Required: which versions are acceptable is a property of the party that
+   * asked, and a document of another party's version is refused.
+   */
+  acceptTypes: readonly string[];
   /** Defaults to now. Injected for tests. */
   now?: Date;
 }
@@ -91,41 +79,34 @@ export interface VerifyStepUpApproveRequestOptions {
  * Verify an RP step-up approve-request before anything derived from it is
  * shown to a human or signed over.
  *
- * Spec rule (auth/step-up/approve-request/0.2): the `reason` is the basis of
- * the user's consent decision, so "consumers MUST verify the proof BEFORE
- * surfacing the reason". Accordingly:
+ * Spec rule: the `reason` is the basis of the user's consent decision, so
+ * "consumers MUST verify the proof BEFORE surfacing the reason". Accordingly:
  *
- *  - the signed `document` is REQUIRED — a start response without one is
- *    refused outright (the legacy proofless `{subject, sessionId, challenge,
- *    reason}` path was removed deliberately; the control plane now always
- *    returns a signed document);
+ *  - the document is REQUIRED, and must be one of `acceptTypes`;
  *  - its Data-Integrity proof must verify (`eddsa-jcs-2022`,
- *    `assertionMethod`), the in-band `issuer` must equal the proven signer,
- *    and that signer must be an executor this wallet is enrolled with;
- *  - when the legacy top-level fields are also present they must agree with
- *    the verified payload (a mismatch means someone altered the unsigned
- *    copy — refuse rather than guess);
+ *    `proofPurpose: authentication` — a request is its issuer's operational
+ *    message; `assertionMethod` is for the approver's attestation, the
+ *    approve-response), the in-band `issuer` must equal the proven signer, and
+ *    that signer must be an executor this wallet is enrolled with;
+ *  - it must not have lapsed (`expiresAt` on the document or in the payload);
  *  - the returned request is built ONLY from the verified document.
  */
 export async function verifyStepUpApproveRequest(
-  start: StepUpStartResponse,
+  doc: Record<string, unknown> | undefined,
   opts: VerifyStepUpApproveRequestOptions,
 ): Promise<VerifyStepUpApproveRequestResult> {
   const refuse = (reason: string): VerifyStepUpApproveRequestResult => ({ ok: false, reason });
 
-  const doc = start.document;
   if (!doc || typeof doc !== "object") {
-    return refuse(
-      "start response carried no signed approve-request document — refusing the proofless legacy shape",
-    );
+    return refuse("no signed approve-request document");
   }
   const type = doc.type;
-  if (typeof type !== "string" || !(STEP_UP_APPROVE_REQUEST_TYPES as readonly string[]).includes(type)) {
-    return refuse(`document type ${String(type)} is not a step-up approve-request`);
+  if (typeof type !== "string" || !opts.acceptTypes.includes(type)) {
+    return refuse(`document type ${String(type)} is not a step-up approve-request this party mints`);
   }
 
   const verification = await verifyTrustTaskProof(doc, {
-    expectedProofPurpose: "assertionMethod",
+    expectedProofPurpose: "authentication",
   });
   if (!verification.verified || !verification.signer) {
     return refuse(verification.reason ?? "proof did not verify");
@@ -154,19 +135,12 @@ export async function verifyStepUpApproveRequest(
     return refuse("verified document is missing subject/sessionId/challenge");
   }
 
-  // Legacy top-level fields, when present, must agree with what was signed.
-  // They carry no authority of their own; a disagreement means the unsigned
-  // copy was altered in flight and nothing here should be acted on.
-  for (const k of ["subject", "sessionId", "challenge"] as const) {
-    if (typeof start[k] === "string" && start[k] !== payload[k]) {
-      return refuse(`legacy field ${k} does not match the signed document`);
-    }
-  }
-
-  if (typeof payload.expiresAt === "string") {
-    const expiry = new Date(payload.expiresAt);
-    if (Number.isNaN(expiry.getTime()) || expiry <= (opts.now ?? new Date())) {
-      return refuse(`approve-request lapsed at ${payload.expiresAt}`);
+  const now = opts.now ?? new Date();
+  for (const at of [doc.expiresAt, payload.expiresAt]) {
+    if (typeof at !== "string") continue;
+    const expiry = new Date(at);
+    if (Number.isNaN(expiry.getTime()) || expiry <= now) {
+      return refuse(`approve-request lapsed at ${at}`);
     }
   }
 
@@ -177,15 +151,18 @@ export async function verifyStepUpApproveRequest(
       subject: payload.subject,
       sessionId: payload.sessionId,
       challenge: payload.challenge,
-      // The reason a human may be shown comes from inside the signature, never
-      // from the unsigned top-level copy.
+      // The reason a human may be shown comes from inside the signature.
       ...(typeof payload.reason === "string" ? { reason: payload.reason } : {}),
     },
-    ...(typeof payload.expiresAt === "string" ? { expiresAt: payload.expiresAt } : {}),
+    ...(typeof doc.expiresAt === "string"
+      ? { expiresAt: doc.expiresAt }
+      : typeof payload.expiresAt === "string"
+        ? { expiresAt: payload.expiresAt }
+        : {}),
   };
 }
 
-/** Payload of the `approve-response/0.2` the wallet signs. */
+/** Payload of the `approve-response` the wallet signs (0.3 and 0.5 alike). */
 export interface StepUpApproveResponsePayload {
   subject: string;
   sessionId: string;
@@ -195,18 +172,16 @@ export interface StepUpApproveResponsePayload {
 }
 
 /**
- * Which acknowledgement vocabulary the relying party can answer in.
+ * Which approve-response version the relying party takes.
  *
- * **Not a preference — a property of the party being answered.** A response
- * document's `type` is the request's `type` plus `#response`, so this decides
- * what the RP is *allowed to say back*. `0.3` adds `recorded`, the honest answer
- * for an approval bound to one operation rather than to the session.
- *
- * Sending `0.3` to a relying party that does not know it is refused as an
- * unsupported type — which takes out step-up for that party entirely — so this
- * is per-RP and never a global default.
+ * **Not a preference — a property of the party being answered.** The agent
+ * takes `0.3` (whose `recorded` acknowledgement is the honest answer for an
+ * approval bound to one operation); the did-hosting control plane takes `0.5`.
+ * Sending a version a party does not serve is refused as an unsupported type,
+ * which takes out step-up for that party entirely — so this is per-RP and never
+ * a global default.
  */
-export type ApproveResponseVersion = "0.2" | "0.3";
+export type ApproveResponseVersion = "0.3" | "0.5";
 
 export interface BuildStepUpApprovalArgs {
   /** The wallet's Ed25519 signing identity — its `did` is the response
@@ -216,7 +191,7 @@ export interface BuildStepUpApprovalArgs {
   /** The RP's DID — bound in-band as `recipient` so the signed proof commits
    *  to this audience (SPEC §4.8.2). */
   rpDid: string;
-  /** The approve-request the RP returned from {@link stepUpVtaStart}. */
+  /** The verified approve-request being answered. */
   request: StepUpApproveRequest;
   /** The user's decision. */
   approved: boolean;
@@ -225,13 +200,12 @@ export interface BuildStepUpApprovalArgs {
   /**
    * The version this relying party can answer in. **Required, deliberately.**
    *
-   * This wallet speaks to two relying parties with different capabilities — the
-   * VTA, which accepts `0.3`, and the did-hosting control plane, which does not
-   * — and there is no default that is right for both. An optional field would
+   * This wallet speaks to two relying parties that serve different versions —
+   * the agent (`0.3`) and the did-hosting control plane (`0.5`) — and there is
+   * no default that is right for both. An optional field would
    * make the next relying party added inherit whichever answer happened to be
-   * the default, and both directions of that mistake are silent: too low and
-   * the approval needlessly elevates a session, too high and every step-up
-   * against that party is refused.
+   * the default, and every step-up against a party that does not serve it
+   * would be refused.
    *
    * The same reasoning as `SigningIdentity` being a required channel input:
    * a call that could omit it is a call that gets it wrong by not thinking.
@@ -244,8 +218,9 @@ export interface BuildStepUpApprovalArgs {
  * version `responseVersion` names. The DI proof (`eddsa-jcs-2022`,
  * `proofPurpose: assertionMethod`) over the subject key is what the RP verifies.
  *
- * The payload is identical across `0.2` and `0.3`; only the acknowledgement the
- * RP may return differs, which is why the version rides on the request.
+ * The payload members the wallet sets are identical across `0.3` and `0.5`;
+ * what differs is which party serves which, which is why the version rides on
+ * the request.
  */
 export async function buildStepUpApproval(
   args: BuildStepUpApprovalArgs,
@@ -261,9 +236,10 @@ export async function buildStepUpApproval(
 
   const document: TrustTask<StepUpApproveResponsePayload> & { proof?: unknown } = {
     id: globalThis.crypto.randomUUID(),
-    type: args.responseVersion === "0.3" ? MSG_APPROVE_RESPONSE_0_3 : MSG_APPROVE_RESPONSE_0_2,
+    type: args.responseVersion === "0.5" ? MSG_APPROVE_RESPONSE_0_5 : MSG_APPROVE_RESPONSE_0_3,
     issuer: args.signing.did,
     recipient: args.rpDid,
+    issuedAt: new Date().toISOString(),
     payload,
   };
 

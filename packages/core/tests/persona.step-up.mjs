@@ -60,7 +60,9 @@ async function approveRequest({ as = AGENT, previewId = PREVIEW, ctx = {} } = {}
       },
     },
   };
-  await signTrustTask({ envelope: document, signing: as });
+  // `authentication`, as the agent signs it: a request is its issuer's
+  // operational message.
+  await signTrustTask({ envelope: document, signing: as, proofPurpose: "authentication" });
   return document;
 }
 
@@ -296,22 +298,21 @@ test("the disclosure approval is minted as 0.3, and rp-login's is not", async ()
      session is raised on the strength of a decision about one card number",
   );
 
-  // The same builder, answering the other relying party, stays on 0.2.
+  // The same builder, answering the did-hosting control plane, mints 0.5.
   const rp = await buildStepUpApproval({
     signing: holder,
     rpDid: "did:web:rp.example",
     request: verified.request,
     approved: true,
-    responseVersion: "0.2",
+    responseVersion: "0.5",
   });
   assert.equal(
     rp.type,
-    "https://trusttasks.org/spec/auth/step-up/approve-response/0.2",
+    "https://trusttasks.org/spec/auth/step-up/approve-response/0.5",
     "the version must be per relying party, not a property of the builder",
   );
 
-  // Both still verify — the payload is identical across the two versions, which
-  // is why only the acknowledgement needed a new one.
+  // Both verify as the holder's attestation.
   for (const doc of [disclosure, rp]) {
     const proof = await verifyTrustTaskProof(doc, { expectedProofPurpose: "assertionMethod" });
     assert.equal(proof.verified, true, proof.reason ?? "");
