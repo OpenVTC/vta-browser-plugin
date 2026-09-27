@@ -54,13 +54,22 @@ export function grantCommand({ ephemeralDid, adminScope, context }: GrantCommand
   // does not leave a permanent grant for a key nobody will use again. The
   // successful path deletes the row at swap time regardless of expiry, and the
   // ACL sweeper prunes the rest.
+  //
+  // `--handoff` is what lets that expiring ephemeral write the wallet's
+  // permanent admin at all. An entry may not write one that outlives it
+  // (VTI-ACL-053), so without the marker provisioning is refused with "your
+  // entry expires at …, so you cannot write a permanent one". The marker
+  // (VTI-ACL-054) permits exactly one rollover, bounded by the *operator's*
+  // authority and expiry rather than the ephemeral's, and the VTA removes the
+  // ephemeral's row in the same atomic step. Omitting it is refused
+  // (VTI-ACL-058); it is not a widening.
   const base = `pnm acl create --did ${ephemeralDid} --role admin`;
   if (adminScope === "unrestricted") {
     // No `--contexts`. `pnm acl create` documents this precisely: omitting the
     // flag leaves the list empty, which is *unrestricted* for `--role admin`.
     // Passing `--contexts ''` is not the same thing and is rejected — it
     // parses to one context named empty-string.
-    return `${base} --expires 1h`;
+    return `${base} --expires 1h --handoff`;
   }
   const ctx = context?.trim();
   if (!ctx) {
@@ -69,7 +78,7 @@ export function grantCommand({ ephemeralDid, adminScope, context }: GrantCommand
         "command would grant the whole agent",
     );
   }
-  return `${base} --contexts ${ctx} --expires 1h`;
+  return `${base} --contexts ${ctx} --expires 1h --handoff`;
 }
 
 /**

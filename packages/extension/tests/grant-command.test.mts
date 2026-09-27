@@ -16,12 +16,12 @@ const EPH = "did:key:z6MkExampleEphemeralKeyForTests";
 
 test("a context-scoped grant names its context", () => {
   const cmd = grantCommand({ ephemeralDid: EPH, adminScope: "context", context: "work" });
-  assert.equal(cmd, `pnm acl create --did ${EPH} --role admin --contexts work --expires 1h`);
+  assert.equal(cmd, `pnm acl create --did ${EPH} --role admin --contexts work --expires 1h --handoff`);
 });
 
 test("an unrestricted grant omits --contexts entirely", () => {
   const cmd = grantCommand({ ephemeralDid: EPH, adminScope: "unrestricted" });
-  assert.equal(cmd, `pnm acl create --did ${EPH} --role admin --expires 1h`);
+  assert.equal(cmd, `pnm acl create --did ${EPH} --role admin --expires 1h --handoff`);
   // Not `--contexts ''`: `pnm acl create` documents that as one context named
   // empty-string, and rejects it. The empty *list* is what reads as
   // unrestricted, and the only way to get one is to leave the flag off.
@@ -69,13 +69,22 @@ test("a context-scoped grant with no context refuses rather than widening", () =
 
 test("surrounding whitespace on a context does not reach the command", () => {
   const cmd = grantCommand({ ephemeralDid: EPH, adminScope: "context", context: "  work  " });
-  assert.equal(cmd, `pnm acl create --did ${EPH} --role admin --contexts work --expires 1h`);
+  assert.equal(cmd, `pnm acl create --did ${EPH} --role admin --contexts work --expires 1h --handoff`);
 });
 
 test("the grant expires, so an abandoned onboarding leaves nothing permanent", () => {
   for (const scope of ["context", "unrestricted"] as const) {
     const cmd = grantCommand({ ephemeralDid: EPH, adminScope: scope, context: "work" });
     assert.ok(cmd.includes("--expires 1h"), `${scope}: ${cmd}`);
+  }
+});
+
+test("the grant is a hand-off, so the expiring ephemeral can write a permanent successor", () => {
+  // Without it the VTA refuses provisioning: an entry may not write one that
+  // outlives it (VTI-ACL-053) unless it was granted as a hand-off (VTI-ACL-054).
+  for (const scope of ["context", "unrestricted"] as const) {
+    const cmd = grantCommand({ ephemeralDid: EPH, adminScope: scope, context: "work" });
+    assert.ok(/ --handoff(\s|$)/.test(cmd), `${scope}: ${cmd}`);
   }
 });
 
