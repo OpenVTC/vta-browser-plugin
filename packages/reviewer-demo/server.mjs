@@ -195,7 +195,9 @@ function underCeiling() {
 }
 
 function runGrant(did, role) {
-  const args = ["acl", "create", "--did", did, "--role", role, "--expires", GRANT_EXPIRES];
+  // `--handoff` (VTI-ACL-054): the wallet's ephemeral must write a permanent
+  // successor, which an expiring entry without the marker may not (VTI-ACL-053).
+  const args = ["acl", "create", "--did", did, "--role", role, "--expires", GRANT_EXPIRES, "--handoff"];
   if (GRANT_CONTEXT) args.push("--contexts", GRANT_CONTEXT);
   return new Promise((resolve) => {
     execFile(GRANT_BIN, args, { timeout: 30_000 }, (err, stdout, stderr) => {
