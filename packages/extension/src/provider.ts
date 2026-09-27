@@ -54,8 +54,9 @@ interface VtaWallet {
   /** Request a DIDComm login (authcrypt-sender auth via the RP's
    *  mediator). Same result shape as `login`. */
   loginDidcomm(params: DidcommLoginParams): Promise<LoginResult>;
-  /** Elevate an existing `aal1` session to `aal2` via VTA approval over
-   *  DIDComm. Same result shape as `login`. */
+  /** Elevate an existing `aal1` session to `aal2` via VTA approval. Same
+   *  result shape as `login`. Refused unless `rpDid` and `baseUrl` are the
+   *  ones this origin's approved `login()` pinned. */
   stepUpVta(params: StepUpVtaParams): Promise<LoginResult>;
   /** Perform an authenticated GET via the wallet (not subject to the
    *  page's cross-origin CORS). Returns the status + parsed body. */
@@ -69,7 +70,10 @@ interface VtaWallet {
   /** Sign a Trust-Task envelope. Default signer is the wallet's holder
    *  did:key — adds an `eddsa-jcs-2022` Data Integrity proof and returns
    *  the resulting envelope. The caller sets `recipient` (audience
-   *  binding) before calling.
+   *  binding) before calling. It must be the RP DID this origin is
+   *  pinned to by an approved `login()`, `loginDidcomm()` or
+   *  `proxyLogin()`; any other recipient, or an origin with no pin, is
+   *  refused before any prompt.
    *
    *  To sign as a vault entry's principal DID (after a
    *  `vault/proxy-login` session where the RP authenticated the session

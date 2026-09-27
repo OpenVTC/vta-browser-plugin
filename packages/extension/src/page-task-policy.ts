@@ -142,3 +142,113 @@ export function pageSignRefusal(envelope: unknown, ownAgentDid: string): string 
   }
   return pageTaskRefusal(type);
 }
+
+// ── Which relying party a page may have the holder key used for ─────────────
+//
+// `pageSignRefusal` requires a recipient, but any recipient: a page the user
+// approved could still get a signature addressed to a *different* relying
+// party, and present it there as the holder's own request. `stepUpVta` had the
+// same gap — the page named the base URL and RP DID, so an approved page could
+// steer an aal2 approval at a party the human never signed in to from it.
+//
+// The binding already exists. A login pins the browser-attested origin to the
+// RP DID the human approved (`origin-pin.ts`, M5), and a REST login pins the
+// base URL it went to beside it. Both page paths are held to that pin:
+//
+// - `signTrustTask` signs only a document whose `recipient` is the pinned RP
+//   DID for the requesting origin.
+// - `stepUpVta` runs only against the pinned RP DID and the pinned base URL.
+// - No pin means no signature and no step-up. Neither path pins on first use:
+//   the only place a pin is seeded is a login the human approved, so the rule
+//   stays login's rule — the human confirms the origin ↔ RP pairing once, on the
+//   prompt that exists to show it.
+//
+// The pin is looked up by exact origin. A subdomain, a lookalike host, or the
+// same host on another scheme or port is a different origin, and has no pin.
+
+/** What a page's origin is pinned to (mirrors `OriginPin` in `origin-pin.ts`,
+ *  restated here so this module stays free of `chrome.*`). */
+export interface PageRpPin {
+  rpDid: string;
+  baseUrl?: string;
+}
+
+/**
+ * A base URL in the one spelling pins are compared in: scheme, host and port as
+ * the URL parser canonicalizes them, and the path without trailing slashes.
+ * `null` for anything that is not a plain http(s) base — credentials, a query
+ * or a fragment have no place in one, and a comparison that ignored them would
+ * be comparing something other than where the request goes.
+ */
+export function normalizeBaseUrl(raw: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+  if (u.username || u.password || u.search || u.hash) return null;
+  return `${u.origin}${u.pathname.replace(/\/+$/, "")}`;
+}
+
+function unpinned(origin: string, what: string): string {
+  return (
+    `${origin} has no relying party pinned, so the wallet will not ${what} for it. ` +
+    `Sign in from this site first: the login prompt is where the site's relying party ` +
+    `is shown and confirmed, and it pins that pairing.`
+  );
+}
+
+/**
+ * Why the page at `origin` may not have a document addressed to `recipient`
+ * signed, or `null` when it may. `pin` is `readOriginPin(origin)`.
+ */
+export function pageSignBindingRefusal(
+  origin: string,
+  pin: PageRpPin | undefined,
+  recipient: string,
+): string | null {
+  if (!pin) return unpinned(origin, "sign documents");
+  if (recipient !== pin.rpDid) {
+    return (
+      `The document is addressed to ${recipient}, but ${origin} is pinned to the relying ` +
+      `party ${pin.rpDid}. A page can only have documents signed for the relying party it ` +
+      `was signed in to.`
+    );
+  }
+  return null;
+}
+
+/**
+ * Why the page at `origin` may not start a step-up against `params`, or `null`
+ * when it may. `pin` is `readOriginPin(origin)`.
+ */
+export function pageStepUpBindingRefusal(
+  origin: string,
+  pin: PageRpPin | undefined,
+  params: { rpDid: string; baseUrl: string },
+): string | null {
+  if (!pin) return unpinned(origin, "step up a session");
+  if (params.rpDid !== pin.rpDid) {
+    return (
+      `Step-up names the relying party ${params.rpDid}, but ${origin} is pinned to ` +
+      `${pin.rpDid}. A page can only step up its session at the relying party it was ` +
+      `signed in to.`
+    );
+  }
+  if (!pin.baseUrl) {
+    return (
+      `${origin} has no relying-party base URL pinned: its sign-in named none. Sign in ` +
+      `from this site with login() so the base URL step-up will use is shown and confirmed.`
+    );
+  }
+  const requested = normalizeBaseUrl(params.baseUrl);
+  if (requested !== pin.baseUrl) {
+    return (
+      `Step-up names the base URL ${params.baseUrl}, but ${origin} is pinned to ` +
+      `${pin.baseUrl}. A page can only step up against the base URL it signed in with.`
+    );
+  }
+  return null;
+}

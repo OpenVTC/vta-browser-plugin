@@ -3782,6 +3782,7 @@ async function doStepUpVta(
         type: RUNTIME_STEP_UP_CONSENT,
         origin: req.origin,
         rpDid: req.params.rpDid,
+        baseUrl: req.params.baseUrl,
         holderDid: signing.did,
         ...(ctx.reason !== undefined ? { reason: ctx.reason } : {}),
       };
