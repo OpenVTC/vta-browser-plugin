@@ -1422,18 +1422,25 @@ async function handleStepUpVta(
   if (!holderDid) return { ok: false, error: "no active VTA connection — connect first" };
 
   // NO consent prompt here. The step-up prompt fires mid-flow instead: the
-  // offscreen fetches the RP `start` response, verifies the signed
-  // approve-request (proof + enrolled-executor signer + issuer == rpDid), and
+  // offscreen sends `auth/step-up/start`, verifies the RP's signed reply and
+  // the approve-request in it (proof + enrolled-executor signer + issuer ==
+  // rpDid + bound to this session), and
   // only then asks back via RUNTIME_STEP_UP_CONSENT — so the prompt can show
   // the human the VERIFIED `reason` from inside the signature. Prompting
   // before the fetch (the old shape) showed origin/rpDid only and left the
   // signed reason unread, which defeated the point of signing it (the spec's
   // rule is verify-BEFORE-surfacing, not verify-instead-of-surfacing).
   // Nothing is signed or sent unless that prompt approves.
+  //
+  // The signer is the active connection's holder — the identity the base login
+  // used — never one the page names.
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
   await ensureOffscreenDocument();
   const offscreenRequest: OffscreenStepUpVtaRequest = {
     target: OFFSCREEN_TARGET,
     type: OFFSCREEN_STEP_UP_VTA,
+    vtaDid: active.conn.vtaDid,
     params: req.params,
     origin: req.origin,
   };

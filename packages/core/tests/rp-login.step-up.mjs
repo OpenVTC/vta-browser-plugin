@@ -1,256 +1,429 @@
-// Unit test for the holder-self-signs step-up: `buildStepUpApproval` emits a
-// spec `auth/step-up/approve-response/0.2` Trust-Task document whose
-// eddsa-jcs-2022 proof verifies against the subject key. This is the exact
-// document + proof the did-hosting RP verifies at `/auth/step-up/vta/finish`
-// (a Rust cross-impl fixture test in affinidi-webvh-service verifies a document
-// produced by THIS function).
+// Step-up against a did-hosting relying party, as Trust Tasks:
+// `auth/step-up/start/0.1` → verified approve-request/0.3 → consent →
+// `approve-response/0.5` → `auth/refresh/0.1`, all to `{base}/trust-tasks`.
+//
+// The RP here is a fake that answers the way the control plane does: every
+// reply signed by the RP's key (`proofPurpose: authentication`), threaded to
+// the request and addressed back to the requester; the approve-request inside
+// the start reply signed the same way.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  AGENT_APPROVE_REQUEST_TYPES,
+  RP_APPROVE_REQUEST_TYPES,
   buildStepUpApproval,
   performStepUpVta,
+  stepUpVtaFinish,
+  stepUpVtaStart,
   verifyStepUpApproveRequest,
   verifyTrustTaskProof,
   generateSigningIdentity,
   signTrustTask,
 } from "../dist/index.js";
 
-const APPROVE_RESPONSE_TYPE = "https://trusttasks.org/spec/auth/step-up/approve-response/0.2";
-const APPROVE_REQUEST_TYPE_02 = "https://trusttasks.org/spec/auth/step-up/approve-request/0.2";
-const APPROVE_REQUEST_TYPE_01 = "https://trusttasks.org/spec/auth/step-up/approve-request/0.1";
+const TT = "https://trusttasks.org/spec/";
+const START = `${TT}auth/step-up/start/0.1`;
+const APPROVE_REQUEST_03 = `${TT}auth/step-up/approve-request/0.3`;
+const APPROVE_REQUEST_02 = `${TT}auth/step-up/approve-request/0.2`;
+const APPROVE_RESPONSE_05 = `${TT}auth/step-up/approve-response/0.5`;
+const REFRESH = `${TT}auth/refresh/0.1`;
+const ERROR = `${TT}trust-task-error/0.3`;
 
-test("buildStepUpApproval: signed approved response echoes the request and verifies", async () => {
-  const holder = generateSigningIdentity();
-  const rpDid = "did:web:rp.example";
-  const request = { subject: holder.did, sessionId: "sess-1", challenge: "c".repeat(64) };
-
-  const doc = await buildStepUpApproval({ signing: holder, rpDid, request, approved: true, responseVersion: "0.2" });
-
-  assert.equal(doc.type, APPROVE_RESPONSE_TYPE);
-  assert.equal(doc.issuer, holder.did);
-  assert.equal(doc.recipient, rpDid); // audience binding (SPEC §4.8.2)
-  assert.equal(doc.payload.subject, holder.did);
-  assert.equal(doc.payload.sessionId, "sess-1");
-  assert.equal(doc.payload.challenge, request.challenge);
-  assert.equal(doc.payload.decision, "approved");
-  assert.ok(!("deniedReason" in doc.payload));
-  assert.equal(doc.proof.proofPurpose, "assertionMethod");
-  assert.equal(doc.proof.verificationMethod, holder.kid);
-
-  const result = await verifyTrustTaskProof(doc, { expectedProofPurpose: "assertionMethod" });
-  assert.equal(result.verified, true, result.reason);
-  assert.equal(result.signer, holder.did);
-});
-
-test("buildStepUpApproval: denied response carries a signed deniedReason", async () => {
-  const holder = generateSigningIdentity();
-  const request = { subject: holder.did, sessionId: "sess-2", challenge: "d".repeat(64) };
-
-  const doc = await buildStepUpApproval({
-    responseVersion: "0.2",
-    signing: holder,
-    rpDid: "did:web:rp.example",
-    request,
-    approved: false,
-    deniedReason: "User declined.",
-  });
-
-  assert.equal(doc.payload.decision, "denied");
-  assert.equal(doc.payload.deniedReason, "User declined.");
-  const result = await verifyTrustTaskProof(doc);
-  assert.equal(result.verified, true, result.reason);
-});
-
-test("buildStepUpApproval: tampering the signed challenge breaks verification", async () => {
-  const holder = generateSigningIdentity();
-  const request = { subject: holder.did, sessionId: "sess-3", challenge: "e".repeat(64) };
-  const doc = await buildStepUpApproval({ signing: holder, rpDid: "did:web:rp.example", request, approved: true, responseVersion: "0.2" });
-  doc.payload.challenge = "f".repeat(64); // flip after signing
-
-  const result = await verifyTrustTaskProof(doc);
-  assert.equal(result.verified, false);
-});
-
-// ── verifyStepUpApproveRequest: the inbound half ─────────────────────────────
-//
-// The RP's `start` response now carries a full signed
-// `auth/step-up/approve-request/0.2` document. Every field the wallet surfaces
-// or echoes into the signed approve-response must come from *inside* that
-// signature, and the signer must be an executor the wallet is enrolled with.
-
-const RP = generateSigningIdentity(); // the control plane / RP — enrolled
+const RP = generateSigningIdentity(); // the control plane — enrolled
 const STRANGER = generateSigningIdentity(); // not enrolled
+const SESSION = "sess-42";
+const BASE = "https://rp.example/api";
 
-function requestPayload(over = {}) {
-  return {
-    subject: "did:key:zSubject",
-    sessionId: "sess-42",
-    challenge: "a".repeat(32),
-    reason: "Confirm the transfer of $1,000 to ACME Corp.",
-    expiresAt: new Date(Date.now() + 300_000).toISOString(),
-    ...over,
-  };
-}
+const sign = (doc, as, proofPurpose = "authentication") =>
+  signTrustTask({ envelope: doc, signing: as, proofPurpose });
 
-/** A signed approve-request document, plus the legacy top-level echo. */
-async function startResponse({
-  as = RP,
-  type = APPROVE_REQUEST_TYPE_02,
-  over = {},
-  unsigned = false,
-  legacy = true,
-  withDocument = true,
-} = {}) {
-  const payload = requestPayload(over);
-  const document = {
-    id: "step-up-req-1",
+// ── Fixtures ────────────────────────────────────────────────────────────────
+
+/** The RP's signed approve-request/0.3 for `holder`'s session. */
+async function approveRequest(
+  holder,
+  { as = RP, type = APPROVE_REQUEST_03, over = {}, envelope = {}, purpose } = {},
+) {
+  const doc = {
+    id: `urn:uuid:${crypto.randomUUID()}`,
     type,
     issuer: as.did,
-    recipient: "did:key:zApprover",
+    recipient: holder.did,
     issuedAt: new Date().toISOString(),
-    payload,
+    expiresAt: new Date(Date.now() + 300_000).toISOString(),
+    payload: {
+      subject: holder.did,
+      sessionId: SESSION,
+      challenge: "a".repeat(64),
+      reason: "Elevate this session to aal2",
+      targetAcr: "aal2",
+      acceptableEvidence: ["didSigned"],
+      ...over,
+    },
+    ...envelope,
   };
-  if (!unsigned) await signTrustTask({ envelope: document, signing: as });
-  return {
-    ...(legacy
-      ? { subject: payload.subject, sessionId: payload.sessionId, challenge: payload.challenge }
-      : {}),
-    ...(withDocument ? { document } : {}),
-  };
+  await sign(doc, as, purpose);
+  return doc;
 }
 
-const enrolled = { enrolledExecutorDids: [RP.did] };
+/** The RP's signed reply to `req`. `before` replaces members before signing. */
+async function reply(req, payload, { as = RP, unsigned = false, before = {} } = {}) {
+  const doc = {
+    id: `urn:uuid:${crypto.randomUUID()}`,
+    threadId: req.id,
+    type: `${req.type}#response`,
+    issuer: as.did,
+    recipient: req.issuer,
+    issuedAt: new Date().toISOString(),
+    payload,
+    ...before,
+  };
+  if (!unsigned) await sign(doc, as);
+  return doc;
+}
 
-test("verifyStepUpApproveRequest: a signed request from an enrolled executor verifies, fields come from the document", async () => {
-  const start = await startResponse();
-  // Tamper the *legacy* reason only — it carries no authority and is not
-  // cross-checked; what the human sees must come from inside the signature.
-  start.reason = "Totally harmless, do not read the signed copy.";
-  const res = await verifyStepUpApproveRequest(start, enrolled);
-  assert.equal(res.ok, true, res.reason);
-  assert.equal(res.issuer, RP.did);
-  assert.equal(res.request.subject, "did:key:zSubject");
-  assert.equal(res.request.sessionId, "sess-42");
-  assert.equal(res.request.challenge, "a".repeat(32));
-  assert.equal(res.request.reason, "Confirm the transfer of $1,000 to ACME Corp.");
-});
+const json = (body, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-test("verifyStepUpApproveRequest: no document → refused (the proofless legacy shape never prompts)", async () => {
-  const res = await verifyStepUpApproveRequest(
-    await startResponse({ withDocument: false }),
-    enrolled,
-  );
-  assert.equal(res.ok, false);
-  assert.match(res.reason, /no signed approve-request document/);
-});
-
-test("verifyStepUpApproveRequest: a signer the wallet is not enrolled with is refused", async () => {
-  const res = await verifyStepUpApproveRequest(await startResponse({ as: STRANGER }), enrolled);
-  assert.equal(res.ok, false);
-  assert.match(res.reason, /not an executor this wallet is enrolled with/);
-});
-
-test("verifyStepUpApproveRequest: an unsigned document is refused", async () => {
-  const res = await verifyStepUpApproveRequest(await startResponse({ unsigned: true }), enrolled);
-  assert.equal(res.ok, false);
-});
-
-test("verifyStepUpApproveRequest: a tampered reason breaks the proof", async () => {
-  const start = await startResponse();
-  start.document.payload.reason = "Approve everything forever.";
-  const res = await verifyStepUpApproveRequest(start, enrolled);
-  assert.equal(res.ok, false);
-});
-
-test("verifyStepUpApproveRequest: legacy fields that disagree with the signed copy are refused", async () => {
-  const start = await startResponse();
-  start.sessionId = "some-other-session";
-  const res = await verifyStepUpApproveRequest(start, enrolled);
-  assert.equal(res.ok, false);
-  assert.match(res.reason, /legacy field sessionId/);
-});
-
-test("verifyStepUpApproveRequest: the VTA-pushed 0.1 flavor passes the same gate", async () => {
-  const res = await verifyStepUpApproveRequest(
-    await startResponse({ type: APPROVE_REQUEST_TYPE_01, legacy: false }),
-    enrolled,
-  );
-  assert.equal(res.ok, true, res.reason);
-});
-
-test("verifyStepUpApproveRequest: any other document type is refused", async () => {
-  const res = await verifyStepUpApproveRequest(
-    await startResponse({ type: APPROVE_RESPONSE_TYPE }),
-    enrolled,
-  );
-  assert.equal(res.ok, false);
-});
-
-test("verifyStepUpApproveRequest: a lapsed request is refused", async () => {
-  const res = await verifyStepUpApproveRequest(
-    await startResponse({ over: { expiresAt: new Date(Date.now() - 1000).toISOString() } }),
-    enrolled,
-  );
-  assert.equal(res.ok, false);
-  assert.match(res.reason, /lapsed/);
-});
-
-// ── performStepUpVta: the whole flow, in its enforced order ──────────────────
-//
-// start → verify → CONSENT → sign → finish. The consent callback stands in
-// for the human: it must be shown only post-verification content (the reason
-// from inside the signature), a decline must send nothing to the RP, and a
-// refused approve-request must never reach it at all.
-
-/** Mock the RP's two REST endpoints; records every request it serves. */
-function mockRp(startBody) {
+/**
+ * A fake RP. `answer(req)` returns the reply document for each request (or a
+ * Response); every request is recorded with its bearer.
+ */
+function fakeRp(answer) {
   const calls = [];
   const fetchFn = async (url, init) => {
-    const u = String(url);
-    calls.push({ url: u, body: init?.body ? JSON.parse(init.body) : undefined });
-    if (u.endsWith("/auth/step-up/vta/start")) {
-      return new Response(JSON.stringify(startBody), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    if (u.endsWith("/auth/step-up/vta/finish")) {
-      return new Response(
-        JSON.stringify({
-          session_id: "sess-42",
-          access_token: "elevated-access",
-          refresh_token: "elevated-refresh",
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }
-    return new Response("not found", { status: 404 });
+    assert.equal(String(url), `${BASE}/trust-tasks`, "every document goes to {base}/trust-tasks");
+    const doc = JSON.parse(init.body);
+    calls.push({ doc, bearer: init.headers.authorization });
+    const out = await answer(doc);
+    return out instanceof Response ? out : json(out);
   };
   return { fetchFn, calls };
 }
 
-function flowArgs(holder, fetchFn, requestConsent) {
-  return {
-    baseUrl: "https://rp.example",
-    accessToken: "aal1-token",
-    signing: holder,
-    rpDid: RP.did,
-    enrolledExecutorDids: [RP.did],
-    fetchFn,
-    requestConsent,
-  };
+const session = (holder) => ({
+  id: SESSION,
+  subject: holder.did,
+  issuedAt: new Date().toISOString(),
+  expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+  acr: "aal2",
+});
+
+/** The honest RP: start → approve-request, approve-response → elevated,
+ *  refresh → new tokens. */
+function honestRp(holder, { request, ack, tokens } = {}) {
+  return fakeRp(async (req) => {
+    switch (req.type) {
+      case START:
+        return reply(req, { approveRequest: request ?? (await approveRequest(holder)) });
+      case APPROVE_RESPONSE_05:
+        return reply(req, ack ?? { status: "elevated", session: session(holder) });
+      case REFRESH:
+        return reply(req, {
+          session: session(holder),
+          tokens: tokens ?? {
+            accessToken: "elevated-access",
+            refreshToken: "elevated-refresh",
+            tokenType: "Bearer",
+            expiresIn: 900,
+          },
+        });
+      default:
+        throw new Error(`unexpected ${req.type}`);
+    }
+  });
 }
 
-test("performStepUpVta: consent sees the reason from INSIDE the signed document, then sign+finish", async () => {
-  const holder = generateSigningIdentity();
-  const start = await startResponse();
-  // Tamper the unsigned top-level reason — the human must never see this copy.
-  start.reason = "Totally harmless, click approve.";
-  const { fetchFn, calls } = mockRp(start);
+const party = (holder, fetchFn) => ({
+  baseUrl: BASE,
+  accessToken: "aal1-access",
+  signing: holder,
+  rpDid: RP.did,
+  fetchFn,
+});
 
+const startArgs = (holder, fetchFn) => ({
+  ...party(holder, fetchFn),
+  sessionId: SESSION,
+  enrolledExecutorDids: [RP.did],
+});
+
+// ── buildStepUpApproval ─────────────────────────────────────────────────────
+
+test("buildStepUpApproval: a 0.5 approval echoes the request and is the holder's attestation", async () => {
+  const holder = generateSigningIdentity();
+  const request = { subject: holder.did, sessionId: SESSION, challenge: "c".repeat(64) };
+  const doc = await buildStepUpApproval({
+    signing: holder,
+    rpDid: RP.did,
+    request,
+    approved: true,
+    responseVersion: "0.5",
+  });
+
+  assert.equal(doc.type, APPROVE_RESPONSE_05);
+  assert.equal(doc.issuer, holder.did);
+  assert.equal(doc.recipient, RP.did);
+  assert.ok(doc.issuedAt, "0.5 requires issuedAt");
+  assert.deepEqual(doc.payload, { ...request, decision: "approved" });
+  const proof = await verifyTrustTaskProof(doc, { expectedProofPurpose: "assertionMethod" });
+  assert.equal(proof.verified, true, proof.reason);
+  assert.equal(proof.signer, holder.did);
+});
+
+test("buildStepUpApproval: a denial carries a signed deniedReason; tampering breaks the proof", async () => {
+  const holder = generateSigningIdentity();
+  const request = { subject: holder.did, sessionId: SESSION, challenge: "d".repeat(64) };
+  const doc = await buildStepUpApproval({
+    signing: holder,
+    rpDid: RP.did,
+    request,
+    approved: false,
+    deniedReason: "No.",
+    responseVersion: "0.5",
+  });
+  assert.equal(doc.payload.decision, "denied");
+  assert.equal(doc.payload.deniedReason, "No.");
+  assert.equal((await verifyTrustTaskProof(doc)).verified, true);
+  doc.payload.challenge = "e".repeat(64);
+  assert.equal((await verifyTrustTaskProof(doc)).verified, false);
+});
+
+// ── verifyStepUpApproveRequest ──────────────────────────────────────────────
+
+const rpOpts = { enrolledExecutorDids: [RP.did], acceptTypes: RP_APPROVE_REQUEST_TYPES };
+
+test("verifyStepUpApproveRequest: the RP's signed 0.3 verifies, fields come from inside the signature", async () => {
+  const holder = generateSigningIdentity();
+  const res = await verifyStepUpApproveRequest(await approveRequest(holder), rpOpts);
+  assert.equal(res.ok, true, res.reason);
+  assert.equal(res.issuer, RP.did);
+  assert.deepEqual(res.request, {
+    subject: holder.did,
+    sessionId: SESSION,
+    challenge: "a".repeat(64),
+    reason: "Elevate this session to aal2",
+  });
+});
+
+test("verifyStepUpApproveRequest: refusals", async () => {
+  const holder = generateSigningIdentity();
+  const tampered = await approveRequest(holder);
+  tampered.payload.reason = "Approve everything forever.";
+  const cases = [
+    ["no document", undefined, /no signed approve-request/],
+    ["a signer the wallet is not enrolled with", await approveRequest(holder, { as: STRANGER }), /not an executor/],
+    ["an unsigned document", { type: APPROVE_REQUEST_03, payload: {} }, /no proof/],
+    [
+      "another party's version",
+      await approveRequest(holder, { type: APPROVE_REQUEST_02 }),
+      /not a step-up approve-request this party mints/,
+    ],
+    [
+      "a lapsed request",
+      await approveRequest(holder, { envelope: { expiresAt: new Date(Date.now() - 1000).toISOString() } }),
+      /lapsed/,
+    ],
+    ["an attestation-purpose proof", await approveRequest(holder, { purpose: "assertionMethod" }), /proofPurpose/],
+    ["a tampered reason", tampered, /signature verification failed/],
+  ];
+  for (const [what, doc, why] of cases) {
+    const res = await verifyStepUpApproveRequest(doc, rpOpts);
+    assert.equal(res.ok, false, what);
+    assert.match(res.reason, why, what);
+  }
+});
+
+test("verifyStepUpApproveRequest: the agent's 0.2 passes only for a caller that accepts the agent's versions", async () => {
+  const holder = generateSigningIdentity();
+  const doc = await approveRequest(holder, { type: APPROVE_REQUEST_02 });
+  const res = await verifyStepUpApproveRequest(doc, {
+    enrolledExecutorDids: [RP.did],
+    acceptTypes: AGENT_APPROVE_REQUEST_TYPES,
+  });
+  assert.equal(res.ok, true, res.reason);
+});
+
+// ── stepUpVtaStart ──────────────────────────────────────────────────────────
+
+test("stepUpVtaStart: sends a signed start for the session to {base}/trust-tasks and verifies the answer", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn, calls } = honestRp(holder);
+
+  const start = await stepUpVtaStart(startArgs(holder, fetchFn));
+
+  assert.equal(start.issuer, RP.did);
+  assert.equal(start.request.sessionId, SESSION);
+  assert.equal(calls.length, 1);
+  const { doc, bearer } = calls[0];
+  assert.equal(bearer, "Bearer aal1-access");
+  assert.equal(doc.type, START);
+  assert.equal(doc.issuer, holder.did);
+  assert.equal(doc.recipient, RP.did);
+  assert.ok(doc.issuedAt);
+  assert.deepEqual(doc.payload, { sessionId: SESSION });
+  const proof = await verifyTrustTaskProof(doc, { expectedProofPurpose: "authentication" });
+  assert.equal(proof.verified, true, proof.reason);
+  assert.equal(proof.signer, holder.did);
+});
+
+test("stepUpVtaStart: refuses an unsigned reply", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn } = fakeRp(async (req) =>
+    reply(req, { approveRequest: await approveRequest(holder) }, { unsigned: true }),
+  );
+  await assert.rejects(stepUpVtaStart(startArgs(holder, fetchFn)), /unsigned or its proof does not verify/);
+});
+
+test("stepUpVtaStart: refuses a reply signed by someone other than the RP", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn } = fakeRp(async (req) =>
+    reply(req, { approveRequest: await approveRequest(holder) }, { as: STRANGER }),
+  );
+  await assert.rejects(stepUpVtaStart(startArgs(holder, fetchFn)), /is signed by/);
+});
+
+test("stepUpVtaStart: refuses a signed reply to another request", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn } = fakeRp(async (req) =>
+    reply(req, { approveRequest: await approveRequest(holder) }, { before: { threadId: "urn:uuid:other" } }),
+  );
+  await assert.rejects(stepUpVtaStart(startArgs(holder, fetchFn)), /not to this request/);
+});
+
+test("stepUpVtaStart: refuses a signed reply addressed to someone else", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn } = fakeRp(async (req) =>
+    reply(req, { approveRequest: await approveRequest(holder) }, { before: { recipient: STRANGER.did } }),
+  );
+  await assert.rejects(stepUpVtaStart(startArgs(holder, fetchFn)), /is addressed to/);
+});
+
+test("stepUpVtaStart: refuses an approve-request bound to a different session", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn } = honestRp(holder, {
+    request: await approveRequest(holder, { over: { sessionId: "someone-elses-session" } }),
+  });
+  await assert.rejects(stepUpVtaStart(startArgs(holder, fetchFn)), /bound to a different session/);
+});
+
+test("stepUpVtaStart: refuses an approve-request naming a different subject", async () => {
+  const holder = generateSigningIdentity();
+  const other = generateSigningIdentity();
+  const { fetchFn } = honestRp(holder, {
+    request: await approveRequest(holder, { over: { subject: other.did } }),
+  });
+  await assert.rejects(stepUpVtaStart(startArgs(holder, fetchFn)), /names subject/);
+});
+
+test("stepUpVtaStart: refuses an approve-request signed by another enrolled executor", async () => {
+  const holder = generateSigningIdentity();
+  const other = generateSigningIdentity();
+  const { fetchFn } = honestRp(holder, { request: await approveRequest(holder, { as: other }) });
+  await assert.rejects(
+    stepUpVtaStart({ ...startArgs(holder, fetchFn), enrolledExecutorDids: [RP.did, other.did] }),
+    /is not the relying party/,
+  );
+});
+
+test("stepUpVtaStart: a refusal keeps the RP's code", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn } = fakeRp(async () =>
+    json(
+      {
+        id: "urn:uuid:e",
+        type: ERROR,
+        payload: { code: "auth/step-up/start:notNeeded", message: "already aal2", retryable: false },
+      },
+      422,
+    ),
+  );
+  await assert.rejects(stepUpVtaStart(startArgs(holder, fetchFn)), (err) => {
+    assert.equal(err.details?.code, "auth/step-up/start:notNeeded");
+    return true;
+  });
+});
+
+// ── stepUpVtaFinish ─────────────────────────────────────────────────────────
+
+function approvalFor(holder) {
+  return buildStepUpApproval({
+    signing: holder,
+    rpDid: RP.did,
+    request: { subject: holder.did, sessionId: SESSION, challenge: "a".repeat(64) },
+    approved: true,
+    responseVersion: "0.5",
+  });
+}
+
+test("stepUpVtaFinish: sends the approval, then a signed refresh, and returns the new tokens", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn, calls } = honestRp(holder);
+  const approval = await approvalFor(holder);
+
+  const tokens = await stepUpVtaFinish({ ...party(holder, fetchFn), refreshToken: "aal1-refresh", approval });
+
+  assert.deepEqual(tokens, {
+    accessToken: "elevated-access",
+    refreshToken: "elevated-refresh",
+    sessionId: SESSION,
+  });
+  assert.deepEqual(calls.map((c) => c.doc.type), [APPROVE_RESPONSE_05, REFRESH]);
+  assert.equal(calls[0].doc.id, approval.id);
+  const refresh = calls[1].doc;
+  assert.deepEqual(refresh.payload, { refreshToken: "aal1-refresh" });
+  assert.equal(refresh.recipient, RP.did);
+  const proof = await verifyTrustTaskProof(refresh, { expectedProofPurpose: "authentication" });
+  assert.equal(proof.verified, true, proof.reason);
+});
+
+test("stepUpVtaFinish: keeps the presented refresh token when the RP does not rotate it", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn } = honestRp(holder, {
+    tokens: { accessToken: "elevated-access", tokenType: "Bearer", expiresIn: 900 },
+  });
+  const tokens = await stepUpVtaFinish({
+    ...party(holder, fetchFn),
+    refreshToken: "aal1-refresh",
+    approval: await approvalFor(holder),
+  });
+  assert.equal(tokens.refreshToken, "aal1-refresh");
+});
+
+test("stepUpVtaFinish: refuses an acknowledgement that elevated nothing, and does not refresh", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn, calls } = honestRp(holder, { ack: { status: "rejected", reason: "challenge expired" } });
+  await assert.rejects(
+    stepUpVtaFinish({ ...party(holder, fetchFn), refreshToken: "r", approval: await approvalFor(holder) }),
+    /did not elevate the session \(rejected: challenge expired\)/,
+  );
+  assert.equal(calls.length, 1);
+});
+
+test("stepUpVtaFinish: refuses an unsigned acknowledgement", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn } = fakeRp(async (req) => reply(req, { status: "elevated" }, { unsigned: true }));
+  await assert.rejects(
+    stepUpVtaFinish({ ...party(holder, fetchFn), refreshToken: "r", approval: await approvalFor(holder) }),
+    /unsigned or its proof does not verify/,
+  );
+});
+
+// ── performStepUpVta ────────────────────────────────────────────────────────
+
+const flowArgs = (holder, fetchFn, requestConsent) => ({
+  ...startArgs(holder, fetchFn),
+  refreshToken: "aal1-refresh",
+  requestConsent,
+});
+
+test("performStepUpVta: consent sees the verified reason, then approve-response and refresh", async () => {
+  const holder = generateSigningIdentity();
+  const { fetchFn, calls } = honestRp(holder);
   const seen = [];
+
   const res = await performStepUpVta(
     flowArgs(holder, fetchFn, async (ctx) => {
       seen.push(ctx);
@@ -260,68 +433,29 @@ test("performStepUpVta: consent sees the reason from INSIDE the signed document,
 
   assert.equal(res.ok, true, res.ok ? undefined : res.error);
   assert.equal(res.tokens.accessToken, "elevated-access");
-  assert.equal(res.tokens.refreshToken, "elevated-refresh");
-  assert.equal(res.tokens.sessionId, "sess-42");
-
-  // The prompt content is the verified payload, not the unsigned echo.
-  assert.equal(seen.length, 1);
-  assert.equal(seen[0].reason, "Confirm the transfer of $1,000 to ACME Corp.");
-  assert.equal(seen[0].issuer, RP.did);
-  assert.equal(seen[0].subject, "did:key:zSubject");
-  assert.equal(seen[0].sessionId, "sess-42");
-
-  // finish carried a signed approve-response echoing only verified fields.
-  const finish = calls.find((c) => c.url.endsWith("/finish"));
-  assert.ok(finish, "finish was called");
-  assert.equal(finish.body.type, APPROVE_RESPONSE_TYPE);
-  assert.equal(finish.body.payload.decision, "approved");
-  assert.equal(finish.body.payload.challenge, "a".repeat(32));
-  const proofCheck = await verifyTrustTaskProof(finish.body, {
-    expectedProofPurpose: "assertionMethod",
-  });
-  assert.equal(proofCheck.verified, true, proofCheck.reason);
-  assert.equal(proofCheck.signer, holder.did);
+  assert.deepEqual(seen, [
+    { issuer: RP.did, subject: holder.did, sessionId: SESSION, reason: "Elevate this session to aal2" },
+  ]);
+  assert.deepEqual(calls.map((c) => c.doc.type), [START, APPROVE_RESPONSE_05, REFRESH]);
+  const approval = calls[1].doc;
+  assert.equal(approval.payload.challenge, "a".repeat(64));
+  assert.equal(approval.payload.decision, "approved");
 });
 
-test("performStepUpVta: a document with no reason still prompts — with no reason member", async () => {
+test("performStepUpVta: a declined prompt sends nothing after start", async () => {
   const holder = generateSigningIdentity();
-  const start = await startResponse({ unsigned: true, legacy: false });
-  delete start.document.payload.reason; // the RP signed a payload with no reason
-  await signTrustTask({ envelope: start.document, signing: RP });
-  const { fetchFn } = mockRp(start);
-
-  const seen = [];
-  const res = await performStepUpVta(
-    flowArgs(holder, fetchFn, async (ctx) => {
-      seen.push(ctx);
-      return true;
-    }),
-  );
-  assert.equal(res.ok, true, res.ok ? undefined : res.error);
-  assert.equal(seen.length, 1);
-  assert.equal("reason" in seen[0], false);
-});
-
-test("performStepUpVta: declined prompt sends NOTHING to the RP", async () => {
-  const holder = generateSigningIdentity();
-  const { fetchFn, calls } = mockRp(await startResponse());
-
+  const { fetchFn, calls } = honestRp(holder);
   const res = await performStepUpVta(flowArgs(holder, fetchFn, async () => false));
-
   assert.equal(res.ok, false);
   assert.equal(res.declined, true);
-  assert.match(res.error, /denied by user/);
-  // Only the start fetch happened — no finish, no denied approve-response.
-  assert.deepEqual(
-    calls.map((c) => c.url),
-    ["https://rp.example/auth/step-up/vta/start"],
-  );
+  assert.deepEqual(calls.map((c) => c.doc.type), [START]);
 });
 
-test("performStepUpVta: missing document refuses WITHOUT prompting", async () => {
+test("performStepUpVta: a refused approve-request never reaches the human", async () => {
   const holder = generateSigningIdentity();
-  const { fetchFn, calls } = mockRp(await startResponse({ withDocument: false }));
-
+  const { fetchFn, calls } = honestRp(holder, {
+    request: await approveRequest(holder, { over: { sessionId: "someone-elses-session" } }),
+  });
   let prompted = false;
   const res = await performStepUpVta(
     flowArgs(holder, fetchFn, async () => {
@@ -331,30 +465,7 @@ test("performStepUpVta: missing document refuses WITHOUT prompting", async () =>
   );
   assert.equal(res.ok, false);
   assert.equal(res.declined, false);
-  assert.match(res.error, /no signed approve-request document/);
-  assert.equal(prompted, false, "no prompt for an unverifiable request");
-  assert.equal(calls.filter((c) => c.url.endsWith("/finish")).length, 0);
-});
-
-test("performStepUpVta: issuer ≠ page rpDid refuses WITHOUT prompting", async () => {
-  const holder = generateSigningIdentity();
-  // Signed by an executor the wallet IS enrolled with — but not the RP the
-  // page named. Verification alone passes; the binding check must still stop
-  // the flow before any human is asked.
-  const other = generateSigningIdentity();
-  const { fetchFn, calls } = mockRp(await startResponse({ as: other, legacy: false }));
-
-  let prompted = false;
-  const res = await performStepUpVta({
-    ...flowArgs(holder, fetchFn, async () => {
-      prompted = true;
-      return true;
-    }),
-    enrolledExecutorDids: [RP.did, other.did],
-  });
-  assert.equal(res.ok, false);
-  assert.equal(res.declined, false);
-  assert.match(res.error, /does not match the page-supplied rpDid/);
+  assert.match(res.error, /bound to a different session/);
   assert.equal(prompted, false);
-  assert.equal(calls.filter((c) => c.url.endsWith("/finish")).length, 0);
+  assert.deepEqual(calls.map((c) => c.doc.type), [START]);
 });

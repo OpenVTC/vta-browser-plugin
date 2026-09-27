@@ -1633,8 +1633,12 @@ async function doVerifyDid(did: string): Promise<VerifyRpDidResult> {
 // 1. **Holder-signed (default).** When `asDid` is absent the envelope
 //    is signed locally by the wallet's holder did:key #key-2 — the
 //    same eddsa-jcs-2022 Data Integrity proof the wallet has emitted
-//    since the beginning. The RP attributes the request to the holder
-//    DID.
+//    since the beginning, with `proofPurpose: authentication`: the page
+//    is asking the holder to sign its own request to the RP, an
+//    operational message, not an attestation. A relying party that binds
+//    proofs to key roles (the did-hosting control plane does) refuses an
+//    `assertionMethod` proof there. The RP attributes the request to the
+//    holder DID.
 //
 // 2. **Principal-signed via VTA (`asDid` set).** After a
 //    `vault/proxy-login/0.1` session the RP authenticates the session
@@ -1704,6 +1708,7 @@ async function doSignTrustTask(
     const signedEnvelope = await signTrustTask({
       envelope: { ...envelope },
       signing,
+      proofPurpose: "authentication",
     });
     return { signedEnvelope, holderDid: signing.did };
   }
@@ -1717,6 +1722,7 @@ async function doSignTrustTask(
   const signedEnvelope = await signTrustTask({
     envelope: { ...envelope },
     signing,
+    proofPurpose: "authentication",
   });
   return { signedEnvelope, holderDid: signing.did };
 }
@@ -3747,10 +3753,10 @@ async function doStepUpVta(
   // Same IndexedDB-backed holder the popup/background use, so the DID is
   // identical to the base-login path being elevated.
   const sw = createStopwatch();
-  const { signing } = await loadHolder(req.params.vtaDid);
+  const { signing } = await loadHolder(req.vtaDid);
   sw.mark("load holder");
 
-  // The flow itself — start → verify → consent → sign → finish, in that
+  // The flow itself — start → verify → consent → sign → finish → refresh, in that
   // enforced order — lives in core (`performStepUpVta`), where it is unit
   // tested. This function contributes only what core cannot know: the holder
   // identity, the enrolled-executor set, and how to reach a human. The
@@ -3758,16 +3764,18 @@ async function doStepUpVta(
   // windows): after `verifyStepUpApproveRequest` has passed — so the `reason`
   // the human reads comes from inside the verified signature, per the spec's
   // "consumers MUST verify the proof BEFORE surfacing the reason" — and
-  // before anything is signed. A refused approve-request (missing document,
-  // bad proof, non-enrolled signer, issuer ≠ rpDid) returns before the
+  // before anything is signed. A refused approve-request (unsigned reply, bad
+  // proof, non-enrolled signer, issuer ≠ rpDid, another session) returns before the
   // consent callback runs, so no prompt is ever raised for it; a declined
   // prompt sends nothing, and the RP's challenge lapses on its TTL.
   const outcome = await performStepUpVta({
     baseUrl: req.params.baseUrl,
     accessToken: req.params.accessToken,
+    refreshToken: req.params.refreshToken,
+    sessionId: req.params.sessionId,
     signing,
     rpDid: req.params.rpDid,
-    enrolledExecutorDids: await enrolledExecutorDids(req.params.vtaDid),
+    enrolledExecutorDids: await enrolledExecutorDids(req.vtaDid),
     onMark: (label) => sw.mark(label),
     requestConsent: async (ctx) => {
       const ask: RuntimeStepUpConsentRequest = {

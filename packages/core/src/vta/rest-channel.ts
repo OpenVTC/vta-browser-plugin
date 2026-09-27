@@ -220,6 +220,11 @@ export async function decodeTrustTaskHttpReply<Res>(
     /** The agent this channel addressed. Its proof is what makes the reply
      *  evidence rather than bytes — see {@link verifyTrustTaskReply}. */
     expectedSigner?: string;
+    /** The request this reply must answer: a non-error reply must be threaded
+     *  to it (`threadId` = its `threadId`, else its `id`) and, when it named an
+     *  issuer, addressed back to that issuer. A signed answer to some other
+     *  request, or to someone else, is refused. */
+    inReplyTo?: Pick<TrustTask<unknown>, "id" | "threadId" | "issuer">;
   } = {},
 ): Promise<Res> {
   let doc: { type?: string; payload?: unknown } | undefined;
@@ -239,6 +244,22 @@ export async function decodeTrustTaskHttpReply<Res>(
 
   if (opts.expectedSigner !== undefined) {
     await verifyTrustTaskReply(doc ?? {}, opts.expectedSigner);
+  }
+  if (opts.inReplyTo !== undefined && !isTrustTaskErrorType(doc?.type)) {
+    const reply = (doc ?? {}) as { threadId?: unknown; recipient?: unknown };
+    const thread = opts.inReplyTo.threadId ?? opts.inReplyTo.id;
+    if (reply.threadId !== thread) {
+      throw new VtaClientError(
+        "e.client.parse",
+        `${opts.operationLabel ?? "reply"}: the reply is threaded to ${String(reply.threadId)}, not to this request`,
+      );
+    }
+    if (opts.inReplyTo.issuer !== undefined && reply.recipient !== opts.inReplyTo.issuer) {
+      throw new VtaClientError(
+        "e.client.parse",
+        `${opts.operationLabel ?? "reply"}: the reply is addressed to ${String(reply.recipient)}, not ${opts.inReplyTo.issuer}`,
+      );
+    }
   }
 
   return parseTrustTaskReply<Res>(doc, {

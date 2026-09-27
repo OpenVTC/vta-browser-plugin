@@ -63,6 +63,18 @@ const NOT_IN_SDK = [
       "in did-hosting, so vta-sdk carries the approve-*response* half only.",
   },
   {
+    prefix: "https://trusttasks.org/spec/auth/step-up/start/",
+    why:
+      "Served by the did-hosting control plane, the relying party a session is stepped " +
+      "up at (rp-login/step-up.ts). The VTA is not the counterparty.",
+  },
+  {
+    prefix: "https://trusttasks.org/spec/auth/step-up/approve-response/0.5",
+    why:
+      "The version the did-hosting control plane serves (rp-login/step-up.ts). The agent " +
+      "takes 0.3, which vta-sdk carries and the persona path sends.",
+  },
+  {
     prefix: "https://trusttasks.org/spec/task-consent/granted/",
     why:
       "Inbound notification from the agent once an approver decided. Not a request this " +
