@@ -8,7 +8,12 @@
 // REST flow: content → RUNTIME_LOGIN → consent → offscreen REST login → tokens.
 // DIDComm flow: content → RUNTIME_LOGIN_DIDCOMM → consent → offscreen doc.
 
-import { pageSignRefusal, pageTaskRefusal } from "./page-task-policy.js";
+import {
+  pageSignBindingRefusal,
+  pageSignRefusal,
+  pageStepUpBindingRefusal,
+  pageTaskRefusal,
+} from "./page-task-policy.js";
 import {
   disclosureStepUpFrom,
   type DisclosureStepUpRequired,
@@ -22,7 +27,7 @@ import {
   readAgentMediatorDids,
   readAllVtaDids,
 } from "./active-vta.js";
-import { checkOriginPin, pinOrigin } from "./origin-pin.js";
+import { checkOriginPin, pinOrigin, readOriginPin, type OriginPinStatus } from "./origin-pin.js";
 import { isOriginTrusted, trustOrigin } from "./trusted-sites.js";
 import {
   forgetSiteIdentity,
@@ -780,6 +785,13 @@ async function requestConsent(args: {
    * operator has to explicitly approve the swap.
    */
   changedFromRpDid?: string;
+  /** When set, the base URL previously pinned for this origin — the site's
+   *  login now names a different one. Same loud treatment as an RP change. */
+  changedFromBaseUrl?: string;
+  /** Show that this origin is pinned to `rpDid` (and, for step-up, to this
+   *  base URL): the action is allowed only because of that pairing, so the
+   *  human should see it. Set by `signTrustTask` and step-up. */
+  pinned?: { baseUrl?: string };
   /** Frames the prompt as a session step-up rather than a sign-in. */
   stepUp?: boolean;
   /** VERIFIED RP-authored reason to render (plain text, already length-capped
@@ -811,7 +823,12 @@ async function requestConsent(args: {
     (args.reason ? `&reason=${encodeURIComponent(args.reason)}` : "") +
     (args.changedFromRpDid
       ? `&changedFrom=${encodeURIComponent(args.changedFromRpDid)}`
-      : "");
+      : "") +
+    (args.changedFromBaseUrl
+      ? `&changedFromBase=${encodeURIComponent(args.changedFromBaseUrl)}`
+      : "") +
+    (args.pinned ? `&pinned=1` : "") +
+    (args.pinned?.baseUrl ? `&pinnedBase=${encodeURIComponent(args.pinned.baseUrl)}` : "");
 
   // The reason card and the persona picker each need room, or the decision
   // buttons slide off-screen — and an Approve the operator has to scroll to
@@ -1196,13 +1213,20 @@ async function gatedConsent(args: {
   holderDid?: string;
   action?: string;
   changedFromRpDid?: string;
+  changedFromBaseUrl?: string;
+  pinned?: { baseUrl?: string };
   stepUp?: boolean;
   reason?: string;
 }): Promise<boolean> {
   // A pinned-RP *change* must always re-prompt, even for a trusted site —
   // it's exactly the redirect-to-attacker-RP case the louder warning exists
   // for, so trust doesn't get to silence it.
-  if (args.origin && !args.changedFromRpDid && (await isOriginTrusted(args.origin))) {
+  if (
+    args.origin &&
+    !args.changedFromRpDid &&
+    !args.changedFromBaseUrl &&
+    (await isOriginTrusted(args.origin))
+  ) {
     return true;
   }
   const { approved, remember } = await requestConsent(args);
@@ -1222,9 +1246,13 @@ async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginRespon
   // origins seed the pin on approval; subsequent origins asking
   // for a *different* rpDid get a louder consent prompt so the
   // operator can spot a redirect-to-attacker-RP attempt.
-  const pin = req.origin
-    ? await checkOriginPin(req.origin, req.params.rpDid)
-    : { firstSeen: true, rpDidChanged: false, pinnedRpDid: undefined };
+  //
+  // The base URL is pinned beside the rpDid, because it is where `stepUpVta`
+  // from this origin may later go. A changed base URL is treated like a
+  // changed rpDid: always prompted, loudly, even for a remembered site.
+  const pin: OriginPinStatus = req.origin
+    ? await checkOriginPin(req.origin, req.params.rpDid, req.params.baseUrl)
+    : { firstSeen: true, rpDidChanged: false, baseUrlChanged: false };
 
   const consent: Parameters<typeof requestConsent>[0] = {
     origin: req.origin,
@@ -1234,11 +1262,14 @@ async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginRespon
   if (pin.rpDidChanged && pin.pinnedRpDid) {
     consent.changedFromRpDid = pin.pinnedRpDid;
   }
+  if (pin.baseUrlChanged && pin.pinnedBaseUrl) {
+    consent.changedFromBaseUrl = pin.pinnedBaseUrl;
+  }
   const approved = await gatedConsent(consent);
   if (!approved) return { ok: false, error: "login denied by user" };
 
   if (req.origin) {
-    await pinOrigin(req.origin, req.params.rpDid);
+    await pinOrigin(req.origin, req.params.rpDid, req.params.baseUrl);
   }
 
   // Which identity signs in. A per-site persona when this origin has one, the
@@ -1365,7 +1396,7 @@ async function handleLoginDidcomm(
   // login path; the DIDComm rpDid here is the RP's controlDid).
   const pin = req.origin
     ? await checkOriginPin(req.origin, req.params.controlDid)
-    : { firstSeen: true, rpDidChanged: false, pinnedRpDid: undefined };
+    : { firstSeen: true, rpDidChanged: false, baseUrlChanged: false, pinnedRpDid: undefined };
 
   const consent: Parameters<typeof requestConsent>[0] = {
     origin: req.origin,
@@ -1434,6 +1465,16 @@ async function handleStepUpVta(
   //
   // The signer is the active connection's holder — the identity the base login
   // used — never one the page names.
+  //
+  // Refused before anything is sent or prompted: the page may only step up at
+  // the RP DID and base URL its origin is pinned to by an approved login. See
+  // `pageStepUpBindingRefusal`.
+  const bindingRefusal = pageStepUpBindingRefusal(
+    req.origin,
+    await readOriginPin(req.origin),
+    req.params,
+  );
+  if (bindingRefusal) return { ok: false, error: bindingRefusal };
   const active = await readActiveConnection();
   if (!active.ok) return { ok: false, error: active.error };
   await ensureOffscreenDocument();
@@ -1479,11 +1520,19 @@ async function handleStepUpConsent(
     cleaned && cleaned.length > MAX_STEP_UP_REASON_CHARS
       ? `${cleaned.slice(0, MAX_STEP_UP_REASON_CHARS)}…`
       : cleaned;
+  // Re-checked here as well as before the flow started: the pin is read again
+  // for the prompt, and a pin that changed underneath the flow is a denial,
+  // never a prompt for a pairing the human has not confirmed.
+  const pin = await readOriginPin(req.origin);
+  if (pageStepUpBindingRefusal(req.origin, pin, { rpDid: req.rpDid, baseUrl: req.baseUrl })) {
+    return { approved: false };
+  }
   const approved = await gatedConsent({
     origin: req.origin,
     rpDid: req.rpDid,
     holderDid: req.holderDid,
     stepUp: true,
+    pinned: { ...(pin?.baseUrl ? { baseUrl: pin.baseUrl } : {}) },
     ...(reason ? { reason } : {}),
   });
   return { approved };
@@ -2066,6 +2115,16 @@ async function handleSignTrustTask(
   const refusal = pageSignRefusal(req.params.envelope, active.conn.vtaDid);
   if (refusal) return { ok: false, error: refusal };
   const { type: label, recipient } = req.params.envelope as { type: string; recipient: string };
+  // And only for the relying party this origin is pinned to by a login the
+  // human approved: a signature addressed to any other party is refused, as is
+  // any signature for an origin with no pin. Nothing here pins. See
+  // `pageSignBindingRefusal`.
+  const bindingRefusal = pageSignBindingRefusal(
+    req.origin,
+    await readOriginPin(req.origin),
+    recipient,
+  );
+  if (bindingRefusal) return { ok: false, error: bindingRefusal };
   // `requestConsent`, NOT `gatedConsent`.
   //
   // `gatedConsent` short-circuits for a remembered origin and prompts for
@@ -2079,10 +2138,12 @@ async function handleSignTrustTask(
   // unprompted, so this always asks, and offers no "remember".
   //
   // The recipient is shown as the relying party: the signature is the holder's
-  // request to that party, and to no other.
+  // request to that party, and to no other — and the prompt says it is the
+  // party this origin is pinned to.
   const approved = await requestConsent({
     origin: req.origin,
     rpDid: recipient,
+    pinned: {},
     ...(req.params.asDid ? { holderDid: req.params.asDid } : {}),
     action: `Sign ${label}`,
     noRemember: true,
@@ -2478,12 +2539,13 @@ async function handleVaultListPage(
 // We unwrap the params and reuse the same offscreen pipeline as the
 // popup-initiated path.
 //
-// Origin gating: M2B.4 records `req.origin` for the upcoming consent
-// prompt + origin-pinning checks but doesn't currently enforce any
-// origin/entry match. That hardening lands alongside M3 policy
-// (Rego-driven proxy-vs-fill decisions). For now the wallet's
-// ProxyLogin capability + the per-entry context-scope check on the
-// VTA side are the trust anchors.
+// Origin pinning follows `login()`'s rule (M5) when the page names a target
+// DID: a changed target re-prompts loudly, and an approved sign-in pins the
+// origin to it. That pin is what `signTrustTask` — including the `asDid`
+// path this sign-in exists to enable — is bound to. The origin/entry match is
+// still not enforced beyond the persona binding; the wallet's ProxyLogin
+// capability + the per-entry context-scope check on the VTA side are the
+// trust anchors for that.
 async function handleVaultProxyLoginPage(
   req: RuntimeVaultProxyLoginPageRequest,
 ): Promise<RuntimeVaultProxyLoginResponse> {
@@ -2499,13 +2561,23 @@ async function handleVaultProxyLoginPage(
   const resolved = await resolveProfileEntry(req.origin, req.params.entryId);
   if (!resolved.ok) return { ok: false, error: resolved.error };
 
+  // M5, as in `handleLogin`: a target that differs from the one pinned for
+  // this origin gets the loud prompt, and only an approval pins.
+  const pin = targetDid ? await checkOriginPin(req.origin, targetDid) : undefined;
+  const changedFromRpDid = pin?.rpDidChanged ? pin.pinnedRpDid : undefined;
+  const pinOnApproval = async () => {
+    if (targetDid) await pinOrigin(req.origin, targetDid);
+  };
+
   if (resolved.entryId) {
     const approved = await gatedConsent({
       origin: req.origin,
       action: "Sign in via your VTA (proxied SIOP)",
       ...(targetDid ? { rpDid: targetDid } : {}),
+      ...(changedFromRpDid ? { changedFromRpDid } : {}),
     });
     if (!approved) return { ok: false, error: "proxy-login denied by user" };
+    await pinOnApproval();
     return dispatchProxyLogin({ ...req.params, entryId: resolved.entryId });
   }
 
@@ -2524,6 +2596,7 @@ async function handleVaultProxyLoginPage(
     action: "Sign in via your VTA (proxied SIOP)",
     chooseProfile: true,
     ...(targetDid ? { rpDid: targetDid } : {}),
+    ...(changedFromRpDid ? { changedFromRpDid } : {}),
   });
   if (!decision.approved || !decision.selectedDid) {
     // An approval with no persona is not an approval of anything — the surface
@@ -2534,6 +2607,7 @@ async function handleVaultProxyLoginPage(
 
   const bound = await bindProfileEntry(req.origin, decision.selectedDid, targetDid);
   if (!bound.ok) return { ok: false, error: bound.error };
+  await pinOnApproval();
 
   if (decision.remember) await trustOrigin(req.origin, targetDid);
 

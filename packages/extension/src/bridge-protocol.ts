@@ -1893,6 +1893,9 @@ export interface RuntimeStepUpConsentRequest {
   origin: string;
   /** The RP DID (== the approve-request's proven issuer). */
   rpDid: string;
+  /** The RP's Trust Task base the flow is running against, re-checked
+   *  against the origin's pin before the prompt is raised. */
+  baseUrl: string;
   /** The holder DID that will sign the approve-response. */
   holderDid: string;
   /** The RP's reason from inside the verified document. Absent when the
