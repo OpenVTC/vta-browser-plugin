@@ -75,6 +75,13 @@ const NOT_IN_SDK = [
       "takes 0.3, which vta-sdk carries and the persona path sends.",
   },
   {
+    prefix: "https://trusttasks.org/spec/auth/authenticate/0.2",
+    why:
+      "The version the did-hosting control plane serves for `login()`, where the " +
+      "wallet binds a session key (rp-login/trust-task.ts). The relying party is " +
+      "the counterparty, not the VTA.",
+  },
+  {
     prefix: "https://trusttasks.org/spec/task-consent/granted/",
     why:
       "Inbound notification from the agent once an approver decided. Not a request this " +

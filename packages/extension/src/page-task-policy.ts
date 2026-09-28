@@ -115,9 +115,15 @@ export function pageTaskRefusal(typeUri: string): string | null {
 // - **Approvals.** A step-up approve-request or approve-response is only ever
 //   built by the wallet's own step-up ceremony, after it has verified the
 //   relying party's signed request and asked the human on its verified reason.
+// - **A sign-in.** An `auth/authenticate` document is a login, and from 0.2 it
+//   can bind a page-held session key that then acts as the holder for the
+//   whole session. A login goes through `login()`, whose prompt says so and is
+//   never skipped for a session key. Signed here, it would get the generic
+//   "Sign <type>" prompt instead, which says neither.
 // - **The families a page may not request** (above), for the same reasons.
 
 const APPROVAL_PREFIX = "https://trusttasks.org/spec/auth/step-up/approve-";
+const AUTHENTICATE_PREFIX = "https://trusttasks.org/spec/auth/authenticate/";
 
 /**
  * Why a page may not have the wallet sign `envelope`, or `null` when it may.
@@ -139,6 +145,9 @@ export function pageSignRefusal(envelope: unknown, ownAgentDid: string): string 
   }
   if (type.startsWith(APPROVAL_PREFIX)) {
     return `${type} cannot be signed for a page. A step-up approval is built only by the wallet's step-up flow (stepUpVta), which verifies the relying party's request and asks the holder first.`;
+  }
+  if (type.startsWith(AUTHENTICATE_PREFIX)) {
+    return `${type} cannot be signed for a page. A sign-in, and any session key it binds, goes through login(), whose prompt tells the holder what the site will be able to do.`;
   }
   return pageTaskRefusal(type);
 }

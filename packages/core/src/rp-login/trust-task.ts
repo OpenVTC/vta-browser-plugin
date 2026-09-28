@@ -1,6 +1,6 @@
 // Logging in to a relying party as an ordinary pair of Trust Tasks.
 //
-// `auth/challenge/0.1` then `auth/authenticate/0.1`, over any
+// `auth/challenge/0.1` then `auth/authenticate/0.2`, over any
 // `TrustTaskSender` — so a login runs on whichever transport the RP advertises,
 // priority TSP > DIDComm > REST, exactly as every VTA operation has since #79.
 //
@@ -23,10 +23,9 @@
 // (affinidi-webvh-service #171). Against one that does not, the challenge comes
 // back `unsupportedType` and the caller can fall back to `loginViaDidcomm`.
 
-import { authenticateSession, requestAuthChallenge } from "../vta/auth-tasks.js";
-import type { TrustTaskSender } from "../vta/channel.js";
-import type { Identity } from "../didcomm/index.js";
-import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
+import { authenticateSession, isDidKey, requestAuthChallenge } from "../vta/auth-tasks.js";
+import { VtaClientError } from "../vta/errors.js";
+import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 
 /** The session an RP issues on a successful login. */
 export interface RpSession {
@@ -38,6 +37,9 @@ export interface RpSession {
   expiresIn: number;
   /** What the RP actually granted — MAY be narrower than what was asked. */
   scope?: string[];
+  /** The `did:key` the RP bound to this session. Present only when one was
+   *  requested, and then always equal to it (see {@link loginViaTrustTask}). */
+  sessionKey?: string;
 }
 
 export interface TrustTaskLoginOptions {
@@ -46,7 +48,7 @@ export interface TrustTaskLoginOptions {
   sender: TrustTaskSender;
   /** The wallet's holder identity — the transport identity, and the default
    *  document `issuer`. */
-  holder: Identity;
+  holder: TaskParty;
   /**
    * DID to log in AS, when that is not the holder — a per-site persona.
    *
@@ -57,10 +59,21 @@ export interface TrustTaskLoginOptions {
    * fails at `signOutboundTask`, locally, naming both DIDs.
    */
   subject?: string;
-  /** The RP's control DID + keyAgreement — the envelope `recipient`. */
-  service: RemoteDidcommEndpoint;
+  /** The RP's DID: the `recipient` of both documents. */
+  service: TaskParty;
   /** Capability tags to request. The RP decides what it grants. */
   scope?: string[];
+  /**
+   * A `did:key` for the RP to bind to the new session (`auth/authenticate/0.2`).
+   * The subject's proof on the authenticate document covers it. After login,
+   * the holder of that key can sign the session's ordinary requests without
+   * the subject's key. It never counts where an `assertionMethod` attestation
+   * is required, such as approving a step-up.
+   *
+   * It must be a `did:key` ({@link isDidKey}). Anything else is refused here,
+   * before the subject signs.
+   */
+  sessionKey?: string;
 }
 
 /**
@@ -80,6 +93,16 @@ export async function loginViaTrustTask(
   // Who is signing in. The holder unless a persona was named — and the same
   // value has to reach both steps, or the RP refuses on the signer check.
   const subject = opts.subject ?? holder.did;
+
+  // Checked before anything goes out. The subject's signature is what
+  // authorises the binding, so a value the spec would refuse must never
+  // reach a document it signs.
+  if (opts.sessionKey !== undefined && !isDidKey(opts.sessionKey)) {
+    throw new VtaClientError(
+      "e.client.invalid_session_key",
+      "sessionKey must be a did:key (did:key:z…), with no fragment",
+    );
+  }
 
   // The guard that used to live here — "the signing identity must be the
   // holder" — has moved to where it can actually be checked.
@@ -107,7 +130,22 @@ export async function loginViaTrustTask(
     challenge: challenge.challenge,
     sessionId: challenge.sessionId,
     ...(opts.scope && opts.scope.length > 0 ? { scope: opts.scope } : {}),
+    ...(opts.sessionKey !== undefined ? { sessionKey: opts.sessionKey } : {}),
   });
+
+  // The RP must bind the key or refuse the login
+  // (`auth/authenticate:sessionKeyUnsupported`). It may not quietly sign us
+  // in without it. A session without the key would reject every call the
+  // page signs with it. Worse, the page would believe the key speaks for a
+  // session it has nothing to do with.
+  if (opts.sessionKey !== undefined && authed.session.sessionKey !== opts.sessionKey) {
+    throw new VtaClientError(
+      "e.client.session_key_not_bound",
+      `the relying party did not bind the requested session key (got ${
+        authed.session.sessionKey ?? "none"
+      })`,
+    );
+  }
 
   const tokens = authed.tokens;
   return {
@@ -116,5 +154,6 @@ export async function loginViaTrustTask(
     sessionId: challenge.sessionId,
     expiresIn: tokens.expiresIn,
     ...(tokens.scope && tokens.scope.length > 0 ? { scope: tokens.scope } : {}),
+    ...(opts.sessionKey !== undefined ? { sessionKey: opts.sessionKey } : {}),
   };
 }

@@ -15,7 +15,7 @@ import { VtaClientError } from "../dist/vta/index.js";
 const HOLDER = "did:key:z6MkHolderExampleExampleExampleExampleExample";
 const RP = "did:web:rp.example";
 const CHALLENGE = "https://trusttasks.org/spec/auth/challenge/0.1";
-const AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.1";
+const AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.2";
 
 function opts(sender, over = {}) {
   return {

@@ -27,6 +27,7 @@ import { runApproverUnlockCeremony } from "./webauthn-prf-unlock.js";
 import { DisclosureConsent } from "./disclosure-consent.js";
 import { consentResultSender } from "./consent-result.js";
 import { DidQrButton } from "./did-qr-view.js";
+import { SessionKeyNotice } from "./session-key-notice.js";
 
 // Consent prompt shown in a popup window before the wallet logs into an RP.
 // The background opens it with the request details as query params and
@@ -94,6 +95,9 @@ const changedFromBaseUrl = params.get("changedFromBase");
 // pairing so the human can see which relying party the page is bound to.
 const isPinned = params.get("pinned") === "1";
 const pinnedBaseUrl = params.get("pinnedBase");
+// Set when this sign-in binds a session key (`auth/authenticate/0.2`). The
+// background validated it as a `did:key` before opening this window.
+const sessionKey = params.get("sessionKey");
 
 // Sends the decision, waits for the background to acknowledge it, and only then
 // closes the window. Closing in the same tick let the window's removal overtake
@@ -698,6 +702,8 @@ function Confirm() {
           </p>
         </div>
       )}
+
+      {sessionKey && <SessionKeyNotice sessionKey={sessionKey} />}
 
       {/* Step-up reason — the RP's stated purpose for wanting elevation,
           pulled from INSIDE its signed approve-request (verified in the

@@ -39,12 +39,25 @@ export type BridgeMethod =
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
 export interface LoginParams {
-  /** The RP's identifier (its server DID) — becomes the `id_token` `aud`. */
+  /** The RP's identifier (its server DID). It is the `recipient` of both auth
+   *  documents, and every reply must be signed by it. */
   rpDid: string;
-  /** Base URL of the RP's auth API, e.g. `https://admin.webvh.storm.ws/api`.
-   *  Supplied by the RP because the API host need not match the DID's
-   *  domain (did:webvh domain ≠ admin host). */
+  /** The RP's Trust Task base, e.g. `https://admin.webvh.storm.ws/api`. The
+   *  documents are POSTed to `{baseUrl}/trust-tasks`. Supplied by the RP
+   *  because the API host need not match the DID's domain (did:webvh
+   *  domain ≠ admin host). */
   baseUrl: string;
+  /**
+   * Optional `did:key` for the RP to bind to this login's session
+   * (`auth/authenticate/0.2` `sessionKey`). The page generates it and keeps
+   * the private half, ideally as a non-extractable WebCrypto key. The wallet
+   * puts it inside the document it signs, so the RP accepts that key's proofs
+   * as the user for this session only, and never for a step-up approval.
+   *
+   * Anything that is not a `did:key` is refused before the wallet signs, and
+   * the consent prompt tells the user the site is getting a session key.
+   */
+  sessionKey?: string;
 }
 
 /** Parameters for `window.vtaWallet.loginDidcomm(...)` (DIDComm transport). */
@@ -166,6 +179,10 @@ export interface LoginResult {
   sessionId: string;
   /** The wallet holder DID — surfaced so the operator can ACL-grant it. */
   holderDid: string;
+  /** The `did:key` the RP bound to this session. Present exactly when the
+   *  login asked for one, and then always equal to it: a relying party that
+   *  does not bind it fails the login. */
+  sessionKey?: string;
   /** Per-phase timings (ms) of the auth flow, for the demo to display. */
   timings?: { label: string; ms: number }[];
 }
@@ -1777,12 +1794,12 @@ export interface OffscreenDidcommLoginRequest {
   params: DidcommLoginParams;
 }
 
-/** background → offscreen: run a REST SIOPv2 login. The actual
- *  `issueIdToken` signing must happen here in offscreen — that's
- *  where the unwrapped holder secret lives (PRF AES cache is per-
- *  module-scope). Background's prior approach of loading the
- *  holder + calling `loginViaSiop` directly hung on encrypted
- *  wallets because background has no access to the cache. */
+/** background → offscreen: run the page's `login()`, `auth/challenge/0.1` then
+ *  `auth/authenticate/0.2`, over the RP's HTTPS Trust Task binding
+ *  (`{baseUrl}/trust-tasks`). The signing must happen here in offscreen,
+ *  because that is where the unwrapped holder secret lives (the PRF AES cache
+ *  is module-scoped). Background has no access to the cache, so signing from
+ *  there hung on encrypted wallets. */
 export const OFFSCREEN_REST_LOGIN = "offscreen/rest-login" as const;
 
 export interface OffscreenRestLoginRequest {
@@ -1797,10 +1814,10 @@ export interface OffscreenRestLoginRequest {
    *  operator chose it for this site or because there is no attested origin to
    *  bind a persona to. Resolved in the background, where the vault and the
    *  operator's recorded choice live; the offscreen only turns it into the
-   *  matching `id_token` producer. */
+   *  matching document signer. */
   entryId?: string;
-  /** REST base for the VTA session the persona mint goes through. Unused for
-   *  a holder login, which contacts only the RP. */
+  /** REST base for the VTA session the persona's signatures go through.
+   *  Unused for a holder login, which contacts only the RP. */
   restBaseUrl?: string;
 }
 

@@ -176,6 +176,17 @@ test("a page cannot have the wallet sign a step-up approval", () => {
   }
 });
 
+test("a page cannot have the wallet sign a sign-in", () => {
+  for (const t of [
+    "https://trusttasks.org/spec/auth/authenticate/0.2",
+    "https://trusttasks.org/spec/auth/authenticate/0.1",
+  ]) {
+    const why = pageSignRefusal({ type: t, recipient: RP }, AGENT);
+    assert.notEqual(why, null, t);
+    assert.match(why, /login\(\)/);
+  }
+});
+
 test("a page cannot have the wallet sign a family it may not request", () => {
   assert.notEqual(
     pageSignRefusal({ type: `${P}disclosure/present/1.0`, recipient: RP }, AGENT),
