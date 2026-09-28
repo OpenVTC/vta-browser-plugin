@@ -20,8 +20,11 @@
 //
 // The numbers mirror the Rust module exactly. The list is the Rust list less
 // the tasks this wallet never sends (`vault/proxy-login/0.1`, superseded;
-// `vta/services/update/1.1`; `rooms/owner/anchor/0.1`) — a budget only matters for a task that leaves
-// here, and `task-surface` holds this file to the tasks the wallet speaks. If
+// `vta/services/update/1.1`; `rooms/owner/anchor/0.1`) — a budget only matters
+// for a task that leaves here, and `task-surface` holds this file to the tasks
+// the wallet speaks. `vta/services/enable` and `update` are relayed too, but
+// they are console-only admin tasks, and this file ships in every wallet
+// surface: `admin/services.ts` gives them `minRelayBudgetMs()` itself. If
 // either side changes, change the other.
 
 import { TYPE_URI as WEBVH_DIDS_CREATE } from "@openvtc/trust-tasks/vta/webvh/dids/create/1.0/payload";
@@ -43,8 +46,6 @@ import { TYPE_URI as ROOMS_KEYS_BACKFILL } from "@openvtc/trust-tasks/rooms/keys
 import { TYPE_URI as ROOMS_KEYS_READ } from "@openvtc/trust-tasks/rooms/keys/read/0.1/payload";
 import { TYPE_URI as ROOMS_KEYS_BROWSE } from "@openvtc/trust-tasks/rooms/keys/browse/0.1/payload";
 import { TYPE_URI as VAULT_PROXY_LOGIN } from "@openvtc/trust-tasks/vault/proxy-login/0.2/payload";
-import { TYPE_URI as SERVICES_ENABLE } from "@openvtc/trust-tasks/vta/services/enable/1.0/payload";
-import { TYPE_URI as SERVICES_UPDATE } from "@openvtc/trust-tasks/vta/services/update/1.0/payload";
 import { TYPE_URI as PROVISION_INTEGRATION } from "@openvtc/trust-tasks/provision/integration/0.3/payload";
 
 /** How long the VTA waits for a peer's reply on one TSP hop
@@ -107,9 +108,6 @@ export const RELAYS_ONWARD: ReadonlySet<string> = new Set([
   ROOMS_KEYS_BROWSE,
   // A `password` entry logs in to the third-party site and waits on it.
   VAULT_PROXY_LOGIN,
-  // Enabling or updating `didcomm` runs the mediator handshake.
-  SERVICES_ENABLE,
-  SERVICES_UPDATE,
   // A template naming a `WEBVH_SERVER` mints through the `dids/create` path.
   PROVISION_INTEGRATION,
 ]);

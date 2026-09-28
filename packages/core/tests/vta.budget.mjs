@@ -34,8 +34,9 @@ test("the task that failed in the field now outlasts the VTA", () => {
 });
 
 test("every relaying task is raised, whatever it asked for", () => {
-  // The Rust list less the three tasks this wallet never sends.
-  assert.equal(RELAYS_ONWARD.size, 22);
+  // The Rust list less the three tasks this wallet never sends, and the two
+  // console-only services tasks, which `admin/services.ts` budgets itself.
+  assert.equal(RELAYS_ONWARD.size, 20);
   for (const type of RELAYS_ONWARD) {
     for (const requested of [1, 30_000, 60_000]) {
       assert.ok(

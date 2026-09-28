@@ -68,6 +68,7 @@ import {
   type VTAManagementReloadServicesPayload,
   type VTAManagementReloadServicesResponsePayload,
 } from "@openvtc/trust-tasks/vta/management/reload-services/1.0/payload";
+import { minRelayBudgetMs } from "../vta/budget.js";
 
 export type { ServiceState, ServiceKind };
 
@@ -89,6 +90,7 @@ async function call<Req, Res>(
   responseType: string,
   label: string,
   payload: Req,
+  timeoutMs?: number,
 ): Promise<Res> {
   const envelope = buildTrustTask(type, payload, {
     issuer: caller.holder.did,
@@ -97,8 +99,18 @@ async function call<Req, Res>(
   return sender.send<Res>(envelope, {
     expectedResponseType: responseType,
     operationLabel: label,
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   });
 }
+
+/**
+ * Enabling or updating a `didcomm` service runs the agent's mediator handshake
+ * and waits on the pong, so these two relay onward and need the relay budget
+ * (`vta/budget.ts`). They are given it here rather than listed in
+ * `RELAYS_ONWARD`: that list ships in every wallet surface, and admin task
+ * URIs must reach only the console (the build asserts it).
+ */
+const RELAYED = minRelayBudgetMs();
 
 /** Every transport the agent knows about, enabled or not. */
 export async function servicesList(
@@ -157,7 +169,7 @@ export async function serviceEnable(
   };
   const res = await call<VTAServicesEnablePayload, VTAServicesEnableResponsePayload>(
     sender, params, SERVICES_ENABLE, SERVICES_ENABLE_RESPONSE,
-    "vta/services/enable/1.0", payload);
+    "vta/services/enable/1.0", payload, RELAYED);
   return res.result;
 }
 
@@ -216,7 +228,7 @@ export async function serviceUpdate(
   };
   const res = await call<VTAServicesUpdatePayload, VTAServicesUpdateResponsePayload>(
     sender, params, SERVICES_UPDATE, SERVICES_UPDATE_RESPONSE,
-    "vta/services/update/1.0", payload);
+    "vta/services/update/1.0", payload, RELAYED);
   return res.result;
 }
 
