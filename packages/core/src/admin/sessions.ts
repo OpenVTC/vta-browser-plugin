@@ -33,7 +33,7 @@ import {
   TYPE_URI as AUTH_REVOKE_SESSION,
   RESPONSE_TYPE_URI as AUTH_REVOKE_SESSION_RESPONSE,
   type AuthRevokeSessionResponsePayload,
-} from "@openvtc/trust-tasks/auth/revoke-session/0.1/payload";
+} from "@openvtc/trust-tasks/auth/revoke-session/0.2/payload";
 
 export type { Session };
 
@@ -118,6 +118,6 @@ export async function sessionRevoke(
   );
   return sender.send<AuthRevokeSessionResponsePayload>(envelope, {
     expectedResponseType: AUTH_REVOKE_SESSION_RESPONSE,
-    operationLabel: "auth/revoke-session/0.1",
+    operationLabel: "auth/revoke-session/0.2",
   });
 }
