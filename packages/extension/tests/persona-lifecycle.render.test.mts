@@ -12,7 +12,7 @@ import {
   FaceHistory,
 } from "../src/manager/panes/persona-editors.js";
 
-const HOLDER = { session: { id: "s" }, roles: ["admin"], scopes: [] };
+const HOLDER = { session: { id: "s", subject: "did:key:zHolder" }, roles: ["admin"], scopes: [], capabilities: ["persona-holder"] };
 const face = { profileId: "p1", name: "Conference", entries: [{ ref: "f1" }], version: 3, updatedAt: "2026-09-07T10:00:00Z" };
 const sent = (a: { calls: { type: string; payload: Record<string, unknown> }[] }, slug: string) =>
   a.calls.filter((c) => c.type.endsWith(`/${slug}`)).map((c) => c.payload);

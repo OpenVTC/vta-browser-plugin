@@ -1687,6 +1687,7 @@ async function handleOnboardPrepare(
     vtaDid: req.vtaDid,
     adminScope: req.adminScope,
     ...(req.context ? { context: req.context } : {}),
+    ...(req.personaHolder ? { personaHolder: true } : {}),
   })) as RuntimeOnboardPrepareResponse;
 }
 

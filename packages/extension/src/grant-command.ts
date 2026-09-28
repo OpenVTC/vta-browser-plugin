@@ -24,6 +24,19 @@
 // the operator asked to create a context inline — a command `pnm` rejects
 // outright — which is the concrete version of why this lives in a tested
 // module.
+//
+// **`persona-holder` is named, because no role carries it.** The holder's own
+// identity — the attribute pool, the faces over it, the disclosure history —
+// sits above every trust context, and since verifiable-trust-infrastructure
+// #1673 the agent admits a caller to it only on an ACL entry granted the
+// capability *by name*: not a context admin, and not a super-admin either. A
+// grant that omits it provisions a wallet whose console persona pane is
+// refused on every task, and nothing at grant time says so. `--capabilities`
+// on `pnm acl create` is a narrowing for every other name, but `persona-holder`
+// is *additive* — it widens the role's set rather than replacing it — and the
+// VTA carries it across the hand-off rollover to the long-term admin (#1573).
+// Only an unscoped operator may confer it, which is why it moves
+// {@link needsSuperAdminOperator}.
 
 import type { AdminScope } from "@openvtc/pnm-core";
 
@@ -39,6 +52,24 @@ export interface GrantCommandInput {
    *  context: the wallet still has a home context, but it is chosen *after*
    *  the grant, from the list the now-authorised ephemeral can read. */
   context?: string;
+  /** Grant authority over the holder's own identity (`persona-holder`).
+   *
+   *  Always granted for `"unrestricted"`: that wallet is the management
+   *  console, and the console's persona pane is the holder's half of the
+   *  family. Opt-in for `"context"`, because conferring it takes an unscoped
+   *  operator and a context-scoped one would otherwise have their grant
+   *  refused. */
+  personaHolder?: boolean;
+}
+
+/** The additive capability that reaches the holder's identity. Spelled as the
+ *  agent's ACL registry declares it. */
+export const PERSONA_HOLDER_CAPABILITY = "persona-holder";
+
+/** Whether this grant confers `persona-holder`. One predicate, so the printed
+ *  command and the operator warning cannot disagree. */
+export function grantsPersonaHolder(adminScope: AdminScope, personaHolder?: boolean): boolean {
+  return adminScope === "unrestricted" || personaHolder === true;
 }
 
 /**
@@ -49,7 +80,12 @@ export interface GrantCommandInput {
  * otherwise render as the unrestricted form, which is the "too wide" failure
  * above — and it would be the operator, not this code, who found out.
  */
-export function grantCommand({ ephemeralDid, adminScope, context }: GrantCommandInput): string {
+export function grantCommand({
+  ephemeralDid,
+  adminScope,
+  context,
+  personaHolder,
+}: GrantCommandInput): string {
   // `--expires 1h` so an abandoned onboarding — prepared, never connected —
   // does not leave a permanent grant for a key nobody will use again. The
   // successful path deletes the row at swap time regardless of expiry, and the
@@ -64,12 +100,15 @@ export function grantCommand({ ephemeralDid, adminScope, context }: GrantCommand
   // ephemeral's row in the same atomic step. Omitting it is refused
   // (VTI-ACL-058); it is not a widening.
   const base = `pnm acl create --did ${ephemeralDid} --role admin`;
+  const caps = grantsPersonaHolder(adminScope, personaHolder)
+    ? ` --capabilities ${PERSONA_HOLDER_CAPABILITY}`
+    : "";
   if (adminScope === "unrestricted") {
     // No `--contexts`. `pnm acl create` documents this precisely: omitting the
     // flag leaves the list empty, which is *unrestricted* for `--role admin`.
     // Passing `--contexts ''` is not the same thing and is rejected — it
     // parses to one context named empty-string.
-    return `${base} --expires 1h --handoff`;
+    return `${base}${caps} --expires 1h --handoff`;
   }
   const ctx = context?.trim();
   if (!ctx) {
@@ -78,20 +117,23 @@ export function grantCommand({ ephemeralDid, adminScope, context }: GrantCommand
         "command would grant the whole agent",
     );
   }
-  return `${base} --contexts ${ctx} --expires 1h --handoff`;
+  return `${base} --contexts ${ctx}${caps} --expires 1h --handoff`;
 }
 
 /**
  * Whether an operator running this command would be conferring authority they
  * must themselves hold unrestricted.
  *
- * Only `"unrestricted"` is: an admin may not grant wider than itself, so a
+ * `"unrestricted"` is: an admin may not grant wider than itself, so a
  * context-scoped operator running the unrestricted form gets a refusal from
- * their own agent. Surfaced so the screen can say that up front rather than
- * letting the operator discover it from a failed paste.
+ * their own agent. So is any grant carrying `persona-holder` — the agent
+ * refuses that capability from a context-scoped admin, so a scoped operator
+ * cannot mint authority over the holder's identity. Surfaced so the screen can
+ * say that up front rather than letting the operator discover it from a failed
+ * paste.
  */
-export function needsSuperAdminOperator(adminScope: AdminScope): boolean {
-  return adminScope === "unrestricted";
+export function needsSuperAdminOperator(adminScope: AdminScope, personaHolder?: boolean): boolean {
+  return grantsPersonaHolder(adminScope, personaHolder);
 }
 
 /**

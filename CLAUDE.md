@@ -290,6 +290,15 @@ the flow printed `--role super-admin`, which `pnm acl create` does not accept
 (the roles are `admin`, `initiator`, `application`, `reader`; super-admin is the
 *shape* of an admin grant, not a role name).
 
+**The command also names `--capabilities persona-holder`**, always for
+`unrestricted` and opt-in for `context`. Since VTI #1673 no role — super-admin
+included — reaches the holder's attribute pool; only an entry granted the
+capability by name does, and the VTA carries it across the hand-off rollover
+(#1573). It is additive, so it does not narrow the admin role; it is the *only*
+capability the grant may name, since any other name there is a narrowing. Only
+an unscoped operator may confer it, which is why asking for it moves
+`needsSuperAdminOperator` for a context-scoped grant too.
+
 **What is stored is what the agent said, never what was asked.**
 `Connection.homeContext` and `Connection.agentScope` come from
 `summary.context` and `summary.adminScope` on the reply. An agent that does not
@@ -389,12 +398,15 @@ checkable.** `@openvtc/pnm-core/persona` is the wallet's half: disclosure's
 two-call gate, contacts, read-only bindings, renderers, and context-local
 profiles. `@openvtc/pnm-core/admin`'s `persona.ts` is the holder's half — the
 attribute pool, profiles, `binding/set`, `correlation/analyze`,
-`disclosure/history` — and the agent gates all ten on
-**`require_super_admin`**: `Admin` *and* unrestricted scope. A guard reading
-"is this an administrator" passes for one scoped to a single context, who would
-then be reading identity data belonging to every *other* context. The console's
-`isUnscopedHolder` mirrors that test and exists so a pane can *explain* the
-refusal; it never decides.
+`disclosure/history` — and the agent gates all ten on the
+**`persona-holder` capability, granted by name**. No role carries it: not a
+context admin, and since VTI #1673 not an unrestricted one either. A guard
+reading "is this an administrator" — or "is this an admin with no context
+restriction", which is what the agent used to test — passes exactly the
+credential it refuses. The console's `holdsPersonaHolder` reads
+`auth/whoami`'s effective `capabilities` and exists so a pane can *explain* the
+refusal (with the `pnm acl update <did> --capabilities persona-holder` that
+fixes it); it never decides.
 
 **Only `manager.js` may carry the holder's half.** CI greps `dist/` for those
 ten URIs with `manager.js` excluded, exactly as it does for `admin/*`. The
@@ -786,7 +798,8 @@ is one a person would see and a model would not.
 
 **What breaks it:** putting a pool task in `core/src/persona/` or the root
 barrel; importing `@openvtc/pnm-core/admin` from a wallet entry; testing
-`hasRole(authority, "admin")` where a persona task is concerned; relaxing the
+`hasRole(authority, "admin")`, or an empty scope list, where a persona task is
+concerned; relaxing the
 guard to allow more than `manager.js`; or deleting the presence assertion
 because it "duplicates" the exclusion one. `packages/core/tests/admin.persona.mjs`
 pins the client shapes, including the two the wire depends on: a `value` is sent

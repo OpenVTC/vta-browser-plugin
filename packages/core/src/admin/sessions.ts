@@ -52,7 +52,7 @@ export interface SessionCallerParams {
 export async function whoAmI(
   sender: TrustTaskSender,
   params: SessionCallerParams,
-): Promise<{ session: Session; roles: string[]; scopes: string[] }> {
+): Promise<{ session: Session; roles: string[]; scopes: string[]; capabilities: string[] }> {
   const envelope = buildTrustTask(
     AUTH_WHOAMI,
     {},
@@ -62,10 +62,20 @@ export async function whoAmI(
     expectedResponseType: AUTH_WHOAMI_RESPONSE,
     operationLabel: "auth/whoami/0.1",
   });
-  // `roles` and `scopes` are optional in the schema; defaulting them here saves
-  // every caller the same `?? []`, and "no roles" is a real answer worth being
-  // able to render. `session` is required, so it is passed through untouched.
-  return { session: res.session, roles: res.roles ?? [], scopes: res.scopes ?? [] };
+  // `roles`, `scopes` and `capabilities` are optional in the schema; defaulting
+  // them here saves every caller the same `?? []`, and "no roles" is a real
+  // answer worth being able to render. `session` is required, so it is passed
+  // through untouched.
+  //
+  // `capabilities` is the *effective* set — the role's own, narrowed, plus any
+  // granted by name — and it is the only way a console can see an additive
+  // grant such as `persona-holder`, which no role implies.
+  return {
+    session: res.session,
+    roles: res.roles ?? [],
+    scopes: res.scopes ?? [],
+    capabilities: res.capabilities ?? [],
+  };
 }
 
 /** The caller's own active sessions — not every session at the agent. */

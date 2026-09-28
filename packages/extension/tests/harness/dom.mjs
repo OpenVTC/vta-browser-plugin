@@ -290,4 +290,4 @@ export const PARTIES = {
 };
 
 /** `whoAmI`'s answer for a caller the agent treats as an unscoped holder. */
-export const UNSCOPED_HOLDER = { session: { id: "s" }, roles: ["admin"], scopes: [] };
+export const UNSCOPED_HOLDER = { session: { id: "s", subject: "did:key:zHolder" }, roles: ["admin"], scopes: [], capabilities: ["persona-holder"] };

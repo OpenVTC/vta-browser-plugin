@@ -16,11 +16,10 @@
 //
 // ## The boundary runs through the middle of it
 //
-// Every task on this page is holder-scoped: the agent gates them on an
-// *unscoped holder* credential — `Admin` AND unrestricted scope — and refuses a
-// context-scoped administrator exactly as it refuses an application. That is
-// why `isUnscopedHolder` and not `hasRole(authority, "admin")`; see its
-// docstring for the emptiness trap that makes the two different tests.
+// Every task on this page is holder-scoped: the agent gates them on the
+// `persona-holder` capability, granted by name, and refuses every role without
+// it — a context-scoped administrator, and an unrestricted one too (#1673).
+// That is why `holdsPersonaHolder` and not `hasRole(authority, "admin")`.
 //
 // The one call that crosses the boundary is `personaBindingSet`, and it crosses
 // **downwards**: the agent resolves the profile up here and pushes a

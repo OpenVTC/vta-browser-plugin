@@ -25,7 +25,7 @@ import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { IdentityMap } from "../src/manager/panes/persona-map.js";
 import { buildGraph } from "../src/manager/identity-graph.js";
 
-const HOLDER = { session: { id: "s" }, roles: ["admin"], scopes: [] };
+const HOLDER = { session: { id: "s", subject: "did:key:zHolder" }, roles: ["admin"], scopes: [], capabilities: ["persona-holder"] };
 const REGISTRY = {
   registryVersion: "0.1",
   entries: [{ type: "name.legal", sensitivity: "normal", release: "consent", mask: "none" }],

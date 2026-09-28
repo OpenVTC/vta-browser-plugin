@@ -20,7 +20,7 @@ import { AttributeEditor, BindingForm, ResolvedProfile } from "../src/manager/pa
 import { PersonaPane } from "../src/manager/panes/persona.js";
 import { buildGraph } from "../src/manager/identity-graph.js";
 
-const HOLDER = { session: { id: "s" }, roles: ["admin"], scopes: [] };
+const HOLDER = { session: { id: "s", subject: "did:key:zHolder" }, roles: ["admin"], scopes: [], capabilities: ["persona-holder"] };
 
 const attribute = (id: string, type: string, value: string) => ({
   attributeId: id,
