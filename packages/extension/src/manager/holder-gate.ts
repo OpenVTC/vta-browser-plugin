@@ -1,4 +1,5 @@
-// What the persona pane says when the caller may not hold enough authority.
+// What the persona pane says when the caller does not hold the authority the
+// holder's own identity takes.
 //!
 // Its own module, and a `.ts` one, for the reason the consent view already
 // lives outside its component: what the screen says here is a security
@@ -9,61 +10,54 @@
 // A *type-only* import: erased at run time, so this module drags no component
 // code behind it and the pane's test runner can load it.
 import type { Authority } from "./use-vta.js";
+import { PERSONA_HOLDER_CAPABILITY } from "../grant-command.js";
 
 /**
- * Whether the agent would treat this caller as an **unscoped holder** — `Admin`
- * with no context restriction.
+ * Whether the agent reports this caller as holding `persona-holder`.
  *
- * This is not "an administrator". The `persona/*` pool sits above every trust
- * context, and the agent gates it on `require_super_admin`, deliberately not on
- * `role == Admin`: an administrator scoped to a single context who could read
- * the pool would be reading identity data belonging to every *other* context.
- * `hasRole(authority, "admin")` is exactly the check that gets that wrong.
+ * **That capability is the whole test, and no role stands in for it.** The
+ * holder's attribute pool, the faces over it and the disclosure history sit
+ * above every trust context. The agent admits a caller to them on an ACL entry
+ * granted `persona-holder` by name, and on nothing else — not a context admin,
+ * and since verifiable-trust-infrastructure #1673 not an admin with no context
+ * restriction either. This used to be `isUnscopedHolder` (`Admin` and an empty
+ * scope list), which mirrored the agent's old `require_super_admin` gate; after
+ * #1673 that test passed exactly the credential most likely to be refused, and
+ * the pane said nothing to it.
  *
- * **The emptiness of `scopes` means opposite things depending on the role.**
- * `vti-common`'s own `act_scope` warns about this from the other side: an empty
- * context list is *unrestricted* for an admin and *nothing at all* for every
- * other role. So the role test is not redundant with the scope test — reading
- * `scopes.length === 0` alone would promote a monitor with no scopes to the most
- * privileged caller there is.
+ * Read from `auth/whoami`'s `capabilities`, the *effective* set: the role's
+ * own, narrowed, plus anything granted by name. It is the only member that can
+ * show an additive grant, which is why it exists (whoami 0.1).
  *
  * Advisory: the agent decides again on every task regardless of what this
- * returns. It is *sufficient* for the holder-scoped tasks and, since
- * `persona-holder` exists, no longer *necessary* — see `holderGate`.
+ * returns.
  */
-export function isUnscopedHolder(authority: Authority | null): boolean {
-  if (!authority) return false;
-  return authority.roles.includes("admin") && authority.scopes.length === 0;
+export function holdsPersonaHolder(authority: Authority | null): boolean {
+  return authority?.capabilities.includes(PERSONA_HOLDER_CAPABILITY) ?? false;
 }
 
-/** The caution every task on this page shares. Null when the caller is known to
- *  hold what it takes.
+/** The command that grants a caller holder authority. `pnm acl update` takes
+ *  the entry's DID as a positional argument, not `--did`. `--capabilities
+ *  persona-holder` is additive — it narrows nothing the role already holds. */
+export function personaHolderGrantCommand(did: string): string {
+  return `pnm acl update ${did} --capabilities ${PERSONA_HOLDER_CAPABILITY}`;
+}
+
+/** Why the holder-scoped tasks on this page will be refused. Null while the
+ *  answer is not yet in, and when the caller holds what it takes.
  *
- *  **A caution, not a gate — the name is older than the model.** It used to
- *  return a refusal and disable the buttons, on the reasoning that an unscoped
- *  admin was the only credential that could reach the holder-scoped tasks. That
- *  stopped being true when the agent gained `persona-holder`
- *  (verifiable-trust-infrastructure#1286): a context-scoped entry granted that
- *  capability reaches them too, and it is now the *recommended* shape — OpenVTC's
- *  own setup asks for exactly it.
- *
- *  `isUnscopedHolder` is therefore sufficient but no longer necessary, and
- *  `auth/whoami` reports roles and scopes but not capabilities, so this console
- *  cannot tell the difference. Disabling on a check that cannot see the answer
- *  would have locked the console out of the configuration it recommends. So it
- *  explains and stands aside; the agent was always the one deciding.
- *
- *  Making it certain again means `auth/whoami` returning capabilities — a spec
- *  change, then trust-tasks-rs, then the VTA. Worth doing; not worth guessing in
- *  the meantime. */
+ *  **No role is named as a way in.** The old text offered "an agent credential
+ *  with no context restriction" as one of two answers; after #1673 it is no
+ *  answer at all, and an operator following it widens a credential and is
+ *  refused anyway. The grant is the one route, so the note prints it. */
 export function holderGate(authority: Authority | null): string | null {
   if (!authority) return null;
-  if (isUnscopedHolder(authority)) return null;
+  if (holdsPersonaHolder(authority)) return null;
   return (
-    "Your attributes sit above every context, so reaching them takes authority of its own: " +
-    "an agent credential with no context restriction, or one granted the " +
-    "`persona-holder` capability. This console cannot see which you have — " +
-    "`auth/whoami` reports roles and scopes, not capabilities — so it does not stop " +
-    "you trying. Your agent decides, and says so if it refuses."
+    "Your attributes sit above every context, so reaching them takes the " +
+    "`persona-holder` capability, and your agent reports that this wallet's credential " +
+    "does not hold it. No role includes it — not even one with no context restriction. " +
+    "Someone with the whole agent can grant it: " +
+    `\`${personaHolderGrantCommand(authority.session.subject)}\``
   );
 }

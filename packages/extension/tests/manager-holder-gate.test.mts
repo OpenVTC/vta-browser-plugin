@@ -1,37 +1,52 @@
-// The console must not lock itself out of the configuration it recommends.
+// The persona caution reads the capability, not the role.
 //
-// `holderGate` used to return a refusal *and* disable every button on the
-// persona pane, on the reasoning that an unscoped admin was the only credential
-// that could reach the holder-scoped tasks. That stopped being true when the
-// agent gained `persona-holder` (verifiable-trust-infrastructure#1286): a
-// context-scoped entry granted that capability reaches them too — and it is now
-// the recommended shape, since OpenVTC's setup asks for exactly it.
-//
-// `auth/whoami` reports roles and scopes, not capabilities, so this console
-// cannot tell the two apart. What it must therefore not do is claim to know.
+// The agent admits a caller to the holder's pool on `persona-holder` granted by
+// name and on nothing else — since verifiable-trust-infrastructure #1673, not
+// even an admin with no context restriction. The caution used to stay silent
+// for exactly that admin, which is the credential most likely to be refused,
+// and offered "no context restriction" as a way in. `auth/whoami` now reports
+// effective capabilities, so the console can say which case it is in.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { holderGate } from "../src/manager/holder-gate.ts";
+import { holderGate, holdsPersonaHolder, personaHolderGrantCommand } from "../src/manager/holder-gate.ts";
 import type { Authority } from "../src/manager/use-vta.ts";
 
-const authority = (roles: string[], scopes: string[]): Authority =>
-  ({ session: {} as Authority["session"], roles, scopes });
+const HOLDER_DID = "did:key:z6MkWalletHolder";
+const authority = (roles: string[], scopes: string[], capabilities: string[] = []): Authority =>
+  ({ session: { subject: HOLDER_DID } as Authority["session"], roles, scopes, capabilities });
 
-test("an unscoped holder is told nothing — it plainly holds what it takes", () => {
-  assert.equal(holderGate(authority(["admin"], [])), null);
+test("a credential granted persona-holder is told nothing, whatever its scope", () => {
+  for (const scopes of [[], ["work"]]) {
+    const a = authority(["admin"], scopes, ["vault-read", "persona-holder"]);
+    assert.equal(holdsPersonaHolder(a), true);
+    assert.equal(holderGate(a), null);
+  }
 });
 
-test("a context-scoped admin is cautioned, not refused", () => {
-  const note = holderGate(authority(["admin"], ["work"]));
-  assert.ok(note, "a scoped admin needs to know this may be refused");
-  // The caution must name *both* ways to satisfy the agent. Naming only the
-  // unscoped credential is what made the old message wrong: it sent operators
-  // to widen their credential when a capability grant was the better answer.
+test("an unrestricted admin without the grant is cautioned — no role reaches the pool", () => {
+  // The old gate returned null here. After #1673 the agent refuses this caller.
+  const a = authority(["admin"], [], ["vault-read", "acl-write"]);
+  assert.equal(holdsPersonaHolder(a), false);
+  const note = holderGate(a);
+  assert.ok(note, "an unscoped admin without the grant will be refused and must be told");
   assert.match(note!, /persona-holder/);
-  assert.match(note!, /no context restriction/);
-  // And it must be honest that this console cannot tell which they have.
-  assert.match(note!, /cannot see/);
+});
+
+test("the caution names the grant, not a wider credential, as the way in", () => {
+  const note = holderGate(authority(["admin"], ["work"]))!;
+  // Widening to "no context restriction" does not help any more; the note must
+  // not send an operator to do it.
+  assert.doesNotMatch(note, /an agent credential with no context restriction, or/);
+  assert.ok(note.includes(personaHolderGrantCommand(HOLDER_DID)), note);
+});
+
+test("the grant command is pnm's real syntax, and names this wallet's own DID", () => {
+  // `pnm acl update` takes the DID positionally; `--did` is not one of its flags.
+  assert.equal(
+    personaHolderGrantCommand(HOLDER_DID),
+    `pnm acl update ${HOLDER_DID} --capabilities persona-holder`,
+  );
 });
 
 test("the caution speaks the agreed vocabulary", () => {

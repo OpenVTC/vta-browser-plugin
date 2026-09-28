@@ -10,7 +10,12 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { grantCommand, mediatorGrantCommand, needsSuperAdminOperator } from "../src/grant-command.js";
+import {
+  grantCommand,
+  grantsPersonaHolder,
+  mediatorGrantCommand,
+  needsSuperAdminOperator,
+} from "../src/grant-command.js";
 
 const EPH = "did:key:z6MkExampleEphemeralKeyForTests";
 
@@ -21,7 +26,10 @@ test("a context-scoped grant names its context", () => {
 
 test("an unrestricted grant omits --contexts entirely", () => {
   const cmd = grantCommand({ ephemeralDid: EPH, adminScope: "unrestricted" });
-  assert.equal(cmd, `pnm acl create --did ${EPH} --role admin --expires 1h --handoff`);
+  assert.equal(
+    cmd,
+    `pnm acl create --did ${EPH} --role admin --capabilities persona-holder --expires 1h --handoff`,
+  );
   // Not `--contexts ''`: `pnm acl create` documents that as one context named
   // empty-string, and rejects it. The empty *list* is what reads as
   // unrestricted, and the only way to get one is to leave the flag off.
@@ -88,9 +96,55 @@ test("the grant is a hand-off, so the expiring ephemeral can write a permanent s
   }
 });
 
-test("only the unrestricted scope asks more of the operator running it", () => {
+test("only the unrestricted scope, or a persona-holder grant, asks more of the operator", () => {
   assert.equal(needsSuperAdminOperator("unrestricted"), true);
   assert.equal(needsSuperAdminOperator("context"), false);
+  // The agent refuses `persona-holder` from a context-scoped admin
+  // (`validate_additive_capability_grant`), so asking for it is asking for an
+  // unscoped operator.
+  assert.equal(needsSuperAdminOperator("context", true), true);
+});
+
+// ── persona-holder ──────────────────────────────────────────────────────────
+
+test("the whole-agent grant always names persona-holder, because no role carries it", () => {
+  // Since VTI #1673 a super-admin does not reach the holder's pool by role; an
+  // unrestricted wallet granted without the capability is a console whose
+  // persona pane is refused on every task.
+  for (const personaHolder of [undefined, false, true]) {
+    const cmd = grantCommand({
+      ephemeralDid: EPH,
+      adminScope: "unrestricted",
+      ...(personaHolder !== undefined ? { personaHolder } : {}),
+    });
+    assert.match(cmd, / --capabilities persona-holder /, cmd);
+    assert.equal(grantsPersonaHolder("unrestricted", personaHolder), true);
+  }
+});
+
+test("a context-scoped grant names persona-holder only when asked", () => {
+  const without = grantCommand({ ephemeralDid: EPH, adminScope: "context", context: "work" });
+  assert.ok(!without.includes("--capabilities"), without);
+  const withIt = grantCommand({
+    ephemeralDid: EPH,
+    adminScope: "context",
+    context: "work",
+    personaHolder: true,
+  });
+  assert.equal(
+    withIt,
+    `pnm acl create --did ${EPH} --role admin --contexts work --capabilities persona-holder --expires 1h --handoff`,
+  );
+});
+
+test("persona-holder is the only capability named, so the grant is never narrowed", () => {
+  // `--capabilities` narrows for every non-additive name. Any other name here
+  // would silently strip the admin role of everything else it carries.
+  for (const scope of ["context", "unrestricted"] as const) {
+    const cmd = grantCommand({ ephemeralDid: EPH, adminScope: scope, context: "work", personaHolder: true });
+    const m = / --capabilities (\S+)/.exec(cmd);
+    assert.equal(m?.[1], "persona-holder", cmd);
+  }
 });
 
 // ── The mediator grant ──────────────────────────────────────────────────────

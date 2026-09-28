@@ -175,11 +175,14 @@ test("whoami sends an empty payload and returns freshly-resolved authority", asy
     expiresAt: "2026-08-18T00:15:00Z",
     amr: ["did"],
   };
-  const channel = recorder({ session, roles: ["admin"], scopes: ["ctx:demo"] });
+  const capabilities = ["vault-read", "persona-holder"];
+  const channel = recorder({ session, roles: ["admin"], scopes: ["ctx:demo"], capabilities });
   const result = await whoAmI(channel, { holder: HOLDER, service: SERVICE });
 
   assert.deepEqual(channel.sent[0].envelope.payload, {});
-  assert.deepEqual(result, { session, roles: ["admin"], scopes: ["ctx:demo"] });
+  // `capabilities` is the only member that shows an additive grant such as
+  // `persona-holder`; the console's persona caution reads it.
+  assert.deepEqual(result, { session, roles: ["admin"], scopes: ["ctx:demo"], capabilities });
 });
 
 test("whoami tolerates a session with no acr rather than inventing one", async () => {

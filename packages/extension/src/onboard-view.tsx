@@ -52,6 +52,7 @@ import {
   looksLikeAgentName,
   parseAgentName,
 } from "./agent-name.js";
+import { grantsPersonaHolder, needsSuperAdminOperator } from "./grant-command.js";
 import {
   MEDIATOR_REQUIRED,
   ONBOARD_STAGES,
@@ -116,6 +117,11 @@ export function OnboardView({
   // afterwards, from `contexts` below.
   const [homeContext, setHomeContext] = useState("");
   const [createIfMissing, setCreateIfMissing] = useState(false);
+  // Whether a context-scoped wallet also asks for `persona-holder` — authority
+  // over the holder's own attributes and faces, which no role carries. Opt-in
+  // there because only an unscoped operator can confer it; an unrestricted
+  // wallet always gets it. See `grant-command.ts`.
+  const [personaHolder, setPersonaHolder] = useState(false);
   const [prep, setPrep] = useState<OnboardPrepareResult | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -295,6 +301,7 @@ export function OnboardView({
         // unrestricted grant would be sending a value the command must not
         // contain, which is the "too narrow" failure in `grant-command.ts`.
         ...(contextNeededBeforeGrant && effectiveContext ? { context: effectiveContext } : {}),
+        ...(adminScope === "context" && personaHolder ? { personaHolder: true } : {}),
       })) as RuntimeOnboardPrepareResponse;
       if (!res.ok) throw new Error(res.error);
       setPrep(res.result);
@@ -569,7 +576,14 @@ export function OnboardView({
             </>
           )}
         </small>
-        {adminScope === "unrestricted" && (
+        {grantsPersonaHolder(adminScope, personaHolder) && (
+          <small>
+            It also grants <strong>your own identity</strong> — the attributes and faces
+            above every context (<code style={mono}>persona-holder</code>). No role includes
+            it, so the command names it.
+          </small>
+        )}
+        {needsSuperAdminOperator(adminScope, personaHolder) && (
           <small style={{ color: c.muted }}>
             You&apos;ll need to be running this as someone who already has the whole agent —
             an admin scoped to one context can&apos;t hand out more than they hold.
@@ -906,6 +920,24 @@ export function OnboardView({
         {/* Asked here only for the scope whose grant command carries it.
             The other half asks after the grant, from the agent's real list —
             see the header comment on why the order differs. */}
+        {adminScope === "context" && (
+          <label style={{ fontSize: t.sm, display: "flex", gap: 8, alignItems: "flex-start", marginTop: 4 }}>
+            <input
+              type="checkbox"
+              checked={personaHolder}
+              onChange={(e) => setPersonaHolder(e.target.checked)}
+              style={{ width: "auto", padding: 0, marginTop: 3 }}
+            />
+            <span>
+              Also manage your own identity
+              <span style={{ color: c.muted }}>
+                {" "}— your attributes and faces, which sit above every context. Only someone who
+                has the whole agent can grant this.
+              </span>
+            </span>
+          </label>
+        )}
+
         {contextNeededBeforeGrant ? (
           <label style={{ display: "grid", gap: 5, marginTop: 4 }}>
             <span style={{ fontSize: t.sm, fontWeight: 600 }}>Which context?</span>

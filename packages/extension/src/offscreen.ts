@@ -315,7 +315,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (msg.type === OFFSCREEN_ONBOARD_PREPARE) {
     const req = message as OffscreenOnboardPrepareRequest;
-    doOnboardPrepare(req.vtaDid, req.adminScope, req.context)
+    doOnboardPrepare(req.vtaDid, req.adminScope, req.context, req.personaHolder === true)
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -1756,6 +1756,7 @@ async function doOnboardPrepare(
   vtaDid: string,
   adminScope: AdminScope,
   context: string | undefined,
+  personaHolder: boolean,
 ): Promise<OnboardPrepareResult> {
   const services = await resolveVtaServices(vtaDid);
   if (!services.didcomm && !services.rest) {
@@ -1779,6 +1780,7 @@ async function doOnboardPrepare(
       ephemeralDid: eph.did,
       adminScope,
       ...(context ? { context } : {}),
+      personaHolder,
     }),
     ...(services.didcomm ? { mediatorDid: services.didcomm.mediatorDid } : {}),
     ...(services.rest ? { restBaseUrl: services.rest.baseUrl } : {}),

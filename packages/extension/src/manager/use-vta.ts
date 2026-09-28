@@ -34,6 +34,8 @@ export interface Authority {
   session: Session;
   roles: string[];
   scopes: string[];
+  /** Effective capabilities, as `auth/whoami` resolves them. */
+  capabilities: string[];
 }
 
 export type VtaState =
@@ -112,4 +114,4 @@ export function hasRole(authority: Authority | null, ...roles: string[]): boolea
  *  This predicate and the caution built on it are one decision, and the caution
  *  has to live outside a `.tsx` file to be testable — the pane's runner cannot
  *  load one. Importers here are unaffected. */
-export { isUnscopedHolder } from "./holder-gate.js";
+export { holdsPersonaHolder } from "./holder-gate.js";

@@ -579,6 +579,9 @@ export interface RuntimeOnboardPrepareRequest {
    *  names no context and the wallet's home context is chosen afterwards —
    *  from the list the authorised ephemeral can then read. */
   context?: string;
+  /** Ask for `persona-holder` on a `"context"` grant. Always granted for
+   *  `"unrestricted"`; see `grant-command.ts`. */
+  personaHolder?: boolean;
 }
 
 export interface OnboardPrepareResult {
@@ -1737,6 +1740,8 @@ export interface OffscreenOnboardPrepareRequest {
   adminScope: AdminScope;
   /** Mirrors `RuntimeOnboardPrepareRequest.context`. */
   context?: string;
+  /** Mirrors `RuntimeOnboardPrepareRequest.personaHolder`. */
+  personaHolder?: boolean;
 }
 
 export interface OffscreenOnboardConnectRequest {
