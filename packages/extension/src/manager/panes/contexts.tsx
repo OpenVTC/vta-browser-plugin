@@ -483,7 +483,9 @@ function ContextDid({
         await contextsUpdateDid(managerSender, {
           ...parties,
           id: record.id,
-          did: did.trim(),
+          // "none" is `null`, never `""`: `update-did/1.1` refuses an empty
+          // string as not a DID, and 1.0 had no way to say "none" at all.
+          did: did.trim() || null,
         });
       },
       { onConsent: setPending, onError: setError },
@@ -493,6 +495,7 @@ function ContextDid({
   }, [parties, record.id, did, onChanged]);
 
   const unchanged = did.trim() === (record.did ?? "");
+  const clearing = Boolean(record.did) && did.trim() === "";
 
   return (
     <Panel
@@ -550,7 +553,8 @@ function ContextDid({
           </span>
         )}
         <span style={{ fontSize: t.xs, color: c.faint }}>
-          Choosing <b>none</b> leaves the context with no identity of its own.
+          Choosing <b>none</b> leaves the context with no identity of its own. The DID itself is
+          not deleted — it stays under <b>DIDs</b>, and can be assigned again or deleted there.
         </span>
 
         {error && <Note tone="danger">{error}</Note>}
@@ -563,7 +567,7 @@ function ContextDid({
             {...(denied ? { title: denied } : {})}
             onClick={() => void save()}
           >
-            {busy ? "Saving…" : record.did ? "Reassign DID" : "Assign DID"}
+            {busy ? "Saving…" : clearing ? "Clear DID" : record.did ? "Reassign DID" : "Assign DID"}
           </Button>
         </div>
         {denied && <span style={{ fontSize: t.sm, color: c.muted }}>{denied}</span>}

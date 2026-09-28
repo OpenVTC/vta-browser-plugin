@@ -82,6 +82,19 @@ pub const JOIN_REQUEST_MANIFEST_TYPE: &str =
   assert.deepEqual(snapshot.tasks[0].consts, ["JOIN_REQUEST_MANIFEST_TYPE"]);
 });
 
+test("a fully qualified generated type resolves without an alias", () => {
+  // vta-sdk's own spelling since #1790 — and, before the resolver knew it, a
+  // form that stopped every sync on the dozen constants written this way.
+  const { status, stderr, snapshot } = syncFrom({
+    "p.rs": `
+pub const TASK_CONTEXTS_UPDATE_DID_1_1: &str =
+    <trust_tasks_rs::specs::vta::contexts::update_did::v1_1::Payload as trust_tasks_rs::Payload>::TYPE_URI;
+`,
+  });
+  assert.equal(status, 0, stderr);
+  assert.deepEqual(uris(snapshot), ["https://trusttasks.org/spec/vta/contexts/update-did/1.1"]);
+});
+
 test("the response half lands on the same task, as the literal pairs do", () => {
   const { snapshot } = syncFrom({
     "p.rs": `

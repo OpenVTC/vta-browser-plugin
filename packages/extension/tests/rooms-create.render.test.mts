@@ -22,7 +22,7 @@ const SERVICES = "vta/services/list/1.0";
 const DIDS_LIST = "vta/webvh/dids/list/1.0";
 const KEYS_LIST = "keys/list/0.1";
 const DIDS_CREATE = "vta/webvh/dids/create/1.0";
-const UPDATE_DID = "vta/contexts/update-did/1.0";
+const UPDATE_DID = "vta/contexts/update-did/1.1";
 // `rooms/owner/register`, not `rooms/create`: the console cannot address a host,
 // so the registration is asked of the agent, which can make the call.
 const REGISTER = "rooms/owner/register/0.1";

@@ -39,7 +39,7 @@ import {
 import {
   TYPE_URI as TASK_CONTEXTS_UPDATE_DID,
   RESPONSE_TYPE_URI as TASK_CONTEXTS_UPDATE_DID_RESPONSE,
-} from "@openvtc/trust-tasks/vta/contexts/update-did/1.0/payload";
+} from "@openvtc/trust-tasks/vta/contexts/update-did/1.1/payload";
 
 /** One context record, as the registry declares it. Re-exported so callers
  *  need not know which task's binding it happens to live under. */
@@ -226,11 +226,18 @@ export interface ContextsUpdateDidParams {
   service: TaskParty;
   /** Context whose DID is being set. */
   id: string;
-  /** The DID to associate with this context. */
-  did: string;
+  /**
+   * The DID this context acts as from now on, or `null` to leave it with none.
+   *
+   * `null` is 1.1's addition and the reason this sends 1.1: 1.0 required a
+   * non-empty string, so a context's last DID could be replaced but never
+   * removed — and the agent refuses to delete a DID a context still acts as.
+   * Never `""`: the schema refuses it, and it is not a DID.
+   */
+  did: string | null;
 }
 
-/** Set the DID a context acts as. */
+/** Set or clear the DID a context acts as. */
 export async function contextsUpdateDid(
   sender: TrustTaskSender,
   params: ContextsUpdateDidParams,
@@ -242,7 +249,7 @@ export async function contextsUpdateDid(
   );
   const payload = await sender.send<Record<string, unknown>>(envelope, {
     expectedResponseType: TASK_CONTEXTS_UPDATE_DID_RESPONSE,
-    operationLabel: "vta/contexts/update-did/1.0",
+    operationLabel: "vta/contexts/update-did/1.1",
   });
   return asContextRecord(payload);
 }
