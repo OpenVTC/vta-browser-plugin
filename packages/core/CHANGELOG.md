@@ -42,6 +42,22 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Fixed
 
+- **A relayed task outlasts the VTA.** Tasks the VTA answers by waiting on a
+  third party — `vta/webvh/dids/create` and the other server-managed did:webvh
+  and agent-name verbs, room key reads, `vault/proxy-login`, `vta/services/*`,
+  `provision/integration` — now get at least 80s, the budget `vta_sdk::budget`
+  derives (two 30s TSP reply windows, the relationship re-form and client
+  headroom), instead of the channel's 30s default. When the hosting server has
+  lost its half of the TSP relationship, the VTA's first send is dropped
+  silently and it re-forms and resends after its own 30s, so a DID created from
+  the manager "timed out" while the create succeeded. New
+  `vta/budget.ts`: `clientBudgetMs`, `minRelayBudgetMs`, `RELAYS_ONWARD`. It
+  raises, never lowers, and tasks served from the VTA's own storage keep their
+  budget.
+- **`RestChannel` honours `timeoutMs`.** Its fetch deadline was fixed at 20s
+  when the channel was built, so a per-request timeout was silently ignored. It
+  is now applied per request (the same 20s default when none is given), which
+  is what lets the relay budget reach REST.
 - **An entry granted `persona-holder` read as holding nothing.** The agent
   narrows by an entry's non-additive names alone and adds the additive ones on
   top; this computed the role intersected with the whole list, so an entry

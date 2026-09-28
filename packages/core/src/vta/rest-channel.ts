@@ -28,6 +28,7 @@ import {
   type VtaAuthInputs,
 } from "./auth.js";
 import { withFetchTimeout, isFetchTimeout, DEFAULT_FETCH_TIMEOUT_MS } from "../http/timeout-fetch.js";
+import { clientBudgetMs } from "./budget.js";
 
 export interface RestChannelOptions extends VtaAuthInputs {
   /**
@@ -65,7 +66,10 @@ export class RestChannel implements TrustTaskChannel {
   private readonly auth: VtaAuthInputs;
   private readonly signer: TaskSigner;
   private readonly path: string;
-  private readonly fetchImpl: typeof fetch;
+  /** Policy-guarded but not yet deadline-bound: the deadline is per request,
+   *  because a task the VTA relays onward needs longer than one it serves
+   *  itself (see `budget.ts`). */
+  private readonly policyFetch: typeof fetch;
 
   constructor(opts: RestChannelOptions) {
     this.signer = asTaskSigner(opts.signing);
@@ -81,9 +85,10 @@ export class RestChannel implements TrustTaskChannel {
     // handshake uses, so it is held to the same policy — vetted before it is
     // dialed, and never followed through a redirect. The cast states what the
     // library's JSDoc types loosely (see `getVtaBearer`).
-    this.fetchImpl = withFetchTimeout(
-      guardedFetch(opts.fetch, vtaRestEndpointPolicy(opts.netPolicy)) as typeof fetch,
-    );
+    this.policyFetch = guardedFetch(
+      opts.fetch,
+      vtaRestEndpointPolicy(opts.netPolicy),
+    ) as typeof fetch;
   }
 
   /**
@@ -93,7 +98,11 @@ export class RestChannel implements TrustTaskChannel {
    * what they do with the reply, and duplicating the auth path would be one
    * more place for a stale-token retry to go missing.
    */
-  private async post(envelope: TrustTask<unknown>, label: string): Promise<Response> {
+  private async post(
+    envelope: TrustTask<unknown>,
+    label: string,
+    timeoutMs: number,
+  ): Promise<Response> {
     const base = this.auth.baseUrl.replace(/\/+$/, "");
     const url = `${base}${this.path}`;
     // Before serialization, and before the bearer handshake: the proof is part
@@ -101,10 +110,11 @@ export class RestChannel implements TrustTaskChannel {
     // one thing that reaches the VTA.
     await signOutboundTask(envelope, this.signer);
     const body = JSON.stringify(envelope);
+    const fetchImpl = withFetchTimeout(this.policyFetch, timeoutMs);
 
     const once = async (bearer: string): Promise<Response> => {
       try {
-        return await this.fetchImpl(url, {
+        return await fetchImpl(url, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -116,7 +126,7 @@ export class RestChannel implements TrustTaskChannel {
         if (isFetchTimeout(err)) {
           throw new VtaClientError(
             "e.client.timeout",
-            `${label}: VTA did not respond within ${DEFAULT_FETCH_TIMEOUT_MS / 1000}s`,
+            `${label}: VTA did not respond within ${timeoutMs / 1000}s`,
           );
         }
         throw new VtaClientError("e.client.network", (err as Error).message);
@@ -133,7 +143,11 @@ export class RestChannel implements TrustTaskChannel {
 
   async send<Res>(envelope: TrustTask<unknown>, opts: SendOpts = {}): Promise<Res> {
     const label = opts.operationLabel ?? envelope.type;
-    const res = await this.post(envelope, label);
+    const res = await this.post(
+      envelope,
+      label,
+      clientBudgetMs(envelope.type, opts.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS),
+    );
 
     return decodeTrustTaskHttpReply<Res>(res, {
       ...(opts.expectedResponseType !== undefined
@@ -157,7 +171,11 @@ export class RestChannel implements TrustTaskChannel {
    * rejected this" is not the same as "delivered".
    */
   async notify(envelope: TrustTask<unknown>, opts: NotifyOpts = {}): Promise<void> {
-    const res = await this.post(envelope, opts.operationLabel ?? envelope.type);
+    const res = await this.post(
+      envelope,
+      opts.operationLabel ?? envelope.type,
+      opts.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+    );
     return decodeTrustTaskHttpAck(res);
   }
 }

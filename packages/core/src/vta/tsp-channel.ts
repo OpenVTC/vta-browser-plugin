@@ -43,6 +43,7 @@ import {
   type RelationshipOutcome,
   type RelationshipStore,
 } from "./tsp-relationship.js";
+import { clientBudgetMs } from "./budget.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -351,7 +352,7 @@ export class TspChannel implements TrustTaskChannel {
 
     try {
       await this.transport.sendAndAwaitReply(packed.bytes, {
-        timeoutMs: opts.timeoutMs ?? this.timeoutMs,
+        timeoutMs: clientBudgetMs(envelope.type, opts.timeoutMs ?? this.timeoutMs),
         claims,
       });
     } catch (err) {

@@ -1,5 +1,6 @@
 export * from "./bridge-memory.js";
 export * from "./bridge-mediator-session.js";
+export * from "./budget.js";
 export * from "./channel.js";
 export * from "./client.js";
 export * from "./contexts.js";
