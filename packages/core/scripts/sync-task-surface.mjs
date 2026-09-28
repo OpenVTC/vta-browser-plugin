@@ -219,6 +219,13 @@ for (const file of rustFiles(sdkSrc)) {
     const m = COMPUTED_TYPE_URI.exec(value);
     if (!m) return null;
     const segs = m[1].split("::").filter(Boolean);
+    // Fully qualified — `<trust_tasks_rs::specs::vta::…::v0_1::Payload as …>`
+    // — needs no alias: the path after `specs` is the module path. vta-sdk
+    // spells a dozen constants this way (#1790 onward), and before this form
+    // was taught every one of them stopped the sync.
+    if (segs[0] === "trust_tasks_rs" && segs[1] === "specs" && segs.length > 2) {
+      return uriFromModulePath(segs.slice(2), m[2]);
+    }
     const head = aliases.get(segs[0]);
     if (!head) {
       unresolved.push(
