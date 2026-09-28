@@ -15,11 +15,9 @@ import {
   Identity,
   IndexedDBKVStore,
   loginViaTrustTask,
-  loginViaSiop,
-  selfIssuedMinter,
+  rpHttpsSender,
   vaultTaskSigner,
   type ChannelSigner,
-  type SiopIdTokenMinter,
   type TaskSigner,
   claimInboundDocument,
   type MediatorConnection,
@@ -3519,52 +3517,60 @@ async function handleTaskConsent(
 async function doRestLogin(
   req: OffscreenRestLoginRequest,
 ): Promise<RuntimeLoginResponse> {
-  // REST SIOPv2 login moved off the background SW into offscreen so
-  // the holder's signing key is accessible — background's module
-  // scope has no PRF AES cache, so `loadHolder` from there throws
-  // `WalletLockedError` on encrypted wallets. Same flow as before
-  // (challenge → issueIdToken → authenticate), just running in the
-  // context that owns the cache.
-  const { signing } = await loadHolder(req.vtaDid);
+  // Runs here rather than in background because the holder's signing key only
+  // lives unwrapped in this document (the PRF AES cache is module-scoped), and
+  // `loadHolder` from background throws `WalletLockedError` on an encrypted
+  // wallet.
+  const sw = createStopwatch();
+  const { identity, signing } = await loadHolder(req.vtaDid);
+  sw.mark("load holder");
 
   // Which identity signs in was decided in the background, where the vault and
-  // the operator's choice live. Here it is only the difference between two
-  // id_token producers: the holder self-issues from a key this document holds,
-  // while a persona is minted by the VTA — the only place that key exists.
-  const minter = req.entryId
-    ? await personaMinter(req.vtaDid, req.restBaseUrl, req.entryId)
-    : selfIssuedMinter(signing);
+  // the operator's choice live. The holder signs with a key this document
+  // holds. A persona signs through the VTA, the only place its key exists.
+  const documentSigner = req.entryId
+    ? await personaTaskSigner(req.vtaDid, req.restBaseUrl, req.entryId)
+    : undefined;
 
-  const tokens = await loginViaSiop({
+  // `auth/challenge` then `auth/authenticate/0.2`, as Trust Tasks, to the RP
+  // this origin is pinned to. `rpHttpsSender` refuses a document addressed to
+  // anyone else and any reply the RP did not sign.
+  const sender = rpHttpsSender({
     baseUrl: req.params.baseUrl,
     rpDid: req.params.rpDid,
-    minter,
+    signing: documentSigner ?? signing,
   });
-  // The DID the RP actually authenticated, not the wallet's own. Reporting
-  // `signing.did` for a persona login would tell the page it is talking to an
-  // identity that never signed anything in this flow.
-  return { ok: true, result: { ...tokens, holderDid: minter.did } };
+  const rpSession = await loginViaTrustTask({
+    sender,
+    holder: identity,
+    service: { did: req.params.rpDid },
+    ...(documentSigner ? { subject: documentSigner.did } : {}),
+    // Validated as a did:key in the background, before the prompt, and
+    // checked again by `loginViaTrustTask` before the subject signs it.
+    ...(req.params.sessionKey !== undefined ? { sessionKey: req.params.sessionKey } : {}),
+  });
+  sw.mark("authenticate (trust-task)");
+  return {
+    ok: true,
+    result: {
+      accessToken: rpSession.accessToken,
+      refreshToken: rpSession.refreshToken ?? "",
+      sessionId: rpSession.sessionId,
+      // The DID the RP actually authenticated, not the wallet's own. Reporting
+      // `signing.did` for a persona login would tell the page it is talking to
+      // an identity that never signed anything in this flow.
+      holderDid: documentSigner?.did ?? signing.did,
+      ...(rpSession.sessionKey !== undefined ? { sessionKey: rpSession.sessionKey } : {}),
+      timings: sw.marks,
+    },
+  };
 }
 
-/**
- * An `id_token` minter backed by `vault/proxy-login/0.2`.
- *
- * The persona's signing key never leaves the VTA, so the wallet cannot issue
- * this token — it asks the VTA to, threading the RP's challenge through as the
- * `nonce` so the result passes the RP's exact-match check. The `SessionBlob`
- * comes back with the token in an `Authorization` header, which is the shape
- * `vault/proxy-login` has always returned for did-self-issued entries.
- *
- * The DID is read from the entry rather than assumed, because `principalDid` is
- * maintainer-derived: an entry whose secret was rotated at the VTA signs as
- * something the wallet never chose, and the challenge must be requested for
- * whatever actually signs or the RP refuses on `signer_did` mismatch.
- */
 /** A {@link TaskSigner} for a vault entry's persona, plus the VTA session it
- *  signs through. The persona DID is read from the entry rather than assumed,
- *  for the same reason `personaMinter` reads it: `principalDid` is
- *  maintainer-derived, and the RP checks the signer against the challenge
- *  subject. */
+ *  signs through. The persona DID is read from the entry rather than assumed.
+ *  `principalDid` is maintainer-derived, so an entry whose secret was rotated
+ *  at the VTA signs as something the wallet never chose, and the RP checks the
+ *  signer against the challenge subject. */
 async function personaTaskSigner(
   vtaDid: string,
   restBaseUrl: string | undefined,
@@ -3579,38 +3585,11 @@ async function personaTaskSigner(
   return vaultTaskSigner({ session, holder, service, entryId, did: entry.principalDid });
 }
 
-async function personaMinter(
-  vtaDid: string,
-  restBaseUrl: string | undefined,
-  entryId: string,
-): Promise<SiopIdTokenMinter> {
-  const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-  const listed = await vaultList(session, { holder, service });
-  const entry = listed.entries.find((e) => e.id === entryId);
-  if (!entry?.principalDid) {
-    throw new Error(`vault entry ${entryId} names no persona DID`);
-  }
-  return {
-    did: entry.principalDid,
-    mint: async ({ nonce }) => {
-      const res = await vaultProxyLogin(session, { holder, service, entryId, nonce });
-      const auth = res.sessionBlob.headers?.find(
-        (h) => h.name.toLowerCase() === "authorization",
-      );
-      const token = auth ? /^\s*Bearer\s+(.+?)\s*$/i.exec(auth.value)?.[1] : undefined;
-      if (!token) {
-        throw new Error("vault/proxy-login: SessionBlob carried no id_token");
-      }
-      return token;
-    },
-  };
-}
-
 async function doDidcommLogin(
   req: OffscreenDidcommLoginRequest,
 ): Promise<RuntimeLoginResponse> {
   // Same IndexedDB-backed holder the popup/background use (shared extension
-  // origin), so the DID is identical to the REST path.
+  // origin), so the DID is identical to the `login()` path.
   const sw = createStopwatch();
   const { identity, signing } = await loadHolder(req.vtaDid);
   sw.mark("load holder");

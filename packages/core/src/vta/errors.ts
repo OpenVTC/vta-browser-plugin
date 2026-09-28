@@ -25,6 +25,15 @@ export type VtaErrorCode =
   // here rather than spent on a round-trip: a document signed by a key its
   // issuer does not control proves only that somebody signed something.
   | "e.client.identity"
+  // A page-supplied `sessionKey` that is not a `did:key`. Refused before the
+  // subject signs anything, so the wallet never vouches for a value the
+  // relying party would reject.
+  | "e.client.invalid_session_key"
+  // The relying party answered a login that asked for a session key with a
+  // session that does not carry it. `auth/authenticate/0.2` says it must bind
+  // the key or refuse, so this is a non-conforming reply, not a partial
+  // success.
+  | "e.client.session_key_not_bound"
   | "e.client.unsupported";
 
 export class VtaClientError extends Error {

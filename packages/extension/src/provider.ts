@@ -48,8 +48,12 @@ interface VtaWallet {
    * not an error to swallow.
    */
   requestTask(params: RequestTaskParams): Promise<Record<string, unknown>>;
-  /** Request a REST SIOPv2 login. Resolves with the RP-issued session
-   *  tokens, or rejects if the user denies or the login fails. */
+  /** Sign in to the RP with `auth/challenge/0.1` then `auth/authenticate/0.2`,
+   *  sent to `{baseUrl}/trust-tasks` and addressed to `rpDid`. Pass
+   *  `sessionKey` (a `did:key` the page holds) to have the RP bind it to the
+   *  session, so later calls can be signed without the wallet. Resolves with
+   *  the RP-issued session tokens. Rejects if the user denies, the key is not
+   *  a `did:key`, or the login fails. */
   login(params: LoginParams): Promise<LoginResult>;
   /** Request a DIDComm login (authcrypt-sender auth via the RP's
    *  mediator). Same result shape as `login`. */

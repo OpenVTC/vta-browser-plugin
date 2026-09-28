@@ -11,9 +11,7 @@
 // either can ask for a challenge — or refresh an expiring session — as an
 // ordinary task, with no bearer anywhere in the loop.
 
-import type { Identity } from "../didcomm/index.js";
-import type { TrustTaskSender } from "./channel.js";
-import type { RemoteDidcommEndpoint } from "./didcomm.js";
+import type { TaskParty, TrustTaskSender } from "./channel.js";
 import { buildTrustTask } from "./trust-task.js";
 
 import {
@@ -27,7 +25,7 @@ import {
   RESPONSE_TYPE_URI as AUTH_AUTHENTICATE_RESPONSE,
   type AuthAuthenticate,
   type AuthAuthenticateResponsePayload,
-} from "@openvtc/trust-tasks/auth/authenticate/0.1/payload";
+} from "@openvtc/trust-tasks/auth/authenticate/0.2/payload";
 import {
   TYPE_URI as AUTH_REFRESH,
   RESPONSE_TYPE_URI as AUTH_REFRESH_RESPONSE,
@@ -51,8 +49,10 @@ import {
 export type { TokenBundle };
 
 export interface AuthTaskCallerParams {
-  holder: Identity;
-  service: RemoteDidcommEndpoint;
+  /** The caller. Only its DID is read: it is the default `issuer`. */
+  holder: TaskParty;
+  /** The consumer. Only its DID is read: it is the `recipient`. */
+  service: TaskParty;
   /**
    * DID the document is issued by. Defaults to the holder's.
    *
@@ -99,6 +99,33 @@ export interface AuthAuthenticateParams extends AuthTaskCallerParams {
   /** Capability tags to ask for. The consumer decides what it grants; the
    *  issued bundle's `scope` MAY be a subset. */
   scope?: string[];
+  /**
+   * A `did:key` to bind to the session this login creates
+   * (`auth/authenticate/0.2`). It sits inside the payload, so the subject's
+   * own proof over this document is what authorises the binding.
+   *
+   * The consumer then accepts that key's `authentication` proofs as the
+   * subject, for this session only. It never accepts them where an
+   * `assertionMethod` attestation is required, so the key cannot approve a
+   * step-up. Validate it with {@link isDidKey} before it gets here. This
+   * function does not re-check it.
+   */
+  sessionKey?: string;
+}
+
+/** `payload.sessionKey`'s schema: a `did:key` VID, at most 512 characters. */
+const DID_KEY_PATTERN = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
+const DID_KEY_MAX_LENGTH = 512;
+
+/** Whether `value` is a `did:key` VID that `auth/authenticate/0.2` accepts as
+ *  `payload.sessionKey`. It must be a bare DID, with no fragment, path or
+ *  query, and the multibase must be base58btc. */
+export function isDidKey(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= DID_KEY_MAX_LENGTH &&
+    DID_KEY_PATTERN.test(value)
+  );
 }
 
 /**
@@ -124,6 +151,7 @@ export async function authenticateSession(
     challenge: params.challenge,
     sessionId: params.sessionId,
     ...(params.scope && params.scope.length > 0 ? { scope: params.scope } : {}),
+    ...(params.sessionKey !== undefined ? { sessionKey: params.sessionKey } : {}),
   };
   const envelope = buildTrustTask(AUTH_AUTHENTICATE, payload, {
     issuer: params.issuer ?? params.holder.did,
@@ -131,7 +159,7 @@ export async function authenticateSession(
   });
   return sender.send<AuthAuthenticateResponsePayload>(envelope, {
     expectedResponseType: AUTH_AUTHENTICATE_RESPONSE,
-    operationLabel: "auth/authenticate/0.1",
+    operationLabel: "auth/authenticate/0.2",
   });
 }
 

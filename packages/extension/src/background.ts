@@ -1,11 +1,11 @@
 /// <reference types="chrome" />
 
-// Service worker. Owns the wallet's holder identity, runs the REST SIOPv2
-// login, and gates every login behind a user-consent prompt. The DIDComm
-// login is delegated to an offscreen document (see `offscreen.ts`) because
-// it needs dynamic `import()` + a DOM, which a service worker lacks.
+// Service worker. Owns the wallet's holder identity and gates every login
+// behind a user-consent prompt. Both logins run in an offscreen document (see
+// `offscreen.ts`), because signing needs the unwrapped holder key and the
+// transports need dynamic `import()` + a DOM, which a service worker lacks.
 //
-// REST flow: content → RUNTIME_LOGIN → consent → offscreen REST login → tokens.
+// Login: content → RUNTIME_LOGIN → consent → offscreen Trust Task login (HTTPS) → tokens.
 // DIDComm flow: content → RUNTIME_LOGIN_DIDCOMM → consent → offscreen doc.
 
 import {
@@ -18,7 +18,7 @@ import {
   disclosureStepUpFrom,
   type DisclosureStepUpRequired,
 } from "@openvtc/pnm-core/persona";
-import { IndexedDBKVStore, listPendingInbound } from "@openvtc/pnm-core";
+import { IndexedDBKVStore, isDidKey, listPendingInbound } from "@openvtc/pnm-core";
 import {
   parseActiveVtaDid,
   parseAllVtaDids,
@@ -29,6 +29,7 @@ import {
 } from "./active-vta.js";
 import { checkOriginPin, pinOrigin, readOriginPin, type OriginPinStatus } from "./origin-pin.js";
 import { isOriginTrusted, trustOrigin } from "./trusted-sites.js";
+import { promptMayRemember, trustMaySkipPrompt } from "./login-consent.js";
 import {
   forgetSiteIdentity,
   HOLDER_IDENTITY,
@@ -794,6 +795,10 @@ async function requestConsent(args: {
   pinned?: { baseUrl?: string };
   /** Frames the prompt as a session step-up rather than a sign-in. */
   stepUp?: boolean;
+  /** The `did:key` a sign-in will bind to its session. The prompt tells the
+   *  user that the site gets a key that can act for them in this session.
+   *  Already validated as a `did:key` by the caller. */
+  sessionKey?: string;
   /** VERIFIED RP-authored reason to render (plain text, already length-capped
    *  and control-stripped by the caller). Only ever set from the step-up path,
    *  where it comes from inside the signed approve-request — never pass a
@@ -818,6 +823,7 @@ async function requestConsent(args: {
     (args.action ? `&action=${encodeURIComponent(args.action)}` : "") +
     (args.noRemember ? `&noRemember=1` : "") +
     (args.stepUp ? `&stepUp=1` : "") +
+    (args.sessionKey ? `&sessionKey=${encodeURIComponent(args.sessionKey)}` : "") +
     (args.chooseProfile ? `&chooseProfile=1` : "") +
     (args.allowHolder ? `&allowHolder=1` : "") +
     (args.reason ? `&reason=${encodeURIComponent(args.reason)}` : "") +
@@ -1217,19 +1223,17 @@ async function gatedConsent(args: {
   pinned?: { baseUrl?: string };
   stepUp?: boolean;
   reason?: string;
+  sessionKey?: string;
 }): Promise<boolean> {
-  // A pinned-RP *change* must always re-prompt, even for a trusted site —
-  // it's exactly the redirect-to-attacker-RP case the louder warning exists
-  // for, so trust doesn't get to silence it.
-  if (
-    args.origin &&
-    !args.changedFromRpDid &&
-    !args.changedFromBaseUrl &&
-    (await isOriginTrusted(args.origin))
-  ) {
+  // A pinned-RP change, or a sign-in that binds a session key, is always
+  // asked, even for a remembered site. See `login-consent.ts`.
+  if (args.origin && trustMaySkipPrompt(args) && (await isOriginTrusted(args.origin))) {
     return true;
   }
-  const { approved, remember } = await requestConsent(args);
+  const { approved, remember } = await requestConsent({
+    ...args,
+    ...(promptMayRemember(args) ? {} : { noRemember: true }),
+  });
   if (approved && remember && args.origin) {
     await trustOrigin(args.origin, args.rpDid);
   }
@@ -1241,6 +1245,15 @@ async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginRespon
   // background-vs-offscreen scope rationale.
   const holderDid = await readActiveHolderDid();
   if (!holderDid) return { ok: false, error: "no active VTA connection — connect first" };
+
+  // The page chose this value, and the wallet is about to sign it into a
+  // document as the user. Anything that is not a `did:key` is refused here,
+  // before the prompt, so the user is never asked to approve a key the RP
+  // would reject.
+  const sessionKey = req.params.sessionKey;
+  if (sessionKey !== undefined && !isDidKey(sessionKey)) {
+    return { ok: false, error: "sessionKey must be a did:key (did:key:z…), with no fragment" };
+  }
 
   // M5: pin the rpDid against the requesting origin. First-sight
   // origins seed the pin on approval; subsequent origins asking
@@ -1258,6 +1271,7 @@ async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginRespon
     origin: req.origin,
     rpDid: req.params.rpDid,
     holderDid,
+    ...(sessionKey !== undefined ? { sessionKey } : {}),
   };
   if (pin.rpDidChanged && pin.pinnedRpDid) {
     consent.changedFromRpDid = pin.pinnedRpDid;
@@ -1278,11 +1292,11 @@ async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginRespon
   const identity = await resolveLoginIdentity(req.origin, req.params.rpDid, holderDid);
   if (!identity.ok) return { ok: false, error: identity.error };
 
-  // Forward the actual SIOPv2 round-trip to offscreen — the holder's
+  // Forward the challenge → authenticate round-trip to offscreen. The holder's
   // signing key only lives unwrapped there (the PRF AES cache is
-  // offscreen-module-scoped). Calling `loginViaSiop` from background
-  // worked on plaintext wallets but threw `WalletLockedError` on
-  // encrypted ones even when offscreen was unlocked.
+  // offscreen-module-scoped). Signing from background worked on plaintext
+  // wallets but threw `WalletLockedError` on encrypted ones, even when
+  // offscreen was unlocked.
   await ensureOffscreenDocument();
   const active = await readActiveConnection();
   if (!active.ok) return { ok: false, error: active.error };
