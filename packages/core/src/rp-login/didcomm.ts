@@ -1,6 +1,7 @@
 // DIDComm session login to a did-hosting Relying Party.
 //
-// Unlike the REST SIOPv2 flow (`loginViaSiop`), there is **no `id_token`**.
+// Unlike the Trust Task login (`loginViaTrustTask`), there is **no signed
+// authenticate document**.
 // Over DIDComm the authcrypt layer (ECDH-1PU) already authenticates the
 // sender DID to the recipient, so "login" is just: authcrypt an
 // `authenticate` message to the RP's control DID → the RP checks its ACL on
