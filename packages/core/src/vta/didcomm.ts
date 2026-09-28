@@ -32,6 +32,7 @@ import type {
   EnrollmentSubmitResponse,
   PasskeyList,
 } from "./types.js";
+import { clientBudgetMs } from "./budget.js";
 
 export interface RemoteDidcommEndpoint {
   did: string;
@@ -178,7 +179,7 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
     // Only the VTA we addressed — or the mediator we handed the forward to,
     // refusing that hop — may answer this request.
     const msg = await this.bridge.sendAndAwaitReply(outer, requestId, {
-      timeoutMs: opts.timeoutMs ?? this.timeoutMs,
+      timeoutMs: clientBudgetMs(envelope.type, opts.timeoutMs ?? this.timeoutMs),
       from: this.mediator ? [this.vta.did, this.mediator.did] : [this.vta.did],
     });
     // A refusal. The bridge matched it by `pthid` to this request (a problem
