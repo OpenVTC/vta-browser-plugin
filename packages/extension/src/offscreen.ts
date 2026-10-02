@@ -185,6 +185,7 @@ import {
   type RuntimeMediatorResponse,
 } from "./bridge-protocol.js";
 import { relayFailure } from "./relay-failure.js";
+import { chooseTrustTaskSigner, needsVault, SignAsUnavailableError } from "./sign-identity.js";
 import { isLensTask, knownRelays, mayOperateMediator } from "./mediator-standing.js";
 import {
   MonitorSequencer,
@@ -1649,31 +1650,33 @@ async function doVerifyDid(did: string): Promise<VerifyRpDidResult> {
 //    canonicalises + signs + returns the signed envelope. Same
 //    eddsa-jcs-2022 proof shape, just signed by a different key.
 //
-// Falls back to holder-signing on `asDid` set BUT no matching vault
-// entry — easier on the caller than failing, and the resulting
-// proof's verificationMethod ≠ asDid will surface as a clear RP-side
-// rejection the operator can diagnose.
+// An `asDid` this wallet cannot sign as is refused (`sign-identity.ts`), never
+// served with the holder key in its place: the relying party would see a
+// document claiming one identity and proved by another.
 async function doSignTrustTask(
   vtaDid: string,
   params: SignTrustTaskParams,
   restBaseUrl: string | undefined,
 ): Promise<SignTrustTaskResult> {
   const envelope = params.envelope;
+  const { signing } = await loadHolder(vtaDid);
 
-  if (params.asDid && restBaseUrl) {
+  if (needsVault(params.asDid, signing.did)) {
     // Principal-signed path: find the matching vault entry, route via VTA
     // (over the VTA's preferred transport).
-    const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-    const listed = await vaultList(session, {
-      holder,
-      service,
-    });
-    const match = listed.entries.find(
-      (e) =>
-        e.principalDid === params.asDid &&
-        (e.secretKind === "didSelfIssued" || e.secretKind === "didcommPeer"),
-    );
-    if (match) {
+    const vta = restBaseUrl ? await getVtaSession(vtaDid, restBaseUrl) : null;
+    const listed = vta
+      ? await vaultList(vta.session, { holder: vta.holder, service: vta.service })
+      : null;
+    const signer = chooseTrustTaskSigner(params.asDid, signing.did, listed?.entries ?? null);
+    // Unreachable — `chooseTrustTaskSigner` refuses rather than answering
+    // `holder` for an identity other than the holder — and kept so this
+    // branch can only ever end in a VTA signature or a refusal.
+    if (signer.kind !== "vault" || !vta) {
+      throw new SignAsUnavailableError(`cannot sign as ${params.asDid}`);
+    }
+    {
+      const { session, holder, service } = vta;
       // Ensure issuer is set on the envelope — the VTA rejects with
       // envelope_issuer_mismatch if it doesn't already match the
       // entry's principalDid. We don't silently rewrite either (matches
@@ -1692,27 +1695,14 @@ async function doSignTrustTask(
       const { signedEnvelope } = await vaultSignTrustTask(session, {
         holder,
         service,
-        entryId: match.id,
+        entryId: signer.entryId,
         unsignedEnvelope: toSign,
       });
-      return { signedEnvelope, holderDid: params.asDid };
+      return { signedEnvelope, holderDid: params.asDid! };
     }
-    // Fall through to holder-signing with a warning the operator
-    // can spot in the offscreen console.
-    console.warn(
-      `[pnm] signTrustTask: asDid=${params.asDid} requested but no matching vault entry found; falling back to holder-signed proof (the RP will likely reject)`,
-    );
-    const { signing } = await loadHolder(vtaDid);
-    const signedEnvelope = await signTrustTask({
-      envelope: { ...envelope },
-      signing,
-      proofPurpose: "authentication",
-    });
-    return { signedEnvelope, holderDid: signing.did };
   }
 
-  // Holder-signed path: existing default.
-  const { signing } = await loadHolder(vtaDid);
+  // Holder-signed path: no `asDid`, or `asDid` naming the holder itself.
   // signTrustTask mutates in place and returns the same reference; clone
   // first so the caller's input is preserved across the IPC boundary
   // (chrome.runtime.sendMessage serializes — a defensive copy is cheap and
