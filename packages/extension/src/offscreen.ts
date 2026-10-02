@@ -1663,16 +1663,16 @@ async function doSignTrustTask(
 
   if (needsVault(params.asDid, signing.did)) {
     // Principal-signed path: find the matching vault entry, route via VTA
-    // (over the VTA's preferred transport).
-    const vta = restBaseUrl ? await getVtaSession(vtaDid, restBaseUrl) : null;
-    const listed = vta
-      ? await vaultList(vta.session, { holder: vta.holder, service: vta.service })
-      : null;
-    const signer = chooseTrustTaskSigner(params.asDid, signing.did, listed?.entries ?? null);
+    // (over the VTA's preferred transport). `restBaseUrl` is only a REST
+    // override — a connection without one still reaches the VTA over TSP or
+    // DIDComm, so it must not gate the session.
+    const vta = await getVtaSession(vtaDid, restBaseUrl);
+    const listed = await vaultList(vta.session, { holder: vta.holder, service: vta.service });
+    const signer = chooseTrustTaskSigner(params.asDid, signing.did, listed.entries);
     // Unreachable — `chooseTrustTaskSigner` refuses rather than answering
     // `holder` for an identity other than the holder — and kept so this
     // branch can only ever end in a VTA signature or a refusal.
-    if (signer.kind !== "vault" || !vta) {
+    if (signer.kind !== "vault") {
       throw new SignAsUnavailableError(`cannot sign as ${params.asDid}`);
     }
     {
