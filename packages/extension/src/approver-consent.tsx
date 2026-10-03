@@ -18,6 +18,10 @@
 //     from exactly this operation, so the statement can bind nothing else.
 //   - **The reason** — the community's words, carried by the page. Nobody has
 //     verified it, and it is labelled so; the operation is the truth.
+//   - **For a decision** — the action (type and payload, the decision's
+//     `payloadDigest` recomputed from exactly these), and whether it is an
+//     approve or a deny, which the decision this statement backs must say. The
+//     VTC's summary of the action is the page's, labelled unverified.
 
 import { useEffect, useState } from "react";
 import { base64url } from "@openvtc/vti-didcomm-js";
@@ -102,7 +106,11 @@ export function ApproverConsent({
   const heading =
     request.kind === "stepUp"
       ? "Approve this action with your approver?"
-      : request.kind === "enrol"
+      : request.kind === "decision"
+        ? request.decision === "deny"
+          ? "Deny this action, vouched for by your approver?"
+          : "Approve this action, vouched for by your approver?"
+        : request.kind === "enrol"
         ? "Enrol this wallet's approver?"
         : "Set up step-up approval in this wallet?";
 
@@ -187,6 +195,64 @@ export function ApproverConsent({
           </>
         ) : null}
 
+        {request.kind === "decision" && request.operation ? (
+          <>
+            <div>
+              <div style={label}>Your decision</div>
+              <div
+                style={{
+                  ...card,
+                  fontWeight: 800,
+                  fontSize: 14,
+                  color: request.decision === "deny" ? "var(--w-danger)" : "var(--w-text)",
+                }}
+              >
+                {request.decision === "deny" ? "DENY" : "APPROVE"}
+              </div>
+            </div>
+            {request.summary ? (
+              <div>
+                <div style={label}>The community's summary (not verified by the wallet)</div>
+                <div style={{ ...card, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                  {request.summary}
+                </div>
+              </div>
+            ) : null}
+            {request.reason ? (
+              <div>
+                <div style={label}>Your note on the decision</div>
+                <div style={{ ...card, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                  {request.reason}
+                </div>
+              </div>
+            ) : null}
+            <div>
+              <div style={label}>The action this decides — and nothing else</div>
+              <div style={card}>
+                <code style={{ fontSize: 12 }}>{taskLabel(request.operation.type)}</code>
+                <div
+                  style={{ fontSize: 10.5, color: "var(--w-muted)", wordBreak: "break-all", marginTop: 2 }}
+                >
+                  {request.operation.type}
+                  {request.actionId ? ` · action ${request.actionId}` : ""}
+                </div>
+                <pre
+                  style={{
+                    margin: "8px 0 0",
+                    maxHeight: 220,
+                    overflow: "auto",
+                    fontSize: 11,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-all",
+                  }}
+                >
+                  {renderOperationPayload(request.operation.payload)}
+                </pre>
+              </div>
+            </div>
+          </>
+        ) : null}
+
         {request.kind === "enrol" ? (
           <div style={{ color: "var(--w-muted)", lineHeight: 1.45 }}>
             This proves to the community that this wallet holds the approver below, so it can be
@@ -204,7 +270,7 @@ export function ApproverConsent({
 
         {request.subject ? (
           <div>
-            <div style={label}>On behalf of</div>
+            <div style={label}>{request.kind === "decision" ? "Decided by" : "On behalf of"}</div>
             <Did value={request.subject} />
           </div>
         ) : null}

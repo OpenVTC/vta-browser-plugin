@@ -35,6 +35,7 @@ const RUNTIME_DISCLOSE = "vta-wallet/disclose";
 const RUNTIME_APPROVER_IDENTITY = "vta-wallet/approver-identity";
 const RUNTIME_APPROVE_STEP_UP = "vta-wallet/approve-step-up";
 const RUNTIME_ATTEST_APPROVER = "vta-wallet/attest-approver";
+const RUNTIME_APPROVE_DECISION = "vta-wallet/approve-decision";
 const RUNTIME_BROADCAST_EVENT = "vta-wallet/broadcast-event";
 
 // ─── 1. Inject the provider into the page world. ───
@@ -73,6 +74,7 @@ const RUNTIME_TYPE_BY_METHOD: Record<BridgeMethod, string> = {
   approverIdentity: RUNTIME_APPROVER_IDENTITY,
   approveStepUp: RUNTIME_APPROVE_STEP_UP,
   attestApprover: RUNTIME_ATTEST_APPROVER,
+  approveDecision: RUNTIME_APPROVE_DECISION,
 };
 
 // ─── 2. Relay provider → background → provider. ───

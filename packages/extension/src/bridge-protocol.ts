@@ -38,7 +38,8 @@ export type BridgeMethod =
   | "disclose"
   | "approverIdentity"
   | "approveStepUp"
-  | "attestApprover";
+  | "attestApprover"
+  | "approveDecision";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
 export interface LoginParams {
@@ -206,7 +207,10 @@ export interface ApproveStepUpParams {
   audience: string;
 }
 
-/** Parameters for `window.vtaWallet.attestApprover(...)`. */
+/** Parameters for `window.vtaWallet.attestApprover(...)`. Enrolment only: a
+ *  `decision` statement goes through {@link ApproveDecisionParams}, which shows
+ *  the action and recomputes its digest; `attestApprover` refuses any other
+ *  purpose. */
 export interface AttestApproverParams {
   purpose: "enrol";
   subject: string;
@@ -215,7 +219,35 @@ export interface AttestApproverParams {
   boundTo: string;
 }
 
-/** Result of `approveStepUp` / `attestApprover`: the complete signed
+/** Parameters for `window.vtaWallet.approveDecision(...)`: the approver for
+ *  `audience` vouches (attest/0.1, `purpose: decision`) for a VTC
+ *  administrator's `task-consent/decision/0.2` on one action. */
+export interface ApproveDecisionParams {
+  /** The relying party (VTC) DID. Must be the origin's pinned RP. Becomes the
+   *  statement's `audience` and `recipient`, and must be the decision's
+   *  `recipient`. */
+  audience: string;
+  /** The administrator who signs the decision — the statement's `subject`. The
+   *  decision must then be signed `asDid` this DID. */
+  subject: string;
+  /** The action, as `vtc/admin/actions/list/0.1` listed it. `type` and
+   *  `payload` are what the wallet shows and digests; `summary` is the VTC's
+   *  rendering of it (its `title`/`effect` are shown, labelled unverified). */
+  action: { type: string; payload: unknown; actionId?: string; summary?: unknown };
+  /** The decision being vouched for. `challenge` is the action's `challenge`
+   *  for this administrator; `payloadDigest` the task-consent wire digest the
+   *  decision echoes (`vta/task-consent/v1\0`, salted with `challenge`) — the
+   *  wallet recomputes it from `action` and refuses on a mismatch. `reason`,
+   *  when given, is shown and is the only `reason` the decision may carry. */
+  decision: {
+    challenge: string;
+    payloadDigest: string;
+    decision: "approve" | "deny";
+    reason?: string;
+  };
+}
+
+/** Result of `approveStepUp` / `attestApprover` / `approveDecision`: the complete signed
  *  attest/0.1 document. */
 export interface ApproverStatementResult {
   statement: Record<string, unknown>;
@@ -341,6 +373,8 @@ export const RUNTIME_APPROVER_IDENTITY = "vta-wallet/approver-identity" as const
 export const RUNTIME_APPROVE_STEP_UP = "vta-wallet/approve-step-up" as const;
 /** page → background: the approver's enrolment statement. */
 export const RUNTIME_ATTEST_APPROVER = "vta-wallet/attest-approver" as const;
+/** page → background: vouch for a task-consent decision with the approver. */
+export const RUNTIME_APPROVE_DECISION = "vta-wallet/approve-decision" as const;
 /** page → background: propose a Trust Task for the VTA to execute.
  *
  *  The generic relay. Unlike {@link RUNTIME_SIGN_TRUST_TASK}, the page supplies
@@ -534,6 +568,12 @@ export interface RuntimeApproveStepUpRequest {
 export interface RuntimeAttestApproverRequest {
   type: typeof RUNTIME_ATTEST_APPROVER;
   params: AttestApproverParams;
+  origin: string;
+}
+
+export interface RuntimeApproveDecisionRequest {
+  type: typeof RUNTIME_APPROVE_DECISION;
+  params: ApproveDecisionParams;
   origin: string;
 }
 
@@ -1704,14 +1744,19 @@ export const OFFSCREEN_STEP_UP_APPROVER = "offscreen/step-up-approver" as const;
  *   "step-up-approver/setup-required"}` when a gesture is needed first.
  * - `check-step-up`: every check `approveStepUp` makes, before a prompt.
  *   Replies `{ok: true, result: {approverDid, boundTo}}` or a refusal.
- * - `sign-step-up` / `sign-enrol`: unseal with the gesture's PRF output and
- *   sign. The checks run again here, beside the key.
+ * - `check-decision`: every check `approveDecision` makes, before a prompt —
+ *   the approver exists for the audience, `payloadDigest` is the action's.
+ *   Replies `{ok: true, result: {approverDid, boundTo}}` or a refusal.
+ * - `sign-step-up` / `sign-enrol` / `sign-decision`: unseal with the gesture's
+ *   PRF output and sign. The checks run again here, beside the key.
  */
 export type StepUpApproverOp =
   | { op: "identity"; audience: string; prfOutputB64u?: string }
   | { op: "check-step-up"; params: ApproveStepUpParams }
   | { op: "sign-step-up"; params: ApproveStepUpParams; prfOutputB64u: string }
-  | { op: "sign-enrol"; params: AttestApproverParams; prfOutputB64u: string };
+  | { op: "sign-enrol"; params: AttestApproverParams; prfOutputB64u: string }
+  | { op: "check-decision"; params: ApproveDecisionParams }
+  | { op: "sign-decision"; params: ApproveDecisionParams; prfOutputB64u: string };
 
 export type OffscreenStepUpApproverRequest = {
   target: typeof OFFSCREEN_TARGET;
@@ -2350,5 +2395,6 @@ export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_APPROVER_IDENTITY,
   RUNTIME_APPROVE_STEP_UP,
   RUNTIME_ATTEST_APPROVER,
+  RUNTIME_APPROVE_DECISION,
 ] as const;
 

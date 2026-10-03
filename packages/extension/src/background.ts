@@ -19,6 +19,11 @@ import {
   ISSUED_STATEMENT_TTL_MS,
   approverResponseRefusal,
   approverResponseStatementId,
+  attestApproverPurposeRefusal,
+  decisionResponseRefusal,
+  decisionStatementId,
+  decisionSummaryText,
+  isApproverSignedDecision,
   pageApproverAudienceRefusal,
   type ApproverConsentRequest,
   type IssuedApproverStatement,
@@ -146,6 +151,7 @@ import {
   RUNTIME_APPROVER_IDENTITY,
   RUNTIME_APPROVE_STEP_UP,
   RUNTIME_ATTEST_APPROVER,
+  RUNTIME_APPROVE_DECISION,
   OFFSCREEN_STEP_UP_APPROVER,
   type StepUpApproverOp,
   type OffscreenStepUpApproverResponse,
@@ -153,6 +159,7 @@ import {
   type RuntimeApproverIdentityResponse,
   type RuntimeApproveStepUpRequest,
   type RuntimeAttestApproverRequest,
+  type RuntimeApproveDecisionRequest,
   type RuntimeApproverStatementResponse,
   RUNTIME_TASK_CONSENT,
   CONSENT_KEEPALIVE_PORT,
@@ -2153,6 +2160,9 @@ async function handleSignTrustTask(
   if ((req.params.envelope as { type?: unknown } | undefined)?.type === APPROVE_RESPONSE_0_6) {
     return handleSignApproverResponse(req, active.conn.vtaDid, active.conn.restBaseUrl);
   }
+  if (isApproverSignedDecision(req.params.envelope)) {
+    return handleSignApproverDecision(req, active.conn.vtaDid, active.conn.restBaseUrl);
+  }
   // Refused before any prompt: shapes no answer to the prompt could make safe
   // (unaddressed, addressed to the holder's own agent, an approval, a family a
   // page may not drive). See `pageSignRefusal`.
@@ -2210,7 +2220,7 @@ async function handleSignTrustTask(
 
 // ── Step-up approver (`auth/step-up/approver/attest/0.1`) ──────────────────
 //
-// Three page-facing methods over the wallet's per-audience approver
+// Four page-facing methods over the wallet's per-audience approver
 // (`@openvtc/pnm-core`'s `store/step-up-approver.ts`). Every one is held to the
 // relying party the origin is pinned to (`pageApproverAudienceRefusal`), and
 // every signature waits on the approver prompt's biometric, whose PRF output is
@@ -2241,7 +2251,9 @@ async function requestApproverConsent(
   const consentId = crypto.randomUUID();
   await chrome.storage.session.set({ [`${APPROVER_CONSENT_PREFIX}${consentId}`]: view });
   const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=approver`;
-  const bounds = await consentWindowBounds(view.kind === "stepUp" ? 700 : 600);
+  const bounds = await consentWindowBounds(
+    view.kind === "stepUp" || view.kind === "decision" ? 700 : 600,
+  );
   return new Promise((resolve) => {
     let settled = false;
     const settle = (approved: boolean, prfOutputB64u?: string) => {
@@ -2345,9 +2357,11 @@ async function handleAttestApprover(
   const params = req.params;
   const refusal = await approverAudienceGate(req.origin, params?.audience);
   if (refusal) return { ok: false, error: refusal };
-  if (params.purpose !== "enrol") {
-    return { ok: false, error: "attestApprover signs enrolment statements only (purpose: enrol)" };
-  }
+  // Enrolment only: a `decision` statement comes from `approveDecision`, which
+  // shows the action and recomputes its digest; a `stepUp` one from
+  // `approveStepUp`. The offscreen refuses the same.
+  const purposeRefusal = attestApproverPurposeRefusal(params?.purpose);
+  if (purposeRefusal) return { ok: false, error: purposeRefusal };
   // The DID is shown on the prompt; with no sealing key yet the enrolment's own
   // gesture creates one, so there is nothing to show until then.
   const known = await stepUpApproverOp({ op: "identity", audience: params.audience });
@@ -2374,6 +2388,96 @@ async function handleAttestApprover(
       approverDid: String(signed.result.approverDid),
     },
   };
+}
+
+// A VTC administrator's own approver vouching for their task-consent decision
+// on one action (attest/0.1, `purpose: decision`). Same shape as a step-up:
+// pinned audience, every check before a prompt (the approver exists for this
+// community, the decision's `payloadDigest` is the task-consent wire digest of
+// the action shown), the action and the approve/deny on the prompt, the
+// biometric, the checks again beside the key, and the statement remembered for
+// the one decision that may carry it.
+async function handleApproveDecision(
+  req: RuntimeApproveDecisionRequest,
+): Promise<RuntimeApproverStatementResponse> {
+  const params = req.params;
+  const refusal = await approverAudienceGate(req.origin, params?.audience);
+  if (refusal) return { ok: false, error: refusal };
+  const reason = params.decision?.reason;
+  if (reason !== undefined && (typeof reason !== "string" || reason.length > 500)) {
+    return { ok: false, error: "decision.reason must be a string of at most 500 characters" };
+  }
+  const check = await stepUpApproverOp({ op: "check-decision", params });
+  if (!check.ok) return { ok: false, error: check.error };
+  const summary = decisionSummaryText(params.action.summary);
+  const consent = await requestApproverConsent({
+    kind: "decision",
+    origin: req.origin,
+    audience: params.audience,
+    approverDid: String(check.result.approverDid),
+    subject: params.subject,
+    operation: { type: params.action.type, payload: params.action.payload },
+    challenge: params.decision.challenge,
+    boundTo: String(check.result.boundTo),
+    decision: params.decision.decision,
+    ...(reason !== undefined ? { reason } : {}),
+    ...(summary !== undefined ? { summary } : {}),
+    ...(params.action.actionId !== undefined ? { actionId: params.action.actionId } : {}),
+  });
+  if (!consent.approved) return { ok: false, error: "user denied the decision" };
+  const signed = await stepUpApproverOp({
+    op: "sign-decision",
+    params,
+    prfOutputB64u: consent.prfOutputB64u!,
+  });
+  if (!signed.ok) return { ok: false, error: signed.error };
+  const statement = signed.result.statement as Record<string, unknown>;
+  const issued: IssuedApproverStatement = {
+    statement,
+    origin: req.origin,
+    audience: params.audience,
+    subject: params.subject,
+    challenge: params.decision.challenge,
+    expiresAt: Date.now() + ISSUED_STATEMENT_TTL_MS,
+    purpose: "decision",
+    payloadDigest: params.decision.payloadDigest,
+    decision: params.decision.decision,
+    ...(reason !== undefined ? { reason } : {}),
+    ...(params.action.actionId !== undefined ? { actionId: params.action.actionId } : {}),
+  };
+  await chrome.storage.session.set({ [`${ISSUED_STATEMENT_PREFIX}${String(statement.id)}`]: issued });
+  return { ok: true, result: { statement, approverDid: String(signed.result.approverDid) } };
+}
+
+// The task-consent decision 0.2 around a statement `approveDecision` just
+// issued: signed once, without a second prompt, exactly when it carries that
+// statement unchanged with what the human was shown. Any decision claiming
+// `approverSigned` evidence that is not that is refused, never prompted for.
+async function handleSignApproverDecision(
+  req: RuntimeSignTrustTaskRequest,
+  vtaDid: string,
+  restBaseUrl: string | undefined,
+): Promise<RuntimeSignTrustTaskResponse> {
+  const id = decisionStatementId(req.params.envelope);
+  const key = id ? `${ISSUED_STATEMENT_PREFIX}${id}` : undefined;
+  const issued = key
+    ? ((await chrome.storage.session.get(key))[key] as IssuedApproverStatement | undefined)
+    : undefined;
+  const refusal = decisionResponseRefusal(req.params.envelope, issued, req.origin, req.params.asDid);
+  if (refusal) return { ok: false, error: refusal };
+  const recipient = (req.params.envelope as { recipient: string }).recipient;
+  const bindingRefusal = pageSignBindingRefusal(req.origin, await readOriginPin(req.origin), recipient);
+  if (bindingRefusal) return { ok: false, error: bindingRefusal };
+  // Spent before signing: the statement backs one decision, once.
+  await chrome.storage.session.remove(key!);
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_SIGN_TRUST_TASK,
+    vtaDid,
+    restBaseUrl,
+    params: req.params,
+  })) as RuntimeSignTrustTaskResponse;
 }
 
 // The approve-response 0.6 around a statement `approveStepUp` just issued. It
@@ -3449,6 +3553,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_APPROVE_STEP_UP) {
     handleApproveStepUp(message as RuntimeApproveStepUpRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_APPROVE_DECISION) {
+    handleApproveDecision(message as RuntimeApproveDecisionRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

@@ -51,7 +51,7 @@ const isTaskConsent = params.get("kind") === "task";
 // component would mean one screen trying to word both.
 const isDisclosureConsent = params.get("kind") === "disclosure";
 // `kind=approver` selects the step-up approver surface (`approveStepUp`,
-// `attestApprover`, and the one-off approver setup): a community's approver
+// `approveDecision`, `attestApprover`, and the one-off approver setup): a community's approver
 // signs a statement after a biometric. See `approver-consent.tsx`.
 const isStepUpApproverConsent = params.get("kind") === "approver";
 // The biometric-gated approver surface: Approve must run a fresh WebAuthn
