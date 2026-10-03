@@ -26,6 +26,13 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Changed
 
+- `@openvtc/trust-tasks` floor raised to `^0.23.0`, the first binding whose
+  `git-ns/activity/list/0.1` schema is satisfiable (0.22.7's `ActivityItem`
+  required a `source` it did not define). `ApproverAttestPayload` and
+  `StepUpApproverRequest` are now the generated `auth/step-up/approver/attest/0.1`
+  and `auth/step-up/approve-request/0.4` payload types instead of transcribed
+  copies; `StepUpApproverRequest` loses its open index signature and types
+  `accepts` and `approvers` as the schema does.
 - **`@openvtc/vti-didcomm-js` floor raised to `^0.11.0`, and it is a
   correctness constraint.** Below it a mediator's Trust-Task replies are never
   acked (they accumulate in the holder's receive queue), a refusal threaded by

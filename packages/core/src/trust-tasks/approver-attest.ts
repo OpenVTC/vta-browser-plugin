@@ -19,49 +19,34 @@
 // is about to *show*, and refuses unless it equals the request's. What the
 // human sees is then what the statement binds.
 //
-// ## The types are transcribed
+// ## The types are generated
 //
-// `@openvtc/trust-tasks` ships generated bindings for attest/0.1 and
-// approve-request/0.4 from 0.22.7, and this package is pinned below that
-// (0.22.7's `git-ns/activity/list` schema requires a member it does not define,
-// which `inbound.consent-schema.mjs` refuses). Until a release without that
-// defect is taken, the payload shapes below are copied from the specification
-// and kept to its members exactly. Replace them with the generated types then.
+// The attest/0.1 payload and the approve-request/0.4 request come from
+// `@openvtc/trust-tasks`, never restated here. The checks below still read the
+// request as untrusted input (a page hands it over), so they test each member
+// rather than trust the type.
 
+import type { Payload as ApproverAttestPayload } from "@openvtc/trust-tasks/auth/step-up/approver/attest/0.1/payload";
+import { TYPE_URI as ATTEST_0_1 } from "@openvtc/trust-tasks/auth/step-up/approver/attest/0.1/payload";
+import type { Payload as StepUpApproverRequest } from "@openvtc/trust-tasks/auth/step-up/approve-request/0.4/payload";
+import { TYPE_URI as APPROVE_RESPONSE_0_6 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.6/payload";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { vtcStepUpBoundTo } from "./domain-digest.js";
 import { signTrustTask, type TrustTaskEnvelope } from "./sign.js";
 
 /** `auth/step-up/approver/attest/0.1`. */
-export const APPROVER_ATTEST_TYPE =
-  "https://trusttasks.org/spec/auth/step-up/approver/attest/0.1";
+export const APPROVER_ATTEST_TYPE = ATTEST_0_1;
 
 /** `auth/step-up/approve-response/0.6` — the version that carries
  *  `approverSigned` evidence. */
-export const APPROVE_RESPONSE_0_6_TYPE =
-  "https://trusttasks.org/spec/auth/step-up/approve-response/0.6";
+export const APPROVE_RESPONSE_0_6_TYPE = APPROVE_RESPONSE_0_6;
 
-/** attest/0.1's payload (transcribed; see the module note). */
-export interface ApproverAttestPayload {
-  purpose: "stepUp" | "decision" | "enrol";
-  subject: string;
-  audience: string;
-  challenge: string;
-  boundTo: string;
-}
+/** attest/0.1's payload, from the generated bindings. */
+export type { ApproverAttestPayload };
 
 /** The inline `auth/step-up/approve-request/0.4` payload a VTC refuses a gated
- *  operation with, as far as an approver reads it (transcribed). */
-export interface StepUpApproverRequest {
-  subject: string;
-  challenge: string;
-  boundTo?: string;
-  reason: string;
-  sessionId?: string;
-  accepts?: string[];
-  approvers?: string[];
-  [k: string]: unknown;
-}
+ *  operation with, from the generated bindings. */
+export type { StepUpApproverRequest };
 
 /** The refused document an approver is asked to step up for. */
 export interface StepUpOperation {
@@ -163,7 +148,7 @@ export async function checkStepUpApproval(args: {
       "this step-up does not accept an approver's statement",
     );
   }
-  const approvers = Array.isArray(r.approvers) ? r.approvers : [];
+  const approvers: readonly string[] = Array.isArray(r.approvers) ? r.approvers : [];
   if (!approvers.includes(approverDid)) {
     throw new ApproverRefusalError(
       APPROVER_REFUSAL.notOffered,
