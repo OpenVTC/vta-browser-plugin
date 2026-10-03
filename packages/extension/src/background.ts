@@ -15,10 +15,25 @@ import {
   pageTaskRefusal,
 } from "./page-task-policy.js";
 import {
+  APPROVE_RESPONSE_0_6,
+  ISSUED_STATEMENT_TTL_MS,
+  approverResponseRefusal,
+  approverResponseStatementId,
+  pageApproverAudienceRefusal,
+  type ApproverConsentRequest,
+  type IssuedApproverStatement,
+  APPROVER_CONSENT_PREFIX,
+} from "./approver-policy.js";
+import {
   disclosureStepUpFrom,
   type DisclosureStepUpRequired,
 } from "@openvtc/pnm-core/persona";
-import { IndexedDBKVStore, isDidKey, listPendingInbound } from "@openvtc/pnm-core";
+import {
+  IndexedDBKVStore,
+  isDidKey,
+  listPendingInbound,
+  STEP_UP_APPROVER_SETUP_REQUIRED,
+} from "@openvtc/pnm-core";
 import {
   parseActiveVtaDid,
   parseAllVtaDids,
@@ -128,6 +143,17 @@ import {
   type RuntimeMediatorRequest,
   type RuntimeMediatorResponse,
   RUNTIME_SIGN_TRUST_TASK,
+  RUNTIME_APPROVER_IDENTITY,
+  RUNTIME_APPROVE_STEP_UP,
+  RUNTIME_ATTEST_APPROVER,
+  OFFSCREEN_STEP_UP_APPROVER,
+  type StepUpApproverOp,
+  type OffscreenStepUpApproverResponse,
+  type RuntimeApproverIdentityRequest,
+  type RuntimeApproverIdentityResponse,
+  type RuntimeApproveStepUpRequest,
+  type RuntimeAttestApproverRequest,
+  type RuntimeApproverStatementResponse,
   RUNTIME_TASK_CONSENT,
   CONSENT_KEEPALIVE_PORT,
   RUNTIME_STEP_UP_CONSENT,
@@ -2124,6 +2150,9 @@ async function handleSignTrustTask(
 ): Promise<RuntimeSignTrustTaskResponse> {
   const active = await readActiveConnection();
   if (!active.ok) return { ok: false, error: active.error };
+  if ((req.params.envelope as { type?: unknown } | undefined)?.type === APPROVE_RESPONSE_0_6) {
+    return handleSignApproverResponse(req, active.conn.vtaDid, active.conn.restBaseUrl);
+  }
   // Refused before any prompt: shapes no answer to the prompt could make safe
   // (unaddressed, addressed to the holder's own agent, an approval, a family a
   // page may not drive). See `pageSignRefusal`.
@@ -2175,6 +2204,208 @@ async function handleSignTrustTask(
     type: OFFSCREEN_SIGN_TRUST_TASK,
     vtaDid: active.conn.vtaDid,
     restBaseUrl: active.conn.restBaseUrl,
+    params: req.params,
+  })) as RuntimeSignTrustTaskResponse;
+}
+
+// ── Step-up approver (`auth/step-up/approver/attest/0.1`) ──────────────────
+//
+// Three page-facing methods over the wallet's per-audience approver
+// (`@openvtc/pnm-core`'s `store/step-up-approver.ts`). Every one is held to the
+// relying party the origin is pinned to (`pageApproverAudienceRefusal`), and
+// every signature waits on the approver prompt's biometric, whose PRF output is
+// the only thing that unwraps the key. The offscreen document holds the store
+// and re-runs every check beside the key; the background's checks only decide
+// whether a human is shown anything at all.
+
+/** Issued statements, by id, for the one approve-response each may ride in. */
+const ISSUED_STATEMENT_PREFIX = "approver-statement:";
+
+async function stepUpApproverOp(
+  req: StepUpApproverOp,
+): Promise<OffscreenStepUpApproverResponse> {
+  await ensureOffscreenDocument();
+  const reply = (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_STEP_UP_APPROVER,
+    ...req,
+  })) as OffscreenStepUpApproverResponse | undefined;
+  return reply ?? { ok: false, error: "the offscreen document did not answer" };
+}
+
+/** Raise the approver prompt and wait. A window that could not be opened, or
+ *  was closed, is a denial; only a gesture's PRF output is an approval. */
+async function requestApproverConsent(
+  view: ApproverConsentRequest,
+): Promise<{ approved: boolean; prfOutputB64u?: string }> {
+  const consentId = crypto.randomUUID();
+  await chrome.storage.session.set({ [`${APPROVER_CONSENT_PREFIX}${consentId}`]: view });
+  const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=approver`;
+  const bounds = await consentWindowBounds(view.kind === "stepUp" ? 700 : 600);
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (approved: boolean, prfOutputB64u?: string) => {
+      if (settled) return;
+      settled = true;
+      pendingConsents.delete(consentId);
+      void chrome.storage.session.remove(`${APPROVER_CONSENT_PREFIX}${consentId}`);
+      // An approval with no PRF output cannot be signed, so it is not one.
+      resolve(approved && prfOutputB64u ? { approved: true, prfOutputB64u } : { approved: false });
+    };
+    pendingConsents.set(consentId, (approved: boolean, _remember: boolean, prfOutputB64u?: string) =>
+      settle(approved, prfOutputB64u),
+    );
+    openConsentWindow({
+      url,
+      bounds,
+      deny: () => settle(false),
+      tag: "[pnm approver]",
+      what: "approver window",
+    });
+  });
+}
+
+async function approverAudienceGate(origin: string, audience: unknown): Promise<string | null> {
+  return pageApproverAudienceRefusal(origin, await readOriginPin(origin), audience);
+}
+
+// The approver DID for the pinned relying party. Signs nothing and, once the
+// wallet's sealing key exists, prompts for nothing: the DID is only ever this
+// community's, so returning it tells the page nothing about any other. The very
+// first approver in a wallet needs the sealing key created, which takes the one
+// setup gesture.
+async function handleApproverIdentity(
+  req: RuntimeApproverIdentityRequest,
+): Promise<RuntimeApproverIdentityResponse> {
+  const audience = req.params?.audience;
+  const refusal = await approverAudienceGate(req.origin, audience);
+  if (refusal) return { ok: false, error: refusal };
+  let reply = await stepUpApproverOp({ op: "identity", audience: audience as string });
+  if (!reply.ok && reply.code === STEP_UP_APPROVER_SETUP_REQUIRED) {
+    const consent = await requestApproverConsent({
+      kind: "setup",
+      origin: req.origin,
+      audience: audience as string,
+    });
+    if (!consent.approved) return { ok: false, error: "user denied approver setup" };
+    reply = await stepUpApproverOp({
+      op: "identity",
+      audience: audience as string,
+      prfOutputB64u: consent.prfOutputB64u!,
+    });
+  }
+  if (!reply.ok) return { ok: false, error: reply.error };
+  return { ok: true, result: { approverDid: String(reply.result.approverDid) } };
+}
+
+async function handleApproveStepUp(
+  req: RuntimeApproveStepUpRequest,
+): Promise<RuntimeApproverStatementResponse> {
+  const params = req.params;
+  const refusal = await approverAudienceGate(req.origin, params?.audience);
+  if (refusal) return { ok: false, error: refusal };
+  // Every refusal the request can earn, before a human sees anything: the
+  // approver offered, `boundTo` the digest of the operation shown.
+  const check = await stepUpApproverOp({ op: "check-step-up", params });
+  if (!check.ok) return { ok: false, error: check.error };
+  const consent = await requestApproverConsent({
+    kind: "stepUp",
+    origin: req.origin,
+    audience: params.audience,
+    approverDid: String(check.result.approverDid),
+    subject: String(params.request.subject),
+    reason: typeof params.request.reason === "string" ? params.request.reason : "",
+    operation: { type: params.operation.type, payload: params.operation.payload },
+    challenge: String(params.request.challenge),
+    boundTo: String(check.result.boundTo),
+  });
+  if (!consent.approved) return { ok: false, error: "user denied the step-up" };
+  const signed = await stepUpApproverOp({
+    op: "sign-step-up",
+    params,
+    prfOutputB64u: consent.prfOutputB64u!,
+  });
+  if (!signed.ok) return { ok: false, error: signed.error };
+  const statement = signed.result.statement as Record<string, unknown>;
+  const issued: IssuedApproverStatement = {
+    statement,
+    origin: req.origin,
+    audience: params.audience,
+    subject: String(params.request.subject),
+    challenge: String(params.request.challenge),
+    expiresAt: Date.now() + ISSUED_STATEMENT_TTL_MS,
+  };
+  await chrome.storage.session.set({ [`${ISSUED_STATEMENT_PREFIX}${String(statement.id)}`]: issued });
+  return { ok: true, result: { statement, approverDid: String(signed.result.approverDid) } };
+}
+
+async function handleAttestApprover(
+  req: RuntimeAttestApproverRequest,
+): Promise<RuntimeApproverStatementResponse> {
+  const params = req.params;
+  const refusal = await approverAudienceGate(req.origin, params?.audience);
+  if (refusal) return { ok: false, error: refusal };
+  if (params.purpose !== "enrol") {
+    return { ok: false, error: "attestApprover signs enrolment statements only (purpose: enrol)" };
+  }
+  // The DID is shown on the prompt; with no sealing key yet the enrolment's own
+  // gesture creates one, so there is nothing to show until then.
+  const known = await stepUpApproverOp({ op: "identity", audience: params.audience });
+  const consent = await requestApproverConsent({
+    kind: "enrol",
+    origin: req.origin,
+    audience: params.audience,
+    ...(known.ok ? { approverDid: String(known.result.approverDid) } : {}),
+    subject: params.subject,
+    challenge: params.challenge,
+    boundTo: params.boundTo,
+  });
+  if (!consent.approved) return { ok: false, error: "user denied the approver enrolment" };
+  const signed = await stepUpApproverOp({
+    op: "sign-enrol",
+    params,
+    prfOutputB64u: consent.prfOutputB64u!,
+  });
+  if (!signed.ok) return { ok: false, error: signed.error };
+  return {
+    ok: true,
+    result: {
+      statement: signed.result.statement as Record<string, unknown>,
+      approverDid: String(signed.result.approverDid),
+    },
+  };
+}
+
+// The approve-response 0.6 around a statement `approveStepUp` just issued. It
+// is the ceremony's second half, so it is signed without a second prompt — the
+// human approved this operation on the approver prompt a moment ago — but only
+// when it carries that statement unchanged, for the same origin, relying party,
+// subject and challenge, signed as the subject, and only once. Anything else of
+// this type is refused exactly as `pageSignRefusal` refuses every approval.
+async function handleSignApproverResponse(
+  req: RuntimeSignTrustTaskRequest,
+  vtaDid: string,
+  restBaseUrl: string | undefined,
+): Promise<RuntimeSignTrustTaskResponse> {
+  const id = approverResponseStatementId(req.params.envelope);
+  const key = id ? `${ISSUED_STATEMENT_PREFIX}${id}` : undefined;
+  const issued = key
+    ? ((await chrome.storage.session.get(key))[key] as IssuedApproverStatement | undefined)
+    : undefined;
+  const refusal = approverResponseRefusal(req.params.envelope, issued, req.origin, req.params.asDid);
+  if (refusal) return { ok: false, error: refusal };
+  const recipient = (req.params.envelope as { recipient: string }).recipient;
+  const bindingRefusal = pageSignBindingRefusal(req.origin, await readOriginPin(req.origin), recipient);
+  if (bindingRefusal) return { ok: false, error: bindingRefusal };
+  // Spent before signing: a second request for the same statement finds
+  // nothing, whatever happens to this one.
+  await chrome.storage.session.remove(key!);
+  await ensureOffscreenDocument();
+  return (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_SIGN_TRUST_TASK,
+    vtaDid,
+    restBaseUrl,
     params: req.params,
   })) as RuntimeSignTrustTaskResponse;
 }
@@ -3200,6 +3431,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if ((message as { type?: string })?.type === RUNTIME_REQUEST_TASK) {
     handleRequestTask(message as RuntimeRequestTaskRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_APPROVER_IDENTITY) {
+    handleApproverIdentity(message as RuntimeApproverIdentityRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_APPROVE_STEP_UP) {
+    handleApproveStepUp(message as RuntimeApproveStepUpRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_ATTEST_APPROVER) {
+    handleAttestApprover(message as RuntimeAttestApproverRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

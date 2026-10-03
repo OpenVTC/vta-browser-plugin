@@ -77,6 +77,12 @@ import {
   verifyDid,
   buildTrustTask,
   verifyTrustTaskReply,
+  checkStepUpApproval,
+  ensureStepUpApprover,
+  proofPurposeForDocumentType,
+  signEnrolAttestation,
+  signStepUpApproval,
+  stepUpApproverDid,
 } from "@openvtc/pnm-core";
 import {
   verifyDisclosureStepUp,
@@ -128,6 +134,8 @@ import {
   OFFSCREEN_ONBOARD_CONTEXTS,
   OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_SIGN_TRUST_TASK,
+  OFFSCREEN_STEP_UP_APPROVER,
+  type OffscreenStepUpApproverRequest,
   OFFSCREEN_START_INBOUND,
   OFFSCREEN_STEP_UP_VTA,
   OFFSCREEN_DISCLOSURE_STEP_UP,
@@ -502,6 +510,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_STEP_UP_APPROVER) {
+    doStepUpApprover(message as OffscreenStepUpApproverRequest)
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((e: unknown) =>
+        sendResponse({
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+          ...(typeof (e as { code?: unknown })?.code === "string"
+            ? { code: (e as { code: string }).code }
+            : {}),
+        }),
       );
     return true; // async sendResponse
   }
@@ -1632,12 +1654,13 @@ async function doVerifyDid(did: string): Promise<VerifyRpDidResult> {
 // 1. **Holder-signed (default).** When `asDid` is absent the envelope
 //    is signed locally by the wallet's holder did:key #key-2 — the
 //    same eddsa-jcs-2022 Data Integrity proof the wallet has emitted
-//    since the beginning, with `proofPurpose: authentication`: the page
-//    is asking the holder to sign its own request to the RP, an
-//    operational message, not an attestation. A relying party that binds
-//    proofs to key roles (the did-hosting control plane does) refuses an
-//    `assertionMethod` proof there. The RP attributes the request to the
-//    holder DID.
+//    since the beginning. Its purpose is the document type's
+//    (`proofPurposeForDocumentType`): `authentication` for the holder's own
+//    operational request to the RP — a relying party that binds proofs to
+//    key roles (the did-hosting control plane does) refuses an
+//    `assertionMethod` proof there — and `assertionMethod` only for the
+//    approval types the VTA classifies the same way. The RP attributes the
+//    request to the holder DID.
 //
 // 2. **Principal-signed via VTA (`asDid` set).** After a
 //    `vault/proxy-login/0.1` session the RP authenticates the session
@@ -1707,12 +1730,87 @@ async function doSignTrustTask(
   // first so the caller's input is preserved across the IPC boundary
   // (chrome.runtime.sendMessage serializes — a defensive copy is cheap and
   // makes the contract clear).
+  // The purpose comes from the document's type, as the VTA's
+  // `vault/sign-trust-task` decides it for the `asDid` path above: an
+  // operational request is `authentication`, an approval or decision
+  // (`auth/step-up/approve-response`, `task-consent/decision`,
+  // `confirm/response`) is the holder's `assertionMethod`. The page has no say.
   const signedEnvelope = await signTrustTask({
     envelope: { ...envelope },
     signing,
-    proofPurpose: "authentication",
+    proofPurpose: proofPurposeForDocumentType(String((envelope as { type?: unknown }).type)),
   });
   return { signedEnvelope, holderDid: signing.did };
+}
+
+// ─── Step-up approver: one did:key per relying party ───
+//
+// The store is `@openvtc/pnm-core`'s `store/step-up-approver.ts`; this is its
+// bridge. A refusal's `code` travels back with it, so the background can tell
+// "needs the setup gesture" (`step-up-approver/setup-required`) from a failure. The background decides whether a page may ask at all (the origin's
+// pinned RP) and raises the biometric prompt; every check that decides what may
+// be *signed* runs here too, beside the key, so a background that skipped one
+// still could not get a statement out of it. The PRF output arrives once, for
+// one signature, and is never kept.
+async function doStepUpApprover(
+  req: OffscreenStepUpApproverRequest,
+): Promise<Record<string, unknown>> {
+  const store = new IndexedDBKVStore();
+  const wrapFrom = (b64u: string | undefined) => {
+    if (typeof b64u !== "string" || b64u.length === 0) {
+      throw new Error("prfOutputB64u missing or empty");
+    }
+    return new ApproverPrfSecretWrap(base64url.decode(b64u));
+  };
+  switch (req.op) {
+    case "identity": {
+      const approverDid = await ensureStepUpApprover(store, req.audience, {
+        ...(req.prfOutputB64u ? { secretWrap: wrapFrom(req.prfOutputB64u) } : {}),
+      });
+      return { approverDid };
+    }
+    case "check-step-up": {
+      const p = req.params;
+      const approverDid = await stepUpApproverDid(store, p?.audience);
+      if (!approverDid) {
+        throw Object.assign(
+          new Error(
+            `this wallet has no step-up approver for ${String(p?.audience)}; enrol one first`,
+          ),
+          { code: "step-up-approver/not-offered" },
+        );
+      }
+      const payload = await checkStepUpApproval({
+        request: p.request,
+        operation: p.operation,
+        audience: p.audience,
+        approverDid,
+      });
+      return { approverDid, boundTo: payload.boundTo };
+    }
+    case "sign-step-up": {
+      const p = req.params;
+      return signStepUpApproval(store, {
+        request: p.request,
+        operation: p.operation,
+        audience: p.audience,
+        secretWrap: wrapFrom(req.prfOutputB64u),
+      });
+    }
+    case "sign-enrol": {
+      const p = req.params;
+      if (p.purpose !== "enrol") throw new Error("only an enrolment statement is signed here");
+      return signEnrolAttestation(store, {
+        subject: p.subject,
+        audience: p.audience,
+        challenge: p.challenge,
+        boundTo: p.boundTo,
+        secretWrap: wrapFrom(req.prfOutputB64u),
+      });
+    }
+    default:
+      throw new Error("unknown step-up approver operation");
+  }
 }
 
 // ─── Onboarding: ephemeral did:key → VTA-minted holder did:key ───

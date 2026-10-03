@@ -4,6 +4,11 @@
 // `window.postMessage` using the bridge protocol.
 
 import type {
+  ApproveStepUpParams,
+  ApproverIdentityParams,
+  ApproverIdentityResult,
+  ApproverStatementResult,
+  AttestApproverParams,
   BridgeMethod,
   RequestTaskParams,
   ApiGetParams,
@@ -125,6 +130,20 @@ interface VtaWallet {
    *  user's other entries, and expect a consent prompt: enumerating a vault to
    *  the site it belongs to is a disclosure, not a lookup. */
   vaultList(params: VaultListParams): Promise<VaultListResultView>;
+  /** The wallet's step-up approver `did:key` for `audience` — one per relying
+   *  party, so communities cannot correlate the user by it. Signs nothing.
+   *  `audience` must be the relying party this origin signed in to. */
+  approverIdentity(params: ApproverIdentityParams): Promise<ApproverIdentityResult>;
+  /** Answer an operation-bound step-up (`auth/step-up/approve-request/0.4`)
+   *  with the approver for `audience`. The wallet refuses unless its approver
+   *  is among `request.approvers` and `request.boundTo` is the digest of
+   *  `operation`; it shows the reason, the operation and the community, takes
+   *  a user-verification gesture, and returns a signed
+   *  `auth/step-up/approver/attest/0.1` statement (`purpose: stepUp`). */
+  approveStepUp(params: ApproveStepUpParams): Promise<ApproverStatementResult>;
+  /** The approver's enrolment statement (attest/0.1, `purpose: enrol`) over the
+   *  relying party's `challenge`, bound to `boundTo`, after a gesture. */
+  attestApprover(params: AttestApproverParams): Promise<ApproverStatementResult>;
 }
 
 declare global {
@@ -186,6 +205,9 @@ function call<T>(
     | WalletProfileParams
     | VaultListParams
     | RequestTaskParams
+    | ApproverIdentityParams
+    | ApproveStepUpParams
+    | AttestApproverParams
     | Record<string, never>,
 ): Promise<T> {
   const id = crypto.randomUUID();
@@ -211,5 +233,8 @@ if (!window.vtaWallet) {
     walletProfile: (params) => call<WalletProfileResult>("walletProfile", params),
     vaultList: (params) => call<VaultListResultView>("vaultList", params),
     requestTask: (params) => call<Record<string, unknown>>("requestTask", params),
+    approverIdentity: (params) => call<ApproverIdentityResult>("approverIdentity", params),
+    approveStepUp: (params) => call<ApproverStatementResult>("approveStepUp", params),
+    attestApprover: (params) => call<ApproverStatementResult>("attestApprover", params),
   };
 }
