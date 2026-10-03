@@ -1143,6 +1143,57 @@ before settling, or not at all; denying on `onRemoved` without the grace; or a
 consent surface that opens its own window — the disclosure prompt did, with no
 `onRemoved` at all, and a closed one hung forever.
 
+## Step-up approvers: one key per community, sealed, never named by a page
+
+`window.vtaWallet.{approverIdentity, approveStepUp, attestApprover}` serve a
+VTC's `approverSigned` step-up (`auth/step-up/approver/attest/0.1`, carried in
+`auth/step-up/approve-response/0.6`). The store is
+`core/src/store/step-up-approver.ts`; the checks and the statement are
+`core/src/trust-tasks/approver-attest.ts`; the page rules are
+`extension/src/approver-policy.ts`.
+
+**One approver per audience, minted and sealed rather than derived.** Each VTC
+gets a fresh CSPRNG Ed25519 `did:key`, so no two communities can correlate the
+user by it. Its seed is sealed (X25519 → HKDF → AES-GCM, audience and DID bound
+into info and AAD) to a wallet sealing key whose secret half is wrapped under
+the approver KEK (`ApproverPrfSecretWrap`). That is what lets
+`approverIdentity` mint a new community's DID with **no gesture** while the
+seed is never at rest unsealed; every *use* needs the biometric that unwraps the
+sealing secret. HKDF from one root was rejected: the DID could not be named
+without the gesture, unwrapping the root would yield every community's key, and
+forgetting a community would not forget its key. The sealing key itself is
+created by the first gesture available — an enrolment, or the one-off setup
+prompt `approverIdentity` raises in a wallet that has none. The VTA DTTE
+approver (`approver-identity.ts`, one per VTA) is a separate key and store and
+is untouched.
+
+**Every call is held to the origin's pinned RP** (`pageApproverAudienceRefusal`):
+an `audience` other than the pinned `rpDid` is refused, or a page could read
+every community's approver DID. **The approver key is chosen by the wallet from
+the audience**; no parameter names one. `approveStepUp` refuses before any
+prompt unless that approver is in `request.approvers` and `request.boundTo`
+equals the VTC digest recomputed from the `operation` the prompt then shows
+(`vtcStepUpBoundTo`, pinned to `vti_common`'s vectors); the offscreen document
+re-runs the same checks beside the key. The reason is the page's text and is
+labelled unverified; the operation is the checked part.
+
+**The approve-response is the one approval a page may have signed**, and only
+the one carrying, unchanged, a statement `approveStepUp` issued to that origin
+within five minutes, for the same RP, subject and challenge, signed `asDid` the
+subject — once (`approverResponseRefusal`, consumed before signing). It takes
+no second prompt; every other `auth/step-up/approve-*` stays refused by
+`pageSignRefusal`. The holder signs a page's document for the purpose its type
+decides (`proofPurposeForDocumentType`, mirroring the VTA's
+`ATTESTATION_SLUGS`): an approve-response is `assertionMethod`.
+
+**What breaks it:** letting a page pass an approver DID or key; deriving the
+per-audience keys from one root; skipping the `boundTo` recompute or doing it
+only in the background; accepting an `audience` other than the pin; storing a
+sealing key without the approver wrap (`unwrapSecret` accepts passthrough
+silently — `loadStepUpApprover` refuses it); or widening the approve-response
+exemption past "the statement just issued". `core/tests/store.step-up-approver.mjs`
+and `extension/tests/approver-policy.test.mts` pin these.
+
 ## Repo mechanics worth knowing before you start
 
 - **Build `core` before typechecking anything that depends on it.** Each

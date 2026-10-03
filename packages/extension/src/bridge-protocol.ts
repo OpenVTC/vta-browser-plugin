@@ -35,7 +35,10 @@ export type BridgeMethod =
   | "walletProfile"
   | "vaultList"
   | "requestTask"
-  | "disclose";
+  | "disclose"
+  | "approverIdentity"
+  | "approveStepUp"
+  | "attestApprover";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
 export interface LoginParams {
@@ -172,6 +175,53 @@ export interface SignTrustTaskResult {
   holderDid: string;
 }
 
+// ── Step-up approver (`auth/step-up/approver/attest/0.1`) ───────────────────
+//
+// The page-facing half of the wallet's per-audience step-up approver. Each
+// method takes the relying party's DID as `audience`, and the wallet serves it
+// only for the relying party the page's origin is pinned to — so a page can
+// neither name another community's approver (correlation) nor have one sign
+// for another community. The approver key is chosen by the wallet from the
+// audience; no parameter names one.
+
+/** Parameters for `window.vtaWallet.approverIdentity(...)`. */
+export interface ApproverIdentityParams {
+  /** The relying party (VTC) DID. Must be the origin's pinned RP. */
+  audience: string;
+}
+
+/** Result of `window.vtaWallet.approverIdentity(...)`. */
+export interface ApproverIdentityResult {
+  approverDid: string;
+}
+
+/** Parameters for `window.vtaWallet.approveStepUp(...)`. */
+export interface ApproveStepUpParams {
+  /** The inline `auth/step-up/approve-request/0.4` payload, as received. */
+  request: Record<string, unknown>;
+  /** The refused document's type and payload. The wallet recomputes
+   *  `request.boundTo` from it and refuses on a mismatch. */
+  operation: { type: string; payload: unknown };
+  /** The relying party (VTC) DID. Must be the origin's pinned RP. */
+  audience: string;
+}
+
+/** Parameters for `window.vtaWallet.attestApprover(...)`. */
+export interface AttestApproverParams {
+  purpose: "enrol";
+  subject: string;
+  audience: string;
+  challenge: string;
+  boundTo: string;
+}
+
+/** Result of `approveStepUp` / `attestApprover`: the complete signed
+ *  attest/0.1 document. */
+export interface ApproverStatementResult {
+  statement: Record<string, unknown>;
+  approverDid: string;
+}
+
 /** Result handed back to the RP page on a successful login. */
 export interface LoginResult {
   accessToken: string;
@@ -285,6 +335,12 @@ export const RUNTIME_API_POST = "vta-wallet/api-post" as const;
 export const RUNTIME_MEDIATOR_STATUS = "vta-wallet/mediator-status" as const;
 export const RUNTIME_WALLET_DEFAULTS = "vta-wallet/wallet-defaults" as const;
 export const RUNTIME_SIGN_TRUST_TASK = "vta-wallet/sign-trust-task" as const;
+/** page → background: the step-up approver DID for the pinned RP. */
+export const RUNTIME_APPROVER_IDENTITY = "vta-wallet/approver-identity" as const;
+/** page → background: answer a bound step-up with the approver. */
+export const RUNTIME_APPROVE_STEP_UP = "vta-wallet/approve-step-up" as const;
+/** page → background: the approver's enrolment statement. */
+export const RUNTIME_ATTEST_APPROVER = "vta-wallet/attest-approver" as const;
 /** page → background: propose a Trust Task for the VTA to execute.
  *
  *  The generic relay. Unlike {@link RUNTIME_SIGN_TRUST_TASK}, the page supplies
@@ -457,6 +513,32 @@ export interface RuntimeSignTrustTaskRequest {
 
 export type RuntimeSignTrustTaskResponse =
   | { ok: true; result: SignTrustTaskResult }
+  | { ok: false; error: string };
+
+export interface RuntimeApproverIdentityRequest {
+  type: typeof RUNTIME_APPROVER_IDENTITY;
+  params: ApproverIdentityParams;
+  origin: string;
+}
+
+export type RuntimeApproverIdentityResponse =
+  | { ok: true; result: ApproverIdentityResult }
+  | { ok: false; error: string };
+
+export interface RuntimeApproveStepUpRequest {
+  type: typeof RUNTIME_APPROVE_STEP_UP;
+  params: ApproveStepUpParams;
+  origin: string;
+}
+
+export interface RuntimeAttestApproverRequest {
+  type: typeof RUNTIME_ATTEST_APPROVER;
+  params: AttestApproverParams;
+  origin: string;
+}
+
+export type RuntimeApproverStatementResponse =
+  | { ok: true; result: ApproverStatementResult }
   | { ok: false; error: string };
 
 /** background → content (sendResponse). */
@@ -1611,6 +1693,34 @@ export interface OffscreenSetWakeResponse {
 /** background → offscreen: sign a Trust-Task envelope with the holder did:peer.
  *  Reply is a [`SignTrustTaskResult`] (or `{error}`) via sendResponse. */
 export const OFFSCREEN_SIGN_TRUST_TASK = "offscreen/sign-trust-task" as const;
+/** background → offscreen: the per-audience step-up approver store. One type,
+ *  four operations — see {@link OffscreenStepUpApproverRequest}. */
+export const OFFSCREEN_STEP_UP_APPROVER = "offscreen/step-up-approver" as const;
+
+/**
+ * - `identity`: the approver DID for `audience`, minting it if the sealing key
+ *   exists (no gesture). With `prfOutputB64u`, creates the sealing key too.
+ *   Replies `{ok: true, result: {approverDid}}`, or `{ok: false, code:
+ *   "step-up-approver/setup-required"}` when a gesture is needed first.
+ * - `check-step-up`: every check `approveStepUp` makes, before a prompt.
+ *   Replies `{ok: true, result: {approverDid, boundTo}}` or a refusal.
+ * - `sign-step-up` / `sign-enrol`: unseal with the gesture's PRF output and
+ *   sign. The checks run again here, beside the key.
+ */
+export type StepUpApproverOp =
+  | { op: "identity"; audience: string; prfOutputB64u?: string }
+  | { op: "check-step-up"; params: ApproveStepUpParams }
+  | { op: "sign-step-up"; params: ApproveStepUpParams; prfOutputB64u: string }
+  | { op: "sign-enrol"; params: AttestApproverParams; prfOutputB64u: string };
+
+export type OffscreenStepUpApproverRequest = {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_STEP_UP_APPROVER;
+} & StepUpApproverOp;
+
+export type OffscreenStepUpApproverResponse =
+  | { ok: true; result: Record<string, unknown> }
+  | { ok: false; error: string; code?: string };
 /** background → offscreen: resolve + verify a DID (used by the consent
  *  prompt's verification badge). Reply is a [`VerifyRpDidResult`] via
  *  sendResponse. */
@@ -2237,5 +2347,8 @@ export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_VAULT_LIST_PAGE,
   RUNTIME_REQUEST_TASK,
   RUNTIME_DISCLOSE,
+  RUNTIME_APPROVER_IDENTITY,
+  RUNTIME_APPROVE_STEP_UP,
+  RUNTIME_ATTEST_APPROVER,
 ] as const;
 

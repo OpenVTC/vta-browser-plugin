@@ -25,6 +25,7 @@ import {
 import { base64url } from "@openvtc/vti-didcomm-js";
 import { runApproverUnlockCeremony } from "./webauthn-prf-unlock.js";
 import { DisclosureConsent } from "./disclosure-consent.js";
+import { ApproverConsent } from "./approver-consent.js";
 import { consentResultSender } from "./consent-result.js";
 import { DidQrButton } from "./did-qr-view.js";
 import { SessionKeyNotice } from "./session-key-notice.js";
@@ -49,6 +50,10 @@ const isTaskConsent = params.get("kind") === "task";
 // this one says "let this verifier keep these attributes about you". Sharing a
 // component would mean one screen trying to word both.
 const isDisclosureConsent = params.get("kind") === "disclosure";
+// `kind=approver` selects the step-up approver surface (`approveStepUp`,
+// `attestApprover`, and the one-off approver setup): a community's approver
+// signs a statement after a biometric. See `approver-consent.tsx`.
+const isStepUpApproverConsent = params.get("kind") === "approver";
 // The biometric-gated approver surface: Approve must run a fresh WebAuthn
 // gesture bound to this decision's payloadDigest before it signs.
 const isApproverConsent = params.get("approver") === "1";
@@ -1432,7 +1437,9 @@ const root = document.getElementById("root");
 if (root) {
   createRoot(root).render(
     <StrictMode>
-      {isDisclosureConsent ? (
+      {isStepUpApproverConsent ? (
+        <ApproverConsent consentId={consentId} decide={(ok, prf) => decide(ok, false, prf)} />
+      ) : isDisclosureConsent ? (
         <DisclosureConsent consentId={consentId} decide={(ok) => decide(ok)} />
       ) : isTaskConsent ? (
         <TaskConsent />

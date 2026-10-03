@@ -75,6 +75,19 @@ const NOT_IN_SDK = [
       "takes 0.3, which vta-sdk carries and the persona path sends.",
   },
   {
+    prefix: "https://trusttasks.org/spec/auth/step-up/approve-response/0.6",
+    why:
+      "The version a VTC takes `approverSigned` evidence in. The console builds it and has " +
+      "the wallet sign it as the subject; the VTA is not the counterparty " +
+      "(trust-tasks/approver-attest.ts names it only to recognise it).",
+  },
+  {
+    prefix: "https://trusttasks.org/spec/auth/step-up/approver/attest/",
+    why:
+      "A step-up approver's statement, issued by the wallet's per-audience approver and " +
+      "verified by the VTC it is addressed to. Never sent on its own, and never to the VTA.",
+  },
+  {
     prefix: "https://trusttasks.org/spec/auth/authenticate/0.2",
     why:
       "The version the did-hosting control plane serves for `login()`, where the " +
