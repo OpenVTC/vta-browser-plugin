@@ -4,6 +4,7 @@
 // `window.postMessage` using the bridge protocol.
 
 import type {
+  ApproveDecisionParams,
   ApproveStepUpParams,
   ApproverIdentityParams,
   ApproverIdentityResult,
@@ -144,6 +145,14 @@ interface VtaWallet {
   /** The approver's enrolment statement (attest/0.1, `purpose: enrol`) over the
    *  relying party's `challenge`, bound to `boundTo`, after a gesture. */
   attestApprover(params: AttestApproverParams): Promise<ApproverStatementResult>;
+  /** Vouch for a VTC administrator's `task-consent/decision/0.2` with the
+   *  approver for `audience` (attest/0.1, `purpose: decision`). The wallet
+   *  recomputes `decision.payloadDigest` from `action` and refuses on a
+   *  mismatch; it shows the action, the decision (approve/deny) and the
+   *  community, takes a user-verification gesture, and returns the signed
+   *  statement. The decision carrying it, signed `asDid` `subject` through
+   *  `signTrustTask`, is then signed once without a second prompt. */
+  approveDecision(params: ApproveDecisionParams): Promise<ApproverStatementResult>;
 }
 
 declare global {
@@ -208,6 +217,7 @@ function call<T>(
     | ApproverIdentityParams
     | ApproveStepUpParams
     | AttestApproverParams
+    | ApproveDecisionParams
     | Record<string, never>,
 ): Promise<T> {
   const id = crypto.randomUUID();
@@ -236,5 +246,6 @@ if (!window.vtaWallet) {
     approverIdentity: (params) => call<ApproverIdentityResult>("approverIdentity", params),
     approveStepUp: (params) => call<ApproverStatementResult>("approveStepUp", params),
     attestApprover: (params) => call<ApproverStatementResult>("attestApprover", params),
+    approveDecision: (params) => call<ApproverStatementResult>("approveDecision", params),
   };
 }

@@ -77,9 +77,11 @@ import {
   verifyDid,
   buildTrustTask,
   verifyTrustTaskReply,
+  checkDecisionApproval,
   checkStepUpApproval,
   ensureStepUpApprover,
   proofPurposeForDocumentType,
+  signDecisionApproval,
   signEnrolAttestation,
   signStepUpApproval,
   stepUpApproverDid,
@@ -1799,12 +1801,44 @@ async function doStepUpApprover(
     }
     case "sign-enrol": {
       const p = req.params;
+      // Enrolment only — a `decision` statement is signed by `sign-decision`,
+      // after the action's digest is recomputed.
       if (p.purpose !== "enrol") throw new Error("only an enrolment statement is signed here");
       return signEnrolAttestation(store, {
         subject: p.subject,
         audience: p.audience,
         challenge: p.challenge,
         boundTo: p.boundTo,
+        secretWrap: wrapFrom(req.prfOutputB64u),
+      });
+    }
+    case "check-decision": {
+      const p = req.params;
+      const approverDid = await stepUpApproverDid(store, p?.audience);
+      if (!approverDid) {
+        throw Object.assign(
+          new Error(
+            `this wallet has no step-up approver for ${String(p?.audience)}; enrol one first`,
+          ),
+          { code: "step-up-approver/not-enrolled" },
+        );
+      }
+      const payload = await checkDecisionApproval({
+        subject: p.subject,
+        action: p.action,
+        decision: p.decision,
+        audience: p.audience,
+        approverDid,
+      });
+      return { approverDid, boundTo: payload.boundTo };
+    }
+    case "sign-decision": {
+      const p = req.params;
+      return signDecisionApproval(store, {
+        subject: p.subject,
+        action: p.action,
+        decision: p.decision,
+        audience: p.audience,
         secretWrap: wrapFrom(req.prfOutputB64u),
       });
     }

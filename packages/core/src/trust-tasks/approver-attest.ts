@@ -19,6 +19,13 @@
 // is about to *show*, and refuses unless it equals the request's. What the
 // human sees is then what the statement binds.
 //
+// For `decision` (a VTC administrator's own approver vouching for their
+// `task-consent/decision/0.2`), `boundTo` is the decision's `payloadDigest`:
+// the task-consent *wire* digest of the action, salted with the challenge the
+// VTC issued that administrator ({@link taskConsentWireDigest}, domain
+// `vta/task-consent/v1\0` — not the step-up tag). The wallet recomputes it from
+// the action it shows, for the same reason ({@link checkDecisionApproval}).
+//
 // ## The types are generated
 //
 // The attest/0.1 payload and the approve-request/0.4 request come from
@@ -31,7 +38,7 @@ import { TYPE_URI as ATTEST_0_1 } from "@openvtc/trust-tasks/auth/step-up/approv
 import type { Payload as StepUpApproverRequest } from "@openvtc/trust-tasks/auth/step-up/approve-request/0.4/payload";
 import { TYPE_URI as APPROVE_RESPONSE_0_6 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.6/payload";
 import type { SigningIdentity } from "../siop/self-issued.js";
-import { vtcStepUpBoundTo } from "./domain-digest.js";
+import { taskConsentWireDigest, vtcStepUpBoundTo } from "./domain-digest.js";
 import { signTrustTask, type TrustTaskEnvelope } from "./sign.js";
 
 /** `auth/step-up/approver/attest/0.1`. */
@@ -61,6 +68,7 @@ export const APPROVER_REFUSAL = {
   boundToMismatch: "step-up-approver/bound-to-mismatch",
   notApproverSigned: "step-up-approver/approver-signed-not-accepted",
   subjectIsApprover: "step-up-approver/subject-is-approver",
+  notEnrolled: "step-up-approver/not-enrolled",
 } as const;
 
 export type ApproverRefusalCode = (typeof APPROVER_REFUSAL)[keyof typeof APPROVER_REFUSAL];
@@ -207,4 +215,88 @@ export async function signApproverStatement(
     payload: { ...p },
   };
   return signTrustTask({ envelope: doc, signing, proofPurpose: "authentication" });
+}
+
+/** The VTC action a `decision` statement vouches for: the parked operation's
+ *  type and payload, as the VTC listed them (`vtc/admin/actions/list/0.1`). */
+export interface DecisionAction {
+  type: string;
+  payload: unknown;
+  /** The action's id — a locator the decision may echo, never part of what is
+   *  bound. */
+  actionId?: string;
+}
+
+/** The `task-consent/decision/0.2` members a `decision` statement is bound to.
+ *  `challenge` is the one the VTC issued this administrator for the action;
+ *  `payloadDigest` the decision's echo of the salted digest. */
+export interface DecisionToApprove {
+  challenge: string;
+  payloadDigest: string;
+  decision: "approve" | "deny";
+}
+
+/**
+ * Every check an approver makes on a decision before showing it to a human,
+ * and again immediately before signing. Returns the attest/0.1 payload
+ * (`purpose: decision`) it would sign; throws {@link ApproverRefusalError}
+ * otherwise.
+ *
+ * - `subject` is the administrator who signs the decision (attest/0.1: the
+ *   decision's signer), and is not the approver;
+ * - `decision.decision` is `approve` or `deny`, and `challenge` /
+ *   `payloadDigest` are within the specification's bounds;
+ * - `payloadDigest` recomputed from `action` and `challenge` under the
+ *   task-consent domain equals the one given — what the human is shown is what
+ *   the statement binds.
+ */
+export async function checkDecisionApproval(args: {
+  subject: unknown;
+  action: unknown;
+  decision: unknown;
+  audience: string;
+  approverDid: string;
+}): Promise<ApproverAttestPayload> {
+  const { subject, action, decision, audience, approverDid } = args;
+  const bad = (what: string): never => {
+    throw new ApproverRefusalError(APPROVER_REFUSAL.malformed, `decision: ${what}`);
+  };
+  if (!isDid(subject)) bad("subject must be the administrator's DID");
+  if (!isDid(audience)) bad("audience must be a DID");
+  if (!action || typeof action !== "object" || Array.isArray(action)) {
+    bad("action must be {type, payload}");
+  }
+  const a = action as DecisionAction;
+  if (typeof a.type !== "string" || a.type === "") bad("action.type must be a type URI");
+  if (!("payload" in a) || a.payload === undefined) bad("action.payload is absent");
+  if (a.actionId !== undefined && (typeof a.actionId !== "string" || a.actionId === "")) {
+    bad("action.actionId must be a non-empty string");
+  }
+  if (!decision || typeof decision !== "object" || Array.isArray(decision)) {
+    bad("decision must be {challenge, payloadDigest, decision}");
+  }
+  const d = decision as DecisionToApprove;
+  if (d.decision !== "approve" && d.decision !== "deny") bad("decision must be approve or deny");
+  if (!isChallenge(d.challenge)) bad("challenge must be 16–512 characters");
+  if (!isBoundTo(d.payloadDigest)) bad("payloadDigest must be 1–256 characters");
+  if (approverDid === subject) {
+    throw new ApproverRefusalError(
+      APPROVER_REFUSAL.subjectIsApprover,
+      "the approver cannot be the administrator it vouches for",
+    );
+  }
+  const recomputed = await taskConsentWireDigest(a.type, a.payload, d.challenge);
+  if (recomputed !== d.payloadDigest) {
+    throw new ApproverRefusalError(
+      APPROVER_REFUSAL.boundToMismatch,
+      "the decision's payloadDigest is not the digest of the action shown; refusing to sign",
+    );
+  }
+  return checkAttestPayload({
+    purpose: "decision",
+    subject: subject as string,
+    audience,
+    challenge: d.challenge,
+    boundTo: d.payloadDigest,
+  });
 }

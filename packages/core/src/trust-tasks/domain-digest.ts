@@ -19,12 +19,26 @@
 // with the approve-request's `challenge`: that value is the request's
 // `boundTo`, and a step-up approver recomputes it from the operation it is
 // shown before signing anything (`auth/step-up/approver/attest/0.1`).
+//
+// Task consent uses it under `vta/task-consent/v1\0` (the tag predates the
+// module's move out of the VTA and is kept on purpose), salted with the
+// pending request's `challenge`: that is the `payloadDigest` a
+// `task-consent/decision` echoes — the *wire* digest, which a VTC also salts
+// per approver, since each approver of an action is issued its own challenge.
+// A step-up approver vouching for a decision (`purpose: decision`) recomputes
+// it from the action it shows before signing.
 
 import { base58btcEncode, jcsCanonicalize } from "./canonical.js";
 
 /** Domain tag of the VTC's operation-bound step-up digest
  *  (`vtc-service/src/acl/bound_step_up.rs` `DIGEST_DOMAIN`). */
 export const VTC_STEP_UP_DOMAIN = "vtc/step-up/v1\0";
+
+/** Domain tag of the task-consent digest
+ *  (`vti_common::task_consent::DIGEST_DOMAIN`). Not the step-up tag: a decision
+ *  is bound under this one, an operation-bound step-up under
+ *  {@link VTC_STEP_UP_DOMAIN}. */
+export const TASK_CONSENT_DOMAIN = "vta/task-consent/v1\0";
 
 const MULTIHASH_SHA2_256_32 = [0x12, 0x20] as const;
 
@@ -77,4 +91,15 @@ export function vtcStepUpBoundTo(
   challenge: string,
 ): Promise<string> {
   return domainDigest(VTC_STEP_UP_DOMAIN, typeUri, payload, challenge);
+}
+
+/** The `payloadDigest` a `task-consent/decision` carries:
+ *  `vti_common::task_consent::wire_digest` — the task's digest salted with the
+ *  `challenge` issued to this approver for it. */
+export function taskConsentWireDigest(
+  typeUri: string,
+  payload: unknown,
+  challenge: string,
+): Promise<string> {
+  return domainDigest(TASK_CONSENT_DOMAIN, typeUri, payload, challenge);
 }

@@ -7,7 +7,9 @@
 //   - each audience gets a distinct DID, minted without a gesture once the
 //     sealing key exists, and none of them is the VTA DTTE approver;
 //   - the statement has attest/0.1's shape and its proof verifies;
-//   - the holder signs an approve-response for `assertionMethod`.
+//   - the holder signs an approve-response for `assertionMethod`;
+//   - a `decision` statement binds the task-consent wire digest (not the
+//     step-up one) recomputed from the action shown, and is refused otherwise.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -18,6 +20,7 @@ import {
   ApproverPrfSecretWrap,
   InMemoryKVStore,
   STEP_UP_APPROVER_SETUP_REQUIRED,
+  TASK_CONSENT_DOMAIN,
   VTC_STEP_UP_DOMAIN,
   clearStepUpApprovers,
   domainDigest,
@@ -26,9 +29,11 @@ import {
   loadStepUpApprover,
   mintApproverIdentity,
   proofPurposeForDocumentType,
+  signDecisionApproval,
   signEnrolAttestation,
   signStepUpApproval,
   stepUpApproverDid,
+  taskConsentWireDigest,
   verifyTrustTaskProof,
   vtcStepUpBoundTo,
 } from "../dist/index.js";
@@ -70,6 +75,16 @@ test("domainDigest reproduces vti_common's pinned vectors", async () => {
     await vtcStepUpBoundTo(URI, P, "chal"),
     "zQmc1qnh2HJTpPzHCsPV81Dred9WPgqRKBooU7WYZdGqJEi",
   );
+});
+
+test("taskConsentWireDigest is vti_common's wire_digest, under the task-consent tag", async () => {
+  assert.equal(TASK_CONSENT_DOMAIN, "vta/task-consent/v1\0");
+  // `wire_digest(URI, &p, "chal")` in the same pinned-vector test.
+  assert.equal(
+    await taskConsentWireDigest(URI, P, "chal"),
+    "zQmYdqiqiHsozX3N5NRnM6CmYRwWmPo4P5Pu1MVopiCfwa2",
+  );
+  assert.notEqual(await taskConsentWireDigest(URI, P, "chal"), await vtcStepUpBoundTo(URI, P, "chal"));
 });
 
 // ── per-audience approvers ──────────────────────────────────────────────────
@@ -287,6 +302,140 @@ test("an enrolment statement refuses members outside attest/0.1's bounds", async
     }),
     (e) => e.code === APPROVER_REFUSAL.malformed,
   );
+});
+
+// ── approveDecision (purpose: decision) ─────────────────────────────────────
+
+// A VTC action as `vtc/admin/actions/list/0.1` lists it, and the decision an
+// administrator (SUBJECT) answers it with. `payloadDigest` is the wire digest
+// salted with the challenge the VTC issued this administrator.
+const ACTION = {
+  actionId: "act_01J9ZK",
+  type: URI,
+  payload: P,
+};
+
+async function decisionFixture(decision = "approve") {
+  const store = new InMemoryKVStore();
+  const approverDid = await ensureStepUpApprover(store, VTC_A, { secretWrap: wrap() });
+  return {
+    store,
+    approverDid,
+    decision: {
+      challenge: CHALLENGE,
+      payloadDigest: await taskConsentWireDigest(ACTION.type, ACTION.payload, CHALLENGE),
+      decision,
+    },
+  };
+}
+
+test("approveDecision returns a complete, verifying attest/0.1 statement for purpose decision", async () => {
+  const { store, approverDid, decision } = await decisionFixture();
+  const { statement, approverDid: did } = await signDecisionApproval(store, {
+    subject: SUBJECT,
+    action: ACTION,
+    decision,
+    audience: VTC_A,
+    secretWrap: wrap(),
+  });
+  assert.equal(did, approverDid);
+  assert.equal(statement.type, APPROVER_ATTEST_TYPE);
+  assert.equal(statement.issuer, approverDid);
+  assert.equal(statement.recipient, VTC_A);
+  assert.match(statement.id, /^urn:uuid:[0-9a-f-]{36}$/);
+  assert.deepEqual(statement.payload, {
+    purpose: "decision",
+    subject: SUBJECT,
+    audience: VTC_A,
+    challenge: CHALLENGE,
+    boundTo: decision.payloadDigest,
+  });
+  assert.equal(statement.proof.cryptosuite, "eddsa-jcs-2022");
+  assert.equal(statement.proof.proofPurpose, "authentication");
+  const v = await verifyTrustTaskProof(statement, { expectedProofPurpose: "authentication" });
+  assert.equal(v.verified, true, v.reason);
+  assert.equal(v.signer, approverDid);
+});
+
+test("approveDecision vouches for a deny as well", async () => {
+  const { store, decision } = await decisionFixture("deny");
+  const { statement } = await signDecisionApproval(store, {
+    subject: SUBJECT,
+    action: ACTION,
+    decision,
+    audience: VTC_A,
+    secretWrap: wrap(),
+  });
+  assert.equal(statement.payload.purpose, "decision");
+});
+
+test("approveDecision refuses a payloadDigest that is not the digest of the action shown", async () => {
+  const { store, decision } = await decisionFixture();
+  const sign = (over) =>
+    signDecisionApproval(store, {
+      subject: SUBJECT,
+      action: ACTION,
+      decision,
+      audience: VTC_A,
+      secretWrap: wrap(),
+      ...over,
+    });
+  const mismatch = (e) => e.code === APPROVER_REFUSAL.boundToMismatch;
+  // The page shows one payload and asks for a statement bound to another…
+  await assert.rejects(sign({ action: { ...ACTION, payload: { ...P, role: "reader" } } }), mismatch);
+  // …or the same payload under another type…
+  await assert.rejects(
+    sign({ action: { ...ACTION, type: "https://trusttasks.org/spec/acl/revoke/0.1" } }),
+    mismatch,
+  );
+  // …or another administrator's challenge (the VTC salts per approver)…
+  await assert.rejects(sign({ decision: { ...decision, challenge: "y".repeat(24) } }), mismatch);
+  // …or the step-up digest, which is the wrong domain for a decision…
+  await assert.rejects(
+    sign({
+      decision: { ...decision, payloadDigest: await vtcStepUpBoundTo(URI, P, CHALLENGE) },
+    }),
+    mismatch,
+  );
+  // …or the unsalted, executor-internal digest.
+  await assert.rejects(
+    sign({ decision: { ...decision, payloadDigest: await domainDigest(TASK_CONSENT_DOMAIN, URI, P) } }),
+    mismatch,
+  );
+});
+
+test("approveDecision refuses malformed input and an approver that is the subject", async () => {
+  const { store, approverDid, decision } = await decisionFixture();
+  const sign = (over) =>
+    signDecisionApproval(store, {
+      subject: SUBJECT,
+      action: ACTION,
+      decision,
+      audience: VTC_A,
+      secretWrap: wrap(),
+      ...over,
+    });
+  const malformed = (e) => e.code === APPROVER_REFUSAL.malformed;
+  await assert.rejects(sign({ decision: { ...decision, decision: "approved" } }), malformed);
+  await assert.rejects(sign({ decision: { ...decision, challenge: "short" } }), malformed);
+  await assert.rejects(sign({ subject: "not-a-did" }), malformed);
+  await assert.rejects(sign({ action: { type: URI } }), malformed);
+  await assert.rejects(sign({ subject: approverDid }), (e) => e.code === APPROVER_REFUSAL.subjectIsApprover);
+});
+
+test("approveDecision never mints: an audience with no approver is refused", async () => {
+  const { store, decision } = await decisionFixture();
+  await assert.rejects(
+    signDecisionApproval(store, {
+      subject: SUBJECT,
+      action: ACTION,
+      decision,
+      audience: VTC_B,
+      secretWrap: wrap(),
+    }),
+    (e) => e.code === APPROVER_REFUSAL.notEnrolled,
+  );
+  assert.equal(await stepUpApproverDid(store, VTC_B), null);
 });
 
 // ── the purpose rule ────────────────────────────────────────────────────────

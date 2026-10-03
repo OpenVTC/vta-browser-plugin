@@ -1145,9 +1145,11 @@ consent surface that opens its own window — the disclosure prompt did, with no
 
 ## Step-up approvers: one key per community, sealed, never named by a page
 
-`window.vtaWallet.{approverIdentity, approveStepUp, attestApprover}` serve a
-VTC's `approverSigned` step-up (`auth/step-up/approver/attest/0.1`, carried in
-`auth/step-up/approve-response/0.6`). The store is
+`window.vtaWallet.{approverIdentity, approveStepUp, attestApprover,
+approveDecision}` serve a VTC's `approverSigned` step-up
+(`auth/step-up/approver/attest/0.1`, carried in
+`auth/step-up/approve-response/0.6`) and its `approverSigned` decision evidence
+(carried in `task-consent/decision/0.2`). The store is
 `core/src/store/step-up-approver.ts`; the checks and the statement are
 `core/src/trust-tasks/approver-attest.ts`; the page rules are
 `extension/src/approver-policy.ts`.
@@ -1186,12 +1188,61 @@ no second prompt; every other `auth/step-up/approve-*` stays refused by
 decides (`proofPurposeForDocumentType`, mirroring the VTA's
 `ATTESTATION_SLUGS`): an approve-response is `assertionMethod`.
 
+**A decision statement (`purpose: decision`) comes only from
+`approveDecision`.** A VTC (#1920) accepts `approverSigned` evidence on a
+`task-consent/decision/0.2`: an attest/0.1 statement whose `subject` is the
+administrator who signs the decision, `audience`/`recipient` the VTC,
+`challenge` the decision's `challenge` and `boundTo` its `payloadDigest`. The
+console calls
+
+```ts
+const { statement, approverDid } = await window.vtaWallet.approveDecision({
+  audience: vtcDid,                   // must be the origin's pinned RP
+  subject: adminDid,                  // the decision's signer (asDid below)
+  action: { type: a.typeUri, payload: a.payload, actionId: a.actionId, summary: a.summary },
+  decision: { challenge: a.challenge, payloadDigest, decision: "approve" | "deny", reason? },
+});
+// then, unchanged:
+await window.vtaWallet.signTrustTask({ asDid: adminDid, envelope: {
+  type: "https://trusttasks.org/spec/task-consent/decision/0.2", recipient: vtcDid,
+  payload: { challenge, payloadDigest, decision, reason?, actionId?,
+             evidence: { kind: "approverSigned", statement } } } });
+```
+
+`payloadDigest` is the task-consent **wire** digest
+(`vti_common::task_consent::wire_digest`: domain `vta/task-consent/v1\0`, *not*
+the step-up tag, salted with the challenge the VTC issued *this* administrator
+for the action — the listing's own `payloadDigest` is an unsalted display
+digest and is not it). The wallet recomputes it from `action.{type,payload}`
+(`taskConsentWireDigest`, pinned to `vti_common`'s vectors) in the background
+and again in the offscreen beside the key, and refuses on a mismatch
+(`step-up-approver/bound-to-mismatch`) before any prompt. It never mints for a
+decision: no approver for the audience is `step-up-approver/not-enrolled`. The
+prompt shows the action (type, payload, action id), APPROVE or DENY, the
+console's note (`reason`), and the VTC's summary labelled unverified; the
+gesture's binding includes approve/deny. `attestApprover` refuses `decision`
+and `stepUp` (`attestApproverPurposeRefusal`), in the background and the
+offscreen.
+
+The decision around the statement is the second exemption from a second
+prompt, shaped exactly like the approve-response one: `signTrustTask` routes
+any `decision/0.2` whose evidence claims `approverSigned` to
+`decisionResponseRefusal`, never to the generic prompt. It is signed once,
+spent before signing, when it carries the statement `approveDecision` issued to
+this origin within five minutes, unchanged, addressed to the same RP, with the
+same challenge, `payloadDigest`, decision, `reason` and `actionId`, no other
+member, signed `asDid` the statement's subject. Otherwise it is refused. A
+statement issued for a step-up cannot ride a decision, nor the reverse
+(`IssuedApproverStatement.purpose`).
+
 **What breaks it:** letting a page pass an approver DID or key; deriving the
 per-audience keys from one root; skipping the `boundTo` recompute or doing it
-only in the background; accepting an `audience` other than the pin; storing a
+only in the background; recomputing a decision's digest under the step-up tag,
+or unsalted; accepting an `audience` other than the pin; storing a
 sealing key without the approver wrap (`unwrapSecret` accepts passthrough
-silently — `loadStepUpApprover` refuses it); or widening the approve-response
-exemption past "the statement just issued". `core/tests/store.step-up-approver.mjs`
+silently — `loadStepUpApprover` refuses it); letting `attestApprover` sign a
+`decision`; or widening either exemption past "the statement just issued, with
+what the human saw". `core/tests/store.step-up-approver.mjs`
 and `extension/tests/approver-policy.test.mts` pin these.
 
 ## Repo mechanics worth knowing before you start

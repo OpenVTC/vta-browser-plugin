@@ -3,7 +3,10 @@ import { base64url, multibase } from "@openvtc/vti-didcomm-js";
 
 import type { SigningIdentity } from "../siop/index.js";
 import {
+  APPROVER_REFUSAL,
+  ApproverRefusalError,
   checkAttestPayload,
+  checkDecisionApproval,
   checkStepUpApproval,
   signApproverStatement,
   type TrustTaskEnvelope,
@@ -359,6 +362,42 @@ export async function signStepUpApproval(
     throw new Error(`this wallet has no step-up approver for ${args.audience}; enrol one first`);
   }
   const payload = await checkStepUpApproval({ ...args, approverDid });
+  const signing = await loadStepUpApprover(store, args.audience, args.secretWrap);
+  if (!signing) throw new Error("step-up approver vanished before signing");
+  try {
+    return { statement: await signApproverStatement(payload, signing), approverDid };
+  } finally {
+    signing.privateKey.fill(0);
+  }
+}
+
+/**
+ * Vouch for a VTC administrator's `task-consent/decision/0.2` with the approver
+ * for `audience`: run {@link checkDecisionApproval} — `payloadDigest`
+ * recomputed from the action shown — against this wallet's own approver DID for
+ * the audience, unseal it with the gesture's wrap, and sign the attest/0.1
+ * statement (`purpose: decision`). Never mints: an approver the community has
+ * never enrolled could not be bound to the administrator, so it refuses
+ * (`step-up-approver/not-enrolled`) before any unsealing.
+ */
+export async function signDecisionApproval(
+  store: KVStore,
+  args: {
+    subject: unknown;
+    action: unknown;
+    decision: unknown;
+    audience: string;
+    secretWrap: SecretWrap;
+  },
+): Promise<{ statement: TrustTaskEnvelope; approverDid: string }> {
+  const approverDid = await stepUpApproverDid(store, args.audience);
+  if (!approverDid) {
+    throw new ApproverRefusalError(
+      APPROVER_REFUSAL.notEnrolled,
+      `this wallet has no step-up approver for ${args.audience}; enrol one first`,
+    );
+  }
+  const payload = await checkDecisionApproval({ ...args, approverDid });
   const signing = await loadStepUpApprover(store, args.audience, args.secretWrap);
   if (!signing) throw new Error("step-up approver vanished before signing");
   try {
