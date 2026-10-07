@@ -552,7 +552,7 @@ const authenticateToMediator = vtiAuthenticateToMediator as unknown as (args: {
   fetch?: typeof fetch;
   netPolicy?: NetPolicy;
   resolve?: DidDocumentResolver;
-}) => Promise<{ accessToken: string; mediator: VtiResolvedMediator }>;
+}) => Promise<{ accessToken: string; accessExpiresAt?: number; mediator: VtiResolvedMediator }>;
 
 /** WebSocket constructor compatible with the library session (the
  *  browser global `WebSocket` satisfies it). */
@@ -609,9 +609,20 @@ export interface MediatorConnection {
    *  A frame no waiter claims is unsolicited, and goes to `onInboundTsp`. */
   awaitTspFrame(timeoutMs: number, claims: TspFrameClaim): Promise<Uint8Array>;
   close(): void;
-  /** True while the underlying WebSocket is open (live delivery active). A
-   *  warm-session holder checks this before reusing a cached connection. */
+  /** True while the underlying WebSocket is open (live delivery active).
+   *
+   *  Necessary for reuse, not sufficient. A socket the mediator closed while
+   *  the machine slept still reads open here after wake: the close frame never
+   *  arrived, and the browser can take minutes to notice the dead TCP
+   *  connection. A request sent in that window goes nowhere. A warm-session
+   *  holder should also check {@link expiresAt}. */
   readonly isOpen: boolean;
+  /** When the mediator will close this socket, in epoch milliseconds: the
+   *  expiry of the access token it was opened with. The mediator closes every
+   *  socket when its token expires, so a connection past this time is dead
+   *  whatever {@link isOpen} says. `undefined` when the mediator did not report
+   *  an expiry. Read off the mediator's clock, so leave a margin for skew. */
+  readonly expiresAt: number | undefined;
   /** Register a handler for unsolicited inbound messages (those no `waitFor`
    *  claims) — e.g. an RP-initiated `confirm` request. The handler should
    *  filter by message `type`. Replaces any previously-registered handler.
@@ -706,6 +717,11 @@ export interface ConnectMediatorSessionOptions {
   /** Called once if the socket drops unexpectedly (not via `close()`).
    *  A warm-session holder uses this to evict + reconnect. */
   onClose?: () => void;
+  /** Called when a request sent on this connection gets no reply in time (a
+   *  TSP `awaitTspFrame` or DIDComm `waitFor` timeout). The request still
+   *  fails. This only tells the holder the socket may be dead without having
+   *  closed, so it can stop handing it to the next request. */
+  onReplyTimeout?: () => void;
 }
 
 /**
@@ -841,8 +857,15 @@ export async function connectMediatorSession(
   return {
     send: (jwe: string) => session.send(jwe),
     waitFor: async (thid, timeoutMs, options) => {
-      const { message } = await session.waitFor(thid, timeoutMs, options?.from ? { from: options.from } : {});
-      return message as Record<string, unknown>;
+      try {
+        const { message } = await session.waitFor(thid, timeoutMs, options?.from ? { from: options.from } : {});
+        return message as Record<string, unknown>;
+      } catch (err) {
+        // Only a timeout. A closed session has already reported itself through
+        // `onClose`.
+        if (/timeout waiting for response/.test((err as Error).message)) opts.onReplyTimeout?.();
+        throw err;
+      }
     },
     sendBinary: (bytes: Uint8Array) => session.sendBinary(bytes),
     awaitTspFrame: (timeoutMs: number, claims: TspFrameClaim) =>
@@ -851,6 +874,7 @@ export async function connectMediatorSession(
           const i = tspWaiters.indexOf(waiter);
           if (i >= 0) tspWaiters.splice(i, 1);
           reject(new Error("timed out awaiting reply frame"));
+          opts.onReplyTimeout?.();
         }, timeoutMs);
         const waiter = { resolve, reject, claims, timer };
         tspWaiters.push(waiter);
@@ -862,6 +886,7 @@ export async function connectMediatorSession(
     get isOpen() {
       return liveSession.isOpen;
     },
+    expiresAt: typeof auth.accessExpiresAt === "number" ? auth.accessExpiresAt * 1000 : undefined,
     // The session reads `onMessage` dynamically on each inbound frame, so a
     // post-connect assignment takes effect immediately.
     onInbound: (handler) => {

@@ -95,6 +95,7 @@ import { base64url } from "@openvtc/vti-didcomm-js";
 import { grantCommand } from "./grant-command.js";
 import { forgetInbox, getSettings, inboxFor, inboxToAdopt, setInbox } from "./config.js";
 import { walletNetPolicy } from "./net-policy.js";
+import { isReusable, startWakeWatch } from "./warm-session-health.js";
 import { loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import type { Transport, TransportHealth, TransportObservation } from "./transports.js";
@@ -2457,8 +2458,17 @@ async function getWarmSession(
   const existing = warmPool.get(key);
   if (existing) {
     const conn = await existing.catch(() => null);
-    if (conn && conn.isOpen) return conn;
-    warmPool.delete(key); // stale/closed — fall through to reconnect
+    // `isOpen` alone is not enough: a socket the mediator closed while the
+    // machine slept still reads open. Past its token's expiry it is dead
+    // whatever the browser says. See `warm-session-health.ts`.
+    if (conn && isReusable(conn, Date.now())) return conn;
+    // Only drop the entry if it is still the one we looked at. A concurrent
+    // caller may already have replaced it with a fresh connection.
+    if (warmPool.get(key) === existing) warmPool.delete(key);
+    // Close our end so nothing else writes into it. A deliberate `close()`
+    // does not fire `onClose`, and it does not need to: the connection opened
+    // below is this pair's replacement and re-attaches the inbox handlers.
+    conn?.close();
   }
 
   mediatorState.set(key, "connecting");
@@ -2477,6 +2487,47 @@ async function getWarmSession(
   return pending;
 }
 
+/**
+ * Drop a pooled connection that can no longer be trusted, and close it.
+ *
+ * A no-op unless `conn` is still the pool's entry for `key`, so a late signal
+ * about an old connection cannot evict its replacement. A deliberate `close()`
+ * does not fire `onClose`, so an inbox is re-armed here. Otherwise the agent
+ * could not reach this wallet until something else happened to open a session.
+ */
+async function evictWarmSession(
+  key: string,
+  conn: MediatorConnection,
+  reason: string,
+): Promise<void> {
+  const entry = warmPool.get(key);
+  if (!entry || (await entry.catch(() => null)) !== conn) return;
+  if (warmPool.get(key) !== entry) return; // replaced while we awaited
+  warmPool.delete(key);
+  mediatorState.set(key, "closed");
+  conn.close();
+  const { mediatorDid, vtaDid } = parsePoolKey(key);
+  console.info("[pnm mediator] dropped session for", vtaDid, "at", mediatorDid, "—", reason);
+  if (mediatorDid === (await inboxMediatorFor(vtaDid))) scheduleInboundReconnect(vtaDid);
+}
+
+// The machine slept: every pooled socket is suspect. Timers do not run during
+// sleep, so the first tick after wake arrives late, and that is the only
+// signal an offscreen document gets. Dropping them all costs a reconnect each.
+// Keeping one the mediator closed meanwhile costs a request that hangs for 30
+// seconds and then fails.
+startWakeWatch({
+  onWake: (gapMs) => {
+    console.info(`[pnm mediator] woke after ${Math.round(gapMs / 1000)}s; reconnecting sessions`);
+    for (const [key, entry] of warmPool) {
+      void entry.then(
+        (conn) => evictWarmSession(key, conn, "machine slept"),
+        () => undefined, // never connected, so nothing to close
+      );
+    }
+  },
+});
+
 async function createWarmSession(
   mediatorDid: string,
   vtaDid: string,
@@ -2484,6 +2535,9 @@ async function createWarmSession(
   const { identity, signing } = await loadHolder(vtaDid);
   const isInbox = mediatorDid === (await inboxMediatorFor(vtaDid));
   const key = poolKey(mediatorDid, vtaDid);
+  // Set once the connection exists. The timeout hook only fires for a
+  // request sent on it, so it is never read before then.
+  let self: MediatorConnection | undefined;
   const conn = await connectMediatorSession({
     holder: identity,
     mediatorDid,
@@ -2503,7 +2557,14 @@ async function createWarmSession(
       // `close()`), so a deliberately-forgotten VTA isn't re-armed here.
       if (isInbox) scheduleInboundReconnect(vtaDid);
     },
+    // A request that got no reply may have gone into a socket that is dead
+    // without having closed. The request still fails, since it may have been
+    // applied, but this connection is not handed to the next one.
+    onReplyTimeout: () => {
+      if (self) void evictWarmSession(key, self, "reply timeout");
+    },
   });
+  self = conn;
   // Attach the inbound confirm handler whenever this session is THIS agent's
   // inbox — regardless of which operation first opened it.
   if (isInbox) {
