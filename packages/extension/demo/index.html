@@ -75,8 +75,8 @@
 
       <!-- ── DIDComm ── -->
       <section class="panel">
-        <h2>DIDComm · authcrypt-sender</h2>
-        <div class="sub">No id_token — authcrypt (ECDH-1PU) authenticates the sender DID; the RP ACL-checks the sender and returns the JWT, all via its mediator.</div>
+        <h2>DIDComm · signed challenge</h2>
+        <div class="sub">No id_token. The wallet asks the RP for a challenge and spends it in a signed auth/authenticate, both as Trust Tasks over DIDComm via the RP's mediator. The RP checks the proof, which must be by the sender, and returns the JWT.</div>
         <label>RP control DID</label>
         <input id="dc-controlDid" value="did:webvh:QmUcydmZKWsAUcuAGzyQRjXnSvnMdSRF1YM7gyhugYGS9s:webvh.storm.ws" />
         <label>RP mediator DID</label>
@@ -267,7 +267,7 @@
             controlDid: rpDid,
             mediatorDid: $("dc-mediatorDid").value.trim(),
           }),
-          ["wallet.loginDidcomm({ controlDid, mediatorDid })", "authcrypt MSG_AUTHENTICATE → mediator → RP"],
+          ["wallet.loginDidcomm({ controlDid, mediatorDid })", "auth/challenge → signed auth/authenticate → mediator → RP"],
           stashBase(rpDid, baseUrl),
         );
       });
