@@ -2378,6 +2378,11 @@ export type MonitorMessage =
  * the two in step; the `page_facing_types_cover_the_content_dispatch_table`
  * assertion in `background.ts` fails if a type here has no home.
  */
+/** content → background: a person's click on a trigger link. Declared here,
+ *  above the list it is in; the rest of the sign-in protocol is at the end of
+ *  this file. */
+export const RUNTIME_TRIGGER_LINK = "vta-wallet/trigger-link" as const;
+
 export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
@@ -2396,5 +2401,111 @@ export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_APPROVE_STEP_UP,
   RUNTIME_ATTEST_APPROVER,
   RUNTIME_APPROVE_DECISION,
+  // Not a provider method: the content script's own click listener sends it
+  // (`trigger-link-click.ts`). Listed so the background takes the activation
+  // origin from the browser, never from the body (VTI-LNK-056).
+  RUNTIME_TRIGGER_LINK,
 ] as const;
 
+
+// ─── Wallet sign-in from a trigger link (VTI spec 7a; sign-in contract C3) ───
+//
+// Three hops, and only the first touches a page:
+//
+//   content script ──RUNTIME_TRIGGER_LINK──▶ background
+//       The person clicked a link that parses as a trigger link. Carries the
+//       link and the origin the content script read at the click; the
+//       background replaces the origin with the browser-attested one, parses
+//       the link again, stores both in `chrome.storage.session` under a fresh
+//       flow id, and opens the sign-in window. Nothing is answered to the page.
+//
+//   sign-in window ──RUNTIME_SIGN_IN_STEP──▶ background ──OFFSCREEN_SIGN_IN_STEP──▶ offscreen
+//       One message per step the person takes. The window names only the flow
+//       id and what the person chose or typed; the link and the origin are
+//       added by the background from its own record, so an extension page
+//       cannot re-point a flow at another origin. The offscreen document runs
+//       the protocol and holds `K_a`, in memory only, for the flow's life.
+
+export interface RuntimeTriggerLinkRequest {
+  type: typeof RUNTIME_TRIGGER_LINK;
+  link: string;
+  /** Overwritten by the background with the attested `sender.origin`. */
+  origin: string;
+}
+
+/** sign-in window → background, and background → offscreen. */
+export const RUNTIME_SIGN_IN_STEP = "vta-wallet/sign-in-step" as const;
+export const OFFSCREEN_SIGN_IN_STEP = "offscreen/sign-in-step" as const;
+
+/** What the person did. `prepare` is the window opening. */
+export type SignInStep =
+  | { step: "prepare" }
+  | { step: "claim"; entryId: string }
+  | { step: "prove"; enteredNumber: string }
+  | { step: "grant-digest" }
+  | { step: "respond"; decision: "approve"; assertion: SignInUvAssertionView }
+  | { step: "respond"; decision: "decline" }
+  | { step: "cancel" };
+
+export type RuntimeSignInStepRequest = { type: typeof RUNTIME_SIGN_IN_STEP; flowId: string } & SignInStep;
+
+export type OffscreenSignInStepRequest = {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_SIGN_IN_STEP;
+  flowId: string;
+  vtaDid: string;
+  restBaseUrl?: string;
+  /** Present on `prepare` only, from the background's own record. */
+  link?: string;
+  origin?: string;
+} & SignInStep;
+
+/** Mirrors `UvWebauthnAssertion` in core (`vault/sign-oob.ts`). */
+export interface SignInUvAssertionView {
+  credentialId: string;
+  authenticatorData: string;
+  clientDataJSON: string;
+  signature: string;
+  userHandle?: string;
+}
+
+/** One identity the member can sign in as: a `didSelfIssued` vault entry
+ *  that targets the community. */
+export interface SignInIdentityView {
+  entryId: string;
+  did: string;
+  label: string;
+}
+
+/** What the window shows. Every variant is a screen. */
+export type SignInStepResult =
+  /** A refusal, with the VTI-LNK-021 message and nothing else about why. */
+  | { kind: "refused"; outcome: "update" | "expired" | "unreachable" | "invalid"; message: string }
+  /** VTI-LNK-101: not one of this wallet's communities. Nothing was sent to
+   *  it. `contactLabel` is the unverified domain label (VTI-LNK-050). */
+  | { kind: "not-member"; contactLabel?: string }
+  /** C3 step 5: "Sign in to <name> at <portal origin>?" */
+  | { kind: "confirm"; communityName: string; portalOrigin: string; identities: SignInIdentityView[] }
+  /** After the claim: type the number. `nameMismatch` is the community's own
+   *  name for itself when it differs from this wallet's record (VTI-LNK-104). */
+  | { kind: "enter-number"; nameMismatch?: string; /** Epoch ms. */ decisionDeadline: number }
+  /** Step 2: where the request came from (base design §14 step 11). */
+  | {
+      kind: "review";
+      location: string;
+      browser: string;
+      os: string;
+      createdAt: string;
+      network: "same" | "different" | "unknown";
+      identifiedAs: string;
+    }
+  /** The digest the passkey must sign (contract C6), base64url of the 32
+   *  challenge bytes, and the credential to use. */
+  | { kind: "uv-challenge"; challenge: string }
+  | { kind: "done"; decision: "approve" | "decline"; status: string }
+  /** The community refused with a stable code (R3.7). */
+  | { kind: "failed"; code: string; message: string };
+
+export type RuntimeSignInStepResponse =
+  | { ok: true; result: SignInStepResult }
+  | { ok: false; error: string };

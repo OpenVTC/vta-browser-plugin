@@ -263,6 +263,16 @@ import {
 import { vetEgressUrl } from "./proxy-url.js";
 import { ConsentReplayLedger, replayKey } from "./consent-replay.js";
 import { deliverConsentResult, openConsentWindow, type ConsentDecision } from "./consent-window.js";
+import { parseTriggerLink } from "@openvtc/pnm-core/links";
+import {
+  RUNTIME_TRIGGER_LINK,
+  RUNTIME_SIGN_IN_STEP,
+  OFFSCREEN_SIGN_IN_STEP,
+  type RuntimeTriggerLinkRequest,
+  type RuntimeSignInStepRequest,
+  type RuntimeSignInStepResponse,
+  type OffscreenSignInStepRequest,
+} from "./bridge-protocol.js";
 
 /** Consent-gated requests awaiting their one exempt replay. In-memory by
  *  design: a service-worker restart loses it, and losing it costs one extra
@@ -3203,6 +3213,93 @@ async function handleApiPost(req: RuntimeApiPostRequest): Promise<RuntimeApiGetR
  */
 const PAGE_FACING_TYPES: ReadonlySet<string> = new Set(PAGE_FACING_RUNTIME_TYPES);
 
+// ─── Wallet sign-in from a trigger link (VTI spec 7a; contract C2/C3) ───
+//
+// The content script reports a person's click on a trigger link. The worker
+// re-parses it, records the link and the browser-attested origin under a fresh
+// flow id in `chrome.storage.session` (memory only, gone with the browser
+// session), and opens the sign-in window. The window drives the flow by id;
+// the link and the origin never come from it. Nothing is answered to the page.
+
+const SIGN_IN_FLOW_PREFIX = "sign-in-flow:";
+
+interface SignInFlowRecord {
+  link: string;
+  origin: string;
+}
+
+async function handleTriggerLink(msg: RuntimeTriggerLinkRequest): Promise<void> {
+  const parsed = parseTriggerLink(typeof msg.link === "string" ? msg.link : "", {
+    now: Math.floor(Date.now() / 1000),
+  });
+  // Text that is not a trigger link is not ours. The content script already
+  // let it navigate; this is the same rule, held again.
+  if (!parsed.ok && parsed.outcome === "pass-on") return;
+  const flowId = crypto.randomUUID();
+  const record: SignInFlowRecord = { link: msg.link, origin: msg.origin };
+  await chrome.storage.session.set({ [`${SIGN_IN_FLOW_PREFIX}${flowId}`]: record });
+  const url = `${chrome.runtime.getURL("confirm.html")}?kind=sign-in&flow=${flowId}`;
+  const bounds = await consentWindowBounds(640);
+  // Closing the window ends the flow: a claim the community holds is
+  // cancelled and K_a forgotten.
+  openConsentWindow({
+    url,
+    bounds,
+    deny: () => void endSignInFlow(flowId),
+    tag: "[pnm sign-in]",
+    what: "sign-in window",
+  });
+}
+
+async function endSignInFlow(flowId: string): Promise<void> {
+  const key = `${SIGN_IN_FLOW_PREFIX}${flowId}`;
+  const had = (await chrome.storage.session.get(key))[key] !== undefined;
+  await chrome.storage.session.remove(key);
+  if (!had) return;
+  try {
+    await ensureOffscreenDocument();
+    await chrome.runtime.sendMessage({
+      target: OFFSCREEN_TARGET,
+      type: OFFSCREEN_SIGN_IN_STEP,
+      flowId,
+      vtaDid: "",
+      step: "cancel",
+    } satisfies OffscreenSignInStepRequest);
+  } catch {
+    // The offscreen document is gone, and K_a with it.
+  }
+}
+
+async function handleSignInStep(msg: RuntimeSignInStepRequest): Promise<RuntimeSignInStepResponse> {
+  const key = `${SIGN_IN_FLOW_PREFIX}${msg.flowId}`;
+  const record = (await chrome.storage.session.get(key))[key] as SignInFlowRecord | undefined;
+  if (!record) {
+    return {
+      ok: true,
+      result: { kind: "failed", code: "sign-in/out-of-order", message: "Refresh the code on the website and try again." },
+    };
+  }
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
+  await ensureOffscreenDocument();
+  const { type: _type, flowId, ...step } = msg;
+  const forward = {
+    ...step,
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_SIGN_IN_STEP,
+    flowId,
+    vtaDid: active.conn.vtaDid,
+    ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}),
+    // From the worker's own record, on the first step only.
+    ...(msg.step === "prepare" ? { link: record.link, origin: record.origin } : {}),
+  } as OffscreenSignInStepRequest;
+  const res = (await chrome.runtime.sendMessage(forward)) as RuntimeSignInStepResponse;
+  if (res.ok && (res.result.kind === "done" || res.result.kind === "refused" || res.result.kind === "not-member")) {
+    await chrome.storage.session.remove(key);
+  }
+  return res;
+}
+
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Defence-in-depth: only accept messages from this extension's
@@ -3247,6 +3344,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // message with no tab behind it is an extension context impersonating a page
   // relay, and there is no legitimate caller for that.
   const msgType = (message as { type?: string })?.type;
+  // A trigger-link activation carries the origin the content script read at
+  // the click (VTI-LNK-056). It must be the page the browser says the message
+  // came from — a page that navigated in between gets nothing — and from here
+  // on only the browser's value is used.
+  if (msgType === RUNTIME_TRIGGER_LINK) {
+    const attested = attestedOrigin(sender);
+    if (!attested || isExtensionPageSender(sender) || (message as { origin?: unknown }).origin !== attested) {
+      return false;
+    }
+  }
   if (msgType && PAGE_FACING_TYPES.has(msgType)) {
     const attested = attestedOrigin(sender);
     if (!attested) {
@@ -3258,6 +3365,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
     (message as { origin?: string }).origin = attested;
+  }
+
+  if (msgType === RUNTIME_TRIGGER_LINK) {
+    // Fire-and-forget: the page must not learn what the wallet decided.
+    void handleTriggerLink(message as RuntimeTriggerLinkRequest).catch(() => undefined);
+    return false;
+  }
+
+  if (msgType === RUNTIME_SIGN_IN_STEP) {
+    // Only the sign-in window drives a flow; a content script naming a flow id
+    // it guessed is not that window.
+    if (!isExtensionPageSender(sender)) {
+      sendResponse({ ok: false, error: "sign-in steps come from the wallet's own window" });
+      return false;
+    }
+    handleSignInStep(message as RuntimeSignInStepRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
   }
 
   if ((message as { type?: string })?.type === RUNTIME_API_GET) {

@@ -195,6 +195,13 @@ import {
   type OffscreenMediatorRequest,
   type RuntimeMediatorResponse,
 } from "./bridge-protocol.js";
+import {
+  OFFSCREEN_SIGN_IN_STEP,
+  type OffscreenSignInStepRequest,
+  type RuntimeSignInStepResponse,
+} from "./bridge-protocol.js";
+import { SignInFlows, type SignInVaultEntry } from "./sign-in-flows.js";
+import { collectPages, vaultSignIdentify, vaultSignGrant, type TrustTaskEnvelope } from "@openvtc/pnm-core";
 import { relayFailure } from "./relay-failure.js";
 import { chooseTrustTaskSigner, needsVault, SignAsUnavailableError } from "./sign-identity.js";
 import { isLensTask, knownRelays, mayOperateMediator } from "./mediator-standing.js";
@@ -261,6 +268,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (msg?.target !== OFFSCREEN_TARGET) return false; // not for us
   if (msg.type === OFFSCREEN_DIDCOMM_LOGIN) {
     doDidcommLogin(message as OffscreenDidcommLoginRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_SIGN_IN_STEP) {
+    const req = message as OffscreenSignInStepRequest;
+    signInFlows
+      .step(req)
+      .then((result): RuntimeSignInStepResponse => ({ ok: true, result }))
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -1225,6 +1243,56 @@ async function buildVtaSession(
     ...(didcommConn ? { didcommConn } : {}),
   };
 }
+
+// ─── Wallet sign-in from a trigger link ───
+//
+// `SignInFlows` (sign-in-flows.ts) runs the protocol; this wires it to the
+// holder's VTA session. `K_a` lives inside it, in this document's memory only:
+// if the document is torn down mid-flow the key is gone and the request simply
+// expires at the community, which is the correct failure for a throwaway key.
+const signInFlows = new SignInFlows({
+  now: () => Date.now(),
+  // A ceiling the member grants; the community ends the session at the
+  // earlier of this and its own limit (base design §7.6).
+  grantLifetimeMs: 12 * 60 * 60 * 1000,
+  vta: (vtaDid, restBaseUrl) => ({
+    listIdentities: async () => {
+      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+      // Every didSelfIssued entry, read to the end. The community's DID is not
+      // sent as a filter: the match happens here (VTI-LNK-073).
+      return collectPages<SignInVaultEntry>("vault/list (didSelfIssued)", async (cursor) => {
+        const page = await vaultList(session, {
+          holder,
+          service,
+          filter: { secretKind: "didSelfIssued", ...(cursor ? { cursor } : {}) },
+        });
+        return {
+          items: page.entries as unknown as SignInVaultEntry[],
+          ...(page.cursor ? { nextCursor: page.cursor } : {}),
+        };
+      });
+    },
+    signIdentify: async (entryId, unsigned) => {
+      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+      return vaultSignIdentify(session, {
+        holder,
+        service,
+        entryId,
+        unsignedIdentify: unsigned as unknown as TrustTaskEnvelope,
+      });
+    },
+    signGrant: async (entryId, unsigned, decision) => {
+      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+      return vaultSignGrant(session, {
+        holder,
+        service,
+        entryId,
+        unsignedGrant: unsigned as unknown as TrustTaskEnvelope,
+        ...(decision ? { consentDecision: decision } : {}),
+      });
+    },
+  }),
+});
 
 /** The wallet holder's session for `vtaDid`, over the warm mediator pool. */
 async function getVtaSession(

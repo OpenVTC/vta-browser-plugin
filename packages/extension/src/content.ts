@@ -1,11 +1,15 @@
 /// <reference types="chrome" />
 
-// Content script (isolated world). Two jobs:
+// Content script (isolated world). Three jobs:
 //   1. Inject the page-world provider (`provider.js`) so the RP page can
 //      call `window.vtaWallet.login(...)`.
 //   2. Relay each provider request to the background service worker and
 //      post the response back into the page.
+//   3. Catch a person's click on a trigger link (a sign-in QR code that is also
+//      a link) and hand it to the worker instead of navigating — see
+//      `trigger-link-click.ts`. Nothing about the result reaches the page.
 
+import { installTriggerLinkClickHandler } from "./trigger-link-click.js";
 import type {
   BridgeMethod,
   ContentResponse,
@@ -14,9 +18,12 @@ import type {
 } from "./bridge-protocol.js";
 
 // A content script is injected as a *classic* script and cannot `import`,
-// so this file must bundle to a single self-contained chunk. We therefore
-// inline the protocol string constants instead of importing their values.
-// Keep these in sync with `bridge-protocol.ts`.
+// so this file must bundle to a single self-contained chunk. It is built on
+// its own (`vite.config.content.ts`, `codeSplitting: false`), which is what
+// lets it import the trigger-link parser from core: there is no other entry to
+// share a chunk with. The protocol string constants are still inlined rather
+// than imported, so `bridge-protocol.ts` (and everything it names) stays out
+// of the page's process; `page-facing-surface.test.mts` checks them against it.
 const INPAGE_SOURCE = "vta-wallet/inpage";
 const CONTENT_SOURCE = "vta-wallet/content";
 const RUNTIME_LOGIN = "vta-wallet/login";
@@ -37,6 +44,7 @@ const RUNTIME_APPROVE_STEP_UP = "vta-wallet/approve-step-up";
 const RUNTIME_ATTEST_APPROVER = "vta-wallet/attest-approver";
 const RUNTIME_APPROVE_DECISION = "vta-wallet/approve-decision";
 const RUNTIME_BROADCAST_EVENT = "vta-wallet/broadcast-event";
+const RUNTIME_TRIGGER_LINK = "vta-wallet/trigger-link";
 
 // ─── 1. Inject the provider into the page world. ───
 // The content script runs in an isolated world, so assigning
@@ -151,7 +159,19 @@ chrome.runtime.onMessage.addListener((message) => {
   );
 });
 
-// ─── 4. Emit `ready` on initial content-script load. ───
+// ─── 4. Same-device trigger links (VTI-LNK-056). ───
+// The worker's answer is deliberately not awaited or read: the page must not
+// learn what the wallet decided about a link it was shown.
+installTriggerLinkClickHandler(window, {
+  now: () => Math.floor(Date.now() / 1000),
+  send: (activation) => {
+    void chrome.runtime
+      .sendMessage({ type: RUNTIME_TRIGGER_LINK, link: activation.link, origin: activation.origin })
+      .catch(() => undefined);
+  },
+});
+
+// ─── 5. Emit `ready` on initial content-script load. ───
 // Fires once per fresh content-script instance. On extension reload,
 // the OLD content script in this tab is orphaned (`chrome.runtime`
 // calls all fail with "Extension context invalidated"). The
