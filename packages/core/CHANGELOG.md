@@ -26,6 +26,16 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Changed
 
+- **Every channel signs an outbound document for the purpose its type
+  requires**, using the one policy in `trust-tasks/purpose.ts`
+  (`proofPurposeForDocumentType`): `authentication` for operational documents
+  and `assertionMethod` for the attestation types (`ATTESTATION_SLUGS`, which
+  include `auth/oob/grant`). Channels used to sign everything for
+  `assertionMethod`; the VTA, the VTC and the did-hosting RP now check the
+  purpose (VTI #1740, affinidi-webvh-service #213). `TaskSigner.sign` takes an
+  optional `TaskSignOptions` (`{ proofPurpose }`), so a signer written for the
+  one-argument form still type-checks. `localTaskSigner` honours it, and picks
+  by type when called without it. `signTrustTask`'s own default is unchanged.
 - `@openvtc/trust-tasks` floor raised to `^0.23.0`, the first binding whose
   `git-ns/activity/list/0.1` schema is satisfiable (0.22.7's `ActivityItem`
   required a `source` it did not define). `ApproverAttestPayload` and

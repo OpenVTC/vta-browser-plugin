@@ -19,6 +19,7 @@
 import { isStandardCode, normalizeCode } from "@openvtc/trust-tasks/_runtime/codes";
 
 import type { SigningIdentity } from "../siop/self-issued.js";
+import { proofPurposeForDocumentType, type ProofPurpose } from "../trust-tasks/purpose.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
 import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import { VtaClientError, type VtaErrorCode } from "./errors.js";
@@ -117,7 +118,23 @@ export async function signOutboundTask(
       `${envelope.type}: envelope issuer ${envelope.issuer} is not the signing identity ${signer.did}`,
     );
   }
-  await signer.sign(envelope);
+  await signer.sign(envelope, { proofPurpose: proofPurposeForDocumentType(envelope.type) });
+}
+
+/**
+ * What {@link signOutboundTask} asks of a {@link TaskSigner}.
+ *
+ * The purpose comes from the document's **type**
+ * ({@link proofPurposeForDocumentType}): `authentication` for an operational
+ * document, which is nearly all of them, and `assertionMethod` for an
+ * attestation such as an approve-response, a consent decision or an
+ * `auth/oob/grant`. The VTA, the VTC and the did-hosting RP sign their own
+ * documents by the same rule (VTI #1740, affinidi-webvh-service #213) and
+ * check the purpose on what they receive, so a channel never lets its caller
+ * choose.
+ */
+export interface TaskSignOptions {
+  proofPurpose: ProofPurpose;
 }
 
 /**
@@ -142,18 +159,34 @@ export async function signOutboundTask(
  */
 export interface TaskSigner {
   readonly did: string;
-  sign(envelope: TrustTask<unknown>): Promise<void>;
+  /**
+   * Put a proof on `envelope`, in place.
+   *
+   * `opts` is optional so that a signer written against the one-argument form
+   * still type-checks; every channel passes it. A signer that cannot choose the
+   * purpose ignores it: the VTA's `vault/sign-trust-task` picks the purpose
+   * from the document type itself, by the same rule.
+   */
+  sign(envelope: TrustTask<unknown>, opts?: TaskSignOptions): Promise<void>;
 }
 
-/** A signer backed by a key this process holds — the holder's own identity,
- *  and what every channel used before the persona paths existed. */
+/**
+ * A signer backed by a key this process holds — the holder's own identity,
+ * and what every channel used before the persona paths existed.
+ *
+ * Signs for `opts.proofPurpose`, or, when called without one, for the purpose
+ * the document's type requires. It used to sign everything for
+ * `assertionMethod`, which reads as an attestation: the consumers now refuse
+ * that on an operational document.
+ */
 export function localTaskSigner(signing: SigningIdentity): TaskSigner {
   return {
     did: signing.did,
-    sign: async (envelope) => {
+    sign: async (envelope, opts) => {
       await signTrustTask({
         envelope: envelope as unknown as Record<string, unknown> & { proof?: unknown },
         signing,
+        proofPurpose: opts?.proofPurpose ?? proofPurposeForDocumentType(envelope.type),
       });
     },
   };

@@ -32,6 +32,7 @@ import {
   buildTrustTask,
   generateSigningIdentity,
   localTaskSigner,
+  proofPurposeForDocumentType,
   signOutboundTask,
   verifyTrustTaskProof,
 } from "../dist/index.js";
@@ -44,11 +45,15 @@ import { openTspEnvelope, wrapTspEnvelope } from "../dist/vta/tsp-binding.js";
 const utf8 = new TextEncoder();
 const fromUtf8 = new TextDecoder();
 
-/** Assert `doc` carries a proof that verifies as its own `issuer`. */
+/**
+ * Assert `doc` carries a proof that verifies as its own `issuer`, declaring
+ * `authentication`: the purpose of an operational document, which the VTA, the
+ * VTC and the RPs now check (VTI #1740, affinidi-webvh-service #213).
+ */
 async function assertSignedBy(doc, expectedIssuer) {
   assert.ok(doc, "no document reached the counterparty");
   const res = await verifyTrustTaskProof(doc, {
-    expectedProofPurpose: "assertionMethod",
+    expectedProofPurpose: "authentication",
   });
   assert.equal(res.verified, true, `proof did not verify: ${res.reason}`);
   // SPEC §7.2 item 6 — a valid proof by some *other* DID establishes only that
@@ -273,4 +278,49 @@ test("re-signing a document that already carries a proof does not sign over it",
   await signOutboundTask(envelope, localTaskSigner(signing));
 
   await assertSignedBy(envelope, signing.did);
+});
+
+// ── the purpose each document declares ──────────────────────────────────────
+
+test("an operational document declares authentication; an attestation declares assertionMethod", async () => {
+  // One policy, decided by the document's type (`proofPurposeForDocumentType`),
+  // so every channel and every signer gives a document the same purpose.
+  const S = "https://trusttasks.org/spec/";
+  for (const [type, purpose] of [
+    [VAULT_DELETE, "authentication"],
+    [`${S}auth/challenge/0.1`, "authentication"],
+    [`${S}auth/authenticate/0.2`, "authentication"],
+    [`${S}auth/step-up/approve-response/0.6`, "assertionMethod"],
+    [`${S}task-consent/decision/0.1`, "assertionMethod"],
+    [`${S}auth/oob/grant/0.1`, "assertionMethod"],
+  ]) {
+    assert.equal(proofPurposeForDocumentType(type), purpose, type);
+    const signing = generateSigningIdentity();
+    const envelope = buildTrustTask(type, {}, { issuer: signing.did, recipient: "did:key:zRp" });
+    await signOutboundTask(envelope, localTaskSigner(signing));
+    assert.equal(envelope.proof.proofPurpose, purpose, type);
+    const res = await verifyTrustTaskProof(envelope, { expectedProofPurpose: purpose });
+    assert.equal(res.verified, true, `${type}: ${res.reason}`);
+  }
+});
+
+test("a signer is told the purpose, and one written for the one-argument form still works", async () => {
+  const signing = generateSigningIdentity();
+  const seen = [];
+  const local = localTaskSigner(signing);
+  const recording = {
+    did: signing.did,
+    sign: async (envelope, opts) => {
+      seen.push(opts?.proofPurpose);
+      await local.sign(envelope, opts);
+    },
+  };
+  const envelope = buildTrustTask(VAULT_DELETE, { id: "e-p" }, { issuer: signing.did, recipient: "did:key:zVta" });
+  await signOutboundTask(envelope, recording);
+  assert.deepEqual(seen, ["authentication"]);
+
+  // Called directly, with no options, the local signer still picks by type.
+  const direct = buildTrustTask(VAULT_DELETE, { id: "e-q" }, { issuer: signing.did, recipient: "did:key:zVta" });
+  await local.sign(direct);
+  assert.equal(direct.proof.proofPurpose, "authentication");
 });

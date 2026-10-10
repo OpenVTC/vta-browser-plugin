@@ -45,6 +45,7 @@ import {
   type TrustTask,
   type TrustTaskErrorPayload,
 } from "../vta/protocol.js";
+import { proofPurposeForDocumentType } from "../trust-tasks/purpose.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
 import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import {
@@ -627,9 +628,14 @@ export async function buildTaskConsentDecisionDocument(
   // The proof IS the authorization: the VTA takes the approver's identity from
   // it and not from the session that carried it. A bearer token proves who
   // opened the channel, not who agreed.
+  //
+  // Signed outside a channel (it travels as a threaded reply on the consent
+  // request's thread), so it takes the purpose the channels would give it:
+  // `assertionMethod`, because the decision is the approver's attestation.
   await signTrustTask({
     envelope: document as unknown as Record<string, unknown> & { proof?: unknown },
     signing: args.signing,
+    proofPurpose: proofPurposeForDocumentType(TASK_CONSENT_DECISION_TYPE),
   });
   return document;
 }
