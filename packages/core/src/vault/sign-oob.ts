@@ -49,6 +49,12 @@ import {
   type DeviceHeartbeatPayload,
   type DeviceHeartbeatResponsePayload,
 } from "@openvtc/trust-tasks/device/heartbeat/0.2/payload";
+import {
+  TYPE_URI as DEVICE_REGISTER,
+  RESPONSE_TYPE_URI as DEVICE_REGISTER_RESPONSE,
+  type DeviceRegisterPayload,
+  type DeviceRegisterResponsePayload,
+} from "@openvtc/trust-tasks/device/register/0.2/payload";
 
 /** `payload.ext` member carrying the UV approval of a grant. */
 export const EXT_UV_CONSENT = "org.openvtc.uv-consent";
@@ -210,24 +216,54 @@ export function p256PointFromSpki(spki: Uint8Array): Uint8Array {
   return spki.slice(26);
 }
 
+/** `details.reason` the VTA puts on a `taskFailed` for a missing row
+ *  (`vta_sdk::protocols::trust_task_reject_reasons::NOT_FOUND`), R3.7. */
+const REASON_NOT_FOUND = "not_found";
+
+function rejectReason(err: unknown): string | undefined {
+  const details = (err as { details?: { details?: { reason?: unknown } } })?.details?.details;
+  return typeof details?.reason === "string" ? details.reason : undefined;
+}
+
 /**
- * Enrol (or replace) the device's UV passkey: `device/heartbeat/0.2` with
- * `payload.ext["org.openvtc.uv-key"]`, over the device's own session — the
- * VTA accepts a replacement only from the device's transport key.
+ * Enrol (or replace) the device's UV passkey, over the device's own session —
+ * the VTA accepts a replacement only from the device's transport key.
+ *
+ * `device/heartbeat/0.2` with `payload.ext["org.openvtc.uv-key"]` for a device
+ * the VTA already has a binding for. A device that never registered (the
+ * heartbeat answers `not_found`) is registered with `device/register/0.2`,
+ * carrying the same extension; re-registering a bound device is a conflict,
+ * which is why the heartbeat goes first.
  */
 export async function enrolUvPasskey(
   sender: TrustTaskSender,
-  params: { holder: TaskParty; service: TaskParty; enrolment: WebauthnUvKeyEnrolment },
-): Promise<DeviceHeartbeatResponsePayload> {
-  const payload: DeviceHeartbeatPayload = {
-    ext: { [EXT_UV_KEY]: params.enrolment } as unknown as NonNullable<DeviceHeartbeatPayload["ext"]>,
+  params: {
+    holder: TaskParty;
+    service: TaskParty;
+    enrolment: WebauthnUvKeyEnrolment;
+    /** Shown to the operator if this enrolment has to register the device. */
+    displayName: string;
+  },
+): Promise<void> {
+  const ext = { [EXT_UV_KEY]: params.enrolment } as unknown as NonNullable<DeviceHeartbeatPayload["ext"]>;
+  const parties = { issuer: params.holder.did, recipient: params.service.did };
+  try {
+    const payload: DeviceHeartbeatPayload = { ext };
+    await sender.send<DeviceHeartbeatResponsePayload>(buildTrustTask(DEVICE_HEARTBEAT, payload, parties), {
+      expectedResponseType: DEVICE_HEARTBEAT_RESPONSE,
+      operationLabel: "device/heartbeat/0.2 (uv-key)",
+    });
+    return;
+  } catch (err) {
+    if (rejectReason(err) !== REASON_NOT_FOUND) throw err;
+  }
+  const payload: DeviceRegisterPayload = {
+    consumerKind: { kind: "companion", formFactor: "browser" },
+    displayName: params.displayName,
+    ext,
   };
-  const envelope = buildTrustTask(DEVICE_HEARTBEAT, payload, {
-    issuer: params.holder.did,
-    recipient: params.service.did,
-  });
-  return sender.send<DeviceHeartbeatResponsePayload>(envelope, {
-    expectedResponseType: DEVICE_HEARTBEAT_RESPONSE,
-    operationLabel: "device/heartbeat/0.2 (uv-key)",
+  await sender.send<DeviceRegisterResponsePayload>(buildTrustTask(DEVICE_REGISTER, payload, parties), {
+    expectedResponseType: DEVICE_REGISTER_RESPONSE,
+    operationLabel: "device/register/0.2 (uv-key)",
   });
 }

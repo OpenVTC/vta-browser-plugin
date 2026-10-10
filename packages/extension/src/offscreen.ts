@@ -1311,7 +1311,7 @@ const signInFlows = new SignInFlows({
     },
     enrolUvKey: async (enrolment) => {
       const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-      await enrolUvPasskey(session, { holder, service, enrolment });
+      await enrolUvPasskey(session, { holder, service, enrolment, displayName: "VTA Wallet browser extension" });
     },
   }),
 });

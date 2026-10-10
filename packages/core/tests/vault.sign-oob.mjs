@@ -134,21 +134,47 @@ test("identify goes through vault/sign-trust-task/0.2 as {entryId, unsignedEnvel
   assert.equal(typeof id.payload.enteredNumber, "string");
 });
 
+const ENROLMENT = {
+  kind: "webauthn",
+  credentialId: "AAECAwQFBgc",
+  publicKeyMultibase: "zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169",
+  rpId: "abcdefghijklmnopabcdefghijklmnop",
+  origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+  hardwareBacked: false,
+  biometricGated: false,
+};
+
 test("UV-key enrolment: device/heartbeat/0.2 with payload.ext[org.openvtc.uv-key]", async () => {
-  const enrolment = {
-    kind: "webauthn",
-    credentialId: "AAECAwQFBgc",
-    publicKeyMultibase: "zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169",
-    rpId: "abcdefghijklmnopabcdefghijklmnop",
-    origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
-    hardwareBacked: false,
-    biometricGated: false,
-  };
   const ch = recorder(() => ({ serverTime: new Date().toISOString() }));
-  await enrolUvPasskey(ch, { holder, service, enrolment });
+  await enrolUvPasskey(ch, { holder, service, enrolment: ENROLMENT, displayName: "Chrome" });
+  assert.equal(ch.sent.length, 1);
   assert.equal(ch.sent[0].type, "https://trusttasks.org/spec/device/heartbeat/0.2");
   assert.equal(ch.sent[0].issuer, holder.did);
-  assert.deepEqual(ch.sent[0].payload, { ext: { [EXT_UV_KEY]: enrolment } });
+  assert.deepEqual(ch.sent[0].payload, { ext: { [EXT_UV_KEY]: ENROLMENT } });
+});
+
+test("UV-key enrolment of an unregistered device falls back to device/register/0.2 on not_found", async () => {
+  const ch = recorder((env) => {
+    if (env.type.includes("heartbeat")) {
+      throw Object.assign(new Error("device/heartbeat:notRegistered"), {
+        details: { code: "taskFailed", details: { reason: "not_found" } },
+      });
+    }
+    return { binding: {} };
+  });
+  await enrolUvPasskey(ch, { holder, service, enrolment: ENROLMENT, displayName: "Chrome" });
+  assert.equal(ch.sent[1].type, "https://trusttasks.org/spec/device/register/0.2");
+  assert.deepEqual(ch.sent[1].payload, {
+    consumerKind: { kind: "companion", formFactor: "browser" },
+    displayName: "Chrome",
+    ext: { [EXT_UV_KEY]: ENROLMENT },
+  });
+  // Any other refusal is not papered over with a registration.
+  const other = recorder(() => {
+    throw Object.assign(new Error("disabled"), { details: { details: { reason: "forbidden" } } });
+  });
+  await assert.rejects(enrolUvPasskey(other, { holder, service, enrolment: ENROLMENT, displayName: "Chrome" }));
+  assert.equal(other.sent.length, 1);
 });
 
 test("P-256 Multikey: zDn…, compressed, matching the VTA's test vector", () => {
