@@ -6,3 +6,4 @@
 // a VTC rather than by an agent, and is not wrapped here.
 
 export * from "./membership.js";
+export * from "./oob-sign-in.js";

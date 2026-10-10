@@ -47,11 +47,15 @@ export type TriggerLinkReason =
   | "from-not-allowed"
   | "missing-exp"
   | "expired"
-  // After the link (VTI-LNK-052, 053, 055, 105).
+  // After the link (VTI-LNK-052, 053, 055, 105). `untyped` is a link with no
+  // `_type`, which this reader cannot place (VTI-LNK-055, outcome `invalid`).
   | "did-document-unverified"
   | "no-common-transport"
   | "untyped"
-  | "wrong-origin";
+  | "wrong-origin"
+  // Local to this reader, outcome `invalid`: the community's verified document
+  // lists no usable `SignInPortal` service (VTI-LNK-102 names no reason).
+  | "no-portal-service";
 
 /** What the person can do about it (VTI-LNK-021). */
 export type TriggerLinkOutcome = "update" | "expired" | "unreachable" | "pass-on" | "invalid";

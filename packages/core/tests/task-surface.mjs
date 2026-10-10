@@ -51,6 +51,14 @@ const NOT_IN_SDK = [
       "This library parses it, never sends it, so it is not part of the SDK's client surface.",
   },
   {
+    prefix: "https://trusttasks.org/spec/auth/oob/",
+    why:
+      "Wallet sign-in (vtc/oob-sign-in.ts): claim, prove, respond and cancel go to the " +
+      "community's VTC, and identify/grant are documents the member's VTA signs through " +
+      "vault/sign-trust-task, never tasks sent to the agent. The VTC, not the VTA, is the " +
+      "counterparty, so vta-sdk carries no constant for them.",
+  },
+  {
     prefix: "https://trusttasks.org/spec/push/register/",
     why:
       "Defined in the vta-mobile-core crate, not vta-sdk. The wallet registers a push " +
