@@ -29,7 +29,7 @@ import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import { jcsCanonicalize, sha256, base58btcEncode } from "../trust-tasks/canonical.js";
 import { meetsHostRules, type TriggerLinkReason } from "../links/trigger-link.js";
 import { isTrustTaskErrorType } from "../vta/protocol.js";
-import { TRUST_TASK_HTTPS_SERVICE_TYPE } from "../vta/endpoint.js";
+import { TRUST_TASK_HTTPS_SERVICE_TYPE, trustTaskUrl } from "../vta/endpoint.js";
 import { withFetchTimeout, isFetchTimeout } from "../http/timeout-fetch.js";
 
 // ── Type URIs (contract C5) ──────────────────────────────────────────────────
@@ -163,8 +163,10 @@ export const SIGN_IN_PORTAL_SERVICE_TYPE = "SignInPortal";
 export interface SignInServices {
   /** The origin of the `SignInPortal` service's endpoint. */
   portalOrigin: string;
-  /** The first usable `TrustTaskHTTPS` service's endpoint: the full URL
-   *  documents are POSTed to, used exactly as published (contract C9). */
+  /** The URL documents are POSTed to: the first usable `TrustTaskHTTPS`
+   *  service's endpoint is a Trust-Task **base**, and this is
+   *  `<base>/trust-tasks` (HTTPS binding 0.2 §6), composed by `trustTaskUrl`
+   *  exactly as the VTA calls compose theirs. */
   trustTaskEndpoint: string;
 }
 
@@ -225,9 +227,13 @@ export function selectSignInServices(doc: unknown): SignInServicesResult {
   for (const s of services) {
     if (!s || typeof s !== "object") continue;
     if (!portal && hasType(s, SIGN_IN_PORTAL_SERVICE_TYPE)) portal = usableHttpsEndpoint(s.serviceEndpoint)?.url;
-    // The full POST URL, exactly as published: no path is appended and no
-    // slash trimmed (contract C9).
-    if (!endpoint && hasType(s, TRUST_TASK_HTTPS_SERVICE_TYPE)) endpoint = usableHttpsEndpoint(s.serviceEndpoint)?.text;
+    // The published endpoint is the Trust-Task base; the POST URL is
+    // `<base>/trust-tasks` (binding 0.2 §6), composed the one way the rest of
+    // this library composes it (a trailing `/` on the base is dropped).
+    if (!endpoint && hasType(s, TRUST_TASK_HTTPS_SERVICE_TYPE)) {
+      const base = usableHttpsEndpoint(s.serviceEndpoint)?.text;
+      if (base !== undefined) endpoint = trustTaskUrl(base);
+    }
   }
   if (!portal) return { ok: false, reason: "no-portal-service" };
   if (!endpoint) return { ok: false, reason: "no-common-transport" };
@@ -416,7 +422,8 @@ export interface OobSenderOptions {
   /** The community's verified document: the reply's signing key is looked up
    *  here, never re-fetched on the strength of the reply. */
   vtcDocument: Record<string, unknown>;
-  /** The `TrustTaskHTTPS` endpoint, the full POST URL (contract C9). */
+  /** The POST URL, `<TrustTaskHTTPS base>/trust-tasks` (binding 0.2 §6), as
+   *  `selectSignInServices` composes it. */
   trustTaskEndpoint: string;
   fetch?: typeof fetch;
 }

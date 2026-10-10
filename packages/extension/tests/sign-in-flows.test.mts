@@ -15,7 +15,10 @@ import { SignInFlows, ALREADY_CLAIMED_MESSAGE, type SignInVaultEntry } from "../
 
 const VTC = "did:webvh:QmPEQVM1JPTyrvEgBcDXwjK4TeyLGSX1PxjgyeAisPviUx:members.example.org";
 const PORTAL = "https://members.example.org";
-const ENDPOINT = "https://members.example.org/v1/trust-tasks";
+// The published `TrustTaskHTTPS` endpoint is the base; documents go to
+// `<base>/trust-tasks` (HTTPS binding 0.2 §6).
+const BASE = "https://members.example.org/v1";
+const ENDPOINT = `${BASE}/trust-tasks`;
 const ID = "Hk2pQ9xV4mT7rW1sZ8yN3A";
 const NOW = 1_791_460_900_000;
 const LINK = `https://link.trustoverip.org/t#_from=${VTC}&_id=${ID}&_exp=${Math.floor(NOW / 1000) + 100}&_type=/vti/flow/sign-in/0.1`;
@@ -29,7 +32,7 @@ const vtcDoc = {
   assertionMethod: [VM],
   service: [
     { id: `${VTC}#sign-in-portal`, type: "SignInPortal", serviceEndpoint: `${PORTAL}/members/` },
-    { id: `${VTC}#tt`, type: "TrustTaskHTTPS", serviceEndpoint: ENDPOINT },
+    { id: `${VTC}#tt`, type: "TrustTaskHTTPS", serviceEndpoint: BASE },
   ],
 };
 
@@ -57,7 +60,7 @@ function world(opts: { name?: string; claimError?: string; known?: SignInVaultEn
     decisionDeadline: Math.floor(NOW / 1000) + 120,
   };
   const fetch = (async (url: string, init: RequestInit) => {
-    assert.equal(url, ENDPOINT, "posted to the endpoint exactly as published (C9)");
+    assert.equal(url, ENDPOINT, "posted to <base>/trust-tasks (binding 0.2 §6)");
     const doc = JSON.parse(String(init.body));
     const type = String(doc.type).replace("https://trusttasks.org/spec/auth/oob/", "").replace("/0.1", "");
     sent.push({ type, doc });

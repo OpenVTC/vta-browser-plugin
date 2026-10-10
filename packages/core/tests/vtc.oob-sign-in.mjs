@@ -33,7 +33,10 @@ import { uvChallengeBytes } from "../dist/vault/index.js";
 const VTC = "did:webvh:QmPEQVM1JPTyrvEgBcDXwjK4TeyLGSX1PxjgyeAisPviUx:members.example.org";
 const REQ = "Hk2pQ9xV4mT7rW1sZ8yN3A";
 const PORTAL = "https://members.example.org";
-const ENDPOINT = "https://members.example.org/v1/trust-tasks";
+// The published `TrustTaskHTTPS` endpoint is the Trust-Task base; documents go
+// to `<base>/trust-tasks` (HTTPS binding 0.2 §6).
+const BASE = "https://members.example.org/v1";
+const ENDPOINT = `${BASE}/trust-tasks`;
 
 const vtcKey = generateSigningIdentity();
 const VM = `${VTC}#key-1`;
@@ -46,9 +49,9 @@ const vtcDoc = {
   assertionMethod: [VM],
   authentication: [VM],
   service: [
-    { id: `${VTC}#tt-old`, type: "TrustTaskHTTPS", serviceEndpoint: "http://members.example.org/v1/trust-tasks" },
+    { id: `${VTC}#tt-old`, type: "TrustTaskHTTPS", serviceEndpoint: "http://members.example.org/v1" },
     { id: `${VTC}#portal`, type: "SignInPortal", serviceEndpoint: `${PORTAL}/members/` },
-    { id: `${VTC}#tt`, type: "TrustTaskHTTPS", serviceEndpoint: ENDPOINT },
+    { id: `${VTC}#tt`, type: "TrustTaskHTTPS", serviceEndpoint: BASE },
     { id: `${VTC}#tt2`, type: "TrustTaskHTTPS", serviceEndpoint: "https://other.example.org" },
   ],
 };
@@ -161,7 +164,7 @@ test("sendOob: a signed, threaded step 1 is returned; the claim went out signed 
   const c = community(() => ({ payload: step1() }));
   const reply = await sendOob(kA, buildClaim(kA, VTC, REQ), sendOpts(c.fetch), "claim");
   assert.equal(reply.payload.service.name, "Example Community");
-  assert.equal(c.seen[0].url, ENDPOINT, "the endpoint exactly as published (C9)");
+  assert.equal(c.seen[0].url, ENDPOINT, "posted to <base>/trust-tasks (binding 0.2 §6)");
   assert.equal(c.seen[0].doc.proof.proofPurpose, "authentication");
   assert.equal(c.seen[0].doc.proof.verificationMethod.startsWith(kA.did), true);
   checkStep1(reply.payload, { requestId: REQ, vtcDid: VTC, portalOrigin: PORTAL, now: Date.now() });
@@ -200,9 +203,11 @@ test("sendOob: a key listed only under authentication is not the community's ass
   );
 });
 
-test("C9: the endpoint is used exactly as published, trailing slash and all", () => {
-  const doc = { service: [vtcDoc.service[1], { type: "TrustTaskHTTPS", serviceEndpoint: "https://h.example/api/trust-tasks/" }] };
-  assert.equal(selectSignInServices(doc).services.trustTaskEndpoint, "https://h.example/api/trust-tasks/");
+test("the published endpoint is a base: the POST URL is <base>/trust-tasks, a trailing / dropped", () => {
+  const svc = (serviceEndpoint) => ({ service: [vtcDoc.service[1], { type: "TrustTaskHTTPS", serviceEndpoint }] });
+  assert.equal(selectSignInServices(svc("https://h.example/api/")).services.trustTaskEndpoint, "https://h.example/api/trust-tasks");
+  assert.equal(selectSignInServices(svc("https://h.example/api")).services.trustTaskEndpoint, "https://h.example/api/trust-tasks");
+  assert.equal(selectSignInServices(svc("https://h.example")).services.trustTaskEndpoint, "https://h.example/trust-tasks");
 });
 
 test("C9: a deadline is integer epoch seconds only", () => {
