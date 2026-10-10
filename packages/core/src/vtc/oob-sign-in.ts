@@ -63,7 +63,8 @@ export interface OobStep1 {
   service: OobService;
   origin: string;
   purpose: "login";
-  decisionDeadline: string;
+  /** Integer epoch seconds (contract C9). RFC 3339 is also read. */
+  decisionDeadline: number | string;
 }
 
 /**
@@ -108,7 +109,8 @@ export interface OobGrantPayload {
   approverKey: string;
   origin: string;
   contextDigest: string;
-  notAfter: string;
+  /** Integer epoch seconds (contract C9). */
+  notAfter: number;
 }
 
 export interface OobRespondResult {
@@ -372,12 +374,11 @@ export function assertSignedAsSent(unsigned: OobDocument, signed: unknown, expec
 // ── Digests ──────────────────────────────────────────────────────────────────
 
 /**
- * SHA-256 of the JCS form of a document, as a base58btc `digestMultibase`
- * (sha2-256 multihash, the encoding `task-consent`'s `payloadDigest` uses).
- *
- * TODO: replace with generated trust-tasks types — the encoding of
- * `contextDigest` and of the grant digest is not fixed by the base design or
- * the draft schemas yet; this is the family's existing digest form.
+ * SHA-256 of the JCS form of a document, as a sha2-256 multihash in base58btc
+ * multibase (`z…`) — the encoding contract C9 fixes for `contextDigest`, and
+ * the one `task-consent`'s `payloadDigest` uses. The grant digest the
+ * user-verification decision covers uses the same form; its exact definition
+ * is the VTA's (see `vault/sign-oob.ts`).
  */
 export async function documentDigest(doc: unknown): Promise<string> {
   const hash = await sha256(jcsCanonicalize(doc));
@@ -522,9 +523,23 @@ export function checkStep1(step1: OobStep1, want: Step1Expectations): OobStep1 {
   if (typeof step1.service?.name !== "string") bad("no community name");
   if (step1.purpose !== "login") bad("a purpose other than login");
   if (step1.origin !== want.portalOrigin) bad("an origin the community's document does not list");
-  const deadline = Date.parse(step1.decisionDeadline);
-  if (!Number.isFinite(deadline) || deadline <= want.now) bad("the decision deadline has passed");
+  const deadline = deadlineMs(step1.decisionDeadline);
+  if (deadline === undefined) bad("no decision deadline");
+  if (deadline! <= want.now) bad("the decision deadline has passed");
   return step1;
+}
+
+/**
+ * A deadline as epoch milliseconds: integer epoch seconds (contract C9), or
+ * RFC 3339, which C9 lets a reader accept too. `undefined` for anything else.
+ */
+export function deadlineMs(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value >= 0 ? value * 1000 : undefined;
+  if (typeof value === "string") {
+    const t = Date.parse(value);
+    return Number.isFinite(t) ? t : undefined;
+  }
+  return undefined;
 }
 
 /** Step 2 must repeat step 1 unchanged, carry a `did:key` session key, and

@@ -58,7 +58,7 @@ const step1 = (over = {}) => ({
   service: { did: VTC, name: "Example Community" },
   origin: PORTAL,
   purpose: "login",
-  decisionDeadline: new Date(Date.now() + 120_000).toISOString(),
+  decisionDeadline: Math.floor(Date.now() / 1000) + 120,
   ...over,
 });
 
@@ -200,6 +200,12 @@ test("sendOob: a key listed only under authentication is not the community's ass
   );
 });
 
+test("C9: a deadline in epoch seconds or RFC 3339", () => {
+  const want = { requestId: REQ, vtcDid: VTC, portalOrigin: PORTAL, now: Date.now() };
+  checkStep1(step1(), want);
+  checkStep1(step1({ decisionDeadline: new Date(Date.now() + 60_000).toISOString() }), want);
+});
+
 test("step 1 checks", () => {
   const want = { requestId: REQ, vtcDid: VTC, portalOrigin: PORTAL, now: Date.now() };
   for (const over of [
@@ -207,7 +213,9 @@ test("step 1 checks", () => {
     { service: { did: "did:web:evil.example", name: "x" } },
     { purpose: "step-up" },
     { origin: "https://evil.example" },
-    { decisionDeadline: new Date(Date.now() - 1).toISOString() },
+    { decisionDeadline: Math.floor(Date.now() / 1000) - 1 },
+    { decisionDeadline: new Date(Date.now() - 1000).toISOString() },
+    { decisionDeadline: "soon" },
   ]) {
     assert.throws(() => checkStep1(step1(over), want), (e) => e.code === OOB_REPLY_INVALID, JSON.stringify(over));
   }
@@ -254,7 +262,7 @@ test("digests: contextDigest covers the proof; the grant digest excludes one; th
     approverKey: "did:key:z6Mk",
     origin: PORTAL,
     contextDigest: await contextDigest(signedA),
-    notAfter: new Date().toISOString(),
+    notAfter: Math.floor(Date.now() / 1000) + 3600,
   });
   const d = await grantDigest(grant);
   assert.equal(d, await grantDigest({ ...grant, proof: { x: 1 } }));
