@@ -274,6 +274,7 @@ import {
   type RuntimeSignInStepResponse,
   type OffscreenSignInStepRequest,
 } from "./bridge-protocol.js";
+import { failureLogFields } from "./sign-in-failure.js";
 
 /** Consent-gated requests awaiting their one exempt replay. In-memory by
  *  design: a service-worker restart loses it, and losing it costs one extra
@@ -781,11 +782,14 @@ const pendingConsents = new Map<string, ConsentDecision>();
  */
 async function consentWindowBounds(
   height: number,
+  /** A narrower cap, for a window whose content is a single short column
+   *  (the sign-in window) and would otherwise sit in a sea of ground. */
+  maxWidth = 1100,
 ): Promise<{ width: number; height: number; left?: number; top?: number }> {
   const MIN_WIDTH = 480;
   // Past this, diff/digest lines stop getting easier to scan and start getting
   // harder — the eye loses the line it is on.
-  const MAX_WIDTH = 1100;
+  const MAX_WIDTH = Math.max(MIN_WIDTH, maxWidth);
   // Keep the popup clear of the screen edges and of the OS window chrome.
   const MARGIN = 48;
 
@@ -3248,7 +3252,7 @@ async function handleTriggerLink(msg: RuntimeTriggerLinkRequest, tabId: number |
   const record: SignInFlowRecord = { link: msg.link, origin: msg.origin };
   await chrome.storage.session.set({ [`${SIGN_IN_FLOW_PREFIX}${flowId}`]: record });
   const url = `${chrome.runtime.getURL("confirm.html")}?kind=sign-in&flow=${flowId}`;
-  const bounds = await consentWindowBounds(640);
+  const bounds = await consentWindowBounds(660, 560);
   // Closing the window ends the flow: a claim the community holds is
   // cancelled and K_a forgotten.
   openConsentWindow({
@@ -3303,6 +3307,12 @@ async function handleSignInStep(msg: RuntimeSignInStepRequest): Promise<RuntimeS
     ...(msg.step === "prepare" ? { link: record.link, origin: record.origin } : {}),
   } as OffscreenSignInStepRequest;
   const res = (await chrome.runtime.sendMessage(forward)) as RuntimeSignInStepResponse;
+  // Every refusal reads the same to the member; this is where whoever has to
+  // find out why can look. Stage, party and stable code only — never the
+  // link, the origin, a key or a message body (VTI-LNK-073).
+  if (res?.ok && res.result.kind === "failed") {
+    console.warn("[pnm sign-in] step failed", failureLogFields(msg.step, res.result));
+  }
   if (res.ok && (res.result.kind === "done" || res.result.kind === "refused" || res.result.kind === "not-member")) {
     await chrome.storage.session.remove(key);
   }

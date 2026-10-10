@@ -15,6 +15,7 @@ import {
   SignInFlows,
   ALREADY_CLAIMED_MESSAGE,
   VTA_REFUSAL_MESSAGES,
+  communityNameMismatch,
   type SignInVaultEntry,
 } from "../src/sign-in-flows.ts";
 
@@ -61,6 +62,10 @@ function world(
   opts: {
     name?: string;
     claimError?: string;
+    proveError?: string;
+    /** The community cannot be reached at all on this step. */
+    unreachableOn?: string;
+    identifyResult?: (unsigned: Record<string, unknown>) => unknown;
     known?: SignInVaultEntry[];
     identifyError?: unknown;
     uvCredentialId?: string;
@@ -81,9 +86,11 @@ function world(
     const doc = JSON.parse(String(init.body));
     const type = String(doc.type).replace("https://trusttasks.org/spec/auth/oob/", "").replace("/0.1", "");
     sent.push({ type, doc });
-    if (type === "claim" && opts.claimError) {
+    if (type === opts.unreachableOn) throw new TypeError("Failed to fetch");
+    const refusal = type === "claim" ? opts.claimError : type === "prove" ? opts.proveError : undefined;
+    if (refusal) {
       return new Response(
-        JSON.stringify({ type: "https://trusttasks.org/spec/trust-task-error/0.2", payload: { code: opts.claimError, retryable: false } }),
+        JSON.stringify({ type: "https://trusttasks.org/spec/trust-task-error/0.2", payload: { code: refusal, retryable: false } }),
         { status: 409 },
       );
     }
@@ -123,6 +130,7 @@ function world(
       signIdentify: async (_entryId, unsigned) => {
         vtaCalls.push({ what: "identify" });
         if (opts.identifyError) throw opts.identifyError;
+        if (opts.identifyResult) return opts.identifyResult(unsigned as Record<string, unknown>);
         return { ...unsigned, proof: { proofPurpose: "authentication" } };
       },
       signGrant: async (_entryId, unsigned, uv) => {
@@ -255,6 +263,8 @@ test("a claim someone else made first", async () => {
     kind: "failed",
     code: "alreadyClaimed",
     message: ALREADY_CLAIMED_MESSAGE,
+    stage: "claim",
+    party: "community",
   });
 });
 
@@ -338,12 +348,98 @@ test("the member's VTA refusing as a disabled device is said plainly, and the cl
     await step(w, { step: "prepare", link: LINK, origin: PORTAL });
     await step(w, { step: "claim", entryId: "e-alice" });
     const r = await step(w, { step: "prove", enteredNumber: "47" });
-    assert.deepEqual(r, { kind: "failed", code, message: VTA_REFUSAL_MESSAGES[code] });
+    assert.deepEqual(r, { kind: "failed", code, message: VTA_REFUSAL_MESSAGES[code], stage: "identify", party: "vta" });
     assert.deepEqual(w.sent.map((s) => s.type), ["claim", "cancel"], "the portal stops waiting");
   }
   // A refusal the wallet has no words for keeps the generic message.
   const w = world({ identifyError: vtaRefusal("oobSomethingNew") });
   await step(w, { step: "prepare", link: LINK, origin: PORTAL });
   await step(w, { step: "claim", entryId: "e-alice" });
-  assert.equal(((await step(w, { step: "prove", enteredNumber: "47" })) as { code: string }).code, "sign-in/failed");
+  const r = await step(w, { step: "prove", enteredNumber: "47" });
+  assert.equal((r as { code: string }).code, "sign-in/failed");
+  // …and says, in its details, what the agent's code was and where.
+  assert.deepEqual(
+    { stage: (r as { stage?: string }).stage, party: (r as { party?: string }).party, cause: (r as { cause?: string }).cause },
+    { stage: "identify", party: "vta", cause: "oobSomethingNew" },
+  );
+});
+
+// ── Name mismatch (VTI-LNK-104) ──────────────────────────────────────────────
+
+test("an unnamed community — its service name is its DID — is not flagged", async () => {
+  const w = world({ name: VTC });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = await step(w, { step: "claim", entryId: "e-alice" });
+  assert.equal(r.kind, "enter-number");
+  assert.equal("nameMismatch" in r, false);
+});
+
+test("the name rule: absent names and DIDs are not names; case and spacing are not differences", () => {
+  const ours = "TEST VTC";
+  const did = "did:webvh:QmNvAiYMwoZMWGfY62gqNJuedQgH224FMpHenzJTK1wJrG:webvh.storm.ws:test-vtc";
+  assert.equal(communityNameMismatch("", did, ours), undefined, "empty");
+  assert.equal(communityNameMismatch("   ", did, ours), undefined, "blank");
+  assert.equal(communityNameMismatch(undefined, did, ours), undefined, "absent");
+  assert.equal(communityNameMismatch(did, did, ours), undefined, "the service's own DID");
+  assert.equal(communityNameMismatch(` ${did} `, did, ours), undefined, "its DID, padded");
+  assert.equal(communityNameMismatch("did:web:elsewhere.example", did, ours), undefined, "any did: string");
+  assert.equal(communityNameMismatch("DID:web:elsewhere.example", did, ours), undefined, "any did: string, any case");
+  assert.equal(communityNameMismatch("test vtc", did, ours), undefined, "case folded");
+  assert.equal(communityNameMismatch("  Test\t  VTC \n", did, ours), undefined, "whitespace trimmed and collapsed");
+  assert.equal(communityNameMismatch("TEST VTC", did, ours), undefined, "identical");
+  assert.equal(communityNameMismatch("Totally Legit Bank", did, ours), "Totally Legit Bank", "a different human name");
+  assert.equal(communityNameMismatch("TEST VTC 2", did, ours), "TEST VTC 2", "a near miss is still different");
+  assert.equal(communityNameMismatch("  Totally  Legit ", did, ours), "  Totally  Legit ", "flagged as the community sent it");
+});
+
+// ── Failure details: where, who, and the code ────────────────────────────────
+
+test("a community refusing the proof says so: stage prove, party community", async () => {
+  const w = world({ proveError: "numberMismatch" });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "claim", entryId: "e-alice" });
+  const r = await step(w, { step: "prove", enteredNumber: "47" });
+  assert.equal(r.kind, "failed");
+  const f = r as { code: string; stage?: string; party?: string; message: string };
+  assert.equal(f.code, "numberMismatch");
+  assert.equal(f.stage, "prove");
+  assert.equal(f.party, "community");
+  assert.match(f.message, /can't be used/, "the member's message is unchanged");
+});
+
+test("a signed document the wallet rejects is the wallet's refusal, at the step that produced it", async () => {
+  const w = world({ identifyResult: (unsigned) => unsigned });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "claim", entryId: "e-alice" });
+  const r = (await step(w, { step: "prove", enteredNumber: "47" })) as { code: string; stage?: string; party?: string };
+  assert.deepEqual({ code: r.code, stage: r.stage, party: r.party }, { code: "auth/oob/reply-invalid", stage: "identify", party: "wallet" });
+});
+
+test("a community that cannot be reached names no party: nobody refused", async () => {
+  const w = world({ unreachableOn: "claim" });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = (await step(w, { step: "claim", entryId: "e-alice" })) as Record<string, unknown>;
+  assert.equal(r.code, "network");
+  assert.equal(r.stage, "claim");
+  assert.equal("party" in r, false);
+});
+
+test("a generic failure keeps its generic code and gives the error's name as the cause", async () => {
+  const w = world({ identifyError: new RangeError("boom") });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "claim", entryId: "e-alice" });
+  const r = (await step(w, { step: "prove", enteredNumber: "47" })) as Record<string, unknown>;
+  assert.equal(r.code, "sign-in/failed");
+  assert.equal(r.stage, "identify");
+  assert.equal(r.cause, "RangeError");
+  assert.equal("party" in r, false, "a thrown error is not a refusal");
+  assert.equal(JSON.stringify(r).includes("boom"), false, "no message body leaves the flow");
+});
+
+test("an out-of-order step is the wallet's", async () => {
+  const w = world();
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = (await step(w, { step: "prove", enteredNumber: "47" })) as Record<string, unknown>;
+  assert.equal(r.code, "sign-in/out-of-order");
+  assert.equal(r.party, "wallet");
 });
