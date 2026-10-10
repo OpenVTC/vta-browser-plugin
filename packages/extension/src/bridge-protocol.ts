@@ -41,7 +41,9 @@ export type BridgeMethod =
   | "attestApprover"
   | "approveDecision";
 
-/** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2). */
+/** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2).
+ *  @deprecated Legacy sign-in (sign-in contract C7); kept working. New pages
+ *  use wallet sign-in with a trigger link. */
 export interface LoginParams {
   /** The RP's identifier (its server DID). It is the `recipient` of both auth
    *  documents, and every reply must be signed by it. */
@@ -64,7 +66,9 @@ export interface LoginParams {
   sessionKey?: string;
 }
 
-/** Parameters for `window.vtaWallet.loginDidcomm(...)` (DIDComm transport). */
+/** Parameters for `window.vtaWallet.loginDidcomm(...)` (DIDComm transport).
+ *  @deprecated Legacy sign-in (sign-in contract C7); kept working. New pages
+ *  use wallet sign-in with a trigger link. */
 export interface DidcommLoginParams {
   /** The RP's control DID — authcrypt recipient + the DID the RP ACL-checks. */
   controlDid: string;
@@ -1503,7 +1507,9 @@ export type RuntimeVaultProxyLoginResponse =
 /** Params shape the page-world provider posts to the content script
  *  for `window.vtaWallet.proxyLogin(...)`. Mirrors the popup's
  *  request body — the content script + background unwrap `params`
- *  and reuse the same offscreen pipeline. */
+ *  and reuse the same offscreen pipeline.
+ *  @deprecated as a page sign-in (sign-in contract C7); kept working. The
+ *  popup's own use of this shape is unaffected. */
 export interface ProxyLoginParams {
   /** The vault entry to log in with.
    *

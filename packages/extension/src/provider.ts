@@ -59,10 +59,22 @@ interface VtaWallet {
    *  `sessionKey` (a `did:key` the page holds) to have the RP bind it to the
    *  session, so later calls can be signed without the wallet. Resolves with
    *  the RP-issued session tokens. Rejects if the user denies, the key is not
-   *  a `did:key`, or the login fails. */
+   *  a `did:key`, or the login fails.   *
+   *  @deprecated Legacy sign-in, kept working (sign-in contract C7). New pages
+   *  should sign members in with a trigger link instead: show the
+   *  `auth/oob` sign-in code as a QR code wrapped in a link to the same text
+   *  (`@openvtc/rp-sdk/browser`'s `createSignIn`), and the wallet takes the
+   *  click. Offer this method only behind an "Using an older wallet?" link. A
+   *  removal date will be set later. */
   login(params: LoginParams): Promise<LoginResult>;
   /** Request a DIDComm login (authcrypt-sender auth via the RP's
-   *  mediator). Same result shape as `login`. */
+   *  mediator). Same result shape as `login`.   *
+   *  @deprecated Legacy sign-in, kept working (sign-in contract C7). New pages
+   *  should sign members in with a trigger link instead: show the
+   *  `auth/oob` sign-in code as a QR code wrapped in a link to the same text
+   *  (`@openvtc/rp-sdk/browser`'s `createSignIn`), and the wallet takes the
+   *  click. Offer this method only behind an "Using an older wallet?" link. A
+   *  removal date will be set later. */
   loginDidcomm(params: DidcommLoginParams): Promise<LoginResult>;
   /** Elevate an existing `aal1` session to `aal2` via VTA approval. Same
    *  result shape as `login`. Refused unless `rpDid` and `baseUrl` are the
@@ -102,7 +114,13 @@ interface VtaWallet {
    *  and on a first visit asks the user which identity to sign in as and
    *  remembers the answer. Naming an entry means first calling `vaultList()`
    *  to learn one, which costs a second consent prompt and shows this site the
-   *  rest of the user's vault. */
+   *  rest of the user's vault.   *
+   *  @deprecated Legacy sign-in, kept working (sign-in contract C7). New pages
+   *  should sign members in with a trigger link instead: show the
+   *  `auth/oob` sign-in code as a QR code wrapped in a link to the same text
+   *  (`@openvtc/rp-sdk/browser`'s `createSignIn`), and the wallet takes the
+   *  click. Offer this method only behind an "Using an older wallet?" link. A
+   *  removal date will be set later. */
   proxyLogin(params: ProxyLoginParams): Promise<VaultProxyLoginResultView>;
   /** Which persona this site knows the user as, resolving or binding one.
    *
@@ -227,19 +245,33 @@ function call<T>(
   });
 }
 
+/** Say once per page, in the developer console, that a legacy sign-in method
+ *  was used. The call itself is unchanged (sign-in contract C7). */
+const warnedLegacy = new Set<string>();
+function legacy<T>(method: "login" | "loginDidcomm" | "proxyLogin", run: () => Promise<T>): Promise<T> {
+  if (!warnedLegacy.has(method)) {
+    warnedLegacy.add(method);
+    console.warn(
+      `[vtaWallet] ${method}() is deprecated legacy sign-in. Use wallet sign-in with a trigger link ` +
+        `(a clickable auth/oob sign-in code); keep ${method}() behind an "Using an older wallet?" link.`,
+    );
+  }
+  return run();
+}
+
 // Define the provider once. A second injection (e.g. SPA re-navigation that
 // re-runs the content script) must not clobber an existing one.
 if (!window.vtaWallet) {
   window.vtaWallet = {
-    login: (params) => call<LoginResult>("login", params),
-    loginDidcomm: (params) => call<LoginResult>("loginDidcomm", params),
+    login: (params) => legacy("login", () => call<LoginResult>("login", params)),
+    loginDidcomm: (params) => legacy("loginDidcomm", () => call<LoginResult>("loginDidcomm", params)),
     stepUpVta: (params) => call<LoginResult>("stepUpVta", params),
     apiGet: (params) => call<ApiGetResult>("apiGet", params),
     apiPost: (params) => call<ApiGetResult>("apiPost", params),
     mediatorStatus: () => call<MediatorStatusResult>("mediatorStatus", {}),
     walletDefaults: () => call<WalletDefaultsResult>("walletDefaults", {}),
     signTrustTask: (params) => call<SignTrustTaskResult>("signTrustTask", params),
-    proxyLogin: (params) => call<VaultProxyLoginResultView>("proxyLogin", params),
+    proxyLogin: (params) => legacy("proxyLogin", () => call<VaultProxyLoginResultView>("proxyLogin", params)),
     walletProfile: (params) => call<WalletProfileResult>("walletProfile", params),
     vaultList: (params) => call<VaultListResultView>("vaultList", params),
     requestTask: (params) => call<Record<string, unknown>>("requestTask", params),

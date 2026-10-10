@@ -353,6 +353,29 @@ resolution with `Access-Control-Allow-Origin: *`. A did:webvh host behind a
 restrictive CORS policy is the known gap — it surfaces in the consent prompt
 as an unresolved DID, which fails closed.
 
+### Signing in to a community: trigger links, and the legacy methods
+
+A community portal signs a member in by showing a **sign-in code**: a QR code
+that is also a link (`https://link.trustoverip.org/t#_from=<VTC DID>&_id=…`,
+VTI spec chapter 7a). On the same computer, clicking the code opens this
+wallet's sign-in window instead of navigating: the wallet checks the community
+is one of yours, verifies its DID document, refuses a code clicked on any page
+but the community's own portal, and asks "Sign in to <community> at <portal>?".
+After you choose an identity and press Continue it claims the request, asks for
+the two-digit number the portal shows, shows where the request came from, and
+signs the grant with your passkey (`auth/oob/*`). The page is told nothing; the
+portal learns the outcome from the community.
+
+This needs the portal's origin granted (see below): the click is caught by the
+same content script as the page provider, and the community's Trust-Task
+endpoint is usually on that origin. On a site that is not granted, the click
+goes to the link host's page for people with no wallet.
+
+**`window.vtaWallet.login`, `loginDidcomm` and `proxyLogin` are deprecated**
+(sign-in contract C7). They keep working, and the console says so once per page.
+Put them behind an "Using an older wallet?" link; a removal date will be set
+later.
+
 ### The wallet writes nothing into your browser
 
 A sign-in produces a signed `id_token` the site verifies for itself by
