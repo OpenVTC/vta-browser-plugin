@@ -118,6 +118,24 @@ export async function signOutboundTask(
       `${envelope.type}: envelope issuer ${envelope.issuer} is not the signing identity ${signer.did}`,
     );
   }
+  // What a consumer binds the proof to, filled or refused *before* signing,
+  // because the proof covers them and nothing may change after it. The VTA, the
+  // VTC and the RPs act on a DIDComm or TSP document only when it names its
+  // issuer (the proven signer, VTI #1739), and key their replay window on
+  // (issuer, id); `recipient` is the audience the proof is bound to (SPEC
+  // §4.8.2), and `issuedAt` places it inside the freshness window.
+  // `buildTrustTask` sets all but the issuer on every document it builds;
+  // these catch one composed some other way.
+  if (envelope.issuer === undefined) envelope.issuer = signer.did;
+  if (!envelope.id) envelope.id = globalThis.crypto.randomUUID();
+  if (!envelope.issuedAt) envelope.issuedAt = new Date().toISOString();
+  if (!envelope.recipient) {
+    throw new VtaClientError(
+      "e.client.identity",
+      `${envelope.type}: the document names no recipient. A signed document with no audience ` +
+        `is replayable at any other party, and the consumer refuses it`,
+    );
+  }
   await signer.sign(envelope, { proofPurpose: proofPurposeForDocumentType(envelope.type) });
 }
 

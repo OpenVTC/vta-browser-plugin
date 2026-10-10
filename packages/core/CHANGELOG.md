@@ -36,6 +36,11 @@ For history before this file, see `git log` on `packages/core`.
   optional `TaskSignOptions` (`{ proofPurpose }`), so a signer written for the
   one-argument form still type-checks. `localTaskSigner` honours it, and picks
   by type when called without it. `signTrustTask`'s own default is unchanged.
+- **`signOutboundTask` binds a document before signing it.** It names the
+  signer as `issuer` when none is set, fills a missing `id` or `issuedAt`, and
+  refuses a document with no `recipient` (`e.client.identity`): the consumers
+  key their replay window on (issuer, id) and refuse an unaddressed document
+  (VTI #1739). Every document this package builds already names its recipient.
 - `@openvtc/trust-tasks` floor raised to `^0.23.0`, the first binding whose
   `git-ns/activity/list/0.1` schema is satisfiable (0.22.7's `ActivityItem`
   required a `source` it did not define). `ApproverAttestPayload` and

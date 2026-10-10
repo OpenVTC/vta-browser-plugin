@@ -52,6 +52,12 @@ const fromUtf8 = new TextDecoder();
  */
 async function assertSignedBy(doc, expectedIssuer) {
   assert.ok(doc, "no document reached the counterparty");
+  // What the consumers bind the proof to: an id to key the replay window on,
+  // a time inside the freshness window, and an audience.
+  assert.equal(typeof doc.id, "string");
+  assert.ok(doc.id.length > 0, "the document has an id");
+  assert.ok(!Number.isNaN(Date.parse(doc.issuedAt)), `issuedAt ${doc.issuedAt}`);
+  assert.equal(typeof doc.recipient, "string", "the document names its audience");
   const res = await verifyTrustTaskProof(doc, {
     expectedProofPurpose: "authentication",
   });
@@ -323,4 +329,38 @@ test("a signer is told the purpose, and one written for the one-argument form st
   const direct = buildTrustTask(VAULT_DELETE, { id: "e-q" }, { issuer: signing.did, recipient: "did:key:zVta" });
   await local.sign(direct);
   assert.equal(direct.proof.proofPurpose, "authentication");
+});
+
+// ── what the signer fills and refuses ───────────────────────────────────────
+
+test("a document with no issuer is issued by the signer", async () => {
+  // The consumers refuse an issuer-less document over DIDComm and TSP, so the
+  // signer names itself rather than letting one go out bare.
+  const signing = generateSigningIdentity();
+  const envelope = buildTrustTask(VAULT_DELETE, { id: "e-5" }, { recipient: "did:key:zVta" });
+  await signOutboundTask(envelope, localTaskSigner(signing));
+  assert.equal(envelope.issuer, signing.did);
+  await assertSignedBy(envelope, signing.did);
+});
+
+test("a document with no recipient is refused before it is signed", async () => {
+  const signing = generateSigningIdentity();
+  const envelope = buildTrustTask(VAULT_DELETE, { id: "e-6" }, { issuer: signing.did });
+  await assert.rejects(
+    () => signOutboundTask(envelope, localTaskSigner(signing)),
+    (err) => err.code === "e.client.identity" && /no recipient/.test(err.message),
+  );
+  assert.equal(envelope.proof, undefined);
+});
+
+test("a document missing its id or issuedAt gets both before the proof covers them", async () => {
+  const signing = generateSigningIdentity();
+  const envelope = {
+    type: VAULT_DELETE,
+    issuer: signing.did,
+    recipient: "did:key:zVta",
+    payload: { id: "e-7" },
+  };
+  await signOutboundTask(envelope, localTaskSigner(signing));
+  await assertSignedBy(envelope, signing.did);
 });

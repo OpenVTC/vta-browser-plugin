@@ -93,7 +93,7 @@ async function tspTimeoutFor(type, channelTimeoutMs) {
     vta: VTA,
     ...(channelTimeoutMs !== undefined ? { timeoutMs: channelTimeoutMs } : {}),
   });
-  await channel.send({ id: "req-1", type, payload: {} }).catch(() => {});
+  await channel.send({ id: "req-1", type, recipient: VTA.vid, payload: {} }).catch(() => {});
   return seen;
 }
 

@@ -21,6 +21,8 @@ import { decodeTrustTaskHttpAck } from "../dist/vta/rest-channel.js";
 const ENVELOPE = {
   id: "req-1",
   type: "https://trusttasks.org/spec/credential-exchange/offer/0.1",
+  // Every channel refuses a document that names no audience.
+  recipient: "did:webvh:QmAgent:agent.example",
   payload: { credential_offer: {} },
 };
 
