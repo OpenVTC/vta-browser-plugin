@@ -155,4 +155,3 @@ async function prfCeremony(
   }
   return { prfOutput: new Uint8Array(prfOutput) };
 }
-

@@ -91,3 +91,89 @@ test("nothing is written back into the page", () => {
   assert.equal(win.document.documentElement.outerHTML, before);
   assert.deepEqual(posted, []);
 });
+
+// ── Backwards compatibility: every link that is not a sign-in code on the link
+// host, and every link while there is no wallet, behaves as before. ──
+
+test("only https://<link host>/t#<fields> is taken; every look-alike navigates", () => {
+  const lookAlikes = [
+    // The reader's grammar on another host: the spec's reader would take it,
+    // the click handler does not.
+    LINK.replace("link.trustoverip.org", "members.example.org"),
+    // Ordinary sites whose URLs happen to carry a reserved name.
+    "https://shop.example.com/item?_id=5",
+    "https://shop.example.com/item?_from=newsletter&_id=5",
+    "https://docs.example.com/page#_from=toc",
+    // The link host, but not a trigger link.
+    "https://link.trustoverip.org/",
+    "https://link.trustoverip.org/about#_from=x",
+    "https://link.trustoverip.org/t",
+    "https://link.trustoverip.org/t#section",
+    "https://link.trustoverip.org/t?_from=did:web:example.org&_id=Hk2pQ9xV4mT7rW1sZ8yN3A",
+    LINK.replace("/t#", "/t?x=1#"),
+    LINK.replace("https://", "http://"),
+    LINK.replace("link.trustoverip.org", "link.trustoverip.org:8443"),
+    LINK.replace("/t#", "/t/#"),
+    "mailto:someone@example.org",
+    "/relative/path",
+    "#top",
+  ];
+  for (const href of lookAlikes) {
+    const { win, sent } = page(`<a id="a" href="${href}">x</a>`);
+    assert.equal(click(win, win.document.getElementById("a") as unknown as Element), false, href);
+    assert.deepEqual(sent, [], href);
+  }
+});
+
+test("a click that is not on a link is never prevented", () => {
+  const { win, sent } = page(`<button id="b">go</button><div id="d">text</div>`);
+  for (const id of ["b", "d"]) {
+    assert.equal(click(win, win.document.getElementById(id) as unknown as Element), false, id);
+  }
+  assert.deepEqual(sent, []);
+});
+
+test("with no wallet connected, a sign-in code navigates as if the plugin were absent", () => {
+  const win = new Window({ url: "https://members.example.org/members/login" });
+  win.document.body.innerHTML = `<a id="a" href="${LINK}">code</a>`;
+  const sent: TriggerLinkActivation[] = [];
+  let ready = false;
+  installTriggerLinkClickHandler(win as unknown as globalThis.Window, {
+    send: (m) => sent.push(m),
+    now: () => EXP,
+    walletReady: () => ready,
+  });
+  const a = win.document.getElementById("a") as unknown as Element;
+  assert.equal(click(win, a), false, "not prevented while no wallet");
+  assert.deepEqual(sent, []);
+  ready = true; // the person connects a VTA; the same page now routes
+  assert.equal(click(win, a), true);
+  assert.equal(sent.length, 1);
+});
+
+test("a configured link host replaces the default", () => {
+  const custom = LINK.replace("link.trustoverip.org", "links.example.net");
+  const win = new Window({ url: "https://members.example.org/" });
+  win.document.body.innerHTML = `<a id="a" href="${custom}">code</a><a id="b" href="${LINK}">code</a>`;
+  const sent: TriggerLinkActivation[] = [];
+  installTriggerLinkClickHandler(win as unknown as globalThis.Window, {
+    send: (m) => sent.push(m),
+    now: () => EXP,
+    linkHosts: ["links.example.net"],
+  });
+  assert.equal(click(win, win.document.getElementById("a") as unknown as Element), true);
+  assert.equal(click(win, win.document.getElementById("b") as unknown as Element), false);
+  assert.equal(sent.length, 1);
+});
+
+test("a send that throws (extension reloaded) does not throw into the page", () => {
+  const win = new Window({ url: "https://members.example.org/" });
+  win.document.body.innerHTML = `<a id="a" href="${LINK}">code</a>`;
+  installTriggerLinkClickHandler(win as unknown as globalThis.Window, {
+    send: () => {
+      throw new Error("Extension context invalidated.");
+    },
+    now: () => EXP,
+  });
+  assert.doesNotThrow(() => click(win, win.document.getElementById("a") as unknown as Element));
+});

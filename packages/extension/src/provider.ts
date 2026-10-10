@@ -59,7 +59,8 @@ interface VtaWallet {
    *  `sessionKey` (a `did:key` the page holds) to have the RP bind it to the
    *  session, so later calls can be signed without the wallet. Resolves with
    *  the RP-issued session tokens. Rejects if the user denies, the key is not
-   *  a `did:key`, or the login fails.   *
+   *  a `did:key`, or the login fails.
+   *
    *  @deprecated Legacy sign-in, kept working (sign-in contract C7). New pages
    *  should sign members in with a trigger link instead: show the
    *  `auth/oob` sign-in code as a QR code wrapped in a link to the same text
@@ -68,7 +69,8 @@ interface VtaWallet {
    *  removal date will be set later. */
   login(params: LoginParams): Promise<LoginResult>;
   /** Request a DIDComm login (authcrypt-sender auth via the RP's
-   *  mediator). Same result shape as `login`.   *
+   *  mediator). Same result shape as `login`.
+   *
    *  @deprecated Legacy sign-in, kept working (sign-in contract C7). New pages
    *  should sign members in with a trigger link instead: show the
    *  `auth/oob` sign-in code as a QR code wrapped in a link to the same text
@@ -114,7 +116,8 @@ interface VtaWallet {
    *  and on a first visit asks the user which identity to sign in as and
    *  remembers the answer. Naming an entry means first calling `vaultList()`
    *  to learn one, which costs a second consent prompt and shows this site the
-   *  rest of the user's vault.   *
+   *  rest of the user's vault.
+   *
    *  @deprecated Legacy sign-in, kept working (sign-in contract C7). New pages
    *  should sign members in with a trigger link instead: show the
    *  `auth/oob` sign-in code as a QR code wrapped in a link to the same text

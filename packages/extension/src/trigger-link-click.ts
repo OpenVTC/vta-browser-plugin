@@ -18,7 +18,11 @@
 //     `sender.origin` (the body's copy is a claim, never the answer).
 //
 //  3. **Text that is not a trigger link navigates normally** (`pass-on`,
-//     VTI-LNK-021). Anything else is ours: the default navigation is prevented
+//     VTI-LNK-021). The click handler is narrower than the reader: it takes
+//     only an `https` link on the configured link host, at path `/t`, with the
+//     fields in the fragment, and only while the wallet has an active VTA
+//     connection. Every other link — and every link while there is no wallet —
+//     behaves exactly as it did before this listener existed. Anything else is ours: the default navigation is prevented
 //     and the link goes to the service worker, which re-parses it and shows the
 //     person the outcome. A refused link is shown in the wallet's own window,
 //     with the spec's message — never by letting the browser carry the handle
@@ -51,6 +55,45 @@ export interface TriggerLinkClickDeps {
   send: (message: TriggerLinkActivation) => void;
   /** Epoch seconds. */
   now: () => number;
+  /** Whether this wallet can act on a sign-in at all (an active VTA
+   *  connection). When it cannot, the click is left to the browser and lands
+   *  on the link host's no-wallet page, exactly as with no plugin (C2).
+   *  Defaults to "yes" so a caller that does not know still routes. */
+  walletReady?: () => boolean;
+  /** The link hosts this wallet takes clicks for. Defaults to
+   *  {@link DEFAULT_TRIGGER_LINK_HOSTS}. */
+  linkHosts?: readonly string[];
+}
+
+/** The trigger-link host (contract C1's default). Clicks are taken only for a
+ *  link on one of these hosts, so a page's other links — including ones that
+ *  happen to carry `_id=` or `#_from=` — behave exactly as before. */
+export const DEFAULT_TRIGGER_LINK_HOSTS: readonly string[] = ["link.trustoverip.org"];
+
+/** The trigger-link path on the link host (C1). */
+export const TRIGGER_LINK_PATH = "/t";
+
+const RESERVED_IN_FRAGMENT = /(?:^|&)_(?:from|id|exp|type)=/;
+
+/**
+ * The shape gate the click handler applies before it even parses: `https`,
+ * a configured link host, path exactly `/t`, and the fields in the fragment.
+ * The spec's reader accepts a trigger link on any host; the click handler is
+ * deliberately narrower, because taking a click away from a page is a
+ * behaviour change for that page and must be confined to links that are
+ * unmistakably sign-in codes.
+ */
+export function isTriggerLinkShaped(href: string, hosts: readonly string[] = DEFAULT_TRIGGER_LINK_HOSTS): boolean {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.port) return false;
+  if (!hosts.some((h) => h.toLowerCase() === url.hostname)) return false;
+  if (url.pathname !== TRIGGER_LINK_PATH || url.search !== "") return false;
+  return RESERVED_IN_FRAGMENT.test(url.hash.slice(1));
 }
 
 /**
@@ -76,6 +119,12 @@ function onClick(win: Window, event: MouseEvent, deps: TriggerLinkClickDeps): vo
 
   const href = anchorHref(event, win);
   if (href === undefined) return;
+
+  // Only a link on the link host, at `/t`, with the fields in the fragment.
+  // Every other link is left completely alone.
+  if (!isTriggerLinkShaped(href, deps.linkHosts)) return;
+  // No wallet to sign in with: behave as if the plugin were not installed.
+  if (deps.walletReady && !deps.walletReady()) return;
 
   // 3. Routing only — the worker re-parses.
   const parsed = parseTriggerLink(href, { now: deps.now() });

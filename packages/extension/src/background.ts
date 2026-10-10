@@ -264,6 +264,7 @@ import { vetEgressUrl } from "./proxy-url.js";
 import { ConsentReplayLedger, replayKey } from "./consent-replay.js";
 import { deliverConsentResult, openConsentWindow, type ConsentDecision } from "./consent-window.js";
 import { parseTriggerLink } from "@openvtc/pnm-core/links";
+import { isTriggerLinkShaped } from "./trigger-link-click.js";
 import {
   RUNTIME_TRIGGER_LINK,
   RUNTIME_SIGN_IN_STEP,
@@ -3228,13 +3229,21 @@ interface SignInFlowRecord {
   origin: string;
 }
 
-async function handleTriggerLink(msg: RuntimeTriggerLinkRequest): Promise<void> {
-  const parsed = parseTriggerLink(typeof msg.link === "string" ? msg.link : "", {
-    now: Math.floor(Date.now() / 1000),
-  });
+async function handleTriggerLink(msg: RuntimeTriggerLinkRequest, tabId: number | undefined): Promise<void> {
+  const link = typeof msg.link === "string" ? msg.link : "";
+  // The content script's shape gate (link host, `/t`, fragment), held again.
+  if (!isTriggerLinkShaped(link)) return;
+  const parsed = parseTriggerLink(link, { now: Math.floor(Date.now() / 1000) });
   // Text that is not a trigger link is not ours. The content script already
   // let it navigate; this is the same rule, held again.
   if (!parsed.ok && parsed.outcome === "pass-on") return;
+  // The wallet was disconnected after the page loaded, so the content script
+  // took a click there is no wallet for. Finish the navigation it prevented —
+  // to the link host's no-wallet page, as with no plugin installed (C2).
+  if (!(await readActiveConnection()).ok) {
+    if (tabId !== undefined) await chrome.tabs.update(tabId, { url: link }).catch(() => undefined);
+    return;
+  }
   const flowId = crypto.randomUUID();
   const record: SignInFlowRecord = { link: msg.link, origin: msg.origin };
   await chrome.storage.session.set({ [`${SIGN_IN_FLOW_PREFIX}${flowId}`]: record });
@@ -3369,7 +3378,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (msgType === RUNTIME_TRIGGER_LINK) {
     // Fire-and-forget: the page must not learn what the wallet decided.
-    void handleTriggerLink(message as RuntimeTriggerLinkRequest).catch(() => undefined);
+    void handleTriggerLink(message as RuntimeTriggerLinkRequest, sender.tab?.id).catch(() => undefined);
     return false;
   }
 

@@ -9,6 +9,7 @@
 //      a link) and hand it to the worker instead of navigating — see
 //      `trigger-link-click.ts`. Nothing about the result reaches the page.
 
+import { parseActiveVtaDid } from "./active-vta.js";
 import { installTriggerLinkClickHandler } from "./trigger-link-click.js";
 import type {
   BridgeMethod,
@@ -162,7 +163,31 @@ chrome.runtime.onMessage.addListener((message) => {
 // ─── 4. Same-device trigger links (VTI-LNK-056). ───
 // The worker's answer is deliberately not awaited or read: the page must not
 // learn what the wallet decided about a link it was shown.
+//
+// With no active VTA connection the click is not taken at all, so a browser
+// with the plugin but no wallet behaves exactly as one without it (C2: the
+// click lands on the link host's no-wallet page). The flag starts false and is
+// read from the popup's persisted connection state, then kept current; a click
+// before the first read simply navigates.
+const CONNECTION_STORAGE_KEY = "pnm-connection/v3";
+let walletReady = false;
+try {
+  void chrome.storage.local
+    .get(CONNECTION_STORAGE_KEY)
+    .then((stored) => {
+      walletReady = parseActiveVtaDid(stored[CONNECTION_STORAGE_KEY]) !== null;
+    })
+    .catch(() => undefined);
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && CONNECTION_STORAGE_KEY in changes) {
+      walletReady = parseActiveVtaDid(changes[CONNECTION_STORAGE_KEY]?.newValue) !== null;
+    }
+  });
+} catch {
+  // Extension context invalidated: leave every click to the browser.
+}
 installTriggerLinkClickHandler(window, {
+  walletReady: () => walletReady,
   now: () => Math.floor(Date.now() / 1000),
   send: (activation) => {
     void chrome.runtime
