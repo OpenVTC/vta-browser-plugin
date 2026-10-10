@@ -30,6 +30,11 @@ export const ATTESTATION_SLUGS: readonly string[] = [
   "auth/step-up/approve-response",
   "task-consent/decision",
   "confirm/response",
+  // The wallet sign-in grant ("let this browser key act as me"), an
+  // attestation the VTC verifies against `assertionMethod`. Added to the VTA's
+  // list in the same change (sign-in trigger-link contract C5). Its sibling
+  // `auth/oob/identify` is deliberately absent: it is `authentication`.
+  "auth/oob/grant",
 ];
 
 export type ProofPurpose = "assertionMethod" | "authentication";
