@@ -59,6 +59,14 @@ const NOT_IN_SDK = [
       "counterparty, so vta-sdk carries no constant for them.",
   },
   {
+    prefix: "https://trusttasks.org/spec/task-consent/decision/0.2",
+    why:
+      "Never sent as a task by this library. vault/sign-oob.ts builds one only as the " +
+      "device's UV approval of a sign-in grant, carried inside vault/sign-trust-task's " +
+      "payload.ext['org.openvtc.uv-consent'] (VTA feat/oob-sign-in-vta), which the VTA " +
+      "reads as a document, not a dispatched task.",
+  },
+  {
     prefix: "https://trusttasks.org/spec/push/register/",
     why:
       "Defined in the vta-mobile-core crate, not vta-sdk. The wallet registers a push " +

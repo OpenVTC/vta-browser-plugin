@@ -29,7 +29,7 @@ import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import { jcsCanonicalize, sha256, base58btcEncode } from "../trust-tasks/canonical.js";
 import { meetsHostRules, type TriggerLinkReason } from "../links/trigger-link.js";
 import { isTrustTaskErrorType } from "../vta/protocol.js";
-import { trustTaskUrl, TRUST_TASK_HTTPS_SERVICE_TYPE } from "../vta/endpoint.js";
+import { TRUST_TASK_HTTPS_SERVICE_TYPE } from "../vta/endpoint.js";
 import { withFetchTimeout, isFetchTimeout } from "../http/timeout-fetch.js";
 
 // ── Type URIs (contract C5) ──────────────────────────────────────────────────
@@ -63,19 +63,14 @@ export interface OobStep1 {
   service: OobService;
   origin: string;
   purpose: "login";
-  /** Integer epoch seconds (contract C9). RFC 3339 is also read. */
-  decisionDeadline: number | string;
+  /** Integer epoch seconds (contract C9). */
+  decisionDeadline: number;
 }
 
-/**
- * Whether the browser that asked is on the network the approver is on.
- *
- * Base design §10 says `true | false | "unknown"`; the draft `_shared/0.1`
- * schema in `dtgwg-trust-tasks-tf` says `"same" | "different" | "unknown"`.
- * Both are read here until the binding is published — see {@link networkLine}.
- * TODO: replace with generated trust-tasks types, and drop the losing spelling.
- */
-export type OobSameNetwork = boolean | "same" | "different" | "unknown";
+/** Whether the browser that asked is on the network the approver is on
+ *  (base design §10, contract C9). TODO: replace with generated trust-tasks
+ *  types. */
+export type OobSameNetwork = boolean | "unknown";
 
 export interface OobRequester {
   /** City and country, or `"unknown"`. */
@@ -168,8 +163,9 @@ export const SIGN_IN_PORTAL_SERVICE_TYPE = "SignInPortal";
 export interface SignInServices {
   /** The origin of the `SignInPortal` service's endpoint. */
   portalOrigin: string;
-  /** The Trust-Task base of the first usable `TrustTaskHTTPS` service. */
-  trustTaskBase: string;
+  /** The first usable `TrustTaskHTTPS` service's endpoint: the full URL
+   *  documents are POSTed to, used exactly as published (contract C9). */
+  trustTaskEndpoint: string;
 }
 
 export type SignInServicesResult =
@@ -194,18 +190,19 @@ function endpointString(raw: unknown): string | undefined {
   return undefined;
 }
 
-/** An `https` URL whose host meets the host rules (VTI-LNK-053 / 060). */
-function usableHttpsEndpoint(raw: unknown): URL | undefined {
-  const s = endpointString(raw);
-  if (s === undefined) return undefined;
-  let u: URL;
+/** An `https` URL whose host meets the host rules (VTI-LNK-053 / 060), with
+ *  the string as published. */
+function usableHttpsEndpoint(raw: unknown): { url: URL; text: string } | undefined {
+  const text = endpointString(raw);
+  if (text === undefined) return undefined;
+  let url: URL;
   try {
-    u = new URL(s);
+    url = new URL(text);
   } catch {
     return undefined;
   }
-  if (u.protocol !== "https:" || u.username || u.password || u.port) return undefined;
-  return meetsHostRules(u.hostname) ? u : undefined;
+  if (url.protocol !== "https:" || url.username || url.password || url.port) return undefined;
+  return meetsHostRules(url.hostname) ? { url, text } : undefined;
 }
 
 /**
@@ -224,18 +221,17 @@ export function selectSignInServices(doc: unknown): SignInServicesResult {
     ? ((doc as { service: unknown[] }).service as DidService[])
     : [];
   let portal: URL | undefined;
-  let base: string | undefined;
+  let endpoint: string | undefined;
   for (const s of services) {
     if (!s || typeof s !== "object") continue;
-    if (!portal && hasType(s, SIGN_IN_PORTAL_SERVICE_TYPE)) portal = usableHttpsEndpoint(s.serviceEndpoint);
-    if (!base && hasType(s, TRUST_TASK_HTTPS_SERVICE_TYPE)) {
-      const u = usableHttpsEndpoint(s.serviceEndpoint);
-      if (u) base = u.href.replace(/\/+$/, "");
-    }
+    if (!portal && hasType(s, SIGN_IN_PORTAL_SERVICE_TYPE)) portal = usableHttpsEndpoint(s.serviceEndpoint)?.url;
+    // The full POST URL, exactly as published: no path is appended and no
+    // slash trimmed (contract C9).
+    if (!endpoint && hasType(s, TRUST_TASK_HTTPS_SERVICE_TYPE)) endpoint = usableHttpsEndpoint(s.serviceEndpoint)?.text;
   }
   if (!portal) return { ok: false, reason: "no-portal-service" };
-  if (!base) return { ok: false, reason: "no-common-transport" };
-  return { ok: true, services: { portalOrigin: portal.origin, trustTaskBase: base } };
+  if (!endpoint) return { ok: false, reason: "no-common-transport" };
+  return { ok: true, services: { portalOrigin: portal.origin, trustTaskEndpoint: endpoint } };
 }
 
 /**
@@ -329,8 +325,15 @@ export function buildIdentify(
   return envelope(OOB_TYPES.identify, memberDid, vtcDid, payload);
 }
 
-export function buildProve(kA: SigningIdentity, vtcDid: string, identify: OobDocument): OobDocument<{ identify: OobDocument }> {
-  return envelope(OOB_TYPES.prove, kA.did, vtcDid, { identify });
+/** `auth/oob/prove`. Carries the handle as `parentThreadId` as well (C9:
+ *  SHOULD). */
+export function buildProve(
+  kA: SigningIdentity,
+  vtcDid: string,
+  identify: OobDocument,
+  requestId: string,
+): OobDocument<{ identify: OobDocument }> {
+  return { ...envelope(OOB_TYPES.prove, kA.did, vtcDid, { identify }), parentThreadId: requestId };
 }
 
 /** `auth/oob/grant`, unsigned. The VTA signs it (for `assertionMethod`) only
@@ -343,8 +346,15 @@ export function buildGrant(
   return envelope(OOB_TYPES.grant, memberDid, vtcDid, payload);
 }
 
-export function buildRespond(kA: SigningIdentity, vtcDid: string, grant: OobDocument): OobDocument<{ grant: OobDocument }> {
-  return envelope(OOB_TYPES.respond, kA.did, vtcDid, { grant });
+/** `auth/oob/respond`. Carries the handle as `parentThreadId` as well (C9:
+ *  SHOULD). */
+export function buildRespond(
+  kA: SigningIdentity,
+  vtcDid: string,
+  grant: OobDocument,
+  requestId: string,
+): OobDocument<{ grant: OobDocument }> {
+  return { ...envelope(OOB_TYPES.respond, kA.did, vtcDid, { grant }), parentThreadId: requestId };
 }
 
 export function buildCancel(kA: SigningIdentity, vtcDid: string, requestId: string): OobDocument<{ requestId: string }> {
@@ -406,7 +416,8 @@ export interface OobSenderOptions {
   /** The community's verified document: the reply's signing key is looked up
    *  here, never re-fetched on the strength of the reply. */
   vtcDocument: Record<string, unknown>;
-  trustTaskBase: string;
+  /** The `TrustTaskHTTPS` endpoint, the full POST URL (contract C9). */
+  trustTaskEndpoint: string;
   fetch?: typeof fetch;
 }
 
@@ -439,7 +450,7 @@ export async function sendOob<P>(
   const fetchFn = withFetchTimeout(opts.fetch);
   let res: Response;
   try {
-    res = await fetchFn(trustTaskUrl(opts.trustTaskBase), {
+    res = await fetchFn(opts.trustTaskEndpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(doc),
@@ -529,17 +540,10 @@ export function checkStep1(step1: OobStep1, want: Step1Expectations): OobStep1 {
   return step1;
 }
 
-/**
- * A deadline as epoch milliseconds: integer epoch seconds (contract C9), or
- * RFC 3339, which C9 lets a reader accept too. `undefined` for anything else.
- */
+/** A deadline as epoch milliseconds. Contract C9: integer epoch seconds
+ *  only; anything else (RFC 3339 included) is `undefined`. */
 export function deadlineMs(value: unknown): number | undefined {
-  if (typeof value === "number") return Number.isSafeInteger(value) && value >= 0 ? value * 1000 : undefined;
-  if (typeof value === "string") {
-    const t = Date.parse(value);
-    return Number.isFinite(t) ? t : undefined;
-  }
-  return undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value * 1000 : undefined;
 }
 
 /** Step 2 must repeat step 1 unchanged, carry a `did:key` session key, and
@@ -572,7 +576,7 @@ export function checkStep2(step2: OobStep2, step1: OobStep1, memberDid: string):
  *  plugin is on the same device as the browser, so a "different" answer is
  *  always worth a warning here. */
 export function networkLine(sameNetwork: OobSameNetwork): "same" | "different" | "unknown" {
-  if (sameNetwork === true || sameNetwork === "same") return "same";
-  if (sameNetwork === false || sameNetwork === "different") return "different";
+  if (sameNetwork === true) return "same";
+  if (sameNetwork === false) return "different";
   return "unknown";
 }

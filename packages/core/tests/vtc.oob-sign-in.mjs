@@ -28,12 +28,12 @@ import {
   networkLine,
 } from "../dist/vtc/index.js";
 import { generateSigningIdentity, signTrustTask, decodeDigestMultibase } from "../dist/index.js";
-import { uvChallengeForDigest } from "../dist/vault/index.js";
+import { uvChallengeBytes } from "../dist/vault/index.js";
 
 const VTC = "did:webvh:QmPEQVM1JPTyrvEgBcDXwjK4TeyLGSX1PxjgyeAisPviUx:members.example.org";
 const REQ = "Hk2pQ9xV4mT7rW1sZ8yN3A";
 const PORTAL = "https://members.example.org";
-const BASE = "https://members.example.org/api";
+const ENDPOINT = "https://members.example.org/v1/trust-tasks";
 
 const vtcKey = generateSigningIdentity();
 const VM = `${VTC}#key-1`;
@@ -46,9 +46,9 @@ const vtcDoc = {
   assertionMethod: [VM],
   authentication: [VM],
   service: [
-    { id: `${VTC}#tt-old`, type: "TrustTaskHTTPS", serviceEndpoint: "http://members.example.org/api" },
+    { id: `${VTC}#tt-old`, type: "TrustTaskHTTPS", serviceEndpoint: "http://members.example.org/v1/trust-tasks" },
     { id: `${VTC}#portal`, type: "SignInPortal", serviceEndpoint: `${PORTAL}/members/` },
-    { id: `${VTC}#tt`, type: "TrustTaskHTTPS", serviceEndpoint: `${BASE}/` },
+    { id: `${VTC}#tt`, type: "TrustTaskHTTPS", serviceEndpoint: ENDPOINT },
     { id: `${VTC}#tt2`, type: "TrustTaskHTTPS", serviceEndpoint: "https://other.example.org" },
   ],
 };
@@ -90,13 +90,13 @@ function community(reply, { sign = true, purpose = "assertionMethod", signer = v
   return { fetch, seen };
 }
 
-const sendOpts = (fetch) => ({ vtcDid: VTC, vtcDocument: vtcDoc, trustTaskBase: BASE, fetch });
+const sendOpts = (fetch) => ({ vtcDid: VTC, vtcDocument: vtcDoc, trustTaskEndpoint: ENDPOINT, fetch });
 
 test("services: matched on type, first usable in document order, https only", () => {
   const r = selectSignInServices(vtcDoc);
   assert.equal(r.ok, true);
   assert.equal(r.services.portalOrigin, PORTAL);
-  assert.equal(r.services.trustTaskBase, BASE); // the http one is skipped
+  assert.equal(r.services.trustTaskEndpoint, ENDPOINT); // the http one is skipped
 });
 
 test("services: no portal is no-portal-service; no Trust-Task endpoint is no-common-transport", () => {
@@ -161,7 +161,7 @@ test("sendOob: a signed, threaded step 1 is returned; the claim went out signed 
   const c = community(() => ({ payload: step1() }));
   const reply = await sendOob(kA, buildClaim(kA, VTC, REQ), sendOpts(c.fetch), "claim");
   assert.equal(reply.payload.service.name, "Example Community");
-  assert.equal(c.seen[0].url, `${BASE}/trust-tasks`);
+  assert.equal(c.seen[0].url, ENDPOINT, "the endpoint exactly as published (C9)");
   assert.equal(c.seen[0].doc.proof.proofPurpose, "authentication");
   assert.equal(c.seen[0].doc.proof.verificationMethod.startsWith(kA.did), true);
   checkStep1(reply.payload, { requestId: REQ, vtcDid: VTC, portalOrigin: PORTAL, now: Date.now() });
@@ -200,10 +200,15 @@ test("sendOob: a key listed only under authentication is not the community's ass
   );
 });
 
-test("C9: a deadline in epoch seconds or RFC 3339", () => {
+test("C9: the endpoint is used exactly as published, trailing slash and all", () => {
+  const doc = { service: [vtcDoc.service[1], { type: "TrustTaskHTTPS", serviceEndpoint: "https://h.example/api/trust-tasks/" }] };
+  assert.equal(selectSignInServices(doc).services.trustTaskEndpoint, "https://h.example/api/trust-tasks/");
+});
+
+test("C9: a deadline is integer epoch seconds only", () => {
   const want = { requestId: REQ, vtcDid: VTC, portalOrigin: PORTAL, now: Date.now() };
   checkStep1(step1(), want);
-  checkStep1(step1({ decisionDeadline: new Date(Date.now() + 60_000).toISOString() }), want);
+  assert.throws(() => checkStep1(step1({ decisionDeadline: new Date(Date.now() + 60_000).toISOString() }), want));
 });
 
 test("step 1 checks", () => {
@@ -268,13 +273,12 @@ test("digests: contextDigest covers the proof; the grant digest excludes one; th
   assert.equal(d, await grantDigest({ ...grant, proof: { x: 1 } }));
   assert.match(d, /^z/);
   assert.equal(decodeDigestMultibase(d).length, 32);
-  assert.equal(uvChallengeForDigest(d).length, 32);
+  // C9: the WebAuthn challenge is the UTF-8 bytes of the string D.
+  assert.equal(new TextDecoder().decode(uvChallengeBytes(d)), d);
 });
 
-test("the network line reads both spellings", () => {
+test("the network line: true, false or \"unknown\" (C9)", () => {
   assert.equal(networkLine(true), "same");
-  assert.equal(networkLine("same"), "same");
   assert.equal(networkLine(false), "different");
-  assert.equal(networkLine("different"), "different");
   assert.equal(networkLine("unknown"), "unknown");
 });
