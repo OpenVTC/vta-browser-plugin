@@ -54,8 +54,15 @@ export interface VaultSignTrustTaskRestOptions
 export interface VaultSignTrustTaskResponse {
   /** The supplied envelope with a `proof` field attached.
    *  `proof.verificationMethod = <principalDid>#<signingKeyId>`;
-   *  `proof.cryptosuite = "eddsa-jcs-2022"`;
-   *  `proof.proofPurpose = "assertionMethod"`. */
+   *  `proof.cryptosuite = "eddsa-jcs-2022"`.
+   *
+   *  `proof.proofPurpose` is chosen by the VTA from the document's **type**,
+   *  never by the caller (VTI-KEY-106; mirrored here by
+   *  `proofPurposeForDocumentType` in `trust-tasks/purpose.ts`):
+   *  `assertionMethod` for an attestation slug — e.g. `auth/oob/grant`, the
+   *  member's grant, signed as an attestation — and `authentication` for
+   *  everything else — e.g. `auth/oob/identify`, the member proving control
+   *  of the DID. A verifier checks the proof against that relationship. */
   signedEnvelope: TrustTaskEnvelope;
 }
 

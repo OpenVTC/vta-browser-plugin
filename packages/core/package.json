@@ -116,6 +116,10 @@
     "./mediator": {
       "types": "./dist/mediator/index.d.ts",
       "import": "./dist/mediator/index.js"
+    },
+    "./links": {
+      "types": "./dist/links/index.d.ts",
+      "import": "./dist/links/index.js"
     }
   },
   "sideEffects": false,

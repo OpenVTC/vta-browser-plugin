@@ -29,7 +29,7 @@ const SRC = resolve(import.meta.dirname, "../src");
  * in one module, or the shared part belongs one layer down.
  */
 const LAYERS = [
-  ["util", "http"], //           0 — no imports of their own
+  ["util", "http", "links"], //  0 — no imports of their own
   ["did", "didcomm", "webauthn"], //  1 — identity + crypto primitives
   ["siop"], //                   2 — token formats
   // `trust-tasks` sits BELOW `vta` rather than beside it. The two were one

@@ -15,5 +15,6 @@ export * from "./device/index.js";
 export * from "./provision/index.js";
 export * from "./http/index.js";
 export * from "./util/index.js";
+export * from "./links/index.js";
 
 export { attestedOrigin, type SenderLike } from "./bridge/origin.js";

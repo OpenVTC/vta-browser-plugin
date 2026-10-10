@@ -76,6 +76,21 @@ jobs:
           fi
           echo "OK: $bundle is a single bundle with no dynamic import()"
 
+      # `content.js` is injected as a *classic* script, which cannot import at
+      # all. It is built on its own (vite.config.content.ts, IIFE,
+      # `codeSplitting: false`) so it can use the trigger-link parser from core;
+      # a lost option would leave an `import` behind and a dead content script
+      # — no provider, no trigger-link clicks — behind a green build.
+      - name: Assert the content script is one classic script
+        run: |
+          bundle=packages/extension/dist/content.js
+          test -f "$bundle" || { echo "::error::$bundle was not emitted"; exit 1; }
+          if grep -qE '(^|[;}])\s*import[\s{*"]|\bimport\s*\(|^export\b' "$bundle"; then
+            echo "::error::$bundle contains an import or export; a classic content script cannot load it"
+            exit 1
+          fi
+          echo "OK: $bundle is self-contained"
+
       # `@openvtc/pnm-core/admin` is operator surface — granting authority at an
       # agent, revoking it, destroying contexts. The task URIs are the tell:
       # they only appear in a bundle that pulled the module in.

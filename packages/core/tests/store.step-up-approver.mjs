@@ -445,6 +445,9 @@ test("an approve-response is signed for assertionMethod; operational documents f
   assert.equal(proofPurposeForDocumentType(`${S}auth/step-up/approve-response/0.6`), "assertionMethod");
   assert.equal(proofPurposeForDocumentType(`${S}task-consent/decision/0.2`), "assertionMethod");
   assert.equal(proofPurposeForDocumentType(`${S}confirm/response/0.1`), "assertionMethod");
+  // Wallet sign-in (contract C5): the grant is an attestation, identify is not.
+  assert.equal(proofPurposeForDocumentType(`${S}auth/oob/grant/0.1`), "assertionMethod");
+  assert.equal(proofPurposeForDocumentType(`${S}auth/oob/identify/0.1`), "authentication");
   // The executor's reply is operational.
   assert.equal(
     proofPurposeForDocumentType(`${S}auth/step-up/approve-response/0.6#response`),

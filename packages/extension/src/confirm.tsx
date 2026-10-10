@@ -29,6 +29,7 @@ import { ApproverConsent } from "./approver-consent.js";
 import { consentResultSender } from "./consent-result.js";
 import { DidQrButton } from "./did-qr-view.js";
 import { SessionKeyNotice } from "./session-key-notice.js";
+import { SignInView } from "./sign-in-view.js";
 
 // Consent prompt shown in a popup window before the wallet logs into an RP.
 // The background opens it with the request details as query params and
@@ -54,6 +55,9 @@ const isDisclosureConsent = params.get("kind") === "disclosure";
 // `approveDecision`, `attestApprover`, and the one-off approver setup): a community's approver
 // signs a statement after a biometric. See `approver-consent.tsx`.
 const isStepUpApproverConsent = params.get("kind") === "approver";
+/** Wallet sign-in from a trigger link (sign-in-view.tsx). Names a flow id and
+ *  nothing else; the link and the origin stay in the background's record. */
+const signInFlowId = params.get("kind") === "sign-in" ? params.get("flow") : null;
 // The biometric-gated approver surface: Approve must run a fresh WebAuthn
 // gesture bound to this decision's payloadDigest before it signs.
 const isApproverConsent = params.get("approver") === "1";
@@ -1437,7 +1441,9 @@ const root = document.getElementById("root");
 if (root) {
   createRoot(root).render(
     <StrictMode>
-      {isStepUpApproverConsent ? (
+      {signInFlowId ? (
+        <SignInView flowId={signInFlowId} />
+      ) : isStepUpApproverConsent ? (
         <ApproverConsent consentId={consentId} decide={(ok, prf) => decide(ok, false, prf)} />
       ) : isDisclosureConsent ? (
         <DisclosureConsent consentId={consentId} decide={(ok) => decide(ok)} />
