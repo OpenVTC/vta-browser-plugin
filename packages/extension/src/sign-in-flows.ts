@@ -64,6 +64,7 @@ import {
   contextDigest,
   grantDigest,
   networkLine,
+  sessionAudienceOf,
   OobRefusedError,
   OOB_REPLY_INVALID,
   type OobDocument,
@@ -105,7 +106,10 @@ export interface SignInVta {
   signGrant(
     entryId: string,
     unsigned: OobDocument,
-    uv?: { payloadDigest: string; assertion: AuthenticatorAssertionResponseLogin },
+    uv?: {
+      payloadDigest: string;
+      assertion: AuthenticatorAssertionResponseLogin;
+    },
   ): Promise<unknown>;
   /** `device/heartbeat` ext `org.openvtc.uv-key`, over the device's session. */
   enrolUvKey(enrolment: WebauthnUvKeyEnrolment): Promise<void>;
@@ -187,7 +191,11 @@ const refused = (reason: TriggerLinkReason): SignInStepResult => {
   const outcome = outcomeOf(reason);
   // `pass-on` never reaches a flow: the background does not open one for it.
   const shown = outcome === "pass-on" ? "invalid" : outcome;
-  return { kind: "refused", outcome: shown, message: triggerLinkMessage(shown)! };
+  return {
+    kind: "refused",
+    outcome: shown,
+    message: triggerLinkMessage(shown)!,
+  };
 };
 
 export class SignInFlows {
@@ -200,12 +208,29 @@ export class SignInFlows {
   }
 
   async step(
-    req: { flowId: string; vtaDid: string; restBaseUrl?: string; link?: string; origin?: string } & SignInStep,
+    req: {
+      flowId: string;
+      vtaDid: string;
+      restBaseUrl?: string;
+      link?: string;
+      origin?: string;
+    } & SignInStep,
   ): Promise<SignInStepResult> {
-    if (req.step === "prepare") return this.prepare(req.flowId, req.link, req.origin, req.vtaDid, req.restBaseUrl);
+    if (req.step === "prepare")
+      return this.prepare(
+        req.flowId,
+        req.link,
+        req.origin,
+        req.vtaDid,
+        req.restBaseUrl,
+      );
     const flow = this.flows.get(req.flowId);
     if (!flow || flow.phase === "ended") {
-      return { kind: "failed", code: SIGN_IN_OUT_OF_ORDER, message: ENDED_MESSAGE };
+      return {
+        kind: "failed",
+        code: SIGN_IN_OUT_OF_ORDER,
+        message: ENDED_MESSAGE,
+      };
     }
     try {
       switch (req.step) {
@@ -221,7 +246,11 @@ export class SignInFlows {
           await flow.vta.enrolUvKey(req.enrolment);
           return { kind: "uv-enrolled" };
         case "respond":
-          return await this.respond(flow, req.decision, req.decision === "approve" ? req.assertion : undefined);
+          return await this.respond(
+            flow,
+            req.decision,
+            req.decision === "approve" ? req.assertion : undefined,
+          );
         case "cancel":
           return await this.cancel(req.flowId, flow);
       }
@@ -247,10 +276,17 @@ export class SignInFlows {
     vtaDid: string,
     restBaseUrl: string | undefined,
   ): Promise<SignInStepResult> {
-    if (this.flows.has(flowId)) return { kind: "failed", code: SIGN_IN_OUT_OF_ORDER, message: ENDED_MESSAGE };
+    if (this.flows.has(flowId))
+      return {
+        kind: "failed",
+        code: SIGN_IN_OUT_OF_ORDER,
+        message: ENDED_MESSAGE,
+      };
     // C3 step 1, parsed again here: the background's parse chose the window,
     // this one is the one the flow acts on.
-    const parsed = parseTriggerLink(linkText ?? "", { now: Math.floor(this.deps.now() / 1000) });
+    const parsed = parseTriggerLink(linkText ?? "", {
+      now: Math.floor(this.deps.now() / 1000),
+    });
     if (!parsed.ok) return refused(parsed.reason);
     const link = parsed.link;
     if (!link.flow) return refused("untyped");
@@ -287,7 +323,8 @@ export class SignInFlows {
     if (!selected.ok) return refused(selected.reason);
 
     // C3 step 4: the page the link was clicked on must be the portal.
-    if (!origin || !originMatchesPortal(origin, selected.services.portalOrigin)) return refused("wrong-origin");
+    if (!origin || !originMatchesPortal(origin, selected.services.portalOrigin))
+      return refused("wrong-origin");
 
     // C3 step 5: the name from the wallet's own record.
     const communityName = identities[0]!.label;
@@ -301,7 +338,12 @@ export class SignInFlows {
       communityName,
       identities,
     });
-    return { kind: "confirm", communityName, portalOrigin: selected.services.portalOrigin, identities };
+    return {
+      kind: "confirm",
+      communityName,
+      portalOrigin: selected.services.portalOrigin,
+      identities,
+    };
   }
 
   // ── claim ──────────────────────────────────────────────────────────────────
@@ -315,7 +357,12 @@ export class SignInFlows {
     flow.kA = kA;
     flow.entry = entry;
     flow.at = "claim";
-    const reply = await sendOob<OobStep1>(kA, buildClaim(kA, flow.vtcDid, flow.link.id), this.sendOpts(flow), "auth/oob/claim");
+    const reply = await sendOob<OobStep1>(
+      kA,
+      buildClaim(kA, flow.vtcDid, flow.link.id),
+      this.sendOpts(flow),
+      "auth/oob/claim",
+    );
     flow.phase = "claimed";
     flow.step1 = checkStep1(reply.payload, {
       requestId: flow.link.id,
@@ -323,27 +370,46 @@ export class SignInFlows {
       portalOrigin: flow.services.portalOrigin,
       now: this.deps.now(),
     });
-    const theirs = communityNameMismatch(flow.step1.service.name, flow.step1.service.did, flow.communityName);
+    const theirs = communityNameMismatch(
+      flow.step1.service.name,
+      flow.step1.service.did,
+      flow.communityName,
+    );
     return {
       kind: "enter-number",
       decisionDeadline: deadlineMs(flow.step1.decisionDeadline)!,
+      // `checkStep1` refused an audience this wallet does not know.
+      audience: sessionAudienceOf(flow.step1)!,
       ...(theirs !== undefined ? { nameMismatch: theirs } : {}),
     };
   }
 
   // ── prove ──────────────────────────────────────────────────────────────────
 
-  private async prove(flow: Flow, enteredNumber: string): Promise<SignInStepResult> {
-    if (flow.phase !== "claimed" || !flow.kA || !flow.entry || !flow.step1) throw outOfOrder();
+  private async prove(
+    flow: Flow,
+    enteredNumber: string,
+  ): Promise<SignInStepResult> {
+    if (flow.phase !== "claimed" || !flow.kA || !flow.entry || !flow.step1)
+      throw outOfOrder();
     const unsigned = buildIdentify(flow.entry.did, flow.vtcDid, {
       requestId: flow.link.id,
       approverKey: flow.kA.did,
       enteredNumber,
     });
     flow.at = "identify";
-    const signed = assertSignedAsSent(unsigned, await flow.vta.signIdentify(flow.entry.entryId, unsigned), "authentication");
+    const signed = assertSignedAsSent(
+      unsigned,
+      await flow.vta.signIdentify(flow.entry.entryId, unsigned),
+      "authentication",
+    );
     flow.at = "prove";
-    const reply = await sendOob<OobStep2>(flow.kA, buildProve(flow.kA, flow.vtcDid, signed, flow.link.id), this.sendOpts(flow), "auth/oob/prove");
+    const reply = await sendOob<OobStep2>(
+      flow.kA,
+      buildProve(flow.kA, flow.vtcDid, signed, flow.link.id),
+      this.sendOpts(flow),
+      "auth/oob/prove",
+    );
     const step2 = checkStep2(reply.payload, flow.step1, flow.entry.did);
     flow.step2Doc = reply.doc;
     flow.phase = "identified";
@@ -355,12 +421,17 @@ export class SignInFlows {
       createdAt: step2.requester.createdAt,
       network: networkLine(step2.requester.sameNetwork),
       identifiedAs: step2.identifiedAs,
+      // `checkStep2` held it equal to step 1's.
+      audience: sessionAudienceOf(step2)!,
     };
   }
 
   // ── grant ──────────────────────────────────────────────────────────────────
 
-  private async buildGrantFor(flow: Flow, decision: OobDecision): Promise<OobDocument<OobGrantPayload>> {
+  private async buildGrantFor(
+    flow: Flow,
+    decision: OobDecision,
+  ): Promise<OobDocument<OobGrantPayload>> {
     const step2 = flow.step2Doc!.payload;
     return buildGrant(flow.entry!.did, flow.vtcDid, {
       requestId: flow.link.id,
@@ -370,7 +441,9 @@ export class SignInFlows {
       origin: step2.origin,
       contextDigest: await contextDigest(flow.step2Doc!),
       // Integer epoch seconds (contract C9).
-      notAfter: Math.floor((this.deps.now() + this.deps.grantLifetimeMs) / 1000),
+      notAfter: Math.floor(
+        (this.deps.now() + this.deps.grantLifetimeMs) / 1000,
+      ),
     });
   }
 
@@ -378,13 +451,16 @@ export class SignInFlows {
    *  passkey. The grant itself stays here: the window signs a digest, it does
    *  not get to supply the document. */
   private async grantChallenge(flow: Flow): Promise<SignInStepResult> {
-    if (flow.phase !== "identified" || !flow.kA || !flow.step2Doc) throw outOfOrder();
+    if (flow.phase !== "identified" || !flow.kA || !flow.step2Doc)
+      throw outOfOrder();
     flow.at = "grant-digest";
     flow.unsignedGrant = await this.buildGrantFor(flow, "approve");
     flow.grantDigest = await grantDigest(flow.unsignedGrant);
     // Which passkey the VTA holds for this device, so the window enrols this
     // browser's passkey first when it holds none (or another).
-    const uvCredentialId = await flow.vta.enrolledUvCredential?.().catch(() => undefined);
+    const uvCredentialId = await flow.vta
+      .enrolledUvCredential?.()
+      .catch(() => undefined);
     // The passkey signs the UTF-8 bytes of the digest string (contract C9).
     return {
       kind: "uv-challenge",
@@ -398,11 +474,18 @@ export class SignInFlows {
     decision: OobDecision,
     assertion: AuthenticatorAssertionResponseLogin | undefined,
   ): Promise<SignInStepResult> {
-    if (flow.phase !== "identified" || !flow.kA || !flow.entry) throw outOfOrder();
+    if (flow.phase !== "identified" || !flow.kA || !flow.entry)
+      throw outOfOrder();
     let unsigned: OobDocument<OobGrantPayload>;
-    let uv: { payloadDigest: string; assertion: AuthenticatorAssertionResponseLogin } | undefined;
+    let uv:
+      | {
+          payloadDigest: string;
+          assertion: AuthenticatorAssertionResponseLogin;
+        }
+      | undefined;
     if (decision === "approve") {
-      if (!flow.unsignedGrant || !flow.grantDigest || !assertion) throw outOfOrder();
+      if (!flow.unsignedGrant || !flow.grantDigest || !assertion)
+        throw outOfOrder();
       unsigned = flow.unsignedGrant;
       uv = { payloadDigest: flow.grantDigest, assertion };
     } else {
@@ -416,9 +499,19 @@ export class SignInFlows {
       "assertionMethod",
     );
     flow.at = "respond";
-    const reply = await sendOob<{ status?: unknown }>(flow.kA, buildRespond(flow.kA, flow.vtcDid, signed, flow.link.id), this.sendOpts(flow), "auth/oob/respond");
+    const reply = await sendOob<{ status?: unknown }>(
+      flow.kA,
+      buildRespond(flow.kA, flow.vtcDid, signed, flow.link.id),
+      this.sendOpts(flow),
+      "auth/oob/respond",
+    );
     this.end(flow);
-    return { kind: "done", decision, status: typeof reply.payload?.status === "string" ? reply.payload.status : "ok" };
+    return {
+      kind: "done",
+      decision,
+      status:
+        typeof reply.payload?.status === "string" ? reply.payload.status : "ok",
+    };
   }
 
   // ── cancel / end ───────────────────────────────────────────────────────────
@@ -433,9 +526,12 @@ export class SignInFlows {
     flow.phase = "ended";
     this.flows.delete(flowId);
     if (held && kA) {
-      await sendOob(kA, buildCancel(kA, flow.vtcDid, flow.link.id), this.sendOpts(flow), "auth/oob/cancel").catch(
-        () => undefined,
-      );
+      await sendOob(
+        kA,
+        buildCancel(kA, flow.vtcDid, flow.link.id),
+        this.sendOpts(flow),
+        "auth/oob/cancel",
+      ).catch(() => undefined);
     }
     this.end(flow);
     return { kind: "done", decision: "decline", status: "cancelled" };
@@ -448,9 +544,18 @@ export class SignInFlows {
     delete flow.kA;
   }
 
-  private async fail(flowId: string, flow: Flow, err: unknown): Promise<SignInStepResult> {
+  private async fail(
+    flowId: string,
+    flow: Flow,
+    err: unknown,
+  ): Promise<SignInStepResult> {
     if ((err as { code?: string })?.code === SIGN_IN_OUT_OF_ORDER) {
-      return { kind: "failed", code: SIGN_IN_OUT_OF_ORDER, message: ENDED_MESSAGE, party: "wallet" };
+      return {
+        kind: "failed",
+        code: SIGN_IN_OUT_OF_ORDER,
+        message: ENDED_MESSAGE,
+        party: "wallet",
+      };
     }
     // Read before the cancel below, which sends and so could move it.
     const where = failureWhere(flow.at, err);
@@ -469,15 +574,30 @@ export class SignInFlows {
       }
     }
     if (err instanceof OobRefusedError) {
-      if (err.code === "alreadyClaimed") return { kind: "failed", code: err.code, message: ALREADY_CLAIMED_MESSAGE, ...where };
+      if (err.code === "alreadyClaimed")
+        return {
+          kind: "failed",
+          code: err.code,
+          message: ALREADY_CLAIMED_MESSAGE,
+          ...where,
+        };
       if (err.code === "requestExpired") return refused("expired");
-      return { kind: "failed", code: err.code, message: `${triggerLinkMessage("invalid")} ${ENDED_MESSAGE}`, ...where };
+      return {
+        kind: "failed",
+        code: err.code,
+        message: `${triggerLinkMessage("invalid")} ${ENDED_MESSAGE}`,
+        ...where,
+      };
     }
     // The member's own VTA refused to sign: say why, in its stable code (R3.7).
     const vtaCode = vaultOobRefusal(err);
     const vtaMessage = vtaCode ? VTA_REFUSAL_MESSAGES[vtaCode] : undefined;
-    if (vtaCode && vtaMessage) return { kind: "failed", code: vtaCode, message: vtaMessage, ...where };
-    const code = (err as { code?: unknown })?.code === OOB_REPLY_INVALID ? OOB_REPLY_INVALID : "sign-in/failed";
+    if (vtaCode && vtaMessage)
+      return { kind: "failed", code: vtaCode, message: vtaMessage, ...where };
+    const code =
+      (err as { code?: unknown })?.code === OOB_REPLY_INVALID
+        ? OOB_REPLY_INVALID
+        : "sign-in/failed";
     const cause = code === "sign-in/failed" ? errorCause(err) : undefined;
     return {
       kind: "failed",
@@ -499,14 +619,20 @@ export class SignInFlows {
 }
 
 function outOfOrder(): Error & { code: string } {
-  return Object.assign(new Error("this step is not available now"), { code: SIGN_IN_OUT_OF_ORDER });
+  return Object.assign(new Error("this step is not available now"), {
+    code: SIGN_IN_OUT_OF_ORDER,
+  });
 }
 
 /** `OobRefusedError` codes that mean the community was never heard from. */
 const UNREACHED: ReadonlySet<string> = new Set(["network", "timeout"]);
 
 /** The exchanges the member's own VTA answers; the rest go to the community. */
-const VTA_STAGES: ReadonlySet<SignInFailureStage> = new Set(["identify", "grant", "enrol-uv"]);
+const VTA_STAGES: ReadonlySet<SignInFailureStage> = new Set([
+  "identify",
+  "grant",
+  "enrol-uv",
+]);
 
 /** Which exchange failed and who refused, for the failure's details. A
  *  failure that is not a refusal (the network, a timeout) names no party:
@@ -524,7 +650,10 @@ function failureWhere(
         : "community"
       : (err as { code?: unknown })?.code === OOB_REPLY_INVALID
         ? "wallet"
-        : vaultOobRefusal(err) !== undefined || (at !== undefined && VTA_STAGES.has(at) && refusalCode(err) !== undefined)
+        : vaultOobRefusal(err) !== undefined ||
+            (at !== undefined &&
+              VTA_STAGES.has(at) &&
+              refusalCode(err) !== undefined)
           ? "vta"
           : undefined;
   return { ...(at ? { stage: at } : {}), ...(party ? { party } : {}) };
@@ -532,8 +661,17 @@ function failureWhere(
 
 /** A refusal's stable code, wherever the transport put it. */
 function refusalCode(err: unknown): string | undefined {
-  const e = err as { code?: unknown; details?: { code?: unknown; details?: { code?: unknown } } } | undefined;
-  return safeCode(e?.details?.details?.code) ?? safeCode(e?.details?.code) ?? safeCode(e?.code);
+  const e = err as
+    | {
+        code?: unknown;
+        details?: { code?: unknown; details?: { code?: unknown } };
+      }
+    | undefined;
+  return (
+    safeCode(e?.details?.details?.code) ??
+    safeCode(e?.details?.code) ??
+    safeCode(e?.code)
+  );
 }
 
 /** What lies under the generic `sign-in/failed`: the refusal's own code if it
@@ -561,11 +699,16 @@ function foldName(name: string): string {
  * one, and flagging it would warn every member of an unnamed community on
  * every sign-in — which teaches them to ignore the warning that matters.
  */
-export function communityNameMismatch(theirs: unknown, serviceDid: unknown, ours: string): string | undefined {
+export function communityNameMismatch(
+  theirs: unknown,
+  serviceDid: unknown,
+  ours: string,
+): string | undefined {
   if (typeof theirs !== "string") return undefined;
   const trimmed = theirs.trim();
   if (trimmed === "") return undefined;
-  if (typeof serviceDid === "string" && trimmed === serviceDid.trim()) return undefined;
+  if (typeof serviceDid === "string" && trimmed === serviceDid.trim())
+    return undefined;
   if (/^did:/i.test(trimmed)) return undefined;
   return foldName(theirs) === foldName(ours) ? undefined : theirs;
 }

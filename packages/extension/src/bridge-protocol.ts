@@ -2512,8 +2512,15 @@ export type SignInStepResult =
   /** C3 step 5: "Sign in to <name> at <portal origin>?" */
   | { kind: "confirm"; communityName: string; portalOrigin: string; identities: SignInIdentityView[] }
   /** After the claim: type the number. `nameMismatch` is the community's own
-   *  name for itself when it differs from this wallet's record (VTI-LNK-104). */
-  | { kind: "enter-number"; nameMismatch?: string; /** Epoch ms. */ decisionDeadline: number }
+   *  name for itself when it differs from this wallet's record (VTI-LNK-104).
+   *  `audience` is the session the website asked for, from the community's
+   *  signed step 1: its member portal, or its operator console (`admin`). */
+  | {
+      kind: "enter-number";
+      nameMismatch?: string;
+      /** Epoch ms. */ decisionDeadline: number;
+      audience: "member" | "admin";
+    }
   /** Step 2: where the request came from (base design §14 step 11). */
   | {
       kind: "review";
@@ -2523,6 +2530,8 @@ export type SignInStepResult =
       createdAt: string;
       network: "same" | "different" | "unknown";
       identifiedAs: string;
+      /** As step 1's; step 2 repeats it, and the grant's digest covers it. */
+      audience: "member" | "admin";
     }
   /** The WebAuthn challenge for the grant: base64url of the UTF-8 bytes of
    *  the grant digest string D (contract C9). */

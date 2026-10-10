@@ -36,7 +36,12 @@ const RESULTS: Record<string, SignInStepResult> = {
       { entryId: "e2", did: "did:web:work.example", label: "Work" },
     ],
   },
-  claim: { kind: "enter-number", nameMismatch: "Totally Legit Bank", decisionDeadline: Date.now() + 60_000 },
+  claim: {
+    kind: "enter-number",
+    nameMismatch: "Totally Legit Bank",
+    decisionDeadline: Date.now() + 60_000,
+    audience: "member",
+  },
   prove: {
     kind: "review",
     location: "Sydney, Australia",
@@ -45,6 +50,7 @@ const RESULTS: Record<string, SignInStepResult> = {
     createdAt: new Date().toISOString(),
     network: "different",
     identifiedAs: "did:web:work.example",
+    audience: "member",
   },
   "grant-digest": { kind: "uv-challenge", challenge: "Q0hBTExFTkdF" },
   "respond:approve": { kind: "done", decision: "approve", status: "approved" },
@@ -82,28 +88,46 @@ test("confirm → number → review → approve with the passkey", async () => {
       return ASSERTION;
     },
   };
-  const screen = await render(h(SignInView, { flowId: "f", send, uv, close: () => {} }));
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, uv, close: () => {} }),
+  );
   await screen.settle();
   assert.match(screen.text(), /Sign in to Example Community\?/);
   assert.match(screen.text(), new RegExp(PORTAL.replace(/[.]/g, "\\.")));
 
-  const radios = screen.container.querySelectorAll<HTMLInputElement>('input[type="radio"]');
+  const radios = screen.container.querySelectorAll<HTMLInputElement>(
+    'input[type="radio"]',
+  );
   await screen.click(radios[1]!);
-  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
+  await screen.click(
+    screen.container.querySelector('[data-testid="continue"]')!,
+  );
   assert.deepEqual(steps[1], { step: "claim", entryId: "e2" });
 
-  assert.match(screen.container.querySelector('[data-testid="name-mismatch"]')!.textContent!, /Totally Legit Bank/);
-  await screen.type(screen.container.querySelector('[data-testid="number"]')!, "47");
+  assert.match(
+    screen.container.querySelector('[data-testid="name-mismatch"]')!
+      .textContent!,
+    /Totally Legit Bank/,
+  );
+  await screen.type(
+    screen.container.querySelector('[data-testid="number"]')!,
+    "47",
+  );
   await screen.click(screen.container.querySelector('[data-testid="prove"]')!);
   assert.deepEqual(steps[2], { step: "prove", enteredNumber: "47" });
 
   assert.match(screen.text(), /Chrome on macOS · near Sydney, Australia/);
   assert.match(screen.text(), /Not on this browser's network/);
-  await screen.click(screen.container.querySelector('[data-testid="approve"]')!);
+  await screen.click(
+    screen.container.querySelector('[data-testid="approve"]')!,
+  );
   await screen.settle();
   // First approval on this browser: the VTA holds no passkey for it, so
   // create, enrol, remember, then assert over a fresh grant.
-  assert.deepEqual(steps.slice(3).map((s) => s.step), ["grant-digest", "enrol-uv", "grant-digest", "respond"]);
+  assert.deepEqual(
+    steps.slice(3).map((s) => s.step),
+    ["grant-digest", "enrol-uv", "grant-digest", "respond"],
+  );
   assert.deepEqual(remembered, [ENROLMENT]);
   assert.deepEqual(challenges, [`${ENROLMENT.credentialId}:Q0hBTExFTkdF`]);
   assert.match(screen.text(), /Approved/);
@@ -113,17 +137,33 @@ test("confirm → number → review → approve with the passkey", async () => {
 /** The VTA already holds this browser's passkey. */
 const ENROLLED: Record<string, SignInStepResult> = {
   ...RESULTS,
-  "grant-digest": { kind: "uv-challenge", challenge: "Q0hBTExFTkdF", uvCredentialId: ENROLMENT.credentialId },
+  "grant-digest": {
+    kind: "uv-challenge",
+    challenge: "Q0hBTExFTkdF",
+    uvCredentialId: ENROLMENT.credentialId,
+  },
 };
 
-async function approveOnReview(uv: Parameters<typeof SignInView>[0]["uv"], results: Record<string, SignInStepResult>) {
+async function approveOnReview(
+  uv: Parameters<typeof SignInView>[0]["uv"],
+  results: Record<string, SignInStepResult>,
+) {
   const { steps, send } = script(results);
-  const screen = await render(h(SignInView, { flowId: "f", send, uv, close: () => {} }));
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, uv, close: () => {} }),
+  );
   await screen.settle();
-  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
-  await screen.type(screen.container.querySelector('[data-testid="number"]')!, "47");
+  await screen.click(
+    screen.container.querySelector('[data-testid="continue"]')!,
+  );
+  await screen.type(
+    screen.container.querySelector('[data-testid="number"]')!,
+    "47",
+  );
   await screen.click(screen.container.querySelector('[data-testid="prove"]')!);
-  await screen.click(screen.container.querySelector('[data-testid="approve"]')!);
+  await screen.click(
+    screen.container.querySelector('[data-testid="approve"]')!,
+  );
   await screen.settle();
   return { steps, screen };
 }
@@ -136,11 +176,17 @@ test("a passkey the VTA already holds is asserted without enrolling again", asyn
       stored: async () => ENROLMENT,
       create: async () => (created++, ENROLMENT),
       remember: async () => {},
-      assert: async (id: string, c: string) => (challenges.push(`${id}:${c}`), ASSERTION),
+      assert: async (id: string, c: string) => (
+        challenges.push(`${id}:${c}`),
+        ASSERTION
+      ),
     },
     ENROLLED,
   );
-  assert.deepEqual(steps.slice(3).map((s) => s.step), ["grant-digest", "respond"]);
+  assert.deepEqual(
+    steps.slice(3).map((s) => s.step),
+    ["grant-digest", "respond"],
+  );
   assert.equal(created, 0);
   assert.deepEqual(challenges, [`${ENROLMENT.credentialId}:Q0hBTExFTkdF`]);
   assert.match(screen.text(), /Approved/);
@@ -161,7 +207,10 @@ test("this browser's passkey is enrolled at an agent that does not hold it, with
     RESULTS,
   );
   assert.equal(created, 0);
-  assert.deepEqual(steps.slice(3).map((s) => s.step), ["grant-digest", "enrol-uv", "grant-digest", "respond"]);
+  assert.deepEqual(
+    steps.slice(3).map((s) => s.step),
+    ["grant-digest", "enrol-uv", "grant-digest", "respond"],
+  );
   assert.deepEqual((steps[4] as { enrolment: unknown }).enrolment, ENROLMENT);
   await screen.unmount();
 });
@@ -176,24 +225,47 @@ test("a cancelled passkey prompt is not a decision", async () => {
       throw new PrfUnlockError("cancelled", "cancelled");
     },
   };
-  const screen = await render(h(SignInView, { flowId: "f", send, uv, close: () => {} }));
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, uv, close: () => {} }),
+  );
   await screen.settle();
-  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
-  await screen.type(screen.container.querySelector('[data-testid="number"]')!, "47");
+  await screen.click(
+    screen.container.querySelector('[data-testid="continue"]')!,
+  );
+  await screen.type(
+    screen.container.querySelector('[data-testid="number"]')!,
+    "47",
+  );
   await screen.click(screen.container.querySelector('[data-testid="prove"]')!);
-  await screen.click(screen.container.querySelector('[data-testid="approve"]')!);
+  await screen.click(
+    screen.container.querySelector('[data-testid="approve"]')!,
+  );
   await screen.settle();
-  assert.equal(steps.some((s) => s.step === "respond"), false);
+  assert.equal(
+    steps.some((s) => s.step === "respond"),
+    false,
+  );
   assert.match(screen.text(), /Approval cancelled/);
   assert.ok(screen.container.querySelector('[data-testid="approve"]'));
   await screen.unmount();
 });
 
 test("a refused link shows only the message", async () => {
-  const { send } = script({ prepare: { kind: "refused", outcome: "update", message: "This code needs a newer version of the app." } });
-  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
+  const { send } = script({
+    prepare: {
+      kind: "refused",
+      outcome: "update",
+      message: "This code needs a newer version of the app.",
+    },
+  });
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, close: () => {} }),
+  );
   await screen.settle();
-  assert.equal(screen.container.querySelector('[data-testid="message"]')!.textContent, "This code needs a newer version of the app.");
+  assert.equal(
+    screen.container.querySelector('[data-testid="message"]')!.textContent,
+    "This code needs a newer version of the app.",
+  );
   await screen.unmount();
 });
 
@@ -203,30 +275,52 @@ const NOW = 1_791_460_900_000;
 
 test("every screen after the first is headed by the community and the portal, host first", async () => {
   const { send } = script(RESULTS);
-  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }));
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }),
+  );
   await screen.settle();
-  assert.equal(screen.container.querySelector('[data-testid="community"]')!.textContent, "Example Community");
+  assert.equal(
+    screen.container.querySelector('[data-testid="community"]')!.textContent,
+    "Example Community",
+  );
   const portal = screen.container.querySelector('[data-testid="portal"]')!;
   assert.equal(portal.textContent, PORTAL, "the origin reads back whole");
   assert.equal(portal.getAttribute("title"), PORTAL);
-  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
-  assert.equal(screen.container.querySelector('[data-testid="community"]')!.textContent, "Example Community");
+  await screen.click(
+    screen.container.querySelector('[data-testid="continue"]')!,
+  );
+  assert.equal(
+    screen.container.querySelector('[data-testid="community"]')!.textContent,
+    "Example Community",
+  );
   await screen.unmount();
 });
 
 test("Enter continues and proves; the number field is numeric and focused", async () => {
   const { steps, send } = script(RESULTS);
-  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }));
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }),
+  );
   await screen.settle();
   await screen.key("Enter");
   assert.deepEqual(steps[1], { step: "claim", entryId: "e1" });
-  const input = screen.container.querySelector<HTMLInputElement>('[data-testid="number"]')!;
+  const input = screen.container.querySelector<HTMLInputElement>(
+    '[data-testid="number"]',
+  )!;
   assert.equal(input.getAttribute("inputmode"), "numeric");
   await screen.key("Enter");
-  assert.equal(steps.length, 2, "Enter does nothing until two digits are typed");
+  assert.equal(
+    steps.length,
+    2,
+    "Enter does nothing until two digits are typed",
+  );
   await screen.type(input, "4");
   await screen.key("Enter");
-  assert.equal(steps.length, 2, "nor after one: no auto-advance on a half-typed number");
+  assert.equal(
+    steps.length,
+    2,
+    "nor after one: no auto-advance on a half-typed number",
+  );
   await screen.type(input, "47");
   assert.equal(steps.length, 2, "two digits do not submit by themselves");
   await screen.key("Enter");
@@ -235,11 +329,23 @@ test("Enter continues and proves; the number field is numeric and focused", asyn
 });
 
 test("Escape declines: the held claim is cancelled and the window closes", async () => {
-  const { steps, send } = script({ ...RESULTS, cancel: { kind: "done", decision: "decline", status: "cancelled" } });
+  const { steps, send } = script({
+    ...RESULTS,
+    cancel: { kind: "done", decision: "decline", status: "cancelled" },
+  });
   let closed = 0;
-  const screen = await render(h(SignInView, { flowId: "f", send, close: () => void closed++, now: () => NOW }));
+  const screen = await render(
+    h(SignInView, {
+      flowId: "f",
+      send,
+      close: () => void closed++,
+      now: () => NOW,
+    }),
+  );
   await screen.settle();
-  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
+  await screen.click(
+    screen.container.querySelector('[data-testid="continue"]')!,
+  );
   await screen.key("Escape");
   await screen.settle();
   assert.deepEqual(steps.at(-1), { step: "cancel" });
@@ -248,46 +354,154 @@ test("Escape declines: the held claim is cancelled and the window closes", async
 });
 
 test("the number screen counts down to the decision deadline", async () => {
-  const { send } = script({ ...RESULTS, claim: { kind: "enter-number", decisionDeadline: NOW + 107_000 } });
-  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }));
+  const { send } = script({
+    ...RESULTS,
+    claim: { kind: "enter-number", decisionDeadline: NOW + 107_000 },
+  });
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }),
+  );
   await screen.settle();
-  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
-  assert.match(screen.container.querySelector('[data-testid="countdown"]')!.textContent!, /1:47/);
-  assert.equal(screen.container.querySelector('[data-testid="name-mismatch"]'), null, "no mismatch, no warning");
+  await screen.click(
+    screen.container.querySelector('[data-testid="continue"]')!,
+  );
+  assert.match(
+    screen.container.querySelector('[data-testid="countdown"]')!.textContent!,
+    /1:47/,
+  );
+  assert.equal(
+    screen.container.querySelector('[data-testid="name-mismatch"]'),
+    null,
+    "no mismatch, no warning",
+  );
   await screen.unmount();
 });
 
 test("a mismatched name that is a DID is shortened, with the whole value one click away", async () => {
-  const did = "did:webvh:QmNvAiYMwoZMWGfY62gqNJuedQgH224FMpHenzJTK1wJrG:webvh.storm.ws:test-vtc";
-  const { send } = script({ ...RESULTS, claim: { kind: "enter-number", nameMismatch: did, decisionDeadline: NOW + 60_000 } });
-  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }));
+  const did =
+    "did:webvh:QmNvAiYMwoZMWGfY62gqNJuedQgH224FMpHenzJTK1wJrG:webvh.storm.ws:test-vtc";
+  const { send } = script({
+    ...RESULTS,
+    claim: {
+      kind: "enter-number",
+      nameMismatch: did,
+      decisionDeadline: NOW + 60_000,
+    },
+  });
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }),
+  );
   await screen.settle();
-  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
+  await screen.click(
+    screen.container.querySelector('[data-testid="continue"]')!,
+  );
   const box = screen.container.querySelector('[data-testid="name-mismatch"]')!;
   assert.equal(box.textContent!.includes(did), false, "shortened");
   assert.match(box.textContent!, /webvh\.storm\.ws/, "the host survives");
-  assert.ok(box.querySelector(`[title="${did}"]`), "the whole value is in the tooltip");
+  assert.ok(
+    box.querySelector(`[title="${did}"]`),
+    "the whole value is in the tooltip",
+  );
   await screen.click(screen.button("Show full"));
   assert.equal(box.textContent!.includes(did), true);
   await screen.unmount();
 });
 
 test("a failure keeps its plain message and says where, who and which code under Details", async () => {
-  const message = "This code can't be used. Refresh the code on the website and try again.";
+  const message =
+    "This code can't be used. Refresh the code on the website and try again.";
   const { send } = script({
     ...RESULTS,
-    prove: { kind: "failed", code: "sign-in/failed", message, stage: "identify", party: "vta", cause: "oobSomethingNew" },
+    prove: {
+      kind: "failed",
+      code: "sign-in/failed",
+      message,
+      stage: "identify",
+      party: "vta",
+      cause: "oobSomethingNew",
+    },
   });
-  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }));
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }),
+  );
   await screen.settle();
-  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
-  await screen.type(screen.container.querySelector('[data-testid="number"]')!, "47");
+  await screen.click(
+    screen.container.querySelector('[data-testid="continue"]')!,
+  );
+  await screen.type(
+    screen.container.querySelector('[data-testid="number"]')!,
+    "47",
+  );
   await screen.click(screen.container.querySelector('[data-testid="prove"]')!);
-  assert.equal(screen.container.querySelector('[data-testid="message"]')!.textContent, message);
-  const details = screen.container.querySelector('[data-testid="failure-details"]')!.textContent!.replace(/\s+/g, " ");
+  assert.equal(
+    screen.container.querySelector('[data-testid="message"]')!.textContent,
+    message,
+  );
+  const details = screen.container
+    .querySelector('[data-testid="failure-details"]')!
+    .textContent!.replace(/\s+/g, " ");
   assert.match(details, /sign-in\/failed/);
   assert.match(details, /oobSomethingNew/);
   assert.match(details, /identify/);
   assert.match(details, /your agent/);
+  await screen.unmount();
+});
+
+test("a sign-in to the operator console says so on the number screen and the review", async () => {
+  const results: Record<string, SignInStepResult> = {
+    ...RESULTS,
+    claim: {
+      kind: "enter-number",
+      decisionDeadline: NOW + 60_000,
+      audience: "admin",
+    },
+    prove: {
+      ...(RESULTS.prove as Extract<SignInStepResult, { kind: "review" }>),
+      audience: "admin",
+    },
+  };
+  const { send } = script(results);
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }),
+  );
+  await screen.settle();
+  // Screen 1 is before anything is sent: it cannot know, and does not say.
+  assert.doesNotMatch(screen.text(), /operator console/);
+  await screen.click(
+    screen.container.querySelector('[data-testid="continue"]')!,
+  );
+  assert.equal(
+    screen.container.querySelector('[data-testid="subtitle"]')!.textContent,
+    "Operator console",
+  );
+  assert.ok(screen.container.querySelector('[data-testid="operator-console"]'));
+  await screen.type(
+    screen.container.querySelector('[data-testid="number"]')!,
+    "47",
+  );
+  await screen.click(screen.container.querySelector('[data-testid="prove"]')!);
+  assert.match(screen.text(), /Approve this sign-in to the operator console\?/);
+  assert.match(screen.text(), /to the operator console at/);
+  await screen.unmount();
+});
+
+test("a member-portal sign-in reads as before", async () => {
+  const { send } = script(RESULTS);
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }),
+  );
+  await screen.settle();
+  await screen.click(
+    screen.container.querySelector('[data-testid="continue"]')!,
+  );
+  assert.match(screen.text(), /Type the number on the screen/);
+  assert.equal(
+    screen.container.querySelector('[data-testid="operator-console"]'),
+    null,
+  );
+  assert.equal(
+    screen.container.querySelector('[data-testid="subtitle"]'),
+    null,
+  );
   await screen.unmount();
 });
