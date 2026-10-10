@@ -26,6 +26,18 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Changed
 
+- **`loginViaDidcomm` signs in with `auth/challenge` then a signed
+  `auth/authenticate`** when given the new, optional `signing` input (whose DID
+  signs in, and must be the holder's). It runs `loginViaTrustTask` over a
+  `DidcommVtaTransport` addressed to the RP, so the reply is accepted only from
+  the RP: the bridge's `from` filter, the thread and sender checks, and the
+  reply's proof verified against the RP's DID. affinidi-webvh-service #213
+  removes the bare route the old message used. It also takes an optional
+  `scope`. `DidcommLoginResult` keeps every member, and gains `expiresIn` and
+  `scope`; on the challenge flow `accessExpiresAt` is computed from
+  `expiresIn` and `refreshExpiresAt` is `0` (the RP does not report it).
+  **Deprecated:** calling it without `signing` still sends the bare
+  `auth/authenticate`, which current RPs refuse.
 - **Every channel signs an outbound document for the purpose its type
   requires**, using the one policy in `trust-tasks/purpose.ts`
   (`proofPurposeForDocumentType`): `authentication` for operational documents

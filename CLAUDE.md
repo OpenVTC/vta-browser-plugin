@@ -223,6 +223,19 @@ a proof where one is merely RECOMMENDED is legal and strictly more
 attributable, and a 141-entry table of which tasks need one goes stale
 invisibly.
 
+**The purpose is chosen by type, in the same place.** `signOutboundTask`
+passes `proofPurposeForDocumentType(envelope.type)` (`trust-tasks/purpose.ts`)
+to the signer: `authentication` for an operational document, `assertionMethod`
+for the attestation types in `ATTESTATION_SLUGS`. That is the VTA's own rule,
+and the VTA, the VTC and the did-hosting RP check it on what they receive (VTI
+#1740, affinidi-webvh-service #213). Do not add a second table: a channel, a
+signer and the page-facing `signTrustTask` all read the one rule.
+
+**RP sign-in over DIDComm is `loginViaTrustTask` over a
+`DidcommVtaTransport`** (`loginViaDidcomm`). Keep it that way rather than
+growing a second login. The bare `auth/authenticate` it used to send survives
+only for a caller that passes no `signing`, and is deprecated.
+
 **What is deliberately NOT signed:** the `/auth/` handshake
 (`vta/auth.ts`). That route is bespoke — it authenticates by the authcrypt
 sender and never reaches the dispatch spine — and `provision/integration`,
