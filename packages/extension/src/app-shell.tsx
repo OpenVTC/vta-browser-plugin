@@ -24,7 +24,7 @@ import { getSettings } from "./config.js";
 import { activeTransport } from "./transports.js";
 import { useTransportHealth } from "./use-transport-health.js";
 import { c, t } from "./theme.js";
-import { Button, Note, Pill } from "./ui.js";
+import { Button, Mark, Note, Pill } from "./ui.js";
 import { unlockWalletAndApprover } from "./unlock-wallet.js";
 import { sendToBackground } from "./send-message.js";
 import {
@@ -418,26 +418,3 @@ function RoleStatus({
   );
 }
 
-function Mark() {
-  return (
-    <span
-      aria-hidden
-      style={{
-        width: 22,
-        height: 22,
-        borderRadius: 6,
-        background: c.accent,
-        display: "grid",
-        placeItems: "center",
-        flex: "none",
-      }}
-    >
-      <svg width="12" height="12" viewBox="0 0 12 12">
-        <path
-          d="M6 1 L10.5 3v3.2c0 2.3-1.9 4-4.5 4.8C3.4 10.2 1.5 8.5 1.5 6.2V3z"
-          fill="var(--w-accent-ink)"
-        />
-      </svg>
-    </span>
-  );
-}
