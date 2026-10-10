@@ -27,14 +27,30 @@ import {
   type SignInStep,
   type SignInStepResult,
 } from "./bridge-protocol.js";
-import { runGrantUvCeremony, PrfUnlockError } from "./webauthn-prf-unlock.js";
+import { PrfUnlockError } from "./webauthn-prf-unlock.js";
+import { assertUvPasskey, createUvPasskey, rememberUvCredential, storedUvCredential } from "./uv-passkey.js";
+
+/** The UV passkey operations the window needs. Injected for tests. */
+export interface UvPasskeyOps {
+  stored: () => Promise<string | undefined>;
+  create: typeof createUvPasskey;
+  remember: (credentialId: string) => Promise<void>;
+  assert: (credentialId: string, challengeB64u: string) => ReturnType<typeof assertUvPasskey>;
+}
+
+const browserUv: UvPasskeyOps = {
+  stored: storedUvCredential,
+  create: () => createUvPasskey(),
+  remember: rememberUvCredential,
+  assert: (id, c) => assertUvPasskey(id, c),
+};
 
 export interface SignInViewProps {
   flowId: string;
   /** Send one step. Injected so the view can be rendered in a test. */
   send?: (step: SignInStep) => Promise<RuntimeSignInStepResponse>;
-  /** The passkey ceremony. Injected for the same reason. */
-  uv?: (challengeB64u: string) => ReturnType<typeof runGrantUvCeremony>;
+  /** The passkey operations. Injected for the same reason. */
+  uv?: UvPasskeyOps;
   close?: () => void;
 }
 
@@ -69,7 +85,7 @@ export function SignInView({ flowId, send, uv, close }: SignInViewProps) {
     send ??
     ((step: SignInStep) =>
       chrome.runtime.sendMessage({ type: RUNTIME_SIGN_IN_STEP, flowId, ...step }) as Promise<RuntimeSignInStepResponse>);
-  const runUv = uv ?? ((c: string) => runGrantUvCeremony(chrome.runtime.id, c));
+  const passkey = uv ?? browserUv;
   const closeWindow = close ?? (() => window.close());
 
   const [screen, setScreen] = useState<SignInStepResult | { kind: "loading" }>({ kind: "loading" });
@@ -96,7 +112,7 @@ export function SignInView({ flowId, send, uv, close }: SignInViewProps) {
         setIdentities(res.result.identities);
         setEntryId(res.result.identities[0]?.entryId ?? "");
       }
-      if (res.result.kind !== "uv-challenge") setScreen(res.result);
+      if (res.result.kind !== "uv-challenge" && res.result.kind !== "uv-enrolled") setScreen(res.result);
       return res.result;
     } finally {
       setBusy(false);
@@ -109,15 +125,33 @@ export function SignInView({ flowId, send, uv, close }: SignInViewProps) {
   }, []);
 
   const approve = async () => {
+    // A cancelled gesture leaves the review open: the person may approve again
+    // or decline. It is not a decision.
+    const cancelled = (e: unknown) =>
+      setNote(e instanceof PrfUnlockError && e.reason === "cancelled" ? "Approval cancelled." : String((e as Error).message ?? e));
+    let credentialId = await passkey.stored();
+    if (!credentialId) {
+      // First approval on this browser: create the ES256 passkey and enrol it
+      // with the VTA (C9), then remember it — only once the VTA accepted it.
+      let enrolment;
+      try {
+        enrolment = await passkey.create();
+      } catch (e) {
+        cancelled(e);
+        return;
+      }
+      const enrolled = await run({ step: "enrol-uv", enrolment });
+      if (enrolled?.kind !== "uv-enrolled") return;
+      await passkey.remember(enrolment.credentialId);
+      credentialId = enrolment.credentialId;
+    }
     const challenge = await run({ step: "grant-digest" });
     if (challenge?.kind !== "uv-challenge") return;
     let assertion;
     try {
-      assertion = await runUv(challenge.challenge);
+      assertion = await passkey.assert(credentialId, challenge.challenge);
     } catch (e) {
-      // A cancelled gesture leaves the review open: the person may approve
-      // again or decline. It is not a decision.
-      setNote(e instanceof PrfUnlockError && e.reason === "cancelled" ? "Approval cancelled." : String((e as Error).message ?? e));
+      cancelled(e);
       return;
     }
     await run({ step: "respond", decision: "approve", assertion });
@@ -287,6 +321,7 @@ export function SignInView({ flowId, send, uv, close }: SignInViewProps) {
       );
 
     case "uv-challenge":
+    case "uv-enrolled":
       return null;
   }
 }

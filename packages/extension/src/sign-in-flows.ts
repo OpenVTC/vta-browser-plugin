@@ -34,8 +34,9 @@ import {
   type ParsedTriggerLink,
   type TriggerLinkReason,
   type SigningIdentity,
-  type UvConsentDecision,
-  uvChallengeForDigest,
+  type AuthenticatorAssertionResponseLogin,
+  type WebauthnUvKeyEnrolment,
+  uvChallengeBytes,
 } from "@openvtc/pnm-core";
 import {
   resolveCommunityDocument,
@@ -84,9 +85,16 @@ export interface SignInVta {
   listIdentities(): Promise<SignInVaultEntry[]>;
   /** `vault/sign-trust-task` for `auth/oob/identify` (no user verification). */
   signIdentify(entryId: string, unsigned: OobDocument): Promise<unknown>;
-  /** `vault/sign-trust-task` for `auth/oob/grant`, with the device's
-   *  user-verification decision for an approval. */
-  signGrant(entryId: string, unsigned: OobDocument, decision?: UvConsentDecision): Promise<unknown>;
+  /** `vault/sign-trust-task` for `auth/oob/grant`. For an approval, `uv` is
+   *  the grant digest D and the passkey's assertion over it; the caller wraps
+   *  them in the device-signed `task-consent/decision/0.2` the VTA requires. */
+  signGrant(
+    entryId: string,
+    unsigned: OobDocument,
+    uv?: { payloadDigest: string; assertion: AuthenticatorAssertionResponseLogin },
+  ): Promise<unknown>;
+  /** `device/heartbeat` ext `org.openvtc.uv-key`, over the device's session. */
+  enrolUvKey(enrolment: WebauthnUvKeyEnrolment): Promise<void>;
 }
 
 export interface SignInFlowDeps {
@@ -164,6 +172,10 @@ export class SignInFlows {
           return await this.prove(flow, req.enteredNumber);
         case "grant-digest":
           return await this.grantChallenge(flow);
+        case "enrol-uv":
+          if (flow.phase !== "identified") throw outOfOrder();
+          await flow.vta.enrolUvKey(req.enrolment);
+          return { kind: "uv-enrolled" };
         case "respond":
           return await this.respond(flow, req.decision, req.decision === "approve" ? req.assertion : undefined);
         case "cancel":
@@ -280,7 +292,7 @@ export class SignInFlows {
       enteredNumber,
     });
     const signed = assertSignedAsSent(unsigned, await flow.vta.signIdentify(flow.entry.entryId, unsigned), "authentication");
-    const reply = await sendOob<OobStep2>(flow.kA, buildProve(flow.kA, flow.vtcDid, signed), this.sendOpts(flow), "auth/oob/prove");
+    const reply = await sendOob<OobStep2>(flow.kA, buildProve(flow.kA, flow.vtcDid, signed, flow.link.id), this.sendOpts(flow), "auth/oob/prove");
     const step2 = checkStep2(reply.payload, flow.step1, flow.entry.did);
     flow.step2Doc = reply.doc;
     flow.phase = "identified";
@@ -318,21 +330,22 @@ export class SignInFlows {
     if (flow.phase !== "identified" || !flow.kA || !flow.step2Doc) throw outOfOrder();
     flow.unsignedGrant = await this.buildGrantFor(flow, "approve");
     flow.grantDigest = await grantDigest(flow.unsignedGrant);
-    return { kind: "uv-challenge", challenge: bytesToBase64url(uvChallengeForDigest(flow.grantDigest)) };
+    // The passkey signs the UTF-8 bytes of the digest string (contract C9).
+    return { kind: "uv-challenge", challenge: bytesToBase64url(uvChallengeBytes(flow.grantDigest)) };
   }
 
   private async respond(
     flow: Flow,
     decision: OobDecision,
-    assertion: UvConsentDecision["assertion"] | undefined,
+    assertion: AuthenticatorAssertionResponseLogin | undefined,
   ): Promise<SignInStepResult> {
     if (flow.phase !== "identified" || !flow.kA || !flow.entry) throw outOfOrder();
     let unsigned: OobDocument<OobGrantPayload>;
-    let uv: UvConsentDecision | undefined;
+    let uv: { payloadDigest: string; assertion: AuthenticatorAssertionResponseLogin } | undefined;
     if (decision === "approve") {
       if (!flow.unsignedGrant || !flow.grantDigest || !assertion) throw outOfOrder();
       unsigned = flow.unsignedGrant;
-      uv = { payloadDigest: flow.grantDigest, decision: "approve", kind: "webauthn", assertion };
+      uv = { payloadDigest: flow.grantDigest, assertion };
     } else {
       // A decline needs no user verification (base design §14 step 12).
       unsigned = await this.buildGrantFor(flow, "decline");
@@ -342,7 +355,7 @@ export class SignInFlows {
       await flow.vta.signGrant(flow.entry.entryId, unsigned, uv),
       "assertionMethod",
     );
-    const reply = await sendOob<{ status?: unknown }>(flow.kA, buildRespond(flow.kA, flow.vtcDid, signed), this.sendOpts(flow), "auth/oob/respond");
+    const reply = await sendOob<{ status?: unknown }>(flow.kA, buildRespond(flow.kA, flow.vtcDid, signed, flow.link.id), this.sendOpts(flow), "auth/oob/respond");
     this.end(flow);
     return { kind: "done", decision, status: typeof reply.payload?.status === "string" ? reply.payload.status : "ok" };
   }
@@ -405,7 +418,7 @@ export class SignInFlows {
     return {
       vtcDid: flow.vtcDid,
       vtcDocument: flow.vtcDocument,
-      trustTaskBase: flow.services.trustTaskBase,
+      trustTaskEndpoint: flow.services.trustTaskEndpoint,
       ...(this.deps.fetch ? { fetch: this.deps.fetch } : {}),
     };
   }

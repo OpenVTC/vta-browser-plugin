@@ -201,7 +201,14 @@ import {
   type RuntimeSignInStepResponse,
 } from "./bridge-protocol.js";
 import { SignInFlows, type SignInVaultEntry } from "./sign-in-flows.js";
-import { collectPages, vaultSignIdentify, vaultSignGrant, type TrustTaskEnvelope } from "@openvtc/pnm-core";
+import {
+  buildUvConsentDecision,
+  collectPages,
+  enrolUvPasskey,
+  vaultSignIdentify,
+  vaultSignGrant,
+  type TrustTaskEnvelope,
+} from "@openvtc/pnm-core";
 import { relayFailure } from "./relay-failure.js";
 import { chooseTrustTaskSigner, needsVault, SignAsUnavailableError } from "./sign-identity.js";
 import { isLensTask, knownRelays, mayOperateMediator } from "./mediator-standing.js";
@@ -1281,15 +1288,30 @@ const signInFlows = new SignInFlows({
         unsignedIdentify: unsigned as unknown as TrustTaskEnvelope,
       });
     },
-    signGrant: async (entryId, unsigned, decision) => {
+    signGrant: async (entryId, unsigned, uv) => {
       const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+      // The decision is the device's: issued and signed by the holder's
+      // transport key — the identity this VTA session authenticates — and
+      // addressed to the VTA.
+      const decision = uv
+        ? await buildUvConsentDecision({
+            device: (await loadHolder(vtaDid)).signing,
+            vtaDid: service.did,
+            payloadDigest: uv.payloadDigest,
+            assertion: uv.assertion,
+          })
+        : undefined;
       return vaultSignGrant(session, {
         holder,
         service,
         entryId,
         unsignedGrant: unsigned as unknown as TrustTaskEnvelope,
-        ...(decision ? { consentDecision: decision } : {}),
+        ...(decision ? { decision } : {}),
       });
+    },
+    enrolUvKey: async (enrolment) => {
+      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+      await enrolUvPasskey(session, { holder, service, enrolment });
     },
   }),
 });

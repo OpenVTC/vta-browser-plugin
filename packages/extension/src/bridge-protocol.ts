@@ -2450,6 +2450,9 @@ export type SignInStep =
   | { step: "prove"; enteredNumber: string }
   | { step: "grant-digest" }
   | { step: "respond"; decision: "approve"; assertion: SignInUvAssertionView }
+  /** Enrol this browser's user-verification passkey with the VTA, after the
+   *  window created it (device/heartbeat ext `org.openvtc.uv-key`). */
+  | { step: "enrol-uv"; enrolment: SignInUvEnrolmentView }
   | { step: "respond"; decision: "decline" }
   | { step: "cancel" };
 
@@ -2466,13 +2469,29 @@ export type OffscreenSignInStepRequest = {
   origin?: string;
 } & SignInStep;
 
-/** Mirrors `UvWebauthnAssertion` in core (`vault/sign-oob.ts`). */
+/** A WebAuthn assertion as `task-consent/decision/0.2` evidence carries it
+ *  (`AuthenticatorAssertionResponseLogin`), base64url member by member. */
 export interface SignInUvAssertionView {
+  id: string;
+  rawId: string;
+  type: "public-key";
+  response: {
+    clientDataJSON: string;
+    authenticatorData: string;
+    signature: string;
+    userHandle?: string | null;
+  };
+}
+
+/** Mirrors `WebauthnUvKeyEnrolment` in core (`vault/sign-oob.ts`). */
+export interface SignInUvEnrolmentView {
+  kind: "webauthn";
   credentialId: string;
-  authenticatorData: string;
-  clientDataJSON: string;
-  signature: string;
-  userHandle?: string;
+  publicKeyMultibase: string;
+  rpId: string;
+  origin: string;
+  hardwareBacked: boolean;
+  biometricGated: boolean;
 }
 
 /** One identity the member can sign in as: a `didSelfIssued` vault entry
@@ -2505,9 +2524,11 @@ export type SignInStepResult =
       network: "same" | "different" | "unknown";
       identifiedAs: string;
     }
-  /** The digest the passkey must sign (contract C6), base64url of the 32
-   *  challenge bytes, and the credential to use. */
+  /** The WebAuthn challenge for the grant: base64url of the UTF-8 bytes of
+   *  the grant digest string D (contract C9). */
   | { kind: "uv-challenge"; challenge: string }
+  /** The passkey is enrolled; the window goes on to approve. */
+  | { kind: "uv-enrolled" }
   | { kind: "done"; decision: "approve" | "decline"; status: string }
   /** The community refused with a stable code (R3.7). */
   | { kind: "failed"; code: string; message: string };

@@ -48,14 +48,37 @@ const RESULTS: Record<string, SignInStepResult> = {
   },
   "grant-digest": { kind: "uv-challenge", challenge: "Q0hBTExFTkdF" },
   "respond:approve": { kind: "done", decision: "approve", status: "approved" },
+  "enrol-uv": { kind: "uv-enrolled" },
+};
+
+const ENROLMENT = {
+  kind: "webauthn" as const,
+  credentialId: "Y3JlZA",
+  publicKeyMultibase: "zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169",
+  rpId: "ext",
+  origin: "chrome-extension://ext",
+  hardwareBacked: false,
+  biometricGated: false,
+};
+const ASSERTION = {
+  id: "Y3JlZA",
+  rawId: "Y3JlZA",
+  type: "public-key" as const,
+  response: { clientDataJSON: "j", authenticatorData: "a", signature: "s" },
 };
 
 test("confirm → number → review → approve with the passkey", async () => {
   const { steps, send } = script(RESULTS);
   const challenges: string[] = [];
-  const uv = async (c: string) => {
-    challenges.push(c);
-    return { credentialId: "c", authenticatorData: "a", clientDataJSON: "j", signature: "s" };
+  const remembered: string[] = [];
+  const uv = {
+    stored: async () => remembered[0],
+    create: async () => ENROLMENT,
+    remember: async (id: string) => void remembered.push(id),
+    assert: async (id: string, c: string) => {
+      challenges.push(`${id}:${c}`);
+      return ASSERTION;
+    },
   };
   const screen = await render(h(SignInView, { flowId: "f", send, uv, close: () => {} }));
   await screen.settle();
@@ -76,16 +99,23 @@ test("confirm → number → review → approve with the passkey", async () => {
   assert.match(screen.text(), /Not on this browser's network/);
   await screen.click(screen.container.querySelector('[data-testid="approve"]')!);
   await screen.settle();
-  assert.deepEqual(challenges, ["Q0hBTExFTkdF"]);
-  assert.deepEqual(steps.slice(3).map((s) => s.step), ["grant-digest", "respond"]);
+  // First approval on this browser: create, enrol, remember, then assert.
+  assert.deepEqual(steps.slice(3).map((s) => s.step), ["enrol-uv", "grant-digest", "respond"]);
+  assert.deepEqual(remembered, [ENROLMENT.credentialId]);
+  assert.deepEqual(challenges, [`${ENROLMENT.credentialId}:Q0hBTExFTkdF`]);
   assert.match(screen.text(), /Approved/);
   await screen.unmount();
 });
 
 test("a cancelled passkey prompt is not a decision", async () => {
   const { steps, send } = script(RESULTS);
-  const uv = async () => {
-    throw new PrfUnlockError("cancelled", "cancelled");
+  const uv = {
+    stored: async () => "known",
+    create: async () => ENROLMENT,
+    remember: async () => {},
+    assert: async () => {
+      throw new PrfUnlockError("cancelled", "cancelled");
+    },
   };
   const screen = await render(h(SignInView, { flowId: "f", send, uv, close: () => {} }));
   await screen.settle();

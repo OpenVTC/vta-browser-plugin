@@ -10,12 +10,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { generateSigningIdentity, signTrustTask, decodeDigestMultibase, bytesToBase64url } from "@openvtc/pnm-core";
+import { generateSigningIdentity, signTrustTask, bytesToBase64url } from "@openvtc/pnm-core";
 import { SignInFlows, ALREADY_CLAIMED_MESSAGE, type SignInVaultEntry } from "../src/sign-in-flows.ts";
 
 const VTC = "did:webvh:QmPEQVM1JPTyrvEgBcDXwjK4TeyLGSX1PxjgyeAisPviUx:members.example.org";
 const PORTAL = "https://members.example.org";
-const BASE = "https://members.example.org/v1";
+const ENDPOINT = "https://members.example.org/v1/trust-tasks";
 const ID = "Hk2pQ9xV4mT7rW1sZ8yN3A";
 const NOW = 1_791_460_900_000;
 const LINK = `https://link.trustoverip.org/t#_from=${VTC}&_id=${ID}&_exp=${Math.floor(NOW / 1000) + 100}&_type=/vti/flow/sign-in/0.1`;
@@ -29,7 +29,7 @@ const vtcDoc = {
   assertionMethod: [VM],
   service: [
     { id: `${VTC}#sign-in-portal`, type: "SignInPortal", serviceEndpoint: `${PORTAL}/members/` },
-    { id: `${VTC}#tt`, type: "TrustTaskHTTPS", serviceEndpoint: BASE },
+    { id: `${VTC}#tt`, type: "TrustTaskHTTPS", serviceEndpoint: ENDPOINT },
   ],
 };
 
@@ -57,7 +57,7 @@ function world(opts: { name?: string; claimError?: string; known?: SignInVaultEn
     decisionDeadline: Math.floor(NOW / 1000) + 120,
   };
   const fetch = (async (url: string, init: RequestInit) => {
-    assert.equal(url, `${BASE}/trust-tasks`);
+    assert.equal(url, ENDPOINT, "posted to the endpoint exactly as published (C9)");
     const doc = JSON.parse(String(init.body));
     const type = String(doc.type).replace("https://trusttasks.org/spec/auth/oob/", "").replace("/0.1", "");
     sent.push({ type, doc });
@@ -97,9 +97,12 @@ function world(opts: { name?: string; claimError?: string; known?: SignInVaultEn
         vtaCalls.push({ what: "identify" });
         return { ...unsigned, proof: { proofPurpose: "authentication" } };
       },
-      signGrant: async (_entryId, unsigned, decision) => {
-        vtaCalls.push({ what: "grant", decision });
+      signGrant: async (_entryId, unsigned, uv) => {
+        vtaCalls.push({ what: "grant", decision: uv });
         return { ...unsigned, proof: { proofPurpose: "assertionMethod" } };
+      },
+      enrolUvKey: async (enrolment) => {
+        vtaCalls.push({ what: "enrol", decision: enrolment });
       },
     }),
   });
@@ -109,7 +112,12 @@ function world(opts: { name?: string; claimError?: string; known?: SignInVaultEn
 const step = (w: World, s: Record<string, unknown>, flowId = "f1") =>
   w.flows.step({ flowId, vtaDid: "did:webvh:vta", ...s } as Parameters<SignInFlows["step"]>[0]);
 
-const ASSERTION = { credentialId: "c", authenticatorData: "a", clientDataJSON: "j", signature: "s" };
+const ASSERTION = {
+  id: "AAECAwQFBgc",
+  rawId: "AAECAwQFBgc",
+  type: "public-key" as const,
+  response: { clientDataJSON: "j", authenticatorData: "a", signature: "s" },
+};
 
 test("the whole approval, in the contract's order", async () => {
   const w = world();
@@ -134,6 +142,7 @@ test("the whole approval, in the contract's order", async () => {
   const review = await step(w, { step: "prove", enteredNumber: "47" });
   assert.equal(review.kind, "review");
   assert.equal((review as { network: string }).network, "same");
+  assert.equal(w.sent[1]!.doc.parentThreadId, ID, "prove carries parentThreadId (C9)");
   const prove = w.sent[1]!.doc as { issuer: string; payload: { identify: { issuer: string; payload: Record<string, unknown> } } };
   assert.equal(prove.issuer, kA);
   assert.equal(prove.payload.identify.issuer, ALICE);
@@ -148,13 +157,15 @@ test("the whole approval, in the contract's order", async () => {
   const grantCall = w.vtaCalls.find((c) => c.what === "grant")!;
   const decision = grantCall.decision as { payloadDigest: string; assertion: unknown };
   assert.deepEqual(decision.assertion, ASSERTION);
-  // The passkey signed exactly the digest the VTA is told about.
+  // The passkey signed exactly the digest the VTA is told about: the UTF-8
+  // bytes of the string D (C9).
   assert.equal(
-    bytesToBase64url(decodeDigestMultibase(decision.payloadDigest)),
+    bytesToBase64url(new TextEncoder().encode(decision.payloadDigest)),
     (challenge as { challenge: string }).challenge,
   );
   const grant = (w.sent[2]!.doc as { payload: { grant: { payload: Record<string, unknown> } } }).payload.grant.payload;
   assert.equal(w.sent[2]!.type, "respond");
+  assert.equal(w.sent[2]!.doc.parentThreadId, ID, "respond carries parentThreadId (C9)");
   assert.equal(grant.decision, "approve");
   assert.equal(grant.approverKey, kA);
   assert.equal(grant.origin, PORTAL);
@@ -247,4 +258,23 @@ test("closing before Continue sends nothing", async () => {
   await step(w, { step: "prepare", link: LINK, origin: PORTAL });
   await w.flows.abort("f1");
   assert.equal(w.sent.length, 0);
+});
+
+test("enrolling the UV passkey goes to the VTA, and only once the member is identified", async () => {
+  const w = world();
+  const enrolment = {
+    kind: "webauthn" as const,
+    credentialId: "AAECAwQFBgc",
+    publicKeyMultibase: "zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169",
+    rpId: "ext",
+    origin: "chrome-extension://ext",
+    hardwareBacked: false,
+    biometricGated: false,
+  };
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  assert.equal((await step(w, { step: "enrol-uv", enrolment })).kind, "failed", "not before step 2");
+  await step(w, { step: "claim", entryId: "e-alice" });
+  await step(w, { step: "prove", enteredNumber: "47" });
+  assert.deepEqual(await step(w, { step: "enrol-uv", enrolment }), { kind: "uv-enrolled" });
+  assert.deepEqual(w.vtaCalls.find((c) => c.what === "enrol")!.decision, enrolment);
 });

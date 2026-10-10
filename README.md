@@ -366,6 +366,11 @@ the two-digit number the portal shows, shows where the request came from, and
 signs the grant with your passkey (`auth/oob/*`). The page is told nothing; the
 portal learns the outcome from the community.
 
+The approval passkey is its own ES256 (P-256) credential, separate from the
+wallet's unlock passkey, because the VTA verifies P-256 only. The first approval
+on a browser creates it and enrols it with your VTA (`device/heartbeat`
+`org.openvtc.uv-key`); later approvals reuse it.
+
 This needs the portal's origin granted (see below): the click is caught by the
 same content script as the page provider, and the community's Trust-Task
 endpoint is usually on that origin. On a site that is not granted, the click
