@@ -171,8 +171,9 @@ DID as `senderDid`, **persists it with the message** (`PendingInbound.senderDid`
 because a re-driven message has no transport left to ask), and every parser
 that decides whether to believe an unsigned notice keys on it:
 `parseTaskConsentOutcome` believes a reply only from the executor the decision
-was sent to (`AwaitingDecision.executorDid`, else the session's VTA) and, when
-the reply carries a proof, only if it verifies as that executor;
+was sent to (`AwaitingDecision.executorDid`, else the session's VTA), drops an
+unsigned success `#response`, and believes a proof only if it verifies as that
+executor under `authentication` (an error document may be unsigned);
 `parseTaskConsentGranted` only from this session's VTA.
 
 The same holds for replies. `DidcommMessageBridge.sendAndAwaitReply` takes a
@@ -222,6 +223,46 @@ specification's `isProofRequired` to decide — we sign unconditionally, because
 a proof where one is merely RECOMMENDED is legal and strictly more
 attributable, and a 141-entry table of which tasks need one goes stale
 invisibly.
+
+**The purpose is chosen by type, in the same place.** `signOutboundTask`
+passes `proofPurposeForDocumentType(envelope.type)` (`trust-tasks/purpose.ts`)
+to the signer: `authentication` for an operational document, `assertionMethod`
+for the attestation types in `ATTESTATION_SLUGS`. That is the VTA's own rule,
+and the VTA, the VTC and the did-hosting RP check it on what they receive (VTI
+#1740, affinidi-webvh-service #213). Do not add a second table: a channel, a
+signer and the page-facing `signTrustTask` all read the one rule.
+
+**RP sign-in over DIDComm is `loginViaTrustTask` over a
+`DidcommVtaTransport`** (`loginViaDidcomm`). Keep it that way rather than
+growing a second login. The bare `auth/authenticate` it used to send survives
+only for a caller that passes no `signing`, and is deprecated.
+
+**Each DIDComm and TSP document is sent by its signer.** The VTA, the VTC and
+the RPs act on a document from those transports only when its proof verifies
+as its `issuer` and that issuer is the transport sender (VTI #1739,
+affinidi-webvh-service #213). `signOutboundTask` takes the channel's sender DID
+(`DidcommVtaTransport` and `TspChannel` pass the holder's) and refuses a signer
+that is not it; REST passes none, because the consumer binds the issuer to the
+bearer. Before signing it also names the signer as `issuer` when none is set,
+fills a missing `id` or `issuedAt`, and refuses a document with no
+`recipient`. Two consequences:
+
+- The same-browser approver relay authcrypts its `task-consent/decision` **as
+  the approver** (`buildTaskConsentDecision`'s `sender`); the worker's session
+  only carries the forward.
+- A per-site persona cannot sign in over DIDComm or TSP: its keys, keyAgreement
+  included, live at the VTA. `doDidcommLogin` refuses one up front
+  (`didcomm-login.ts`), and persona sign-in is the REST path.
+
+**What the executors push and reply is verified under `authentication`.**
+`verifyTrustTaskProof` with `expectedProofPurpose` also requires the
+verification method to be listed under that relationship in the signer's DID
+document, because the resolver finds a key under any of them. Replies
+(`verifyTrustTaskReply`), `task-consent/request`, step-up `approve-request` and
+`task-consent/decision#response` all require `authentication`, which is what
+the VTA, the VTC and the did-hosting RP sign them for. The one opt-out is the
+Mediator Lens (`replyProofPurpose: "any"`): a mediator is none of those, and
+signs its `messaging/*` replies for a purpose of its own.
 
 **What is deliberately NOT signed:** the `/auth/` handshake
 (`vta/auth.ts`). That route is bespoke — it authenticates by the authcrypt

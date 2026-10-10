@@ -19,6 +19,7 @@
 import { isStandardCode, normalizeCode } from "@openvtc/trust-tasks/_runtime/codes";
 
 import type { SigningIdentity } from "../siop/self-issued.js";
+import { proofPurposeForDocumentType, type ProofPurpose } from "../trust-tasks/purpose.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
 import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import { VtaClientError, type VtaErrorCode } from "./errors.js";
@@ -107,7 +108,23 @@ export function buildTrustTask<P>(
 export async function signOutboundTask(
   envelope: TrustTask<unknown>,
   signer: TaskSigner,
+  transportSender?: string,
 ): Promise<void> {
+  // The DID a DIDComm or TSP channel sends as. The VTA, the VTC and the RPs act
+  // on a document from those transports only when its proven signer is that
+  // sender (VTI #1739, affinidi-webvh-service #213), so a signer that is not
+  // the sender — a persona whose key lives at the VTA, on a channel that sends
+  // as the holder — is a document every consumer refuses. Refused here, naming
+  // both, rather than remotely as `identityMismatch`. REST passes nothing: it
+  // has no sender identity of its own, and the consumer binds the issuer to the
+  // bearer instead.
+  if (transportSender !== undefined && signer.did !== transportSender) {
+    throw new VtaClientError(
+      "e.client.identity",
+      `${envelope.type}: signed as ${signer.did} but sent as ${transportSender}. ` +
+        `A DIDComm or TSP document must be sent by its signer`,
+    );
+  }
   // SPEC §7.2 item 6 — the in-band issuer must be the party that signed. A
   // consumer rejects the mismatch, so catching it here turns a remote
   // `identityMismatch` into a local error naming both DIDs.
@@ -117,7 +134,41 @@ export async function signOutboundTask(
       `${envelope.type}: envelope issuer ${envelope.issuer} is not the signing identity ${signer.did}`,
     );
   }
-  await signer.sign(envelope);
+  // What a consumer binds the proof to, filled or refused *before* signing,
+  // because the proof covers them and nothing may change after it. The VTA, the
+  // VTC and the RPs act on a DIDComm or TSP document only when it names its
+  // issuer (the proven signer, VTI #1739), and key their replay window on
+  // (issuer, id); `recipient` is the audience the proof is bound to (SPEC
+  // §4.8.2), and `issuedAt` places it inside the freshness window.
+  // `buildTrustTask` sets all but the issuer on every document it builds;
+  // these catch one composed some other way.
+  if (envelope.issuer === undefined) envelope.issuer = signer.did;
+  if (!envelope.id) envelope.id = globalThis.crypto.randomUUID();
+  if (!envelope.issuedAt) envelope.issuedAt = new Date().toISOString();
+  if (!envelope.recipient) {
+    throw new VtaClientError(
+      "e.client.identity",
+      `${envelope.type}: the document names no recipient. A signed document with no audience ` +
+        `is replayable at any other party, and the consumer refuses it`,
+    );
+  }
+  await signer.sign(envelope, { proofPurpose: proofPurposeForDocumentType(envelope.type) });
+}
+
+/**
+ * What {@link signOutboundTask} asks of a {@link TaskSigner}.
+ *
+ * The purpose comes from the document's **type**
+ * ({@link proofPurposeForDocumentType}): `authentication` for an operational
+ * document, which is nearly all of them, and `assertionMethod` for an
+ * attestation such as an approve-response, a consent decision or an
+ * `auth/oob/grant`. The VTA, the VTC and the did-hosting RP sign their own
+ * documents by the same rule (VTI #1740, affinidi-webvh-service #213) and
+ * check the purpose on what they receive, so a channel never lets its caller
+ * choose.
+ */
+export interface TaskSignOptions {
+  proofPurpose: ProofPurpose;
 }
 
 /**
@@ -142,18 +193,34 @@ export async function signOutboundTask(
  */
 export interface TaskSigner {
   readonly did: string;
-  sign(envelope: TrustTask<unknown>): Promise<void>;
+  /**
+   * Put a proof on `envelope`, in place.
+   *
+   * `opts` is optional so that a signer written against the one-argument form
+   * still type-checks; every channel passes it. A signer that cannot choose the
+   * purpose ignores it: the VTA's `vault/sign-trust-task` picks the purpose
+   * from the document type itself, by the same rule.
+   */
+  sign(envelope: TrustTask<unknown>, opts?: TaskSignOptions): Promise<void>;
 }
 
-/** A signer backed by a key this process holds — the holder's own identity,
- *  and what every channel used before the persona paths existed. */
+/**
+ * A signer backed by a key this process holds — the holder's own identity,
+ * and what every channel used before the persona paths existed.
+ *
+ * Signs for `opts.proofPurpose`, or, when called without one, for the purpose
+ * the document's type requires. It used to sign everything for
+ * `assertionMethod`, which reads as an attestation: the consumers now refuse
+ * that on an operational document.
+ */
 export function localTaskSigner(signing: SigningIdentity): TaskSigner {
   return {
     did: signing.did,
-    sign: async (envelope) => {
+    sign: async (envelope, opts) => {
       await signTrustTask({
         envelope: envelope as unknown as Record<string, unknown> & { proof?: unknown },
         signing,
+        proofPurpose: opts?.proofPurpose ?? proofPurposeForDocumentType(envelope.type),
       });
     },
   };
@@ -207,6 +274,20 @@ type ReplyDocument = { type?: string; payload?: unknown };
  * - Otherwise the `payload` is returned as `Res` (validated against
  *   `expectedResponseType` first, when one is supplied).
  */
+/** What {@link verifyTrustTaskReply} requires of a reply's proof. */
+export interface VerifyTrustTaskReplyOptions {
+  /**
+   * The purpose the reply's proof must declare, with its key listed under the
+   * same relationship. Default `"authentication"`: what the VTA, the VTC and
+   * the did-hosting RP sign their replies for.
+   *
+   * `"any"` checks only that the proof verifies as the expected signer. It is
+   * for a counterparty outside those three whose signing purpose is its own
+   * (a mediator answering its `messaging/*` surface), and nothing else.
+   */
+  proofPurpose?: ProofPurpose | "any";
+}
+
 /**
  * Verify that a reply really came from the agent this channel is talking to.
  *
@@ -246,10 +327,18 @@ type ReplyDocument = { type?: string; payload?: unknown };
 export async function verifyTrustTaskReply(
   doc: { type?: string; proof?: unknown },
   expectedSigner: string,
+  opts: VerifyTrustTaskReplyOptions = {},
 ): Promise<void> {
   if (isTrustTaskErrorType(doc.type)) return;
 
-  const result = await verifyTrustTaskProof(doc as Record<string, unknown>);
+  // The VTA, the VTC and the did-hosting RP sign every reply with their
+  // operational key under `authentication` (VTI #1740, VTI-KEY-106;
+  // affinidi-webvh-service #213), and that key must be listed there.
+  const purpose = opts.proofPurpose ?? "authentication";
+  const result = await verifyTrustTaskProof(
+    doc as Record<string, unknown>,
+    purpose === "any" ? {} : { expectedProofPurpose: purpose },
+  );
   if (!result.verified) {
     throw new VtaClientError(
       "e.client.parse",

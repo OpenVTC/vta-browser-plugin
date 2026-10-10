@@ -15,8 +15,7 @@ import type { SendOpts, TrustTaskSender } from "../vta/channel.js";
 import { VtaClientError } from "../vta/errors.js";
 import type { TrustTask } from "../vta/protocol.js";
 import { decodeTrustTaskHttpReply } from "../vta/rest-channel.js";
-import { signOutboundTask, type ChannelSigner, type TaskSigner } from "../vta/trust-task.js";
-import { signTrustTask } from "../trust-tasks/sign.js";
+import { asTaskSigner, signOutboundTask, type ChannelSigner } from "../vta/trust-task.js";
 import { DEFAULT_FETCH_TIMEOUT_MS, isFetchTimeout, withFetchTimeout } from "../http/timeout-fetch.js";
 
 export interface RpHttpsSenderOptions {
@@ -33,7 +32,11 @@ export interface RpHttpsSenderOptions {
 
 /** Build a sender that carries Trust Tasks to one relying party over HTTPS. */
 export function rpHttpsSender(opts: RpHttpsSenderOptions): TrustTaskSender {
-  const signer = operationalSigner(opts.signing);
+  // The channel signs each document for the purpose its type requires
+  // (`signOutboundTask`): `authentication` for the RP's operational requests,
+  // `auth/authenticate` included. This sender used to force `authentication`
+  // itself, because the channels signed `assertionMethod`; they no longer do.
+  const signer = asTaskSigner(opts.signing);
   const fetchFn = withFetchTimeout(opts.fetch);
   const url = `${opts.baseUrl.replace(/\/+$/, "")}/trust-tasks`;
 
@@ -73,28 +76,6 @@ export function rpHttpsSender(opts: RpHttpsSenderOptions): TrustTaskSender {
         operationLabel: label,
         expectedSigner: opts.rpDid,
         inReplyTo: envelope,
-      });
-    },
-  };
-}
-
-/**
- * A signer for the RP's operational requests: `proofPurpose: authentication`.
- *
- * `signTrustTask` defaults to `assertionMethod`, which is for attestations. An
- * RP refuses it on an ordinary request, and `auth/authenticate` must be an
- * `authentication` proof. A {@link TaskSigner} (a persona signing at the VTA)
- * is used as it is: the VTA chooses the purpose for the key it holds.
- */
-function operationalSigner(signing: ChannelSigner): TaskSigner {
-  if ("sign" in signing) return signing;
-  return {
-    did: signing.did,
-    sign: async (envelope) => {
-      await signTrustTask({
-        envelope: envelope as unknown as Record<string, unknown> & { proof?: unknown },
-        signing,
-        proofPurpose: "authentication",
       });
     },
   };

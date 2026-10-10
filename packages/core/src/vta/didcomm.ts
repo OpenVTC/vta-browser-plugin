@@ -22,7 +22,12 @@ import {
   signOutboundTask,
   verifyTrustTaskReply,
 } from "./trust-task.js";
-import { asTaskSigner, type ChannelSigner, type TaskSigner } from "./trust-task.js";
+import {
+  asTaskSigner,
+  type ChannelSigner,
+  type TaskSigner,
+  type VerifyTrustTaskReplyOptions,
+} from "./trust-task.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import type { NotifyOpts, SendOpts, TrustTaskChannel } from "./channel.js";
 import type { DidcommMessageBridge, VtaTransport } from "./transport.js";
@@ -58,6 +63,14 @@ export interface DidcommVtaTransportOptions {
   mediator?: RemoteDidcommEndpoint;
   /** Per-request timeout (default 30s). */
   timeoutMs?: number;
+  /**
+   * What a reply's proof must declare (see `verifyTrustTaskReply`). Default
+   * `"authentication"`, which the VTA, the VTC and the did-hosting RP sign
+   * their replies for. A channel whose counterparty is a mediator passes
+   * `"any"`: the mediator signs its `messaging/*` replies for a purpose of its
+   * own choosing.
+   */
+  replyProofPurpose?: VerifyTrustTaskReplyOptions["proofPurpose"];
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -116,8 +129,10 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
   private readonly signer: TaskSigner;
   private readonly mediator?: RemoteDidcommEndpoint;
   private readonly timeoutMs: number;
+  private readonly replyProofPurpose: NonNullable<VerifyTrustTaskReplyOptions["proofPurpose"]>;
 
   constructor(opts: DidcommVtaTransportOptions) {
+    this.replyProofPurpose = opts.replyProofPurpose ?? "authentication";
     this.signer = asTaskSigner(opts.signing);
     this.bridge = opts.bridge;
     this.holder = opts.holder;
@@ -229,7 +244,7 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
     // to the document. A relay that could pack for us could still hand us a
     // body we did not get from the agent, and the document's own proof is what
     // closes that.
-    await verifyTrustTaskReply(doc ?? {}, this.vta.did);
+    await verifyTrustTaskReply(doc ?? {}, this.vta.did, { proofPurpose: this.replyProofPurpose });
 
     return parseTrustTaskReply<Res>(doc, {
       ...(opts.expectedResponseType !== undefined
@@ -304,7 +319,9 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
     // Every outbound path — `send`, `notify`, and the passkey-VM convenience
     // surface — packs through here, which is why the proof is attached here
     // and not in each of them.
-    await signOutboundTask(envelope, this.signer);
+    // Sent as the holder, so signed as the holder: the counterparty acts on the
+    // document only when its proven signer is the authcrypt sender.
+    await signOutboundTask(envelope, this.signer, this.holder.did);
     const requestId = envelope.id;
     const message = {
       id: requestId,

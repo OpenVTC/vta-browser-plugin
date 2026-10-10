@@ -1,4 +1,10 @@
-// The RP login's wire contract, pinned.
+// The deprecated bare form of the RP login's wire contract, pinned.
+//
+// `loginViaDidcomm` sends this only for a caller that passes no `signing`:
+// with nothing to sign with, those options can only mean the old message. The
+// challenge flow every other caller gets is `rp-login.didcomm-challenge.mjs`.
+// Every option and result member below is the same as it always was, which is
+// the point of keeping these tests unchanged.
 //
 // This had drifted: the package sent `affinidi.com/webvh/1.0/authenticate` to a
 // control plane whose DIDComm router binds

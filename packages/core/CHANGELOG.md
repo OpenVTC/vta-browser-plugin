@@ -26,6 +26,53 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Changed
 
+- **What the executors push and reply is verified under `authentication`.**
+  `verifyTrustTaskProof` with `expectedProofPurpose` now also requires the
+  verification method to be listed under that relationship in the signer's DID
+  document (`listsMethodUnder`, exported). `verifyTrustTaskReply` requires
+  `authentication` by default and takes an optional third argument
+  (`{ proofPurpose }`, `"any"` to check only the signer);
+  `DidcommVtaTransport` takes the same as `replyProofPurpose`, for a channel
+  whose counterparty is a mediator. `parseTaskConsentRequest` and
+  `parseTaskConsentOutcome` require `authentication` (they required
+  `assertionMethod`), and an unsigned `task-consent/decision#response` is now
+  dropped. Error documents may still be unsigned. This is what the VTA, the VTC
+  and the did-hosting RP sign for (VTI #1740, affinidi-webvh-service #213).
+- **A DIDComm or TSP document is sent by its signer.** `signOutboundTask` takes
+  an optional third argument, the channel's sender DID, and refuses a signer
+  that is not it (`e.client.identity`); `DidcommVtaTransport` and `TspChannel`
+  pass the holder's. The consumers act on a document from those transports
+  only when its proven signer is the sender (VTI #1739). REST passes none.
+- `buildTaskConsentDecision` takes an optional `sender`, the identity the inner
+  message is authcrypted as (default `holder`), and refuses one that is not
+  the signer. A same-browser approver relay passes the approver's identity.
+- **`loginViaDidcomm` signs in with `auth/challenge` then a signed
+  `auth/authenticate`** when given the new, optional `signing` input (whose DID
+  signs in, and must be the holder's). It runs `loginViaTrustTask` over a
+  `DidcommVtaTransport` addressed to the RP, so the reply is accepted only from
+  the RP: the bridge's `from` filter, the thread and sender checks, and the
+  reply's proof verified against the RP's DID. affinidi-webvh-service #213
+  removes the bare route the old message used. It also takes an optional
+  `scope`. `DidcommLoginResult` keeps every member, and gains `expiresIn` and
+  `scope`; on the challenge flow `accessExpiresAt` is computed from
+  `expiresIn` and `refreshExpiresAt` is `0` (the RP does not report it).
+  **Deprecated:** calling it without `signing` still sends the bare
+  `auth/authenticate`, which current RPs refuse.
+- **Every channel signs an outbound document for the purpose its type
+  requires**, using the one policy in `trust-tasks/purpose.ts`
+  (`proofPurposeForDocumentType`): `authentication` for operational documents
+  and `assertionMethod` for the attestation types (`ATTESTATION_SLUGS`, which
+  include `auth/oob/grant`). Channels used to sign everything for
+  `assertionMethod`; the VTA, the VTC and the did-hosting RP now check the
+  purpose (VTI #1740, affinidi-webvh-service #213). `TaskSigner.sign` takes an
+  optional `TaskSignOptions` (`{ proofPurpose }`), so a signer written for the
+  one-argument form still type-checks. `localTaskSigner` honours it, and picks
+  by type when called without it. `signTrustTask`'s own default is unchanged.
+- **`signOutboundTask` binds a document before signing it.** It names the
+  signer as `issuer` when none is set, fills a missing `id` or `issuedAt`, and
+  refuses a document with no `recipient` (`e.client.identity`): the consumers
+  key their replay window on (issuer, id) and refuse an unaddressed document
+  (VTI #1739). Every document this package builds already names its recipient.
 - `@openvtc/trust-tasks` floor raised to `^0.23.0`, the first binding whose
   `git-ns/activity/list/0.1` schema is satisfiable (0.22.7's `ActivityItem`
   required a `source` it did not define). `ApproverAttestPayload` and
