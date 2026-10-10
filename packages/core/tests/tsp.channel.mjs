@@ -70,7 +70,7 @@ function simulatedVtaTransport(vta, holder, dispatch, replySenderVid) {
       // requiring a proof on its request requires one on its response too, so a
       // double that did not sign would model a VTA that no longer exists.
       if (vta.signing && !replyDoc.proof && !String(replyDoc.type ?? "").includes("trust-task-error")) {
-        await signTrustTask({ envelope: replyDoc, signing: vta.signing });
+        await signTrustTask({ envelope: replyDoc, signing: vta.signing, proofPurpose: "authentication" });
       }
       // Seal the reply under `replySenderVid` (defaults to the VTA's real VID),
       // still using the VTA's keys — so the channel's own sender-VID check is

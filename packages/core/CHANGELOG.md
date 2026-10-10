@@ -26,6 +26,18 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Changed
 
+- **What the executors push and reply is verified under `authentication`.**
+  `verifyTrustTaskProof` with `expectedProofPurpose` now also requires the
+  verification method to be listed under that relationship in the signer's DID
+  document (`listsMethodUnder`, exported). `verifyTrustTaskReply` requires
+  `authentication` by default and takes an optional third argument
+  (`{ proofPurpose }`, `"any"` to check only the signer);
+  `DidcommVtaTransport` takes the same as `replyProofPurpose`, for a channel
+  whose counterparty is a mediator. `parseTaskConsentRequest` and
+  `parseTaskConsentOutcome` require `authentication` (they required
+  `assertionMethod`), and an unsigned `task-consent/decision#response` is now
+  dropped. Error documents may still be unsigned. This is what the VTA, the VTC
+  and the did-hosting RP sign for (VTI #1740, affinidi-webvh-service #213).
 - **A DIDComm or TSP document is sent by its signer.** `signOutboundTask` takes
   an optional third argument, the channel's sender DID, and refuses a signer
   that is not it (`e.client.identity`); `DidcommVtaTransport` and `TspChannel`

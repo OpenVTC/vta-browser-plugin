@@ -269,3 +269,21 @@ test("a DID is named by host AND path, so a relay and an agent on one host read 
   );
   assert.match(didLabel("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"), /^did:key:z6Mkha\w*…\w*a2doK$/);
 });
+
+test("the lens holds a mediator's replies to its own signature, not the agents' purpose", () => {
+  // The VTA, the VTC and the did-hosting RP sign replies under
+  // `authentication`, and every other channel requires that. A mediator signs
+  // its `messaging/*` replies for a purpose of its own choosing, so the lens
+  // channel and the monitor batches ask only that the proof verifies as the
+  // mediator. Requiring `authentication` here would blank the lens.
+  const offscreen = readFileSync(
+    fileURLToPath(new URL("../src/offscreen.ts", import.meta.url)),
+    "utf8",
+  );
+  const lens = /async function lensSession\([\s\S]*?\n}\n/.exec(offscreen)?.[0] ?? "";
+  assert.ok(lens, "lensSession not found");
+  assert.match(lens, /replyProofPurpose: "any"/);
+  assert.match(offscreen, /verifyTrustTaskReply\(doc, mediatorDid, \{ proofPurpose: "any" \}\)/);
+  // Nowhere else opts out.
+  assert.equal(offscreen.match(/replyProofPurpose:/g)?.length, 1);
+});

@@ -274,6 +274,20 @@ type ReplyDocument = { type?: string; payload?: unknown };
  * - Otherwise the `payload` is returned as `Res` (validated against
  *   `expectedResponseType` first, when one is supplied).
  */
+/** What {@link verifyTrustTaskReply} requires of a reply's proof. */
+export interface VerifyTrustTaskReplyOptions {
+  /**
+   * The purpose the reply's proof must declare, with its key listed under the
+   * same relationship. Default `"authentication"`: what the VTA, the VTC and
+   * the did-hosting RP sign their replies for.
+   *
+   * `"any"` checks only that the proof verifies as the expected signer. It is
+   * for a counterparty outside those three whose signing purpose is its own
+   * (a mediator answering its `messaging/*` surface), and nothing else.
+   */
+  proofPurpose?: ProofPurpose | "any";
+}
+
 /**
  * Verify that a reply really came from the agent this channel is talking to.
  *
@@ -313,10 +327,18 @@ type ReplyDocument = { type?: string; payload?: unknown };
 export async function verifyTrustTaskReply(
   doc: { type?: string; proof?: unknown },
   expectedSigner: string,
+  opts: VerifyTrustTaskReplyOptions = {},
 ): Promise<void> {
   if (isTrustTaskErrorType(doc.type)) return;
 
-  const result = await verifyTrustTaskProof(doc as Record<string, unknown>);
+  // The VTA, the VTC and the did-hosting RP sign every reply with their
+  // operational key under `authentication` (VTI #1740, VTI-KEY-106;
+  // affinidi-webvh-service #213), and that key must be listed there.
+  const purpose = opts.proofPurpose ?? "authentication";
+  const result = await verifyTrustTaskProof(
+    doc as Record<string, unknown>,
+    purpose === "any" ? {} : { expectedProofPurpose: purpose },
+  );
   if (!result.verified) {
     throw new VtaClientError(
       "e.client.parse",

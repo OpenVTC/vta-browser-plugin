@@ -2726,6 +2726,11 @@ async function lensSession(mediatorDid: string, vtaDid: string): Promise<LensSes
     // so no forward wrap — this message is for the relay itself.
     vta: conn.mediator,
     timeoutMs: 20_000,
+    // The mediator signs its `messaging/*` replies for a purpose of its own
+    // choosing. Only the VTA, the VTC and the did-hosting RP are held to
+    // `authentication` (VTI #1740, affinidi-webvh-service #213); the proof
+    // must still verify as the mediator.
+    replyProofPurpose: "any",
   });
   return {
     conn,
@@ -2924,7 +2929,7 @@ async function runMonitor(
       try {
         // A batch is the mediator's signed document like any reply; one that
         // does not verify is not the mediator's account of its traffic.
-        await verifyTrustTaskReply(doc, mediatorDid);
+        await verifyTrustTaskReply(doc, mediatorDid, { proofPurpose: "any" });
       } catch (e) {
         console.warn("[mediator lens] dropped a monitor batch that did not verify:", e);
         return;

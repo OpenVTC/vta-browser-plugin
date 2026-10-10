@@ -45,7 +45,7 @@ async function vtaFixture({ replier } = {}) {
   const vtaSigning = generateSigningIdentity();
   const vta = Identity.generate(vtaSigning.did);
   const signedReply = { type: `${VAULT_DELETE}#response`, payload: { deleted: true } };
-  await signTrustTask({ envelope: signedReply, signing: vtaSigning });
+  await signTrustTask({ envelope: signedReply, signing: vtaSigning, proofPurpose: "authentication" });
   const inner = new InMemoryDidcommBridge({
     vta,
     holderPublicJwk: holder.publicJwk(),

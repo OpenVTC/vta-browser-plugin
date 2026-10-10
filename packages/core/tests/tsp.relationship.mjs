@@ -69,7 +69,7 @@ function relationshipVta(vta, holder, { gating = true, answerInvites = true, acc
       }
       const reqDoc = openTspEnvelope(fromUtf8.decode(req.payload));
       const replyDoc = { type: LIST_RESP, payload: { entries: [], truncated: false }, threadId: reqDoc.id };
-      await signTrustTask({ envelope: replyDoc, signing: VTA_SIGNING });
+      await signTrustTask({ envelope: replyDoc, signing: VTA_SIGNING, proofPurpose: "authentication" });
       const reply = await pack(utf8.encode(wrapTspEnvelope(replyDoc)), vta.vid, holder.vid, {
         senderSigningKey: vta.signSk,
         receiverEncryptionKey: holder.encPk,

@@ -64,7 +64,8 @@ async function inbound({
   drop = [],
   recipient = HOLDER,
   unsigned = false,
-  proofPurpose,
+  // The executor signs a consent request under `authentication` (VTI #1740).
+  proofPurpose = "authentication",
 } = {}) {
   const p = payload(over);
   for (const k of drop) delete p[k];
@@ -77,7 +78,7 @@ async function inbound({
     payload: p,
   };
   if (!unsigned) {
-    await signTrustTask({ envelope: doc, signing: as, ...(proofPurpose ? { proofPurpose } : {}) });
+    await signTrustTask({ envelope: doc, signing: as, proofPurpose });
   }
   return { id: doc.id, type: TRUST_TASK_ENVELOPE_TYPE, from: as.did, body: doc };
 }
@@ -95,6 +96,16 @@ test("a request signed by any enrolled executor (e.g. a control plane) is accept
   const res = await parseTaskConsentRequest(await inbound({ as: CONTROL_PLANE }), opts);
   assert.equal(res.ok, true);
   assert.equal(res.parsed.executorDid, CONTROL_PLANE.did);
+});
+
+test("a request signed for assertionMethod never reaches a human", async () => {
+  // A consent request is the executor's operational message, signed with its
+  // operational key under `authentication` (VTI #1740; affinidi-webvh-service
+  // #213). An `assertionMethod` proof is refused before anything is shown.
+  const res = await parseTaskConsentRequest(await inbound({ proofPurpose: "assertionMethod" }), opts);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "untrusted_issuer");
+  assert.match(res.detail, /authentication/);
 });
 
 test("an unsigned request never reaches a human", async () => {
