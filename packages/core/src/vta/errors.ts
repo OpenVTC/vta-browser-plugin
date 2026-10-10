@@ -126,3 +126,16 @@ export async function errorFromResponse(res: Response): Promise<VtaClientError> 
   if (body?.error?.suggestion !== undefined) opts.suggestion = body.error.suggestion;
   return new VtaClientError(code, message, opts);
 }
+
+// ── A Trust-Task refusal's machine-readable reason ──────────────────────────
+
+/** `details.reason` the VTA puts on a `taskFailed` for a missing row and for a
+ *  conflicting write (`vta_sdk::protocols::trust_task_reject_reasons`), R3.7. */
+export const TASK_REFUSAL_NOT_FOUND = "not_found";
+export const TASK_REFUSAL_CONFLICT = "conflict";
+
+/** The refusal's `details.reason`, if the counterparty gave one. */
+export function taskRefusalReason(err: unknown): string | undefined {
+  const details = (err as { details?: { details?: { reason?: unknown } } })?.details?.details;
+  return typeof details?.reason === "string" ? details.reason : undefined;
+}

@@ -366,10 +366,21 @@ the two-digit number the portal shows, shows where the request came from, and
 signs the grant with your passkey (`auth/oob/*`). The page is told nothing; the
 portal learns the outcome from the community.
 
+Each browser is one of your devices at your VTA. Every install (every browser
+profile) has its own holder identity, so it registers itself separately
+(`device/register`, as `companion`/`browser`, named like "Chrome on macOS")
+after onboarding, when it first connects to your agent, and before a sign-in.
+An install from before this registers on its next unlock, with no new
+onboarding. A second browser or a phone registers under its own identity and
+does not disturb this one, and disabling one device at your agent leaves the
+others signing in. A browser that has been disabled is told so, rather than
+retried.
+
 The approval passkey is its own ES256 (P-256) credential, separate from the
 wallet's unlock passkey, because the VTA verifies P-256 only. The first approval
 on a browser creates it and enrols it with your VTA (`device/heartbeat`
-`org.openvtc.uv-key`); later approvals reuse it.
+`org.openvtc.uv-key`); later approvals reuse it. A second agent, or a holder
+onboarded again, is enrolled with the same passkey at its first approval.
 
 This needs the portal's origin granted (see below): the click is caught by the
 same content script as the page provider, and the community's Trust-Task

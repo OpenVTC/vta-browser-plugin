@@ -12,6 +12,7 @@ import type { Identity } from "../didcomm/index.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { buildTrustTask } from "../vta/trust-task.js";
+import { TASK_REFUSAL_CONFLICT, TASK_REFUSAL_NOT_FOUND, taskRefusalReason } from "../vta/errors.js";
 
 import {
   TYPE_URI as DEVICE_REGISTER,
@@ -134,4 +135,45 @@ export async function deviceHeartbeat(
     queuedOperations: res.queuedOperations ?? [],
     ...(res.syncHint ? { syncHint: res.syncHint } : {}),
   };
+}
+
+// ── Enrolling early ─────────────────────────────────────────────────────────
+
+/**
+ * Make sure this device is registered with the agent, without disturbing a
+ * registration it already has.
+ *
+ * Every wallet install (every browser profile, every phone) is a device of its
+ * own: it authenticates as its own holder DID, which has its own ACL entry, so
+ * registering here writes that entry's binding and nothing else. The agent
+ * refuses a second `device/register` for a bound DID, so this asks first with
+ * a `device/heartbeat`: a heartbeat that succeeds means the binding exists
+ * (and refreshes `lastSeenAt`); `not_found` means it does not, and the device
+ * registers. A `conflict` on the register is another call of this one winning
+ * the race, which is the outcome wanted.
+ *
+ * Returns `"present"` when the device was already registered and
+ * `"registered"` when this call registered it.
+ */
+export async function ensureDeviceRegistered(
+  sender: TrustTaskSender,
+  params: DeviceRegisterParams,
+): Promise<"present" | "registered"> {
+  try {
+    await deviceHeartbeat(sender, {
+      holder: params.holder,
+      service: params.service,
+      ...(params.platform ? { platform: params.platform } : {}),
+    });
+    return "present";
+  } catch (err) {
+    if (taskRefusalReason(err) !== TASK_REFUSAL_NOT_FOUND) throw err;
+  }
+  try {
+    await registerDevice(sender, params);
+    return "registered";
+  } catch (err) {
+    if (taskRefusalReason(err) === TASK_REFUSAL_CONFLICT) return "present";
+    throw err;
+  }
 }

@@ -204,10 +204,15 @@ import {
   buildUvConsentDecision,
   collectPages,
   enrolUvPasskey,
+  ensureDeviceRegistered,
+  vaultOobRefusal,
   vaultSignIdentify,
   vaultSignGrant,
+  OOB_NOT_ENROLLED_DEVICE,
+  OOB_NO_UV_KEY,
   type TrustTaskEnvelope,
 } from "@openvtc/pnm-core";
+import { describeThisDevice } from "./device-name.js";
 import { relayFailure } from "./relay-failure.js";
 import { chooseTrustTaskSigner, needsVault, SignAsUnavailableError } from "./sign-identity.js";
 import { didcommLoginRefusal, didcommLoginResult } from "./didcomm-login.js";
@@ -1265,42 +1270,170 @@ const signInFlows = new SignInFlows({
         };
       });
     },
-    signIdentify: async (entryId, unsigned) => {
-      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-      return vaultSignIdentify(session, {
-        holder,
-        service,
-        entryId,
-        unsignedIdentify: unsigned as unknown as TrustTaskEnvelope,
-      });
-    },
-    signGrant: async (entryId, unsigned, uv) => {
-      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-      // The decision is the device's: issued and signed by the holder's
-      // transport key — the identity this VTA session authenticates — and
-      // addressed to the VTA.
-      const decision = uv
-        ? await buildUvConsentDecision({
-            device: (await loadHolder(vtaDid)).signing,
-            vtaDid: service.did,
-            payloadDigest: uv.payloadDigest,
-            assertion: uv.assertion,
-          })
-        : undefined;
-      return vaultSignGrant(session, {
-        holder,
-        service,
-        entryId,
-        unsignedGrant: unsigned as unknown as TrustTaskEnvelope,
-        ...(decision ? { decision } : {}),
-      });
-    },
+    ensureDevice: () => ensureDeviceEnrolment(vtaDid, restBaseUrl),
+    signIdentify: (entryId, unsigned) =>
+      asEnrolledDevice(vtaDid, restBaseUrl, async () => {
+        const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+        return vaultSignIdentify(session, {
+          holder,
+          service,
+          entryId,
+          unsignedIdentify: unsigned as unknown as TrustTaskEnvelope,
+        });
+      }),
+    signGrant: (entryId, unsigned, uv) =>
+      asEnrolledDevice(vtaDid, restBaseUrl, async () => {
+        const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+        // The decision is the device's: issued and signed by the holder's
+        // transport key — the identity this VTA session authenticates — and
+        // addressed to the VTA.
+        const decision = uv
+          ? await buildUvConsentDecision({
+              device: (await loadHolder(vtaDid)).signing,
+              vtaDid: service.did,
+              payloadDigest: uv.payloadDigest,
+              assertion: uv.assertion,
+            })
+          : undefined;
+        try {
+          return await vaultSignGrant(session, {
+            holder,
+            service,
+            entryId,
+            unsignedGrant: unsigned as unknown as TrustTaskEnvelope,
+            ...(decision ? { decision } : {}),
+          });
+        } catch (err) {
+          // The VTA holds no passkey for this device after all (an
+          // administrator replaced the row, a restore): forget the record, so
+          // the next approval enrols this browser's passkey again.
+          if (vaultOobRefusal(err) === OOB_NO_UV_KEY) await new IndexedDBKVStore().delete(uvEnrolledKey(vtaDid));
+          throw err;
+        }
+      }),
     enrolUvKey: async (enrolment) => {
       const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-      await enrolUvPasskey(session, { holder, service, enrolment, displayName: "VTA Wallet browser extension" });
+      await enrolUvPasskey(session, {
+        holder,
+        service,
+        enrolment,
+        displayName: describeThisDevice().displayName,
+      });
+      const store = new IndexedDBKVStore();
+      const at = Date.now();
+      await store.put(uvEnrolledKey(vtaDid), { holderDid: holder.did, credentialId: enrolment.credentialId, at });
+      // A heartbeat that took, or the register it fell back to: either way the
+      // device is enrolled now.
+      await store.put(deviceEnrolmentKey(vtaDid), { holderDid: holder.did, at });
+    },
+    enrolledUvCredential: async () => {
+      const rec = await new IndexedDBKVStore().get<UvEnrolledRecord>(uvEnrolledKey(vtaDid));
+      if (!rec) return undefined;
+      const { identity } = await loadHolder(vtaDid);
+      return rec.holderDid === identity.did ? rec.credentialId : undefined;
     },
   }),
 });
+
+// ─── This browser as one of the member's devices ───
+//
+// Every wallet install is a device of its own at each agent it is onboarded
+// to: its own holder DID (minted for it at onboarding), so its own ACL entry,
+// and on that entry its own `device/register` binding — its own
+// `consumerKind`, display name, transport key and UV passkey. A second browser
+// profile, or a phone, registers under its own DID and disturbs nothing here.
+//
+// The VTA signs a wallet sign-in document only for an enrolled device, so the
+// wallet registers itself early: after onboarding, when an agent's inbox comes
+// up (which is how an install from before this existed enrols on upgrade,
+// without being onboarded again), and before a sign-in. The passkey stays
+// lazy — it is enrolled at the first approval. A record per agent remembers
+// which holder was enrolled, so this is one heartbeat per holder, not one per
+// call; onboarding again mints a new holder, which enrols afresh.
+
+const DEVICE_ENROLMENT_PREFIX = "pnm/device-enrolment/";
+const UV_ENROLLED_PREFIX = "pnm/uv-passkey/enrolled/";
+
+interface DeviceEnrolmentRecord {
+  /** The holder registered as this device at that agent. */
+  holderDid: string;
+  /** Epoch ms. */
+  at: number;
+}
+
+interface UvEnrolledRecord extends DeviceEnrolmentRecord {
+  /** The passkey that agent holds for that holder. */
+  credentialId: string;
+}
+
+function deviceEnrolmentKey(vtaDid: string): string {
+  return DEVICE_ENROLMENT_PREFIX + vtaDid;
+}
+
+function uvEnrolledKey(vtaDid: string): string {
+  return UV_ENROLLED_PREFIX + vtaDid;
+}
+
+/** In flight per agent, so a sign-in racing an inbox start registers once. */
+const deviceEnrolments = new Map<string, Promise<void>>();
+
+/**
+ * Register this browser as a device at `vtaDid` unless this holder already is
+ * one there. `force` skips the record — for when the VTA says otherwise.
+ */
+async function ensureDeviceEnrolment(vtaDid: string, restBaseUrl?: string, force = false): Promise<void> {
+  const inflight = deviceEnrolments.get(vtaDid);
+  if (inflight) {
+    if (!force) return inflight;
+    await inflight.catch(() => undefined);
+  }
+  const run = (async () => {
+    const store = new IndexedDBKVStore();
+    const key = deviceEnrolmentKey(vtaDid);
+    if (!force) {
+      const rec = await store.get<DeviceEnrolmentRecord>(key);
+      const { identity } = await loadHolder(vtaDid);
+      if (rec?.holderDid === identity.did) return;
+    }
+    const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+    const me = describeThisDevice();
+    const outcome = await ensureDeviceRegistered(session, {
+      holder,
+      service,
+      consumerKind: { kind: "companion", formFactor: "browser" },
+      displayName: me.displayName,
+      ...(me.platform ? { platform: me.platform } : {}),
+    });
+    await store.put(key, { holderDid: holder.did, at: Date.now() } satisfies DeviceEnrolmentRecord);
+    if (outcome === "registered") console.info("[pnm device] registered with", vtaDid, "as", me.displayName);
+  })().finally(() => deviceEnrolments.delete(vtaDid));
+  deviceEnrolments.set(vtaDid, run);
+  return run;
+}
+
+/** Best effort, for the paths where enrolment is a convenience rather than
+ *  the gate: a locked wallet or an unreachable agent is retried next time. */
+function enrolDeviceInBackground(vtaDid: string, restBaseUrl?: string): void {
+  void ensureDeviceEnrolment(vtaDid, restBaseUrl).catch((err) =>
+    console.warn("[pnm device] could not register this browser with", vtaDid, err),
+  );
+}
+
+/**
+ * Run a sign-in signature as an enrolled device: if the VTA answers
+ * `oobNotEnrolledDevice` — its binding is not there, whatever the record says
+ * — register once and try once more. Any other refusal, and a second
+ * `oobNotEnrolledDevice`, is the caller's to show.
+ */
+async function asEnrolledDevice<T>(vtaDid: string, restBaseUrl: string | undefined, op: () => Promise<T>): Promise<T> {
+  try {
+    return await op();
+  } catch (err) {
+    if (vaultOobRefusal(err) !== OOB_NOT_ENROLLED_DEVICE) throw err;
+  }
+  await ensureDeviceEnrolment(vtaDid, restBaseUrl, true);
+  return op();
+}
 
 /** The wallet holder's session for `vtaDid`, over the warm mediator pool. */
 async function getVtaSession(
@@ -2189,6 +2322,9 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
   }
 
   await store.delete(ONBOARD_KEY);
+  // The new holder is one of the member's devices now: register it, so its
+  // first sign-in need not. Not awaited — onboarding has succeeded either way.
+  enrolDeviceInBackground(pending.vtaDid, pending.restBaseUrl);
   return {
     holderDid: adminReply.adminDid,
     role: "admin",
@@ -3201,6 +3337,9 @@ async function startInbound(vtaDid: string): Promise<boolean> {
       "as",
       vtaDid,
     );
+    // The holder is unlocked and the agent reachable: the moment to make
+    // sure this browser is registered as a device there (once per holder).
+    enrolDeviceInBackground(vtaDid);
     return true;
   } catch (e) {
     console.error("[pnm inbound] failed to start inbound session:", e);

@@ -26,22 +26,25 @@ import {
   type SignInIdentityView,
   type SignInStep,
   type SignInStepResult,
+  type SignInUvEnrolmentView,
 } from "./bridge-protocol.js";
 import { PrfUnlockError } from "./webauthn-prf-unlock.js";
-import { assertUvPasskey, createUvPasskey, rememberUvCredential, storedUvCredential } from "./uv-passkey.js";
+import { assertUvPasskey, createUvPasskey, rememberUvEnrolment, storedUvEnrolment } from "./uv-passkey.js";
 
 /** The UV passkey operations the window needs. Injected for tests. */
 export interface UvPasskeyOps {
-  stored: () => Promise<string | undefined>;
+  /** This browser's passkey, as enrolled — kept whole so it can be enrolled
+   *  at another agent without creating a second one. */
+  stored: () => Promise<SignInUvEnrolmentView | undefined>;
   create: typeof createUvPasskey;
-  remember: (credentialId: string) => Promise<void>;
+  remember: (enrolment: SignInUvEnrolmentView) => Promise<void>;
   assert: (credentialId: string, challengeB64u: string) => ReturnType<typeof assertUvPasskey>;
 }
 
 const browserUv: UvPasskeyOps = {
-  stored: storedUvCredential,
+  stored: storedUvEnrolment,
   create: () => createUvPasskey(),
-  remember: rememberUvCredential,
+  remember: rememberUvEnrolment,
   assert: (id, c) => assertUvPasskey(id, c),
 };
 
@@ -129,27 +132,33 @@ export function SignInView({ flowId, send, uv, close }: SignInViewProps) {
     // or decline. It is not a decision.
     const cancelled = (e: unknown) =>
       setNote(e instanceof PrfUnlockError && e.reason === "cancelled" ? "Approval cancelled." : String((e as Error).message ?? e));
-    let credentialId = await passkey.stored();
-    if (!credentialId) {
-      // First approval on this browser: create the ES256 passkey and enrol it
-      // with the VTA (C9), then remember it — only once the VTA accepted it.
-      let enrolment;
-      try {
-        enrolment = await passkey.create();
-      } catch (e) {
-        cancelled(e);
-        return;
+    let challenge = await run({ step: "grant-digest" });
+    if (challenge?.kind !== "uv-challenge") return;
+    let enrolment = await passkey.stored();
+    if (!enrolment || challenge.uvCredentialId !== enrolment.credentialId) {
+      // The VTA holds no passkey for this browser (its first approval, a
+      // second agent, or a holder onboarded again): enrol this browser's — a
+      // new ES256 one only if it has none (C9) — and remember it only once the
+      // VTA accepted it. Each device enrols its own; another device's passkey
+      // is never this one's.
+      if (!enrolment) {
+        try {
+          enrolment = await passkey.create();
+        } catch (e) {
+          cancelled(e);
+          return;
+        }
       }
       const enrolled = await run({ step: "enrol-uv", enrolment });
       if (enrolled?.kind !== "uv-enrolled") return;
-      await passkey.remember(enrolment.credentialId);
-      credentialId = enrolment.credentialId;
+      await passkey.remember(enrolment);
+      // A fresh grant: the one above may have aged while the passkey was made.
+      challenge = await run({ step: "grant-digest" });
+      if (challenge?.kind !== "uv-challenge") return;
     }
-    const challenge = await run({ step: "grant-digest" });
-    if (challenge?.kind !== "uv-challenge") return;
     let assertion;
     try {
-      assertion = await passkey.assert(credentialId, challenge.challenge);
+      assertion = await passkey.assert(enrolment.credentialId, challenge.challenge);
     } catch (e) {
       cancelled(e);
       return;
