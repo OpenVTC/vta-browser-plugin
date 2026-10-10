@@ -62,6 +62,7 @@ import {
   contextDigest,
   grantDigest,
   networkLine,
+  sessionAudienceOf,
   OobRefusedError,
   OOB_REPLY_INVALID,
   type OobDocument,
@@ -313,6 +314,8 @@ export class SignInFlows {
     return {
       kind: "enter-number",
       decisionDeadline: deadlineMs(flow.step1.decisionDeadline)!,
+      // `checkStep1` refused an audience this wallet does not know.
+      audience: sessionAudienceOf(flow.step1)!,
       ...(theirs !== flow.communityName ? { nameMismatch: theirs } : {}),
     };
   }
@@ -339,6 +342,8 @@ export class SignInFlows {
       createdAt: step2.requester.createdAt,
       network: networkLine(step2.requester.sameNetwork),
       identifiedAs: step2.identifiedAs,
+      // `checkStep2` held it equal to step 1's.
+      audience: sessionAudienceOf(step2)!,
     };
   }
 

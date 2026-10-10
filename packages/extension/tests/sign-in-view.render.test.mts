@@ -36,7 +36,12 @@ const RESULTS: Record<string, SignInStepResult> = {
       { entryId: "e2", did: "did:web:work.example", label: "Work" },
     ],
   },
-  claim: { kind: "enter-number", nameMismatch: "Totally Legit Bank", decisionDeadline: Date.now() + 60_000 },
+  claim: {
+    kind: "enter-number",
+    nameMismatch: "Totally Legit Bank",
+    decisionDeadline: Date.now() + 60_000,
+    audience: "member",
+  },
   prove: {
     kind: "review",
     location: "Sydney, Australia",
@@ -45,6 +50,7 @@ const RESULTS: Record<string, SignInStepResult> = {
     createdAt: new Date().toISOString(),
     network: "different",
     identifiedAs: "did:web:work.example",
+    audience: "member",
   },
   "grant-digest": { kind: "uv-challenge", challenge: "Q0hBTExFTkdF" },
   "respond:approve": { kind: "done", decision: "approve", status: "approved" },
@@ -194,5 +200,36 @@ test("a refused link shows only the message", async () => {
   const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
   await screen.settle();
   assert.equal(screen.container.querySelector('[data-testid="message"]')!.textContent, "This code needs a newer version of the app.");
+  await screen.unmount();
+});
+
+test("a sign-in to the operator console says so on the number screen and the review", async () => {
+  const results: Record<string, SignInStepResult> = {
+    ...RESULTS,
+    claim: { kind: "enter-number", decisionDeadline: Date.now() + 60_000, audience: "admin" },
+    prove: { ...(RESULTS.prove as Extract<SignInStepResult, { kind: "review" }>), audience: "admin" },
+  };
+  const { send } = script(results);
+  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
+  await screen.settle();
+  // Screen 1 is before anything is sent: it cannot know, and does not say.
+  assert.doesNotMatch(screen.text(), /operator console/);
+  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
+  assert.match(screen.text(), new RegExp(`Sign in to Example Community operator console at ${PORTAL.replace(/[.]/g, "\\.")}\\?`));
+  assert.ok(screen.container.querySelector('[data-testid="operator-console"]'));
+  await screen.type(screen.container.querySelector('[data-testid="number"]')!, "47");
+  await screen.click(screen.container.querySelector('[data-testid="prove"]')!);
+  assert.match(screen.text(), /Approve this sign-in to the operator console\?/);
+  assert.match(screen.text(), /to the operator console at/);
+  await screen.unmount();
+});
+
+test("a member-portal sign-in reads as before", async () => {
+  const { send } = script(RESULTS);
+  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
+  await screen.settle();
+  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
+  assert.match(screen.text(), /Type the number on the screen/);
+  assert.equal(screen.container.querySelector('[data-testid="operator-console"]'), null);
   await screen.unmount();
 });

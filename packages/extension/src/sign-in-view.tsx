@@ -12,7 +12,10 @@
 //      Pick an identity, then Continue. Nothing has been sent to the
 //      community before this press.
 //   2. "Type the number on the screen." A different name in the community's
-//      own reply is flagged here (VTI-LNK-104).
+//      own reply is flagged here (VTI-LNK-104). When the community's signed
+//      reply says the website asked for its operator console, this screen
+//      says so first: "Sign in to <community> operator console at
+//      <portal>?" — screen 1 cannot, because nothing has been sent yet.
 //   3. "Request from <browser> on <os> · near <location> · <network>". Approve
 //      runs the passkey over the grant digest (C6); Decline needs none.
 //
@@ -231,7 +234,19 @@ export function SignInView({ flowId, send, uv, close }: SignInViewProps) {
 
     case "enter-number":
       return (
-        <Screen title="Type the number on the screen">
+        <Screen
+          title={
+            screen.audience === "admin"
+              ? `Sign in to ${communityName} operator console at ${portalOrigin}?`
+              : "Type the number on the screen"
+          }
+        >
+          {screen.audience === "admin" && (
+            <div style={box} data-testid="operator-console">
+              This signs you in to the community's <strong>operator console</strong>, not its member portal.
+              Only an identity the community holds as an administrator is admitted.
+            </div>
+          )}
           {screen.nameMismatch !== undefined && (
             <div style={warn} data-testid="name-mismatch">
               The community calls itself <strong>{screen.nameMismatch}</strong>, not{" "}
@@ -268,7 +283,9 @@ export function SignInView({ flowId, send, uv, close }: SignInViewProps) {
     case "review": {
       const locationUnknown = screen.location === "unknown";
       return (
-        <Screen title="Approve this sign-in?">
+        <Screen
+          title={screen.audience === "admin" ? "Approve this sign-in to the operator console?" : "Approve this sign-in?"}
+        >
           <div style={box}>
             <div style={label}>Request from (as reported by the community)</div>
             <div data-testid="requester">
@@ -290,7 +307,9 @@ export function SignInView({ flowId, send, uv, close }: SignInViewProps) {
             <div style={warn}>This request did not come from the network this browser is on.</div>
           )}
           <p style={{ color: "var(--w-muted)" }}>
-            This signs in that browser at {portalOrigin} as {screen.identifiedAs}, for this session only.
+            {screen.audience === "admin"
+              ? `This signs in that browser to the operator console at ${portalOrigin} as ${screen.identifiedAs}, for this session only.`
+              : `This signs in that browser at ${portalOrigin} as ${screen.identifiedAs}, for this session only.`}
           </p>
           {note && <p style={{ color: "var(--w-warn)" }}>{note}</p>}
           <div style={row}>

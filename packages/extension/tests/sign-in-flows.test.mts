@@ -64,6 +64,8 @@ function world(
     known?: SignInVaultEntry[];
     identifyError?: unknown;
     uvCredentialId?: string;
+    /** The community's `ext` on step 1, repeated in step 2. */
+    ext?: Record<string, unknown>;
   } = {},
 ): World {
   const sent: World["sent"] = [];
@@ -75,6 +77,7 @@ function world(
     origin: PORTAL,
     purpose: "login",
     decisionDeadline: Math.floor(NOW / 1000) + 120,
+    ...(opts.ext ? { ext: opts.ext } : {}),
   };
   const fetch = (async (url: string, init: RequestInit) => {
     assert.equal(url, ENDPOINT, "posted to <base>/trust-tasks (binding 0.2 §6)");
@@ -161,6 +164,7 @@ test("the whole approval, in the contract's order", async () => {
   const enter = await step(w, { step: "claim", entryId: "e-alice" });
   assert.equal(enter.kind, "enter-number");
   assert.equal("nameMismatch" in enter, false);
+  assert.equal((enter as { audience: string }).audience, "member", "no extension: the member portal");
   const claim = w.sent[0]!.doc;
   assert.equal(w.sent[0]!.type, "claim");
   assert.equal(claim.parentThreadId, ID);
@@ -170,6 +174,7 @@ test("the whole approval, in the contract's order", async () => {
   const review = await step(w, { step: "prove", enteredNumber: "47" });
   assert.equal(review.kind, "review");
   assert.equal((review as { network: string }).network, "same");
+  assert.equal((review as { audience: string }).audience, "member");
   assert.equal(w.sent[1]!.doc.parentThreadId, ID, "prove carries parentThreadId (C9)");
   const prove = w.sent[1]!.doc as { issuer: string; payload: { identify: { issuer: string; payload: Record<string, unknown> } } };
   assert.equal(prove.issuer, kA);
@@ -346,4 +351,15 @@ test("the member's VTA refusing as a disabled device is said plainly, and the cl
   await step(w, { step: "prepare", link: LINK, origin: PORTAL });
   await step(w, { step: "claim", entryId: "e-alice" });
   assert.equal(((await step(w, { step: "prove", enteredNumber: "47" })) as { code: string }).code, "sign-in/failed");
+});
+
+test("an operator-console sign-in: the audience is read from step 1 and held through step 2", async () => {
+  const w = world({ ext: { "org.openvtc.session": { audience: "admin" } } });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const enter = await step(w, { step: "claim", entryId: "e-alice" });
+  assert.equal(enter.kind, "enter-number");
+  assert.equal((enter as { audience: string }).audience, "admin");
+  const review = await step(w, { step: "prove", enteredNumber: "47" });
+  assert.equal(review.kind, "review");
+  assert.equal((review as { audience: string }).audience, "admin");
 });
