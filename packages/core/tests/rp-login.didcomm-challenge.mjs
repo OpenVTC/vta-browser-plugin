@@ -21,6 +21,7 @@ import {
   InMemoryDidcommBridge,
   TRUST_TASK_ENVELOPE_TYPE,
   generateSigningIdentity,
+  localTaskSigner,
   proofPurposeForDocumentType,
   verifyTrustTaskProof,
 } from "../dist/index.js";
@@ -203,6 +204,23 @@ test("both documents are signed for authentication", async () => {
     const res = await verifyTrustTaskProof(doc, { expectedProofPurpose: "authentication" });
     assert.equal(res.verified, true, `${doc.type}: ${res.reason}`);
   }
+});
+
+test("a signer that is not the sender is refused before anything is sent", async () => {
+  // A persona signs with a key the wallet does not hold as a DIDComm identity,
+  // so its document would go out authcrypted by the holder. The RP acts on a
+  // DIDComm document only when its signer is its sender, so that is refused
+  // here, naming both, rather than remotely as `identityMismatch`.
+  const w = world();
+  const persona = generateSigningIdentity();
+  await assert.rejects(
+    () => loginViaDidcomm(opts(w, { signing: localTaskSigner(persona) })),
+    (e) =>
+      e.code === "e.client.identity" &&
+      e.message.includes(persona.did) &&
+      e.message.includes(w.holder.did),
+  );
+  assert.equal(w.received.length, 0, "nothing reached the RP");
 });
 
 test("the reply is awaited from the RP alone", async () => {

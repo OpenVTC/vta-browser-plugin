@@ -364,3 +364,56 @@ test("a document missing its id or issuedAt gets both before the proof covers th
   await signOutboundTask(envelope, localTaskSigner(signing));
   await assertSignedBy(envelope, signing.did);
 });
+
+test("a DIDComm or TSP channel refuses a signer that is not its sender", async () => {
+  // The consumers bind the proven signer to the transport sender (VTI #1739).
+  // REST passes no sender and is not checked here: the consumer binds the
+  // issuer to the bearer.
+  const signing = generateSigningIdentity();
+  const other = generateSigningIdentity();
+  const envelope = buildTrustTask(VAULT_DELETE, { id: "e-8" }, {
+    issuer: other.did,
+    recipient: "did:key:zVta",
+  });
+  await assert.rejects(
+    () => signOutboundTask(envelope, localTaskSigner(other), signing.did),
+    (err) => err.code === "e.client.identity" && /must be sent by its signer/.test(err.message),
+  );
+  assert.equal(envelope.proof, undefined);
+
+  // The same signer as the sender passes, and so does no sender at all.
+  const ok = buildTrustTask(VAULT_DELETE, { id: "e-9" }, { issuer: signing.did, recipient: "did:key:zVta" });
+  await signOutboundTask(ok, localTaskSigner(signing), signing.did);
+  await assertSignedBy(ok, signing.did);
+});
+
+test("a DIDComm channel whose signer is not its holder sends nothing", async () => {
+  const signing = generateSigningIdentity();
+  const holder = Identity.generate(signing.did);
+  const vta = Identity.generate(generateSigningIdentity().did);
+  const persona = generateSigningIdentity();
+  let sent = 0;
+  const bridge = {
+    async sendAndAwaitReply() {
+      sent += 1;
+      throw new Error("must not be reached");
+    },
+    async send() {
+      sent += 1;
+    },
+  };
+  const channel = new DidcommVtaTransport({
+    bridge,
+    holder,
+    signing: localTaskSigner(persona),
+    vta: {
+      did: vta.did,
+      keyAgreementKid: vta.publicJwk().kid,
+      keyAgreementPublicJwk: vta.publicJwk().jwk,
+    },
+  });
+  const envelope = buildTrustTask(VAULT_DELETE, { id: "e-10" }, { issuer: persona.did, recipient: vta.did });
+  await assert.rejects(() => channel.send(envelope), (err) => err.code === "e.client.identity");
+  await assert.rejects(() => channel.notify(envelope), (err) => err.code === "e.client.identity");
+  assert.equal(sent, 0);
+});

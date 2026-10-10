@@ -17,7 +17,6 @@ import {
   loginViaTrustTask,
   rpHttpsSender,
   vaultTaskSigner,
-  type ChannelSigner,
   type TaskSigner,
   claimInboundDocument,
   type MediatorConnection,
@@ -211,6 +210,7 @@ import {
 } from "@openvtc/pnm-core";
 import { relayFailure } from "./relay-failure.js";
 import { chooseTrustTaskSigner, needsVault, SignAsUnavailableError } from "./sign-identity.js";
+import { didcommLoginRefusal, didcommLoginResult } from "./didcomm-login.js";
 import { isLensTask, knownRelays, mayOperateMediator } from "./mediator-standing.js";
 import {
   MonitorSequencer,
@@ -675,22 +675,12 @@ interface SessionIdentity {
    *  it, the mediator authenticates it — and, by default, what signs outbound
    *  documents too. */
   signing: SigningIdentity;
-  /**
-   * Signs the documents, when that is not the holder.
-   *
-   * Transport sender and document signer are different things, and the RP
-   * treats them as different things: it establishes the caller from the proof
-   * on the document (`session.did != input.signer_did` in vti-common's
-   * `handle_authenticate`), not from who delivered it. A per-site persona
-   * login rides the wallet's own transport — there is no second mediator
-   * session, and the persona has no key here to open one with — while the
-   * documents are issued by, and signed as, the persona.
-   *
-   * Kept out of `signing` deliberately: widening that field would have handed
-   * a keyless signer to `tspHolderIdentityFromSecret`, which needs the actual
-   * private key and would have failed at a distance from the cause.
-   */
-  documentSigner?: TaskSigner;
+  // There is deliberately no separate document signer. The VTA, the VTC and
+  // the RPs act on a DIDComm or TSP document only when its proven signer is the
+  // transport sender (VTI #1739, affinidi-webvh-service #213), and a session
+  // sends as `holder`, so it signs as the holder too. A per-site persona, whose
+  // keys live at the VTA, therefore has no DIDComm or TSP session here; it signs
+  // in over REST (`doRestLogin`).
 }
 
 /** How an identity reaches a mediator.
@@ -1133,9 +1123,6 @@ async function buildVtaSession(
   } = {},
 ): Promise<VtaSessionHandle> {
   const { holder, signing } = who;
-  // Documents are signed by the persona when there is one; the transport
-  // stays the wallet's own either way.
-  const documentSigner: ChannelSigner = who.documentSigner ?? signing;
   const restBaseUrl = opts.restBaseUrl;
   const service = await resolveKeyAgreement(vtaDid);
   const services = opts.services ?? (await resolveVtaServices(vtaDid));
@@ -1165,11 +1152,10 @@ async function buildVtaSession(
           // Outer TSP envelope and inner Trust-Task proof are separate
           // signatures, and not redundant: the outer one authenticates the
           // *sender of the frame*, and SPEC §7.2 item 7 admits no transport
-          // substitute for a proof over the document itself. Which is exactly
-          // why they can be different keys — a persona login is sent by the
-          // wallet and issued by the persona, and the consumer reads the
-          // caller off the document.
-          signing: documentSigner,
+          // substitute for a proof over the document itself. They are made
+          // with the same key, though: the consumer acts on the document only
+          // when its proven signer is the TSP sender (VTI #1739).
+          signing,
           vta: vtaTsp,
         }),
       );
@@ -1207,7 +1193,7 @@ async function buildVtaSession(
         new DidcommVtaTransport({
           bridge,
           holder,
-          signing: documentSigner,
+          signing,
           vta: service,
           mediator: conn.mediator,
         }),
@@ -1220,7 +1206,7 @@ async function buildVtaSession(
       new RestChannel({
         baseUrl: rest,
         holder,
-        signing: documentSigner,
+        signing,
         service,
         netPolicy: walletNetPolicy(),
       }),
@@ -1627,7 +1613,11 @@ async function maybeRelayConsentLocally(
     }
 
     const outer = await buildTaskConsentDecision({
-      holder, // worker identity — the enrolled channel to the mediator
+      holder, // worker identity — carries the forward over its mediator session
+      // Sent AS the approver. The VTA acts on the decision only when its
+      // proven signer is the DIDComm sender (VTI #1739); authcrypting it as
+      // the worker would be refused as `identityMismatch`.
+      sender: approver.identity,
       signing: approver.signing, // approver — the authority the VTA reads from the proof
       vta,
       mediator: conn.mediator,
@@ -3863,6 +3853,13 @@ async function personaTaskSigner(
 async function doDidcommLogin(
   req: OffscreenDidcommLoginRequest,
 ): Promise<RuntimeLoginResponse> {
+  // A per-site persona signs in over REST, never here: the RP acts on a
+  // DIDComm or TSP document only when its signer is its sender, and the
+  // persona's keys stay at the agent. Refused before anything is resolved or
+  // signed, rather than at the channel's own check.
+  const refusal = didcommLoginRefusal(req.entryId);
+  if (refusal) return { ok: false, error: refusal };
+
   // Same IndexedDB-backed holder the popup/background use (shared extension
   // origin), so the DID is identical to the `login()` path.
   const sw = createStopwatch();
@@ -3888,17 +3885,9 @@ async function doDidcommLogin(
   };
   sw.mark("resolve rp services");
 
-  // A persona signs the documents when this origin has one; the transport
-  // stays the wallet's own either way. The signer talks to the **VTA** over the
-  // wallet's own session — a different channel from the RP one being built here
-  // — because that is where the persona's key lives.
-  const documentSigner = req.entryId
-    ? await personaTaskSigner(req.vtaDid, req.restBaseUrl, req.entryId)
-    : undefined;
-
   const { session } = await buildVtaSession(
     req.params.controlDid,
-    { holder: identity, signing, ...(documentSigner ? { documentSigner } : {}) },
+    { holder: identity, signing },
     (mediatorDid) => getWarmSession(mediatorDid, req.vtaDid),
     { services },
   );
@@ -3916,24 +3905,11 @@ async function doDidcommLogin(
     sender: session,
     holder: identity,
     service,
-    ...(documentSigner ? { subject: documentSigner.did } : {}),
     ...(req.params.scope ? { scope: req.params.scope } : {}),
   });
   sw.mark("authenticate (trust-task)");
-  return {
-    ok: true,
-    result: {
-      accessToken: rpSession.accessToken,
-      // The RP may not rotate a refresh token on login; the bridge's response
-      // shape wants a string, and an empty one says "none" more honestly than
-      // a fabricated value would.
-      refreshToken: rpSession.refreshToken ?? "",
-      sessionId: rpSession.sessionId,
-      // The DID the RP authenticated, not the wallet's own — see doRestLogin.
-      holderDid: documentSigner?.did ?? signing.did,
-      timings: sw.marks,
-    },
-  };
+  // The page-level result keeps the shape it has always had.
+  return { ok: true, result: didcommLoginResult(rpSession, signing.did, sw.marks) };
 }
 
 /**

@@ -236,6 +236,23 @@ signer and the page-facing `signTrustTask` all read the one rule.
 growing a second login. The bare `auth/authenticate` it used to send survives
 only for a caller that passes no `signing`, and is deprecated.
 
+**Each DIDComm and TSP document is sent by its signer.** The VTA, the VTC and
+the RPs act on a document from those transports only when its proof verifies
+as its `issuer` and that issuer is the transport sender (VTI #1739,
+affinidi-webvh-service #213). `signOutboundTask` takes the channel's sender DID
+(`DidcommVtaTransport` and `TspChannel` pass the holder's) and refuses a signer
+that is not it; REST passes none, because the consumer binds the issuer to the
+bearer. Before signing it also names the signer as `issuer` when none is set,
+fills a missing `id` or `issuedAt`, and refuses a document with no
+`recipient`. Two consequences:
+
+- The same-browser approver relay authcrypts its `task-consent/decision` **as
+  the approver** (`buildTaskConsentDecision`'s `sender`); the worker's session
+  only carries the forward.
+- A per-site persona cannot sign in over DIDComm or TSP: its keys, keyAgreement
+  included, live at the VTA. `doDidcommLogin` refuses one up front
+  (`didcomm-login.ts`), and persona sign-in is the REST path.
+
 **What is deliberately NOT signed:** the `/auth/` handshake
 (`vta/auth.ts`). That route is bespoke — it authenticates by the authcrypt
 sender and never reaches the dispatch spine — and `provision/integration`,

@@ -304,7 +304,9 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
     // Every outbound path — `send`, `notify`, and the passkey-VM convenience
     // surface — packs through here, which is why the proof is attached here
     // and not in each of them.
-    await signOutboundTask(envelope, this.signer);
+    // Sent as the holder, so signed as the holder: the counterparty acts on the
+    // document only when its proven signer is the authcrypt sender.
+    await signOutboundTask(envelope, this.signer, this.holder.did);
     const requestId = envelope.id;
     const message = {
       id: requestId,

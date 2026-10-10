@@ -26,6 +26,14 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Changed
 
+- **A DIDComm or TSP document is sent by its signer.** `signOutboundTask` takes
+  an optional third argument, the channel's sender DID, and refuses a signer
+  that is not it (`e.client.identity`); `DidcommVtaTransport` and `TspChannel`
+  pass the holder's. The consumers act on a document from those transports
+  only when its proven signer is the sender (VTI #1739). REST passes none.
+- `buildTaskConsentDecision` takes an optional `sender`, the identity the inner
+  message is authcrypted as (default `holder`), and refuses one that is not
+  the signer. A same-browser approver relay passes the approver's identity.
 - **`loginViaDidcomm` signs in with `auth/challenge` then a signed
   `auth/authenticate`** when given the new, optional `signing` input (whose DID
   signs in, and must be the holder's). It runs `loginViaTrustTask` over a
