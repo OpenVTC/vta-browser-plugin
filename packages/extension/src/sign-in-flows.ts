@@ -37,6 +37,11 @@ import {
   type AuthenticatorAssertionResponseLogin,
   type WebauthnUvKeyEnrolment,
   uvChallengeBytes,
+  vaultOobRefusal,
+  OOB_NOT_ENROLLED_DEVICE,
+  OOB_DEVICE_DISABLED,
+  OOB_NO_UV_KEY,
+  OOB_UV_INVALID,
 } from "@openvtc/pnm-core";
 import {
   resolveCommunityDocument,
@@ -95,6 +100,17 @@ export interface SignInVta {
   ): Promise<unknown>;
   /** `device/heartbeat` ext `org.openvtc.uv-key`, over the device's session. */
   enrolUvKey(enrolment: WebauthnUvKeyEnrolment): Promise<void>;
+  /**
+   * Make sure this browser is registered as one of the member's devices at
+   * the VTA (`device/register`, once per holder). The VTA signs sign-in
+   * documents only for an enrolled device, so this runs before anything is
+   * sent to the community; a failure here is not final, because signing
+   * `identify` registers and retries once on `oobNotEnrolledDevice`.
+   */
+  ensureDevice?(): Promise<void>;
+  /** The credential id of the UV passkey the VTA holds for this browser's
+   *  current holder, if this wallet enrolled one there. */
+  enrolledUvCredential?(): Promise<string | undefined>;
 }
 
 export interface SignInFlowDeps {
@@ -139,6 +155,21 @@ export const SIGN_IN_OUT_OF_ORDER = "sign-in/out-of-order";
 export const ALREADY_CLAIMED_MESSAGE =
   "This code was already used by another device. If that wasn't you, cancel on the website.";
 export const ENDED_MESSAGE = "Refresh the code on the website and try again.";
+
+/** What the member is told when their own VTA refused to sign, by its code. */
+export const VTA_REFUSAL_MESSAGES: Readonly<Record<string, string>> = {
+  [OOB_NOT_ENROLLED_DEVICE]:
+    "This browser isn't registered as one of your devices with your agent, and registering it didn't work. " +
+    "Check that the wallet can reach your agent, then refresh the code on the website and try again.",
+  [OOB_DEVICE_DISABLED]:
+    "This browser has been disabled as one of your devices at your agent, so it can't sign you in. " +
+    "Sign in from another device, or connect this browser to your agent again.",
+  [OOB_NO_UV_KEY]:
+    "Your agent doesn't hold this browser's sign-in passkey yet. " +
+    "Refresh the code on the website and approve again to set it up.",
+  [OOB_UV_INVALID]:
+    "Your agent didn't accept the passkey approval. Refresh the code on the website and try again.",
+};
 
 const refused = (reason: TriggerLinkReason): SignInStepResult => {
   const outcome = outcomeOf(reason);
@@ -216,6 +247,10 @@ export class SignInFlows {
     // C3 step 2 / VTI-LNK-101: one of this wallet's communities, or nothing is
     // sent to it.
     const vta = this.deps.vta(vtaDid, restBaseUrl);
+    // This browser is one of the member's devices; the VTA signs sign-in
+    // documents only for an enrolled one. Best effort here — `identify`
+    // enrols and retries once if this did not take.
+    await vta.ensureDevice?.().catch(() => undefined);
     const entries = await vta.listIdentities();
     const identities: SignInIdentityView[] = entries
       .filter(
@@ -330,8 +365,15 @@ export class SignInFlows {
     if (flow.phase !== "identified" || !flow.kA || !flow.step2Doc) throw outOfOrder();
     flow.unsignedGrant = await this.buildGrantFor(flow, "approve");
     flow.grantDigest = await grantDigest(flow.unsignedGrant);
+    // Which passkey the VTA holds for this device, so the window enrols this
+    // browser's passkey first when it holds none (or another).
+    const uvCredentialId = await flow.vta.enrolledUvCredential?.().catch(() => undefined);
     // The passkey signs the UTF-8 bytes of the digest string (contract C9).
-    return { kind: "uv-challenge", challenge: bytesToBase64url(uvChallengeBytes(flow.grantDigest)) };
+    return {
+      kind: "uv-challenge",
+      challenge: bytesToBase64url(uvChallengeBytes(flow.grantDigest)),
+      ...(uvCredentialId ? { uvCredentialId } : {}),
+    };
   }
 
   private async respond(
@@ -410,6 +452,10 @@ export class SignInFlows {
       if (err.code === "requestExpired") return refused("expired");
       return { kind: "failed", code: err.code, message: `${triggerLinkMessage("invalid")} ${ENDED_MESSAGE}` };
     }
+    // The member's own VTA refused to sign: say why, in its stable code (R3.7).
+    const vtaCode = vaultOobRefusal(err);
+    const vtaMessage = vtaCode ? VTA_REFUSAL_MESSAGES[vtaCode] : undefined;
+    if (vtaCode && vtaMessage) return { kind: "failed", code: vtaCode, message: vtaMessage };
     const code = (err as { code?: unknown })?.code === OOB_REPLY_INVALID ? OOB_REPLY_INVALID : "sign-in/failed";
     return { kind: "failed", code, message: `${triggerLinkMessage("invalid")} ${ENDED_MESSAGE}` };
   }

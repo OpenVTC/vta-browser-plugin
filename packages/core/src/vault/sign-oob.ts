@@ -33,6 +33,7 @@ import type { SigningIdentity } from "../siop/self-issued.js";
 import { signTrustTask, type TrustTaskEnvelope } from "../trust-tasks/sign.js";
 import { base58btcEncode } from "../trust-tasks/canonical.js";
 import { vaultSignTrustTask } from "./sign-trust-task.js";
+import { TASK_REFUSAL_NOT_FOUND, taskRefusalReason } from "../vta/errors.js";
 
 import {
   TYPE_URI as TASK_VAULT_SIGN_TRUST_TASK,
@@ -216,13 +217,25 @@ export function p256PointFromSpki(spki: Uint8Array): Uint8Array {
   return spki.slice(26);
 }
 
-/** `details.reason` the VTA puts on a `taskFailed` for a missing row
- *  (`vta_sdk::protocols::trust_task_reject_reasons::NOT_FOUND`), R3.7. */
-const REASON_NOT_FOUND = "not_found";
+// ── Why the VTA refused a sign-in document ─────────────────────────────────
 
-function rejectReason(err: unknown): string | undefined {
-  const details = (err as { details?: { details?: { reason?: unknown } } })?.details?.details;
-  return typeof details?.reason === "string" ? details.reason : undefined;
+/** The device has no binding at the VTA: register it, then try again. */
+export const OOB_NOT_ENROLLED_DEVICE = "oobNotEnrolledDevice";
+/** The device is registered but disabled or wiped. Registering cannot fix it. */
+export const OOB_DEVICE_DISABLED = "oobDeviceDisabled";
+/** The device has no UV key, so it cannot approve a grant. */
+export const OOB_NO_UV_KEY = "oobNoUvKey";
+/** The UV decision did not verify against this device's UV key. */
+export const OOB_UV_INVALID = "oobUvInvalid";
+
+/**
+ * The VTA's `vault/sign-trust-task` refusal code for a sign-in document
+ * (`details.details.code`, e.g. {@link OOB_NOT_ENROLLED_DEVICE}), if `err` is
+ * one. Matched on the stable code, never the message (R3.7).
+ */
+export function vaultOobRefusal(err: unknown): string | undefined {
+  const code = (err as { details?: { details?: { code?: unknown } } })?.details?.details?.code;
+  return typeof code === "string" && code.startsWith("oob") ? code : undefined;
 }
 
 /**
@@ -255,7 +268,7 @@ export async function enrolUvPasskey(
     });
     return;
   } catch (err) {
-    if (rejectReason(err) !== REASON_NOT_FOUND) throw err;
+    if (taskRefusalReason(err) !== TASK_REFUSAL_NOT_FOUND) throw err;
   }
   const payload: DeviceRegisterPayload = {
     consumerKind: { kind: "companion", formFactor: "browser" },

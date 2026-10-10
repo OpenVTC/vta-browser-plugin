@@ -67,14 +67,16 @@ const ASSERTION = {
   response: { clientDataJSON: "j", authenticatorData: "a", signature: "s" },
 };
 
+type Enrolment = typeof ENROLMENT;
+
 test("confirm → number → review → approve with the passkey", async () => {
   const { steps, send } = script(RESULTS);
   const challenges: string[] = [];
-  const remembered: string[] = [];
+  const remembered: Enrolment[] = [];
   const uv = {
     stored: async () => remembered[0],
     create: async () => ENROLMENT,
-    remember: async (id: string) => void remembered.push(id),
+    remember: async (e: Enrolment) => void remembered.push(e),
     assert: async (id: string, c: string) => {
       challenges.push(`${id}:${c}`);
       return ASSERTION;
@@ -99,18 +101,75 @@ test("confirm → number → review → approve with the passkey", async () => {
   assert.match(screen.text(), /Not on this browser's network/);
   await screen.click(screen.container.querySelector('[data-testid="approve"]')!);
   await screen.settle();
-  // First approval on this browser: create, enrol, remember, then assert.
-  assert.deepEqual(steps.slice(3).map((s) => s.step), ["enrol-uv", "grant-digest", "respond"]);
-  assert.deepEqual(remembered, [ENROLMENT.credentialId]);
+  // First approval on this browser: the VTA holds no passkey for it, so
+  // create, enrol, remember, then assert over a fresh grant.
+  assert.deepEqual(steps.slice(3).map((s) => s.step), ["grant-digest", "enrol-uv", "grant-digest", "respond"]);
+  assert.deepEqual(remembered, [ENROLMENT]);
   assert.deepEqual(challenges, [`${ENROLMENT.credentialId}:Q0hBTExFTkdF`]);
   assert.match(screen.text(), /Approved/);
   await screen.unmount();
 });
 
+/** The VTA already holds this browser's passkey. */
+const ENROLLED: Record<string, SignInStepResult> = {
+  ...RESULTS,
+  "grant-digest": { kind: "uv-challenge", challenge: "Q0hBTExFTkdF", uvCredentialId: ENROLMENT.credentialId },
+};
+
+async function approveOnReview(uv: Parameters<typeof SignInView>[0]["uv"], results: Record<string, SignInStepResult>) {
+  const { steps, send } = script(results);
+  const screen = await render(h(SignInView, { flowId: "f", send, uv, close: () => {} }));
+  await screen.settle();
+  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
+  await screen.type(screen.container.querySelector('[data-testid="number"]')!, "47");
+  await screen.click(screen.container.querySelector('[data-testid="prove"]')!);
+  await screen.click(screen.container.querySelector('[data-testid="approve"]')!);
+  await screen.settle();
+  return { steps, screen };
+}
+
+test("a passkey the VTA already holds is asserted without enrolling again", async () => {
+  let created = 0;
+  const challenges: string[] = [];
+  const { steps, screen } = await approveOnReview(
+    {
+      stored: async () => ENROLMENT,
+      create: async () => (created++, ENROLMENT),
+      remember: async () => {},
+      assert: async (id: string, c: string) => (challenges.push(`${id}:${c}`), ASSERTION),
+    },
+    ENROLLED,
+  );
+  assert.deepEqual(steps.slice(3).map((s) => s.step), ["grant-digest", "respond"]);
+  assert.equal(created, 0);
+  assert.deepEqual(challenges, [`${ENROLMENT.credentialId}:Q0hBTExFTkdF`]);
+  assert.match(screen.text(), /Approved/);
+  await screen.unmount();
+});
+
+test("this browser's passkey is enrolled at an agent that does not hold it, without making another", async () => {
+  // A second agent, or a holder onboarded again: the window has its passkey,
+  // the VTA does not.
+  let created = 0;
+  const { steps, screen } = await approveOnReview(
+    {
+      stored: async () => ENROLMENT,
+      create: async () => (created++, ENROLMENT),
+      remember: async () => {},
+      assert: async () => ASSERTION,
+    },
+    RESULTS,
+  );
+  assert.equal(created, 0);
+  assert.deepEqual(steps.slice(3).map((s) => s.step), ["grant-digest", "enrol-uv", "grant-digest", "respond"]);
+  assert.deepEqual((steps[4] as { enrolment: unknown }).enrolment, ENROLMENT);
+  await screen.unmount();
+});
+
 test("a cancelled passkey prompt is not a decision", async () => {
-  const { steps, send } = script(RESULTS);
+  const { steps, send } = script(ENROLLED);
   const uv = {
-    stored: async () => "known",
+    stored: async () => ENROLMENT,
     create: async () => ENROLMENT,
     remember: async () => {},
     assert: async () => {

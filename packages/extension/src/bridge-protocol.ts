@@ -2526,11 +2526,19 @@ export type SignInStepResult =
     }
   /** The WebAuthn challenge for the grant: base64url of the UTF-8 bytes of
    *  the grant digest string D (contract C9). */
-  | { kind: "uv-challenge"; challenge: string }
+  | {
+      kind: "uv-challenge";
+      challenge: string;
+      /** The UV passkey the VTA holds for this browser's holder, when this
+       *  wallet enrolled one there. Absent, or another credential than the
+       *  window's: the window enrols its passkey before asserting. */
+      uvCredentialId?: string;
+    }
   /** The passkey is enrolled; the window goes on to approve. */
   | { kind: "uv-enrolled" }
   | { kind: "done"; decision: "approve" | "decline"; status: string }
-  /** The community refused with a stable code (R3.7). */
+  /** The community — or the member's own VTA — refused with a stable code
+   *  (R3.7). */
   | { kind: "failed"; code: string; message: string };
 
 export type RuntimeSignInStepResponse =

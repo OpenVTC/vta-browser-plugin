@@ -21,15 +21,39 @@ import type { SignInUvAssertionView, SignInUvEnrolmentView } from "./bridge-prot
 import { PrfUnlockError } from "./webauthn-prf-unlock.js";
 
 const UV_CREDENTIAL_KEY = "pnm/uv-passkey/credentialId";
+/** The whole enrolment (all public), so the same passkey can be enrolled at a
+ *  second agent, or for a re-onboarded holder, without creating another. */
+const UV_ENROLMENT_KEY = "pnm/uv-passkey/enrolment";
 
 /** The credential id of the enrolled UV passkey, if there is one. */
 export async function storedUvCredential(): Promise<string | undefined> {
   return (await new IndexedDBKVStore().get<string>(UV_CREDENTIAL_KEY)) ?? undefined;
 }
 
+/**
+ * This browser's UV passkey, as it was enrolled, if the wallet kept it.
+ *
+ * A wallet from before this record existed holds only the credential id
+ * ({@link storedUvCredential}). That is not enough to enrol the passkey
+ * anywhere else — the public key is gone — so it reads as no passkey, and the
+ * next approval creates one. Nothing fails; the member sees one more passkey
+ * prompt, once.
+ */
+export async function storedUvEnrolment(): Promise<SignInUvEnrolmentView | undefined> {
+  const rec = await new IndexedDBKVStore().get<SignInUvEnrolmentView>(UV_ENROLMENT_KEY);
+  return rec && rec.kind === "webauthn" && typeof rec.credentialId === "string" ? rec : undefined;
+}
+
 /** Remember the passkey — call only after the VTA accepted its enrolment. */
 export async function rememberUvCredential(credentialId: string): Promise<void> {
   await new IndexedDBKVStore().put(UV_CREDENTIAL_KEY, credentialId);
+}
+
+/** Remember the whole enrolment, and its id where older code reads it. */
+export async function rememberUvEnrolment(enrolment: SignInUvEnrolmentView): Promise<void> {
+  const store = new IndexedDBKVStore();
+  await store.put(UV_ENROLMENT_KEY, enrolment);
+  await store.put(UV_CREDENTIAL_KEY, enrolment.credentialId);
 }
 
 /**

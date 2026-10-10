@@ -11,7 +11,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { generateSigningIdentity, signTrustTask, bytesToBase64url } from "@openvtc/pnm-core";
-import { SignInFlows, ALREADY_CLAIMED_MESSAGE, type SignInVaultEntry } from "../src/sign-in-flows.ts";
+import {
+  SignInFlows,
+  ALREADY_CLAIMED_MESSAGE,
+  VTA_REFUSAL_MESSAGES,
+  type SignInVaultEntry,
+} from "../src/sign-in-flows.ts";
 
 const VTC = "did:webvh:QmPEQVM1JPTyrvEgBcDXwjK4TeyLGSX1PxjgyeAisPviUx:members.example.org";
 const PORTAL = "https://members.example.org";
@@ -48,7 +53,19 @@ interface World {
   vtaCalls: Array<{ what: string; decision?: unknown }>;
 }
 
-function world(opts: { name?: string; claimError?: string; known?: SignInVaultEntry[] } = {}): World {
+/** What the member's VTA refuses a sign-in document with (`details.details.code`). */
+const vtaRefusal = (code: string) =>
+  Object.assign(new Error(`vault/sign-trust-task:${code}`), { details: { code: "taskFailed", details: { code } } });
+
+function world(
+  opts: {
+    name?: string;
+    claimError?: string;
+    known?: SignInVaultEntry[];
+    identifyError?: unknown;
+    uvCredentialId?: string;
+  } = {},
+): World {
   const sent: World["sent"] = [];
   const vtaCalls: World["vtaCalls"] = [];
   const sessionKey = generateSigningIdentity().did;
@@ -95,9 +112,17 @@ function world(opts: { name?: string; claimError?: string; known?: SignInVaultEn
       return { didDocument: vtcDoc };
     },
     vta: () => ({
-      listIdentities: async () => opts.known ?? entries,
+      ensureDevice: async () => {
+        vtaCalls.push({ what: "ensure-device" });
+      },
+      enrolledUvCredential: async () => opts.uvCredentialId,
+      listIdentities: async () => {
+        vtaCalls.push({ what: "list" });
+        return opts.known ?? entries;
+      },
       signIdentify: async (_entryId, unsigned) => {
         vtaCalls.push({ what: "identify" });
+        if (opts.identifyError) throw opts.identifyError;
         return { ...unsigned, proof: { proofPurpose: "authentication" } };
       },
       signGrant: async (_entryId, unsigned, uv) => {
@@ -280,4 +305,45 @@ test("enrolling the UV passkey goes to the VTA, and only once the member is iden
   await step(w, { step: "prove", enteredNumber: "47" });
   assert.deepEqual(await step(w, { step: "enrol-uv", enrolment }), { kind: "uv-enrolled" });
   assert.deepEqual(w.vtaCalls.find((c) => c.what === "enrol")!.decision, enrolment);
+});
+
+test("the browser enrols as one of the member's devices before anything is sent", async () => {
+  const w = world();
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  assert.deepEqual(
+    w.vtaCalls.map((c) => c.what),
+    ["ensure-device", "list"],
+    "registered at the VTA before the identities are read, and before the claim",
+  );
+  assert.equal(w.sent.length, 0);
+});
+
+test("the challenge says which passkey the VTA holds for this device", async () => {
+  const w = world({ uvCredentialId: "AAECAwQFBgc" });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "claim", entryId: "e-alice" });
+  await step(w, { step: "prove", enteredNumber: "47" });
+  const challenge = await step(w, { step: "grant-digest" });
+  assert.equal((challenge as { uvCredentialId?: string }).uvCredentialId, "AAECAwQFBgc");
+  const none = world();
+  await step(none, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(none, { step: "claim", entryId: "e-alice" });
+  await step(none, { step: "prove", enteredNumber: "47" });
+  assert.equal("uvCredentialId" in (await step(none, { step: "grant-digest" })), false);
+});
+
+test("the member's VTA refusing as a disabled device is said plainly, and the claim is cancelled", async () => {
+  for (const code of ["oobDeviceDisabled", "oobNotEnrolledDevice"]) {
+    const w = world({ identifyError: vtaRefusal(code) });
+    await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+    await step(w, { step: "claim", entryId: "e-alice" });
+    const r = await step(w, { step: "prove", enteredNumber: "47" });
+    assert.deepEqual(r, { kind: "failed", code, message: VTA_REFUSAL_MESSAGES[code] });
+    assert.deepEqual(w.sent.map((s) => s.type), ["claim", "cancel"], "the portal stops waiting");
+  }
+  // A refusal the wallet has no words for keeps the generic message.
+  const w = world({ identifyError: vtaRefusal("oobSomethingNew") });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "claim", entryId: "e-alice" });
+  assert.equal(((await step(w, { step: "prove", enteredNumber: "47" })) as { code: string }).code, "sign-in/failed");
 });
