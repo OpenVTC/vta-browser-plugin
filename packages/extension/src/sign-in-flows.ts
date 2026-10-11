@@ -949,6 +949,7 @@ export class SignInFlows {
       flow.step1.service.name,
       flow.step1.service.did,
       flow.communityName,
+      flow.services.portalOrigin,
     );
     return {
       kind: "enter-number",
@@ -1287,6 +1288,15 @@ function foldName(name: string): string {
   return name.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+/** The lower-case host of a portal origin, or `undefined` if it is not a URL. */
+function portalHost(origin: string): string | undefined {
+  try {
+    return new URL(origin).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The community's own name for itself, when it is a different human name
  * from the one this wallet holds (VTI-LNK-104) — else `undefined`.
@@ -1296,11 +1306,14 @@ function foldName(name: string): string {
  * DID, or any `did:` string is the absence of a name rather than a different
  * one, and flagging it would warn every member of an unnamed community on
  * every sign-in — which teaches them to ignore the warning that matters.
+ * The host of the verified portal origin is the same: a service that names
+ * itself "webvh.storm.ws" has told us nothing the wallet did not verify.
  */
 export function communityNameMismatch(
   theirs: unknown,
   serviceDid: unknown,
   ours: string,
+  portalOrigin?: string,
 ): string | undefined {
   if (typeof theirs !== "string") return undefined;
   const trimmed = theirs.trim();
@@ -1308,5 +1321,7 @@ export function communityNameMismatch(
   if (typeof serviceDid === "string" && trimmed === serviceDid.trim())
     return undefined;
   if (/^did:/i.test(trimmed)) return undefined;
+  if (portalOrigin !== undefined && foldName(theirs) === portalHost(portalOrigin))
+    return undefined;
   return foldName(theirs) === foldName(ours) ? undefined : theirs;
 }

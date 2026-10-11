@@ -704,6 +704,19 @@ test("the name rule: absent names and DIDs are not names; case and spacing are n
   assert.equal(communityNameMismatch("  Totally  Legit ", did, ours), "  Totally  Legit ", "flagged as the community sent it");
 });
 
+test("the name rule: the verified portal host is not a different name (VTI-LNK-104)", () => {
+  const ours = "DID Hosting";
+  const did = "did:webvh:QmSNo2TJRq5xiiYhHZNrTqoaq8bivffWq4PZXjQQAzvNtr:webvh.storm.ws";
+  const portal = "https://webvh.storm.ws";
+  assert.equal(communityNameMismatch("webvh.storm.ws", did, ours, portal), undefined, "the portal host");
+  assert.equal(communityNameMismatch(" WebVH.Storm.WS ", did, ours, portal), undefined, "the portal host, any case");
+  assert.equal(communityNameMismatch("webvh.storm.ws", did, ours), "webvh.storm.ws", "no portal origin to compare with");
+  assert.equal(communityNameMismatch("evil.example", did, ours, portal), "evil.example", "another host");
+  assert.equal(communityNameMismatch("storm.ws", did, ours, portal), "storm.ws", "a parent domain is still different");
+  assert.equal(communityNameMismatch("https://webvh.storm.ws", did, ours, portal), "https://webvh.storm.ws", "only the bare host");
+  assert.equal(communityNameMismatch("webvh.storm.ws", did, ours, "not a url"), "webvh.storm.ws", "an unparseable origin");
+});
+
 // ── Failure details: where, who, and the code ────────────────────────────────
 
 test("a community refusing the proof says so: stage prove, party community", async () => {
