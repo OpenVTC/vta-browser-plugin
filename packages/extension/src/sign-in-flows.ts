@@ -23,7 +23,9 @@
 // trust: the confirm screen shows the wallet's record, and a different name in
 // step 1 is flagged (VTI-LNK-104). The link's fields are never shown as a
 // statement of what the exchange is (VTI-LNK-052), and nothing of the link is
-// logged (VTI-LNK-073) — this module does not log at all.
+// logged (VTI-LNK-073) — this module does not log at all. A failure carries
+// the exchange it happened in, who refused and the stable code
+// (`sign-in-failure.ts`); the background logs those, and nothing else.
 
 import {
   parseTriggerLink,
@@ -71,7 +73,14 @@ import {
   type OobDecision,
   type SignInServices,
 } from "@openvtc/pnm-core/vtc";
-import type { SignInIdentityView, SignInStep, SignInStepResult } from "./bridge-protocol.js";
+import type {
+  SignInFailureParty,
+  SignInFailureStage,
+  SignInIdentityView,
+  SignInStep,
+  SignInStepResult,
+} from "./bridge-protocol.js";
+import { safeCode } from "./sign-in-failure.js";
 
 /** A vault entry, as far as finding a community's identities needs it. */
 export interface SignInVaultEntry {
@@ -147,6 +156,9 @@ interface Flow {
   step2Doc?: OobDocument<OobStep2>;
   unsignedGrant?: OobDocument<OobGrantPayload>;
   grantDigest?: string;
+  /** The exchange in progress, for a failure's details. Set before each call
+   *  out; read only by `fail`. */
+  at?: SignInFailureStage;
 }
 
 /** Stable code for a step the flow is not ready for (R3.7). */
@@ -205,6 +217,7 @@ export class SignInFlows {
           return await this.grantChallenge(flow);
         case "enrol-uv":
           if (flow.phase !== "identified") throw outOfOrder();
+          flow.at = "enrol-uv";
           await flow.vta.enrolUvKey(req.enrolment);
           return { kind: "uv-enrolled" };
         case "respond":
@@ -301,6 +314,7 @@ export class SignInFlows {
     const kA = newApproverKey();
     flow.kA = kA;
     flow.entry = entry;
+    flow.at = "claim";
     const reply = await sendOob<OobStep1>(kA, buildClaim(kA, flow.vtcDid, flow.link.id), this.sendOpts(flow), "auth/oob/claim");
     flow.phase = "claimed";
     flow.step1 = checkStep1(reply.payload, {
@@ -309,11 +323,11 @@ export class SignInFlows {
       portalOrigin: flow.services.portalOrigin,
       now: this.deps.now(),
     });
-    const theirs = flow.step1.service.name;
+    const theirs = communityNameMismatch(flow.step1.service.name, flow.step1.service.did, flow.communityName);
     return {
       kind: "enter-number",
       decisionDeadline: deadlineMs(flow.step1.decisionDeadline)!,
-      ...(theirs !== flow.communityName ? { nameMismatch: theirs } : {}),
+      ...(theirs !== undefined ? { nameMismatch: theirs } : {}),
     };
   }
 
@@ -326,7 +340,9 @@ export class SignInFlows {
       approverKey: flow.kA.did,
       enteredNumber,
     });
+    flow.at = "identify";
     const signed = assertSignedAsSent(unsigned, await flow.vta.signIdentify(flow.entry.entryId, unsigned), "authentication");
+    flow.at = "prove";
     const reply = await sendOob<OobStep2>(flow.kA, buildProve(flow.kA, flow.vtcDid, signed, flow.link.id), this.sendOpts(flow), "auth/oob/prove");
     const step2 = checkStep2(reply.payload, flow.step1, flow.entry.did);
     flow.step2Doc = reply.doc;
@@ -363,6 +379,7 @@ export class SignInFlows {
    *  not get to supply the document. */
   private async grantChallenge(flow: Flow): Promise<SignInStepResult> {
     if (flow.phase !== "identified" || !flow.kA || !flow.step2Doc) throw outOfOrder();
+    flow.at = "grant-digest";
     flow.unsignedGrant = await this.buildGrantFor(flow, "approve");
     flow.grantDigest = await grantDigest(flow.unsignedGrant);
     // Which passkey the VTA holds for this device, so the window enrols this
@@ -392,11 +409,13 @@ export class SignInFlows {
       // A decline needs no user verification (base design §14 step 12).
       unsigned = await this.buildGrantFor(flow, "decline");
     }
+    flow.at = "grant";
     const signed = assertSignedAsSent(
       unsigned,
       await flow.vta.signGrant(flow.entry.entryId, unsigned, uv),
       "assertionMethod",
     );
+    flow.at = "respond";
     const reply = await sendOob<{ status?: unknown }>(flow.kA, buildRespond(flow.kA, flow.vtcDid, signed, flow.link.id), this.sendOpts(flow), "auth/oob/respond");
     this.end(flow);
     return { kind: "done", decision, status: typeof reply.payload?.status === "string" ? reply.payload.status : "ok" };
@@ -431,8 +450,10 @@ export class SignInFlows {
 
   private async fail(flowId: string, flow: Flow, err: unknown): Promise<SignInStepResult> {
     if ((err as { code?: string })?.code === SIGN_IN_OUT_OF_ORDER) {
-      return { kind: "failed", code: SIGN_IN_OUT_OF_ORDER, message: ENDED_MESSAGE };
+      return { kind: "failed", code: SIGN_IN_OUT_OF_ORDER, message: ENDED_MESSAGE, party: "wallet" };
     }
+    // Read before the cancel below, which sends and so could move it.
+    const where = failureWhere(flow.at, err);
     // Once K_a exists the flow is spent: a refused claim, proof or response
     // ends the request at the community, and a reply that did not check out
     // is not one to keep talking to. When the community did not refuse (the
@@ -448,16 +469,23 @@ export class SignInFlows {
       }
     }
     if (err instanceof OobRefusedError) {
-      if (err.code === "alreadyClaimed") return { kind: "failed", code: err.code, message: ALREADY_CLAIMED_MESSAGE };
+      if (err.code === "alreadyClaimed") return { kind: "failed", code: err.code, message: ALREADY_CLAIMED_MESSAGE, ...where };
       if (err.code === "requestExpired") return refused("expired");
-      return { kind: "failed", code: err.code, message: `${triggerLinkMessage("invalid")} ${ENDED_MESSAGE}` };
+      return { kind: "failed", code: err.code, message: `${triggerLinkMessage("invalid")} ${ENDED_MESSAGE}`, ...where };
     }
     // The member's own VTA refused to sign: say why, in its stable code (R3.7).
     const vtaCode = vaultOobRefusal(err);
     const vtaMessage = vtaCode ? VTA_REFUSAL_MESSAGES[vtaCode] : undefined;
-    if (vtaCode && vtaMessage) return { kind: "failed", code: vtaCode, message: vtaMessage };
+    if (vtaCode && vtaMessage) return { kind: "failed", code: vtaCode, message: vtaMessage, ...where };
     const code = (err as { code?: unknown })?.code === OOB_REPLY_INVALID ? OOB_REPLY_INVALID : "sign-in/failed";
-    return { kind: "failed", code, message: `${triggerLinkMessage("invalid")} ${ENDED_MESSAGE}` };
+    const cause = code === "sign-in/failed" ? errorCause(err) : undefined;
+    return {
+      kind: "failed",
+      code,
+      message: `${triggerLinkMessage("invalid")} ${ENDED_MESSAGE}`,
+      ...where,
+      ...(cause ? { cause } : {}),
+    };
   }
 
   private sendOpts(flow: Flow) {
@@ -472,4 +500,72 @@ export class SignInFlows {
 
 function outOfOrder(): Error & { code: string } {
   return Object.assign(new Error("this step is not available now"), { code: SIGN_IN_OUT_OF_ORDER });
+}
+
+/** `OobRefusedError` codes that mean the community was never heard from. */
+const UNREACHED: ReadonlySet<string> = new Set(["network", "timeout"]);
+
+/** The exchanges the member's own VTA answers; the rest go to the community. */
+const VTA_STAGES: ReadonlySet<SignInFailureStage> = new Set(["identify", "grant", "enrol-uv"]);
+
+/** Which exchange failed and who refused, for the failure's details. A
+ *  failure that is not a refusal (the network, a timeout) names no party:
+ *  nobody refused, and saying so would send someone after the wrong side. */
+function failureWhere(
+  at: SignInFailureStage | undefined,
+  err: unknown,
+): { stage?: SignInFailureStage; party?: SignInFailureParty } {
+  const party: SignInFailureParty | undefined =
+    err instanceof OobRefusedError
+      ? // `sendOob` reports an unreachable community with these two codes:
+        // nobody refused.
+        UNREACHED.has(err.code)
+        ? undefined
+        : "community"
+      : (err as { code?: unknown })?.code === OOB_REPLY_INVALID
+        ? "wallet"
+        : vaultOobRefusal(err) !== undefined || (at !== undefined && VTA_STAGES.has(at) && refusalCode(err) !== undefined)
+          ? "vta"
+          : undefined;
+  return { ...(at ? { stage: at } : {}), ...(party ? { party } : {}) };
+}
+
+/** A refusal's stable code, wherever the transport put it. */
+function refusalCode(err: unknown): string | undefined {
+  const e = err as { code?: unknown; details?: { code?: unknown; details?: { code?: unknown } } } | undefined;
+  return safeCode(e?.details?.details?.code) ?? safeCode(e?.details?.code) ?? safeCode(e?.code);
+}
+
+/** What lies under the generic `sign-in/failed`: the refusal's own code if it
+ *  has one, else the error's name when that says more than "Error". */
+function errorCause(err: unknown): string | undefined {
+  const code = refusalCode(err);
+  if (code) return code;
+  const name = (err as { name?: unknown })?.name;
+  return name !== "Error" ? safeCode(name) : undefined;
+}
+
+/** Fold a name for comparison: trimmed, inner whitespace collapsed, case
+ *  folded. "Test  VTC" and "test vtc" are the same name told twice. */
+function foldName(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * The community's own name for itself, when it is a different human name
+ * from the one this wallet holds (VTI-LNK-104) — else `undefined`.
+ *
+ * A VTC with no name configured fills `service.name` with its DID
+ * (verifiable-trust-infrastructure `oob_tasks.rs`), so an empty name, its own
+ * DID, or any `did:` string is the absence of a name rather than a different
+ * one, and flagging it would warn every member of an unnamed community on
+ * every sign-in — which teaches them to ignore the warning that matters.
+ */
+export function communityNameMismatch(theirs: unknown, serviceDid: unknown, ours: string): string | undefined {
+  if (typeof theirs !== "string") return undefined;
+  const trimmed = theirs.trim();
+  if (trimmed === "") return undefined;
+  if (typeof serviceDid === "string" && trimmed === serviceDid.trim()) return undefined;
+  if (/^did:/i.test(trimmed)) return undefined;
+  return foldName(theirs) === foldName(ours) ? undefined : theirs;
 }

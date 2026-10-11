@@ -2538,8 +2538,28 @@ export type SignInStepResult =
   | { kind: "uv-enrolled" }
   | { kind: "done"; decision: "approve" | "decline"; status: string }
   /** The community — or the member's own VTA — refused with a stable code
-   *  (R3.7). */
-  | { kind: "failed"; code: string; message: string };
+   *  (R3.7). `stage`, `party` and `cause` say where, for the window's
+   *  "Details" line and the background's console; they never change what the
+   *  flow does, and none carries link content, a key or a message body. */
+  | {
+      kind: "failed";
+      code: string;
+      message: string;
+      /** Which exchange failed. */
+      stage?: SignInFailureStage;
+      /** Who refused: the community, the member's own VTA, or this wallet
+       *  (a reply or signed document that did not check out). */
+      party?: SignInFailureParty;
+      /** The underlying stable code, or error name, when `code` is the
+       *  generic one and something more specific is known. */
+      cause?: string;
+    };
+
+/** Where in the flow a sign-in failed. `identify` and `grant` are the
+ *  member's VTA signing; `claim`, `prove` and `respond` are the exchanges with
+ *  the community. */
+export type SignInFailureStage = "claim" | "identify" | "prove" | "grant-digest" | "enrol-uv" | "grant" | "respond";
+export type SignInFailureParty = "community" | "vta" | "wallet";
 
 export type RuntimeSignInStepResponse =
   | { ok: true; result: SignInStepResult }
