@@ -4,6 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  bindProfile,
   buildProfileEntry,
   decideSiteIdentity,
   matchProfileEntry,
@@ -175,4 +176,55 @@ test("a look-alike origin's entry never satisfies the real one", () => {
     { kind: "webOrigin", origin: "https://shop.example.evil.test" },
   ]);
   assert.deepEqual(decideSiteIdentity([lookalike], origin, false), { kind: "ask" });
+});
+
+// ── bindProfile: the one way an entry is made, for both sign-in paths ───────
+
+const HOSTED = [
+  { did: "did:webvh:Qm1:h.example:a", contextId: "personal" },
+  { did: "did:webvh:Qm2:h.example:b", contextId: "work" },
+];
+
+function bindDeps(candidates: string[] = ["did:webvh:Qm2:h.example:b#key-0"]) {
+  const upserts: unknown[] = [];
+  return {
+    upserts,
+    deps: {
+      listDids: async () => HOSTED,
+      deriveSigningKeyIds: async () => ({ candidates }),
+      upsert: async (body: unknown) => {
+        upserts.push(body);
+        return { entryId: "e-1" };
+      },
+    },
+  };
+}
+
+test("bindProfile makes the first-use entry, in the DID's own context", async () => {
+  const { deps, upserts } = bindDeps();
+  const r = await bindProfile(deps, {
+    origin: "https://h.example",
+    did: HOSTED[1]!.did,
+    rpDid: "did:webvh:QmSvc:h.example",
+  });
+  assert.deepEqual(r, { ok: true, entryId: "e-1" });
+  assert.deepEqual(upserts, [
+    buildProfileEntry({
+      origin: "https://h.example",
+      did: HOSTED[1]!.did,
+      contextId: "work",
+      signingKeyId: "did:webvh:Qm2:h.example:b#key-0",
+      rpDid: "did:webvh:QmSvc:h.example",
+    }),
+  ]);
+});
+
+test("bindProfile refuses a DID the agent does not host, and an ambiguous key, without writing", async () => {
+  const a = bindDeps();
+  assert.equal((await bindProfile(a.deps, { origin: "https://h.example", did: "did:web:x" })).ok, false);
+  const b = bindDeps(["k1", "k2"]);
+  const r = await bindProfile(b.deps, { origin: "https://h.example", did: HOSTED[0]!.did });
+  assert.equal(r.ok, false);
+  assert.match((r as { error: string }).error, /2 possible signing keys/);
+  assert.equal(a.upserts.length + b.upserts.length, 0);
 });

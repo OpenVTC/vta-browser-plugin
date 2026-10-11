@@ -505,3 +505,132 @@ test("a member-portal sign-in reads as before", async () => {
   );
   await screen.unmount();
 });
+
+// ── A site the wallet does not know ──────────────────────────────────────────
+
+const HOSTING = "https://dids.example.net";
+const BOB = "did:webvh:QmBob:dids.example.net:bob";
+const WORK = "did:webvh:QmWork:dids.example.net:work";
+
+const JOIN: Record<string, SignInStepResult> = {
+  prepare: {
+    kind: "join-hosting",
+    host: "dids.example.net",
+    portalOrigin: HOSTING,
+    identities: [
+      { did: BOB, contextId: "personal" },
+      { did: WORK, contextId: "work" },
+    ],
+  },
+  join: {
+    kind: "confirm",
+    communityName: "dids.example.net",
+    portalOrigin: HOSTING,
+    identities: [{ entryId: "e-new", did: WORK, label: "dids.example.net" }],
+  },
+  cancel: { kind: "done", decision: "decline", status: "cancelled" },
+};
+
+test("an unknown DID hosting service is offered by its verified origin; yes records the choice and goes on to confirm", async () => {
+  const { steps, send } = script(JOIN);
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }),
+  );
+  await screen.settle();
+  assert.match(screen.text(), /Use dids\.example\.net to host your DIDs\?/);
+  assert.equal(
+    screen.container.querySelector('[data-testid="portal"]')!.textContent,
+    HOSTING,
+  );
+  const join = screen.container.querySelector<HTMLButtonElement>(
+    '[data-testid="join"]',
+  )!;
+  assert.equal(join.disabled, true, "two identities: the person picks one");
+  const radios = screen.container.querySelectorAll<HTMLInputElement>(
+    'input[type="radio"]',
+  );
+  await screen.click(radios[1]!);
+  await screen.click(join);
+  assert.deepEqual(steps[1], { step: "join", did: WORK });
+  assert.match(screen.text(), /Sign in to dids\.example\.net\?/);
+  assert.ok(screen.container.querySelector('[data-testid="continue"]'));
+  await screen.unmount();
+});
+
+test("Not now on the DID hosting offer cancels and closes", async () => {
+  const { steps, send } = script(JOIN);
+  let closed = 0;
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, close: () => void closed++ }),
+  );
+  await screen.settle();
+  await screen.click(
+    screen.container.querySelector('[data-testid="decline"]')!,
+  );
+  await screen.settle();
+  assert.deepEqual(
+    steps.map((s) => s.step),
+    ["prepare", "cancel"],
+  );
+  assert.equal(closed, 1);
+  await screen.unmount();
+});
+
+test("an agent with no DIDs cannot join, and is told why", async () => {
+  const { send } = script({
+    prepare: { kind: "join-hosting", host: "dids.example.net", portalOrigin: HOSTING, identities: [] },
+  });
+  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
+  await screen.settle();
+  assert.ok(screen.container.querySelector('[data-testid="no-identities"]'));
+  assert.equal(
+    screen.container.querySelector<HTMLButtonElement>('[data-testid="join"]')!.disabled,
+    true,
+  );
+  await screen.unmount();
+});
+
+test("a VTC the wallet does not know: not one of your communities, at its verified sign-in page", async () => {
+  const { send } = script({
+    prepare: { kind: "not-member", contactLabel: "members.example.org", portalOrigin: PORTAL },
+  });
+  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
+  await screen.settle();
+  assert.match(screen.text(), /Not one of your communities/);
+  assert.match(screen.text(), /You're not a member of members\.example\.org\. Nothing was sent to it\./);
+  assert.equal(screen.container.querySelector('[data-testid="portal"]')!.textContent, PORTAL);
+  await screen.unmount();
+});
+
+test("not on the access list: the DID to send the operator, with a Copy button", async () => {
+  const copied: string[] = [];
+  const { send } = script({
+    prepare: JOIN.join!,
+    claim: RESULTS.claim!,
+    prove: {
+      kind: "failed",
+      code: "auth/oob:notAuthorized",
+      message: "dids.example.net hasn't added you yet. Send this DID to its operator:",
+      stage: "prove",
+      party: "community",
+      unlisted: { host: "dids.example.net", did: WORK },
+    },
+  });
+  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }));
+  // The harness installs its own `navigator` at render; the clipboard goes on that one.
+  Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (s: string) => void copied.push(s) },
+  });
+  await screen.settle();
+  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
+  await screen.type(screen.container.querySelector('[data-testid="number"]')!, "47");
+  await screen.click(screen.container.querySelector('[data-testid="prove"]')!);
+  assert.match(screen.text(), /dids\.example\.net hasn't added you yet/);
+  assert.equal(screen.container.querySelector('[data-testid="unlisted-did"]')!.textContent, WORK);
+  await screen.click(screen.container.querySelector('[data-testid="copy-did"]')!);
+  await screen.settle();
+  assert.deepEqual(copied, [WORK]);
+  assert.equal(screen.container.querySelector('[data-testid="copy-did"]')!.textContent, "Copied");
+  await screen.unmount();
+});

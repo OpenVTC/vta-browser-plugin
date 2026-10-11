@@ -57,7 +57,7 @@ import {
   rememberHolderIdentity,
 } from "./site-identity.js";
 import {
-  buildProfileEntry,
+  bindProfile,
   decideSiteIdentity,
   matchProfileEntry,
   PROFILE_SECRET_KIND,
@@ -3135,56 +3135,34 @@ async function resolveProfileEntry(
 }
 
 /**
- * Bind the persona the operator picked to `origin`, as a vault entry.
- *
- * The prompt returns a DID string and nothing else. Everything the entry needs
- * beyond it — the context, the signing key — is re-derived here from the
- * agent's own answers, so a DID that is not one the agent hosts cannot be
- * bound no matter what the consent window sent back.
+ * Bind the persona the operator picked to `origin`, as a vault entry
+ * (`bindProfile`, shared with the trigger-link sign-in's join step).
  */
 async function bindProfileEntry(
   origin: string,
   did: string,
   rpDid: string | undefined,
 ): Promise<{ ok: true; entryId: string } | { ok: false; error: string }> {
-  const dids = await handleListDids({ type: RUNTIME_LIST_DIDS });
-  if (!dids.ok) return { ok: false, error: dids.error };
-  const record = dids.result.dids.find((d) => d.did === did);
-  if (!record) {
-    return { ok: false, error: `${did} is not an identity this agent hosts` };
-  }
-
-  const derived = await handleDeriveSigningKeyId({ type: RUNTIME_DERIVE_SIGNING_KEY_ID, did });
-  if (!derived.ok) return { ok: false, error: derived.error };
-  if (derived.result.error) return { ok: false, error: derived.result.error };
-  const candidates = derived.result.candidates;
-  if (candidates.length !== 1) {
-    // Zero: nothing in the document can sign, and an entry naming a key that
-    // does not exist fails later, opaquely, at the VTA. More than one: which
-    // key signs the id_token is a real choice with no default, and picking one
-    // here would be the wallet guessing. Both send the operator to the vault
-    // panel, which has the key picker this prompt deliberately does not.
-    return {
-      ok: false,
-      error:
-        candidates.length === 0
-          ? `no signing key could be derived from ${did}`
-          : `${did} has ${candidates.length} possible signing keys — bind it from the wallet's vault panel, which lets you choose one`,
-    };
-  }
-
-  const upserted = await handleVaultUpsert({
-    type: RUNTIME_VAULT_UPSERT,
-    ...buildProfileEntry({
-      origin,
-      did,
-      contextId: record.contextId,
-      signingKeyId: candidates[0]!,
-      ...(rpDid ? { rpDid } : {}),
-    }),
-  });
-  if (!upserted.ok) return { ok: false, error: upserted.error };
-  return { ok: true, entryId: upserted.result.entry.id };
+  return bindProfile(
+    {
+      listDids: async () => {
+        const r = await handleListDids({ type: RUNTIME_LIST_DIDS });
+        if (!r.ok) throw new Error(r.error);
+        return r.result.dids;
+      },
+      deriveSigningKeyIds: async (d) => {
+        const r = await handleDeriveSigningKeyId({ type: RUNTIME_DERIVE_SIGNING_KEY_ID, did: d });
+        if (!r.ok) throw new Error(r.error);
+        return r.result;
+      },
+      upsert: async (body) => {
+        const r = await handleVaultUpsert({ type: RUNTIME_VAULT_UPSERT, ...body });
+        if (!r.ok) throw new Error(r.error);
+        return { entryId: r.result.entry.id };
+      },
+    },
+    { origin, did, ...(rpDid ? { rpDid } : {}) },
+  );
 }
 
 // Authenticated POST proxied through the wallet (host permission → no CORS).

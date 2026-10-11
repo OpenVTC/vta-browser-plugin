@@ -211,6 +211,7 @@ import {
   type RuntimeSignInStepResponse,
 } from "./bridge-protocol.js";
 import { SignInFlows, type SignInVaultEntry } from "./sign-in-flows.js";
+import { bindProfile, profileLabelFor } from "./first-use-profile.js";
 import {
   buildUvConsentDecision,
   collectPages,
@@ -1404,6 +1405,33 @@ const signInFlows = new SignInFlows({
           ...(page.cursor ? { nextCursor: page.cursor } : {}),
         };
       });
+    },
+    listPersonas: async () => {
+      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+      const dids = await vtaListDids(session, { holder, service });
+      return dids.map((d) => ({ did: d.did, contextId: d.contextId }));
+    },
+    // The legacy first-use prompt's entry, made the same way (`bindProfile`),
+    // so `proxyLogin` at the same origin and this sign-in find the one entry.
+    bindIdentity: async ({ origin, did, rpDid }) => {
+      const bound = await bindProfile(
+        {
+          listDids: async () => {
+            const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+            return vtaListDids(session, { holder, service });
+          },
+          deriveSigningKeyIds: (d) => deriveSigningKeyId(d),
+          upsert: async (body) => {
+            const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+            type Params = Parameters<typeof vaultUpsert>[1];
+            const res = await vaultUpsert(session, { holder, service, ...body } as unknown as Params);
+            return { entryId: res.entry.id };
+          },
+        },
+        { origin, did, rpDid },
+      );
+      if (!bound.ok) throw new Error(bound.error);
+      return { entryId: bound.entryId, label: profileLabelFor(origin) };
     },
     ensureDevice: () => ensureDeviceEnrolment(vtaDid, restBaseUrl),
     signIdentify: (entryId, unsigned) =>

@@ -15,6 +15,9 @@ import {
   SignInFlows,
   ALREADY_CLAIMED_MESSAGE,
   VTA_REFUSAL_MESSAGES,
+  SIGN_IN_JOIN_FAILED,
+  notListedMessage,
+  siteKindOf,
   communityNameMismatch,
   type SignInVaultEntry,
 } from "../src/sign-in-flows.ts";
@@ -42,6 +45,25 @@ const vtcDoc = {
   ],
 };
 
+/** The same service, published as a DID hosting service (affinidi-webvh-service
+ *  `add_webvh_hosting_service`). */
+const hostingDoc = {
+  ...vtcDoc,
+  service: [
+    ...vtcDoc.service,
+    { id: `${VTC}#webvh-hosting`, type: "WebVHHosting", serviceEndpoint: { uri: PORTAL } },
+  ],
+};
+/** A VTC: its REST service, no `WebVHHosting`. */
+const communityDoc = {
+  ...vtcDoc,
+  service: [...vtcDoc.service, { id: `${VTC}#vtc-rest`, type: "VTCRest", serviceEndpoint: BASE }],
+};
+const PERSONAS = [
+  { did: "did:webvh:QmBob:dids.example.net:bob", contextId: "personal" },
+  { did: "did:webvh:QmWork:dids.example.net:work", contextId: "work" },
+];
+
 const entries: SignInVaultEntry[] = [
   { id: "e-other", label: "Elsewhere", secretKind: "didSelfIssued", principalDid: "did:web:x.example", targets: [{ kind: "did", did: "did:web:other.example" }] },
   { id: "e-pw", label: "Example Community", secretKind: "password", principalDid: ALICE, targets: [{ kind: "did", did: VTC }] },
@@ -52,6 +74,8 @@ interface World {
   flows: SignInFlows;
   sent: Array<{ type: string; doc: Record<string, unknown> }>;
   vtaCalls: Array<{ what: string; decision?: unknown }>;
+  /** Every `bindIdentity` the flow asked the VTA for. */
+  binds: Array<{ origin: string; did: string; rpDid: string }>;
 }
 
 /** What the member's VTA refuses a sign-in document with (`details.details.code`). */
@@ -71,9 +95,14 @@ function world(
     uvCredentialId?: string;
     /** The community's `ext` on step 1, repeated in step 2. */
     ext?: Record<string, unknown>;
+    /** The service's DID document; the plain sign-in service by default. */
+    doc?: Record<string, unknown>;
+    personas?: Array<{ did: string; contextId: string }>;
+    bindError?: Error;
   } = {},
 ): World {
   const sent: World["sent"] = [];
+  const binds: World["binds"] = [];
   const vtaCalls: World["vtaCalls"] = [];
   const sessionKey = generateSigningIdentity().did;
   const step1 = {
@@ -119,7 +148,7 @@ function world(
     fetch,
     resolveDid: async (did) => {
       assert.equal(did, VTC);
-      return { didDocument: vtcDoc };
+      return { didDocument: opts.doc ?? vtcDoc };
     },
     vta: () => ({
       ensureDevice: async () => {
@@ -129,6 +158,16 @@ function world(
       listIdentities: async () => {
         vtaCalls.push({ what: "list" });
         return opts.known ?? entries;
+      },
+      listPersonas: async () => {
+        vtaCalls.push({ what: "personas" });
+        return opts.personas ?? PERSONAS;
+      },
+      bindIdentity: async (binding) => {
+        vtaCalls.push({ what: "bind" });
+        if (opts.bindError) throw opts.bindError;
+        binds.push(binding);
+        return { entryId: "e-new", label: new URL(binding.origin).hostname };
       },
       signIdentify: async (_entryId, unsigned) => {
         vtaCalls.push({ what: "identify" });
@@ -145,7 +184,7 @@ function world(
       },
     }),
   });
-  return { flows, sent, vtaCalls };
+  return { flows, sent, vtaCalls, binds };
 }
 
 const step = (w: World, s: Record<string, unknown>, flowId = "f1") =>
@@ -219,11 +258,153 @@ test("the whole approval, in the contract's order", async () => {
   assert.equal(w.sent.length, 3);
 });
 
-test("a community the wallet does not know: nothing is sent, and joining is offered", async () => {
-  const w = world({ known: entries.filter((e) => e.id !== "e-alice") });
+const UNKNOWN = entries.filter((e) => e.id !== "e-alice");
+
+test("a community the wallet does not know: verified first, then not-member, and nothing is sent", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc });
   const r = await step(w, { step: "prepare", link: LINK, origin: PORTAL });
-  assert.deepEqual(r, { kind: "not-member", contactLabel: "members.example.org" });
+  assert.deepEqual(r, { kind: "not-member", contactLabel: "members.example.org", portalOrigin: PORTAL });
   assert.equal(w.sent.length, 0);
+  assert.equal(w.vtaCalls.some((c) => c.what === "personas" || c.what === "bind"), false, "no DID hosting offer to a VTC");
+  assert.equal((await step(w, { step: "join", did: PERSONAS[0]!.did })).kind, "failed", "nothing to join");
+  assert.equal(w.binds.length, 0);
+  assert.equal(w.sent.length, 0);
+});
+
+test("the site's kind is read from its verified document's services", () => {
+  assert.equal(siteKindOf(hostingDoc), "did-hosting");
+  assert.equal(siteKindOf({ service: [{ type: ["Other", "WebVHHosting"] }] }), "did-hosting");
+  assert.equal(siteKindOf(communityDoc), "other");
+  assert.equal(siteKindOf(vtcDoc), "other");
+  assert.equal(siteKindOf({}), "other");
+});
+
+test("an unknown DID hosting service: offered, joined, and straight on to confirm", async () => {
+  const w = world({ known: UNKNOWN, doc: hostingDoc });
+  const offer = await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  assert.deepEqual(offer, {
+    kind: "join-hosting",
+    host: "members.example.org",
+    portalOrigin: PORTAL,
+    identities: PERSONAS,
+  });
+  assert.equal(w.sent.length, 0, "nothing goes to the service before the person agrees");
+
+  const confirm = await step(w, { step: "join", did: PERSONAS[1]!.did });
+  // The legacy first-use entry: the portal origin, and the service's DID.
+  assert.deepEqual(w.binds, [{ origin: PORTAL, did: PERSONAS[1]!.did, rpDid: VTC }]);
+  assert.deepEqual(confirm, {
+    kind: "confirm",
+    communityName: "members.example.org",
+    portalOrigin: PORTAL,
+    identities: [{ entryId: "e-new", did: PERSONAS[1]!.did, label: "members.example.org" }],
+  });
+  assert.equal(w.sent.length, 0, "joining sends nothing to the service either");
+
+  // The same link goes on: no second click on the website.
+  const enter = await step(w, { step: "claim", entryId: "e-new" });
+  assert.equal(enter.kind, "enter-number");
+  assert.deepEqual(w.sent.map((s) => s.type), ["claim"]);
+  await step(w, { step: "prove", enteredNumber: "47" });
+  const prove = w.sent[1]!.doc as { payload: { identify: { issuer: string } } };
+  assert.equal(prove.payload.identify.issuer, PERSONAS[1]!.did);
+});
+
+test("declining an unknown DID hosting service sends nothing, and records nothing", async () => {
+  for (const decline of ["cancel", "abort"] as const) {
+    const w = world({ known: UNKNOWN, doc: hostingDoc });
+    assert.equal((await step(w, { step: "prepare", link: LINK, origin: PORTAL })).kind, "join-hosting");
+    if (decline === "cancel") {
+      assert.deepEqual(await step(w, { step: "cancel" }), { kind: "done", decision: "decline", status: "cancelled" });
+    } else {
+      await w.flows.abort("f1");
+    }
+    assert.equal(w.sent.length, 0, `${decline}: zero network calls to the site`);
+    assert.equal(w.binds.length, 0, `${decline}: nothing recorded in the vault`);
+    assert.equal(w.flows.has("f1"), false);
+    assert.equal((await step(w, { step: "join", did: PERSONAS[0]!.did })).kind, "failed", "the offer is gone");
+    assert.equal(w.binds.length, 0);
+  }
+});
+
+test("joining is offered only for the DIDs the agent listed", async () => {
+  const w = world({ known: UNKNOWN, doc: hostingDoc });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = await step(w, { step: "join", did: "did:web:not-mine.example" });
+  assert.equal(r.kind, "failed");
+  assert.equal(w.binds.length, 0);
+  assert.equal(w.sent.length, 0);
+});
+
+test("a vault that will not record the service ends the flow with its reason, and nothing is sent", async () => {
+  const w = world({ known: UNKNOWN, doc: hostingDoc, bindError: new Error("no signing key could be derived") });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = await step(w, { step: "join", did: PERSONAS[0]!.did });
+  assert.equal(r.kind, "failed");
+  const f = r as { code: string; stage?: string; message: string };
+  assert.equal(f.code, SIGN_IN_JOIN_FAILED);
+  assert.equal(f.stage, "join");
+  assert.match(f.message, /no signing key could be derived/);
+  assert.equal(w.sent.length, 0);
+  assert.equal(w.flows.has("f1"), false);
+});
+
+test("an unknown site clicked on a page that is not its portal is still wrong-origin, before any offer", async () => {
+  for (const doc of [hostingDoc, communityDoc]) {
+    const w = world({ known: UNKNOWN, doc });
+    const r = await step(w, { step: "prepare", link: LINK, origin: "https://evil.example" });
+    assert.deepEqual(r, { kind: "refused", outcome: "invalid", message: "This code can't be used." });
+    assert.equal(w.sent.length, 0);
+    assert.equal(w.vtaCalls.some((c) => c.what === "personas"), false);
+    assert.equal((await step(w, { step: "join", did: PERSONAS[0]!.did })).kind, "failed");
+    assert.equal(w.binds.length, 0);
+  }
+});
+
+test("a DID hosting service that has not listed the DID: the DID is shown, to send its operator", async () => {
+  const w = world({ known: UNKNOWN, doc: hostingDoc, proveError: "auth/oob:notAuthorized" });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "join", did: PERSONAS[0]!.did });
+  await step(w, { step: "claim", entryId: "e-new" });
+  const r = await step(w, { step: "prove", enteredNumber: "47" });
+  assert.deepEqual(r, {
+    kind: "failed",
+    code: "auth/oob:notAuthorized",
+    message: notListedMessage("members.example.org"),
+    stage: "prove",
+    party: "community",
+    unlisted: { host: "members.example.org", did: PERSONAS[0]!.did },
+  });
+  assert.equal(r.kind === "failed" && r.message, "members.example.org hasn't added you yet. Send this DID to its operator:");
+  assert.equal(w.flows.has("f1"), false, "the request ended at the service");
+});
+
+test("an existing DID hosting entry that is refused gets the same screen", async () => {
+  const w = world({ doc: hostingDoc, proveError: "auth/oob:notAuthorized" });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "claim", entryId: "e-alice" });
+  const r = await step(w, { step: "prove", enteredNumber: "47" });
+  assert.deepEqual((r as { unlisted?: unknown }).unlisted, { host: "members.example.org", did: ALICE });
+});
+
+test("a VTC refusing the proof keeps the generic message: its members are not an access list to ask for", async () => {
+  const w = world({ doc: communityDoc, proveError: "auth/oob:notAuthorized" });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "claim", entryId: "e-alice" });
+  const r = await step(w, { step: "prove", enteredNumber: "47" });
+  assert.equal(r.kind, "failed");
+  assert.equal("unlisted" in r, false);
+  assert.match((r as { message: string }).message, /can't be used/);
+});
+
+test("the services' family-qualified codes are matched on their stable name (C9)", async () => {
+  const w = world({ claimError: "auth/oob/claim:alreadyClaimed" });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = await step(w, { step: "claim", entryId: "e-alice" });
+  assert.equal((r as { message: string }).message, ALREADY_CLAIMED_MESSAGE);
+  const x = world({ claimError: "auth/oob:requestExpired" });
+  await step(x, { step: "prepare", link: LINK, origin: PORTAL });
+  assert.equal((await step(x, { step: "claim", entryId: "e-alice" })).kind, "refused");
 });
 
 test("a link clicked on a page that is not the portal is wrong-origin, and nothing is sent", async () => {
