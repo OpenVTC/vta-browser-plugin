@@ -3293,7 +3293,10 @@ async function handleSignInStep(msg: RuntimeSignInStepRequest): Promise<RuntimeS
   if (res?.ok && res.result.kind === "failed") {
     console.warn("[pnm sign-in] step failed", failureLogFields(msg.step, res.result));
   }
-  if (res.ok && (res.result.kind === "done" || res.result.kind === "refused" || res.result.kind === "not-member")) {
+  if (res.ok && (res.result.kind === "done" || res.result.kind === "refused" ||
+      res.result.kind === "not-member" ||
+      res.result.kind === "join-elsewhere" ||
+      res.result.kind === "join-pending")) {
     await chrome.storage.session.remove(key);
   }
   return res;

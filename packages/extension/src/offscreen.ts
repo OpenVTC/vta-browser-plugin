@@ -1433,6 +1433,22 @@ const signInFlows = new SignInFlows({
       if (!bound.ok) throw new Error(bound.error);
       return { entryId: bound.entryId, label: profileLabelFor(origin) };
     },
+    // A join request, signed as the persona the person chose: the community
+    // takes the applicant from this signature.
+    signTask: async (entryId, unsigned) => {
+      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+      const { signedEnvelope } = await vaultSignTrustTask(session, {
+        holder,
+        service,
+        entryId,
+        unsignedEnvelope: unsigned as unknown as TrustTaskEnvelope,
+      });
+      return signedEnvelope;
+    },
+    unbindIdentity: async (entryId) => {
+      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+      await vaultDelete(session, { holder, service, id: entryId, reason: "join request not taken" });
+    },
     ensureDevice: () => ensureDeviceEnrolment(vtaDid, restBaseUrl),
     signIdentify: (entryId, unsigned) =>
       asEnrolledDevice(vtaDid, restBaseUrl, async () => {

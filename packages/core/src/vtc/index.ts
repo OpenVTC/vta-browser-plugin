@@ -8,3 +8,4 @@
 export * from "./membership.js";
 export * from "./oob-sign-in.js";
 export * from "./domain-linkage.js";
+export * from "./join.js";

@@ -59,6 +59,22 @@ const NOT_IN_SDK = [
       "counterparty, so vta-sdk carries no constant for them.",
   },
   {
+    prefix: "https://trusttasks.org/spec/vtc/join-requests/manifest/0.3",
+    why:
+      "Joining a community from a trigger link (vtc/join.ts): posted to the VTC's own " +
+      "Trust-Task endpoint as a throwaway key, never sent to the agent. vta-sdk 0.65 " +
+      "declares it (JOIN_REQUEST_MANIFEST_TYPE); this snapshot (0.56.1) predates it. " +
+      "Drop this entry when the snapshot is resynced — the still-needed check will say so.",
+  },
+  {
+    prefix: "https://trusttasks.org/spec/vtc/join-requests/submit/0.3",
+    why:
+      "Joining a community from a trigger link (vtc/join.ts): the member's VTA signs it " +
+      "through vault/sign-trust-task and the wallet posts it to the VTC, so the agent is " +
+      "not the counterparty. vta-sdk 0.65 declares it (JOIN_REQUEST_SUBMIT_TYPE); this " +
+      "snapshot (0.56.1) predates it. Drop this entry when the snapshot is resynced.",
+  },
+  {
     prefix: "https://trusttasks.org/spec/task-consent/decision/0.2",
     why:
       "Never sent as a task by this library. vault/sign-oob.ts builds one only as the " +

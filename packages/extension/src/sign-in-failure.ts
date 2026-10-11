@@ -17,6 +17,9 @@ type Failed = Extract<SignInStepResult, { kind: "failed" }>;
 export const STAGE_LABEL: Readonly<Record<SignInFailureStage, string>> = {
   "domain-linkage": "checking the website belongs to the community",
   join: "join (recording the service in your vault)",
+  "join-manifest": "asking the community what it requires to join",
+  "join-sign": "your agent signing the join request",
+  "join-submit": "sending the join request to the community",
   claim: "claim (sending the code to the community)",
   identify: "identify (your agent signing who you are)",
   prove: "prove (sending the number to the community)",

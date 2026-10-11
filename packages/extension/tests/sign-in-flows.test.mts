@@ -16,6 +16,7 @@ import {
   ALREADY_CLAIMED_MESSAGE,
   VTA_REFUSAL_MESSAGES,
   SIGN_IN_JOIN_FAILED,
+  SIGN_IN_JOIN_DECLINED,
   notListedMessage,
   siteKindOf,
   communityNameMismatch,
@@ -39,6 +40,9 @@ const vtcDoc = {
   id: VTC,
   verificationMethod: [{ id: VM, type: "Multikey", controller: VTC, publicKeyMultibase: vtcKey.did.slice(8) }],
   assertionMethod: [VM],
+  // The VTC signs its operational replies (the join requests') for
+  // `authentication` (VTI-KEY-106).
+  authentication: [VM],
   service: [
     { id: `${VTC}#sign-in-portal`, type: "SignInPortal", serviceEndpoint: `${PORTAL}/members/` },
     { id: `${VTC}#tt`, type: "TrustTaskHTTPS", serviceEndpoint: BASE },
@@ -59,6 +63,30 @@ const communityDoc = {
   ...vtcDoc,
   service: [...vtcDoc.service, { id: `${VTC}#vtc-rest`, type: "VTCRest", serviceEndpoint: BASE }],
 };
+/** A community admitting by review and asking a display name (required) and a
+ *  country (optional) — the VTC's own defaults, plus requested attributes. */
+const MANIFEST = {
+  communityDid: VTC,
+  criteria: [
+    { id: "invited", admission: "automatic", invitationRequired: true, requirementsDigest: "zInvited" },
+    {
+      id: "member-credential",
+      admission: "automatic",
+      presentationDefinition: { credentials: [{ id: "membership", format: "ldp_vc" }] },
+      credentialIssuers: "community",
+      requirementsDigest: "zCredential",
+    },
+    { id: "review", admission: "review", requirementsDigest: "zReview" },
+  ],
+  branding: { displayName: "Example Community" },
+  requestedAttributes: [
+    { type: "name.display", required: true, purpose: "So members know who you are" },
+    { type: "address.country", required: false },
+  ],
+};
+/** One that admits anyone on the spot. */
+const OPEN_MANIFEST = { communityDid: VTC, criteria: [{ id: "open", admission: "automatic", requirementsDigest: "zOpen" }] };
+
 const PERSONAS = [
   { did: "did:webvh:QmBob:dids.example.net:bob", contextId: "personal" },
   { did: "did:webvh:QmWork:dids.example.net:work", contextId: "work" },
@@ -72,6 +100,10 @@ const entries: SignInVaultEntry[] = [
 
 interface World {
   flows: SignInFlows;
+  /** Every `vault/delete` of an entry the flow recorded. */
+  unbinds: string[];
+  /** Every document the VTA was asked to sign as a persona (`signTask`). */
+  signed: Array<{ entryId: string; doc: Record<string, unknown> }>;
   sent: Array<{ type: string; doc: Record<string, unknown> }>;
   vtaCalls: Array<{ what: string; decision?: unknown }>;
   /** Every `bindIdentity` the flow asked the VTA for. */
@@ -99,9 +131,19 @@ function world(
     doc?: Record<string, unknown>;
     personas?: Array<{ did: string; contextId: string }>;
     bindError?: Error;
+    /** The community's join manifest. */
+    manifest?: Record<string, unknown>;
+    /** Its answer to a join request: a submit response payload, or a refusal
+     *  code. */
+    submit?: Record<string, unknown> | { refuse: string };
+    /** The manifest reply goes out unsigned. */
+    manifestUnsigned?: boolean;
+    signTaskError?: unknown;
   } = {},
 ): World {
   const sent: World["sent"] = [];
+  const unbinds: string[] = [];
+  const signed: World["signed"] = [];
   const binds: World["binds"] = [];
   const vtaCalls: World["vtaCalls"] = [];
   const sessionKey = generateSigningIdentity().did;
@@ -116,9 +158,24 @@ function world(
   const fetch = (async (url: string, init: RequestInit) => {
     assert.equal(url, ENDPOINT, "posted to <base>/trust-tasks (binding 0.2 §6)");
     const doc = JSON.parse(String(init.body));
-    const type = String(doc.type).replace("https://trusttasks.org/spec/auth/oob/", "").replace("/0.1", "");
+    const join = /\/vtc\/join-requests\/(manifest|submit)\/0\.3$/.exec(String(doc.type));
+    const type = join ? `join-${join[1]}` : String(doc.type).replace("https://trusttasks.org/spec/auth/oob/", "").replace("/0.1", "");
     sent.push({ type, doc });
     if (type === opts.unreachableOn) throw new TypeError("Failed to fetch");
+    if (join) {
+      const answer = type === "join-manifest" ? (opts.manifest ?? MANIFEST) : (opts.submit ?? { requestId: "jr-1", verdict: { effect: "refer", with: { queue: "admin-review" } } });
+      if ("refuse" in answer) {
+        return new Response(
+          JSON.stringify({ type: "https://trusttasks.org/spec/trust-task-error/0.2", payload: { code: answer.refuse, retryable: false } }),
+          { status: 409 },
+        );
+      }
+      const res = { id: crypto.randomUUID(), type: `${doc.type}#response`, issuer: VTC, recipient: doc.issuer, threadId: doc.id, issuedAt: new Date().toISOString(), payload: answer };
+      if (!(type === "join-manifest" && opts.manifestUnsigned)) {
+        await signTrustTask({ envelope: res, signing: { ...vtcKey, did: VTC, kid: VM }, proofPurpose: "authentication" });
+      }
+      return new Response(JSON.stringify(res), { status: 200 });
+    }
     const refusal = type === "claim" ? opts.claimError : type === "prove" ? opts.proveError : undefined;
     if (refusal) {
       return new Response(
@@ -169,6 +226,16 @@ function world(
         binds.push(binding);
         return { entryId: "e-new", label: new URL(binding.origin).hostname };
       },
+      unbindIdentity: async (entryId) => {
+        vtaCalls.push({ what: "unbind" });
+        unbinds.push(entryId);
+      },
+      signTask: async (entryId, unsigned) => {
+        vtaCalls.push({ what: "sign-task" });
+        if (opts.signTaskError) throw opts.signTaskError;
+        signed.push({ entryId, doc: unsigned as unknown as Record<string, unknown> });
+        return { ...unsigned, proof: { proofPurpose: "authentication" } };
+      },
       signIdentify: async (_entryId, unsigned) => {
         vtaCalls.push({ what: "identify" });
         if (opts.identifyError) throw opts.identifyError;
@@ -184,7 +251,7 @@ function world(
       },
     }),
   });
-  return { flows, sent, vtaCalls, binds };
+  return { flows, sent, vtaCalls, binds, unbinds, signed };
 }
 
 const step = (w: World, s: Record<string, unknown>, flowId = "f1") =>
@@ -260,13 +327,14 @@ test("the whole approval, in the contract's order", async () => {
 
 const UNKNOWN = entries.filter((e) => e.id !== "e-alice");
 
-test("a community the wallet does not know: verified first, then not-member, and nothing is sent", async () => {
-  const w = world({ known: UNKNOWN, doc: communityDoc });
+test("a site that is neither a community nor a DID host: verified first, then not-member, and nothing is sent", async () => {
+  const w = world({ known: UNKNOWN, doc: vtcDoc });
   const r = await step(w, { step: "prepare", link: LINK, origin: PORTAL });
   assert.deepEqual(r, { kind: "not-member", contactLabel: "members.example.org", portalOrigin: PORTAL });
   assert.equal(w.sent.length, 0);
-  assert.equal(w.vtaCalls.some((c) => c.what === "personas" || c.what === "bind"), false, "no DID hosting offer to a VTC");
+  assert.equal(w.vtaCalls.some((c) => c.what === "personas" || c.what === "bind"), false);
   assert.equal((await step(w, { step: "join", did: PERSONAS[0]!.did })).kind, "failed", "nothing to join");
+  assert.equal((await step(w, { step: "join-manifest" })).kind, "failed", "nothing to join");
   assert.equal(w.binds.length, 0);
   assert.equal(w.sent.length, 0);
 });
@@ -274,7 +342,8 @@ test("a community the wallet does not know: verified first, then not-member, and
 test("the site's kind is read from its verified document's services", () => {
   assert.equal(siteKindOf(hostingDoc), "did-hosting");
   assert.equal(siteKindOf({ service: [{ type: ["Other", "WebVHHosting"] }] }), "did-hosting");
-  assert.equal(siteKindOf(communityDoc), "other");
+  assert.equal(siteKindOf(communityDoc), "community");
+  assert.equal(siteKindOf({ ...communityDoc, service: [...communityDoc.service, ...hostingDoc.service] }), "did-hosting");
   assert.equal(siteKindOf(vtcDoc), "other");
   assert.equal(siteKindOf({}), "other");
 });
@@ -639,4 +708,278 @@ test("an operator-console sign-in: the audience is read from step 1 and held thr
   const review = await step(w, { step: "prove", enteredNumber: "47" });
   assert.equal(review.kind, "review");
   assert.equal((review as { audience: string }).audience, "admin");
+});
+
+// ── An unknown community (VTC): joining ─────────────────────────────────────
+
+const NAME = [{ type: "name.display", value: "Ada" }];
+
+test("an unknown community is offered to join, by its verified origin, and nothing is sent", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc });
+  const r = await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  assert.deepEqual(r, { kind: "join-community", host: "members.example.org", portalOrigin: PORTAL });
+  assert.equal(w.sent.length, 0, "nothing goes to the community before the person continues");
+  assert.equal(w.vtaCalls.some((c) => c.what === "personas" || c.what === "bind"), false);
+  // The DID hosting step is not this flow's.
+  assert.equal((await step(w, { step: "join", did: PERSONAS[0]!.did })).kind, "failed");
+  assert.equal(w.sent.length, 0);
+});
+
+test("a community whose DID document does not verify is refused, with no offer", async () => {
+  const w = world({ known: UNKNOWN, doc: { ...communityDoc, id: "did:web:someone-else.example" } });
+  const r = await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  assert.equal(r.kind, "refused");
+  assert.equal((await step(w, { step: "join-manifest" })).kind, "failed");
+  assert.equal(w.sent.length, 0);
+});
+
+test("declining or closing the join offer sends nothing; after the manifest, nothing about the person", async () => {
+  for (const at of ["offer", "apply"] as const) {
+    for (const decline of ["cancel", "abort"] as const) {
+      const w = world({ known: UNKNOWN, doc: communityDoc });
+      await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+      if (at === "apply") assert.equal((await step(w, { step: "join-manifest" })).kind, "join-apply");
+      if (decline === "cancel") await step(w, { step: "cancel" });
+      else await w.flows.abort("f1");
+      assert.deepEqual(w.sent.map((s) => s.type), at === "offer" ? [] : ["join-manifest"], `${at}/${decline}`);
+      assert.equal(w.binds.length, 0, "nothing recorded");
+      assert.equal(w.signed.length, 0, "nothing signed as the person");
+      assert.equal(w.flows.has("f1"), false);
+      assert.equal((await step(w, { step: "join-submit", did: PERSONAS[0]!.did, attributes: NAME, registryConsent: false })).kind, "failed");
+      assert.equal(w.binds.length, 0);
+    }
+  }
+});
+
+test("the manifest is asked for as a throwaway key, and shows what the community asks", async () => {
+  const known: SignInVaultEntry[] = [
+    ...UNKNOWN,
+    { id: "e-bob", label: "Other Community", secretKind: "didSelfIssued", principalDid: PERSONAS[0]!.did, targets: [{ kind: "did", did: "did:web:other-vtc.example" }] },
+  ];
+  const w = world({ known, doc: communityDoc });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = await step(w, { step: "join-manifest" });
+  assert.deepEqual(r, {
+    kind: "join-apply",
+    host: "members.example.org",
+    portalOrigin: PORTAL,
+    displayName: "Example Community",
+    admission: "review",
+    attributes: [
+      { type: "name.display", required: true, purpose: "So members know who you are" },
+      { type: "address.country", required: false },
+    ],
+    identities: [
+      { ...PERSONAS[0]!, usedAt: ["Other Community"] },
+      PERSONAS[1]!,
+    ],
+  });
+  const manifest = w.sent[0]!.doc as { issuer: string; recipient: string; payload: unknown; proof?: unknown };
+  assert.match(manifest.issuer, /^did:key:z6Mk/);
+  assert.equal(PERSONAS.some((p) => p.did === manifest.issuer), false, "not the person's identity");
+  assert.equal(manifest.recipient, VTC);
+  assert.deepEqual(manifest.payload, {});
+  assert.equal(w.binds.length, 0, "nothing recorded yet");
+});
+
+test("a pending request: the request-sent screen, the entry kept, and no sign-in document", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "join-manifest" });
+  const r = await step(w, {
+    step: "join-submit",
+    did: PERSONAS[1]!.did,
+    attributes: [...NAME, { type: "address.country", value: "  " }],
+    registryConsent: false,
+  });
+  assert.deepEqual(r, { kind: "join-pending", host: "members.example.org", portalOrigin: PORTAL });
+  assert.deepEqual(w.sent.map((s) => s.type), ["join-manifest", "join-submit"]);
+  // The entry every member's sign-in finds: the portal origin and the VTC.
+  assert.deepEqual(w.binds, [{ origin: PORTAL, did: PERSONAS[1]!.did, rpDid: VTC }]);
+  assert.deepEqual(w.unbinds, [], "the request is open under that identity");
+  // Signed as the chosen identity, by its vault entry.
+  assert.equal(w.signed[0]!.entryId, "e-new");
+  const submit = w.sent[1]!.doc as { issuer: string; recipient: string; payload: Record<string, unknown> };
+  assert.equal(submit.issuer, PERSONAS[1]!.did);
+  assert.equal(submit.recipient, VTC);
+  assert.deepEqual(submit.payload, {
+    vp: { "@context": ["https://www.w3.org/ns/credentials/v2"], type: ["VerifiablePresentation"], holder: PERSONAS[1]!.did },
+    criterion: "zReview",
+    registryConsent: false,
+    attributes: NAME,
+  });
+  // Spent: nothing more goes out.
+  assert.equal(w.flows.has("f1"), false);
+  assert.equal((await step(w, { step: "claim", entryId: "e-new" })).kind, "failed");
+  assert.equal(w.sent.length, 2);
+  assert.equal(w.vtaCalls.some((c) => c.what === "identify" || c.what === "grant"), false);
+});
+
+test("a community asking for more evidence: pending, with what it asks", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, submit: { requestId: "jr-1", verdict: { effect: "requestMore", with: { needs: ["proof of personhood"] } } } });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "join-manifest" });
+  const r = await step(w, { step: "join-submit", did: PERSONAS[0]!.did, attributes: NAME, registryConsent: true });
+  assert.deepEqual(r, { kind: "join-pending", host: "members.example.org", portalOrigin: PORTAL, needs: ["proof of personhood"] });
+  assert.equal((w.sent[1]!.doc as { payload: { registryConsent: boolean } }).payload.registryConsent, true);
+});
+
+test("admitted on the spot: straight on to confirm, and the same link signs in as the new member", async () => {
+  const w = world({
+    known: UNKNOWN,
+    doc: communityDoc,
+    manifest: OPEN_MANIFEST,
+    submit: { requestId: "jr-1", verdict: { effect: "allow", with: { role: "member", vmc: {}, roleVac: {} } } },
+  });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const apply = await step(w, { step: "join-manifest" });
+  assert.equal(apply.kind, "join-apply");
+  assert.equal((apply as { admission: string }).admission, "automatic");
+  const confirm = await step(w, { step: "join-submit", did: PERSONAS[0]!.did, attributes: [], registryConsent: false });
+  assert.deepEqual(confirm, {
+    kind: "confirm",
+    communityName: "members.example.org",
+    portalOrigin: PORTAL,
+    identities: [{ entryId: "e-new", did: PERSONAS[0]!.did, label: "members.example.org" }],
+  });
+  assert.equal((w.sent[1]!.doc as { payload: { criterion: string; attributes?: unknown } }).payload.criterion, "zOpen");
+  assert.equal("attributes" in (w.sent[1]!.doc as { payload: object }).payload, false, "none asked, none sent");
+  const enter = await step(w, { step: "claim", entryId: "e-new" });
+  assert.equal(enter.kind, "enter-number");
+  await step(w, { step: "prove", enteredNumber: "47" });
+  assert.deepEqual(w.sent.map((s) => s.type), ["join-manifest", "join-submit", "claim", "prove"]);
+  assert.equal((w.sent[3]!.doc as { payload: { identify: { issuer: string } } }).payload.identify.issuer, PERSONAS[0]!.did);
+  assert.deepEqual(w.unbinds, []);
+});
+
+test("a community asking for evidence the wallet cannot send: said plainly, and nothing about the person is sent", async () => {
+  const manifest = { ...MANIFEST, criteria: MANIFEST.criteria.slice(0, 2) };
+  const w = world({ known: UNKNOWN, doc: communityDoc, manifest });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = await step(w, { step: "join-manifest" });
+  assert.deepEqual(r, {
+    kind: "join-elsewhere",
+    host: "members.example.org",
+    portalOrigin: PORTAL,
+    reason: "needs-more",
+    needs: ["an invitation from the community", "a credential"],
+    displayName: "Example Community",
+  });
+  assert.equal(w.flows.has("f1"), false);
+  assert.equal(w.binds.length, 0);
+  assert.deepEqual(w.sent.map((s) => s.type), ["join-manifest"]);
+});
+
+test("a submission is held to what the community asked, and to the agent's own DIDs", async () => {
+  const bad = [
+    { did: "did:web:not-mine.example", attributes: NAME },
+    { did: PERSONAS[0]!.did, attributes: [] },
+    { did: PERSONAS[0]!.did, attributes: [{ type: "name.display", value: "  " }] },
+    { did: PERSONAS[0]!.did, attributes: [...NAME, { type: "phone.mobile", value: "1" }] },
+  ];
+  for (const b of bad) {
+    const w = world({ known: UNKNOWN, doc: communityDoc });
+    await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+    await step(w, { step: "join-manifest" });
+    const r = await step(w, { step: "join-submit", ...b, registryConsent: false });
+    assert.equal(r.kind, "failed");
+    assert.equal(w.binds.length, 0);
+    assert.deepEqual(w.sent.map((s) => s.type), ["join-manifest"]);
+  }
+});
+
+test("a community refusing the request: its reason, plainly, and the entry is removed", async () => {
+  const cases: Array<[Parameters<typeof world>[0], string, RegExp]> = [
+    [{ submit: { refuse: "vtc/join-requests/submit:notAccepting" } }, "vtc/join-requests/submit:notAccepting", /isn't accepting new members/],
+    [{ submit: { refuse: "vtc/join-requests/submit:attributesMissing" } }, "vtc/join-requests/submit:attributesMissing", /needs details/],
+    [{ submit: { refuse: "rateLimited" } }, "rateLimited", /didn't take the request\. It answered rateLimited/],
+    [{ unreachableOn: "join-submit" }, "network", /couldn't be reached/],
+  ];
+  for (const [opts, code, message] of cases) {
+    const w = world({ known: UNKNOWN, doc: communityDoc, ...opts });
+    await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+    await step(w, { step: "join-manifest" });
+    const r = (await step(w, { step: "join-submit", did: PERSONAS[0]!.did, attributes: NAME, registryConsent: false })) as {
+      kind: string;
+      code: string;
+      message: string;
+      stage?: string;
+    };
+    assert.equal(r.kind, "failed", code);
+    assert.equal(r.code, code);
+    assert.match(r.message, message);
+    assert.equal(r.stage, "join-submit");
+    assert.deepEqual(w.unbinds, ["e-new"], "the entry is removed again");
+    assert.equal(w.flows.has("f1"), false);
+  }
+});
+
+test("a declined request says so, with the community's reason", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, submit: { requestId: "jr-1", verdict: { effect: "deny", with: { code: "policy", reason: "Members only by referral" } } } });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "join-manifest" });
+  const r = await step(w, { step: "join-submit", did: PERSONAS[0]!.did, attributes: NAME, registryConsent: false });
+  assert.deepEqual(r, {
+    kind: "failed",
+    code: SIGN_IN_JOIN_DECLINED,
+    message: "members.example.org declined your request to join: Members only by referral",
+    stage: "join-submit",
+    party: "community",
+    cause: "policy",
+  });
+  assert.deepEqual(w.unbinds, ["e-new"]);
+});
+
+test("a request already open under that identity is pending, and its entry stays", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, submit: { refuse: "vtc/join-requests/submit:requestAlreadyOpen" } });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "join-manifest" });
+  const r = await step(w, { step: "join-submit", did: PERSONAS[0]!.did, attributes: NAME, registryConsent: false });
+  assert.deepEqual(r, { kind: "join-pending", host: "members.example.org", portalOrigin: PORTAL });
+  assert.deepEqual(w.unbinds, []);
+});
+
+test("the agent refusing to sign the request: nothing goes to the community, and the entry is removed", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, signTaskError: vtaRefusal("notSignable") });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "join-manifest" });
+  const r = (await step(w, { step: "join-submit", did: PERSONAS[0]!.did, attributes: NAME, registryConsent: false })) as {
+    code: string;
+    stage: string;
+    party: string;
+  };
+  assert.equal(r.code, "notSignable");
+  assert.equal(r.stage, "join-sign");
+  assert.equal(r.party, "vta");
+  assert.deepEqual(w.sent.map((s) => s.type), ["join-manifest"]);
+  assert.deepEqual(w.unbinds, ["e-new"]);
+});
+
+test("a vault that will not record the identity: nothing is sent as the person", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, bindError: new Error("no signing key could be derived") });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "join-manifest" });
+  const r = (await step(w, { step: "join-submit", did: PERSONAS[0]!.did, attributes: NAME, registryConsent: false })) as { code: string; message: string };
+  assert.equal(r.code, SIGN_IN_JOIN_FAILED);
+  assert.match(r.message, /nothing was sent to it: no signing key could be derived/);
+  assert.deepEqual(w.sent.map((s) => s.type), ["join-manifest"]);
+});
+
+test("a manifest the community did not sign is not believed", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, manifestUnsigned: true });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = (await step(w, { step: "join-manifest" })) as { kind: string; code: string; party?: string };
+  assert.equal(r.kind, "failed");
+  assert.equal(r.code, "auth/oob/reply-invalid");
+  assert.equal(r.party, "wallet");
+  assert.equal(w.vtaCalls.some((c) => c.what === "personas"), false);
+});
+
+test("a manifest the community would not share is said plainly", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, manifest: { refuse: "permissionDenied" } as unknown as Record<string, unknown> });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = (await step(w, { step: "join-manifest" })) as { kind: string; message: string; stage: string };
+  assert.equal(r.kind, "failed");
+  assert.match(r.message, /doesn't share how to join/);
+  assert.equal(r.stage, "join-manifest");
 });

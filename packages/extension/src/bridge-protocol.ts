@@ -2463,6 +2463,18 @@ export type SignInStep =
    *  of the `join-hosting` candidates). Records it in the vault the way the
    *  legacy first-use prompt does, then the flow goes on to `confirm`. */
   | { step: "join"; did: string }
+  /** Unknown community (VTC): the person asked what it requires. The wallet
+   *  fetches its join manifest as a throwaway key, saying nothing of who is
+   *  asking. */
+  | { step: "join-manifest" }
+  /** Unknown community: the person sent a join request as `did` (one of the
+   *  `join-apply` candidates), with their answers to what it asked. */
+  | {
+      step: "join-submit";
+      did: string;
+      attributes: Array<{ type: string; value: string }>;
+      registryConsent: boolean;
+    }
   | { step: "claim"; entryId: string }
   | { step: "prove"; enteredNumber: string }
   | { step: "grant-digest" }
@@ -2524,6 +2536,17 @@ export interface SignInIdentityView {
 export interface SignInPersonaView {
   did: string;
   contextId: string;
+  /** Labels of the vault entries this DID already signs in to, so the person
+   *  can see when one identity would link two communities. */
+  usedAt?: string[];
+}
+
+/** One attribute a community asks an applicant for. Self-asserted. */
+export interface SignInJoinAttributeView {
+  type: string;
+  required: boolean;
+  /** The community's reason, in its words. */
+  purpose?: string;
 }
 
 /** What the window shows. Every variant is a screen. */
@@ -2539,6 +2562,37 @@ export type SignInStepResult =
    *  service (`WebVHHosting`): "Use <host> to host your DIDs?". Nothing has
    *  been sent to it. `identities` are the DIDs the member's agent hosts. */
   | { kind: "join-hosting"; host: string; portalOrigin: string; identities: SignInPersonaView[] }
+  /** An unknown site whose verified DID document says it is a community
+   *  (`VTCRest`): "Join <host>?". Nothing has been sent to it. */
+  | { kind: "join-community"; host: string; portalOrigin: string }
+  /** The community's join manifest, as far as this wallet can apply under it.
+   *  Only the anonymous manifest request has been sent. `displayName` is the
+   *  community's own name for itself (unverified). */
+  | {
+      kind: "join-apply";
+      host: string;
+      portalOrigin: string;
+      displayName?: string;
+      /** `automatic`: admitted on the spot. `review`: an administrator decides. */
+      admission: "automatic" | "review";
+      attributes: SignInJoinAttributeView[];
+      identities: SignInPersonaView[];
+    }
+  /** The community asks for evidence this wallet cannot provide (a
+   *  credential, an invitation, vetting), or takes no members. The flow has
+   *  ended; nothing about the person was sent. */
+  | {
+      kind: "join-elsewhere";
+      host: string;
+      portalOrigin: string;
+      reason: "not-accepting" | "needs-more";
+      needs: string[];
+      displayName?: string;
+    }
+  /** The request was sent and is waiting on the community (`refer`), or it
+   *  wants more evidence (`requestMore`, `needs`). The flow has ended; no
+   *  sign-in document was sent. */
+  | { kind: "join-pending"; host: string; portalOrigin: string; needs?: string[] }
   /** C3 step 5: "Sign in to <name> at <portal origin>?" */
   | { kind: "confirm"; communityName: string; portalOrigin: string; identities: SignInIdentityView[] }
   /** After the claim: type the number. `nameMismatch` is the community's own
@@ -2602,7 +2656,7 @@ export type SignInStepResult =
  *  checking a domain-linked community's website (its DID Configuration);
  *  `identify` and `grant` are the member's VTA signing; `claim`, `prove` and
  *  `respond` are the exchanges with the community. */
-export type SignInFailureStage = "domain-linkage" | "join" | "claim" | "identify" | "prove" | "grant-digest" | "enrol-uv" | "grant" | "respond";
+export type SignInFailureStage = "domain-linkage" | "join" | "join-manifest" | "join-sign" | "join-submit" | "claim" | "identify" | "prove" | "grant-digest" | "enrol-uv" | "grant" | "respond";
 export type SignInFailureParty = "community" | "vta" | "wallet";
 
 export type RuntimeSignInStepResponse =

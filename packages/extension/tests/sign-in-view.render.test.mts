@@ -590,7 +590,7 @@ test("an agent with no DIDs cannot join, and is told why", async () => {
   await screen.unmount();
 });
 
-test("a VTC the wallet does not know: not one of your communities, at its verified sign-in page", async () => {
+test("a site that is neither a community nor a DID host: not one of your communities, at its verified sign-in page", async () => {
   const { send } = script({
     prepare: { kind: "not-member", contactLabel: "members.example.org", portalOrigin: PORTAL },
   });
@@ -632,5 +632,120 @@ test("not on the access list: the DID to send the operator, with a Copy button",
   await screen.settle();
   assert.deepEqual(copied, [WORK]);
   assert.equal(screen.container.querySelector('[data-testid="copy-did"]')!.textContent, "Copied");
+  await screen.unmount();
+});
+
+// ── An unknown community: joining ───────────────────────────────────────────
+
+const VTC_JOIN: Record<string, SignInStepResult> = {
+  prepare: { kind: "join-community", host: "members.example.org", portalOrigin: PORTAL },
+  "join-manifest": {
+    kind: "join-apply",
+    host: "members.example.org",
+    portalOrigin: PORTAL,
+    displayName: "Example Community",
+    admission: "review",
+    attributes: [
+      { type: "name.display", required: true, purpose: "So members know who you are" },
+      { type: "address.country", required: false },
+    ],
+    identities: [
+      { did: BOB, contextId: "personal", usedAt: ["Other Community"] },
+      { did: WORK, contextId: "work" },
+    ],
+  },
+  "join-submit": { kind: "join-pending", host: "members.example.org", portalOrigin: PORTAL },
+  cancel: { kind: "done", decision: "decline", status: "cancelled" },
+};
+
+test("an unknown community: join offer, what it asks, the request, and Request sent", async () => {
+  const { steps, send } = script(VTC_JOIN);
+  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }));
+  await screen.settle();
+  assert.match(screen.text(), /Join members\.example\.org\?/);
+  assert.match(screen.text(), /Nothing has been sent to it/);
+  assert.equal(screen.container.querySelector('[data-testid="portal"]')!.textContent, PORTAL);
+  await screen.click(screen.container.querySelector('[data-testid="join-manifest"]')!);
+  assert.deepEqual(steps[1], { step: "join-manifest" });
+
+  assert.match(screen.text(), /Ask to join members\.example\.org/);
+  assert.equal(screen.container.querySelector('[data-testid="display-name"]')!.textContent, "Example Community");
+  assert.match(screen.text(), /not checked/);
+  assert.match(screen.text(), /An administrator reviews each request/);
+  assert.match(screen.text(), /Also used at Other Community/);
+  const submit = screen.container.querySelector<HTMLButtonElement>('[data-testid="join-submit"]')!;
+  assert.equal(submit.disabled, true, "no identity chosen, required field empty");
+  const radios = screen.container.querySelectorAll<HTMLInputElement>('input[name="applicant"]');
+  await screen.click(radios[1]!);
+  assert.equal(submit.disabled, true, "the required field is still empty");
+  await screen.type(screen.container.querySelector('[data-testid="attribute-name.display"]')!, " Ada ");
+  assert.equal(submit.disabled, false);
+  const consent = screen.container.querySelector<HTMLInputElement>('[data-testid="registry-consent"]')!;
+  assert.equal(consent.checked, false, "not listed unless the person says so");
+  await screen.click(submit);
+  assert.deepEqual(steps[2], {
+    step: "join-submit",
+    did: WORK,
+    attributes: [{ type: "name.display", value: "Ada" }],
+    registryConsent: false,
+  });
+  assert.match(screen.text(), /Request sent/);
+  assert.match(screen.text(), /You can sign in once members\.example\.org approves it/);
+  assert.equal(steps.length, 3, "nothing else is sent");
+  await screen.unmount();
+});
+
+test("Not now on the community offer cancels and closes", async () => {
+  const { steps, send } = script(VTC_JOIN);
+  let closed = 0;
+  const screen = await render(h(SignInView, { flowId: "f", send, close: () => void closed++ }));
+  await screen.settle();
+  await screen.click(screen.container.querySelector('[data-testid="decline"]')!);
+  await screen.settle();
+  assert.deepEqual(steps.map((s) => s.step), ["prepare", "cancel"]);
+  assert.equal(closed, 1);
+  await screen.unmount();
+});
+
+test("a community asking for what the wallet can't send says what, and only closes", async () => {
+  const { send } = script({
+    ...VTC_JOIN,
+    "join-manifest": {
+      kind: "join-elsewhere",
+      host: "members.example.org",
+      portalOrigin: PORTAL,
+      reason: "needs-more",
+      needs: ["an invitation from the community", "Hold a member credential"],
+    },
+  });
+  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
+  await screen.settle();
+  await screen.click(screen.container.querySelector('[data-testid="join-manifest"]')!);
+  assert.match(screen.text(), /members\.example\.org needs more than your wallet can send/);
+  assert.match(screen.container.querySelector('[data-testid="join-needs"]')!.textContent!, /an invitation from the community.*Hold a member credential/);
+  assert.ok(screen.container.querySelector('[data-testid="close"]'));
+  assert.equal(screen.container.querySelector('[data-testid="join-submit"]'), null);
+  await screen.unmount();
+});
+
+test("a join request the community refused shows its message plainly", async () => {
+  const { send } = script({
+    ...VTC_JOIN,
+    "join-manifest": { ...(VTC_JOIN["join-manifest"] as Extract<SignInStepResult, { kind: "join-apply" }>), attributes: [] },
+    "join-submit": {
+      kind: "failed",
+      code: "vtc/join-requests/submit:notAccepting",
+      message: "members.example.org isn't accepting new members right now.",
+      stage: "join-submit",
+      party: "community",
+    },
+  });
+  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
+  await screen.settle();
+  await screen.click(screen.container.querySelector('[data-testid="join-manifest"]')!);
+  await screen.click(screen.container.querySelectorAll<HTMLInputElement>('input[name="applicant"]')[0]!);
+  await screen.click(screen.container.querySelector('[data-testid="join-submit"]')!);
+  assert.match(screen.text(), /isn't accepting new members right now/);
+  assert.match(screen.text(), /sending the join request to the community/);
   await screen.unmount();
 });

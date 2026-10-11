@@ -39,10 +39,32 @@
 //     goes straight on to `confirm` for the same link. The service admits only
 //     DIDs its operator put on its access list, so a `notAuthorized` to the
 //     proof is shown as exactly that, with the DID to send them.
-//   - anything else (a VTC, `VTCRest`): not one of your communities. Joining
-//     a VTC is its own application process, and this window does not run it.
+//   - `VTCRest`: a community (VTC). "Join <host>?" — and still nothing is sent
+//     until the person continues. Then, in order:
+//       join-manifest  the community's join manifest, asked for as a throwaway
+//                      `did:key`: what it admits under and what it asks
+//                      applicants to say. Nothing about the person is sent.
+//                      A community that asks for evidence this wallet cannot
+//                      assemble (a credential, an invitation, vetting) is
+//                      said so plainly (`join-elsewhere`) and the flow ends.
+//       join-submit    the person chose an identity and answered. The vault
+//                      entry is recorded first, in the shape every member's
+//                      has (`bindProfile`, as for a DID hosting service),
+//                      because the VTA signs only as a vault entry's principal
+//                      and the community reads the applicant from that
+//                      signature. Then `vtc/join-requests/submit/0.3`:
+//                        allow        admitted: straight on to `confirm` for
+//                                     the same link.
+//                        refer /      pending (`join-pending`): the entry stays,
+//                        requestMore  as the request is open under that DID;
+//                                     the flow ends and no sign-in document is
+//                                     sent.
+//                        deny, or a   the entry is removed again and the
+//                        refusal      reason is shown.
+//   - anything else: not one of your communities.
 //
-// Declining or closing at that point sends nothing to the site.
+// Declining or closing at any point before the request is sent sends nothing
+// about the person to the site.
 //
 // The community's *own* name for itself is never what the member is asked to
 // trust: the confirm screen shows the wallet's record, and a different name in
@@ -94,6 +116,14 @@ import {
   networkLine,
   sessionAudienceOf,
   verifyDomainLinkage,
+  postCommunityTask,
+  buildJoinManifestRequest,
+  checkJoinManifest,
+  planJoin,
+  buildJoinSubmit,
+  joinOutcomeOf,
+  VTC_REST_SERVICE_TYPE,
+  type JoinPlan,
   OobRefusedError,
   OOB_REPLY_INVALID,
   type OobDocument,
@@ -106,6 +136,7 @@ import {
 import type {
   SignInFailureParty,
   SignInFailureStage,
+  SignInPersonaView,
   SignInIdentityView,
   SignInStep,
   SignInStepResult,
@@ -161,6 +192,11 @@ export interface SignInVta {
     did: string;
     rpDid: string;
   }): Promise<{ entryId: string; label: string }>;
+  /** `vault/sign-trust-task` for any other document the member sends as the
+   *  entry's principal (a join request). Returns the document with its proof. */
+  signTask(entryId: string, unsigned: OobDocument): Promise<unknown>;
+  /** Remove an entry this flow recorded and no longer needs (`vault/delete`). */
+  unbindIdentity(entryId: string): Promise<void>;
   /** `device/heartbeat` ext `org.openvtc.uv-key`, over the device's session. */
   enrolUvKey(enrolment: WebauthnUvKeyEnrolment): Promise<void>;
   /**
@@ -199,22 +235,25 @@ export interface SignInFlowDeps {
 type Phase = "joining" | "prepared" | "claimed" | "identified" | "ended";
 
 /** What a verified DID document says the site is. */
-export type SiteKind = "did-hosting" | "other";
+export type SiteKind = "did-hosting" | "community" | "other";
 
 /** The service type a DID hosting service publishes (affinidi-webvh-service
  *  `add_webvh_hosting_service`, the VTA's `did-host-http` templates). It is
  *  also what a VTA's `servers add` reads to accept a server as a DID host. */
 export const WEBVH_HOSTING_SERVICE_TYPE = "WebVHHosting";
 
-/** Read from the **verified** document, matched on `type` (VTI-LNK-053). */
+/** Read from the **verified** document, matched on `type` (VTI-LNK-053). A
+ *  document that publishes both is a DID hosting service first. */
 export function siteKindOf(doc: unknown): SiteKind {
   const services = (doc as { service?: unknown })?.service;
   if (!Array.isArray(services)) return "other";
-  const hosting = services.some((s) => {
-    const t = (s as { type?: unknown } | null)?.type;
-    return t === WEBVH_HOSTING_SERVICE_TYPE || (Array.isArray(t) && t.includes(WEBVH_HOSTING_SERVICE_TYPE));
-  });
-  return hosting ? "did-hosting" : "other";
+  const has = (wanted: string) =>
+    services.some((s) => {
+      const t = (s as { type?: unknown } | null)?.type;
+      return t === wanted || (Array.isArray(t) && t.includes(wanted));
+    });
+  if (has(WEBVH_HOSTING_SERVICE_TYPE)) return "did-hosting";
+  return has(VTC_REST_SERVICE_TYPE) ? "community" : "other";
 }
 
 /** The host of an origin, for a sentence ("Use <host> …"). */
@@ -224,6 +263,18 @@ function hostOf(origin: string): string {
   } catch {
     return origin;
   }
+}
+
+/** A DID the agent hosts, with the sites it already signs in to. */
+function personaView(p: SignInPersona, entries: readonly SignInVaultEntry[]): SignInPersonaView {
+  const usedAt = [
+    ...new Set(
+      entries
+        .filter((e) => e.secretKind === "didSelfIssued" && e.principalDid === p.did)
+        .map((e) => e.label),
+    ),
+  ];
+  return { did: p.did, contextId: p.contextId, ...(usedAt.length ? { usedAt } : {}) };
 }
 
 /** The last segment of a refusal code: `auth/oob/claim:alreadyClaimed` →
@@ -250,6 +301,11 @@ interface Flow {
   linked?: boolean;
   /** The agent's DIDs, while `joining`. */
   personas?: SignInPersona[];
+  /** Every `didSelfIssued` entry, read at `prepare`: which sites a DID is
+   *  already used at, for the community join offer. */
+  entries?: SignInVaultEntry[];
+  /** A community's join manifest, as far as the wallet can apply under it. */
+  joinPlan?: Extract<JoinPlan, { ok: true }>;
   kA?: SigningIdentity;
   entry?: SignInIdentityView;
   step1?: OobStep1;
@@ -270,6 +326,20 @@ export const ENDED_MESSAGE = "Refresh the code on the website and try again.";
 
 /** Stable code: recording a DID hosting service in the vault failed. */
 export const SIGN_IN_JOIN_FAILED = "sign-in/join-failed";
+
+/** Stable code: the community decided against a join request (`deny`). */
+export const SIGN_IN_JOIN_DECLINED = "sign-in/join-declined";
+
+/** What the person is told for a community's refusal of a join request, by
+ *  the code's stable name (C9: the segment after the family). */
+export const JOIN_REFUSAL_MESSAGES: Readonly<Record<string, (host: string) => string>> = {
+  notAccepting: (host) => `${host} isn't accepting new members right now.`,
+  attributesMissing: (host) => `${host} needs details this request didn't include. Try again and fill in every required field.`,
+  attributesUnrequested: (host) => `${host} didn't ask for some of the details sent. Try again.`,
+  criterionUnknown: (host) => `${host} changed what it requires to join. Try again.`,
+  presentationInvalid: (host) => `${host} didn't accept the request as sent.`,
+  permissionDenied: (host) => `${host} doesn't share how to join with people who aren't members.`,
+};
 
 /** Stable code, and the spec's reason: a domain-linked contact's portal
  *  origin is not linked to its DID (outcome `invalid`). Nothing was sent. */
@@ -349,6 +419,10 @@ export class SignInFlows {
       switch (req.step) {
         case "join":
           return await this.join(req.flowId, flow, req.did);
+        case "join-manifest":
+          return await this.joinManifest(req.flowId, flow);
+        case "join-submit":
+          return await this.joinSubmit(req.flowId, flow, req);
         case "claim":
           return await this.claim(req.flowId, flow, req.entryId);
         case "prove":
@@ -445,6 +519,24 @@ export class SignInFlows {
     const kind = siteKindOf(resolved.doc);
     if (identities.length === 0) {
       const { portalOrigin } = selected.services;
+      if (kind === "community") {
+        // A community: offer to join it. Nothing is sent to it yet.
+        const host = hostOf(portalOrigin);
+        this.flows.set(flowId, {
+          phase: "joining",
+          link,
+          vta,
+          vtcDid,
+          vtcDocument: resolved.doc,
+          services: selected.services,
+          communityName: host,
+          identities: [],
+          kind,
+          route: resolved.route,
+          entries,
+        });
+        return { kind: "join-community", host, portalOrigin };
+      }
       if (kind !== "did-hosting") {
         const contactLabel = contactDomainLabel(link.from, methods);
         return {
@@ -506,7 +598,7 @@ export class SignInFlows {
     flow: Flow,
     did: string,
   ): Promise<SignInStepResult> {
-    if (flow.phase !== "joining") throw outOfOrder();
+    if (flow.phase !== "joining" || flow.kind !== "did-hosting") throw outOfOrder();
     if (!flow.personas?.some((p) => p.did === did)) throw outOfOrder();
     // The person agreed: a domain-linked site is held to its DID
     // Configuration before anything is recorded or sent.
@@ -548,6 +640,216 @@ export class SignInFlows {
       communityName: flow.communityName,
       portalOrigin: flow.services.portalOrigin,
       identities: flow.identities,
+    };
+  }
+
+  // ── join (an unknown community) ─────────────────────────────────────────────
+
+  /** The person asked what the community requires. The manifest is asked for
+   *  as a throwaway key: the community learns nothing of who is looking. */
+  private async joinManifest(
+    flowId: string,
+    flow: Flow,
+  ): Promise<SignInStepResult> {
+    if (flow.phase !== "joining" || flow.kind !== "community" || flow.joinPlan)
+      throw outOfOrder();
+    const unlinked = await this.confirmLinkage(flowId, flow);
+    if (unlinked) return unlinked;
+    const host = flow.communityName;
+    const { portalOrigin } = flow.services;
+    flow.at = "join-manifest";
+    const key = newApproverKey();
+    let plan: JoinPlan;
+    try {
+      const reply = await sendOob(
+        key,
+        buildJoinManifestRequest(key.did, flow.vtcDid),
+        this.sendOpts(flow),
+        "vtc/join-requests/manifest",
+        "authentication",
+      );
+      plan = planJoin(checkJoinManifest(reply.payload, flow.vtcDid));
+    } catch (err) {
+      return this.joinFailed(flowId, flow, err, `Your wallet couldn't ask ${host} how to join`);
+    } finally {
+      key.privateKey.fill(0);
+    }
+    const named = plan.displayName !== undefined ? { displayName: plan.displayName } : {};
+    if (!plan.ok) {
+      this.end(flow);
+      this.flows.delete(flowId);
+      return { kind: "join-elsewhere", host, portalOrigin, reason: plan.reason, needs: plan.needs, ...named };
+    }
+    flow.joinPlan = plan;
+    flow.personas = await flow.vta.listPersonas();
+    return {
+      kind: "join-apply",
+      host,
+      portalOrigin,
+      ...named,
+      admission: plan.admission,
+      attributes: plan.requestedAttributes,
+      identities: flow.personas.map((p) => personaView(p, flow.entries ?? [])),
+    };
+  }
+
+  /** The person sent the request, as `did`, with their answers. */
+  private async joinSubmit(
+    flowId: string,
+    flow: Flow,
+    req: {
+      did: string;
+      attributes: Array<{ type: string; value: string }>;
+      registryConsent: boolean;
+    },
+  ): Promise<SignInStepResult> {
+    const plan = flow.joinPlan;
+    if (flow.phase !== "joining" || flow.kind !== "community" || !plan) throw outOfOrder();
+    if (!flow.personas?.some((p) => p.did === req.did)) throw outOfOrder();
+    if (typeof req.registryConsent !== "boolean") throw outOfOrder();
+    // Only what the community asked for, and every required one, non-empty.
+    const asked = new Map(plan.requestedAttributes.map((a) => [a.type, a]));
+    const answers: Array<{ type: string; value: string }> = [];
+    for (const a of Array.isArray(req.attributes) ? req.attributes : []) {
+      if (!asked.has(a?.type) || typeof a.value !== "string") throw outOfOrder();
+      if (answers.some((x) => x.type === a.type)) throw outOfOrder();
+      const value = a.value.trim();
+      if (value !== "") answers.push({ type: a.type, value });
+    }
+    for (const a of plan.requestedAttributes) {
+      if (a.required && !answers.some((x) => x.type === a.type)) throw outOfOrder();
+    }
+    const host = flow.communityName;
+    const { portalOrigin } = flow.services;
+
+    // The entry first: the VTA signs only as a vault entry's principal, and
+    // the community takes the applicant from that signature.
+    flow.at = "join";
+    let bound: { entryId: string; label: string };
+    try {
+      bound = await flow.vta.bindIdentity({ origin: portalOrigin, did: req.did, rpDid: flow.vtcDid });
+    } catch (err) {
+      this.end(flow);
+      this.flows.delete(flowId);
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        kind: "failed",
+        code: SIGN_IN_JOIN_FAILED,
+        message: `Your wallet couldn't record ${host}, so nothing was sent to it: ${message}`,
+        stage: "join",
+      };
+    }
+    const unbind = () => flow.vta.unbindIdentity(bound.entryId).catch(() => undefined);
+
+    let outcome: ReturnType<typeof joinOutcomeOf>;
+    try {
+      const unsigned = buildJoinSubmit(req.did, flow.vtcDid, {
+        criterion: plan.criterion,
+        attributes: answers,
+        registryConsent: req.registryConsent,
+      });
+      flow.at = "join-sign";
+      const signed = assertSignedAsSent(unsigned, await flow.vta.signTask(bound.entryId, unsigned), "authentication");
+      flow.at = "join-submit";
+      const reply = await postCommunityTask(signed, this.sendOpts(flow), "vtc/join-requests/submit", "authentication");
+      outcome = joinOutcomeOf(reply.payload);
+    } catch (err) {
+      // A request already open under this DID is a pending one: keep the
+      // entry it is open under.
+      if (err instanceof OobRefusedError && oobCode(err.code) === "requestAlreadyOpen") {
+        this.end(flow);
+        this.flows.delete(flowId);
+        return { kind: "join-pending", host, portalOrigin };
+      }
+      await unbind();
+      return this.joinFailed(flowId, flow, err, `${host} didn't take the request`);
+    }
+
+    if (outcome.kind === "admitted") {
+      // A member now: on to the ordinary confirm (C3 step 5) for the same link.
+      const identity: SignInIdentityView = { entryId: bound.entryId, did: req.did, label: bound.label };
+      flow.identities = [identity];
+      flow.communityName = bound.label;
+      delete flow.personas;
+      delete flow.joinPlan;
+      delete flow.entries;
+      flow.phase = "prepared";
+      return {
+        kind: "confirm",
+        communityName: flow.communityName,
+        portalOrigin,
+        identities: flow.identities,
+      };
+    }
+    this.end(flow);
+    this.flows.delete(flowId);
+    if (outcome.kind === "pending") {
+      return { kind: "join-pending", host, portalOrigin, ...(outcome.needs ? { needs: outcome.needs } : {}) };
+    }
+    await unbind();
+    return {
+      kind: "failed",
+      code: SIGN_IN_JOIN_DECLINED,
+      message: outcome.reason
+        ? `${host} declined your request to join: ${outcome.reason}`
+        : `${host} declined your request to join.`,
+      stage: "join-submit",
+      party: "community",
+      ...(outcome.code ? { cause: safeCode(outcome.code) ?? "deny" } : {}),
+    };
+  }
+
+  /** A join step that failed: said plainly, with where and who, and the flow
+   *  ends. Nothing further is sent. */
+  private joinFailed(
+    flowId: string,
+    flow: Flow,
+    err: unknown,
+    lead: string,
+  ): SignInStepResult {
+    const where = failureWhere(flow.at, err);
+    this.end(flow);
+    this.flows.delete(flowId);
+    const host = flow.communityName;
+    if (err instanceof OobRefusedError) {
+      const local = oobCode(err.code);
+      if (UNREACHED.has(err.code))
+        return {
+          kind: "failed",
+          code: err.code,
+          message: `${lead}: it couldn't be reached. Check your connection and try again.`,
+          ...where,
+        };
+      const known = JOIN_REFUSAL_MESSAGES[local];
+      return {
+        kind: "failed",
+        code: err.code,
+        message: known ? known(host) : `${lead}. It answered ${err.code}.`,
+        ...where,
+      };
+    }
+    const vtaCode = vaultOobRefusal(err) ?? refusalCode(err);
+    if (vtaCode && flow.at === "join-sign")
+      return {
+        kind: "failed",
+        code: vtaCode,
+        message: `${lead}: your agent didn't sign the request (${vtaCode}).`,
+        ...where,
+      };
+    const code =
+      (err as { code?: unknown })?.code === OOB_REPLY_INVALID
+        ? OOB_REPLY_INVALID
+        : SIGN_IN_JOIN_FAILED;
+    const cause = code === SIGN_IN_JOIN_FAILED ? errorCause(err) : undefined;
+    return {
+      kind: "failed",
+      code,
+      message:
+        code === OOB_REPLY_INVALID
+          ? `${lead}: its answer didn't check out, so your wallet stopped.`
+          : `${lead}: ${err instanceof Error ? err.message : String(err)}`,
+      ...where,
+      ...(cause ? { cause } : {}),
     };
   }
 
@@ -899,6 +1201,7 @@ const UNREACHED: ReadonlySet<string> = new Set(["network", "timeout"]);
 
 /** The exchanges the member's own VTA answers; the rest go to the community. */
 const VTA_STAGES: ReadonlySet<SignInFailureStage> = new Set([
+  "join-sign",
   "identify",
   "grant",
   "enrol-uv",
