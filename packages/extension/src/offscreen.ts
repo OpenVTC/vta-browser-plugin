@@ -223,6 +223,7 @@ import {
 } from "@openvtc/pnm-core";
 import { describeThisDevice } from "./device-name.js";
 import { relayFailure } from "./relay-failure.js";
+import { requestFailureLog } from "./request-failure-log.js";
 import { chooseTrustTaskSigner, needsVault, SignAsUnavailableError } from "./sign-identity.js";
 import { didcommLoginRefusal, didcommLoginResult } from "./didcomm-login.js";
 import { isLensTask, knownRelays, mayOperateMediator } from "./mediator-standing.js";
@@ -270,7 +271,16 @@ void (async function ensurePersistentStorage(): Promise<void> {
   }
 })();
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  // Every failed reply is logged on its way out, whichever handler built it.
+  // One wrapper rather than 33 catch sites, so a handler added later cannot
+  // forget. See `request-failure-log.ts`.
+  const startedAt = performance.now();
+  const sendResponse = (response?: unknown): void => {
+    const line = requestFailureLog(message, response, performance.now() - startedAt);
+    if (line) console.warn(...line);
+    respond(response);
+  };
   // Defence-in-depth sender check — same rationale as the
   // background listener (M4 from the May 2026 security review).
   // MV3 isolation enforces this at the manifest layer; this
