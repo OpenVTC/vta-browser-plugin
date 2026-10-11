@@ -140,6 +140,15 @@ test("example: a did:key contact is from-not-allowed for sign-in", () => {
   refused(read(withFragment(fields({ _from: didKey }))), "from-not-allowed", "invalid");
 });
 
+test("from-not-allowed names the contact's DID method, and nothing else of the contact", () => {
+  const didKey = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+  const r = read(withFragment(fields({ _from: didKey })));
+  assert.equal(r.method, "did:key");
+  assert.equal(JSON.stringify(r).includes(didKey), false);
+  // Other refusals carry no method.
+  assert.equal("method" in read(withFragment(fields({ _type: "/vti//flow/sign-in/0.1" }))), false);
+});
+
 test("example: _type with an empty segment is bad-type", () => {
   refused(read(withFragment(fields({ _type: "/vti//flow/sign-in/0.1" }))), "bad-type", "invalid");
 });

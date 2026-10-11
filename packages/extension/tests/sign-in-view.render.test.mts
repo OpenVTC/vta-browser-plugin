@@ -269,6 +269,151 @@ test("a refused link shows only the message", async () => {
   await screen.unmount();
 });
 
+test("a refused link field shows no Details", async () => {
+  const { send } = script({
+    prepare: { kind: "refused", outcome: "invalid", message: "This code can't be used." },
+  });
+  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
+  await screen.settle();
+  assert.match(screen.text(), /Code not accepted/);
+  assert.equal(screen.container.querySelector('[data-testid="failure-details"]'), null);
+  await screen.unmount();
+});
+
+const SERVICE_DID = "did:webvh:QmService:members.example.org";
+const INVALID = "This code can't be used.";
+
+/** Each refusal about the service's DID document or the page: the headline and
+ *  message stay the outcome's, and Details says what is wrong, with the DID. */
+const DOCUMENT_REFUSALS: Array<{
+  name: string;
+  result: SignInStepResult;
+  title: RegExp;
+  details: string[];
+  did?: string;
+}> = [
+  {
+    name: "no SignInPortal service",
+    result: {
+      kind: "refused",
+      outcome: "invalid",
+      message: INVALID,
+      detail: { reason: "no-portal-service", did: SERVICE_DID, service: "SignInPortal" },
+    },
+    title: /Code not accepted/,
+    details: [
+      "no-portal-service",
+      "This service's DID document doesn't list a sign-in portal (a SignInPortal service). Ask its operator to add one.",
+    ],
+    did: SERVICE_DID,
+  },
+  {
+    name: "a SignInPortal service with an unusable endpoint",
+    result: {
+      kind: "refused",
+      outcome: "invalid",
+      message: INVALID,
+      detail: { reason: "no-portal-service", did: SERVICE_DID, service: "SignInPortal", unusable: true },
+    },
+    title: /Code not accepted/,
+    details: ["lists a sign-in portal (a SignInPortal service), but its endpoint isn't usable", "Ask its operator to fix it."],
+    did: SERVICE_DID,
+  },
+  {
+    name: "no TrustTaskHTTPS service",
+    result: {
+      kind: "refused",
+      outcome: "unreachable",
+      message: "This service can't be reached from your wallet.",
+      detail: { reason: "no-common-transport", did: SERVICE_DID, service: "TrustTaskHTTPS" },
+    },
+    title: /Community unreachable/,
+    details: [
+      "no-common-transport",
+      "doesn't list a Trust-Task endpoint (a TrustTaskHTTPS service), so the wallet has nowhere to send the sign-in. Ask its operator to add one.",
+    ],
+    did: SERVICE_DID,
+  },
+  {
+    name: "wrong origin",
+    result: {
+      kind: "refused",
+      outcome: "invalid",
+      message: INVALID,
+      detail: { reason: "wrong-origin", did: SERVICE_DID, pageOrigin: "https://a.example", portalOrigin: "https://b.example" },
+    },
+    title: /Code not accepted/,
+    details: ["wrong-origin", "This page (https://a.example) isn't the service's sign-in page (https://b.example)."],
+    did: SERVICE_DID,
+  },
+  {
+    name: "a DID document that did not verify",
+    result: {
+      kind: "refused",
+      outcome: "invalid",
+      message: INVALID,
+      detail: { reason: "did-document-unverified", did: SERVICE_DID },
+    },
+    title: /Code not accepted/,
+    details: ["did-document-unverified", "The wallet couldn't fetch or verify this service's DID document."],
+    did: SERVICE_DID,
+  },
+  {
+    name: "a contact method sign-in does not accept",
+    result: {
+      kind: "refused",
+      outcome: "invalid",
+      message: INVALID,
+      detail: { reason: "from-not-allowed", method: "did:key" },
+    },
+    title: /Code not accepted/,
+    details: ["from-not-allowed", "Sign-in doesn't accept a did:key DID as the service's identifier."],
+  },
+  {
+    name: "a DID method this wallet cannot resolve",
+    result: {
+      kind: "refused",
+      outcome: "update",
+      message: "This code needs a newer version of the app.",
+      detail: { reason: "unsupported-vid", method: "did:example" },
+    },
+    title: /Update needed/,
+    details: ["This wallet can't resolve did:example DIDs yet"],
+  },
+  {
+    name: "a website not linked to the DID",
+    result: {
+      kind: "failed",
+      code: "domain-not-linked",
+      message: "This code can't be used. Your wallet couldn't confirm that this website belongs to the community that made the code.",
+      stage: "domain-linkage",
+      detail: { reason: "domain-not-linked", did: SERVICE_DID, portalOrigin: "https://portal.example.org" },
+    },
+    title: /Sign-in stopped/,
+    details: ["The website (https://portal.example.org) doesn't publish a DID Configuration", "/.well-known/did-configuration.json"],
+    did: SERVICE_DID,
+  },
+];
+
+for (const c of DOCUMENT_REFUSALS) {
+  test(`Details for ${c.name} say what is wrong, under the unchanged message`, async () => {
+    const { send } = script({ prepare: c.result });
+    const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
+    await screen.settle();
+    assert.match(screen.text(), c.title);
+    assert.equal(
+      screen.container.querySelector('[data-testid="message"]')!.textContent,
+      (c.result as { message: string }).message,
+    );
+    const details = screen.container.querySelector('[data-testid="failure-details"]')!.textContent!.replace(/\s+/g, " ");
+    for (const text of c.details) assert.ok(details.includes(text), `Details has ${JSON.stringify(text)}: ${details}`);
+    const did = screen.container.querySelector('[data-testid="details-did"]');
+    if (c.did) assert.equal(did!.textContent, c.did, "the DID is shown whole, as selectable text");
+    else assert.equal(did, null);
+    await screen.unmount();
+  });
+}
+
 // ── Layout, keyboard, and the words around a failure ─────────────────────────
 
 const NOW = 1_791_460_900_000;

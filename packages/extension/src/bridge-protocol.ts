@@ -2551,8 +2551,15 @@ export interface SignInJoinAttributeView {
 
 /** What the window shows. Every variant is a screen. */
 export type SignInStepResult =
-  /** A refusal, with the VTI-LNK-021 message and nothing else about why. */
-  | { kind: "refused"; outcome: "update" | "expired" | "unreachable" | "invalid"; message: string }
+  /** A refusal, with the VTI-LNK-021 message. A refusal about the contact's
+   *  DID document or the page (not a link field) also carries `detail`, for
+   *  the window's "Details" line only. */
+  | {
+      kind: "refused";
+      outcome: "update" | "expired" | "unreachable" | "invalid";
+      message: string;
+      detail?: SignInRefusalDetail;
+    }
   /** VTI-LNK-101: not one of this wallet's communities. Nothing was sent to
    *  it. `contactLabel` is the unverified domain label (VTI-LNK-050);
    *  `portalOrigin` is present when its DID document verified and the link was
@@ -2650,7 +2657,37 @@ export type SignInStepResult =
        *  the member's DID is not on its access list yet. The window shows the
        *  DID to send to the service's operator. */
       unlisted?: { host: string; did: string };
+      /** What the wallet checked, for `domain-not-linked`. */
+      detail?: SignInRefusalDetail;
     };
+
+/** Why a sign-in was refused, when the cause is the contact's DID document or
+ *  the page the code was on rather than a link field (VTI-LNK-021 forbids
+ *  naming a failing link field). Shown in the window's "Details" so an
+ *  operator can fix it; never logged and never in the message (VTI-LNK-073).
+ *  - `did-document-unverified`: `did` could not be resolved or verified.
+ *  - `unsupported-vid`: no resolver for `method`.
+ *  - `no-portal-service` / `no-common-transport`: `service` is missing from
+ *    `did`'s document, or listed with no usable endpoint (`unusable`).
+ *  - `wrong-origin`: `pageOrigin` is not `portalOrigin`.
+ *  - `from-not-allowed`: `method` is not accepted for sign-in.
+ *  - `domain-not-linked`: `portalOrigin` is not linked to `did`. */
+export interface SignInRefusalDetail {
+  reason:
+    | "did-document-unverified"
+    | "unsupported-vid"
+    | "no-portal-service"
+    | "no-common-transport"
+    | "wrong-origin"
+    | "from-not-allowed"
+    | "domain-not-linked";
+  did?: string;
+  method?: string;
+  service?: string;
+  unusable?: true;
+  pageOrigin?: string;
+  portalOrigin?: string;
+}
 
 /** Where in the flow a sign-in failed. `domain-linkage` is the wallet
  *  checking a domain-linked community's website (its DID Configuration);

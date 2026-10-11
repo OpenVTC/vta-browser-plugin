@@ -138,6 +138,7 @@ import type {
   SignInFailureStage,
   SignInPersonaView,
   SignInIdentityView,
+  SignInRefusalDetail,
   SignInStep,
   SignInStepResult,
 } from "./bridge-protocol.js";
@@ -370,7 +371,7 @@ export const VTA_REFUSAL_MESSAGES: Readonly<Record<string, string>> = {
     "Your agent didn't accept the passkey approval. Refresh the code on the website and try again.",
 };
 
-const refused = (reason: TriggerLinkReason): SignInStepResult => {
+const refused = (reason: TriggerLinkReason, detail?: SignInRefusalDetail): SignInStepResult => {
   const outcome = outcomeOf(reason);
   // `pass-on` never reaches a flow: the background does not open one for it.
   const shown = outcome === "pass-on" ? "invalid" : outcome;
@@ -378,6 +379,7 @@ const refused = (reason: TriggerLinkReason): SignInStepResult => {
     kind: "refused",
     outcome: shown,
     message: triggerLinkMessage(shown)!,
+    ...(detail ? { detail } : {}),
   };
 };
 
@@ -478,7 +480,13 @@ export class SignInFlows {
       now: Math.floor(this.deps.now() / 1000),
       contactMethods: methods,
     });
-    if (!parsed.ok) return refused(parsed.reason);
+    if (!parsed.ok) {
+      // A link field's failure stays vague (VTI-LNK-021); a contact method
+      // the flow does not take is named, for the operator's Details.
+      return parsed.reason === "from-not-allowed" && parsed.method
+        ? refused(parsed.reason, { reason: parsed.reason, method: parsed.method })
+        : refused(parsed.reason);
+    }
     const link = parsed.link;
     if (!link.flow) return refused("untyped");
     if (link.flow.spec.name !== "sign-in") return refused("unknown-flow");
@@ -508,13 +516,29 @@ export class SignInFlows {
       ...(this.deps.resolveDid ? { resolveDid: this.deps.resolveDid } : {}),
       contactMethods: methods,
     });
-    if (!resolved.ok) return refused(resolved.reason);
+    if (!resolved.ok) {
+      return resolved.reason === "unsupported-vid"
+        ? refused(resolved.reason, { reason: resolved.reason, method: link.from.kind })
+        : refused(resolved.reason, { reason: "did-document-unverified", did: vtcDid });
+    }
     const selected = selectSignInServices(resolved.doc);
-    if (!selected.ok) return refused(selected.reason);
+    if (!selected.ok) {
+      return refused(selected.reason, {
+        reason: selected.reason === "no-portal-service" ? "no-portal-service" : "no-common-transport",
+        did: vtcDid,
+        service: selected.service,
+        ...(selected.unusable ? { unusable: true as const } : {}),
+      });
+    }
 
     // C3 step 4: the page the link was clicked on must be the portal.
     if (!origin || !originMatchesPortal(origin, selected.services.portalOrigin))
-      return refused("wrong-origin");
+      return refused("wrong-origin", {
+        reason: "wrong-origin",
+        did: vtcDid,
+        ...(origin ? { pageOrigin: origin } : {}),
+        portalOrigin: selected.services.portalOrigin,
+      });
 
     const kind = siteKindOf(resolved.doc);
     if (identities.length === 0) {
@@ -886,6 +910,7 @@ export class SignInFlows {
       code: SIGN_IN_DOMAIN_NOT_LINKED,
       message: DOMAIN_NOT_LINKED_MESSAGE,
       stage: "domain-linkage",
+      detail: { reason: SIGN_IN_DOMAIN_NOT_LINKED, did: flow.vtcDid, portalOrigin: flow.services.portalOrigin },
     };
   }
 

@@ -108,14 +108,36 @@ test("services: no portal is no-portal-service; no Trust-Task endpoint is no-com
   assert.deepEqual(selectSignInServices({ service: vtcDoc.service.filter((s) => s.type !== "SignInPortal") }), {
     ok: false,
     reason: "no-portal-service",
+    service: "SignInPortal",
   });
   assert.deepEqual(selectSignInServices({ service: vtcDoc.service.filter((s) => s.type !== "TrustTaskHTTPS") }), {
     ok: false,
     reason: "no-common-transport",
+    service: "TrustTaskHTTPS",
   });
-  // An endpoint on a private name fails the host rules.
+  // An endpoint on a private name fails the host rules: listed, but unusable.
   const local = { service: [{ type: "SignInPortal", serviceEndpoint: "https://portal.local/" }, vtcDoc.service[2]] };
-  assert.equal(selectSignInServices(local).ok, false);
+  assert.deepEqual(selectSignInServices(local), {
+    ok: false,
+    reason: "no-portal-service",
+    service: "SignInPortal",
+    unusable: true,
+  });
+});
+
+test("services: a TrustTaskHTTPS listed only over http is no-common-transport, unusable", () => {
+  const httpOnly = {
+    service: [
+      { type: "SignInPortal", serviceEndpoint: PORTAL },
+      { type: "TrustTaskHTTPS", serviceEndpoint: "http://members.example.org/api" },
+    ],
+  };
+  assert.deepEqual(selectSignInServices(httpOnly), {
+    ok: false,
+    reason: "no-common-transport",
+    service: "TrustTaskHTTPS",
+    unusable: true,
+  });
 });
 
 test("VTI-LNK-105: the activation origin must be the portal origin exactly", () => {

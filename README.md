@@ -430,6 +430,30 @@ on a browser creates it and enrols it with your VTA (`device/heartbeat`
 `org.openvtc.uv-key`); later approvals reuse it. A second agent, or a holder
 onboarded again, is enrolled with the same passkey at its first approval.
 
+#### When a sign-in code isn't accepted
+
+The window tells the person only the outcome ("Code not accepted", "Community
+unreachable", ...) and never which part of the code was wrong (VTI-LNK-021).
+When the cause is the service's DID document or the page the code was on, the
+collapsed **Details** line says what the operator has to fix, with the DID (and
+a Copy button) or the origins that were checked. Nothing in it is logged.
+
+| Code | Details says | How the operator fixes it |
+|---|---|---|
+| `no-portal-service` | The DID document doesn't list a sign-in portal (a `SignInPortal` service), or lists one whose endpoint isn't usable. | Add a `SignInPortal` service whose endpoint is the sign-in page: an `https` URL on a public host name, no port or credentials. |
+| `no-common-transport` | The DID document doesn't list a Trust-Task endpoint (a `TrustTaskHTTPS` service), or lists one whose endpoint isn't usable. | Add a `TrustTaskHTTPS` service whose endpoint is the Trust-Task base (the wallet posts to `<base>/trust-tasks`), with the same URL rules. |
+| `wrong-origin` | This page (`https://a`) isn't the service's sign-in page (`https://b`). | Show the code on the `SignInPortal` page's origin, or point `SignInPortal` at the page that shows it. |
+| `did-document-unverified` | The wallet couldn't fetch or verify the DID document, with the DID. | Check the DID resolves, its log verifies, and its host is a public name on the default `https` port. |
+| `from-not-allowed` | Sign-in doesn't accept a `did:key` (or other named method) DID as the service's identifier. | Use a DID that can list services, such as `did:webvh`. |
+| `unsupported-vid` | This wallet can't resolve that DID method yet. | Use a supported method, or wait for a wallet update. |
+| `domain-not-linked` | The website (its origin) doesn't publish a DID Configuration linking it to the DID. | Serve `/.well-known/did-configuration.json` on that origin with a Domain Linkage credential for the DID. |
+
+A **DID hosting service** needs all three of these services in its DID
+document: `SignInPortal` (its console's login page, `https://<host>/login`),
+`TrustTaskHTTPS` (its Trust-Task base, `https://<host>/api`) and
+`WebVHHosting` (`{ "uri": "https://<host>" }`). Add a missing one with
+`pnm did-mgmt dids edit --did <did>`.
+
 This needs the portal's origin granted (see below): the click is caught by the
 same content script as the page provider, and the community's Trust-Task
 endpoint is usually on that origin. On a site that is not granted, the click
