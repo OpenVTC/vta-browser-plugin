@@ -362,7 +362,15 @@ export interface ParsedTriggerLink {
 
 export type TriggerLinkResult =
   | { ok: true; link: ParsedTriggerLink }
-  | { ok: false; reason: TriggerLinkReason; outcome: TriggerLinkOutcome };
+  | {
+      ok: false;
+      reason: TriggerLinkReason;
+      outcome: TriggerLinkOutcome;
+      /** With `from-not-allowed` only: the contact's DID method, which the
+       *  flow does not accept (VTI-LNK-031). Not the link field and not the
+       *  contact — for an operator's "Details", never for the message. */
+      method?: ContactKind;
+    };
 
 export interface ParseTriggerLinkOptions {
   /** The reader's clock, in **epoch seconds**. Required: the parser has no
@@ -388,8 +396,8 @@ export const MAX_TRIGGER_LINK_CODE_POINTS = 1536;
 /** VTI-LNK-020 step 10. */
 export const EXPIRY_ALLOWANCE_SECONDS = 60;
 
-function fail(reason: TriggerLinkReason): TriggerLinkResult {
-  return { ok: false, reason, outcome: outcomeOf(reason) };
+function fail(reason: TriggerLinkReason, method?: ContactKind): TriggerLinkResult {
+  return { ok: false, reason, outcome: outcomeOf(reason), ...(method ? { method } : {}) };
 }
 
 /**
@@ -477,7 +485,7 @@ export function parseTriggerLink(text: string, opts: ParseTriggerLinkOptions): T
 
   // 9. The flow's own rules.
   if (flow) {
-    if (!flow.spec.allowsContact(contact, methods)) return fail("from-not-allowed");
+    if (!flow.spec.allowsContact(contact, methods)) return fail("from-not-allowed", contact.kind);
     if (flow.spec.requiresExp && exp === undefined) return fail("missing-exp");
   }
 

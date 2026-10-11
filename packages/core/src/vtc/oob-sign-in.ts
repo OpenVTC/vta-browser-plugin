@@ -196,7 +196,17 @@ export interface SignInServices {
 
 export type SignInServicesResult =
   | { ok: true; services: SignInServices }
-  | { ok: false; reason: TriggerLinkReason };
+  | {
+      ok: false;
+      reason: TriggerLinkReason;
+      /** The service type that was missing or unusable: `SignInPortal` with
+       *  `no-portal-service`, `TrustTaskHTTPS` with `no-common-transport`. */
+      service: typeof SIGN_IN_PORTAL_SERVICE_TYPE | typeof TRUST_TASK_HTTPS_SERVICE_TYPE;
+      /** The document lists a service of that type, but none with a usable
+       *  endpoint (an `https` URL with no port or credentials, whose host
+       *  meets the host rules). Absent: it lists none at all. */
+      unusable?: true;
+    };
 
 interface DidService {
   type?: unknown;
@@ -241,6 +251,10 @@ function usableHttpsEndpoint(raw: unknown): { url: URL; text: string } | undefin
  *   requires one; the chapter names no reason for its absence, so this is a
  *   local reason that maps to `invalid`.
  * - No usable `TrustTaskHTTPS`: `no-common-transport` (outcome `unreachable`).
+ *
+ * A refusal names the service type, and whether one was listed with an
+ * unusable endpoint, so the window's "Details" can tell an operator what to
+ * fix. Neither comes from the link.
  */
 export function selectSignInServices(doc: unknown): SignInServicesResult {
   const services = Array.isArray((doc as { service?: unknown })?.service)
@@ -248,8 +262,12 @@ export function selectSignInServices(doc: unknown): SignInServicesResult {
     : [];
   let portal: URL | undefined;
   let endpoint: string | undefined;
+  let portalListed = false;
+  let endpointListed = false;
   for (const s of services) {
     if (!s || typeof s !== "object") continue;
+    if (hasType(s, SIGN_IN_PORTAL_SERVICE_TYPE)) portalListed = true;
+    if (hasType(s, TRUST_TASK_HTTPS_SERVICE_TYPE)) endpointListed = true;
     if (!portal && hasType(s, SIGN_IN_PORTAL_SERVICE_TYPE)) portal = usableHttpsEndpoint(s.serviceEndpoint)?.url;
     // The published endpoint is the Trust-Task base; the POST URL is
     // `<base>/trust-tasks` (binding 0.2 §6), composed the one way the rest of
@@ -259,8 +277,22 @@ export function selectSignInServices(doc: unknown): SignInServicesResult {
       if (base !== undefined) endpoint = trustTaskUrl(base);
     }
   }
-  if (!portal) return { ok: false, reason: "no-portal-service" };
-  if (!endpoint) return { ok: false, reason: "no-common-transport" };
+  if (!portal) {
+    return {
+      ok: false,
+      reason: "no-portal-service",
+      service: SIGN_IN_PORTAL_SERVICE_TYPE,
+      ...(portalListed ? { unusable: true as const } : {}),
+    };
+  }
+  if (!endpoint) {
+    return {
+      ok: false,
+      reason: "no-common-transport",
+      service: TRUST_TASK_HTTPS_SERVICE_TYPE,
+      ...(endpointListed ? { unusable: true as const } : {}),
+    };
+  }
   return { ok: true, services: { portalOrigin: portal.origin, trustTaskEndpoint: endpoint } };
 }
 
