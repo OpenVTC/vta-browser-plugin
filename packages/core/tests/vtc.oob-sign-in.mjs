@@ -22,6 +22,8 @@ import {
   sendOob,
   checkStep1,
   checkStep2,
+  sessionAudienceOf,
+  OOB_SESSION_EXT,
   assertSignedAsSent,
   contextDigest,
   grantDigest,
@@ -244,6 +246,34 @@ test("step 2 must repeat step 1, carry a did:key session key and name the chosen
   assert.throws(() => checkStep2({ ...s2, origin: "https://evil.example" }, s1, member));
   assert.throws(() => checkStep2({ ...s2, sessionKey: "did:web:x.example" }, s1, member));
   assert.throws(() => checkStep2({ ...s2, identifiedAs: "did:web:bob.example" }, s1, member));
+});
+
+test("the session audience: absent is the member portal, admin is the operator console", () => {
+  const want = { requestId: REQ, vtcDid: VTC, portalOrigin: PORTAL, now: Date.now() };
+  const admin = { [OOB_SESSION_EXT]: { audience: "admin" } };
+  assert.equal(sessionAudienceOf(step1()), "member");
+  assert.equal(sessionAudienceOf(step1({ ext: { "com.example": {} } })), "member");
+  assert.equal(sessionAudienceOf(step1({ ext: { [OOB_SESSION_EXT]: { audience: "member" } } })), "member");
+  assert.equal(sessionAudienceOf(step1({ ext: admin })), "admin");
+  checkStep1(step1({ ext: admin }), want);
+  for (const ext of [{ [OOB_SESSION_EXT]: { audience: "root" } }, { [OOB_SESSION_EXT]: "admin" }, "admin"]) {
+    assert.throws(() => checkStep1(step1({ ext }), want), (e) => e.code === OOB_REPLY_INVALID, JSON.stringify(ext));
+  }
+
+  // Step 2 must name the session step 1 showed: the grant's digest covers
+  // step 2, so that is the one the member approves.
+  const member = "did:webvh:Qm:members.example.org:alice";
+  const s1 = step1({ ext: admin });
+  const s2 = {
+    ...s1,
+    sessionKey: generateSigningIdentity().did,
+    requester: { location: "unknown", browser: "Chrome", os: "macOS", createdAt: new Date().toISOString(), sameNetwork: "unknown" },
+    identifiedAs: member,
+  };
+  checkStep2(s2, s1, member);
+  const { ext: _dropped, ...noExt } = s2;
+  assert.throws(() => checkStep2(noExt, s1, member), (e) => e.code === OOB_REPLY_INVALID);
+  assert.throws(() => checkStep2({ ...s2, ext: admin }, step1(), member), (e) => e.code === OOB_REPLY_INVALID);
 });
 
 test("the VTA's signature must be over the document sent, for the type's purpose", () => {

@@ -65,6 +65,32 @@ export interface OobStep1 {
   purpose: "login";
   /** Integer epoch seconds (contract C9). */
   decisionDeadline: number;
+  /** Framework extension member. A VTC puts the session audience here
+   *  ([`OOB_SESSION_EXT`]); anything else is carried unread. */
+  ext?: Record<string, unknown>;
+}
+
+/** The `ext` namespace in which a VTC says which session a sign-in asks for.
+ *  `auth/oob/0.1`'s `purpose` is a closed enum (`login`), so the operator
+ *  console's sign-in is told apart here instead. The VTC signs it into step 1
+ *  and repeats it in step 2, so the grant's `contextDigest` covers it. */
+export const OOB_SESSION_EXT = "org.openvtc.session";
+
+/** Which session the website asked for: the community's member portal, or
+ *  its operator console. */
+export type OobSessionAudience = "member" | "admin";
+
+/** The audience a step 1 or step 2 names. No extension is `member` — what
+ *  every VTC that predates it sends. `undefined` when the extension is there
+ *  but names something this wallet does not know. */
+export function sessionAudienceOf(step: { ext?: unknown }): OobSessionAudience | undefined {
+  const ext = step.ext;
+  if (ext === undefined || ext === null) return "member";
+  if (typeof ext !== "object") return undefined;
+  const ns = (ext as Record<string, unknown>)[OOB_SESSION_EXT];
+  if (ns === undefined) return "member";
+  const audience = (ns as { audience?: unknown } | null)?.audience;
+  return audience === "member" || audience === "admin" ? audience : undefined;
 }
 
 /** Whether the browser that asked is on the network the approver is on
@@ -541,6 +567,7 @@ export function checkStep1(step1: OobStep1, want: Step1Expectations): OobStep1 {
   if (typeof step1.service?.name !== "string") bad("no community name");
   if (step1.purpose !== "login") bad("a purpose other than login");
   if (step1.origin !== want.portalOrigin) bad("an origin the community's document does not list");
+  if (sessionAudienceOf(step1) === undefined) bad("a session this wallet does not know");
   const deadline = deadlineMs(step1.decisionDeadline);
   if (deadline === undefined) bad("no decision deadline");
   if (deadline! <= want.now) bad("the decision deadline has passed");
@@ -568,6 +595,9 @@ export function checkStep2(step2: OobStep2, step1: OobStep1, memberDid: string):
     decisionDeadline: s.decisionDeadline,
   });
   if (jcsCanonicalize(repeated(step2)) !== jcsCanonicalize(repeated(step1))) bad("it does not repeat step 1");
+  // The audience the member approves is step 2's (the grant's
+  // `contextDigest` covers it); it must be the one step 1 showed.
+  if (sessionAudienceOf(step2) !== sessionAudienceOf(step1)) bad("it names a different session than step 1");
   if (typeof step2.sessionKey !== "string" || !/^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]+$/.test(step2.sessionKey)) {
     bad("the session key is not an Ed25519 did:key");
   }

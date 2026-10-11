@@ -12,7 +12,10 @@
 //      Pick an identity, then Continue. Nothing has been sent to the
 //      community before this press.
 //   2. "Type the number on the screen." A different name in the community's
-//      own reply is flagged here (VTI-LNK-104).
+//      own reply is flagged here (VTI-LNK-104). When the community's signed
+//      reply says the website asked for its operator console, this screen
+//      says so first: "Sign in to <community> operator console at
+//      <portal>?" — screen 1 cannot, because nothing has been sent yet.
 //   3. "Request from <browser> on <os> · near <location> · <network>". Approve
 //      runs the passkey over the grant digest (C6); Decline needs none.
 //
@@ -28,8 +31,8 @@
 // focus is, except on a control that answers Enter itself.
 //
 // The header takes a `subtitle` line under the community name for a sign-in
-// that is more than a member's (an operator console, say); nothing sets it
-// yet.
+// that is more than a member's: "Operator console" once the community's signed
+// step 1 says the link asks for the console's session.
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 
@@ -42,8 +45,21 @@ import {
   type SignInUvEnrolmentView,
 } from "./bridge-protocol.js";
 import { PrfUnlockError } from "./webauthn-prf-unlock.js";
-import { assertUvPasskey, createUvPasskey, rememberUvEnrolment, storedUvEnrolment } from "./uv-passkey.js";
-import { c, t, font, radius, microLabel, button, type ButtonKind } from "./theme.js";
+import {
+  assertUvPasskey,
+  createUvPasskey,
+  rememberUvEnrolment,
+  storedUvEnrolment,
+} from "./uv-passkey.js";
+import {
+  c,
+  t,
+  font,
+  radius,
+  microLabel,
+  button,
+  type ButtonKind,
+} from "./theme.js";
 import { Mark, Note } from "./ui.js";
 import { collapseDid, type DidPart } from "./did-display.js";
 import { failureDetails } from "./sign-in-failure.js";
@@ -55,7 +71,10 @@ export interface UvPasskeyOps {
   stored: () => Promise<SignInUvEnrolmentView | undefined>;
   create: typeof createUvPasskey;
   remember: (enrolment: SignInUvEnrolmentView) => Promise<void>;
-  assert: (credentialId: string, challengeB64u: string) => ReturnType<typeof assertUvPasskey>;
+  assert: (
+    credentialId: string,
+    challengeB64u: string,
+  ) => ReturnType<typeof assertUvPasskey>;
 }
 
 const browserUv: UvPasskeyOps = {
@@ -94,13 +113,24 @@ const ROLE_STYLE: Record<DidPart["role"], CSSProperties> = {
  * (`collapseDid`) — with the whole value in its tooltip, and, where there is
  * room for a control, a "Show full" toggle.
  */
-function ShortDid({ value, toggle = false }: { value: string; toggle?: boolean }) {
+function ShortDid({
+  value,
+  toggle = false,
+}: {
+  value: string;
+  toggle?: boolean;
+}) {
   const [full, setFull] = useState(false);
-  const parts = full ? [{ text: value, role: "opaque" as const }] : collapseDid(value);
+  const parts = full
+    ? [{ text: value, role: "opaque" as const }]
+    : collapseDid(value);
   const shortened = parts.map((p) => p.text).join("") !== value;
   return (
     <span style={wrap}>
-      <span title={value} style={{ fontFamily: font.mono, fontSize: t.sm, ...wrap }}>
+      <span
+        title={value}
+        style={{ fontFamily: font.mono, fontSize: t.sm, ...wrap }}
+      >
         {parts.map((p, i) => (
           <span key={i} style={full ? { color: c.text } : ROLE_STYLE[p.role]}>
             {p.text}
@@ -112,7 +142,13 @@ function ShortDid({ value, toggle = false }: { value: string; toggle?: boolean }
           type="button"
           onClick={() => setFull((v) => !v)}
           aria-expanded={full}
-          style={{ ...button("quiet"), padding: "0 4px", fontSize: t.xs, color: c.accent, marginLeft: 4 }}
+          style={{
+            ...button("quiet"),
+            padding: "0 4px",
+            fontSize: t.xs,
+            color: c.accent,
+            marginLeft: 4,
+          }}
         >
           {full ? "Show less" : "Show full"}
         </button>
@@ -124,7 +160,11 @@ function ShortDid({ value, toggle = false }: { value: string; toggle?: boolean }
 /** A value someone else chose: a DID gets `ShortDid`, anything else is set
  *  in bold and wraps. */
 function Claimed({ value }: { value: string }) {
-  return value.startsWith("did:") ? <ShortDid value={value} toggle /> : <strong style={wrap}>{value}</strong>;
+  return value.startsWith("did:") ? (
+    <ShortDid value={value} toggle />
+  ) : (
+    <strong style={wrap}>{value}</strong>
+  );
 }
 
 /** An origin with its host loud and its scheme and port quiet. The text reads
@@ -142,7 +182,11 @@ function Origin({ origin, testId }: { origin: string; testId?: string }) {
     // Not a URL: shown as given, all of it loud.
   }
   return (
-    <span data-testid={testId} title={origin} style={{ ...wrap, fontSize: t.md }}>
+    <span
+      data-testid={testId}
+      title={origin}
+      style={{ ...wrap, fontSize: t.md }}
+    >
       <span style={{ color: c.faint }}>{scheme}</span>
       <span style={{ color: c.text, fontWeight: 650 }}>{host}</span>
       <span style={{ color: c.faint }}>{port}</span>
@@ -163,25 +207,54 @@ function Header({ who }: { who: Who | undefined }) {
     <header style={{ display: "grid", gap: 14, marginBottom: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
         <Mark />
-        <span style={{ fontWeight: 640, fontSize: t.sm, letterSpacing: "-0.01em" }}>VTA Wallet</span>
-        <span style={{ marginLeft: "auto", fontSize: t.xs, color: c.faint }}>Sign-in request</span>
+        <span
+          style={{ fontWeight: 640, fontSize: t.sm, letterSpacing: "-0.01em" }}
+        >
+          VTA Wallet
+        </span>
+        <span style={{ marginLeft: "auto", fontSize: t.xs, color: c.faint }}>
+          Sign-in request
+        </span>
       </div>
       {who && (
         <div style={{ display: "grid", gap: 3, minWidth: 0 }}>
           <div style={microLabel}>Community · your wallet's record</div>
-          <div data-testid="community" style={{ fontSize: t.lg, fontWeight: 650, lineHeight: 1.25, ...wrap }}>
+          <div
+            data-testid="community"
+            style={{
+              fontSize: t.lg,
+              fontWeight: 650,
+              lineHeight: 1.25,
+              ...wrap,
+            }}
+          >
             {who.community}
           </div>
           {who.subtitle && (
-            <div data-testid="subtitle" style={{ fontSize: t.sm, color: c.muted, ...wrap }}>
+            <div
+              data-testid="subtitle"
+              style={{ fontSize: t.sm, color: c.muted, ...wrap }}
+            >
               {who.subtitle}
             </div>
           )}
-          <div style={{ display: "flex", alignItems: "baseline", gap: 6, flexWrap: "wrap", marginTop: 4, minWidth: 0 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              gap: 6,
+              flexWrap: "wrap",
+              marginTop: 4,
+              minWidth: 0,
+            }}
+          >
             <span style={{ fontSize: t.sm, color: c.muted }}>at</span>
             <Origin origin={who.origin} testId="portal" />
           </div>
-          <div style={{ fontSize: t.xs, color: c.faint }}>From its verified DID document. Check it matches the website's address.</div>
+          <div style={{ fontSize: t.xs, color: c.faint }}>
+            From its verified DID document. Check it matches the website's
+            address.
+          </div>
         </div>
       )}
     </header>
@@ -202,7 +275,14 @@ interface Action {
 function useKeys(primary: Action | undefined, secondary: Action | undefined) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.isComposing || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (
+        e.defaultPrevented ||
+        e.isComposing ||
+        e.altKey ||
+        e.ctrlKey ||
+        e.metaKey
+      )
+        return;
       if (e.key === "Escape" && secondary && !secondary.disabled) {
         e.preventDefault();
         secondary.run();
@@ -283,9 +363,26 @@ function Screen({
           minWidth: 0,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            minWidth: 0,
+          }}
+        >
           {icon}
-          <h1 style={{ fontSize: t.md, fontWeight: 650, margin: 0, lineHeight: 1.3, ...wrap }}>{title}</h1>
+          <h1
+            style={{
+              fontSize: t.md,
+              fontWeight: 650,
+              margin: 0,
+              lineHeight: 1.3,
+              ...wrap,
+            }}
+          >
+            {title}
+          </h1>
         </div>
         {children}
         {(primary || secondary) && (
@@ -309,23 +406,62 @@ function Screen({
   );
 }
 
-function Message({ children, muted = false }: { children: ReactNode; muted?: boolean }) {
+function Message({
+  children,
+  muted = false,
+}: {
+  children: ReactNode;
+  muted?: boolean;
+}) {
   return (
-    <p data-testid="message" style={{ margin: 0, color: muted ? c.muted : c.text, ...wrap }}>
+    <p
+      data-testid="message"
+      style={{ margin: 0, color: muted ? c.muted : c.text, ...wrap }}
+    >
       {children}
     </p>
   );
 }
 
 function StatusIcon({ tone }: { tone: "ok" | "warn" | "danger" | "off" }) {
-  const colour = tone === "ok" ? c.ok : tone === "warn" ? c.warn : tone === "danger" ? c.danger : c.faint;
-  const soft = tone === "ok" ? c.okSoft : tone === "warn" ? c.warnSoft : tone === "danger" ? c.dangerSoft : c.raised;
+  const colour =
+    tone === "ok"
+      ? c.ok
+      : tone === "warn"
+        ? c.warn
+        : tone === "danger"
+          ? c.danger
+          : c.faint;
+  const soft =
+    tone === "ok"
+      ? c.okSoft
+      : tone === "warn"
+        ? c.warnSoft
+        : tone === "danger"
+          ? c.dangerSoft
+          : c.raised;
   return (
     <span
       aria-hidden
-      style={{ width: 26, height: 26, borderRadius: 999, background: soft, display: "grid", placeItems: "center", flex: "none" }}
+      style={{
+        width: 26,
+        height: 26,
+        borderRadius: 999,
+        background: soft,
+        display: "grid",
+        placeItems: "center",
+        flex: "none",
+      }}
     >
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke={colour} strokeWidth="2" strokeLinecap="round">
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 14 14"
+        fill="none"
+        stroke={colour}
+        strokeWidth="2"
+        strokeLinecap="round"
+      >
         {tone === "ok" ? (
           <path d="M3 7.5l2.5 2.5L11 4.5" />
         ) : tone === "off" ? (
@@ -352,29 +488,70 @@ function Countdown({ deadline, now }: { deadline: number; now: () => number }) {
   const left = Math.max(0, Math.ceil((deadline - at) / 1000));
   if (left === 0) {
     return (
-      <div data-testid="countdown" style={{ fontSize: t.sm, color: c.warn, textAlign: "center" }}>
-        The time to decide has passed. If the website refuses, refresh the code there.
+      <div
+        data-testid="countdown"
+        style={{ fontSize: t.sm, color: c.warn, textAlign: "center" }}
+      >
+        The time to decide has passed. If the website refuses, refresh the code
+        there.
       </div>
     );
   }
   const mmss = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
   return (
-    <div data-testid="countdown" style={{ fontSize: t.sm, color: left <= 20 ? c.warn : c.muted, textAlign: "center" }}>
-      Time left to decide <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{mmss}</span>
+    <div
+      data-testid="countdown"
+      style={{
+        fontSize: t.sm,
+        color: left <= 20 ? c.warn : c.muted,
+        textAlign: "center",
+      }}
+    >
+      Time left to decide{" "}
+      <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
+        {mmss}
+      </span>
     </div>
   );
 }
 
-function FailureDetails({ result }: { result: Extract<SignInStepResult, { kind: "failed" }> }) {
+function FailureDetails({
+  result,
+}: {
+  result: Extract<SignInStepResult, { kind: "failed" }>;
+}) {
   const rows = failureDetails(result);
   return (
-    <details data-testid="failure-details" style={{ fontSize: t.xs, color: c.muted }}>
-      <summary style={{ cursor: "pointer", color: c.muted, width: "fit-content" }}>Details</summary>
-      <dl style={{ display: "grid", gridTemplateColumns: "auto minmax(0, 1fr)", gap: "3px 12px", margin: "8px 0 0" }}>
+    <details
+      data-testid="failure-details"
+      style={{ fontSize: t.xs, color: c.muted }}
+    >
+      <summary
+        style={{ cursor: "pointer", color: c.muted, width: "fit-content" }}
+      >
+        Details
+      </summary>
+      <dl
+        style={{
+          display: "grid",
+          gridTemplateColumns: "auto minmax(0, 1fr)",
+          gap: "3px 12px",
+          margin: "8px 0 0",
+        }}
+      >
         {rows.map(([k, v]) => (
           <div key={k} style={{ display: "contents" }}>
             <dt style={{ color: c.faint }}>{k}</dt>
-            <dd style={{ margin: 0, fontFamily: k === "Code" || k === "Cause" ? font.mono : undefined, ...wrap }}>{v}</dd>
+            <dd
+              style={{
+                margin: 0,
+                fontFamily:
+                  k === "Code" || k === "Cause" ? font.mono : undefined,
+                ...wrap,
+              }}
+            >
+              {v}
+            </dd>
           </div>
         ))}
       </dl>
@@ -382,7 +559,10 @@ function FailureDetails({ result }: { result: Extract<SignInStepResult, { kind: 
   );
 }
 
-const REFUSED_TITLE: Record<Extract<SignInStepResult, { kind: "refused" }>["outcome"], string> = {
+const REFUSED_TITLE: Record<
+  Extract<SignInStepResult, { kind: "refused" }>["outcome"],
+  string
+> = {
   expired: "Code expired",
   update: "Update needed",
   unreachable: "Community unreachable",
@@ -395,12 +575,18 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
   const sendStep =
     send ??
     ((step: SignInStep) =>
-      chrome.runtime.sendMessage({ type: RUNTIME_SIGN_IN_STEP, flowId, ...step }) as Promise<RuntimeSignInStepResponse>);
+      chrome.runtime.sendMessage({
+        type: RUNTIME_SIGN_IN_STEP,
+        flowId,
+        ...step,
+      }) as Promise<RuntimeSignInStepResponse>);
   const passkey = uv ?? browserUv;
   const closeWindow = close ?? (() => window.close());
   const [clock] = useState(() => now ?? Date.now);
 
-  const [screen, setScreen] = useState<SignInStepResult | { kind: "loading" }>({ kind: "loading" });
+  const [screen, setScreen] = useState<SignInStepResult | { kind: "loading" }>({
+    kind: "loading",
+  });
   const [portalOrigin, setPortalOrigin] = useState("");
   const [communityName, setCommunityName] = useState("");
   const [entryId, setEntryId] = useState("");
@@ -410,13 +596,19 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | undefined>();
 
-  const run = async (step: SignInStep): Promise<SignInStepResult | undefined> => {
+  const run = async (
+    step: SignInStep,
+  ): Promise<SignInStepResult | undefined> => {
     setBusy(true);
     setNote(undefined);
     try {
       const res = await sendStep(step);
       if (!res || !res.ok) {
-        setScreen({ kind: "failed", code: "sign-in/failed", message: res?.error ?? "The wallet did not answer." });
+        setScreen({
+          kind: "failed",
+          code: "sign-in/failed",
+          message: res?.error ?? "The wallet did not answer.",
+        });
         return undefined;
       }
       if (res.result.kind === "confirm") {
@@ -425,8 +617,13 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
         setIdentities(res.result.identities);
         setEntryId(res.result.identities[0]?.entryId ?? "");
       }
-      if (res.result.kind === "enter-number") setDeadline(res.result.decisionDeadline);
-      if (res.result.kind !== "uv-challenge" && res.result.kind !== "uv-enrolled") setScreen(res.result);
+      if (res.result.kind === "enter-number")
+        setDeadline(res.result.decisionDeadline);
+      if (
+        res.result.kind !== "uv-challenge" &&
+        res.result.kind !== "uv-enrolled"
+      )
+        setScreen(res.result);
       return res.result;
     } finally {
       setBusy(false);
@@ -442,7 +639,11 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
     // A cancelled gesture leaves the review open: the person may approve again
     // or decline. It is not a decision.
     const cancelled = (e: unknown) =>
-      setNote(e instanceof PrfUnlockError && e.reason === "cancelled" ? "Approval cancelled." : String((e as Error).message ?? e));
+      setNote(
+        e instanceof PrfUnlockError && e.reason === "cancelled"
+          ? "Approval cancelled."
+          : String((e as Error).message ?? e),
+      );
     let challenge = await run({ step: "grant-digest" });
     if (challenge?.kind !== "uv-challenge") return;
     let enrolment = await passkey.stored();
@@ -469,7 +670,10 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
     }
     let assertion;
     try {
-      assertion = await passkey.assert(enrolment.credentialId, challenge.challenge);
+      assertion = await passkey.assert(
+        enrolment.credentialId,
+        challenge.challenge,
+      );
     } catch (e) {
       cancelled(e);
       return;
@@ -477,8 +681,18 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
     await run({ step: "respond", decision: "approve", assertion });
   };
 
-  const who: Who | undefined = communityName ? { community: communityName, origin: portalOrigin } : undefined;
-  const closeAction: Action = { label: "Close", run: closeWindow, testId: "close" };
+  const who: Who | undefined = communityName
+    ? { community: communityName, origin: portalOrigin }
+    : undefined;
+  const consoleWho: Who | undefined = who && {
+    ...who,
+    subtitle: "Operator console",
+  };
+  const closeAction: Action = {
+    label: "Close",
+    run: closeWindow,
+    testId: "close",
+  };
   const declineToClose: Action = {
     label: "Decline",
     run: () => void run({ step: "cancel" }).then(closeWindow),
@@ -490,25 +704,46 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
     case "loading":
       return (
         <Screen title="Checking this sign-in code…">
-          <Message muted>Your wallet is checking who sent this code. Nothing has been sent to anyone yet.</Message>
+          <Message muted>
+            Your wallet is checking who sent this code. Nothing has been sent to
+            anyone yet.
+          </Message>
         </Screen>
       );
 
     case "refused":
       return (
-        <Screen title={REFUSED_TITLE[screen.outcome] ?? "Sign in"} icon={<StatusIcon tone="warn" />} primary={closeAction} escape={closeAction}>
+        <Screen
+          title={REFUSED_TITLE[screen.outcome] ?? "Sign in"}
+          icon={<StatusIcon tone="warn" />}
+          primary={closeAction}
+          escape={closeAction}
+        >
           <Message>{screen.message}</Message>
         </Screen>
       );
 
     case "not-member":
       return (
-        <Screen title="Not one of your communities" icon={<StatusIcon tone="off" />} primary={closeAction} escape={closeAction}>
+        <Screen
+          title="Not one of your communities"
+          icon={<StatusIcon tone="off" />}
+          primary={closeAction}
+          escape={closeAction}
+        >
           <Message>
-            You're not a member of {screen.contactLabel ? <strong style={wrap}>{screen.contactLabel}</strong> : "this community"}
-            {screen.contactLabel ? " (unverified)" : ""}. Nothing was sent to it.
+            You're not a member of{" "}
+            {screen.contactLabel ? (
+              <strong style={wrap}>{screen.contactLabel}</strong>
+            ) : (
+              "this community"
+            )}
+            {screen.contactLabel ? " (unverified)" : ""}. Nothing was sent to
+            it.
           </Message>
-          <p style={{ margin: 0, color: c.muted }}>To sign in here, join the community first.</p>
+          <p style={{ margin: 0, color: c.muted }}>
+            To sign in here, join the community first.
+          </p>
         </Screen>
       );
 
@@ -517,12 +752,30 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
         <Screen
           who={{ community: screen.communityName, origin: screen.portalOrigin }}
           title={`Sign in to ${screen.communityName}?`}
-          primary={{ label: "Continue", run: () => void run({ step: "claim", entryId }), disabled: busy || !entryId, testId: "continue" }}
+          primary={{
+            label: "Continue",
+            run: () => void run({ step: "claim", entryId }),
+            disabled: busy || !entryId,
+            testId: "continue",
+          }}
           secondary={declineToClose}
         >
-          <p style={{ margin: 0, color: c.muted }}>Nothing is sent to the community until you continue.</p>
-          <fieldset style={{ border: "none", margin: 0, padding: 0, display: "grid", gap: 8, minWidth: 0 }}>
-            <legend style={{ ...microLabel, padding: 0, marginBottom: 8 }}>Sign in as</legend>
+          <p style={{ margin: 0, color: c.muted }}>
+            Nothing is sent to the community until you continue.
+          </p>
+          <fieldset
+            style={{
+              border: "none",
+              margin: 0,
+              padding: 0,
+              display: "grid",
+              gap: 8,
+              minWidth: 0,
+            }}
+          >
+            <legend style={{ ...microLabel, padding: 0, marginBottom: 8 }}>
+              Sign in as
+            </legend>
             {identities.map((i) => {
               const on = entryId === i.entryId;
               return (
@@ -547,7 +800,11 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
                     value={i.entryId}
                     checked={on}
                     onChange={() => setEntryId(i.entryId)}
-                    style={{ accentColor: c.accent, margin: "3px 0 0", padding: 0 }}
+                    style={{
+                      accentColor: c.accent,
+                      margin: "3px 0 0",
+                      padding: 0,
+                    }}
                   />
                   <span style={{ fontWeight: 600, ...wrap }}>{i.label}</span>
                   <span />
@@ -562,7 +819,7 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
     case "enter-number":
       return (
         <Screen
-          who={who}
+          who={screen.audience === "admin" ? consoleWho : who}
           title="Type the number on the screen"
           primary={{
             label: "Continue",
@@ -572,18 +829,37 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
           }}
           secondary={declineToClose}
         >
+          {screen.audience === "admin" && (
+            <Note tone="accent">
+              <div data-testid="operator-console" style={wrap}>
+                This signs you in to the community's{" "}
+                <strong>operator console</strong>, not its member portal. Only
+                an identity the community holds as an administrator is admitted.
+              </div>
+            </Note>
+          )}
           {screen.nameMismatch !== undefined && (
             <Note tone="warn">
               <div data-testid="name-mismatch" style={wrap}>
-                The community calls itself <Claimed value={screen.nameMismatch} />, but your wallet knows it as{" "}
-                <strong style={wrap}>{communityName}</strong>. If you didn't expect that, decline.
+                The community calls itself{" "}
+                <Claimed value={screen.nameMismatch} />, but your wallet knows
+                it as <strong style={wrap}>{communityName}</strong>. If you
+                didn't expect that, decline.
               </div>
             </Note>
           )}
           <p style={{ margin: 0, ...wrap }}>
-            The website at <Origin origin={portalOrigin} /> is showing a two-digit number. Type it here.
+            The website at <Origin origin={portalOrigin} /> is showing a
+            two-digit number. Type it here.
           </p>
-          <div style={{ display: "grid", justifyItems: "center", gap: 8, padding: "6px 0 2px" }}>
+          <div
+            style={{
+              display: "grid",
+              justifyItems: "center",
+              gap: 8,
+              padding: "6px 0 2px",
+            }}
+          >
             <input
               data-testid="number"
               inputMode="numeric"
@@ -593,7 +869,9 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
               maxLength={2}
               aria-label="The two-digit number the website shows"
               value={number}
-              onChange={(e) => setNumber(e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
+              onChange={(e) =>
+                setNumber(e.target.value.replace(/[^0-9]/g, "").slice(0, 2))
+              }
               style={{
                 fontFamily: font.mono,
                 fontSize: 40,
@@ -609,7 +887,9 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
                 borderRadius: radius.md,
               }}
             />
-            {deadline !== undefined && <Countdown deadline={deadline} now={clock} />}
+            {deadline !== undefined && (
+              <Countdown deadline={deadline} now={clock} />
+            )}
           </div>
         </Screen>
       );
@@ -618,9 +898,18 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
       const locationUnknown = screen.location === "unknown";
       return (
         <Screen
-          who={who}
-          title="Approve this sign-in?"
-          primary={{ label: "Approve", run: () => void approve(), disabled: busy, testId: "approve" }}
+          who={screen.audience === "admin" ? consoleWho : who}
+          title={
+            screen.audience === "admin"
+              ? "Approve this sign-in to the operator console?"
+              : "Approve this sign-in?"
+          }
+          primary={{
+            label: "Approve",
+            run: () => void approve(),
+            disabled: busy,
+            testId: "approve",
+          }}
           secondary={{
             label: "Decline",
             run: () => void run({ step: "respond", decision: "decline" }),
@@ -639,14 +928,25 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
               minWidth: 0,
             }}
           >
-            <div style={microLabel}>Request from · as the community reports it</div>
+            <div style={microLabel}>
+              Request from · as the community reports it
+            </div>
             <div data-testid="requester" style={{ fontWeight: 600, ...wrap }}>
-              {screen.browser} on {screen.os} · {locationUnknown ? "location unknown" : `near ${screen.location}`} ·{" "}
-              {new Date(screen.createdAt).toLocaleTimeString()}
+              {screen.browser} on {screen.os} ·{" "}
+              {locationUnknown ? "location unknown" : `near ${screen.location}`}{" "}
+              · {new Date(screen.createdAt).toLocaleTimeString()}
             </div>
             <div
               data-testid="network"
-              style={{ fontSize: t.sm, color: screen.network === "different" ? c.warn : screen.network === "same" ? c.ok : c.muted }}
+              style={{
+                fontSize: t.sm,
+                color:
+                  screen.network === "different"
+                    ? c.warn
+                    : screen.network === "same"
+                      ? c.ok
+                      : c.muted,
+              }}
             >
               {screen.network === "same"
                 ? "Same network as this browser"
@@ -655,15 +955,25 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
                   : "Network: can't tell"}
             </div>
           </div>
-          {locationUnknown && <Note tone="warn">The community could not tell where this request came from.</Note>}
+          {locationUnknown && (
+            <Note tone="warn">
+              The community could not tell where this request came from.
+            </Note>
+          )}
           {screen.network === "different" && (
-            <Note tone="warn">This request did not come from the network this browser is on.</Note>
+            <Note tone="warn">
+              This request did not come from the network this browser is on.
+            </Note>
           )}
           <p style={{ margin: 0, fontSize: t.sm, color: c.muted, ...wrap }}>
-            This signs in that browser at {portalOrigin} as <ShortDid value={screen.identifiedAs} />, for this session
-            only. Approving asks for your passkey.
+            This signs in that browser
+            {screen.audience === "admin" ? " to the operator console" : ""} at{" "}
+            {portalOrigin} as <ShortDid value={screen.identifiedAs} />, for this
+            session only. Approving asks for your passkey.
           </p>
-          {deadline !== undefined && <Countdown deadline={deadline} now={clock} />}
+          {deadline !== undefined && (
+            <Countdown deadline={deadline} now={clock} />
+          )}
           {note && <Note tone="danger">{note}</Note>}
         </Screen>
       );
@@ -671,18 +981,36 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
 
     case "done":
       return screen.decision === "approve" ? (
-        <Screen who={who} title="Approved" icon={<StatusIcon tone="ok" />} primary={closeAction} escape={closeAction}>
+        <Screen
+          who={who}
+          title="Approved"
+          icon={<StatusIcon tone="ok" />}
+          primary={closeAction}
+          escape={closeAction}
+        >
           <Message>Return to the website to continue.</Message>
         </Screen>
       ) : (
-        <Screen who={who} title="Declined" icon={<StatusIcon tone="off" />} primary={closeAction} escape={closeAction}>
+        <Screen
+          who={who}
+          title="Declined"
+          icon={<StatusIcon tone="off" />}
+          primary={closeAction}
+          escape={closeAction}
+        >
           <Message>Nothing was approved. You can close this window.</Message>
         </Screen>
       );
 
     case "failed":
       return (
-        <Screen who={who} title="Sign-in stopped" icon={<StatusIcon tone="danger" />} primary={closeAction} escape={closeAction}>
+        <Screen
+          who={who}
+          title="Sign-in stopped"
+          icon={<StatusIcon tone="danger" />}
+          primary={closeAction}
+          escape={closeAction}
+        >
           <Message>{screen.message}</Message>
           <FailureDetails result={screen} />
         </Screen>
