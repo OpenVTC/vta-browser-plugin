@@ -38,12 +38,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 
-import * as x25519 from "@openvtc/vti-didcomm-js/x25519";
-import * as jwk from "@openvtc/vti-didcomm-js/jwk";
-import * as multibase from "@openvtc/vti-didcomm-js/multibase";
-
 import { Identity } from "../dist/didcomm/index.js";
 import { getVtaBearer } from "../dist/vta/auth.js";
+import { generateSigningIdentity, signTrustTask } from "../dist/index.js";
 
 /** The stable code every refusal carries. Spelled out rather than imported so
  *  the test would notice the constant changing value (R3.7). */
@@ -51,15 +48,34 @@ const BLOCKED_ENDPOINT = "E_BLOCKED_ENDPOINT";
 /** The only combination that admits a loopback base URL over http. */
 const DEV_POLICY = { allowInsecure: true, allowPrivate: true };
 
-/** A VTA keyAgreement endpoint the handshake can authcrypt to. */
-function vtaEndpoint() {
-  const kp = x25519.generateKeyPair();
-  const mb = multibase.encodeMultikey(multibase.MULTICODEC.X25519_PUB, kp.publicKey);
-  return {
-    did: `did:key:${mb}`,
-    keyAgreementKid: `did:key:${mb}#${mb}`,
-    keyAgreementPublicJwk: jwk.publicJwk("X25519", kp.publicKey),
+/** The stand-in VTA's key: its replies are signed with it, as the real one's are. */
+const VTA = generateSigningIdentity();
+const vtaEndpoint = () => ({ did: VTA.did });
+
+/** A holder whose DIDComm identity and signing key share one DID, as a
+ *  wallet's do. `getVtaBearer` caches per base URL + holder, so each test
+ *  takes a fresh one and a cache hit can never answer without a request. */
+function holderPair() {
+  const signing = generateSigningIdentity();
+  return { signing, holder: Identity.generate(signing.did) };
+}
+
+/** The VTA's signed, threaded answer to a pre-session document. */
+async function vtaReply(req) {
+  const payload = req.type.endsWith("auth/challenge/0.1")
+    ? { challenge: "c".repeat(32), sessionId: "s-1", expiresAt: "2099-01-01T00:00:00Z" }
+    : { tokens: { accessToken: "vta.jwt", tokenType: "Bearer", expiresIn: 900 } };
+  const doc = {
+    id: `urn:uuid:${crypto.randomUUID()}`,
+    threadId: req.id,
+    type: `${req.type}#response`,
+    issuer: VTA.did,
+    recipient: req.issuer,
+    issuedAt: new Date().toISOString(),
+    payload,
   };
+  await signTrustTask({ envelope: doc, signing: VTA, proofPurpose: "authentication" });
+  return doc;
 }
 
 /** What the stand-in VTA does with a request: redirect it, or answer it. */
@@ -96,12 +112,13 @@ before(async () => {
       res.end();
       return;
     }
-    const body =
-      req.url === "/auth/challenge"
-        ? { sessionId: "s-1", challenge: "c-1" }
-        : { tokens: { accessToken: "vta.jwt" } };
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(body));
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", async () => {
+      const body = await vtaReply(JSON.parse(raw));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    });
   });
   await new Promise((resolve) => vta.listen(0, "127.0.0.1", resolve));
   vtaBase = `http://127.0.0.1:${vta.address().port}`;
@@ -120,7 +137,7 @@ test("a VTA that answers the bearer handshake with a redirect is refused, and th
   reached = [];
   // A fresh holder DID each time: `getVtaBearer` caches a bearer per
   // base URL + holder, and a cache hit would answer without a request.
-  const holder = Identity.generate("did:example:holder-redirect");
+  const { holder, signing } = holderPair();
   try {
     // Caught rather than asserted inline, so the count below is the first thing
     // checked: it is the property this file is named for, and a failure should
@@ -131,6 +148,7 @@ test("a VTA that answers the bearer handshake with a redirect is refused, and th
         baseUrl: vtaBase,
         holder,
         service: vtaEndpoint(),
+        signing,
         netPolicy: DEV_POLICY,
       });
     } catch (e) {
@@ -148,7 +166,7 @@ test("a VTA that answers the bearer handshake with a redirect is refused, and th
     assert.equal(err.status, 302);
     // It got as far as asking — otherwise the refusal could have happened
     // before the request, which is a different control.
-    assert.deepEqual(asked, ["/auth/challenge"]);
+    assert.deepEqual(asked, ["/trust-tasks"]);
   } finally {
     holder.dispose();
   }
@@ -165,7 +183,7 @@ test("the redirect is real and the internal listener is reachable — the contro
 
   await assert.rejects(
     () =>
-      fetch(`${vtaBase}/auth/challenge`, {
+      fetch(`${vtaBase}/trust-tasks`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: "{}",
@@ -175,7 +193,7 @@ test("the redirect is real and the internal listener is reachable — the contro
     // it has been made, which is the whole point.
     () => true,
   );
-  assert.deepEqual(asked, ["/auth/challenge"]);
+  assert.deepEqual(asked, ["/trust-tasks"]);
   assert.ok(reached.length > 0, "the internal listener never saw the followed redirect");
 });
 
@@ -186,16 +204,17 @@ test("the same handshake over the same sockets succeeds when the VTA does not re
   mode = "answer";
   asked = [];
   reached = [];
-  const holder = Identity.generate("did:example:holder-answer");
+  const { holder, signing } = holderPair();
   try {
     const token = await getVtaBearer({
       baseUrl: vtaBase,
       holder,
       service: vtaEndpoint(),
+      signing,
       netPolicy: DEV_POLICY,
     });
     assert.equal(token, "vta.jwt");
-    assert.deepEqual(asked, ["/auth/challenge", "/auth/"]);
+    assert.deepEqual(asked, ["/trust-tasks", "/trust-tasks"]);
     assert.deepEqual(reached, [], "nothing should have gone near the internal listener");
   } finally {
     holder.dispose();
@@ -217,11 +236,11 @@ test("without the dev policy the same base URL never reaches a socket at all", a
   mode = "answer";
   asked = [];
   reached = [];
-  const holder = Identity.generate("did:example:holder-strict");
+  const { holder, signing } = holderPair();
   try {
     // Plaintext: refused on the scheme, first.
     await assert.rejects(
-      () => getVtaBearer({ baseUrl: vtaBase, holder, service: vtaEndpoint() }),
+      () => getVtaBearer({ baseUrl: vtaBase, holder, service: vtaEndpoint(), signing }),
       (err) => err.code === BLOCKED_ENDPOINT && err.reason === "scheme",
     );
     // TLS on the same loopback host: refused on the address, which is the check
@@ -232,6 +251,7 @@ test("without the dev policy the same base URL never reaches a socket at all", a
           baseUrl: vtaBase.replace("http://", "https://"),
           holder,
           service: vtaEndpoint(),
+          signing,
         }),
       (err) => err.code === BLOCKED_ENDPOINT && err.reason === "private_address",
     );

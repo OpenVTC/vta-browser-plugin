@@ -145,7 +145,7 @@ export interface SwapAclRestOptions {
    *  holder's key vouches for the `linkProof` inside the payload, which is a
    *  different claim by a different party and cannot stand in for this one. */
   ephemeralSigning: SigningIdentity;
-  /** The VTA's DID + keyAgreement (authcrypt recipient for `/auth/`). */
+  /** The VTA's DID + keyAgreement. */
   service: RemoteDidcommEndpoint;
   /** The VTA's DID — the presentation `aud`. Usually `service.did`. */
   vtaDid: string;

@@ -12,8 +12,8 @@
 //  2. Pack it as authcrypt: sender = holder's keyAgreement, recipient =
 //     VTA's keyAgreement (same primitive the auth handshake uses, just
 //     pointing the opposite direction with a different message body).
-//  3. Bearer-auth via `getVtaBearer` (REST + DIDComm-authcrypt /auth/
-//     round-trip).
+//  3. Bearer-auth via `getVtaBearer` (two pre-session Trust Tasks on
+//     /trust-tasks).
 //  4. POST the upsert envelope with `sealedSecret: { envelope:
 //     "didcommAuthcrypt", jwe }`.
 //  5. Return the maintainer's response (metadata view + `created` flag).

@@ -1,15 +1,15 @@
 // `auth/challenge` and `auth/refresh` as canonical Trust Tasks.
 //
-// **Not the bootstrap.** `vta/auth.ts` gets the first bearer over bespoke REST
-// (`POST /auth/challenge`, then an authcrypted `POST /auth/`), and it has to:
-// posting a Trust Task to `/trust-tasks` over REST requires a bearer, so a
-// REST-only client cannot ask for its first token as a task. That is a genuine
-// chicken-and-egg, not an oversight.
+// **Also the REST bootstrap.** Posting to `/trust-tasks` needs a bearer for
+// every other task, but the VTA dispatches this family by its `type` ahead of
+// the session check (vti #1858), so a REST client asks for its first token
+// with these two documents and no bearer at all. `vta/auth.ts` does exactly
+// that. It used to use bespoke `POST /auth/challenge` and `POST /auth/`
+// routes, on the reasoning that this was a chicken-and-egg; the VTA removed
+// those routes when it solved it.
 //
-// These are for the transports where it does not arise. TSP and DIDComm
-// authenticate the sender in the envelope itself, so a client already speaking
-// either can ask for a challenge — or refresh an expiring session — as an
-// ordinary task, with no bearer anywhere in the loop.
+// Over TSP and DIDComm the envelope already authenticates the sender, so a
+// client speaking either sends these as ordinary tasks.
 
 import type { TaskParty, TrustTaskSender } from "./channel.js";
 import { buildTrustTask } from "./trust-task.js";
