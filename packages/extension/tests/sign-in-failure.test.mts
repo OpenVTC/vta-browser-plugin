@@ -48,3 +48,12 @@ test("the background logs every failed step through the one formatter", () => {
   const src = readFileSync(new URL("../src/background.ts", import.meta.url), "utf8");
   assert.match(src, /console\.warn\("\[pnm sign-in\] step failed", failureLogFields\(msg\.step, res\.result\)\)/);
 });
+
+test("domain-not-linked and unsupported-vid say what they mean, in a line", () => {
+  const rows = Object.fromEntries(
+    failureDetails({ kind: "failed", code: "domain-not-linked", message: "m", stage: "domain-linkage" }),
+  );
+  assert.match(rows.Meaning!, /DID Configuration/);
+  assert.match(rows.Step!, /website belongs to the community/);
+  assert.match(Object.fromEntries(failureDetails({ kind: "failed", code: "unsupported-vid", message: "m" })).Meaning!, /update/i);
+});

@@ -12,6 +12,12 @@
 //            verify its DID document → the clicked page's origin must be the
 //            portal's (VTI-LNK-105) → "Sign in to <name> at <origin>?"
 //   join     only for a site the wallet does not know (see below).
+//   linkage  only for a domain-linked contact (a DID that names no host,
+//            dtgwg-vti-spec #58): after Continue, before the claim, the
+//            portal's DIF DID Configuration must link its origin to the DID,
+//            or the flow ends `domain-not-linked` with nothing sent. Which
+//            route a contact takes is the contact-method registry's
+//            (`CONTACT_METHODS`); today every registered method is host-named.
 //   claim    the member chose an identity and pressed Continue. Only now is
 //            K_a generated and anything sent to the community (C3 step 7).
 //   prove    the typed number, and `identify` signed by the VTA.
@@ -63,6 +69,9 @@ import {
   OOB_DEVICE_DISABLED,
   OOB_NO_UV_KEY,
   OOB_UV_INVALID,
+  CONTACT_METHODS,
+  type ContactMethodRegistry,
+  type ContactRoute,
 } from "@openvtc/pnm-core";
 import {
   resolveCommunityDocument,
@@ -84,6 +93,7 @@ import {
   grantDigest,
   networkLine,
   sessionAudienceOf,
+  verifyDomainLinkage,
   OobRefusedError,
   OOB_REPLY_INVALID,
   type OobDocument,
@@ -172,6 +182,9 @@ export interface SignInFlowDeps {
   vta: (vtaDid: string, restBaseUrl?: string) => SignInVta;
   resolveDid?: (did: string) => Promise<unknown>;
   fetch?: typeof fetch;
+  /** The contact methods this reader takes. Defaults to the shared registry
+   *  (`did:webvh` and `did:web`, both host-named). */
+  contactMethods?: ContactMethodRegistry;
   /**
    * How long the grant lets the browser act as the member (`notAfter`).
    *
@@ -230,6 +243,11 @@ interface Flow {
   communityName: string;
   identities: SignInIdentityView[];
   kind: SiteKind;
+  /** How the contact qualifies (dtgwg-vti-spec #58). A `domain-linked` one
+   *  is held to the portal's DID Configuration before anything is sent. */
+  route: ContactRoute;
+  /** The portal origin's linkage to the contact's DID was confirmed. */
+  linked?: boolean;
   /** The agent's DIDs, while `joining`. */
   personas?: SignInPersona[];
   kA?: SigningIdentity;
@@ -252,6 +270,15 @@ export const ENDED_MESSAGE = "Refresh the code on the website and try again.";
 
 /** Stable code: recording a DID hosting service in the vault failed. */
 export const SIGN_IN_JOIN_FAILED = "sign-in/join-failed";
+
+/** Stable code, and the spec's reason: a domain-linked contact's portal
+ *  origin is not linked to its DID (outcome `invalid`). Nothing was sent. */
+export const SIGN_IN_DOMAIN_NOT_LINKED = "domain-not-linked";
+
+/** What the member is told when the portal is not linked to the community's
+ *  DID. */
+export const DOMAIN_NOT_LINKED_MESSAGE =
+  "This code can't be used. Your wallet couldn't confirm that this website belongs to the community that made the code.";
 
 /** What the member is told when a DID hosting service has not put their DID
  *  on its access list. */
@@ -323,7 +350,7 @@ export class SignInFlows {
         case "join":
           return await this.join(req.flowId, flow, req.did);
         case "claim":
-          return await this.claim(flow, req.entryId);
+          return await this.claim(req.flowId, flow, req.entryId);
         case "prove":
           return await this.prove(flow, req.enteredNumber);
         case "grant-digest":
@@ -372,8 +399,10 @@ export class SignInFlows {
       };
     // C3 step 1, parsed again here: the background's parse chose the window,
     // this one is the one the flow acts on.
+    const methods = this.deps.contactMethods ?? CONTACT_METHODS;
     const parsed = parseTriggerLink(linkText ?? "", {
       now: Math.floor(this.deps.now() / 1000),
+      contactMethods: methods,
     });
     if (!parsed.ok) return refused(parsed.reason);
     const link = parsed.link;
@@ -403,6 +432,7 @@ export class SignInFlows {
     // of the site and never the link's.
     const resolved = await resolveCommunityDocument(vtcDid, {
       ...(this.deps.resolveDid ? { resolveDid: this.deps.resolveDid } : {}),
+      contactMethods: methods,
     });
     if (!resolved.ok) return refused(resolved.reason);
     const selected = selectSignInServices(resolved.doc);
@@ -416,7 +446,7 @@ export class SignInFlows {
     if (identities.length === 0) {
       const { portalOrigin } = selected.services;
       if (kind !== "did-hosting") {
-        const contactLabel = contactDomainLabel(link.from);
+        const contactLabel = contactDomainLabel(link.from, methods);
         return {
           kind: "not-member",
           ...(contactLabel ? { contactLabel } : {}),
@@ -436,6 +466,7 @@ export class SignInFlows {
         communityName: host,
         identities: [],
         kind,
+        route: resolved.route,
         personas,
       });
       return {
@@ -458,6 +489,7 @@ export class SignInFlows {
       communityName,
       identities,
       kind,
+      route: resolved.route,
     });
     return {
       kind: "confirm",
@@ -476,6 +508,10 @@ export class SignInFlows {
   ): Promise<SignInStepResult> {
     if (flow.phase !== "joining") throw outOfOrder();
     if (!flow.personas?.some((p) => p.did === did)) throw outOfOrder();
+    // The person agreed: a domain-linked site is held to its DID
+    // Configuration before anything is recorded or sent.
+    const unlinked = await this.confirmLinkage(flowId, flow);
+    if (unlinked) return unlinked;
     flow.at = "join";
     let bound: { entryId: string; label: string };
     try {
@@ -515,12 +551,55 @@ export class SignInFlows {
     };
   }
 
+  // ── domain linkage (route B) ────────────────────────────────────────────────
+
+  /**
+   * For a domain-linked contact, confirm the portal origin is linked to its
+   * DID by the portal's DIF DID Configuration. Runs once the person has
+   * continued and before anything is sent to the contact's services; on
+   * failure the flow ends with `domain-not-linked` and nothing is sent. A
+   * host-named contact needs no check (the DID names the host).
+   */
+  private async confirmLinkage(
+    flowId: string,
+    flow: Flow,
+  ): Promise<SignInStepResult | undefined> {
+    if (flow.route !== "domain-linked" || flow.linked) return undefined;
+    flow.at = "domain-linkage";
+    const linkage = await verifyDomainLinkage({
+      did: flow.vtcDid,
+      didDocument: flow.vtcDocument,
+      origin: flow.services.portalOrigin,
+      now: this.deps.now(),
+      ...(this.deps.fetch ? { fetch: this.deps.fetch } : {}),
+    });
+    if (linkage.ok) {
+      flow.linked = true;
+      return undefined;
+    }
+    this.end(flow);
+    this.flows.delete(flowId);
+    return {
+      kind: "failed",
+      code: SIGN_IN_DOMAIN_NOT_LINKED,
+      message: DOMAIN_NOT_LINKED_MESSAGE,
+      stage: "domain-linkage",
+    };
+  }
+
   // ── claim ──────────────────────────────────────────────────────────────────
 
-  private async claim(flow: Flow, entryId: string): Promise<SignInStepResult> {
+  private async claim(
+    flowId: string,
+    flow: Flow,
+    entryId: string,
+  ): Promise<SignInStepResult> {
     if (flow.phase !== "prepared") throw outOfOrder();
     const entry = flow.identities.find((i) => i.entryId === entryId);
     if (!entry) throw outOfOrder();
+    // Route B: after Continue, before the claim (dtgwg-vti-spec #58).
+    const unlinked = await this.confirmLinkage(flowId, flow);
+    if (unlinked) return unlinked;
     // C3 step 7: only now.
     const kA = newApproverKey();
     flow.kA = kA;

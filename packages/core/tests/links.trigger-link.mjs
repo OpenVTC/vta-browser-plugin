@@ -19,6 +19,7 @@ import {
   SIGN_IN_FLOW,
   CONTACT_METHOD_CAPABILITIES,
   isHostNamedServiceContact,
+  isServiceContact,
 } from "../dist/links/index.js";
 
 const FROM = "did:webvh:QmPEQVM1JPTyrvEgBcDXwjK4TeyLGSX1PxjgyeAisPviUx:members.example.org";
@@ -218,7 +219,13 @@ test("VTI-LNK-102: the contact rule is an allow-list by capability", () => {
   assert.equal(isHostNamedServiceContact({ kind: "did:web", value: "did:web:example.org" }), true);
   assert.equal(isHostNamedServiceContact({ kind: "did:key", value: "did:key:z6Mk" }), false);
   assert.equal(isHostNamedServiceContact({ kind: "did:peer", value: "did:peer:2.Ez6L" }), false);
-  assert.equal(SIGN_IN_FLOW.allowsContact, isHostNamedServiceContact);
+  // Sign-in takes either route; with only host-named methods registered, that
+  // is exactly the host-named contacts.
+  assert.equal(SIGN_IN_FLOW.allowsContact, isServiceContact);
+  for (const kind of ["did:webvh", "did:web", "did:key", "did:peer"]) {
+    const contact = { kind, value: `${kind}:x` };
+    assert.equal(SIGN_IN_FLOW.allowsContact(contact), isHostNamedServiceContact(contact), kind);
+  }
 });
 
 test("VTI-LNK-102: a did:web contact is accepted for sign-in", () => {
