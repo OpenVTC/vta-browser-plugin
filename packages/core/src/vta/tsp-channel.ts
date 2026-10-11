@@ -47,6 +47,79 @@ import { clientBudgetMs } from "./budget.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+// ── One unpack per frame, however many requests are waiting ──
+//
+// Every inbound frame on a socket is offered to each outstanding request in
+// turn, and each request has to unpack it — decrypt and verify the signature —
+// before it can read the thread id and say "not mine". With N requests waiting,
+// a burst of N replies cost about N²/2 unpacks, serially, on the one thread that
+// also sends. A console switched between agents a few times a second leaves six
+// requests waiting per load for up to 30 s, so N reached ~80 (gt-vta,
+// 2026-10-11): at ~1.4 ms an unpack (measured in Node; slower in a browser)
+// that is seconds of blocked thread per burst, and the wallet's own sends came
+// out bunched behind it — four page loads reaching the agent within 15 ms.
+//
+// The transport hands every waiter the same `bytes` object, and every waiter on
+// one socket opens it with the same keys, so the result is shared: one unpack
+// per frame, then a thread-id comparison per waiter. Keyed on the frame object
+// (dropped with it) and on the public half of the keys, so a waiter holding
+// different keys never reads another's result.
+
+type OpenedReply =
+  | { ok: true; sender: string; doc: { type?: string; id?: unknown; payload?: unknown; threadId?: unknown } }
+  | { ok: false; decline: string };
+
+const openedFrames = new WeakMap<Uint8Array, Map<string, Promise<OpenedReply>>>();
+
+const hexOf = (b: Uint8Array): string => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+
+/** Unpack and open `bytes` as a reply from `vta` to `holder`, at most once per
+ *  frame for any given pair of keys. Never rejects: a frame that does not open
+ *  is a decline, with the reason. Exported for tests. */
+export function openReplyOnce(
+  bytes: Uint8Array,
+  holder: TspHolderIdentity,
+  vta: TspRemoteEndpoint,
+): Promise<OpenedReply> {
+  const keys = `${hexOf(holder.encryptionPublicKey)}|${hexOf(vta.encryptionPublicKey)}|${hexOf(vta.signingPublicKey)}`;
+  let byKeys = openedFrames.get(bytes);
+  if (!byKeys) {
+    byKeys = new Map();
+    openedFrames.set(bytes, byKeys);
+  }
+  const cached = byKeys.get(keys);
+  if (cached) return cached;
+  const opened = (async (): Promise<OpenedReply> => {
+    let reply;
+    try {
+      reply = await unpack(bytes, {
+        receiverDecryptionKey: holder.encryptionPrivateKey,
+        senderEncryptionKey: vta.encryptionPublicKey,
+        senderSigningKey: vta.signingPublicKey,
+      });
+    } catch (err) {
+      return { ok: false, decline: `unpack failed: ${(err as Error).message}` };
+    }
+    try {
+      // The reply comes back in the same binding envelope it was sent in. A
+      // reply that dropped the wrapper would make the binding asymmetric —
+      // conformant one way and not the other — which is harder to notice than
+      // being wrong in both directions.
+      const doc = openTspEnvelope(fromUtf8.decode(reply.payload)) as {
+        type?: string;
+        id?: unknown;
+        payload?: unknown;
+        threadId?: unknown;
+      };
+      return { ok: true, sender: reply.sender, doc };
+    } catch (err) {
+      return { ok: false, decline: (err as Error).message };
+    }
+  })();
+  byKeys.set(keys, opened);
+  return opened;
+}
+
 /** The wallet's TSP identity — its VID plus the raw keys `pack`/`unpack` need.
  *  All keys are raw 32-byte (X25519 / Ed25519). */
 export interface TspHolderIdentity {
@@ -316,36 +389,21 @@ export class TspChannel implements TrustTaskChannel {
 
     const claims: TspFrameClaim = async (bytes) => {
       framesSeen++;
-      let reply;
-      try {
-        reply = await unpack(bytes, {
-          receiverDecryptionKey: this.holder.encryptionPrivateKey,
-          senderEncryptionKey: this.vta.encryptionPublicKey,
-          senderSigningKey: this.vta.signingPublicKey,
-        });
-      } catch (err) {
-        // Not unpackable under these keys, so not ours. Expected on a shared
-        // socket — another peer's frame — but recorded, because "nothing I can
-        // read arrived" and "the VTA answered something I did not expect" are
-        // very different problems and they look identical from the timeout.
-        lastDecline = `unpack failed: ${(err as Error).message}`;
+      // Shared with every other request waiting on this socket — see
+      // `openReplyOnce`. A frame that does not open under these keys is
+      // expected on a shared socket (another peer's), but the reason is kept,
+      // because "nothing I can read arrived" and "the VTA answered something I
+      // did not expect" look identical from the timeout.
+      const opened = await openReplyOnce(bytes, this.holder, this.vta);
+      if (!opened.ok) {
+        lastDecline = opened.decline;
         return false;
       }
-      if (reply.sender !== this.vta.vid) {
-        lastDecline = `sealed by ${reply.sender}, not the VTA ${this.vta.vid}`;
+      if (opened.sender !== this.vta.vid) {
+        lastDecline = `sealed by ${opened.sender}, not the VTA ${this.vta.vid}`;
         return false;
       }
-      let doc: { type?: string; id?: unknown; payload?: unknown; threadId?: unknown };
-      try {
-        // The reply comes back in the same binding envelope it was sent in. A
-        // reply that dropped the wrapper would make the binding asymmetric —
-        // conformant one way and not the other — which is harder to notice than
-        // being wrong in both directions.
-        doc = openTspEnvelope(fromUtf8.decode(reply.payload)) as typeof doc;
-      } catch (err) {
-        lastDecline = (err as Error).message;
-        return false;
-      }
+      const doc = opened.doc;
       // `threadId` on a response is the request's `threadId` or, as here, its
       // `id` — the same `thid ?? id` rule DIDComm correlates on, and what the
       // framework's `respond_with` sets.
