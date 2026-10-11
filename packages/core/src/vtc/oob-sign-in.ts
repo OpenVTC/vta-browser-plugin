@@ -445,15 +445,17 @@ export interface OobReply<P> {
 /**
  * Sign `doc` with `K_a` (an operational proof, `authentication`), post it to
  * the community's Trust-Task endpoint, and return its reply once it checks
- * out: signed by the community for `assertionMethod` with a key its verified
- * document lists under `assertionMethod`, threaded to this request, and
- * addressed back to `K_a`. A refusal throws {@link OobRefusedError}.
+ * out: signed by the community for `replyPurpose` (`assertionMethod`, the
+ * `auth/oob` steps' default, contract C5) with a key its verified document
+ * lists under that relationship, threaded to this request, and addressed back
+ * to `K_a`. A refusal throws {@link OobRefusedError}.
  */
 export async function sendOob<P>(
   kA: SigningIdentity,
   doc: OobDocument,
   opts: OobSenderOptions,
   label: string,
+  replyPurpose: "authentication" | "assertionMethod" = "assertionMethod",
 ): Promise<OobReply<P>> {
   if (doc.issuer !== kA.did || doc.recipient !== opts.vtcDid) {
     throw new OobReplyInvalidError(`${label}: the document is not from K_a to the community`);
@@ -463,6 +465,30 @@ export async function sendOob<P>(
     signing: kA,
     proofPurpose: "authentication",
   });
+  return postCommunityTask<P>(doc, opts, label, replyPurpose);
+}
+
+/**
+ * Post an already-signed document to the community's Trust-Task endpoint and
+ * return its reply once it checks out: of the response type, threaded to this
+ * document, addressed back to its issuer (when addressed at all), and signed by
+ * the community for `replyPurpose` with a key its verified document lists under
+ * that relationship. A refusal throws {@link OobRefusedError}; a reply that
+ * does not check out, {@link OobReplyInvalidError}.
+ *
+ * The `auth/oob` steps are attested (`assertionMethod`, contract C5); every
+ * other VTC response — the join requests' among them — is operational and
+ * signed for `authentication` (VTI-KEY-106).
+ */
+export async function postCommunityTask<P>(
+  doc: OobDocument,
+  opts: OobSenderOptions,
+  label: string,
+  replyPurpose: "authentication" | "assertionMethod",
+): Promise<OobReply<P>> {
+  if (doc.recipient !== opts.vtcDid) {
+    throw new OobReplyInvalidError(`${label}: the document is not addressed to the community`);
+  }
   const fetchFn = withFetchTimeout(opts.fetch);
   let res: Response;
   try {
@@ -494,22 +520,24 @@ export async function sendOob<P>(
   if ((reply as { threadId?: unknown }).threadId !== doc.id) {
     throw new OobReplyInvalidError(`${label}: the reply is not threaded to this request`);
   }
-  if (reply.recipient !== undefined && reply.recipient !== kA.did) {
+  if (reply.recipient !== undefined && reply.recipient !== doc.issuer) {
     throw new OobReplyInvalidError(`${label}: the reply is addressed to someone else`);
   }
-  await assertSignedByCommunity(reply, opts.vtcDid, opts.vtcDocument, label);
+  await assertSignedByCommunity(reply, opts.vtcDid, opts.vtcDocument, label, replyPurpose);
   return { doc: reply, payload: reply.payload };
 }
 
-/** The community's `assertionMethod` signature over a reply (contract C5). */
+/** The community's signature over a reply: `assertionMethod` for the
+ *  `auth/oob` steps (contract C5), `authentication` for an operational one. */
 export async function assertSignedByCommunity(
   reply: OobDocument,
   vtcDid: string,
   vtcDocument: Record<string, unknown>,
   label: string,
+  purpose: "authentication" | "assertionMethod" = "assertionMethod",
 ): Promise<void> {
   const result = await verifyTrustTaskProof(reply as unknown as Record<string, unknown>, {
-    expectedProofPurpose: "assertionMethod",
+    expectedProofPurpose: purpose,
     resolveDid: async (did) => {
       if (did !== vtcDid) throw new Error(`reply signed by ${did}, not the community`);
       return vtcDocument;
@@ -519,13 +547,14 @@ export async function assertSignedByCommunity(
     throw new OobReplyInvalidError(`${label}: the reply is not signed by the community (${result.reason ?? "wrong signer"})`);
   }
   const vm = (reply.proof as { verificationMethod?: string }).verificationMethod!;
-  const listed = Array.isArray(vtcDocument.assertionMethod) ? vtcDocument.assertionMethod : [];
+  const relationship = vtcDocument[purpose];
+  const listed = Array.isArray(relationship) ? relationship : [];
   const fragment = vm.slice(vm.indexOf("#"));
   const ok = listed.some((m) => {
     const id = typeof m === "string" ? m : (m as { id?: unknown })?.id;
     return typeof id === "string" && (id === vm || id === fragment);
   });
-  if (!ok) throw new OobReplyInvalidError(`${label}: the signing key is not one of the community's assertionMethod keys`);
+  if (!ok) throw new OobReplyInvalidError(`${label}: the signing key is not one of the community's ${purpose} keys`);
 }
 
 // ── The checks on the community's replies (base design §14 steps 6 and 10) ───

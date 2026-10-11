@@ -382,10 +382,37 @@ document says it is:
   "<host> hasn't added you yet. Send this DID to its operator:" and shows the
   DID with a Copy button; the same screen appears for an identity you have
   used there before that it no longer admits.
-- **Anything else, such as a community (VTC):** "Not one of your communities",
-  with its verified sign-in page. Joining a community is the community's own
-  application process (`vtc/join-requests/*`), which this wallet does not run
-  yet, and VTC DID documents do not advertise a join page to link to.
+- **A community (VTC)** (it publishes a `VTCRest` service): "Join <host>?".
+  Still nothing has been sent. **See what it asks** fetches the community's
+  join manifest (`vtc/join-requests/manifest/0.3`) as a throwaway key, so the
+  community learns nothing about who is asking. The window then shows whether
+  it admits members straight away or an administrator reviews each request,
+  the details it asks applicants to give (required ones must be filled in),
+  a "List me in its public member registry" box (unticked unless you tick it),
+  and the DIDs your agent hosts, each marked with any site it is already used
+  at, since one identity used at two communities links them. **Send request**
+  records the community in your vault (the same `did-self-issued` entry a
+  member's sign-in uses: the portal's origin and the community's DID, in the
+  chosen DID's context) and sends `vtc/join-requests/submit/0.3`, signed by
+  your agent as that DID. The entry comes first because your agent signs only
+  as a vault entry's identity, and the community takes the applicant from that
+  signature. Then:
+  - **Admitted straight away:** the window goes on to "Sign in to <host>?" for
+    the same code.
+  - **Waiting for an administrator** (or for more evidence): "Request sent —
+    you can sign in once <host> approves it". Nothing else is sent, and the
+    vault entry stays, because the request is open under that DID.
+  - **Declined, or the request was refused** (not accepting members, a
+    required detail missing, unreachable): the reason, plainly, and the vault
+    entry is removed again.
+
+  A community whose every way in needs something this wallet cannot send yet —
+  a credential, an invitation or identity vetting — gets a screen that lists
+  what it asks for and closes; nothing about you was sent. VTC DID documents
+  do not advertise a join page to link to, so the window names the verified
+  address to ask.
+- **Anything else:** "Not one of your communities", with its verified sign-in
+  page.
 
 Each browser is one of your devices at your VTA. Every install (every browser
 profile) has its own holder identity, so it registers itself separately

@@ -28,6 +28,15 @@
 // communities". A DID hosting service that has not put the member's DID on
 // its access list ends on a screen with that DID and a Copy button.
 //
+// A community (VTC) the wallet does not know is offered to join, in two
+// screens: "Join <host>?" (nothing sent; continuing asks the community, as a
+// throwaway key, what it requires), then "Ask to join <host>" with what it
+// asks for — an identity to apply as, the details it requests, and whether to
+// be listed in its public registry — and Send request. An immediate admission
+// goes on to screen 1 for the same code; a request an administrator has to
+// decide ends on "Request sent"; a community that asks for evidence this
+// wallet cannot provide ends on a screen that says what it asks for.
+//
 // ## Layout
 //
 // Every screen is one `Screen`: the wallet's mark, then a header naming the
@@ -645,6 +654,8 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
   const [entryId, setEntryId] = useState("");
   const [identities, setIdentities] = useState<SignInIdentityView[]>([]);
   const [joinDid, setJoinDid] = useState("");
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [registryConsent, setRegistryConsent] = useState(false);
   const [number, setNumber] = useState("");
   const [deadline, setDeadline] = useState<number | undefined>();
   const [busy, setBusy] = useState(false);
@@ -670,6 +681,19 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
         setCommunityName(res.result.communityName);
         setIdentities(res.result.identities);
         setEntryId(res.result.identities[0]?.entryId ?? "");
+      }
+      if (res.result.kind === "join-community")
+        setPortalOrigin(res.result.portalOrigin);
+      if (res.result.kind === "join-apply") {
+        setPortalOrigin(res.result.portalOrigin);
+        // Preselect only an identity used nowhere else, and only when it is
+        // the one choice: picking for the person would link communities.
+        const fresh = res.result.identities.filter((i) => !i.usedAt?.length);
+        setJoinDid(
+          res.result.identities.length === 1 && fresh.length === 1
+            ? fresh[0]!.did
+            : "",
+        );
       }
       if (res.result.kind === "join-hosting") {
         setPortalOrigin(res.result.portalOrigin);
@@ -876,6 +900,288 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
             {screen.host} admits only identities its operator has added. If it
             hasn't added this one yet, the wallet will show you the DID to send
             them.
+          </p>
+        </Screen>
+      );
+
+    case "join-community":
+      return (
+        <Screen
+          title={`Join ${screen.host}?`}
+          primary={{
+            label: "See what it asks",
+            run: () => void run({ step: "join-manifest" }),
+            disabled: busy,
+            testId: "join-manifest",
+          }}
+          secondary={{
+            label: "Not now",
+            run: () => void run({ step: "cancel" }).then(closeWindow),
+            disabled: busy,
+            testId: "decline",
+          }}
+        >
+          <p style={{ margin: 0, ...wrap }}>
+            <Origin origin={screen.portalOrigin} testId="portal" /> is a
+            community you're not a member of. Its address is from its verified
+            DID document; check it matches the website's.
+          </p>
+          <p style={{ margin: 0, color: c.muted }}>
+            Nothing has been sent to it. If you continue, your wallet asks it
+            what it requires to join, without saying who you are.
+          </p>
+        </Screen>
+      );
+
+    case "join-apply": {
+      const missing = screen.attributes.some(
+        (a) => a.required && !(answers[a.type] ?? "").trim(),
+      );
+      const send = () =>
+        void run({
+          step: "join-submit",
+          did: joinDid,
+          attributes: screen.attributes
+            .map((a) => ({ type: a.type, value: (answers[a.type] ?? "").trim() }))
+            .filter((a) => a.value !== ""),
+          registryConsent,
+        });
+      return (
+        <Screen
+          title={`Ask to join ${screen.host}`}
+          primary={{
+            label: "Send request",
+            run: send,
+            disabled: busy || !joinDid || missing,
+            testId: "join-submit",
+          }}
+          secondary={{
+            label: "Not now",
+            run: () => void run({ step: "cancel" }).then(closeWindow),
+            disabled: busy,
+            testId: "decline",
+          }}
+        >
+          <p style={{ margin: 0, ...wrap }}>
+            <Origin origin={screen.portalOrigin} testId="portal" />
+            {screen.displayName ? (
+              <>
+                {" "}calls itself{" "}
+                <strong data-testid="display-name" style={wrap}>
+                  {screen.displayName}
+                </strong>{" "}
+                (its own word, not checked)
+              </>
+            ) : null}
+            .{" "}
+            <span data-testid="admission">
+              {screen.admission === "automatic"
+                ? "It admits members straight away."
+                : "An administrator reviews each request."}
+            </span>
+          </p>
+          {screen.identities.length === 0 ? (
+            <Note tone="warn">
+              <div data-testid="no-identities" style={wrap}>
+                Your agent hosts no identities yet, so there is nothing to join
+                as. Create one in the wallet and try again.
+              </div>
+            </Note>
+          ) : (
+            <fieldset
+              style={{
+                border: "none",
+                margin: 0,
+                padding: 0,
+                display: "grid",
+                gap: 8,
+                minWidth: 0,
+              }}
+            >
+              <legend style={{ ...microLabel, padding: 0, marginBottom: 8 }}>
+                Join as
+              </legend>
+              {screen.identities.map((i) => {
+                const on = joinDid === i.did;
+                return (
+                  <label
+                    key={i.did}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "auto minmax(0, 1fr)",
+                      gap: "2px 10px",
+                      alignItems: "start",
+                      padding: "10px 12px",
+                      borderRadius: radius.md,
+                      border: `1px solid ${on ? c.accent : c.line}`,
+                      background: on ? c.accentSoft : c.surface,
+                      cursor: "pointer",
+                      minWidth: 0,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="applicant"
+                      value={i.did}
+                      checked={on}
+                      onChange={() => setJoinDid(i.did)}
+                      style={{
+                        accentColor: c.accent,
+                        margin: "3px 0 0",
+                        padding: 0,
+                      }}
+                    />
+                    <ShortDid value={i.did} />
+                    <span />
+                    <span style={{ fontSize: t.xs, color: c.faint, ...wrap }}>
+                      {i.usedAt?.length
+                        ? `Also used at ${i.usedAt.join(", ")}`
+                        : i.contextId}
+                    </span>
+                  </label>
+                );
+              })}
+            </fieldset>
+          )}
+          {screen.attributes.length > 0 && (
+            <div style={{ display: "grid", gap: 8, minWidth: 0 }}>
+              <div style={{ ...microLabel }}>It asks you to tell it</div>
+              {screen.attributes.map((a) => (
+                <label
+                  key={a.type}
+                  style={{ display: "grid", gap: 4, minWidth: 0 }}
+                >
+                  <span style={{ fontSize: t.sm, ...wrap }}>
+                    <code style={{ fontFamily: font.mono }}>{a.type}</code>
+                    {a.required ? " (required)" : " (optional)"}
+                    {a.purpose ? (
+                      <span style={{ color: c.muted }}> — {a.purpose}</span>
+                    ) : null}
+                  </span>
+                  <input
+                    type="text"
+                    data-testid={`attribute-${a.type}`}
+                    autoComplete="off"
+                    value={answers[a.type] ?? ""}
+                    onChange={(e) =>
+                      setAnswers((prev) => ({ ...prev, [a.type]: e.target.value }))
+                    }
+                    style={{
+                      font: "inherit",
+                      padding: "7px 10px",
+                      background: c.ground,
+                      color: c.text,
+                      border: `1px solid ${c.line}`,
+                      borderRadius: radius.md,
+                      minWidth: 0,
+                    }}
+                  />
+                </label>
+              ))}
+              <span style={{ fontSize: t.xs, color: c.faint }}>
+                What you type is sent as you typed it, signed by the identity
+                you join as.
+              </span>
+            </div>
+          )}
+          <label
+            style={{
+              display: "grid",
+              gridTemplateColumns: "auto minmax(0, 1fr)",
+              gap: 10,
+              alignItems: "start",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              data-testid="registry-consent"
+              checked={registryConsent}
+              onChange={(e) => setRegistryConsent(e.target.checked)}
+              style={{ accentColor: c.accent, margin: "3px 0 0" }}
+            />
+            <span style={{ fontSize: t.sm, ...wrap }}>
+              List me in {screen.host}'s public member registry
+            </span>
+          </label>
+          <p style={{ margin: 0, fontSize: t.sm, color: c.muted, ...wrap }}>
+            Sending the request tells {screen.host} the identity you chose.
+            Your wallet remembers {screen.host} for that identity.
+          </p>
+        </Screen>
+      );
+    }
+
+    case "join-elsewhere":
+      return (
+        <Screen
+          title={
+            screen.reason === "not-accepting"
+              ? `${screen.host} isn't taking new members`
+              : `${screen.host} needs more than your wallet can send`
+          }
+          icon={<StatusIcon tone="off" />}
+          primary={closeAction}
+          escape={closeAction}
+        >
+          {screen.reason === "not-accepting" ? (
+            <Message>
+              It isn't accepting requests to join right now. Nothing about you
+              was sent to it.
+            </Message>
+          ) : (
+            <>
+              <Message>
+                To join, it asks for something this wallet can't provide yet.
+                Nothing about you was sent to it.
+              </Message>
+              <ul
+                data-testid="join-needs"
+                style={{ margin: 0, paddingLeft: 18, color: c.muted, ...wrap }}
+              >
+                {screen.needs.map((n) => (
+                  <li key={n}>{n}</li>
+                ))}
+              </ul>
+              <p style={{ margin: 0, color: c.muted, ...wrap }}>
+                Ask the community how to join. Its verified address is{" "}
+                <Origin origin={screen.portalOrigin} testId="portal" />.
+              </p>
+            </>
+          )}
+        </Screen>
+      );
+
+    case "join-pending":
+      return (
+        <Screen
+          title="Request sent"
+          icon={<StatusIcon tone="ok" />}
+          primary={closeAction}
+          escape={closeAction}
+        >
+          <Message>
+            You can sign in once {screen.host} approves it. Nothing else was
+            sent.
+          </Message>
+          {screen.needs?.length ? (
+            <>
+              <p style={{ margin: 0, color: c.muted, ...wrap }}>
+                Before it decides, it asks for:
+              </p>
+              <ul
+                data-testid="join-needs"
+                style={{ margin: 0, paddingLeft: 18, color: c.muted, ...wrap }}
+              >
+                {screen.needs.map((n) => (
+                  <li key={n}>{n}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+          <p style={{ margin: 0, color: c.muted, ...wrap }}>
+            Sign in from <Origin origin={screen.portalOrigin} testId="portal" />{" "}
+            once you're in.
           </p>
         </Screen>
       );
