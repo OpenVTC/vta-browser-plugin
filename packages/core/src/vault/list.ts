@@ -5,11 +5,9 @@
 // view of stored credentials. Read-only — secret material never crosses the
 // wire (it's only released by `vault/release/0.1`, which lands in M2).
 //
-// Authentication: the wallet authcrypts a `auth/authenticate/0.1` DIDComm
-// message to the VTA's keyAgreement key (same primitive `swapAclRest` uses)
-// to obtain a short-lived bearer token, then attaches the token to the
-// trust-tasks POST. No token caching in M1 — every list call does a fresh
-// auth round-trip. Caching can land in M2 alongside vault/sync.
+// Authentication: over REST the channel gets a short-lived bearer from
+// `getVtaBearer` (`vta/auth.ts`), a signed `auth/authenticate/0.2` posted to
+// `/trust-tasks`, and attaches it to the trust-tasks POST.
 //
 // Holder authentication: the wallet's holder did:peer must be in the VTA's
 // ACL (placed there by the M0.7 swap-acl flow) and must carry the derived

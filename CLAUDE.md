@@ -264,12 +264,23 @@ the VTA, the VTC and the did-hosting RP sign them for. The one opt-out is the
 Mediator Lens (`replyProofPurpose: "any"`): a mediator is none of those, and
 signs its `messaging/*` replies for a purpose of its own.
 
-**What is deliberately NOT signed:** the `/auth/` handshake
-(`vta/auth.ts`). That route is bespoke — it authenticates by the authcrypt
-sender and never reaches the dispatch spine — and `provision/integration`,
+**What is deliberately NOT signed by a channel:** `provision/integration`,
 which signs its own document with an `authentication`-purpose proof in
-`provision/request.ts` and sends outside the channels. Neither is an oversight;
-routing either through a channel would overwrite or duplicate a proof.
+`provision/request.ts` and sends outside the channels. Routing it through one
+would overwrite or duplicate that proof.
+
+**The REST bearer is two signed Trust Tasks, not a bespoke route.**
+`getVtaBearer` (`vta/auth.ts`) posts `auth/challenge/0.1` (with
+`payload.subject`, which the VTA's handler requires) and then
+`auth/authenticate/0.2` to `/trust-tasks` with no bearer; the VTA dispatches
+that family by `type` ahead of the session check, and the authenticate proof
+*is* the sign-in. It signs through `signOutboundTask` like every channel and
+verifies the VTA's signed, threaded replies with `decodeTrustTaskHttpReply`
+(`vta/http-reply.ts`, split out so `auth.ts` need not import the channel that
+imports it). This replaced `POST /auth/challenge` + an authcrypted
+`POST /auth/`, which vti #1858 deleted: a wallet still on them got a 405 from
+every VTA on that release, and REST, the fallback when a mediator stops
+answering, could not sign in at all.
 
 `tests/vta.outbound-signing.mjs` pins it, running the real verifier over the
 document as the counterparty receives it — a signature copied from another

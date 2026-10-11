@@ -2,8 +2,9 @@
 // (vta/rest-channel.ts) owns the POST to /trust-tasks and the response
 // decode; this module owns getting the token it posts with:
 //
-//   - `getVtaBearer` — runs the canonical /auth/challenge → DIDComm
-//     authcrypt → /auth/ → bearer-token round-trip, with caching.
+//   - `getVtaBearer` — posts an `auth/challenge/0.1` document and then a
+//     signed `auth/authenticate/0.2` to /trust-tasks for a bearer token, with
+//     caching.
 //   - `makeReauth` / `invalidateVtaBearer` — drop a stale cached token so a
 //     401 self-heals with one retry.
 //
@@ -19,7 +20,7 @@
 // Bearer caching: the VTA's access token has a ~15-minute TTL, so we
 // reuse it across vault ops within a conservative window. Without this,
 // a single user action that chains ops (e.g. a SIOP sign-in that lists
-// entries THEN signs a trust-task) fires one /auth/challenge + /auth/
+// entries THEN signs a trust-task) fires one challenge + authenticate
 // round-trip per op — and those back-to-back unauth requests from one IP
 // trip the VTA's per-IP rate limit (HTTP 429 "Too Many Requests"). The
 // cache is keyed by (baseUrl, holder DID) so distinct identities and
@@ -28,11 +29,16 @@
 
 import { guardedFetch } from "@openvtc/vti-didcomm-js/net-guard";
 
-import { packAuthcrypt, type Identity, type NetPolicy } from "../didcomm/index.js";
+import type { Identity, NetPolicy } from "../didcomm/index.js";
 import type { RemoteDidcommEndpoint } from "./didcomm.js";
-import { withFetchTimeout } from "../http/timeout-fetch.js";
-
-import { TYPE_URI as VTA_AUTHENTICATE } from "@openvtc/trust-tasks/auth/authenticate/0.1/payload";
+import { withFetchTimeout, isFetchTimeout, DEFAULT_FETCH_TIMEOUT_MS } from "../http/timeout-fetch.js";
+import { authenticateSession, requestAuthChallenge } from "./auth-tasks.js";
+import type { SendOpts, TrustTaskSender } from "./channel.js";
+import { TRUST_TASK_PATH } from "./endpoint.js";
+import { VtaClientError } from "./errors.js";
+import { decodeTrustTaskHttpReply } from "./http-reply.js";
+import type { TrustTask } from "./protocol.js";
+import { asTaskSigner, signOutboundTask, type ChannelSigner } from "./trust-task.js";
 
 /** Reuse window — kept well under the server's ~15-minute token TTL so a
  *  cached token can't be served past expiry (clock-skew safety margin). */
@@ -63,10 +69,17 @@ export function makeReauth(opts: VtaAuthInputs): () => Promise<string> {
 export interface VtaAuthInputs {
   /** VTA REST base URL — from the connection state's `restBaseUrl`. */
   baseUrl: string;
-  /** Authcrypt sender — the holder's DIDComm identity post-onboarding. */
+  /** Who signs in. Only its DID is read here: it is the challenge's subject
+   *  and the issuer of both documents. Typed as the full identity because the
+   *  channel this feeds is built from one. */
   holder: Identity;
-  /** VTA's keyAgreement endpoint (resolved via `resolveKeyAgreement`). */
+  /** The VTA. Only its DID is read here: it is the recipient, and the signer
+   *  its replies must verify as. */
   service: RemoteDidcommEndpoint;
+  /** Signs the `auth/authenticate` document, whose proof *is* the sign-in.
+   *  Must be the holder's key: the VTA verifies it with a `did:key` resolver
+   *  and mints the session for whoever signed. */
+  signing: ChannelSigner;
   /** fetch impl (defaults to global). */
   fetch?: typeof fetch;
   /** Egress policy for `baseUrl`. Strict by default — https on a public host —
@@ -96,12 +109,64 @@ export function vtaRestEndpointPolicy(netPolicy?: NetPolicy): {
 }
 
 /**
- * Run /auth/challenge → authcrypt /auth/ → bearer token, returning a
- * cached token when one is still within its reuse window. Caching keeps a
- * multi-op user action (sign-in = list + sign, etc.) to a single /auth/
- * round-trip so it doesn't trip the VTA's per-IP unauth rate limit.
+ * Get a bearer token for the VTA's REST surface, returning a cached one when it
+ * is still within its reuse window. Caching keeps a multi-op user action
+ * (sign-in = list + sign, etc.) to one sign-in so it does not trip the VTA's
+ * per-IP rate limit on anonymous requests.
+ *
+ * Two Trust Tasks, both POSTed to `/trust-tasks` with no bearer: an
+ * `auth/challenge/0.1` naming the holder as its subject, then an
+ * `auth/authenticate/0.2` carrying the challenge, whose proof is the
+ * authentication. The VTA recognises this family by the document's `type` and
+ * dispatches it ahead of the session check (vti #1858).
+ *
+ * This replaced `POST /auth/challenge` and an authcrypted `POST /auth/`, which
+ * the VTA deleted in that release. A wallet still using them got a 405 from
+ * every VTA on it, and nothing over REST worked at all.
  */
 export async function getVtaBearer(opts: VtaAuthInputs): Promise<string> {
+  const base = opts.baseUrl.replace(/\/+$/, "");
+  const cacheKey = bearerCacheKey(base, opts.holder.did);
+  const cached = bearerCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.token;
+  }
+
+  const sender = preSessionSender(opts);
+  const challenge = await requestAuthChallenge(sender, {
+    holder: opts.holder,
+    service: opts.service,
+    // REQUIRED by the VTA's handler, though optional in the spec: the
+    // challenge is minted for this DID and spent only by its signature.
+    subject: opts.holder.did,
+  });
+  const authed = await authenticateSession(sender, {
+    holder: opts.holder,
+    service: opts.service,
+    challenge: challenge.challenge,
+    sessionId: challenge.sessionId,
+  });
+  const accessToken = authed.tokens?.accessToken;
+  if (!accessToken) {
+    throw new VtaClientError("e.client.parse", "auth/authenticate: the reply carries no access token");
+  }
+  // The token's own lifetime when it says, less a margin for clock skew and a
+  // request in flight; never longer than the fixed window.
+  const lifetimeMs =
+    typeof authed.tokens.expiresIn === "number"
+      ? Math.min(BEARER_TTL_MS, authed.tokens.expiresIn * 1000 - 60_000)
+      : BEARER_TTL_MS;
+  bearerCache.set(cacheKey, { token: accessToken, expiresAt: Date.now() + lifetimeMs });
+  return accessToken;
+}
+
+/**
+ * Posts a pre-session document to `/trust-tasks` with no bearer, and reads the
+ * reply the way the REST channel does: signed by the VTA, threaded to the
+ * request, body before status. The channel cannot carry these itself, since
+ * every request it makes starts by asking this module for a bearer.
+ */
+function preSessionSender(opts: VtaAuthInputs): TrustTaskSender {
   // Guard inside the timeout wrapper so both hold: every URL is checked before
   // it is dialed (throwing `BlockedEndpointError` with
   // `code: "E_BLOCKED_ENDPOINT"`) and every request is still bounded (R1.2).
@@ -109,57 +174,39 @@ export async function getVtaBearer(opts: VtaAuthInputs): Promise<string> {
   // returns a drop-in for the `fetch` it wrapped.
   const guarded = guardedFetch(opts.fetch, vtaRestEndpointPolicy(opts.netPolicy)) as typeof fetch;
   const f = withFetchTimeout(guarded);
-  const base = opts.baseUrl.replace(/\/+$/, "");
-
-  const cacheKey = bearerCacheKey(base, opts.holder.did);
-  const cached = bearerCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.token;
-  }
-
-  // 1. /auth/challenge → flat { challenge, sessionId, expiresAt }.
-  const cRes = await f(`${base}/auth/challenge`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ did: opts.holder.did }),
-  });
-  if (!cRes.ok) {
-    throw new Error(`vta /auth/challenge failed (${cRes.status}): ${await cRes.text()}`);
-  }
-  const cBody = (await cRes.json()) as { sessionId?: string; challenge?: string };
-  if (!cBody.sessionId || !cBody.challenge) {
-    throw new Error(`vta /auth/challenge: malformed response: ${JSON.stringify(cBody)}`);
-  }
-
-  // 2. Authcrypt an `auth/authenticate/0.1` message to the VTA.
-  const authMsg = {
-    id: globalThis.crypto.randomUUID(),
-    type: VTA_AUTHENTICATE,
-    from: opts.holder.did,
-    to: [opts.service.did],
-    body: { challenge: cBody.challenge, session_id: cBody.sessionId },
-  };
-  const packed = await packAuthcrypt(authMsg, opts.holder, [
-    {
-      kid: opts.service.keyAgreementKid,
-      jwk: opts.service.keyAgreementPublicJwk,
+  const url = `${opts.baseUrl.replace(/\/+$/, "")}${TRUST_TASK_PATH}`;
+  const signer = asTaskSigner(opts.signing);
+  return {
+    async send<Res>(envelope: TrustTask<unknown>, sendOpts: SendOpts = {}): Promise<Res> {
+      const label = sendOpts.operationLabel ?? envelope.type;
+      await signOutboundTask(envelope, signer);
+      let res: Response;
+      try {
+        res = await f(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(envelope),
+        });
+      } catch (err) {
+        if (isFetchTimeout(err)) {
+          throw new VtaClientError(
+            "e.client.timeout",
+            `${label}: VTA did not respond within ${DEFAULT_FETCH_TIMEOUT_MS / 1000}s`,
+          );
+        }
+        // A refused endpoint keeps its own code (`E_BLOCKED_ENDPOINT`), which
+        // callers match structurally; only a network failure is rewrapped.
+        if ((err as { code?: unknown }).code !== undefined) throw err;
+        throw new VtaClientError("e.client.network", (err as Error).message);
+      }
+      return decodeTrustTaskHttpReply<Res>(res, {
+        ...(sendOpts.expectedResponseType !== undefined
+          ? { expectedResponseType: sendOpts.expectedResponseType }
+          : {}),
+        operationLabel: label,
+        expectedSigner: opts.service.did,
+        inReplyTo: envelope,
+      });
     },
-  ]);
-
-  // 3. POST → AuthenticateResponse { session, tokens: { accessToken, ... } }.
-  const aRes = await f(`${base}/auth/`, {
-    method: "POST",
-    headers: { "content-type": "application/didcomm-encrypted+json" },
-    body: packed,
-  });
-  if (!aRes.ok) {
-    throw new Error(`vta /auth/ failed (${aRes.status}): ${await aRes.text()}`);
-  }
-  const aBody = (await aRes.json()) as { tokens?: { accessToken?: string } };
-  const accessToken = aBody.tokens?.accessToken;
-  if (!accessToken) {
-    throw new Error(`vta /auth/: malformed response: ${JSON.stringify(aBody)}`);
-  }
-  bearerCache.set(cacheKey, { token: accessToken, expiresAt: Date.now() + BEARER_TTL_MS });
-  return accessToken;
+  };
 }
