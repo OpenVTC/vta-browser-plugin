@@ -50,6 +50,7 @@ import {
   TspChannel,
   MediatorSessionTspTransport,
   MemoryRelationshipStore,
+  probeRoundTrip,
   tspHolderIdentityFromSecret,
   setDeviceWake,
   type AdminScope,
@@ -225,6 +226,7 @@ import {
 import { describeThisDevice } from "./device-name.js";
 import { relayFailure } from "./relay-failure.js";
 import { requestFailureLog } from "./request-failure-log.js";
+import { roundTripCheck, type ProbeOutcome } from "./round-trip-check.js";
 import { chooseTrustTaskSigner, needsVault, SignAsUnavailableError } from "./sign-identity.js";
 import { didcommLoginRefusal, didcommLoginResult } from "./didcomm-login.js";
 import { isLensTask, knownRelays, mayOperateMediator } from "./mediator-standing.js";
@@ -1139,12 +1141,76 @@ async function runDiagnostics(vtaDid: string): Promise<DiagnosticsReport> {
         },
   );
 
+  checks.push(...(await roundTripChecks(vtaDid, services)));
+
   return {
     vtaDid,
     extensionOrigin: origin ?? "unknown",
     generatedAt: new Date().toISOString(),
     checks,
   };
+}
+
+/** How long one self-test request may wait. Shorter than a real request's 30 s
+ *  so the panel answers while someone is watching, and long enough that a
+ *  healthy agent behind a mediator is never failed by it. */
+const ROUND_TRIP_TIMEOUT_MS = 12_000;
+
+/**
+ * One timed `auth/whoami` per advertised transport, each over a session built
+ * with only that transport — so the report says which path answers rather than
+ * which one the session happened to pick. Run one after another: they share
+ * the warm mediator socket, and a probe that times out evicts it.
+ */
+async function roundTripChecks(
+  vtaDid: string,
+  services: VtaServices | undefined,
+): Promise<DiagnosticCheck[]> {
+  if (!services) return [];
+  const { preferTsp } = await getSettings();
+  let who: SessionIdentity;
+  try {
+    const { identity: holder, signing } = await loadHolder(vtaDid);
+    who = { holder, signing };
+  } catch (err) {
+    const reason = `This wallet's identity for the agent could not be loaded: ${err instanceof Error ? err.message : String(err)}`;
+    return (["TSP", "DIDComm", "REST"] as const)
+      .filter((t) => (t === "TSP" ? services.tsp : t === "DIDComm" ? services.didcomm : services.rest))
+      .map((t) => roundTripCheck(t, { kind: "skipped", reason }));
+  }
+  const probes: [Transport, VtaServices | undefined, string | undefined][] = [
+    ["TSP", services.tsp ? { tsp: services.tsp } : undefined, preferTsp ? undefined : "Prefer TSP is off, so this wallet does not use it."],
+    ["DIDComm", services.didcomm ? { didcomm: services.didcomm } : undefined, undefined],
+    ["REST", services.rest ? { rest: services.rest } : undefined, undefined],
+  ];
+  const out: DiagnosticCheck[] = [];
+  for (const [transport, only, skipReason] of probes) {
+    if (!only) continue;
+    if (skipReason) {
+      out.push(roundTripCheck(transport, { kind: "skipped", reason: skipReason }));
+      continue;
+    }
+    let outcome: ProbeOutcome;
+    try {
+      const { session, holder, service } = await buildVtaSession(
+        vtaDid,
+        who,
+        (mediatorDid) => getWarmSession(mediatorDid, vtaDid),
+        { services: only, probe: true },
+      );
+      outcome = await probeRoundTrip(session, {
+        holder,
+        service,
+        timeoutMs: ROUND_TRIP_TIMEOUT_MS,
+      });
+    } catch (err) {
+      // The channel could not be built at all — the mediator refused the
+      // handshake, say. That is a failure of this path, not a skip.
+      outcome = { kind: "failed", ms: 0, message: err instanceof Error ? err.message : String(err) };
+    }
+    out.push(roundTripCheck(transport, outcome));
+  }
+  return out;
 }
 
 // Build a VtaSession for `vtaDid` honouring the advertised transports
@@ -1167,6 +1233,10 @@ async function buildVtaSession(
      *  can stand in for a DIDComm service a bare `did:peer` VTA has no document
      *  to declare. */
     services?: VtaServices;
+    /** A self-test probe: build the channels the services name even when a
+     *  recent timeout has the mediator ones sitting out. The point of a probe
+     *  is to ask the path that live traffic is avoiding. */
+    probe?: boolean;
   } = {},
 ): Promise<VtaSessionHandle> {
   const { holder, signing } = who;
@@ -1181,6 +1251,7 @@ async function buildVtaSession(
   // into a certain one.
   let fellBack = false;
   const sittingOut = (transport: Transport, mediatorDid: string): boolean => {
+    if (opts.probe) return false;
     if (!rest || !mediatorFallback.isSittingOut(vtaDid, mediatorDid, Date.now())) return false;
     recordTransport(vtaDid, transport, {
       state: "down",
