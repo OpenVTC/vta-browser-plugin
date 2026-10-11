@@ -10,8 +10,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { unpackInboundTsp, TRUST_TASK_ENVELOPE_TYPE } from "../dist/index.js";
-import { pack } from "@openvtc/vti-tsp-js";
+import { unpackInboundTsp, isInboundTspControl, TRUST_TASK_ENVELOPE_TYPE } from "../dist/index.js";
+import { pack, packAccept, packCancel } from "@openvtc/vti-tsp-js";
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 
 import { wrapTspEnvelope } from "../dist/vta/tsp-binding.js";
@@ -165,4 +165,45 @@ test("bytes that are not a TSP envelope are refused", async () => {
       }),
     (e) => e.code === "e.client.parse" && /unreadable envelope/.test(e.message),
   );
+});
+
+test("a relationship control frame comes back as control, not as a document that failed to parse", async () => {
+  // Seen against glenn-vta: unclaimed control frames have an empty body, were
+  // read as a document ("payload is not JSON"), thrown back to the transport,
+  // never acknowledged, and redelivered on every reconnect.
+  const keys = { senderSigningKey: executor.signSk, receiverEncryptionKey: holder.encPk };
+  const invite = new Uint8Array(32).fill(7);
+  for (const packed of [
+    await packAccept(invite, executor.vid, holder.vid, keys),
+    await packCancel(invite, executor.vid, holder.vid, keys),
+  ]) {
+    const out = await unpackInboundTsp(packed.bytes, {
+      holder: holderIdentity(),
+      resolveSender: resolverFor(executor),
+    });
+    assert.ok(isInboundTspControl(out), "a control frame is reported as one");
+    // Proven by the same unpack as a document's sender.
+    assert.equal(out.from, executor.vid);
+    assert.deepEqual(out.control.inReplyTo, invite);
+  }
+});
+
+test("a control frame from a sender it cannot verify is still refused", async () => {
+  const impostor = tspIdentity("did:web:impostor.example");
+  const packed = await packAccept(new Uint8Array(32), executor.vid, holder.vid, {
+    senderSigningKey: impostor.signSk,
+    receiverEncryptionKey: holder.encPk,
+  });
+  await assert.rejects(
+    unpackInboundTsp(packed.bytes, { holder: holderIdentity(), resolveSender: resolverFor(executor) }),
+    (err) => err.code === "e.p.msg.unauthorized",
+  );
+});
+
+test("a document still comes back as a document", async () => {
+  const out = await unpackInboundTsp(await sealed(DOC), {
+    holder: holderIdentity(),
+    resolveSender: resolverFor(executor),
+  });
+  assert.equal(isInboundTspControl(out), false);
 });

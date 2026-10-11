@@ -46,6 +46,8 @@ import {
   resolveVtaTspEndpoint,
   resolveVtaTspEndpointCached,
   unpackInboundTsp,
+  isInboundTspControl,
+  applyInboundControl,
   RestChannel,
   TspChannel,
   MediatorSessionTspTransport,
@@ -3812,6 +3814,32 @@ async function onInboundTspFrame(
       err instanceof Error ? err.message : String(err),
     );
     throw err;
+  }
+  // A relationship control frame no request was waiting for. Applied to the
+  // shared relationship record and then acknowledged by returning: it carries
+  // no consent request, so there is nothing for persist-before-ack to hold, and
+  // refusing it is what had the mediator redeliver it on every reconnect.
+  if (isInboundTspControl(message)) {
+    const outcome = await applyInboundControl(
+      tspRelationships,
+      identity.did,
+      message.from,
+      message.control,
+    );
+    if (outcome.kind === "ignored") {
+      console.info("[pnm tsp] ignored a relationship message from", message.from, "—", outcome.reason);
+    } else if (outcome.kind === "adopted") {
+      console.info("[pnm tsp] relationship with", message.from, "accepted after the handshake stopped waiting");
+    } else {
+      // §7.3 owes an answering cancellation when both halves were held. Not
+      // sent: the peer has already forgotten the relationship, and the next
+      // request re-invites.
+      console.info(
+        "[pnm tsp] relationship with", message.from, "cancelled by the peer",
+        outcome.reply ? "(answering cancellation not sent)" : "",
+      );
+    }
+    return;
   }
   // `message.from` here is the sender `unpackInboundTsp` proved, not a claim.
   await onInboundMessage(conn, identity, signing, vtaDid, message, message.from, isApprover);
