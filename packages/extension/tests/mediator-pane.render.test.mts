@@ -100,7 +100,13 @@ const mount = async (l: ReturnType<typeof lens>, hash = "") => {
     dispatchEvent(new Event("hashchange"));
     await screen.settle();
   }
-  await screen.settle();
+  // Until nothing is still loading, rather than a fixed number of rounds. A
+  // DID's mail is three dependent reads (locate the relay, check standing,
+  // read the account), and two rounds was enough locally and not always on a
+  // slower CI runner, which then asserted against "Reading where this DID's
+  // mail goes…". Bounded, so a pane that never finishes fails the assertion
+  // that follows instead of hanging the suite.
+  for (let i = 0; i < 50 && /Reading [^…]*…/.test(screen.text()); i++) await screen.settle();
   await screen.settle();
   return screen;
 };
