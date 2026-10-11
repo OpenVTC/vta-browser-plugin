@@ -49,6 +49,7 @@ import {
   RestChannel,
   TspChannel,
   MediatorSessionTspTransport,
+  MemoryRelationshipStore,
   tspHolderIdentityFromSecret,
   setDeviceWake,
   type AdminScope,
@@ -737,6 +738,22 @@ const vtaTransportHealth = new Map<string, TransportHealth>();
 // `mediator-fallback.ts`.
 const mediatorFallback = new MediatorFallback();
 
+// The TSP relationships this wallet holds, for every channel this document
+// builds. A channel is built per request, and each used to get its own empty
+// store from `TspChannel`'s default, so every request re-invited the VTA and
+// waited up to five seconds for an accept before sending. Concurrent requests
+// each invited too, and the VTA, whose accept to the first moves it to
+// `Bidirectional`, refused the second (`SendAccept in state Bidirectional`).
+// One store makes the second request see the first invite and go straight on.
+//
+// Still memory, for the life of this document, which keeps the reason the
+// default is in-memory: a VTA that restarts forgets us, and so do we on our
+// next teardown, so we re-invite rather than send into silence. A send that
+// times out still clears the record (`forgetOnFailure`), so a VTA that forgot
+// us mid-session is re-invited on the next request. Records are keyed on the
+// (holder, VTA) pair, so agents never share one.
+const tspRelationships = new MemoryRelationshipStore();
+
 function recordTransport(
   vtaDid: string,
   transport: Transport,
@@ -1202,6 +1219,7 @@ async function buildVtaSession(
           // when its proven signer is the TSP sender (VTI #1739).
           signing,
           vta: vtaTsp,
+          relationships: tspRelationships,
         }),
       );
       recordTransport(vtaDid, "TSP", { state: "up" });
