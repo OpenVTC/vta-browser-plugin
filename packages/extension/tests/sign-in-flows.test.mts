@@ -422,7 +422,12 @@ test("an unknown site clicked on a page that is not its portal is still wrong-or
   for (const doc of [hostingDoc, communityDoc]) {
     const w = world({ known: UNKNOWN, doc });
     const r = await step(w, { step: "prepare", link: LINK, origin: "https://evil.example" });
-    assert.deepEqual(r, { kind: "refused", outcome: "invalid", message: "This code can't be used." });
+    assert.deepEqual(r, {
+      kind: "refused",
+      outcome: "invalid",
+      message: "This code can't be used.",
+      detail: { reason: "wrong-origin", did: VTC, pageOrigin: "https://evil.example", portalOrigin: PORTAL },
+    });
     assert.equal(w.sent.length, 0);
     assert.equal(w.vtaCalls.some((c) => c.what === "personas"), false);
     assert.equal((await step(w, { step: "join", did: PERSONAS[0]!.did })).kind, "failed");
@@ -479,9 +484,61 @@ test("the services' family-qualified codes are matched on their stable name (C9)
 test("a link clicked on a page that is not the portal is wrong-origin, and nothing is sent", async () => {
   const w = world();
   const r = await step(w, { step: "prepare", link: LINK, origin: "https://evil.example" });
-  assert.deepEqual(r, { kind: "refused", outcome: "invalid", message: "This code can't be used." });
+  // The message stays the outcome's; the detail names both origins, for Details.
+  assert.deepEqual(r, {
+    kind: "refused",
+    outcome: "invalid",
+    message: "This code can't be used.",
+    detail: { reason: "wrong-origin", did: VTC, pageOrigin: "https://evil.example", portalOrigin: PORTAL },
+  });
   assert.equal(w.sent.length, 0);
   assert.equal((await step(w, { step: "claim", entryId: "e-alice" })).kind, "failed", "no flow to claim on");
+});
+
+test("refusals about the service's DID document carry what was wrong, and the message stays the outcome's", async () => {
+  const cases: Array<[Record<string, unknown>, Record<string, unknown>, string]> = [
+    [
+      { ...vtcDoc, service: vtcDoc.service.filter((s) => s.type !== "SignInPortal") },
+      { reason: "no-portal-service", did: VTC, service: "SignInPortal" },
+      "invalid",
+    ],
+    [
+      { ...vtcDoc, service: [{ type: "SignInPortal", serviceEndpoint: "https://portal.local/" }, vtcDoc.service[1]] },
+      { reason: "no-portal-service", did: VTC, service: "SignInPortal", unusable: true },
+      "invalid",
+    ],
+    [
+      { ...vtcDoc, service: vtcDoc.service.filter((s) => s.type !== "TrustTaskHTTPS") },
+      { reason: "no-common-transport", did: VTC, service: "TrustTaskHTTPS" },
+      "unreachable",
+    ],
+    // A document that is not the DID's does not verify.
+    [{ ...vtcDoc, id: "did:webvh:QmOther:elsewhere.example" }, { reason: "did-document-unverified", did: VTC }, "invalid"],
+  ];
+  for (const [doc, detail, outcome] of cases) {
+    const w = world({ doc });
+    const r = await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+    assert.equal(r.kind, "refused");
+    const refusal = r as Extract<typeof r, { kind: "refused" }>;
+    assert.equal(refusal.outcome, outcome);
+    assert.deepEqual(refusal.detail, detail);
+    assert.doesNotMatch(refusal.message, /SignInPortal|TrustTask|did:/, "the message names nothing");
+    assert.equal(w.sent.length, 0);
+  }
+});
+
+test("a contact method sign-in does not take is named in the detail; a bad link field is not", async () => {
+  const w = world();
+  const didKey = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+  const r = await step(w, { step: "prepare", link: LINK.replace(VTC, didKey), origin: PORTAL });
+  assert.deepEqual(r, {
+    kind: "refused",
+    outcome: "invalid",
+    message: "This code can't be used.",
+    detail: { reason: "from-not-allowed", method: "did:key" },
+  });
+  const badId = await step(w, { step: "prepare", link: LINK.replace(ID, "short"), origin: PORTAL }, "f2");
+  assert.deepEqual(badId, { kind: "refused", outcome: "invalid", message: "This code can't be used." });
 });
 
 test("a refused link shows only its outcome's message", async () => {

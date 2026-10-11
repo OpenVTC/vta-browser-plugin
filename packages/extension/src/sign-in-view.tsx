@@ -19,7 +19,9 @@
 //   3. "Request from <browser> on <os> · near <location> · <network>". Approve
 //      runs the passkey over the grant digest (C6); Decline needs none.
 //
-// A refused link shows only the VTI-LNK-021 message for its outcome.
+// A refused link shows only the VTI-LNK-021 message for its outcome. When the
+// cause is the contact's DID document or the page (never a link field), a
+// collapsed "Details" says what is wrong, for the service's operator.
 //
 // A site the wallet does not know gets one of two screens before screen 1,
 // both after its DID document verified and nothing sent to it: a DID hosting
@@ -534,9 +536,10 @@ function Countdown({ deadline, now }: { deadline: number; now: () => number }) {
 function FailureDetails({
   result,
 }: {
-  result: Extract<SignInStepResult, { kind: "failed" }>;
+  result: Extract<SignInStepResult, { kind: "failed" | "refused" }>;
 }) {
   const rows = failureDetails(result);
+  if (rows.length === 0) return null;
   return (
     <details
       data-testid="failure-details"
@@ -566,7 +569,7 @@ function FailureDetails({
                 ...wrap,
               }}
             >
-              {v}
+              {k === "DID" ? <CopyableDid did={v} testId="details-did" /> : v}
             </dd>
           </div>
         ))}
@@ -576,7 +579,13 @@ function FailureDetails({
 }
 
 /** A DID shown whole, with a button that copies it. */
-function CopyableDid({ did }: { did: string }) {
+function CopyableDid({
+  did,
+  testId = "unlisted-did",
+}: {
+  did: string;
+  testId?: string;
+}) {
   const [copied, setCopied] = useState<"yes" | "no" | undefined>();
   const copy = () => {
     const clip = globalThis.navigator?.clipboard;
@@ -604,7 +613,7 @@ function CopyableDid({ did }: { did: string }) {
       }}
     >
       <code
-        data-testid="unlisted-did"
+        data-testid={testId}
         style={{ fontFamily: font.mono, fontSize: t.sm, ...wrap }}
       >
         {did}
@@ -806,6 +815,7 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
           escape={closeAction}
         >
           <Message>{screen.message}</Message>
+          <FailureDetails result={screen} />
         </Screen>
       );
 

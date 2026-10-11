@@ -57,3 +57,31 @@ test("domain-not-linked and unsupported-vid say what they mean, in a line", () =
   assert.match(rows.Step!, /website belongs to the community/);
   assert.match(Object.fromEntries(failureDetails({ kind: "failed", code: "unsupported-vid", message: "m" })).Meaning!, /update/i);
 });
+
+test("a refusal shows Details only when it is about the document or the page", () => {
+  assert.deepEqual(failureDetails({ kind: "refused", outcome: "invalid", message: "m" }), []);
+  const rows = Object.fromEntries(
+    failureDetails({
+      kind: "refused",
+      outcome: "invalid",
+      message: "m",
+      detail: { reason: "wrong-origin", did: "did:web:x.example", pageOrigin: "https://a.example", portalOrigin: "https://b.example" },
+    }),
+  );
+  assert.equal(rows.Code, "wrong-origin");
+  assert.equal(rows.Meaning, "This page (https://a.example) isn't the service's sign-in page (https://b.example). " +
+    "Start sign-in from https://b.example, or ask the operator to point the SignInPortal service at this page.");
+  assert.equal(rows.DID, "did:web:x.example");
+});
+
+test("the console line never carries the detail's DID or origins", () => {
+  const fields = failureLogFields("claim", {
+    kind: "failed",
+    code: "domain-not-linked",
+    message: "m",
+    stage: "domain-linkage",
+    detail: { reason: "domain-not-linked", did: "did:web:x.example", portalOrigin: "https://p.example" },
+  });
+  assert.equal(JSON.stringify(fields).includes("x.example"), false);
+  assert.equal(JSON.stringify(fields).includes("p.example"), false);
+});

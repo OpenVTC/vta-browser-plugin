@@ -184,6 +184,7 @@ test("a portal not linked to the DID: domain-not-linked, and nothing is sent", a
       code: SIGN_IN_DOMAIN_NOT_LINKED,
       message: DOMAIN_NOT_LINKED_MESSAGE,
       stage: "domain-linkage",
+      detail: { reason: "domain-not-linked", did: VTC, portalOrigin: PORTAL },
     });
     assert.deepEqual(w.log, [`GET ${CONFIG_URL}`], "nothing was posted to the community");
     assert.equal(w.flows.has("f1"), false, "the flow ended");
@@ -193,6 +194,8 @@ test("a portal not linked to the DID: domain-not-linked, and nothing is sent", a
     const rows = Object.fromEntries(failureDetails(r as Extract<typeof r, { kind: "failed" }>));
     assert.equal(rows.Code, "domain-not-linked");
     assert.match(rows.Meaning!, /DID Configuration/);
+    assert.ok(rows.Meaning!.includes(PORTAL), "names the origin that was checked");
+    assert.equal(rows.DID, VTC);
     assert.match(rows.Step!, /website belongs to the community/);
   }
 });
