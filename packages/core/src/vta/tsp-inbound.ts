@@ -27,7 +27,7 @@
 // cleartext VID and *believing* it are different acts, and only the first
 // happens here.
 
-import { decodeEnvelope, unpack } from "@openvtc/vti-tsp-js";
+import { decodeEnvelope, unpack, type ControlMessage } from "@openvtc/vti-tsp-js";
 
 import { openTspEnvelope } from "./tsp-binding.js";
 
@@ -63,6 +63,26 @@ export interface InboundTspMessage extends Record<string, unknown> {
 }
 
 /**
+ * A verified relationship control message (§7.2): an invite, accept or
+ * cancellation. It carries no Trust-Task document, so it never enters the
+ * inbound pipeline — `applyInboundControl` (`tsp-relationship.ts`) is what it is
+ * for. `from` is the sender `unpack` proved, as on a document.
+ */
+export interface InboundTspControl {
+  readonly kind: "control";
+  readonly from: string;
+  readonly control: ControlMessage;
+}
+
+/** Whether an unpacked inbound frame is a control message rather than a
+ *  document. */
+export function isInboundTspControl(
+  m: InboundTspMessage | InboundTspControl,
+): m is InboundTspControl {
+  return (m as { kind?: unknown }).kind === "control";
+}
+
+/**
  * Verify a sealed inbound TSP frame and shape it for the inbound pipeline.
  *
  * Throws a {@link VtaClientError} when the frame is unreadable, unverifiable,
@@ -72,7 +92,7 @@ export interface InboundTspMessage extends Record<string, unknown> {
 export async function unpackInboundTsp(
   bytes: Uint8Array,
   opts: UnpackInboundTspOptions,
-): Promise<InboundTspMessage> {
+): Promise<InboundTspMessage | InboundTspControl> {
   let claimedSender: string;
   try {
     claimedSender = decodeEnvelope(bytes).envelope.sender;
@@ -118,6 +138,14 @@ export async function unpackInboundTsp(
       "e.p.msg.unauthorized",
       `tsp inbound: proven sender ${opened.sender} != envelope sender ${claimedSender}`,
     );
+  }
+
+  // A control frame has an empty body: there is no document to open, and
+  // reading one failed as "payload is not JSON" — thrown back to the transport,
+  // never acknowledged, and redelivered on every reconnect. Its sender is
+  // proven by the same unpack, so it is handed back for the relationship store.
+  if (opened.control) {
+    return { kind: "control", from: opened.sender, control: opened.control };
   }
 
   // The binding envelope comes off here, and nowhere else in this path:

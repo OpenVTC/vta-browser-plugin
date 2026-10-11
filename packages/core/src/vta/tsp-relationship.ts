@@ -39,6 +39,7 @@
 import {
   packInvite,
   resolveAccept,
+  resolveCancel,
   unpack,
   transition,
   type ControlMessage,
@@ -111,6 +112,13 @@ export class MemoryRelationshipStore implements RelationshipStore {
 
 const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+
+const fromHex = (hex: string | undefined): Uint8Array | undefined => {
+  if (hex === undefined || hex.length % 2 !== 0 || !/^[0-9a-f]*$/.test(hex)) return undefined;
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
+};
 
 export interface EnsureRelationshipOpts {
   transport: TspTransport;
@@ -251,4 +259,69 @@ export async function forgetOnFailure(
   theirVid: string,
 ): Promise<void> {
   await store.clear(ourVid, theirVid);
+}
+
+/** What an unclaimed control message did to the relationship record. */
+export type InboundControlOutcome =
+  /** A late accept to our outstanding invite: the relationship is now
+   *  bidirectional. */
+  | { kind: "adopted" }
+  /** A cancellation of a relationship we held: our half is gone. `reply` is
+   *  §7.3's answer-with-a-cancellation, owed when we held both halves. */
+  | { kind: "removed"; reply: boolean }
+  /** Nothing to do; `reason` says why. */
+  | { kind: "ignored"; reason: string };
+
+/**
+ * Apply a relationship control message that arrived with no request waiting
+ * for it.
+ *
+ * `ensureRelationship` claims the accept it is waiting for. Everything else that
+ * arrives as a control frame — an accept that came after the handshake gave up
+ * waiting, a cancellation, the VTA's own invite — reaches the inbox, and the
+ * inbox read every frame as a Trust-Task document. A control frame carries no
+ * document, so it failed to parse, was thrown back to the transport, and was
+ * never acknowledged: the mediator redelivered it on every reconnect, forever
+ * (seen against glenn-vta, 2026-10-11: four 580-byte frames on every
+ * reconnect).
+ *
+ * The decisions are the specification's own, from `@openvtc/vti-tsp-js`:
+ * `resolveAccept` adopts only an accept that answers our outstanding invite,
+ * and `resolveCancel` ignores a cancellation naming a relationship we do not
+ * hold — answering that would let anyone probe which relationships we hold.
+ * An invite is ignored: this wallet initiates its relationships and does not
+ * take inbound ones, and a Rev 3 peer may send application messages over an
+ * invite it is still waiting on (§3.6), so ignoring it loses nothing.
+ */
+export async function applyInboundControl(
+  store: RelationshipStore,
+  ourVid: string,
+  theirVid: string,
+  control: ControlMessage,
+): Promise<InboundControlOutcome> {
+  const record = await store.get(ourVid, theirVid);
+  const state: RelationshipState = record?.state ?? "none";
+
+  if (control.controlType === "accept") {
+    const outcome = resolveAccept(state, control.inReplyTo, fromHex(record?.ourDigest));
+    if (outcome.action === "ignore") return { kind: "ignored", reason: `an accept that ${outcome.reason}` };
+    await store.set(ourVid, theirVid, {
+      ...record,
+      state: transition(state, "receiveAccept"),
+      ...(control.digest ? { theirDigest: toHex(control.digest) } : {}),
+    });
+    return { kind: "adopted" };
+  }
+
+  if (control.controlType === "cancel") {
+    const known = [record?.ourDigest, record?.theirDigest]
+      .map(fromHex)
+      .filter((d): d is Uint8Array => d !== undefined);
+    const outcome = resolveCancel(state, control.inReplyTo, known);
+    if (outcome.action === "ignore") return { kind: "ignored", reason: `a cancellation: ${outcome.reason}` };
+    await store.clear(ourVid, theirVid);
+    return { kind: "removed", reply: outcome.action === "removeAndReply" };
+  }
+
+  return { kind: "ignored", reason: "an invite: this wallet does not take inbound relationships" };
 }
