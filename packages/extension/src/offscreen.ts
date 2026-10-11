@@ -99,11 +99,18 @@ import { loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import type { Transport, TransportHealth, TransportObservation } from "./transports.js";
 import {
+  TRANSPORT_DIAGNOSIS,
   classifyTransportFailure,
   originOf,
   probeReachable,
   type Reachability,
 } from "./transport-diagnosis.js";
+import {
+  MediatorFallback,
+  agentLabel,
+  fallbackNotification,
+  noReplyDetail,
+} from "./mediator-fallback.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
   OFFSCREEN_GET_STATUS,
@@ -157,6 +164,8 @@ import {
   CONSENT_KEEPALIVE_PORT,
   RUNTIME_STEP_UP_CONSENT,
   RUNTIME_EMIT_WALLET_EVENT,
+  RUNTIME_NOTIFY,
+  type RuntimeNotifyRequest,
   type OffscreenDidcommLoginRequest,
   type OffscreenRestLoginRequest,
   type OffscreenCreateContextRequest,
@@ -712,6 +721,12 @@ type MediatorConnector = (mediatorDid: string) => Promise<MediatorConnection>;
 // from "down".
 const vtaTransportHealth = new Map<string, TransportHealth>();
 
+// Which agents' mediator channels are sitting out after a reply timeout. Module
+// scope for the same reason as the health map: losing it to a teardown costs
+// one more timeout before the fallback is taken again. See
+// `mediator-fallback.ts`.
+const mediatorFallback = new MediatorFallback();
+
 function recordTransport(
   vtaDid: string,
   transport: Transport,
@@ -1133,6 +1148,21 @@ async function buildVtaSession(
   const services = opts.services ?? (await resolveVtaServices(vtaDid));
 
   const channels: TrustTaskChannel[] = [];
+  const rest = restBaseUrl || services.rest?.baseUrl;
+  // A mediator channel sits out after a reply timeout, but only when REST is
+  // there to take the traffic. Without it, skipping would turn a slow failure
+  // into a certain one.
+  let fellBack = false;
+  const sittingOut = (transport: Transport, mediatorDid: string): boolean => {
+    if (!rest || !mediatorFallback.isSittingOut(vtaDid, mediatorDid, Date.now())) return false;
+    recordTransport(vtaDid, transport, {
+      state: "down",
+      code: TRANSPORT_DIAGNOSIS.noReply,
+      detail: noReplyDetail(mediatorDid),
+    });
+    fellBack = true;
+    return true;
+  };
   // TSP is the highest-priority transport. It rides the SAME warm mediator
   // socket as DIDComm (the mediator multiplexes both — binary 0xF8 → TSP, text
   // → DIDComm), so there is no second socket to conflict with the wallet's
@@ -1144,7 +1174,7 @@ async function buildVtaSession(
   // so an operator can turn TSP off to pin a VTA to DIDComm/REST if a given
   // mediator's TSP delivery misbehaves.
   const { preferTsp } = await getSettings();
-  if (preferTsp && services.tsp) {
+  if (preferTsp && services.tsp && !sittingOut("TSP", services.tsp.mediatorDid)) {
     try {
       const vtaTsp = await resolveVtaTspEndpoint(vtaDid);
       // Same mediator as DIDComm in practice; getWarmSession is pooled by
@@ -1174,7 +1204,7 @@ async function buildVtaSession(
     }
   }
   let didcommConn: MediatorConnection | undefined;
-  if (services.didcomm) {
+  if (services.didcomm && !sittingOut("DIDComm", services.didcomm.mediatorDid)) {
     // A mediator we cannot reach skips its channel rather than failing the
     // whole session, mirroring the TSP branch above. Safe for the same reason:
     // this is *pre-send*, so nothing has been dispatched and nothing can have
@@ -1205,7 +1235,6 @@ async function buildVtaSession(
       );
     }
   }
-  const rest = restBaseUrl || services.rest?.baseUrl;
   if (rest) {
     channels.push(
       new RestChannel({
@@ -1225,6 +1254,13 @@ async function buildVtaSession(
   }
   if (channels.length === 0) {
     throw new Error(`${vtaDid} advertises no usable transport (#tsp, #vta-didcomm or #vta-rest)`);
+  }
+  if (fellBack) {
+    console.warn("[pnm mediator] no reply recently from", vtaDid, "through its mediator; using REST");
+    if (mediatorFallback.claimNotification(vtaDid, Date.now())) {
+      const { title, message } = fallbackNotification(agentLabel(vtaDid));
+      notifyUser(title, message);
+    }
   }
   // `channels` is already in priority order; onboarding asks for DIDComm to
   // lead instead. A stable partition, so everything else keeps its order.
@@ -1543,19 +1579,18 @@ function recordDecisionSent(id: string, entry: AwaitingDecision): void {
  *  event that contradicts something they were just shown and agreed to, so it
  *  gets a notification rather than a console line they will never read. */
 function notifyApprovalRefused(summary: string): void {
-  try {
-    chrome.notifications?.create({
-      type: "basic",
-      iconUrl: chrome.runtime.getURL("icon-128.png"),
-      title: "Approval was not accepted",
-      message: summary,
-      priority: 2,
-    });
-  } catch (e) {
-    // Notifications are a courtesy on top of the log, never the record of what
-    // happened — a browser that refuses one must not take the handler down.
-    console.warn("[pnm inbound] could not raise a refusal notification:", e);
-  }
+  notifyUser("Approval was not accepted", summary);
+}
+
+/** Raise a browser notification. An offscreen document gets `chrome.runtime`
+ *  and no other extension API, so `chrome.notifications` is undefined here and
+ *  the background raises it. Notifications are a courtesy on top of the log,
+ *  never the record of what happened: a failure to raise one is logged and
+ *  must not take the caller down. */
+function notifyUser(title: string, message: string): void {
+  chrome.runtime
+    .sendMessage({ type: RUNTIME_NOTIFY, title, message } satisfies RuntimeNotifyRequest)
+    .catch((e: unknown) => console.warn("[pnm] could not raise a notification:", title, e));
 }
 
 /**
@@ -2780,6 +2815,8 @@ async function createWarmSession(
     // without having closed. The request still fails, since it may have been
     // applied, but this connection is not handed to the next one.
     onReplyTimeout: () => {
+      // The next session for this agent goes over REST, if it has one.
+      mediatorFallback.noteNoReply(vtaDid, mediatorDid, Date.now());
       if (self) void evictWarmSession(key, self, "reply timeout");
     },
   });

@@ -37,8 +37,14 @@ const EMPTY: TransportDiagnostics = { health: {}, sessions: [] };
  *
  * @param vtaDid the VTA whose session health to report. Undefined (no
  *   connection yet) yields an empty result.
+ * @param pollMs re-read this often. For a screen that stays open while the
+ *   wallet's transports change underneath it — the console, where a fallback
+ *   to REST should appear without a reload. Omitted, it reads once.
  */
-export function useTransportHealth(vtaDid: string | undefined): TransportDiagnostics {
+export function useTransportHealth(
+  vtaDid: string | undefined,
+  pollMs?: number,
+): TransportDiagnostics {
   const [state, setState] = useState<TransportDiagnostics>(EMPTY);
 
   useEffect(() => {
@@ -47,7 +53,7 @@ export function useTransportHealth(vtaDid: string | undefined): TransportDiagnos
       return;
     }
     let live = true;
-    void (async () => {
+    const read = async () => {
       try {
         const res = (await chrome.runtime.sendMessage({
           type: RUNTIME_TRANSPORT_HEALTH,
@@ -64,11 +70,14 @@ export function useTransportHealth(vtaDid: string | undefined): TransportDiagnos
       } catch {
         if (live) setState(EMPTY);
       }
-    })();
+    };
+    void read();
+    const timer = pollMs ? setInterval(() => void read(), pollMs) : undefined;
     return () => {
       live = false;
+      if (timer !== undefined) clearInterval(timer);
     };
-  }, [vtaDid]);
+  }, [vtaDid, pollMs]);
 
   return state;
 }

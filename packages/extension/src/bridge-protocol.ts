@@ -363,6 +363,19 @@ export interface RuntimeEmitWalletEvent {
   detail?: Record<string, unknown>;
 }
 
+/** offscreen → background: raise a browser notification. An offscreen
+ *  document gets `chrome.runtime` and no other extension API, so it cannot
+ *  call `chrome.notifications` itself. Not page-facing: the background accepts
+ *  it only from an extension page, so a site cannot put words in the wallet's
+ *  mouth. */
+export const RUNTIME_NOTIFY = "vta-wallet/notify" as const;
+
+export interface RuntimeNotifyRequest {
+  type: typeof RUNTIME_NOTIFY;
+  title: string;
+  message: string;
+}
+
 export const RUNTIME_LOGIN = "vta-wallet/login" as const;
 export const RUNTIME_LOGIN_DIDCOMM = "vta-wallet/login-didcomm" as const;
 export const RUNTIME_STEP_UP_VTA = "vta-wallet/step-up-vta" as const;
