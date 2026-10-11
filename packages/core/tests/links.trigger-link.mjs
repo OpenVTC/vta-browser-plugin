@@ -17,6 +17,8 @@ import {
   contactDomainLabel,
   isTriggerLinkText,
   SIGN_IN_FLOW,
+  CONTACT_METHOD_CAPABILITIES,
+  isHostNamedServiceContact,
 } from "../dist/links/index.js";
 
 const FROM = "did:webvh:QmPEQVM1JPTyrvEgBcDXwjK4TeyLGSX1PxjgyeAisPviUx:members.example.org";
@@ -137,6 +139,45 @@ test("example: a did:key contact is from-not-allowed for sign-in", () => {
   refused(read(withFragment(fields({ _from: didKey }))), "from-not-allowed", "invalid");
 });
 
+test("example: _type with an empty segment is bad-type", () => {
+  refused(read(withFragment(fields({ _type: "/vti//flow/sign-in/0.1" }))), "bad-type", "invalid");
+});
+
+test("example: _type in absolute form with an upper-case host is bad-type", () => {
+  refused(read(withFragment(fields({ _type: "https://LINK.trustoverip.org/vti/flow/sign-in/0.1" }))), "bad-type", "invalid");
+});
+
+test("example: _type in absolute form with a port is bad-type", () => {
+  refused(read(withFragment(fields({ _type: "https://link.trustoverip.org:443/vti/flow/sign-in/0.1" }))), "bad-type", "invalid");
+});
+
+test("example: an absolute flow path on another host is wrong-host, whatever its version", () => {
+  refused(read(withFragment(fields({ _type: "https://flows.example.org/vti/flow/sign-in/0.9" }))), "wrong-host", "invalid");
+});
+
+test("example: _from=did:web:example.com/@alice is unsupported-vid (update)", () => {
+  refused(read(withFragment(fields({ _from: "did:web:example.com/@alice" }))), "unsupported-vid", "update");
+});
+
+test("example: _from=did:web:example.com/alice is bad-from", () => {
+  refused(read(withFragment(fields({ _from: "did:web:example.com/alice" }))), "bad-from", "invalid");
+});
+
+test("example: a _from that is not a DID (a KERI identifier) is unsupported-vid (update)", () => {
+  refused(read(withFragment(fields({ _from: "EKYLUMmNPZeEs77Zvclf0bSN5IN-mLfLpx2ySb-HDlk4" }))), "unsupported-vid", "update");
+});
+
+test("example: _from empty is bad-from", () => {
+  refused(read(withFragment(fields({ _from: "" }))), "bad-from", "invalid");
+});
+
+test("example: a did:peer contact is from-not-allowed for sign-in (it names no host)", () => {
+  const didPeer2 =
+    "did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc.Vz6MkqRYqQiSgvZQdnBytw86Qbs2ZWUkGv22od935YF4s8M7V";
+  refused(read(withFragment(fields({ _from: didPeer2 }))), "from-not-allowed", "invalid");
+  refused(read(withFragment(fields({ _from: "did:peer:0z6MkqRYqQiSgvZQdnBytw86Qbs2ZWUkGv22od935YF4s8M7V" }))), "from-not-allowed", "invalid");
+});
+
 test("example: did:web with %253A parses as %3A (refused later, at resolution)", () => {
   const link = accepted(read(withFragment(fields({ _from: "did:web:example.com%253A8443" }))));
   assert.equal(link.from.value, "did:web:example.com%3A8443");
@@ -163,6 +204,26 @@ test("VTI-LNK-050: the unverified label is the domain then the path", () => {
   assert.equal(contactDomainLabel({ kind: "did:webvh", value: did }), "dids.example.org/farm-auth");
   assert.equal(contactDomainLabel({ kind: "did:webvh", value: FROM }), "members.example.org");
   assert.equal(contactDomainLabel({ kind: "did:key", value: "did:key:z6Mk" }), undefined);
+});
+
+// ── The contact rule (VTI-LNK-102 / 112) ─────────────────────────────────────
+
+test("VTI-LNK-102: the contact rule is an allow-list by capability", () => {
+  const allowed = Object.entries(CONTACT_METHOD_CAPABILITIES)
+    .filter(([, c]) => c.namesHost && c.listsServices && c.verified)
+    .map(([kind]) => kind)
+    .sort();
+  assert.deepEqual(allowed, ["did:web", "did:webvh"]);
+  assert.equal(isHostNamedServiceContact({ kind: "did:webvh", value: FROM }), true);
+  assert.equal(isHostNamedServiceContact({ kind: "did:web", value: "did:web:example.org" }), true);
+  assert.equal(isHostNamedServiceContact({ kind: "did:key", value: "did:key:z6Mk" }), false);
+  assert.equal(isHostNamedServiceContact({ kind: "did:peer", value: "did:peer:2.Ez6L" }), false);
+  assert.equal(SIGN_IN_FLOW.allowsContact, isHostNamedServiceContact);
+});
+
+test("VTI-LNK-102: a did:web contact is accepted for sign-in", () => {
+  const link = accepted(read(withFragment(fields({ _from: "did:web:members.example.org" }))));
+  assert.equal(link.from.kind, "did:web");
 });
 
 // ── Step 1 ───────────────────────────────────────────────────────────────────
@@ -261,7 +322,7 @@ test("step 6: _from absent is missing-from", () => {
 });
 
 test("step 6: a malformed DID is bad-from", () => {
-  for (const f of ["did:", "did:webvh:", "did:WEB:example.com", "did:web:a/b", "did:webvh:scid", "nonsense"]) {
+  for (const f of ["did:", "did:webvh:", "did:WEB:example.com", "did:web:a/b", "did:webvh:scid"]) {
     refused(read(withFragment(fields({ _from: f }))), "bad-from", "invalid");
   }
 });
@@ -269,6 +330,11 @@ test("step 6: a malformed DID is bad-from", () => {
 test("step 6: a DID method or identifier type the reader does not support is unsupported-vid", () => {
   refused(read(withFragment(fields({ _from: "did:ion:abc" }))), "unsupported-vid", "update");
   refused(read(withFragment(fields({ _from: "urn:example:abc" }))), "unsupported-vid", "update");
+  // Neither a DID nor an agent name, scheme or not: a type this reader does
+  // not implement (VTI-LNK-031), never bad-from.
+  for (const f of ["nonsense", "members.example.org", "DID:web:example.org", "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"]) {
+    refused(read(withFragment(fields({ _from: f }))), "unsupported-vid", "update");
+  }
 });
 
 test("step 6: /@ wins over DID syntax", () => {
@@ -325,6 +391,26 @@ test("step 8: _type grammar", () => {
     "/vti/flow/sign in/0.1",
     "https://link.trustoverip.org/vti/flow/sign-in/0.1%3Fq",
     "http://link.trustoverip.org/vti/flow/sign-in/0.1",
+    // Empty segments, in either form (VTI-LNK-040).
+    "/vti/flow/sign-in//0.1",
+    "https://link.trustoverip.org//vti/flow/sign-in/0.1",
+    "https://link.trustoverip.org/vti//flow/sign-in/0.1",
+    // The absolute form, checked as written: scheme case, userinfo, port,
+    // host rules, percent-encoding, query, fragment, dot segments.
+    "HTTPS://link.trustoverip.org/vti/flow/sign-in/0.1",
+    "Https://link.trustoverip.org/vti/flow/sign-in/0.1",
+    "https://user@link.trustoverip.org/vti/flow/sign-in/0.1",
+    "https://link.trustoverip.org:8443/vti/flow/sign-in/0.1",
+    "https://localhost/vti/flow/sign-in/0.1",
+    "https://127.0.0.1/vti/flow/sign-in/0.1",
+    "https://link.trustoverip.org./vti/flow/sign-in/0.1",
+    "https://link.trustoverip.org",
+    "https://link.trustoverip.org/vti/flow/sign%2Din/0.1",
+    "https://link%2Etrustoverip.org/vti/flow/sign-in/0.1",
+    "https://link.trustoverip.org/vti/flow/../flow/sign-in/0.1",
+    "https://link.trustoverip.org/vti/flow/sign-in/0.1?q",
+    // Percent-encoded as a whole: valid only after decoding, so refused.
+    "https%3A%2F%2Flink.trustoverip.org%2Fvti%2Fflow%2Fsign-in%2F0.1",
   ]) {
     refused(read(withFragment(fields({ _type: t.replace(/ /g, "%20") }))), "bad-type", "invalid");
   }
