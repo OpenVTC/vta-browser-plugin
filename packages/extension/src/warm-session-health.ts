@@ -85,3 +85,43 @@ export function startWakeWatch(opts: WakeWatchOptions): () => void {
   }, intervalMs);
   return () => clear(handle);
 }
+
+/** How long a replaced connection stays open for the requests already on it:
+ *  the longest reply wait (30 s) plus slack for the reply in transit. */
+export const RETIRE_GRACE_MS = 35_000;
+
+/** The parts of a `MediatorConnection` retiring one touches. */
+export interface RetirableConnection extends ConnectionLiveness {
+  close(): void;
+}
+
+/**
+ * Close a connection the pool has stopped handing out, without breaking the
+ * requests already using it.
+ *
+ * The pool replaces a connection the moment `isReusable` says no, but another
+ * request may have been handed it a moment earlier and still be sending or
+ * awaiting its reply. Closing it at once failed that request with
+ * `mediator-transport: not connected` — and when the local clock runs ahead of
+ * the mediator's, every connection reads expired on arrival, so concurrent
+ * requests closed each other's sockets and the console could not load at all.
+ *
+ * A socket that is no longer open is closed now, because nothing on it can
+ * succeed. An open one is closed after the grace period. A request that does
+ * go into a dead-but-open socket fails on its own reply timeout, as it would
+ * have anyway.
+ */
+export function retireConnection(
+  conn: RetirableConnection,
+  opts: {
+    graceMs?: number;
+    setTimeout?: (fn: () => void, ms: number) => unknown;
+  } = {},
+): void {
+  if (!conn.isOpen) {
+    conn.close();
+    return;
+  }
+  const set = opts.setTimeout ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
+  set(() => conn.close(), opts.graceMs ?? RETIRE_GRACE_MS);
+}

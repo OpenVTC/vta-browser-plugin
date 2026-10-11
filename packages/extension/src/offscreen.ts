@@ -94,7 +94,7 @@ import { base64url } from "@openvtc/vti-didcomm-js";
 import { grantCommand } from "./grant-command.js";
 import { forgetInbox, getSettings, inboxFor, inboxToAdopt, setInbox } from "./config.js";
 import { walletNetPolicy } from "./net-policy.js";
-import { isReusable, startWakeWatch } from "./warm-session-health.js";
+import { isReusable, retireConnection, startWakeWatch } from "./warm-session-health.js";
 import { loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import type { Transport, TransportHealth, TransportObservation } from "./transports.js";
@@ -2681,10 +2681,13 @@ async function getWarmSession(
     // Only drop the entry if it is still the one we looked at. A concurrent
     // caller may already have replaced it with a fresh connection.
     if (warmPool.get(key) === existing) warmPool.delete(key);
-    // Close our end so nothing else writes into it. A deliberate `close()`
-    // does not fire `onClose`, and it does not need to: the connection opened
-    // below is this pair's replacement and re-attaches the inbox handlers.
-    conn?.close();
+    // Nothing new is handed this connection, but a concurrent request may
+    // still be using it, so it is retired rather than closed under that
+    // request. A deliberate `close()` does not fire `onClose`, and it does not
+    // need to: the connection opened below is this pair's replacement and
+    // re-attaches the inbox handlers. An inbound message that arrives on both
+    // meanwhile is one id, recorded once by the pending store.
+    if (conn) retireConnection(conn);
   }
 
   mediatorState.set(key, "connecting");
