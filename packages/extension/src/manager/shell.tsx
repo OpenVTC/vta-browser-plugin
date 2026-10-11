@@ -19,6 +19,7 @@ import { Icon, type IconName } from "./icons.js";
 import { Note } from "../ui.js";
 import { ContextTree, type ContextSelection } from "./context-column.js";
 import { WhoamiBanner } from "./whoami-banner.js";
+import { FallbackBanner } from "./fallback-banner.js";
 import { ContextsPane } from "./panes/contexts.js";
 import { KeysPane } from "./panes/keys.js";
 import { DidsPane } from "./panes/dids.js";
@@ -675,6 +676,7 @@ export function ManagerShell() {
       </div>
 
       <main style={{ gridArea: "pane", overflowY: "auto", padding: "20px 24px", minWidth: 0 }}>
+        <FallbackBanner agentDid={vta.parties.service.did} />
         {contexts.error && (
           <div style={{ marginBottom: 16 }}>
             <Note tone="danger">

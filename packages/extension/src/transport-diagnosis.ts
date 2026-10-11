@@ -62,6 +62,10 @@ export const TRANSPORT_DIAGNOSIS = {
   /** The mediator replied, and the reply was the failure — auth, ACL, a bad
    *  challenge. Not a connectivity problem. */
   rejected: "mediator/rejected",
+  /** Connected, sent, and no reply came back in time. The channel works as
+   *  far as the handshake can tell, so this is not a connection failure: the
+   *  agent is not answering through this mediator. See `mediator-fallback.ts`. */
+  noReply: "mediator/no-reply",
   /** Classification did not apply; the original message is all there is. */
   unknown: "mediator/unknown",
 } as const;

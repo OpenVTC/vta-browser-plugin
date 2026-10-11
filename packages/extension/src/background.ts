@@ -120,6 +120,8 @@ import {
   RUNTIME_TRANSPORT_HEALTH,
   RUNTIME_RUN_DIAGNOSTICS,
   RUNTIME_EMIT_WALLET_EVENT,
+  RUNTIME_NOTIFY,
+  type RuntimeNotifyRequest,
   type WalletEventKind,
   RUNTIME_CREATE_CONTEXT,
   RUNTIME_DERIVE_SIGNING_KEY_ID,
@@ -3465,6 +3467,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (typeof digest === "string" && digest) consentReplays.recordGranted(digest);
     }
     void broadcastWalletEvent(m.event, m.detail);
+    return false;
+  }
+
+  // The offscreen document cannot reach `chrome.notifications`, so it asks us.
+  // Extension pages only: a content script carries this extension's id too,
+  // and a page must not be able to raise a notice in the wallet's name.
+  if ((message as { type?: string })?.type === RUNTIME_NOTIFY) {
+    if (!isExtensionPageSender(sender)) return false;
+    const m = message as RuntimeNotifyRequest;
+    chrome.notifications.create(
+      {
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("icon-128.png"),
+        title: String(m.title),
+        message: String(m.message),
+        priority: 2,
+      },
+      () => void chrome.runtime.lastError,
+    );
     return false;
   }
 
