@@ -126,10 +126,49 @@ export interface TriggerLinkFlowSpec {
 /** The shared flow registry's root (VTI-LNK-046 table). */
 export const FLOW_REGISTRY_BASE = "https://link.trustoverip.org/vti/flow/";
 
+/** The three properties VTI-LNK-102's contact rule asks of a DID method. */
+export interface ContactMethodCapabilities {
+  /** The identifier names the host that serves its document — the person has
+   *  a domain to recognise before continuing (VTI-LNK-050). */
+  namesHost: boolean;
+  /** The document can list services (a `SignInPortal`, a Farm's claim
+   *  service). */
+  listsServices: boolean;
+  /** This reader verifies the document under VTI-LNK-052 (for `did:webvh`,
+   *  the log verifies). */
+  verified: boolean;
+}
+
 /**
- * `sign-in` 0.1, draft (VTI-LNK-100 to 105). The contact is the VTC, whose DID
- * document must list the portal's service, so a `did:key` (or a `did:peer`
- * with no services, numalgo 0) can never be one (VTI-LNK-102).
+ * What each contact kind this reader classifies can do, for the contact rule
+ * of VTI-LNK-102 (reused by `vta-claim`, VTI-LNK-112). This is the one place
+ * to change: the rule is an allow-list by capability, not a refusal of named
+ * methods, so a new method with all three properties qualifies by adding its
+ * row here — no flow needs editing.
+ */
+export const CONTACT_METHOD_CAPABILITIES: Readonly<Record<ContactKind, ContactMethodCapabilities>> = {
+  "did:webvh": { namesHost: true, listsServices: true, verified: true },
+  "did:web": { namesHost: true, listsServices: true, verified: true },
+  // Self-certifying, and named after no host: no domain to show, and nothing
+  // ties a portal origin in the document to anyone the person recognises.
+  "did:key": { namesHost: false, listsServices: false, verified: true },
+  "did:peer": { namesHost: false, listsServices: true, verified: true },
+};
+
+/**
+ * The contact rule of VTI-LNK-102 / 112: a DID of a method whose identifier
+ * names the host serving its document, whose document can list services, and
+ * whose document this reader verifies. In practice `did:webvh` and `did:web`.
+ */
+export function isHostNamedServiceContact(contact: TriggerLinkContact): boolean {
+  const caps = CONTACT_METHOD_CAPABILITIES[contact.kind];
+  return caps !== undefined && caps.namesHost && caps.listsServices && caps.verified;
+}
+
+/**
+ * `sign-in` 0.1, draft (VTI-LNK-100 to 105). The contact is the service, and
+ * only a contact the rule of VTI-LNK-102 accepts — `did:key`, `did:peer` and
+ * any other method that names no host are `from-not-allowed`.
  */
 export const SIGN_IN_FLOW: TriggerLinkFlowSpec = {
   name: "sign-in",
@@ -138,13 +177,13 @@ export const SIGN_IN_FLOW: TriggerLinkFlowSpec = {
   minors: [1],
   draft: true,
   requiresExp: true,
-  allowsContact: (c) =>
-    c.kind === "did:webvh" || c.kind === "did:web" || (c.kind === "did:peer" && !c.value.startsWith("did:peer:0")),
+  allowsContact: isHostNamedServiceContact,
 };
 
 /** The flows this plugin implements, as a reader. `vta-claim` is deliberately
  *  absent: this wallet does not claim VTAs from a Farm, so such a link is
- *  `unknown-flow` (outcome `update`). */
+ *  `unknown-flow` (outcome `update`). A reader that adds it uses
+ *  {@link isHostNamedServiceContact} as its `allowsContact` (VTI-LNK-112). */
 export const READER_FLOWS: readonly TriggerLinkFlowSpec[] = [SIGN_IN_FLOW];
 
 // ── Results ──────────────────────────────────────────────────────────────────
@@ -280,7 +319,7 @@ export function parseTriggerLink(text: string, opts: ParseTriggerLinkOptions): T
   // 8. The flow.
   let flow: ParsedTriggerLink["flow"];
   if (fields._type !== undefined) {
-    const resolved = resolveFlowType(fields._type.raw, fields._type.value, host);
+    const resolved = resolveFlowType(fields._type.raw, host);
     if (resolved === undefined) return fail("bad-type");
     const placed = placeFlow(resolved, flows);
     if (!placed.ok) return fail(placed.reason);
@@ -395,17 +434,19 @@ function parseEpochSeconds(value: string): number | undefined {
 /** DID syntax (DID Core §3.1), DID only — no path, query or fragment. */
 const DID_SYNTAX = /^did:[a-z0-9]+:(?:(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})*:)*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})+$/;
 
-/** A generic URI scheme prefix: the shape of "some other identifier". */
-const OTHER_IDENTIFIER = /^[A-Za-z][A-Za-z0-9+.-]*:\S+$/;
-
 /**
- * VTI-LNK-030 to 032. A value containing `/@` is an agent name, reserved and
- * refused as `unsupported-vid` before anything else — `members.example.org/@`
- * must not read as merely malformed, because a newer reader may support it.
- * A DID of a method this reader cannot use, or a non-DID identifier with a
- * scheme, is likewise `unsupported-vid`. Anything else malformed is `bad-from`.
+ * VTI-LNK-020 step 6, VTI-LNK-030 to 032. Empty is `bad-from`. A value
+ * containing `/@` is an agent name, reserved and refused as `unsupported-vid`
+ * before any DID syntax check — `members.example.org/@` must not read as merely
+ * malformed, because a newer reader may support it. A value beginning `did:`
+ * that is not a DID is `bad-from`; a DID of a method this reader cannot use is
+ * `unsupported-vid`. Anything that is neither a DID nor an agent name (a bare
+ * KERI identifier, a URN, plain text) is an identifier type this reader does
+ * not implement, and a reader cannot tell a type it does not know from one
+ * that does not exist (VTI-LNK-031): `unsupported-vid`.
  */
 function classifyContact(value: string): TriggerLinkContact | "bad-from" | "unsupported-vid" {
+  if (value.length === 0) return "bad-from";
   if (value.includes("/@")) return "unsupported-vid";
   if (value.startsWith("did:")) {
     if (!DID_SYNTAX.test(value)) return "bad-from";
@@ -428,7 +469,7 @@ function classifyContact(value: string): TriggerLinkContact | "bad-from" | "unsu
         return "unsupported-vid";
     }
   }
-  return OTHER_IDENTIFIER.test(value) ? "unsupported-vid" : "bad-from";
+  return "unsupported-vid";
 }
 
 /**
@@ -454,36 +495,42 @@ export function contactDomainLabel(contact: TriggerLinkContact): string | undefi
 }
 
 /**
- * VTI-LNK-040 / 041. The path form is checked on the value **as written**:
- * `sign%2Din` is refused rather than decoded into shape, because a reader
- * MUST NOT normalise a `_type` (VTI-LNK-040). The path form resolves against
- * `https://` and the link's host, lowercased, whatever the link's scheme.
+ * VTI-LNK-040 / 041. Both forms are checked on the value **as written**,
+ * before percent-decoding: `sign%2Din` is refused rather than decoded into
+ * shape, because a reader MUST NOT normalise a `_type` (VTI-LNK-040). The path
+ * form resolves against `https://` and the link's host, lowercased, whatever
+ * the link's scheme; the absolute form gets no such repair — it is written out
+ * in full, so `https://LINK.…` or a `:443` is refused, not fixed.
  */
-function resolveFlowType(raw: string, value: string, host: string): string | undefined {
+function resolveFlowType(raw: string, host: string): string | undefined {
   if (raw.startsWith("/")) {
-    if (raw.startsWith("//")) return undefined;
-    if (!/^[A-Za-z0-9\-._~/]+$/.test(raw)) return undefined;
-    const segments = raw.slice(1).split("/");
-    if (segments.some((seg) => seg === "." || seg === "..")) return undefined;
-    if (!isVersionSegment(segments[segments.length - 1]!)) return undefined;
-    return `https://${host.toLowerCase()}${raw}`;
+    return isFlowPath(raw) ? `https://${host.toLowerCase()}${raw}` : undefined;
   }
-  // Absolute form: an https URI with no query or fragment.
-  if (!/^https:\/\//i.test(value)) return undefined;
-  if (value.includes("?") || value.includes("#")) return undefined;
-  let u: URL;
-  try {
-    u = new URL(value);
-  } catch {
-    return undefined;
-  }
-  if (u.protocol !== "https:") return undefined;
-  const path = value.slice(value.indexOf("/", "https://".length));
-  if (!path.startsWith("/")) return undefined;
+  // Absolute form: `https://` in lower case, a lowercase host meeting the host
+  // rules (no userinfo, no port — `@` and `:` are not host characters, so the
+  // host rules refuse both), then a path meeting every path-form constraint.
+  // No query or fragment: `?`, `#` and `%` are outside the path's characters.
+  const SCHEME = "https://";
+  if (!raw.startsWith(SCHEME)) return undefined;
+  const rest = raw.slice(SCHEME.length);
+  const slash = rest.indexOf("/");
+  if (slash === -1) return undefined;
+  const flowHost = rest.slice(0, slash);
+  if (!meetsHostRules(flowHost)) return undefined;
+  return isFlowPath(rest.slice(slash)) ? raw : undefined;
+}
+
+/**
+ * The path-form constraints of VTI-LNK-040, on text as written: exactly one
+ * leading `/`, only `A-Za-z0-9-._~/`, no empty, `.` or `..` segment, no
+ * percent-encoding, and a last segment `<MAJOR>.<MINOR>` with no leading
+ * zeros.
+ */
+function isFlowPath(path: string): boolean {
+  if (!/^\/[A-Za-z0-9\-._~/]+$/.test(path)) return false;
   const segments = path.slice(1).split("/");
-  if (segments.some((seg) => seg === "." || seg === "..")) return undefined;
-  if (!isVersionSegment(segments[segments.length - 1]!)) return undefined;
-  return value;
+  if (segments.some((seg) => seg === "" || seg === "." || seg === "..")) return false;
+  return isVersionSegment(segments[segments.length - 1]!);
 }
 
 function isVersionSegment(seg: string): boolean {
