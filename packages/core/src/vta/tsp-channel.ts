@@ -306,8 +306,16 @@ export class TspChannel implements TrustTaskChannel {
     // a correlation mismatch into a 30s hang with no reason anywhere — the
     // predicate has to report, because by design nothing downstream can.
     let lastDecline: string | undefined;
+    // How many frames were offered to this request at all. Zero at a timeout is
+    // its own finding: nothing reached this socket while it waited, so the reply
+    // was lost before the wallet — at the agent's send or at the mediator — and
+    // nothing on this side could have accepted it. A late reply would still be
+    // logged by the inbox (`[pnm inbound] received`), so "zero here and nothing
+    // there" means it never came.
+    let framesSeen = 0;
 
     const claims: TspFrameClaim = async (bytes) => {
+      framesSeen++;
       let reply;
       try {
         reply = await unpack(bytes, {
@@ -370,7 +378,15 @@ export class TspChannel implements TrustTaskChannel {
         throw new VtaClientError(
           (err as VtaClientError).code ?? "e.client.network",
           `${(err as Error).message} — last inbound frame declined: ${lastDecline}`,
-          { details: { lastDecline } },
+          { details: { lastDecline, framesSeen } },
+        );
+      }
+      if (framesSeen === 0) {
+        throw new VtaClientError(
+          (err as VtaClientError).code ?? "e.client.network",
+          `${(err as Error).message} — no frame arrived on this socket while waiting, so the ` +
+            `reply was lost before reaching the wallet (at the agent's send or at the mediator)`,
+          { details: { framesSeen } },
         );
       }
       throw err;
