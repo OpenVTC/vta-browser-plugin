@@ -16,6 +16,7 @@ import {
   agentLabel,
   fallbackNotification,
   sittingOutTransports,
+  withExpiredFallbackDropped,
 } from "../src/mediator-fallback.js";
 import { TRANSPORT_DIAGNOSIS } from "../src/transport-diagnosis.js";
 
@@ -92,4 +93,49 @@ test("the offscreen document never calls chrome.notifications itself", () => {
   // refusal notice was lost this way.
   const src = readFileSync(new URL("../src/offscreen.ts", import.meta.url), "utf8");
   assert.doesNotMatch(src, /chrome\.notifications\??\.\w+\(/);
+});
+
+// ── the console's warning, per agent and no longer than the cooldown ──
+//
+// Field report: switching the console between two agents, the REST warning
+// lingered and came back. It was always per agent; what lingered was a record
+// of a fallback that had ended, shown until the agent's next request.
+
+const NO_REPLY = { state: "down" as const, code: TRANSPORT_DIAGNOSIS.noReply, detail: "x" };
+
+test("one agent sitting out says nothing about another", () => {
+  const f = new MediatorFallback();
+  f.noteNoReply(VTA, MEDIATOR, T);
+  assert.equal(f.isAnySittingOut(VTA, T + 1), true);
+  assert.equal(f.isAnySittingOut(OTHER_VTA, T + 1), false);
+});
+
+test("isAnySittingOut ends with the cooldown and does not consume it", () => {
+  const f = new MediatorFallback();
+  f.noteNoReply(VTA, MEDIATOR, T);
+  assert.equal(f.isAnySittingOut(VTA, T + FALLBACK_COOLDOWN_MS - 1), true);
+  assert.equal(f.isAnySittingOut(VTA, T + FALLBACK_COOLDOWN_MS), false);
+  // The status read left the session build's answer alone.
+  assert.equal(f.isSittingOut(VTA, MEDIATOR, T + FALLBACK_COOLDOWN_MS - 1), true);
+});
+
+test("an agent's DID that prefixes another's does not borrow its fallback", () => {
+  const f = new MediatorFallback();
+  f.noteNoReply(`${VTA}-two`, MEDIATOR, T);
+  assert.equal(f.isAnySittingOut(VTA, T + 1), false);
+});
+
+test("a fallback that has ended is not reported", () => {
+  const health = { TSP: NO_REPLY, DIDComm: NO_REPLY, REST: { state: "unknown" as const } };
+  assert.deepEqual(sittingOutTransports(withExpiredFallbackDropped(health, true)), ["TSP", "DIDComm"]);
+  const after = withExpiredFallbackDropped(health, false);
+  assert.deepEqual(sittingOutTransports(after), []);
+  assert.deepEqual(after, { REST: { state: "unknown" } });
+});
+
+test("dropping an ended fallback leaves other down reasons alone", () => {
+  // A mediator that refused the handshake is down for a reason the cooldown
+  // has nothing to do with.
+  const refused = { state: "down" as const, code: TRANSPORT_DIAGNOSIS.originNotAllowed, detail: "y" };
+  assert.deepEqual(withExpiredFallbackDropped({ TSP: refused }, false), { TSP: refused });
 });

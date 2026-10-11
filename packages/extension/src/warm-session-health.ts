@@ -125,3 +125,36 @@ export function retireConnection(
   const set = opts.setTimeout ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
   set(() => conn.close(), opts.graceMs ?? RETIRE_GRACE_MS);
 }
+
+/**
+ * Whether a connection that just closed has already been replaced in its pool.
+ *
+ * The mediator keeps one live socket per DID: when a second one authenticates
+ * as the same holder it closes the first ("Duplicate WebSocket connection:
+ * closing old session in favour of new one"). So replacing a pooled connection
+ * — `retireConnection`, which deliberately leaves the old one open — gets the
+ * old one closed by the far side, and its `onClose` fires as an unexpected
+ * drop.
+ *
+ * If that handler acted on it, it deleted the *replacement's* pool entry, which
+ * is keyed on the pair rather than on the connection, and scheduled a
+ * reconnect. The reconnect found the pool empty, opened a third socket, the
+ * mediator closed the second, whose `onClose` did the same — a self-sustaining
+ * duel every couple of seconds, logged by the mediator as "Something is running
+ * more than one live session for this DID". Replies addressed to the holder
+ * went to whichever socket was newest, and the request waiting on another one
+ * timed out. Seen in the field at gt-vta, 2026-10-11, starting at a token
+ * expiry and restarting on the next replacement.
+ *
+ * `self` is read lazily: the entry resolves only once the connection has been
+ * returned, which is when the caller has a name for it. An entry that failed
+ * means nobody holds the pair, so the close is not superseded.
+ */
+export async function isSuperseded<T>(
+  entry: Promise<T> | undefined,
+  self: () => T | undefined,
+): Promise<boolean> {
+  if (!entry) return false;
+  const current = await entry.catch(() => undefined);
+  return current !== undefined && current !== self();
+}

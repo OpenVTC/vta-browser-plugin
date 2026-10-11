@@ -141,9 +141,10 @@ export class RestChannel implements TrustTaskChannel {
     // A cached bearer can outlive its server-side session (VTA restart or
     // session eviction). On 401, re-authenticate once and retry so a stale
     // token self-heals instead of surfacing as an auth failure.
-    const res = await once(await getVtaBearer(this.auth));
+    const bearer = await getVtaBearer(this.auth);
+    const res = await once(bearer);
     if (res.status !== 401) return res;
-    return once(await makeReauth(this.auth)());
+    return once(await makeReauth(this.auth)(bearer));
   }
 
   async send<Res>(envelope: TrustTask<unknown>, opts: SendOpts = {}): Promise<Res> {
