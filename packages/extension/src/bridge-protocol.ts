@@ -2598,10 +2598,11 @@ export type SignInStepResult =
       unlisted?: { host: string; did: string };
     };
 
-/** Where in the flow a sign-in failed. `identify` and `grant` are the
- *  member's VTA signing; `claim`, `prove` and `respond` are the exchanges with
- *  the community. */
-export type SignInFailureStage = "join" | "claim" | "identify" | "prove" | "grant-digest" | "enrol-uv" | "grant" | "respond";
+/** Where in the flow a sign-in failed. `domain-linkage` is the wallet
+ *  checking a domain-linked community's website (its DID Configuration);
+ *  `identify` and `grant` are the member's VTA signing; `claim`, `prove` and
+ *  `respond` are the exchanges with the community. */
+export type SignInFailureStage = "domain-linkage" | "join" | "claim" | "identify" | "prove" | "grant-digest" | "enrol-uv" | "grant" | "respond";
 export type SignInFailureParty = "community" | "vta" | "wallet";
 
 export type RuntimeSignInStepResponse =

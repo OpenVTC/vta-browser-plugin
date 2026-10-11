@@ -15,6 +15,7 @@ import type { SignInFailureParty, SignInFailureStage, SignInStepResult } from ".
 type Failed = Extract<SignInStepResult, { kind: "failed" }>;
 
 export const STAGE_LABEL: Readonly<Record<SignInFailureStage, string>> = {
+  "domain-linkage": "checking the website belongs to the community",
   join: "join (recording the service in your vault)",
   claim: "claim (sending the code to the community)",
   identify: "identify (your agent signing who you are)",
@@ -31,9 +32,19 @@ export const PARTY_LABEL: Readonly<Record<SignInFailureParty, string>> = {
   wallet: "this wallet (a reply did not check out)",
 };
 
+/** What a code means, in a line, for codes a person cannot act on from the
+ *  code alone. Keyed by the spec's reason where the code is one. */
+export const CODE_MEANING: Readonly<Record<string, string>> = {
+  "domain-not-linked":
+    "The website doesn't publish a DID Configuration that links it to the community's DID, so nothing was sent to it.",
+  "unsupported-vid": "The code names a kind of identifier this wallet can't check yet. An update may add it.",
+};
+
 /** The rows of the "Details" line, in reading order. */
 export function failureDetails(r: Failed): Array<[label: string, value: string]> {
   const rows: Array<[string, string]> = [["Code", r.code]];
+  const meaning = CODE_MEANING[r.code];
+  if (meaning) rows.push(["Meaning", meaning]);
   if (r.cause && r.cause !== r.code) rows.push(["Cause", r.cause]);
   if (r.stage) rows.push(["Step", STAGE_LABEL[r.stage] ?? r.stage]);
   if (r.party) rows.push(["Refused by", PARTY_LABEL[r.party] ?? r.party]);

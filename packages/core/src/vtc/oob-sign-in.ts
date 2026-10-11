@@ -20,14 +20,12 @@
 // local copy of base design §10 plus contract C5, because the
 // `dtgwg-trust-tasks-tf` bindings for `auth/oob/*` are not published yet.
 
-import { resolve as vtiResolve } from "@openvtc/vti-didcomm-js";
-
-import { assertResolvableWebvhHost } from "../did/egress-guard.js";
+import { resolveContactDocument, type ContactMethodRegistry } from "../did/methods.js";
 import { generateSigningIdentity, type SigningIdentity } from "../siop/self-issued.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
 import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import { jcsCanonicalize, sha256, base58btcEncode } from "../trust-tasks/canonical.js";
-import { meetsHostRules, type TriggerLinkReason } from "../links/trigger-link.js";
+import { meetsHostRules, type ContactRoute, type TriggerLinkReason } from "../links/trigger-link.js";
 import { isTrustTaskErrorType } from "../vta/protocol.js";
 import { TRUST_TASK_HTTPS_SERVICE_TYPE, trustTaskUrl } from "../vta/endpoint.js";
 import { withFetchTimeout, isFetchTimeout } from "../http/timeout-fetch.js";
@@ -277,46 +275,31 @@ export function originMatchesPortal(activationOrigin: string, portalOrigin: stri
 export interface ResolveCommunityOptions {
   /** Defaults to the shared resolver. The host guards run first either way. */
   resolveDid?: (did: string) => Promise<unknown>;
+  /** The reader's contact methods. Defaults to {@link CONTACT_METHODS}. */
+  contactMethods?: ContactMethodRegistry;
 }
 
 /**
- * Resolve and verify the community's DID document, afresh (VTI-LNK-052/053).
- * For `did:webvh` the resolver walks and verifies the log. The contact's host
- * must meet the host rules — which is where `did:web:example.com%3A8443` is
- * refused. Any failure is `did-document-unverified`, and nothing is sent.
+ * Resolve and verify the community's DID document, afresh (VTI-LNK-052/053),
+ * through its registered contact method. For `did:webvh` the resolver walks
+ * and verifies the log. A host-named contact's host must meet the host rules —
+ * which is where `did:web:example.com%3A8443` is refused. A method with no
+ * registered resolver is `unsupported-vid`; any other failure is
+ * `did-document-unverified`, and nothing is sent.
+ *
+ * `route` says how the contact qualifies: a `domain-linked` one still needs
+ * {@link verifyDomainLinkage} after the person continues.
  */
 export async function resolveCommunityDocument(
   did: string,
   opts: ResolveCommunityOptions = {},
-): Promise<{ ok: true; doc: Record<string, unknown> } | { ok: false; reason: TriggerLinkReason }> {
-  const unverified = { ok: false as const, reason: "did-document-unverified" as const };
-  const host = contactHost(did);
-  if (host === undefined || !meetsHostRules(host)) return unverified;
-  try {
-    if (did.startsWith("did:webvh:")) assertResolvableWebvhHost(did);
-    const res = (await (opts.resolveDid ?? ((d: string) => vtiResolve(d, {})))(did)) as {
-      didDocument?: Record<string, unknown>;
-      didResolutionMetadata?: { error?: string };
-    };
-    if (res?.didResolutionMetadata?.error) return unverified;
-    const doc = res?.didDocument;
-    if (!doc || doc.id !== did) return unverified;
-    return { ok: true, doc };
-  } catch {
-    return unverified;
-  }
-}
-
-/** The host a did:webvh / did:web names, percent-decoded, or `undefined`. */
-function contactHost(did: string): string | undefined {
-  const parts = did.split(":");
-  const raw = did.startsWith("did:webvh:") ? parts[3] : did.startsWith("did:web:") ? parts[2] : undefined;
-  if (!raw) return undefined;
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return undefined;
-  }
+): Promise<
+  { ok: true; doc: Record<string, unknown>; route: ContactRoute } | { ok: false; reason: TriggerLinkReason }
+> {
+  return resolveContactDocument(did, {
+    ...(opts.resolveDid ? { resolveDid: opts.resolveDid } : {}),
+    ...(opts.contactMethods ? { methods: opts.contactMethods } : {}),
+  });
 }
 
 // ── K_a, and the documents it signs ──────────────────────────────────────────

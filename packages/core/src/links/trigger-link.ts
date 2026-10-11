@@ -53,6 +53,9 @@ export type TriggerLinkReason =
   | "no-common-transport"
   | "untyped"
   | "wrong-origin"
+  // Route B (dtgwg-vti-spec #58), outcome `invalid`: the portal origin is not
+  // linked to a domain-linked contact's DID by a DIF DID Configuration.
+  | "domain-not-linked"
   // Local to this reader, outcome `invalid`: the community's verified document
   // lists no usable `SignInPortal` service (VTI-LNK-102 names no reason).
   | "no-portal-service";
@@ -99,8 +102,10 @@ export function triggerLinkMessage(outcome: TriggerLinkOutcome): string | undefi
 
 // ── Flows ────────────────────────────────────────────────────────────────────
 
-/** Contact identifier kinds this reader can classify. */
-export type ContactKind = "did:webvh" | "did:web" | "did:key" | "did:peer";
+/** A contact's DID method as `did:<method>` (`did:webvh`, `did:web`, …). The
+ *  kinds this reader can classify are the methods in its contact-method
+ *  table ({@link ContactMethodTable}); anything else is `unsupported-vid`. */
+export type ContactKind = `did:${string}`;
 
 /** A flow this reader implements (VTI-LNK-040 to 046). */
 export interface TriggerLinkFlowSpec {
@@ -119,56 +124,196 @@ export interface TriggerLinkFlowSpec {
   /** `_exp` is required (VTI-LNK-100 / 110). */
   requiresExp: boolean;
   /** Which contact kinds the flow accepts (VTI-LNK-031). A contact of a kind
-   *  the reader supports but the flow does not is `from-not-allowed`. */
-  allowsContact: (contact: TriggerLinkContact) => boolean;
+   *  the reader supports but the flow does not is `from-not-allowed`. The
+   *  table is the reader's contact methods ({@link DEFAULT_CONTACT_METHODS}
+   *  when the caller passes none). */
+  allowsContact: (contact: TriggerLinkContact, methods?: ContactMethodTable) => boolean;
 }
 
 /** The shared flow registry's root (VTI-LNK-046 table). */
 export const FLOW_REGISTRY_BASE = "https://link.trustoverip.org/vti/flow/";
 
-/** The three properties VTI-LNK-102's contact rule asks of a DID method. */
-export interface ContactMethodCapabilities {
-  /** The identifier names the host that serves its document — the person has
-   *  a domain to recognise before continuing (VTI-LNK-050). */
-  namesHost: boolean;
+// ── Contact methods (VTI-LNK-102 / 112) ──────────────────────────────────────
+//
+// A contact qualifies for `sign-in` (and `vta-claim`) by one of two routes
+// (dtgwg-vti-spec #58). Both need a method this reader resolves and whose
+// document it verifies (VTI-LNK-052), and a document that lists a
+// `SignInPortal`:
+//
+//   - **host-named** (route A): the DID names the host that serves its
+//     document (`did:webvh`, `did:web`). Nothing more is checked.
+//   - **domain-linked** (route B): any other method. After the person
+//     continues and before the claim, the reader confirms the portal origin is
+//     linked to the DID by the DIF Well-Known DID Configuration
+//     (`vtc/domain-linkage.ts`); if it is not, `domain-not-linked`.
+//
+// This module only knows the *policy* of each method — its route, whether its
+// documents list services, its syntax and the host it names. It stays pure:
+// the resolvers live one layer up, in `did/methods.ts`, whose registry is a
+// {@link ContactMethodTable} and is what the flow passes in. Adding a method
+// is a registration there; no flow needs editing.
+
+/** How a contact of a method qualifies as a service contact. */
+export type ContactRoute = "host-named" | "domain-linked";
+
+/** What the reader knows of a DID method, for the contact rule. */
+export interface ContactMethodPolicy {
+  /** `did:<method>`. */
+  kind: ContactKind;
+  /** The route a contact of this method qualifies by. Absent: no route can
+   *  ever qualify one (`did:key` lists no services; `did:peer` is
+   *  self-certifying and published by no one), so a link naming one is
+   *  `from-not-allowed`. */
+  route?: ContactRoute;
   /** The document can list services (a `SignInPortal`, a Farm's claim
    *  service). */
   listsServices: boolean;
-  /** This reader verifies the document under VTI-LNK-052 (for `did:webvh`,
-   *  the log verifies). */
+  /** This reader resolves the method and verifies its documents under
+   *  VTI-LNK-052. A method with a route but no resolver is `unsupported-vid`. */
+  verified: boolean;
+  /** Method-specific syntax, beyond DID syntax. `false` is `bad-from`. */
+  wellFormed?: (did: string) => boolean;
+  /** For a host-named method: the host serving the document, then the path,
+   *  each percent-decoded once (VTI-LNK-050). */
+  hostPath?: (did: string) => string[] | undefined;
+}
+
+/** The reader's contact methods, by kind. */
+export interface ContactMethodTable {
+  policyFor(kind: string): ContactMethodPolicy | undefined;
+}
+
+function decodeSegments(segments: string[]): string[] | undefined {
+  if (segments.length === 0) return undefined;
+  return segments.map((seg) => {
+    try {
+      return decodeURIComponent(seg);
+    } catch {
+      return seg;
+    }
+  });
+}
+
+/** `did:webvh:<scid>:<host>[:<path>…]`. Route A. */
+export const WEBVH_CONTACT_POLICY: ContactMethodPolicy = {
+  kind: "did:webvh",
+  route: "host-named",
+  listsServices: true,
+  verified: true,
+  wellFormed: (did) => {
+    const parts = did.split(":");
+    return parts.length >= 4 && !!parts[2] && !!parts[3];
+  },
+  hostPath: (did) => decodeSegments(did.split(":").slice(3)),
+};
+
+/** `did:web:<host>[:<path>…]`. Route A. */
+export const WEB_CONTACT_POLICY: ContactMethodPolicy = {
+  kind: "did:web",
+  route: "host-named",
+  listsServices: true,
+  verified: true,
+  hostPath: (did) => decodeSegments(did.split(":").slice(2)),
+};
+
+/** Self-certifying, and named after no host: no domain to show, and its
+ *  document lists no services. No route. */
+export const KEY_CONTACT_POLICY: ContactMethodPolicy = {
+  kind: "did:key",
+  listsServices: false,
+  verified: true,
+  wellFormed: (did) => /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/.test(did),
+};
+
+/** Self-certifying; its document lists services, but no one publishes it, so
+ *  nothing ties a portal in it to anyone the person recognises. No route. */
+export const PEER_CONTACT_POLICY: ContactMethodPolicy = {
+  kind: "did:peer",
+  listsServices: true,
+  verified: true,
+};
+
+/** The contact methods this reader classifies before any registry is
+ *  consulted: route A for `did:webvh` and `did:web`, and the two methods it
+ *  knows can never qualify. */
+export const BUILTIN_CONTACT_POLICIES: readonly ContactMethodPolicy[] = [
+  WEBVH_CONTACT_POLICY,
+  WEB_CONTACT_POLICY,
+  KEY_CONTACT_POLICY,
+  PEER_CONTACT_POLICY,
+];
+
+/** A {@link ContactMethodTable} over a list of policies. */
+export function contactMethodTable(policies: Iterable<ContactMethodPolicy>): ContactMethodTable {
+  const byKind = new Map<string, ContactMethodPolicy>();
+  for (const p of policies) byKind.set(p.kind, p);
+  return { policyFor: (kind) => byKind.get(kind) };
+}
+
+/** The table a caller that passes none gets: {@link BUILTIN_CONTACT_POLICIES}.
+ *  The flow passes the registry in `did/methods.ts`, which starts from the
+ *  same policies and adds each method's resolver. */
+export const DEFAULT_CONTACT_METHODS: ContactMethodTable = contactMethodTable(BUILTIN_CONTACT_POLICIES);
+
+/** The three properties the original VTI-LNK-102 contact rule asked of a DID
+ *  method. Derived from the contact-method policies; kept for callers. */
+export interface ContactMethodCapabilities {
+  /** The identifier names the host that serves its document (route A). */
+  namesHost: boolean;
+  /** The document can list services. */
+  listsServices: boolean;
+  /** This reader verifies the document under VTI-LNK-052. */
   verified: boolean;
 }
 
-/**
- * What each contact kind this reader classifies can do, for the contact rule
- * of VTI-LNK-102 (reused by `vta-claim`, VTI-LNK-112). This is the one place
- * to change: the rule is an allow-list by capability, not a refusal of named
- * methods, so a new method with all three properties qualifies by adding its
- * row here — no flow needs editing.
- */
-export const CONTACT_METHOD_CAPABILITIES: Readonly<Record<ContactKind, ContactMethodCapabilities>> = {
-  "did:webvh": { namesHost: true, listsServices: true, verified: true },
-  "did:web": { namesHost: true, listsServices: true, verified: true },
-  // Self-certifying, and named after no host: no domain to show, and nothing
-  // ties a portal origin in the document to anyone the person recognises.
-  "did:key": { namesHost: false, listsServices: false, verified: true },
-  "did:peer": { namesHost: false, listsServices: true, verified: true },
-};
+/** {@link BUILTIN_CONTACT_POLICIES} as capabilities, by kind. */
+export const CONTACT_METHOD_CAPABILITIES: Readonly<Record<string, ContactMethodCapabilities>> = Object.freeze(
+  Object.fromEntries(
+    BUILTIN_CONTACT_POLICIES.map((p) => [
+      p.kind,
+      { namesHost: p.route === "host-named", listsServices: p.listsServices, verified: p.verified },
+    ]),
+  ),
+);
+
+/** The route a contact qualifies by, or `undefined` when none can qualify it:
+ *  a method with a route, documents that list services, and a resolver. */
+export function contactRoute(
+  contact: TriggerLinkContact,
+  methods: ContactMethodTable = DEFAULT_CONTACT_METHODS,
+): ContactRoute | undefined {
+  const p = methods.policyFor(contact.kind);
+  return p?.route !== undefined && p.listsServices && p.verified ? p.route : undefined;
+}
 
 /**
- * The contact rule of VTI-LNK-102 / 112: a DID of a method whose identifier
- * names the host serving its document, whose document can list services, and
- * whose document this reader verifies. In practice `did:webvh` and `did:web`.
+ * Route A of the contact rule (VTI-LNK-102 / 112): a DID of a method whose
+ * identifier names the host serving its document, whose document can list
+ * services, and whose document this reader verifies. `did:webvh`, `did:web`.
  */
-export function isHostNamedServiceContact(contact: TriggerLinkContact): boolean {
-  const caps = CONTACT_METHOD_CAPABILITIES[contact.kind];
-  return caps !== undefined && caps.namesHost && caps.listsServices && caps.verified;
+export function isHostNamedServiceContact(
+  contact: TriggerLinkContact,
+  methods: ContactMethodTable = DEFAULT_CONTACT_METHODS,
+): boolean {
+  return contactRoute(contact, methods) === "host-named";
+}
+
+/**
+ * The contact rule of VTI-LNK-102 / 112, both routes: a contact some route can
+ * qualify. A domain-linked contact is only *provisionally* accepted here —
+ * the flow still confirms the linkage after the person continues.
+ */
+export function isServiceContact(
+  contact: TriggerLinkContact,
+  methods: ContactMethodTable = DEFAULT_CONTACT_METHODS,
+): boolean {
+  return contactRoute(contact, methods) !== undefined;
 }
 
 /**
  * `sign-in` 0.1, draft (VTI-LNK-100 to 105). The contact is the service, and
- * only a contact the rule of VTI-LNK-102 accepts — `did:key`, `did:peer` and
- * any other method that names no host are `from-not-allowed`.
+ * only a contact the rule of VTI-LNK-102 accepts by either route — `did:key`,
+ * `did:peer` and any method no route can qualify are `from-not-allowed`.
  */
 export const SIGN_IN_FLOW: TriggerLinkFlowSpec = {
   name: "sign-in",
@@ -177,13 +322,13 @@ export const SIGN_IN_FLOW: TriggerLinkFlowSpec = {
   minors: [1],
   draft: true,
   requiresExp: true,
-  allowsContact: isHostNamedServiceContact,
+  allowsContact: isServiceContact,
 };
 
 /** The flows this plugin implements, as a reader. `vta-claim` is deliberately
  *  absent: this wallet does not claim VTAs from a Farm, so such a link is
  *  `unknown-flow` (outcome `update`). A reader that adds it uses
- *  {@link isHostNamedServiceContact} as its `allowsContact` (VTI-LNK-112). */
+ *  {@link isServiceContact} as its `allowsContact` (VTI-LNK-112). */
 export const READER_FLOWS: readonly TriggerLinkFlowSpec[] = [SIGN_IN_FLOW];
 
 // ── Results ──────────────────────────────────────────────────────────────────
@@ -228,6 +373,9 @@ export interface ParseTriggerLinkOptions {
   /** Custom schemes this reader registers for its own scanner (VTI-LNK-012).
    *  Lowercase. The browser plugin registers none. */
   aliasSchemes?: readonly string[];
+  /** The reader's contact methods. Defaults to {@link DEFAULT_CONTACT_METHODS};
+   *  the flow passes the registry in `did/methods.ts`. */
+  contactMethods?: ContactMethodTable;
 }
 
 /** The four reserved names (VTI-LNK-011). Everything else is ignored. */
@@ -303,7 +451,8 @@ export function parseTriggerLink(text: string, opts: ParseTriggerLinkOptions): T
   // 6. The contact.
   const fromField = fields._from;
   if (fromField === undefined) return fail("missing-from");
-  const contact = classifyContact(fromField.value);
+  const methods = opts.contactMethods ?? DEFAULT_CONTACT_METHODS;
+  const contact = classifyContact(fromField.value, methods);
   if (contact === "bad-from" || contact === "unsupported-vid") return fail(contact);
 
   // 7. The handle and the expiry.
@@ -328,7 +477,7 @@ export function parseTriggerLink(text: string, opts: ParseTriggerLinkOptions): T
 
   // 9. The flow's own rules.
   if (flow) {
-    if (!flow.spec.allowsContact(contact)) return fail("from-not-allowed");
+    if (!flow.spec.allowsContact(contact, methods)) return fail("from-not-allowed");
     if (flow.spec.requiresExp && exp === undefined) return fail("missing-exp");
   }
 
@@ -445,29 +594,21 @@ const DID_SYNTAX = /^did:[a-z0-9]+:(?:(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})*:)*(?:[
  * not implement, and a reader cannot tell a type it does not know from one
  * that does not exist (VTI-LNK-031): `unsupported-vid`.
  */
-function classifyContact(value: string): TriggerLinkContact | "bad-from" | "unsupported-vid" {
+function classifyContact(
+  value: string,
+  methods: ContactMethodTable,
+): TriggerLinkContact | "bad-from" | "unsupported-vid" {
   if (value.length === 0) return "bad-from";
   if (value.includes("/@")) return "unsupported-vid";
   if (value.startsWith("did:")) {
     if (!DID_SYNTAX.test(value)) return "bad-from";
-    const method = value.slice(4, value.indexOf(":", 4));
-    switch (method) {
-      case "webvh": {
-        // did:webvh:<scid>:<host>[:<path>…]
-        const parts = value.split(":");
-        if (parts.length < 4 || !parts[2] || !parts[3]) return "bad-from";
-        return { kind: "did:webvh", value };
-      }
-      case "web":
-        return { kind: "did:web", value };
-      case "key":
-        if (!/^did:key:z[1-9A-HJ-NP-Za-km-z]+$/.test(value)) return "bad-from";
-        return { kind: "did:key", value };
-      case "peer":
-        return { kind: "did:peer", value };
-      default:
-        return "unsupported-vid";
-    }
+    const kind: ContactKind = `did:${value.slice(4, value.indexOf(":", 4))}`;
+    const policy = methods.policyFor(kind);
+    // A method the reader has no policy for, or one with a route but no
+    // resolver, is one it cannot use (VTI-LNK-031).
+    if (!policy || (policy.route !== undefined && !policy.verified)) return "unsupported-vid";
+    if (policy.wellFormed && !policy.wellFormed(value)) return "bad-from";
+    return { kind, value };
   }
   return "unsupported-vid";
 }
@@ -477,21 +618,15 @@ function classifyContact(value: string): TriggerLinkContact | "bad-from" | "unsu
  * (VTI-LNK-050): the domain, followed by the path where the identifier has
  * one — `dids.example.org/farm-auth` for
  * `did:webvh:<SCID>:dids.example.org:farm-auth`. `undefined` for a contact
- * with no domain; the caller then shows its own label or says there is none.
+ * with no domain (every domain-linked method); the caller then shows its own
+ * label or says there is none.
  */
-export function contactDomainLabel(contact: TriggerLinkContact): string | undefined {
-  const parts = contact.value.split(":");
-  const segments =
-    contact.kind === "did:webvh" ? parts.slice(3) : contact.kind === "did:web" ? parts.slice(2) : undefined;
-  if (!segments || segments.length === 0) return undefined;
-  const decoded = segments.map((seg) => {
-    try {
-      return decodeURIComponent(seg);
-    } catch {
-      return seg;
-    }
-  });
-  return decoded.join("/");
+export function contactDomainLabel(
+  contact: TriggerLinkContact,
+  methods: ContactMethodTable = DEFAULT_CONTACT_METHODS,
+): string | undefined {
+  const segments = methods.policyFor(contact.kind)?.hostPath?.(contact.value);
+  return segments && segments.length > 0 ? segments.join("/") : undefined;
 }
 
 /**

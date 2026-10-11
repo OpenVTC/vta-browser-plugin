@@ -3,3 +3,4 @@ export * from "./egress-guard.js";
 export * from "./verification-method.js";
 export * from "./peer.js";
 export * from "./verify.js";
+export * from "./methods.js";
