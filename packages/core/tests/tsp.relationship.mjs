@@ -88,6 +88,23 @@ function makeChannel(opts = {}) {
   const transport = relationshipVta(vta, holder, opts);
   const outcomes = [];
   const store = new MemoryRelationshipStore();
+  // Another channel to the same VTA over the same transport, as the wallet
+  // builds one per request. `relationships` is what decides whether it knows
+  // the first one's relationship.
+  const another = (relationships) =>
+    new TspChannel({
+      transport,
+      holder: {
+        vid: holder.vid,
+        signingPrivateKey: holder.signSk,
+        encryptionPrivateKey: holder.encSk,
+        encryptionPublicKey: holder.encPk,
+      },
+      signing: { did: holder.vid, kid: `${holder.vid}#key-2`, privateKey: holder.signSk, publicKey: holder.signPk },
+      vta: { vid: vta.vid, encryptionPublicKey: vta.encPk, signingPublicKey: vta.signPk },
+      ...(relationships ? { relationships } : {}),
+      handshakeTimeoutMs: 200,
+    });
   const channel = new TspChannel({
     transport,
     holder: {
@@ -107,7 +124,7 @@ function makeChannel(opts = {}) {
     handshakeTimeoutMs: 200,
     onRelationship: (o) => outcomes.push(o),
   });
-  return { channel, transport, outcomes, store, holder };
+  return { channel, transport, outcomes, store, holder, another };
 }
 
 const task = () =>
@@ -150,6 +167,29 @@ test("concurrent sends produce one invite, not one each", async () => {
   ]);
   const invites = transport.sent.filter((m) => m.messageType === "control");
   assert.equal(invites.length, 1);
+});
+
+test("channels built per request share a relationship when they share a store", async () => {
+  // The wallet builds a channel for every request. With each on its own empty
+  // store, every request re-invited the VTA and waited for an accept first; a
+  // VTA already related refused the accept of a racing second invite
+  // ("SendAccept in state Bidirectional"). One store per document fixes both.
+  const { channel, transport, store, another } = makeChannel({ gating: true });
+  await channel.send(task(), { expectedResponseType: LIST_RESP });
+  await another(store).send(task(), { expectedResponseType: LIST_RESP });
+  await another(store).send(task(), { expectedResponseType: LIST_RESP });
+  const invites = transport.sent.filter((m) => m.messageType === "control");
+  assert.equal(invites.length, 1, "three channels, one store, one invite");
+});
+
+test("the control: a channel with its own store invites again", async () => {
+  // Without this, the test above could pass because the fixture never invites
+  // from a second channel at all.
+  const { channel, transport, another } = makeChannel({ gating: true });
+  await channel.send(task(), { expectedResponseType: LIST_RESP });
+  await another().send(task(), { expectedResponseType: LIST_RESP });
+  const invites = transport.sent.filter((m) => m.messageType === "control");
+  assert.equal(invites.length, 2);
 });
 
 test("a VTA that never answers an invite still gets the application message", async () => {
