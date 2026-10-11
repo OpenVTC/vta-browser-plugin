@@ -44,7 +44,15 @@ export class MediatorSessionBridge implements DidcommMessageBridge {
       options.timeoutMs ?? this.defaultTimeoutMs,
       { from: options.from },
     );
-    this.connection.send(outerPackedJwe);
+    try {
+      this.connection.send(outerPackedJwe);
+    } catch (err) {
+      // Nothing will await the waiter now, and it still rejects later — on
+      // timeout, or when the socket closes. Unobserved, that surfaces as an
+      // uncaught rejection in the offscreen document on top of the real error.
+      reply.catch(() => {});
+      throw err;
+    }
     return (await reply) as DidcommReply;
   }
 

@@ -11,7 +11,9 @@ import { test } from "node:test";
 
 import {
   EXPIRY_MARGIN_MS,
+  RETIRE_GRACE_MS,
   isReusable,
+  retireConnection,
   startWakeWatch,
 } from "../src/warm-session-health.js";
 
@@ -92,4 +94,37 @@ test("stopping the watch clears its timer", () => {
   const stop = startWakeWatch({ onWake: () => {}, ...t });
   stop();
   assert.equal(t.cleared, true);
+});
+
+// A replaced connection may still carry a concurrent request. Closing it at
+// once failed that request with "mediator-transport: not connected"; with the
+// local clock ahead of the mediator's, every connection read expired on
+// arrival and the console's parallel loads closed each other's sockets.
+
+function fakeConn(isOpen: boolean) {
+  const conn = { isOpen, expiresAt: undefined, closed: 0, close() { conn.closed++; } };
+  return conn;
+}
+
+test("an open connection being replaced is closed only after the grace period", () => {
+  const conn = fakeConn(true);
+  const timers: Array<{ fn: () => void; ms: number }> = [];
+  retireConnection(conn, { setTimeout: (fn, ms) => timers.push({ fn, ms }) });
+  assert.equal(conn.closed, 0, "a request already on it must be able to finish");
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0]!.ms, RETIRE_GRACE_MS);
+  timers[0]!.fn();
+  assert.equal(conn.closed, 1);
+});
+
+test("the grace outlasts the longest reply wait", () => {
+  assert.ok(RETIRE_GRACE_MS > 30_000);
+});
+
+test("a connection that is no longer open is closed at once", () => {
+  const conn = fakeConn(false);
+  retireConnection(conn, {
+    setTimeout: () => assert.fail("nothing on a closed socket can succeed; do not wait"),
+  });
+  assert.equal(conn.closed, 1);
 });
