@@ -44,6 +44,13 @@ import { asTaskSigner, signOutboundTask, type ChannelSigner } from "./trust-task
  *  cached token can't be served past expiry (clock-skew safety margin). */
 const BEARER_TTL_MS = 10 * 60_000;
 const bearerCache = new Map<string, { token: string; expiresAt: number }>();
+/** The sign-in currently running for a (baseUrl, holder), so concurrent
+ *  callers share it. The cache only helps once a token exists: a console that
+ *  loads three panes at once used to run three challenge + authenticate pairs
+ *  — six anonymous requests against a per-IP budget of ten — and switching
+ *  between two agents spent the rest. Cleared when it settles, success or
+ *  failure, so a refusal is not replayed to the next caller. */
+const bearerInflight = new Map<string, Promise<string>>();
 
 function bearerCacheKey(baseUrl: string, holderDid: string): string {
   return `${baseUrl.replace(/\/+$/, "")}|${holderDid}`;
@@ -58,10 +65,17 @@ export function invalidateVtaBearer(baseUrl: string, holderDid: string): void {
 /** Build a `reauth` callback for the `RestChannel`: drop the cached bearer and
  *  mint a fresh one. Used so a 401 (a cached token that outlived its
  *  server-side session — restart/eviction) self-heals with a single retry
- *  instead of surfacing as an auth failure. */
-export function makeReauth(opts: VtaAuthInputs): () => Promise<string> {
-  return () => {
-    invalidateVtaBearer(opts.baseUrl, opts.holder.did);
+ *  instead of surfacing as an auth failure.
+ *
+ *  Pass the token that was refused, and only that token is dropped. The VTA
+ *  keeps one live token per DID — each sign-in supersedes the last (`token
+ *  superseded (jti mismatch)`) — so when several requests are refused together,
+ *  the first one's re-auth mints the replacement and a later one discarding it
+ *  would sign in again and supersede it, refusing the first one's retry. */
+export function makeReauth(opts: VtaAuthInputs): (rejected?: string) => Promise<string> {
+  return (rejected) => {
+    const key = bearerCacheKey(opts.baseUrl, opts.holder.did);
+    if (rejected === undefined || bearerCache.get(key)?.token === rejected) bearerCache.delete(key);
     return getVtaBearer(opts);
   };
 }
@@ -112,7 +126,9 @@ export function vtaRestEndpointPolicy(netPolicy?: NetPolicy): {
  * Get a bearer token for the VTA's REST surface, returning a cached one when it
  * is still within its reuse window. Caching keeps a multi-op user action
  * (sign-in = list + sign, etc.) to one sign-in so it does not trip the VTA's
- * per-IP rate limit on anonymous requests.
+ * per-IP rate limit on anonymous requests. Concurrent callers with no token
+ * yet share the one sign-in already running rather than each starting their
+ * own.
  *
  * Two Trust Tasks, both POSTed to `/trust-tasks` with no bearer: an
  * `auth/challenge/0.1` naming the holder as its subject, then an
@@ -131,7 +147,17 @@ export async function getVtaBearer(opts: VtaAuthInputs): Promise<string> {
   if (cached && cached.expiresAt > Date.now()) {
     return cached.token;
   }
+  const running = bearerInflight.get(cacheKey);
+  if (running) return running;
 
+  const signIn = signInForBearer(opts, cacheKey).finally(() => {
+    if (bearerInflight.get(cacheKey) === signIn) bearerInflight.delete(cacheKey);
+  });
+  bearerInflight.set(cacheKey, signIn);
+  return signIn;
+}
+
+async function signInForBearer(opts: VtaAuthInputs, cacheKey: string): Promise<string> {
   const sender = preSessionSender(opts);
   const challenge = await requestAuthChallenge(sender, {
     holder: opts.holder,

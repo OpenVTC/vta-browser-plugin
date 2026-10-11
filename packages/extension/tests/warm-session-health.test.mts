@@ -13,6 +13,7 @@ import {
   EXPIRY_MARGIN_MS,
   RETIRE_GRACE_MS,
   isReusable,
+  isSuperseded,
   retireConnection,
   startWakeWatch,
 } from "../src/warm-session-health.js";
@@ -127,4 +128,45 @@ test("a connection that is no longer open is closed at once", () => {
     setTimeout: () => assert.fail("nothing on a closed socket can succeed; do not wait"),
   });
   assert.equal(conn.closed, 1);
+});
+
+// ── a replaced connection closing is not a drop ──
+//
+// The field case: at gt-vta's token expiry the pool replaced the holder's
+// socket. The mediator keeps one socket per DID and closed the old one; its
+// `onClose` deleted the replacement's pool entry and reconnected, and the two
+// kept closing each other every ~2.4 s until a request's reply went to the
+// wrong socket and timed out.
+
+test("a connection the pool has replaced is superseded", async () => {
+  const old = { id: "old" };
+  const replacement = { id: "new" };
+  assert.equal(await isSuperseded(Promise.resolve(replacement), () => old), true);
+});
+
+test("the pool's own connection closing is a drop", async () => {
+  const conn = { id: "conn" };
+  assert.equal(await isSuperseded(Promise.resolve(conn), () => conn), false);
+});
+
+test("an empty pool slot means nobody holds the pair, so the close is a drop", async () => {
+  assert.equal(await isSuperseded(undefined, () => ({ id: "conn" })), false);
+});
+
+test("a replacement that failed to connect does not hold the pair", async () => {
+  const failed = Promise.reject(new Error("mediator refused"));
+  assert.equal(await isSuperseded(failed, () => ({ id: "old" })), false);
+});
+
+test("self is read after the entry settles, so a close during connect is not misread", async () => {
+  // The pool entry resolves only once the connection has been returned, which
+  // is also when the caller's name for it is assigned.
+  const conn = { id: "conn" };
+  let self: typeof conn | undefined;
+  let resolve!: (c: typeof conn) => void;
+  const entry = new Promise<typeof conn>((r) => (resolve = r));
+  const verdict = isSuperseded(entry, () => self);
+  self = conn;
+  resolve(conn);
+  assert.equal(await verdict, false);
 });

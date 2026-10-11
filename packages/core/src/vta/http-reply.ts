@@ -6,7 +6,7 @@
 // verified, the thread checked. Its own module so `auth.ts` can use it without
 // importing the channel that imports it.
 
-import { errorFromBody, VtaClientError } from "./errors.js";
+import { errorFromBody, rateLimitedError, VtaClientError } from "./errors.js";
 import type { TrustTask } from "./protocol.js";
 import { isTrustTaskErrorType } from "./protocol.js";
 import { parseTrustTaskReply, verifyTrustTaskReply } from "./trust-task.js";
@@ -32,8 +32,10 @@ export async function decodeTrustTaskHttpAck(res: Response): Promise<void> {
     doc = (await res.json()) as { type?: string; payload?: unknown };
   } catch {
     // Not JSON, so there is no code to recover — build from the status alone.
+    if (res.status === 429) throw rateLimitedError(res, undefined);
     throw errorFromBody(undefined, res.status, res.statusText);
   }
+  if (res.status === 429 && !isTrustTaskErrorType(doc?.type)) throw rateLimitedError(res, doc);
   throw errorFromBody(doc, res.status, res.statusText);
 }
 
@@ -82,12 +84,16 @@ export async function decodeTrustTaskHttpReply<Res>(
   } catch (err) {
     // Not JSON, so there is no code to recover — build from the status alone
     // rather than from a stream we cannot read again.
+    if (res.status === 429) throw rateLimitedError(res, undefined);
     if (!res.ok) throw errorFromBody(undefined, res.status, res.statusText);
     throw new VtaClientError("e.client.parse", (err as Error).message, {
       status: res.status,
     });
   }
   if (!res.ok && !isTrustTaskErrorType(doc?.type)) {
+    // A 429 is answered by whichever limiter tripped, which may not be the
+    // agent's: say which (see `rateLimitedError`).
+    if (res.status === 429) throw rateLimitedError(res, doc);
     throw errorFromBody(doc, res.status, res.statusText);
   }
 

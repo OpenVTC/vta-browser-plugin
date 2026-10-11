@@ -57,6 +57,17 @@ export class MediatorFallback {
     return false;
   }
 
+  /** Whether any of `vtaDid`'s mediator channels is sitting out at `now`.
+   *  Read-only, unlike {@link isSittingOut}, so a status read cannot change
+   *  what the next session build decides. */
+  isAnySittingOut(vtaDid: string, now: number): boolean {
+    const prefix = vtaDid + SEP;
+    for (const [key, until] of this.until) {
+      if (key.startsWith(prefix) && now < until) return true;
+    }
+    return false;
+  }
+
   /** Whether to alert that `vtaDid` fell back now. Records the alert, so call
    *  it once per fallback actually taken. */
   claimNotification(vtaDid: string, now: number): boolean {
@@ -104,4 +115,26 @@ export function sittingOutTransports(health: TransportHealth): Transport[] {
   return (["TSP", "DIDComm"] as const).filter(
     (t) => health[t]?.state === "down" && health[t]?.code === TRANSPORT_DIAGNOSIS.noReply,
   );
+}
+
+/**
+ * `health` as it stands at the moment it is read, given whether the agent is
+ * still sitting out.
+ *
+ * A no-reply record is written by the session build that skips the mediator,
+ * and nothing replaces it until a build after the cooldown tries the mediator
+ * again. An agent with no request in between kept a fallback that had already
+ * ended, so switching the console back to it showed the warning for an agent
+ * the wallet would happily use the mediator for. Once the cooldown is over the
+ * record is dropped: nothing has been observed since, which is what an absent
+ * entry means.
+ */
+export function withExpiredFallbackDropped(
+  health: TransportHealth,
+  stillSittingOut: boolean,
+): TransportHealth {
+  if (stillSittingOut) return health;
+  const out: TransportHealth = { ...health };
+  for (const t of sittingOutTransports(health)) delete out[t];
+  return out;
 }

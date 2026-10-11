@@ -127,6 +127,109 @@ export async function errorFromResponse(res: Response): Promise<VtaClientError> 
   return new VtaClientError(code, message, opts);
 }
 
+// ── Who refused with a 429 ──────────────────────────────────────────────────
+//
+// A 429 from a VTA URL is not necessarily the VTA's. The agent may sit behind
+// a CDN or reverse proxy with limits of its own, and the two are tuned in
+// different places: an operator told "the agent rate-limited you" when it was
+// the CDN tunes the wrong one. The VTA marks every 429 its own limiter emits
+// with `x-rate-limit-source: vta`, a `retry-after`, and a JSON body naming the
+// limiter (`vta-service/src/routes/rate_limit.rs`; `vta_sdk::rate_limit` reads
+// the same contract). Without those it is unattributable, and is reported as
+// such rather than guessed at.
+//
+// The body is read as well as the header because a browser may not be shown
+// the header. `x-rate-limit-source` and `retry-after` are not CORS-safelisted,
+// so a page reaching the VTA under its origin allow-list rather than a host
+// permission sees neither. The body is the VTI limiter contract's own
+// machine-readable shape (`error: "rate_limited"`), on a request this module
+// addressed to the agent, so it attributes the refusal as well as the header
+// does.
+
+/** Response header naming the service whose limiter refused the request. */
+export const RATE_LIMIT_SOURCE_HEADER = "x-rate-limit-source";
+
+/** Which service refused. `upstream` means the 429 did not identify itself:
+ *  something in front of the agent (a CDN, a proxy, a load balancer). */
+export type RateLimitSource = "vta" | "vtc" | "mediator" | "did-host" | "upstream";
+
+/** A 429's attribution, carried as `details.rateLimit` on the error. */
+export interface RateLimit {
+  source: RateLimitSource;
+  /** Which of the service's limiters tripped (`auth`, `did-log`, …), when it
+   *  said. The VTA's `auth` limiter is its sign-in endpoints. */
+  limiter?: string;
+  /** How long the refusing service asked the caller to wait. */
+  retryAfterSecs?: number;
+}
+
+const KNOWN_SOURCES: readonly RateLimitSource[] = ["vta", "vtc", "mediator", "did-host"];
+/** A year. Bounds a hostile or broken hint, as `vta_sdk::rate_limit` does. */
+const MAX_RETRY_AFTER_SECS = 86_400 * 365;
+const MAX_LIMITER_LEN = 128;
+
+/** `retry-after` in either RFC 9110 form — delta-seconds or an HTTP-date — as
+ *  whole seconds from `nowMs`. Anything else is no hint, not an error. */
+export function parseRetryAfter(value: string | null, nowMs: number): number | undefined {
+  if (value === null) return undefined;
+  const v = value.trim();
+  if (/^\d+$/.test(v)) return Math.min(Number(v), MAX_RETRY_AFTER_SECS);
+  const at = Date.parse(v);
+  if (Number.isNaN(at)) return undefined;
+  return Math.min(Math.max(0, Math.ceil((at - nowMs) / 1000)), MAX_RETRY_AFTER_SECS);
+}
+
+/** Read a 429's attribution from its headers and its already-parsed body. */
+export function rateLimitFrom(headers: Headers, body: unknown, nowMs: number = Date.now()): RateLimit {
+  const doc = (body ?? {}) as { error?: unknown; limiter?: unknown; retryAfterSecs?: unknown };
+  const isLimiterBody = doc.error === "rate_limited";
+  const header = headers.get(RATE_LIMIT_SOURCE_HEADER)?.trim().toLowerCase();
+  const source: RateLimitSource = (KNOWN_SOURCES as readonly string[]).includes(header ?? "")
+    ? (header as RateLimitSource)
+    : isLimiterBody
+      ? "vta"
+      : "upstream";
+  const out: RateLimit = { source };
+  if (isLimiterBody && typeof doc.limiter === "string" && doc.limiter !== "") {
+    out.limiter = doc.limiter.slice(0, MAX_LIMITER_LEN);
+  }
+  const retryAfterSecs =
+    parseRetryAfter(headers.get("retry-after"), nowMs) ??
+    parseRetryAfter(headers.get("x-ratelimit-after"), nowMs) ??
+    (isLimiterBody && typeof doc.retryAfterSecs === "number" && doc.retryAfterSecs >= 0
+      ? Math.min(Math.ceil(doc.retryAfterSecs), MAX_RETRY_AFTER_SECS)
+      : undefined);
+  if (retryAfterSecs !== undefined) out.retryAfterSecs = retryAfterSecs;
+  return out;
+}
+
+const SOURCE_LABEL: Record<RateLimitSource, string> = {
+  vta: "the agent",
+  vtc: "the VTC",
+  mediator: "the mediator",
+  "did-host": "the DID host",
+  upstream: "something in front of the agent (a CDN or proxy), not the agent's own limiter",
+};
+
+/**
+ * The typed error for a 429, from the response and its already-parsed body
+ * (read once — R3.7). Code `e.p.msg.rate_limited`; who refused, which limiter
+ * and how long to wait ride in `details.rateLimit` and in the message, so a
+ * relay that only forwards prose still says who to talk to.
+ */
+export function rateLimitedError(res: Response, body: unknown, nowMs: number = Date.now()): VtaClientError {
+  const rateLimit = rateLimitFrom(res.headers, body, nowMs);
+  const who =
+    rateLimit.limiter !== undefined && rateLimit.source !== "upstream"
+      ? `${SOURCE_LABEL[rateLimit.source]}'s \`${rateLimit.limiter}\` limiter`
+      : SOURCE_LABEL[rateLimit.source];
+  const wait = rateLimit.retryAfterSecs !== undefined ? ` — retry after ${rateLimit.retryAfterSecs} s` : "";
+  return new VtaClientError("e.p.msg.rate_limited", `rate limited by ${who}${wait}`, {
+    status: res.status,
+    details: { rateLimit },
+  });
+}
+
 // ── A Trust-Task refusal's machine-readable reason ──────────────────────────
 
 /** `details.reason` the VTA puts on a `taskFailed` for a missing row and for a

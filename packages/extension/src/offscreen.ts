@@ -96,7 +96,7 @@ import { base64url } from "@openvtc/vti-didcomm-js";
 import { grantCommand } from "./grant-command.js";
 import { forgetInbox, getSettings, inboxFor, inboxToAdopt, setInbox } from "./config.js";
 import { walletNetPolicy } from "./net-policy.js";
-import { isReusable, retireConnection, startWakeWatch } from "./warm-session-health.js";
+import { isReusable, isSuperseded, retireConnection, startWakeWatch } from "./warm-session-health.js";
 import { loadHolder } from "./holder.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import type { Transport, TransportHealth, TransportObservation } from "./transports.js";
@@ -112,6 +112,7 @@ import {
   agentLabel,
   fallbackNotification,
   noReplyDetail,
+  withExpiredFallbackDropped,
 } from "./mediator-fallback.js";
 import {
   OFFSCREEN_DIDCOMM_LOGIN,
@@ -769,7 +770,10 @@ function recordTransport(
 /** Snapshot for the UI, shaped as the bridge declares it. */
 async function transportHealthSnapshot(): Promise<TransportHealthResult> {
   const byVta: TransportHealthResult["byVta"] = {};
-  for (const [vtaDid, health] of vtaTransportHealth) byVta[vtaDid] = health;
+  const now = Date.now();
+  for (const [vtaDid, health] of vtaTransportHealth) {
+    byVta[vtaDid] = withExpiredFallbackDropped(health, mediatorFallback.isAnySittingOut(vtaDid, now));
+  }
   // Whether a session is an inbox decides whether a dead one is "an outbound
   // channel fell back" or "this agent can no longer reach us". Matched on the
   // (agent, relay) PAIR: with one relay per agent, the same mediator DID can
@@ -2944,15 +2948,23 @@ async function createWarmSession(
     // each operation resolves its real VTA target separately (cached).
     vtaDid: identity.did,
     onClose: () => {
-      warmPool.delete(key);
-      mediatorState.set(key, "closed");
-      // Keep the inbound path alive: re-arm THIS VTA's inbox session
-      // under the same holder, with backoff that survives a prolonged
-      // outage. Multi-VTA: each holder has its own session, so the re-arm
-      // targets the specific (mediator, vtaDid) that dropped, not the
-      // aggregate. `onClose` fires only on an UNEXPECTED drop (not our own
-      // `close()`), so a deliberately-forgotten VTA isn't re-armed here.
-      if (isInbox) scheduleInboundReconnect(vtaDid);
+      // A connection the pool has already replaced is closed by the mediator
+      // when the replacement authenticates, and that is not a drop: the
+      // replacement holds the pair and carries the inbox. Acting on it deleted
+      // the replacement and started a reconnect duel (see `isSuperseded`).
+      const entry = warmPool.get(key);
+      void isSuperseded(entry, () => self).then((superseded) => {
+        if (superseded) return;
+        if (warmPool.get(key) === entry) warmPool.delete(key);
+        mediatorState.set(key, "closed");
+        // Keep the inbound path alive: re-arm THIS VTA's inbox session
+        // under the same holder, with backoff that survives a prolonged
+        // outage. Multi-VTA: each holder has its own session, so the re-arm
+        // targets the specific (mediator, vtaDid) that dropped, not the
+        // aggregate. `onClose` fires only on an UNEXPECTED drop (not our own
+        // `close()`), so a deliberately-forgotten VTA isn't re-armed here.
+        if (isInbox) scheduleInboundReconnect(vtaDid);
+      });
     },
     // A request that got no reply may have gone into a socket that is dead
     // without having closed. The request still fails, since it may have been
@@ -3445,18 +3457,26 @@ async function createApproverWarmSession(vtaDid: string): Promise<MediatorConnec
   if (!approver) throw new Error(`approver for ${vtaDid} is locked`);
   const mediatorDid = await requireInboxMediator(vtaDid);
   const key = approverPoolKey(mediatorDid, vtaDid);
+  let self: MediatorConnection | undefined;
   const conn = await connectMediatorSession({
     holder: approver.identity,
     mediatorDid,
     netPolicy: walletNetPolicy(),
     vtaDid: approver.identity.did,
     onClose: () => {
-      approverPool.delete(key);
-      // Re-arm only while the approver is still unlocked — a deliberate lock
-      // clears the held identity and must not resurrect the session.
-      if (approverIdentities.has(vtaDid)) approverReconnect.schedule(vtaDid);
+      // Same rule as the holder pool: a replaced connection closing is the
+      // mediator making room for its replacement, not a drop.
+      const entry = approverPool.get(key);
+      void isSuperseded(entry, () => self).then((superseded) => {
+        if (superseded) return;
+        if (approverPool.get(key) === entry) approverPool.delete(key);
+        // Re-arm only while the approver is still unlocked — a deliberate lock
+        // clears the held identity and must not resurrect the session.
+        if (approverIdentities.has(vtaDid)) approverReconnect.schedule(vtaDid);
+      });
     },
   });
+  self = conn;
   // Inbound on the approver session is handled as the approver (its identity +
   // signing), with `isApprover` so the popup demands the per-decision biometric.
   conn.onInboundTsp((bytes) =>
