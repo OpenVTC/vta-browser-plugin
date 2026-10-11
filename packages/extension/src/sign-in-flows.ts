@@ -9,15 +9,34 @@
 //
 //   prepare  parse the link (C1) → is this one of the wallet's communities
 //            (VTI-LNK-101; nothing is sent to one that is not) → resolve and
-//            verify its DID document (allowed before the tap only because it
-//            is known, VTI-LNK-051) → the clicked page's origin must be the
+//            verify its DID document → the clicked page's origin must be the
 //            portal's (VTI-LNK-105) → "Sign in to <name> at <origin>?"
+//   join     only for a site the wallet does not know (see below).
 //   claim    the member chose an identity and pressed Continue. Only now is
 //            K_a generated and anything sent to the community (C3 step 7).
 //   prove    the typed number, and `identify` signed by the VTA.
 //   review   step 2: where the request came from.
 //   grant    the grant digest goes to the passkey (C6); the VTA signs the grant
 //            with that decision; `respond` carries it. K_a is then discarded.
+//
+// ## A site the wallet does not know
+//
+// Nothing is sent to it (VTI-LNK-101) until the person agrees, but its DID
+// document is still resolved and verified, and the page must still be its
+// portal, before anything is offered — the offer names the verified origin,
+// never the link's text. Then the document's services say what it is:
+//
+//   - `WebVHHosting`: a DID hosting service. "Use <host> to host your DIDs?"
+//     with the agent's DIDs to choose from; `join` records the choice the way
+//     the legacy first-use prompt always has (`bindProfile`: a `didSelfIssued`
+//     entry targeting the portal origin and the service DID), and the flow
+//     goes straight on to `confirm` for the same link. The service admits only
+//     DIDs its operator put on its access list, so a `notAuthorized` to the
+//     proof is shown as exactly that, with the DID to send them.
+//   - anything else (a VTC, `VTCRest`): not one of your communities. Joining
+//     a VTC is its own application process, and this window does not run it.
+//
+// Declining or closing at that point sends nothing to the site.
 //
 // The community's *own* name for itself is never what the member is asked to
 // trust: the confirm screen shows the wallet's record, and a different name in
@@ -84,6 +103,13 @@ import type {
 import { safeCode } from "./sign-in-failure.js";
 
 /** A vault entry, as far as finding a community's identities needs it. */
+/** A DID the member's agent hosts — a candidate when starting to use a DID
+ *  hosting service. */
+export interface SignInPersona {
+  did: string;
+  contextId: string;
+}
+
 export interface SignInVaultEntry {
   id: string;
   label: string;
@@ -111,6 +137,20 @@ export interface SignInVta {
       assertion: AuthenticatorAssertionResponseLogin;
     },
   ): Promise<unknown>;
+  /** The DIDs the agent hosts, across every context (`vta/webvh/list`): what
+   *  the person may choose from when they start using a DID hosting service. */
+  listPersonas(): Promise<SignInPersona[]>;
+  /**
+   * Record that `did` is who the member is at the site at `origin` whose DID
+   * is `rpDid`: the same `didSelfIssued` vault entry the legacy first-use
+   * prompt creates (`bindProfile` in `first-use-profile.ts`). Returns the new
+   * entry's id and label.
+   */
+  bindIdentity(binding: {
+    origin: string;
+    did: string;
+    rpDid: string;
+  }): Promise<{ entryId: string; label: string }>;
   /** `device/heartbeat` ext `org.openvtc.uv-key`, over the device's session. */
   enrolUvKey(enrolment: WebauthnUvKeyEnrolment): Promise<void>;
   /**
@@ -143,7 +183,42 @@ export interface SignInFlowDeps {
   grantLifetimeMs: number;
 }
 
-type Phase = "prepared" | "claimed" | "identified" | "ended";
+type Phase = "joining" | "prepared" | "claimed" | "identified" | "ended";
+
+/** What a verified DID document says the site is. */
+export type SiteKind = "did-hosting" | "other";
+
+/** The service type a DID hosting service publishes (affinidi-webvh-service
+ *  `add_webvh_hosting_service`, the VTA's `did-host-http` templates). It is
+ *  also what a VTA's `servers add` reads to accept a server as a DID host. */
+export const WEBVH_HOSTING_SERVICE_TYPE = "WebVHHosting";
+
+/** Read from the **verified** document, matched on `type` (VTI-LNK-053). */
+export function siteKindOf(doc: unknown): SiteKind {
+  const services = (doc as { service?: unknown })?.service;
+  if (!Array.isArray(services)) return "other";
+  const hosting = services.some((s) => {
+    const t = (s as { type?: unknown } | null)?.type;
+    return t === WEBVH_HOSTING_SERVICE_TYPE || (Array.isArray(t) && t.includes(WEBVH_HOSTING_SERVICE_TYPE));
+  });
+  return hosting ? "did-hosting" : "other";
+}
+
+/** The host of an origin, for a sentence ("Use <host> …"). */
+function hostOf(origin: string): string {
+  try {
+    return new URL(origin).hostname || origin;
+  } catch {
+    return origin;
+  }
+}
+
+/** The last segment of a refusal code: `auth/oob/claim:alreadyClaimed` →
+ *  `alreadyClaimed`. The services send the family-qualified code (C9); the
+ *  segment after the colon is the stable name within it. */
+function oobCode(code: string): string {
+  return code.slice(code.lastIndexOf(":") + 1);
+}
 
 interface Flow {
   phase: Phase;
@@ -154,6 +229,9 @@ interface Flow {
   services: SignInServices;
   communityName: string;
   identities: SignInIdentityView[];
+  kind: SiteKind;
+  /** The agent's DIDs, while `joining`. */
+  personas?: SignInPersona[];
   kA?: SigningIdentity;
   entry?: SignInIdentityView;
   step1?: OobStep1;
@@ -171,6 +249,14 @@ export const SIGN_IN_OUT_OF_ORDER = "sign-in/out-of-order";
 export const ALREADY_CLAIMED_MESSAGE =
   "This code was already used by another device. If that wasn't you, cancel on the website.";
 export const ENDED_MESSAGE = "Refresh the code on the website and try again.";
+
+/** Stable code: recording a DID hosting service in the vault failed. */
+export const SIGN_IN_JOIN_FAILED = "sign-in/join-failed";
+
+/** What the member is told when a DID hosting service has not put their DID
+ *  on its access list. */
+export const notListedMessage = (host: string): string =>
+  `${host} hasn't added you yet. Send this DID to its operator:`;
 
 /** What the member is told when their own VTA refused to sign, by its code. */
 export const VTA_REFUSAL_MESSAGES: Readonly<Record<string, string>> = {
@@ -234,6 +320,8 @@ export class SignInFlows {
     }
     try {
       switch (req.step) {
+        case "join":
+          return await this.join(req.flowId, flow, req.did);
         case "claim":
           return await this.claim(flow, req.entryId);
         case "prove":
@@ -309,12 +397,10 @@ export class SignInFlows {
           e.targets.some((t) => t.kind === "did" && t.did === vtcDid),
       )
       .map((e) => ({ entryId: e.id, did: e.principalDid!, label: e.label }));
-    if (identities.length === 0) {
-      const contactLabel = contactDomainLabel(link.from);
-      return { kind: "not-member", ...(contactLabel ? { contactLabel } : {}) };
-    }
 
-    // C3 step 3: resolve and verify, afresh.
+    // C3 step 3: resolve and verify, afresh — for a site the wallet does not
+    // know too, so that what it is offered is the verified document's account
+    // of the site and never the link's.
     const resolved = await resolveCommunityDocument(vtcDid, {
       ...(this.deps.resolveDid ? { resolveDid: this.deps.resolveDid } : {}),
     });
@@ -325,6 +411,40 @@ export class SignInFlows {
     // C3 step 4: the page the link was clicked on must be the portal.
     if (!origin || !originMatchesPortal(origin, selected.services.portalOrigin))
       return refused("wrong-origin");
+
+    const kind = siteKindOf(resolved.doc);
+    if (identities.length === 0) {
+      const { portalOrigin } = selected.services;
+      if (kind !== "did-hosting") {
+        const contactLabel = contactDomainLabel(link.from);
+        return {
+          kind: "not-member",
+          ...(contactLabel ? { contactLabel } : {}),
+          portalOrigin,
+        };
+      }
+      // A DID hosting service: offer to use it. Still nothing is sent to it.
+      const personas = await vta.listPersonas();
+      const host = hostOf(portalOrigin);
+      this.flows.set(flowId, {
+        phase: "joining",
+        link,
+        vta,
+        vtcDid,
+        vtcDocument: resolved.doc,
+        services: selected.services,
+        communityName: host,
+        identities: [],
+        kind,
+        personas,
+      });
+      return {
+        kind: "join-hosting",
+        host,
+        portalOrigin,
+        identities: personas.map((p) => ({ did: p.did, contextId: p.contextId })),
+      };
+    }
 
     // C3 step 5: the name from the wallet's own record.
     const communityName = identities[0]!.label;
@@ -337,12 +457,61 @@ export class SignInFlows {
       services: selected.services,
       communityName,
       identities,
+      kind,
     });
     return {
       kind: "confirm",
       communityName,
       portalOrigin: selected.services.portalOrigin,
       identities,
+    };
+  }
+
+  // ── join (an unknown DID hosting service) ──────────────────────────────────
+
+  private async join(
+    flowId: string,
+    flow: Flow,
+    did: string,
+  ): Promise<SignInStepResult> {
+    if (flow.phase !== "joining") throw outOfOrder();
+    if (!flow.personas?.some((p) => p.did === did)) throw outOfOrder();
+    flow.at = "join";
+    let bound: { entryId: string; label: string };
+    try {
+      bound = await flow.vta.bindIdentity({
+        origin: flow.services.portalOrigin,
+        did,
+        rpDid: flow.vtcDid,
+      });
+    } catch (err) {
+      // Nothing was sent to the site; the flow simply ends here.
+      this.end(flow);
+      this.flows.delete(flowId);
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        kind: "failed",
+        code: SIGN_IN_JOIN_FAILED,
+        message: `Your wallet couldn't record ${flow.communityName}: ${message}`,
+        stage: "join",
+      };
+    }
+    const identity: SignInIdentityView = {
+      entryId: bound.entryId,
+      did,
+      label: bound.label,
+    };
+    flow.identities = [identity];
+    flow.communityName = bound.label;
+    delete flow.personas;
+    flow.phase = "prepared";
+    // Straight on to the ordinary confirm (C3 step 5) for the same link: the
+    // website does not need clicking again.
+    return {
+      kind: "confirm",
+      communityName: flow.communityName,
+      portalOrigin: flow.services.portalOrigin,
+      identities: flow.identities,
     };
   }
 
@@ -574,14 +743,36 @@ export class SignInFlows {
       }
     }
     if (err instanceof OobRefusedError) {
-      if (err.code === "alreadyClaimed")
+      const local = oobCode(err.code);
+      // A DID hosting service admits only DIDs its operator listed, and its
+      // refusal of the proof is the one `notAuthorized` for every reason
+      // (deliberately: which check failed is not the caller's to learn). The
+      // wallet's own VTA signed this proof and the wallet checked it before
+      // sending, so the reason left is the access list — say so, and give the
+      // member the DID to send.
+      if (
+        local === "notAuthorized" &&
+        flow.at === "prove" &&
+        flow.kind === "did-hosting" &&
+        flow.entry
+      ) {
+        const host = hostOf(flow.services.portalOrigin);
+        return {
+          kind: "failed",
+          code: err.code,
+          message: notListedMessage(host),
+          ...where,
+          unlisted: { host, did: flow.entry.did },
+        };
+      }
+      if (local === "alreadyClaimed")
         return {
           kind: "failed",
           code: err.code,
           message: ALREADY_CLAIMED_MESSAGE,
           ...where,
         };
-      if (err.code === "requestExpired") return refused("expired");
+      if (local === "requestExpired") return refused("expired");
       return {
         kind: "failed",
         code: err.code,

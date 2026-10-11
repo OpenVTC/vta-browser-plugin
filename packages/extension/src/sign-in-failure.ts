@@ -15,6 +15,7 @@ import type { SignInFailureParty, SignInFailureStage, SignInStepResult } from ".
 type Failed = Extract<SignInStepResult, { kind: "failed" }>;
 
 export const STAGE_LABEL: Readonly<Record<SignInFailureStage, string>> = {
+  join: "join (recording the service in your vault)",
   claim: "claim (sending the code to the community)",
   identify: "identify (your agent signing who you are)",
   prove: "prove (sending the number to the community)",

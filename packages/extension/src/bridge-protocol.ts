@@ -2459,6 +2459,10 @@ export const OFFSCREEN_SIGN_IN_STEP = "offscreen/sign-in-step" as const;
 /** What the person did. `prepare` is the window opening. */
 export type SignInStep =
   | { step: "prepare" }
+  /** Unknown DID hosting service: the person agreed to use it, as `did` (one
+   *  of the `join-hosting` candidates). Records it in the vault the way the
+   *  legacy first-use prompt does, then the flow goes on to `confirm`. */
+  | { step: "join"; did: string }
   | { step: "claim"; entryId: string }
   | { step: "prove"; enteredNumber: string }
   | { step: "grant-digest" }
@@ -2515,13 +2519,26 @@ export interface SignInIdentityView {
   label: string;
 }
 
+/** A DID the member's agent hosts, offered when they start using a DID
+ *  hosting service (`join-hosting`). */
+export interface SignInPersonaView {
+  did: string;
+  contextId: string;
+}
+
 /** What the window shows. Every variant is a screen. */
 export type SignInStepResult =
   /** A refusal, with the VTI-LNK-021 message and nothing else about why. */
   | { kind: "refused"; outcome: "update" | "expired" | "unreachable" | "invalid"; message: string }
   /** VTI-LNK-101: not one of this wallet's communities. Nothing was sent to
-   *  it. `contactLabel` is the unverified domain label (VTI-LNK-050). */
-  | { kind: "not-member"; contactLabel?: string }
+   *  it. `contactLabel` is the unverified domain label (VTI-LNK-050);
+   *  `portalOrigin` is present when its DID document verified and the link was
+   *  clicked on its portal. */
+  | { kind: "not-member"; contactLabel?: string; portalOrigin?: string }
+  /** An unknown site whose verified DID document says it is a DID hosting
+   *  service (`WebVHHosting`): "Use <host> to host your DIDs?". Nothing has
+   *  been sent to it. `identities` are the DIDs the member's agent hosts. */
+  | { kind: "join-hosting"; host: string; portalOrigin: string; identities: SignInPersonaView[] }
   /** C3 step 5: "Sign in to <name> at <portal origin>?" */
   | { kind: "confirm"; communityName: string; portalOrigin: string; identities: SignInIdentityView[] }
   /** After the claim: type the number. `nameMismatch` is the community's own
@@ -2575,12 +2592,16 @@ export type SignInStepResult =
       /** The underlying stable code, or error name, when `code` is the
        *  generic one and something more specific is known. */
       cause?: string;
+      /** A DID hosting service refused the proof (`auth/oob:notAuthorized`):
+       *  the member's DID is not on its access list yet. The window shows the
+       *  DID to send to the service's operator. */
+      unlisted?: { host: string; did: string };
     };
 
 /** Where in the flow a sign-in failed. `identify` and `grant` are the
  *  member's VTA signing; `claim`, `prove` and `respond` are the exchanges with
  *  the community. */
-export type SignInFailureStage = "claim" | "identify" | "prove" | "grant-digest" | "enrol-uv" | "grant" | "respond";
+export type SignInFailureStage = "join" | "claim" | "identify" | "prove" | "grant-digest" | "enrol-uv" | "grant" | "respond";
 export type SignInFailureParty = "community" | "vta" | "wallet";
 
 export type RuntimeSignInStepResponse =

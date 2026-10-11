@@ -134,3 +134,68 @@ export function decideSiteIdentity(
   if (prefersHolder) return { kind: "holder" };
   return { kind: "ask" };
 }
+
+/** What {@link bindProfile} needs from the agent. Each throws on a transport
+ *  failure; the answers are the agent's own. */
+export interface BindProfileDeps {
+  /** The DIDs the agent hosts, across every context. */
+  listDids(): Promise<ReadonlyArray<{ did: string; contextId: string }>>;
+  /** The signing-key candidates derived from `did`'s document. */
+  deriveSigningKeyIds(did: string): Promise<{ candidates: string[]; error?: string }>;
+  /** `vault/upsert`, returning the new entry's id. */
+  upsert(body: Omit<RuntimeVaultUpsertRequest, "type">): Promise<{ entryId: string }>;
+}
+
+/**
+ * Bind the persona the operator picked to `origin`, as a vault entry.
+ *
+ * The picker returns a DID string and nothing else. Everything the entry needs
+ * beyond it — the context, the signing key — is re-derived here from the
+ * agent's own answers, so a DID that is not one the agent hosts cannot be
+ * bound no matter what the window sent back.
+ *
+ * Shared by the legacy first-use prompt (`proxyLogin`, `walletProfile`,
+ * `login`) and the trigger-link sign-in's "use this DID hosting service" step,
+ * so both create the same entry: the one either path finds again.
+ */
+export async function bindProfile(
+  deps: BindProfileDeps,
+  input: { origin: string; did: string; rpDid?: string },
+): Promise<{ ok: true; entryId: string } | { ok: false; error: string }> {
+  const { origin, did, rpDid } = input;
+  try {
+    const record = (await deps.listDids()).find((d) => d.did === did);
+    if (!record) return { ok: false, error: `${did} is not an identity this agent hosts` };
+
+    const derived = await deps.deriveSigningKeyIds(did);
+    if (derived.error) return { ok: false, error: derived.error };
+    const candidates = derived.candidates;
+    if (candidates.length !== 1) {
+      // Zero: nothing in the document can sign, and an entry naming a key that
+      // does not exist fails later, opaquely, at the VTA. More than one: which
+      // key signs is a real choice with no default, and picking one here would
+      // be the wallet guessing. Both send the operator to the vault panel,
+      // which has the key picker this prompt deliberately does not.
+      return {
+        ok: false,
+        error:
+          candidates.length === 0
+            ? `no signing key could be derived from ${did}`
+            : `${did} has ${candidates.length} possible signing keys — bind it from the wallet's vault panel, which lets you choose one`,
+      };
+    }
+
+    const { entryId } = await deps.upsert(
+      buildProfileEntry({
+        origin,
+        did,
+        contextId: record.contextId,
+        signingKeyId: candidates[0]!,
+        ...(rpDid ? { rpDid } : {}),
+      }),
+    );
+    return { ok: true, entryId };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}

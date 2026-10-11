@@ -21,6 +21,13 @@
 //
 // A refused link shows only the VTI-LNK-021 message for its outcome.
 //
+// A site the wallet does not know gets one of two screens before screen 1,
+// both after its DID document verified and nothing sent to it: a DID hosting
+// service is offered ("Use <host> to host your DIDs?" — yes records it and
+// goes on to screen 1 for the same code); anything else is "Not one of your
+// communities". A DID hosting service that has not put the member's DID on
+// its access list ends on a screen with that DID and a Copy button.
+//
 // ## Layout
 //
 // Every screen is one `Screen`: the wallet's mark, then a header naming the
@@ -559,6 +566,52 @@ function FailureDetails({
   );
 }
 
+/** A DID shown whole, with a button that copies it. */
+function CopyableDid({ did }: { did: string }) {
+  const [copied, setCopied] = useState<"yes" | "no" | undefined>();
+  const copy = () => {
+    const clip = globalThis.navigator?.clipboard;
+    if (!clip) {
+      setCopied("no");
+      return;
+    }
+    clip.writeText(did).then(
+      () => setCopied("yes"),
+      () => setCopied("no"),
+    );
+  };
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) auto",
+        gap: 10,
+        alignItems: "center",
+        padding: "10px 12px",
+        borderRadius: radius.md,
+        background: c.raised,
+        border: `1px solid ${c.lineSoft}`,
+        minWidth: 0,
+      }}
+    >
+      <code
+        data-testid="unlisted-did"
+        style={{ fontFamily: font.mono, fontSize: t.sm, ...wrap }}
+      >
+        {did}
+      </code>
+      <button
+        type="button"
+        data-testid="copy-did"
+        onClick={copy}
+        style={{ ...button("default"), fontSize: t.sm, padding: "5px 12px" }}
+      >
+        {copied === "yes" ? "Copied" : copied === "no" ? "Copy failed" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
 const REFUSED_TITLE: Record<
   Extract<SignInStepResult, { kind: "refused" }>["outcome"],
   string
@@ -591,6 +644,7 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
   const [communityName, setCommunityName] = useState("");
   const [entryId, setEntryId] = useState("");
   const [identities, setIdentities] = useState<SignInIdentityView[]>([]);
+  const [joinDid, setJoinDid] = useState("");
   const [number, setNumber] = useState("");
   const [deadline, setDeadline] = useState<number | undefined>();
   const [busy, setBusy] = useState(false);
@@ -616,6 +670,14 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
         setCommunityName(res.result.communityName);
         setIdentities(res.result.identities);
         setEntryId(res.result.identities[0]?.entryId ?? "");
+      }
+      if (res.result.kind === "join-hosting") {
+        setPortalOrigin(res.result.portalOrigin);
+        setJoinDid(
+          res.result.identities.length === 1
+            ? res.result.identities[0]!.did
+            : "",
+        );
       }
       if (res.result.kind === "enter-number")
         setDeadline(res.result.decisionDeadline);
@@ -723,6 +785,101 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
         </Screen>
       );
 
+    case "join-hosting":
+      return (
+        <Screen
+          title={`Use ${screen.host} to host your DIDs?`}
+          primary={{
+            label: `Use ${screen.host}`,
+            run: () => void run({ step: "join", did: joinDid }),
+            disabled: busy || !joinDid,
+            testId: "join",
+          }}
+          secondary={{
+            label: "Not now",
+            run: () => void run({ step: "cancel" }).then(closeWindow),
+            disabled: busy,
+            testId: "decline",
+          }}
+        >
+          <p style={{ margin: 0, ...wrap }}>
+            <Origin origin={screen.portalOrigin} testId="portal" /> is a DID
+            hosting service your wallet hasn't used before. Its address is from
+            its verified DID document; check it matches the website's.
+          </p>
+          <p style={{ margin: 0, color: c.muted }}>
+            Nothing has been sent to it. If you go ahead, your wallet remembers
+            it and signs you in with the identity you choose.
+          </p>
+          {screen.identities.length === 0 ? (
+            <Note tone="warn">
+              <div data-testid="no-identities" style={wrap}>
+                Your agent hosts no identities yet, so there is nothing to sign
+                in as. Create one in the wallet and try again.
+              </div>
+            </Note>
+          ) : (
+            <fieldset
+              style={{
+                border: "none",
+                margin: 0,
+                padding: 0,
+                display: "grid",
+                gap: 8,
+                minWidth: 0,
+              }}
+            >
+              <legend style={{ ...microLabel, padding: 0, marginBottom: 8 }}>
+                Sign in as
+              </legend>
+              {screen.identities.map((i) => {
+                const on = joinDid === i.did;
+                return (
+                  <label
+                    key={i.did}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "auto minmax(0, 1fr)",
+                      gap: "2px 10px",
+                      alignItems: "start",
+                      padding: "10px 12px",
+                      borderRadius: radius.md,
+                      border: `1px solid ${on ? c.accent : c.line}`,
+                      background: on ? c.accentSoft : c.surface,
+                      cursor: "pointer",
+                      minWidth: 0,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="persona"
+                      value={i.did}
+                      checked={on}
+                      onChange={() => setJoinDid(i.did)}
+                      style={{
+                        accentColor: c.accent,
+                        margin: "3px 0 0",
+                        padding: 0,
+                      }}
+                    />
+                    <ShortDid value={i.did} />
+                    <span />
+                    <span style={{ fontSize: t.xs, color: c.faint, ...wrap }}>
+                      {i.contextId}
+                    </span>
+                  </label>
+                );
+              })}
+            </fieldset>
+          )}
+          <p style={{ margin: 0, fontSize: t.sm, color: c.muted, ...wrap }}>
+            {screen.host} admits only identities its operator has added. If it
+            hasn't added this one yet, the wallet will show you the DID to send
+            them.
+          </p>
+        </Screen>
+      );
+
     case "not-member":
       return (
         <Screen
@@ -738,9 +895,15 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
             ) : (
               "this community"
             )}
-            {screen.contactLabel ? " (unverified)" : ""}. Nothing was sent to
-            it.
+            {screen.contactLabel && !screen.portalOrigin ? " (unverified)" : ""}
+            . Nothing was sent to it.
           </Message>
+          {screen.portalOrigin && (
+            <p style={{ margin: 0, color: c.muted, ...wrap }}>
+              Its verified sign-in page is{" "}
+              <Origin origin={screen.portalOrigin} testId="portal" />.
+            </p>
+          )}
           <p style={{ margin: 0, color: c.muted }}>
             To sign in here, join the community first.
           </p>
@@ -1003,6 +1166,24 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
       );
 
     case "failed":
+      if (screen.unlisted)
+        return (
+          <Screen
+            who={who}
+            title={`${screen.unlisted.host} hasn't added you yet`}
+            icon={<StatusIcon tone="warn" />}
+            primary={closeAction}
+            escape={closeAction}
+          >
+            <Message>{screen.message}</Message>
+            <CopyableDid did={screen.unlisted.did} />
+            <p style={{ margin: 0, color: c.muted, ...wrap }}>
+              Once it's on {screen.unlisted.host}'s access list, refresh the
+              code on the website and sign in again.
+            </p>
+            <FailureDetails result={screen} />
+          </Screen>
+        );
       return (
         <Screen
           who={who}

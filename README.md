@@ -366,6 +366,27 @@ the two-digit number the portal shows, shows where the request came from, and
 signs the grant with your passkey (`auth/oob/*`). The page is told nothing; the
 portal learns the outcome from the community.
 
+A site the wallet does not know yet gets the same checks first: its DID
+document is resolved and verified, and the code must have been clicked on its
+own portal. Nothing is sent to it until you agree, and declining or closing
+the window sends nothing at all. What happens next depends on what its verified
+document says it is:
+
+- **A DID hosting service** (it publishes a `WebVHHosting` service): "Use
+  <host> to host your DIDs?", with the DIDs your agent hosts to choose from. Yes
+  records it in your vault exactly as the older `proxyLogin` first-use prompt
+  does — a `did-self-issued` entry for the portal's origin and the service's
+  DID, in the chosen DID's context — and the window goes straight on to "Sign
+  in to <host>?" for the same code. The service admits only DIDs its operator
+  has added to its access list. If it has not added yours, the window says
+  "<host> hasn't added you yet. Send this DID to its operator:" and shows the
+  DID with a Copy button; the same screen appears for an identity you have
+  used there before that it no longer admits.
+- **Anything else, such as a community (VTC):** "Not one of your communities",
+  with its verified sign-in page. Joining a community is the community's own
+  application process (`vtc/join-requests/*`), which this wallet does not run
+  yet, and VTC DID documents do not advertise a join page to link to.
+
 Each browser is one of your devices at your VTA. Every install (every browser
 profile) has its own holder identity, so it registers itself separately
 (`device/register`, as `companion`/`browser`, named like "Chrome on macOS")
