@@ -127,6 +127,20 @@ const NOT_IN_SDK = [
       "the counterparty, not the VTA.",
   },
   {
+    prefix: "https://trusttasks.org/spec/auth/authenticate/0.1",
+    why:
+      "The deprecated bare-authenticate message to a did-hosting relying party " +
+      "(rp-login/didcomm.ts), kept for a caller with no signing key. The RP serves " +
+      "it; the VTA serves 0.2 and 0.3 (vta/auth-tasks.ts sends 0.2).",
+  },
+  {
+    prefix: "https://trusttasks.org/spec/auth/refresh/0.1",
+    why:
+      "The refresh that ends a did-hosting relying party's step-up " +
+      "(rp-login/step-up.ts), posted to that RP's Trust Task endpoint. The VTA " +
+      "serves 0.2, which vta/auth-tasks.ts sends.",
+  },
+  {
     prefix: "https://trusttasks.org/spec/task-consent/granted/",
     why:
       "Inbound notification from the agent once an approver decided. Not a request this " +

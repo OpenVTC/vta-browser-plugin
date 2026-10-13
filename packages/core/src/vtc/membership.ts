@@ -3,13 +3,18 @@
 // Joining a community and being a member of one: submit an application, ask
 // where it stands, receive the credential that says you belong, and leave.
 //
-// **This is deliberately eight tasks, not sixty.** `@openvtc/trust-tasks`
+// **This is deliberately a handful of tasks, not sixty.** `@openvtc/trust-tasks`
 // ships bindings for the whole `vtc/*` surface — endorsements, invitations,
 // the community's own website and registry, member administration — but that
 // is the *community's* admin plane, implemented by a VTC rather than by an
-// agent. `vta-sdk` declares only these eight, which are exactly the ones an
-// agent speaks as a member. Wrapping the rest here would be building a VTC
+// agent. `vta-sdk` declares only the ones an agent speaks as a member, and
+// this file and `./join.ts` between them are those. Wrapping the rest here would be building a VTC
 // console inside a wallet library.
+//
+// Applying is not here: `./join.ts` builds `vtc/join-requests/manifest` and
+// `submit` at the versions the VTC serves (0.3), and is the one implementation.
+// This file carried a second, at manifest 0.1 and submit 0.2, that nothing
+// but a test called and the VTC no longer answers.
 //
 // Two of them are receipts a member *sends* (`submit-receipt`,
 // `self-remove-receipt`) — the acknowledgement half of an exchange the
@@ -21,20 +26,6 @@ import type { TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
-import {
-  TYPE_URI as JR_MANIFEST,
-  RESPONSE_TYPE_URI as JR_MANIFEST_RESPONSE,
-  type VTCJoinRequestsManifestResponsePayload,
-} from "@openvtc/trust-tasks/vtc/join-requests/manifest/0.1/payload";
-import {
-  TYPE_URI as JR_SUBMIT,
-  RESPONSE_TYPE_URI as JR_SUBMIT_RESPONSE,
-  type VTCJoinRequestsSubmitPayload,
-  type VTCJoinRequestsSubmitResponsePayload,
-  type Verdict,
-  type VerdictEffect,
-  type VerdictWith,
-} from "@openvtc/trust-tasks/vtc/join-requests/submit/0.2/payload";
 import {
   TYPE_URI as JR_STATUS,
   RESPONSE_TYPE_URI as JR_STATUS_RESPONSE,
@@ -83,88 +74,6 @@ export interface CommunityCallerParams {
   holder: Identity;
   /** The community — envelope `recipient`. */
   service: RemoteDidcommEndpoint;
-}
-
-/**
- * What this community asks of an applicant.
- *
- * Fetch it before building a presentation: the criteria are the community's,
- * they change, and an application built against last month's manifest is a
- * disclosure made for a reason that may no longer apply.
- */
-export async function joinManifest(
-  sender: TrustTaskSender,
-  params: CommunityCallerParams,
-): Promise<VTCJoinRequestsManifestResponsePayload> {
-  const envelope = buildTrustTask(
-    JR_MANIFEST,
-    {},
-    { issuer: params.holder.did, recipient: params.service.did },
-  );
-  return sender.send<VTCJoinRequestsManifestResponsePayload>(envelope, {
-    expectedResponseType: JR_MANIFEST_RESPONSE,
-    operationLabel: "vtc/join-requests/manifest/0.1",
-  });
-}
-
-export interface JoinSubmitParams extends CommunityCallerParams {
-  /** A Verifiable Presentation answering the manifest's criteria. */
-  vp: VTCJoinRequestsSubmitPayload["vp"];
-  /**
-   * Whether this applicant agrees to appear in the community's public
-   * registry.
-   *
-   * Absent is not consent. Send it explicitly, from something the applicant
-   * actually chose — this decides whether their membership is published.
-   */
-  registryConsent?: boolean;
-  extensions?: VTCJoinRequestsSubmitPayload["extensions"];
-}
-
-/**
- * The community's decision on a submission, and its effect-dependent detail.
- *
- * Re-exported so a caller can branch without importing the bindings directly.
- * **Branch on `effect`, never on which members of `with` happen to be
- * present** — every member is optional at the schema level, and which ones are
- * meaningful is decided by `effect` (`role`/`obligations`/`bundleRef` on
- * `allow`, `code`/`reason` on `deny`, `queue`/`reason` on `refer`,
- * `needs`/`presentationDefinition` on `requestMore`).
- */
-export type { Verdict, VerdictEffect, VerdictWith };
-
-/**
- * Apply to join. Returns the request id to follow up with, and the community's
- * `verdict` on the submission.
- *
- * **Read `verdict`, not a status constant.** `submit/0.1` returned
- * `status: "pending"` — a literal, so a community that admits outright,
- * refuses outright, or wants more evidence had no way to say so on the
- * response and had to be reported as "pending" regardless. `0.2` replaces it
- * with a {@link Verdict}, which carries all four outcomes. A caller that
- * renders "pending" unconditionally is now describing one branch of four.
- */
-export async function submitJoinRequest(
-  sender: TrustTaskSender,
-  params: JoinSubmitParams,
-): Promise<VTCJoinRequestsSubmitResponsePayload> {
-  const payload: VTCJoinRequestsSubmitPayload = {
-    vp: params.vp,
-    // `!== undefined`: an explicit `false` is a refusal to be published, and
-    // dropping it would leave the community to decide by default.
-    ...(params.registryConsent !== undefined
-      ? { registryConsent: params.registryConsent }
-      : {}),
-    ...(params.extensions !== undefined ? { extensions: params.extensions } : {}),
-  };
-  const envelope = buildTrustTask(JR_SUBMIT, payload, {
-    issuer: params.holder.did,
-    recipient: params.service.did,
-  });
-  return sender.send<VTCJoinRequestsSubmitResponsePayload>(envelope, {
-    expectedResponseType: JR_SUBMIT_RESPONSE,
-    operationLabel: "vtc/join-requests/submit/0.2",
-  });
 }
 
 export interface JoinStatusParams extends CommunityCallerParams {
