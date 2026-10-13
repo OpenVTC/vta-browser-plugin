@@ -15,8 +15,8 @@
 // The extension keeps it in the one context that is its own and is not a page:
 // the offscreen document asks the VTA for it, seals or opens the file there
 // with `vti-rooms-wasm`, and hands the console verified plaintext, never a key.
-// CI fails the build if this task's URI appears in any bundle but
-// `offscreen.js`. That is why this is its own subpath rather than more of
+// CI fails the build if this task's URI appears in any bundle but the
+// offscreen entry chunk. That is why this is its own subpath rather than more of
 // `@openvtc/pnm-core/rooms`, which the console imports.
 //
 // ## Two recipients, as for the rest of `rooms/*`
@@ -50,6 +50,12 @@ import {
   type RoomsInfoPayload,
   type RoomsInfoResponsePayload,
 } from "@openvtc/trust-tasks/rooms/info/0.1/payload";
+import {
+  TYPE_URI as RECORDS_LIST,
+  RESPONSE_TYPE_URI as RECORDS_LIST_RESPONSE,
+  type RoomsRecordsListPayload,
+  type RoomsRecordsListResponsePayload,
+} from "@openvtc/trust-tasks/rooms/records/list/0.1/payload";
 import {
   TYPE_URI as RECORDS_GET,
   RESPONSE_TYPE_URI as RECORDS_GET_RESPONSE,
@@ -134,6 +140,31 @@ export async function roomsInfo(
 ): Promise<RoomsInfoResponsePayload> {
   const payload: RoomsInfoPayload = { roomId: params.roomId, presentation: params.presentation };
   return call(sender, params, INFO, INFO_RESPONSE, "rooms/info/0.1", payload);
+}
+
+/**
+ * The room's head version: the version the next write is predicted to take,
+ * less one. `0` for a room holding no records, and for a host that keeps no
+ * record tree (which then corrects the prediction on the put).
+ */
+export async function roomsHeadVersion(
+  sender: TrustTaskSender,
+  params: RoomsHostCall,
+): Promise<number> {
+  const payload: RoomsRecordsListPayload = {
+    roomId: params.roomId,
+    presentation: params.presentation,
+    limit: 1,
+  };
+  const res = await call<RoomsRecordsListResponsePayload>(
+    sender,
+    params,
+    RECORDS_LIST,
+    RECORDS_LIST_RESPONSE,
+    "rooms/records/list/0.1",
+    payload,
+  );
+  return res.headVersion ?? 0;
 }
 
 /** One record, with the blobs the host says it names. Open `sealed` with the VTA. */
@@ -547,3 +578,8 @@ export async function verifyRecordBody(
   }
   return Object.freeze(body) as VerifiedRecordBody;
 }
+
+// ── The rest of the offscreen document's room-file surface ──────────────────
+
+export * from "./host-channel.js";
+export * from "./file-engine.js";

@@ -145,6 +145,12 @@ import {
   type RuntimeDiscloseRequest,
   type RuntimeDiscloseResponse,
   RUNTIME_MANAGER_TASK,
+  RUNTIME_ROOM_FILES_PREPARE,
+  OFFSCREEN_ROOM_HOST_ENDPOINT,
+  ROOM_FILES_PORT,
+  type RuntimeRoomFilesPrepareRequest,
+  type RuntimeRoomFilesPrepareResponse,
+  type OffscreenRoomHostEndpointResponse,
   RUNTIME_MEDIATOR,
   OFFSCREEN_MEDIATOR,
   type RuntimeMediatorRequest,
@@ -751,6 +757,16 @@ async function refreshPendingBadge(): Promise<void> {
 // doorbell. Idempotent and cheap, so running it often costs nothing and means
 // no single missed call leaves the badge lying.
 void refreshPendingBadge();
+
+// A room-file transfer runs between the console and the offscreen document.
+// This worker is not part of it, but every extension context with an
+// `onConnect` listener receives the port, and the console's end hears a
+// disconnect only once *every* other end has closed. Holding this one would
+// leave the console waiting forever on an offscreen document that has gone, so
+// it is let go at once.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === ROOM_FILES_PORT) port.disconnect();
+});
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== CONSENT_KEEPALIVE_PORT) return;
@@ -2148,6 +2164,38 @@ async function handleManagerTask(
     restBaseUrl: active.conn.restBaseUrl,
     params: req.params,
   })) as OffscreenRequestTaskResponse;
+}
+
+/**
+ * Before a room-file transfer: the host's endpoint (from its DID document,
+ * resolved in the offscreen document), whether the wallet may reach it, and the
+ * agent that acts. Leaves the offscreen document running for the port the
+ * console opens next.
+ *
+ * The permission is only *checked* here — a worker cannot ask for one. The
+ * console asks, in the click, for the origin this returns.
+ */
+async function handleRoomFilesPrepare(
+  req: RuntimeRoomFilesPrepareRequest,
+): Promise<RuntimeRoomFilesPrepareResponse> {
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
+  await ensureOffscreenDocument();
+  const resolved = (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_ROOM_HOST_ENDPOINT,
+    hostDid: req.hostDid,
+  })) as OffscreenRoomHostEndpointResponse;
+  if (!resolved.ok) return { ok: false, error: resolved.error };
+  return {
+    ok: true,
+    result: {
+      endpoint: resolved.endpoint,
+      granted: await hasOriginPermission(resolved.endpoint),
+      vtaDid: active.conn.vtaDid,
+      ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}),
+    },
+  };
 }
 
 // Sign a Trust-Task envelope with the wallet's holder did:peer #key-2.
@@ -3647,6 +3695,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_ROOM_FILES_PREPARE) {
+    // Console only, like the manager relay: a transfer moves a room's plaintext.
+    if (!isExtensionPageSender(sender)) {
+      console.warn(`[background] rejecting ${RUNTIME_ROOM_FILES_PREPARE} from non-extension sender url=${sender.url}`);
+      sendResponse({ ok: false, error: "room files are not page-reachable" } satisfies RuntimeRoomFilesPrepareResponse);
+      return false;
+    }
+    handleRoomFilesPrepare(message as RuntimeRoomFilesPrepareRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) } satisfies RuntimeRoomFilesPrepareResponse),
       );
     return true; // async sendResponse
   }

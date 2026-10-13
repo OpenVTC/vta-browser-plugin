@@ -209,6 +209,12 @@ import {
   type RuntimeMediatorResponse,
 } from "./bridge-protocol.js";
 import {
+  OFFSCREEN_ROOM_HOST_ENDPOINT,
+  type OffscreenRoomHostEndpointRequest,
+  type OffscreenRoomHostEndpointResponse,
+} from "./bridge-protocol.js";
+import { installRoomFilesPort, resolveRoomHostEndpoint } from "./room-files-offscreen.js";
+import {
   OFFSCREEN_SIGN_IN_STEP,
   type OffscreenSignInStepRequest,
   type RuntimeSignInStepResponse,
@@ -600,6 +606,20 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_ROOM_HOST_ENDPOINT) {
+    // Gated like the lens: the console asks this through the background, and
+    // a content script reaching the listener directly is refused here.
+    if (!isExtensionContextSender(sender)) {
+      sendResponse({ ok: false, error: "room files are not page-reachable" } satisfies OffscreenRoomHostEndpointResponse);
+      return false;
+    }
+    resolveRoomHostEndpoint((message as OffscreenRoomHostEndpointRequest).hostDid)
+      .then((endpoint) => sendResponse({ ok: true, endpoint } satisfies OffscreenRoomHostEndpointResponse))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) } satisfies OffscreenRoomHostEndpointResponse),
       );
     return true; // async sendResponse
   }
@@ -3152,6 +3172,23 @@ async function doMediatorOp(op: MediatorOp): Promise<MediatorOpResult> {
     }
   }
 }
+
+// ── Room files ──────────────────────────────────────────────────────────────
+//
+// The file key is asked for, used and dropped in this document and nowhere
+// else; see `room-files-offscreen.ts`.
+
+installRoomFilesPort({
+  async agent(vtaDid, restBaseUrl) {
+    const { session } = await getVtaSession(vtaDid, restBaseUrl);
+    // The presentations are minted for the DID that signs to the agent, and the
+    // host refuses one presented by anyone else — so the room leg signs with
+    // the same identity.
+    const { signing } = await loadHolder(vtaDid);
+    return { sender: session, signing };
+  },
+  fromExtensionPage: isExtensionPagePort,
+});
 
 // ── Live traffic ────────────────────────────────────────────────────────────
 //

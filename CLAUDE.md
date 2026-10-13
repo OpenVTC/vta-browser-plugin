@@ -901,6 +901,22 @@ VTA; drawing a failed listing as an empty one ("this agent holds keys to no
 rooms" is a claim, and an agent that did not answer has made none); or rendering
 one epoch and calling it the answer.
 
+**Files are the one rooms flow the wallet runs against the host itself.** Records
+are read *through the agent* (`rooms/keys/{browse,read}`): the console's bridge
+carries only `type` and `payload` to the wallet's own VTA, so the agent makes the
+host call. Files cannot go that way — their bytes must not pass through the VTA
+— so the offscreen document calls the host directly (`RoomHostChannel`: HTTPS to
+the host's `TrustTaskHTTPS` endpoint, signed by the wallet's DID, no bearer, the
+reply believed only once it is signed by the host and threaded to the request).
+The VTA's part is what it alone can do: the presentations (`rooms/keys/present`,
+granted to the wallet's DID, which is why the host leg must be signed by that
+same DID), the file key, and sealing and opening the record body. The flow is
+`@openvtc/pnm-core/rooms/files`'s `putRoomFile` / `getRoomFile`, step for step
+the CLI's `pnm rooms file put` / `get`, so a file either writes opens in the
+other. The host's origin needs a just-in-time host permission, requested in the
+console's click (`prepareRoomFiles` → `requestOriginPermission`). Key handling
+is in "Key material never reaches a browser" below.
+
 ## The Mediator Lens: the relay, seen from inside
 
 `manager/panes/mediator.tsx` asks the **mediator**, not the agent. An Affinidi
@@ -1062,6 +1078,45 @@ to a surface that cannot contain it".
 **What breaks it:** adding a seeds client to `packages/core`; relaxing the guard
 to allow `manager.js` "for symmetry" with the admin one; or reading this as
 advice rather than a refusal.
+
+### One piece of material does reach the browser: a room file's key, offscreen only
+
+`rooms/keys/file-key/0.1` returns the key to **one** room file. It is material
+by the test above — the holder cannot revoke it, and a leaked one opens that
+file's ciphertext for as long as the ciphertext exists — but unlike a seed a
+browser genuinely needs it: a member opening a file has to decrypt it
+somewhere, and the bytes must not pass through the VTA. So this one is let in,
+and kept to exactly one context:
+
+- **Only the offscreen document asks for it.** `room-files-offscreen.ts` is the
+  only importer of `@openvtc/pnm-core/rooms/files` (the subpath exists so the
+  URI has somewhere to live that the console does not import), and only
+  `offscreen.ts` imports that module. The key is fetched, handed to
+  `@openvtc/vti-rooms-wasm`'s `FileSealer` / `FileOpener`, and dropped — never
+  stored, logged, returned or posted.
+- **The console sends intents and bytes, and gets progress and verified
+  plaintext** over `ROOM_FILES_PORT`. Never a key, a presentation or a host's
+  reply. `manager/room-files.ts` holds a download's pieces out of a pane's
+  reach and turns them into a `Blob` only once the offscreen document reports
+  the file verified against its author's digest; on anything else they are
+  dropped.
+- **A CI guard bans the URI from every bundle but the offscreen entry chunk** —
+  `manager.js` included, which makes it the one material guard whose permitted
+  file is not the console — and asserts it is still present there.
+
+Why offscreen and not the console: the console is an extension page a person
+uses, and the offscreen document is the one context the extension owns that is
+not a page. Bounding the key to it bounds a compromise of any page — the
+console's included — to the plaintext that page was shown while it lasted
+(`data-rooms-files.md` §4.1). The page-facing half (P7b: a portal page asking
+for a file, per-room consent, streaming to it) waits for the member portal
+(P8); until then `page-task-policy.ts`'s "a page is not a member" stands.
+
+**What breaks it:** importing `@openvtc/pnm-core/rooms/files` from a console
+pane "just for a type" (the import brings the URI, and the guard trips — import
+types from `@openvtc/pnm-core/rooms` instead); returning the key, or anything
+derived from it, over the port; letting a pane read pieces before `got`; or
+widening the guard's exception to `manager.js`.
 
 ## Advertisement is not availability
 

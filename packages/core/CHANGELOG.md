@@ -10,6 +10,16 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Added
 
+- **`@openvtc/pnm-core/rooms/files`** — room files, for a wallet's offscreen
+  document (it names `rooms/keys/file-key`, so a console must not import it).
+  The host's blob tasks (`rooms/blobs/*`, `rooms/info`, `rooms/records/{get,put}/0.2`,
+  `roomsHeadVersion`), one file's key from the member's VTA, the signed record
+  body a file's manifest lives in (`signRecordBody` / `verifyRecordBody`,
+  interoperable with `vtc-client::rooms::body`), `RoomHostChannel` (HTTPS to a
+  room host, signed by the caller, reply verified as the host's) and the whole
+  flow — `putRoomFile` / `getRoomFile`, the same steps as `pnm rooms file put`
+  / `get`, with the cipher (`@openvtc/vti-rooms-wasm`) passed in. A download's
+  plaintext is provisional until `getRoomFile` resolves.
 - **`@openvtc/pnm-core/mediator`** — a client for a mediator's own
   `messaging/*` operations surface (statistics, queue ranking and status,
   accounts, message listing and deletion, preview-then-confirm purge, the
