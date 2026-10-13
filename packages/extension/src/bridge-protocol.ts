@@ -2699,3 +2699,106 @@ export type SignInFailureParty = "community" | "vta" | "wallet";
 export type RuntimeSignInStepResponse =
   | { ok: true; result: SignInStepResult }
   | { ok: false; error: string };
+
+// ── Room files ───────────────────────────────────────────────────────────────
+//
+// The console puts a file in a room, or gets one out. The offscreen document
+// does all of it — asks the VTA for the presentations and the file's key, seals
+// or opens with `@openvtc/vti-rooms-wasm`, and talks to the room's host
+// directly, signed by the wallet's DID — and the console sends intents and
+// bytes and receives progress and plaintext. **The file key never crosses this
+// boundary:** CI fails the build if `rooms/keys/file-key` appears in any bundle
+// but the offscreen document's.
+//
+// Operator surface, like `RUNTIME_MANAGER_TASK`: NOT page-facing, absent from
+// `content.ts`, gated on `sender.url` in the background and again in the
+// offscreen document.
+
+/**
+ * console → background, before a transfer: where is this host, may the wallet
+ * reach it, and which agent acts. Also makes sure the offscreen document is up
+ * for the port that follows.
+ *
+ * Asked twice: once when the pane learns the host, so a click can request the
+ * host permission as its *first* act (`requestOriginPermission` must be reached
+ * with the gesture still live), and again just before connecting, because the
+ * offscreen document may have gone in between.
+ */
+export const RUNTIME_ROOM_FILES_PREPARE = "vta-wallet/room-files-prepare" as const;
+export const OFFSCREEN_ROOM_HOST_ENDPOINT = "offscreen/room-host-endpoint" as const;
+
+export interface RuntimeRoomFilesPrepareRequest {
+  type: typeof RUNTIME_ROOM_FILES_PREPARE;
+  hostDid: string;
+}
+
+export interface RoomFilesPrepared {
+  /** The host's dispatcher URL, from its DID document. */
+  endpoint: string;
+  /** Whether the wallet already holds a host permission for the endpoint's origin. */
+  granted: boolean;
+  /** The agent whose presentations and keys the transfer uses. */
+  vtaDid: string;
+  restBaseUrl?: string;
+}
+
+export type RuntimeRoomFilesPrepareResponse = { ok: true; result: RoomFilesPrepared } | { ok: false; error: string };
+
+export interface OffscreenRoomHostEndpointRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_ROOM_HOST_ENDPOINT;
+  hostDid: string;
+}
+
+export type OffscreenRoomHostEndpointResponse = { ok: true; endpoint: string } | { ok: false; error: string };
+
+/**
+ * Port name for one file transfer, console → offscreen. The port's lifetime is
+ * the transfer's: closing it stops the transfer, and an upload stopped part way
+ * releases what the host reserved for it.
+ */
+export const ROOM_FILES_PORT = "vta-wallet/room-files" as const;
+
+interface RoomFilesTarget {
+  vtaDid: string;
+  restBaseUrl?: string;
+  roomId: string;
+  hostDid: string;
+}
+
+/** console → offscreen, once, as the port's first message. */
+export type RoomFilesOpen =
+  | (RoomFilesTarget & {
+      kind: "put";
+      name: string;
+      mediaType?: string;
+      /** The number of bytes the `data` messages will carry, in all. */
+      size: number;
+      title?: string;
+      description?: string;
+      tags?: string[];
+      padme?: boolean;
+    })
+  | (RoomFilesTarget & { kind: "get"; key: string });
+
+/** console → offscreen, after a `put` open: the file, in order, then `end`. */
+export type RoomFilesUpload = { kind: "data"; data: string /* base64url */ } | { kind: "end" };
+
+/** offscreen → console. */
+export type RoomFilesMessage =
+  | { kind: "progress"; stage: string; done?: number; total?: number }
+  /** Plaintext that has opened but is not yet the file its author signed. Held,
+   *  never released, until `got`; discarded on `failed`. */
+  | { kind: "provisional"; data: string /* base64url */ }
+  | { kind: "put"; key: string; version: number; blobRef: string; size: number }
+  | {
+      kind: "got";
+      /** The author's manifest. Untrusted text from another member. */
+      file: { name: string; mediaType?: string; size: number };
+      author: string;
+      version: number;
+      title?: string;
+      description?: string;
+      tags?: string[];
+    }
+  | { kind: "failed"; error: string; code?: string };
