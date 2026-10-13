@@ -156,6 +156,51 @@ function specAliases(source) {
 }
 
 /**
+ * `<crate::…::Name as …Payload>::TYPE_URI` — a constant whose value is a
+ * generated type the SDK re-exports under a name of its own, from another
+ * module: `keys/sign-jws` is
+ * `<crate::protocols::key_management::sign_jws::SignJwsPayload as …>`, and
+ * `SignJwsPayload` is `sign_jws.rs`'s
+ * `pub use trust_tasks_rs::specs::keys::sign_jws::v0_1::{Payload as SignJwsPayload, …}`.
+ */
+const CRATE_TYPE_URI =
+  /<\s*crate::([A-Za-z0-9_:]+)::([A-Za-z0-9_]+)\s+as\s+[A-Za-z0-9_:]*Payload\s*>::TYPE_URI/;
+
+/**
+ * Every generated `Payload` / `Response` the crate re-exports under its own
+ * name, keyed `module::path::Name`: what [`CRATE_TYPE_URI`] resolves against.
+ * Built over the whole crate first, because the constant and the `pub use` it
+ * names live in different files.
+ */
+function crateTypeAliases(root, files) {
+  const index = new Map();
+  for (const file of files) {
+    const rel = file.slice(root.length + 1).replace(/\.rs$/, "");
+    const module = rel
+      .replace(/^src\//, "")
+      .replace(/(^|\/)(mod|lib)$/, "")
+      .split("/")
+      .filter(Boolean)
+      .join("::");
+    const source = readFileSync(file, "utf8");
+    for (const m of source.matchAll(/pub\s+use\s+trust_tasks_rs::specs::([\s\S]*?);/g)) {
+      const braced = /^(.*?)::(v\d+_\d+)::\{(.+)\}$/.exec(m[1].replace(/\s+/g, ""));
+      if (!braced) continue;
+      for (const item of braced[3].split(",")) {
+        const alias = /^(Payload|Response)as([A-Za-z0-9_]+)$/.exec(item);
+        if (alias) {
+          index.set(`${module ? `${module}::` : ""}${alias[2]}`, {
+            segments: braced[1].split("::").filter(Boolean),
+            version: braced[2],
+          });
+        }
+      }
+    }
+  }
+  return index;
+}
+
+/**
  * Turn a resolved module path and version module into a task URI.
  *
  * Rust modules are snake_case and spec slugs are kebab-case, segment for
@@ -208,6 +253,8 @@ function attach(entry, constName, deprecation) {
   }
 }
 
+const crateAliases = crateTypeAliases(sdkRoot, rustFiles(sdkSrc));
+
 for (const file of rustFiles(sdkSrc)) {
   const rel = file.slice(sdkRoot.length + 1);
   const source = readFileSync(file, "utf8");
@@ -216,6 +263,18 @@ for (const file of rustFiles(sdkSrc)) {
 
   /** Resolve a computed `…::TYPE_URI` value, or record why it could not be. */
   const resolveComputed = (value, constName, lineNo) => {
+    const viaCrate = CRATE_TYPE_URI.exec(value);
+    if (viaCrate) {
+      const target = crateAliases.get(`${viaCrate[1]}::${viaCrate[2]}`);
+      if (!target) {
+        unresolved.push(
+          `${rel}:${lineNo}  ${constName} — \`crate::${viaCrate[1]}::${viaCrate[2]}\` is not ` +
+            `a generated Payload or Response re-exported with \`pub use trust_tasks_rs::specs::…::vN_M::{… as …}\``,
+        );
+        return null;
+      }
+      return uriFromModulePath(target.segments, target.version);
+    }
     const m = COMPUTED_TYPE_URI.exec(value);
     if (!m) return null;
     const segs = m[1].split("::").filter(Boolean);
@@ -263,7 +322,7 @@ for (const file of rustFiles(sdkSrc)) {
       // are `&str` constants that are not tasks at all; anything else is a form
       // this scanner has not been taught, and writing the snapshot without it
       // is the silent omission the header describes.
-      if (!NOT_A_TASK_VALUE.test(line) && !COMPUTED_TYPE_URI.test(line)) {
+      if (!NOT_A_TASK_VALUE.test(line) && !COMPUTED_TYPE_URI.test(line) && !CRATE_TYPE_URI.test(line)) {
         unresolved.push(`${rel}:${lineNo}  ${name} — unrecognised value: ${line.trim()}`);
       }
     }
