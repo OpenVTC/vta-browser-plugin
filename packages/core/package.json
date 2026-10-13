@@ -113,6 +113,10 @@
       "types": "./dist/rooms/index.d.ts",
       "import": "./dist/rooms/index.js"
     },
+    "./rooms/files": {
+      "types": "./dist/rooms/files.d.ts",
+      "import": "./dist/rooms/files.js"
+    },
     "./mediator": {
       "types": "./dist/mediator/index.d.ts",
       "import": "./dist/mediator/index.js"
