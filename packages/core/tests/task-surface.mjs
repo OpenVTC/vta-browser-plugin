@@ -127,6 +127,20 @@ const NOT_IN_SDK = [
       "the counterparty, not the VTA.",
   },
   {
+    prefix: "https://trusttasks.org/spec/auth/authenticate/0.1",
+    why:
+      "The deprecated bare-authenticate message to a did-hosting relying party " +
+      "(rp-login/didcomm.ts), kept for a caller with no signing key. The RP serves " +
+      "it; the VTA serves 0.2 and 0.3 (vta/auth-tasks.ts sends 0.2).",
+  },
+  {
+    prefix: "https://trusttasks.org/spec/auth/refresh/0.1",
+    why:
+      "The refresh that ends a did-hosting relying party's step-up " +
+      "(rp-login/step-up.ts), posted to that RP's Trust Task endpoint. The VTA " +
+      "serves 0.2, which vta/auth-tasks.ts sends.",
+  },
+  {
     prefix: "https://trusttasks.org/spec/task-consent/granted/",
     why:
       "Inbound notification from the agent once an approver decided. Not a request this " +
@@ -151,6 +165,19 @@ const NOT_IN_SDK = [
       "Host-served: list/get/put move sealed bytes to and from the host. Sealing " +
       "and opening happen at the member's VTA under `rooms/keys/*`, which is the " +
       "half that does have SDK constants.",
+  },
+  {
+    prefix: "https://trusttasks.org/spec/rooms/blobs/",
+    why:
+      "Host-served: a file's ciphertext moves to and from the room's host in " +
+      "chunks (vti-rooms::blob_tasks). Only ciphertext crosses; the key is " +
+      "`rooms/keys/file-key`, at the member's own VTA.",
+  },
+  {
+    prefix: "https://trusttasks.org/spec/rooms/info/",
+    why:
+      "Host-served: the room's tier, epoch, limits and usage, answered by its " +
+      "host to a `read` presentation.",
   },
   {
     prefix: "https://trusttasks.org/spec/rooms/epoch/",
@@ -467,7 +494,14 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // 240 → 246 with the snapshot resynced from vta-sdk 0.47.0 — exactly these
   // six. The resync also taught the scanner that a constant taken from a
   // generated `error_codes::NAME.code` is an error code, not a task.
-  const expected = 212;
+  //
+  // 212 → 213 is `rooms/keys/file-key/0.1`, one file's key from the member's
+  // own VTA (verifiable-trust-infrastructure `data-rooms-files.md` §4). It is
+  // in its own subpath, `rooms/files`, which only the offscreen document
+  // imports, and CI bans its URI from every other bundle: what it returns is
+  // key material. The host-served half of room files (`rooms/blobs/*`,
+  // `rooms/info`) is in NOT_IN_SDK, beside the other host verbs.
+  const expected = 213;
   assert.equal(
     implemented.size,
     expected,

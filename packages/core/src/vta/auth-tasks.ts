@@ -32,7 +32,7 @@ import {
   type AuthRefresh,
   type AuthRefreshResponsePayload,
   type TokenBundle,
-} from "@openvtc/trust-tasks/auth/refresh/0.1/payload";
+} from "@openvtc/trust-tasks/auth/refresh/0.2/payload";
 import {
   TYPE_URI as AUTH_PASSKEY_LOGIN_START,
   RESPONSE_TYPE_URI as AUTH_PASSKEY_LOGIN_START_RESPONSE,
@@ -193,7 +193,7 @@ export async function refreshAuthSession(
   });
   return sender.send<AuthRefreshResponsePayload>(envelope, {
     expectedResponseType: AUTH_REFRESH_RESPONSE,
-    operationLabel: "auth/refresh/0.1",
+    operationLabel: "auth/refresh/0.2",
   });
 }
 

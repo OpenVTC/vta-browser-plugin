@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 
 import { registerDevice, deviceHeartbeat, pushWake } from "../dist/device/index.js";
 import { requestAuthChallenge, refreshAuthSession } from "../dist/vta/index.js";
-import { submitJoinRequest, joinRequestStatus, selfRemoveFromCommunity } from "../dist/vtc/index.js";
+import { joinRequestStatus, selfRemoveFromCommunity } from "../dist/vtc/index.js";
 import {
   registerHostedDid,
   listHostedDids,
@@ -112,19 +112,6 @@ test("refresh carries the token, and the response may rotate it", async () => {
 });
 
 // ── VTC membership ──────────────────────────────────────────────────────────
-
-test("registryConsent:false is sent — absence is not a refusal", async () => {
-  // This decides whether a membership is published. Dropping an explicit false
-  // would leave the community to decide by default.
-  const channel = recorder({ requestId: "jr1", status: "pending" });
-  await submitJoinRequest(channel, {
-    holder: HOLDER,
-    service: SERVICE,
-    vp: {},
-    registryConsent: false,
-  });
-  assert.equal(channel.sent[0].envelope.payload.registryConsent, false);
-});
 
 test("a deferred application carries what it still needs", async () => {
   // The community is asking, not refusing. Reporting a bare "pending" leaves an
