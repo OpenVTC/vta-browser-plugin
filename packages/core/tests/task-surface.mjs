@@ -167,6 +167,19 @@ const NOT_IN_SDK = [
       "half that does have SDK constants.",
   },
   {
+    prefix: "https://trusttasks.org/spec/rooms/blobs/",
+    why:
+      "Host-served: a file's ciphertext moves to and from the room's host in " +
+      "chunks (vti-rooms::blob_tasks). Only ciphertext crosses; the key is " +
+      "`rooms/keys/file-key`, at the member's own VTA.",
+  },
+  {
+    prefix: "https://trusttasks.org/spec/rooms/info/",
+    why:
+      "Host-served: the room's tier, epoch, limits and usage, answered by its " +
+      "host to a `read` presentation.",
+  },
+  {
     prefix: "https://trusttasks.org/spec/rooms/epoch/",
     why:
       "Host-served: the host records that an epoch advanced and serves the key " +
@@ -481,7 +494,14 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // 240 → 246 with the snapshot resynced from vta-sdk 0.47.0 — exactly these
   // six. The resync also taught the scanner that a constant taken from a
   // generated `error_codes::NAME.code` is an error code, not a task.
-  const expected = 212;
+  //
+  // 212 → 213 is `rooms/keys/file-key/0.1`, one file's key from the member's
+  // own VTA (verifiable-trust-infrastructure `data-rooms-files.md` §4). It is
+  // in its own subpath, `rooms/files`, which only the offscreen document
+  // imports, and CI bans its URI from every other bundle: what it returns is
+  // key material. The host-served half of room files (`rooms/blobs/*`,
+  // `rooms/info`) is in NOT_IN_SDK, beside the other host verbs.
+  const expected = 213;
   assert.equal(
     implemented.size,
     expected,
