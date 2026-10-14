@@ -33,6 +33,9 @@ import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
 import type { Parties } from "../use-vta.js";
+import type { RoomFilesPrepared } from "../../bridge-protocol.js";
+import { prepareRoomFiles, roomFileClaimOf } from "../room-files.js";
+import { GetRoomFile, PutRoomFile, RoomFilesUnavailable } from "./rooms-files.js";
 
 const fieldStyle: React.CSSProperties = {
   boxSizing: "border-box",
@@ -42,6 +45,18 @@ const fieldStyle: React.CSSProperties = {
   border: `1px solid ${c.line}`,
   borderRadius: "var(--w-r-sm)",
   fontSize: t.sm,
+};
+
+const bodyStyle: React.CSSProperties = {
+  margin: "6px 0 0",
+  padding: 10,
+  background: c.ground,
+  border: `1px solid ${c.line}`,
+  borderRadius: "var(--w-r-sm)",
+  fontFamily: font.mono,
+  fontSize: t.xs,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
 };
 
 /** The shape both tasks return under `verification`, as this pane reads it. */
@@ -182,16 +197,20 @@ function OpenedRecord({
   room,
   host,
   recordKey,
+  prepared,
 }: {
   parties: Parties;
   room: HeldRoom;
   host: string;
   recordKey: string;
+  prepared: RoomFilesPrepared | null;
 }) {
   const [body, setBody] = useState<string | null>(null);
   const [verification, setVerification] = useState<Verification | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const claim = body === null ? null : roomFileClaimOf(body);
 
   const open = useCallback(async () => {
     setBusy(true);
@@ -228,22 +247,19 @@ function OpenedRecord({
           </p>
         </div>
       )}
-      {body !== null && (
-        <pre
-          style={{
-            margin: 0,
-            padding: 10,
-            background: c.ground,
-            border: `1px solid ${c.line}`,
-            borderRadius: "var(--w-r-sm)",
-            fontFamily: font.mono,
-            fontSize: t.xs,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-          }}
-        >
-          {body}
-        </pre>
+      {/* A record that carries a file is offered as one. The body is still
+          there to look at, folded: it is JSON, and the proof is most of it. */}
+      {claim && (
+        <GetRoomFile room={room} host={host} prepared={prepared} recordKey={recordKey} claim={claim} />
+      )}
+      {body !== null && claim && (
+        <details>
+          <summary style={{ fontSize: t.xs, color: c.muted, cursor: "pointer" }}>The record</summary>
+          <pre style={bodyStyle}>{body}</pre>
+        </details>
+      )}
+      {body !== null && !claim && (
+        <pre style={{ ...bodyStyle, margin: 0 }}>{body}</pre>
       )}
       {verification && <Verdict verification={verification} />}
       {error && <Note tone="danger">{error}</Note>}
@@ -266,6 +282,11 @@ export function RoomRecords({ parties, room }: { parties: Parties; room: HeldRoo
   const [complete, setComplete] = useState<boolean | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The host is learnt here, at listing, so that a click on put or get can ask
+  // for its origin as its first act (`rooms-files.tsx`).
+  const [listedHost, setListedHost] = useState("");
+  const [prepared, setPrepared] = useState<RoomFilesPrepared | null>(null);
+  const [filesError, setFilesError] = useState<string | null>(null);
 
   const browse = useCallback(async () => {
     const host = hostDid.trim();
@@ -273,6 +294,12 @@ export function RoomRecords({ parties, room }: { parties: Parties; room: HeldRoo
     setBusy(true);
     setError(null);
     setRows(null);
+    setListedHost(host);
+    setPrepared(null);
+    setFilesError(null);
+    void prepareRoomFiles(host).then(setPrepared, (e: unknown) =>
+      setFilesError(e instanceof Error ? e.message : String(e)),
+    );
     try {
       const res = await roomsKeysBrowse(managerSender, {
         ...parties,
@@ -347,8 +374,9 @@ export function RoomRecords({ parties, room }: { parties: Parties; room: HeldRoo
               <OpenedRecord
                 parties={parties}
                 room={room}
-                host={hostDid.trim()}
+                host={listedHost}
                 recordKey={r.key}
+                prepared={prepared}
               />
             )}
             empty="This host served no records for this room — which is also what a host
@@ -360,6 +388,10 @@ export function RoomRecords({ parties, room }: { parties: Parties; room: HeldRoo
               complete={complete}
               returned={rows.length}
             />
+          )}
+          {filesError && <RoomFilesUnavailable error={filesError} />}
+          {prepared && (
+            <PutRoomFile room={room} host={listedHost} prepared={prepared} onPut={() => void browse()} />
           )}
         </>
       )}

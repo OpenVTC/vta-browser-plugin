@@ -232,6 +232,69 @@ export async function getRoomFileIntoConsole(
 }
 
 /**
+ * What an opened record body says about the file it carries, if it carries one.
+ *
+ * Read from the text `rooms/keys/read` returned, which the console has not
+ * verified and cannot: the signature check lives with the file key, offscreen.
+ * So this is a **claim**, good for offering a download and nothing else. The
+ * name and size shown after a download come from the offscreen document's
+ * verified answer, not from here.
+ */
+export interface RoomFileClaim {
+  name: string;
+  size: number;
+  mediaType?: string;
+  title?: string;
+}
+
+export function roomFileClaimOf(bodyText: string): RoomFileClaim | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const { file, title } = parsed as { file?: unknown; title?: unknown };
+  if (typeof file !== "object" || file === null) return null;
+  const { name, size, mediaType, blobRef } = file as Record<string, unknown>;
+  if (typeof name !== "string" || typeof blobRef !== "string") return null;
+  if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) return null;
+  return {
+    name,
+    size,
+    ...(typeof mediaType === "string" ? { mediaType } : {}),
+    ...(typeof title === "string" ? { title } : {}),
+  };
+}
+
+const STAGE_WORDS: Record<string, string> = {
+  presenting: "Asking your agent for this room's credentials",
+  checking: "Checking the room takes files",
+  sealing: "Encrypting",
+  uploading: "Uploading",
+  writing: "Writing the record",
+  reading: "Reading the record",
+  downloading: "Downloading",
+  verifying: "Checking it against its author's digest",
+};
+
+/** One line saying where a transfer has got to. */
+export function describeProgress(p: { stage: string; done?: number; total?: number }): string {
+  const words = STAGE_WORDS[p.stage] ?? p.stage;
+  return p.done !== undefined && p.total !== undefined && p.total > 0
+    ? `${words} — ${p.done} of ${p.total}`
+    : `${words}…`;
+}
+
+/** Bytes for a person: 0 B, 12.3 KiB, 4.0 MiB. */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+/**
  * A local file name from one another member chose: its last path component,
  * without leading dots or control characters, never empty. The same rule as
  * `pnm rooms file get` (`local_name`).
