@@ -10,9 +10,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  describeProgress,
+  formatBytes,
   getRoomFileIntoConsole,
   putRoomFileFromConsole,
   ROOM_FILE_MAX_BYTES,
+  roomFileClaimOf,
   safeFileName,
 } from "../src/manager/room-files.ts";
 import { serveRoomFilesPort } from "../src/room-files-offscreen.ts";
@@ -87,6 +90,37 @@ test("a file name chosen by another member cannot leave the directory or hide", 
 
 test("the console's ceiling is core's", () => {
   assert.equal(ROOM_FILE_MAX_BYTES, CORE_MAX);
+});
+
+// ── what a record says it carries ─────────────────────────────────────────
+
+const signedBody = (file: unknown, extra: Record<string, unknown> = {}) =>
+  JSON.stringify({ roomId: "r", key: "k", version: 2, author: "did:key:zA", ...extra, file, proof: { type: "DataIntegrityProof" } });
+
+test("an opened file record is offered as a file, by what it claims", () => {
+  const claim = roomFileClaimOf(
+    signedBody({ fileId: "f", name: "term sheet.pdf", mediaType: "application/pdf", size: 1234, blobRef: "zRef" }, { title: "Terms" }),
+  );
+  assert.deepEqual(claim, { name: "term sheet.pdf", size: 1234, mediaType: "application/pdf", title: "Terms" });
+});
+
+test("a record that is not a file, or claims one badly, is shown as a record", () => {
+  assert.equal(roomFileClaimOf("plain text"), null);
+  assert.equal(roomFileClaimOf(JSON.stringify({ body: "hi" })), null);
+  assert.equal(roomFileClaimOf("null"), null);
+  assert.equal(roomFileClaimOf(signedBody({ name: "a", size: 1 })), null, "no blob to fetch");
+  assert.equal(roomFileClaimOf(signedBody({ name: "a", size: -1, blobRef: "z" })), null);
+  assert.equal(roomFileClaimOf(signedBody({ name: "a", size: 1.5, blobRef: "z" })), null);
+  assert.equal(roomFileClaimOf(signedBody({ name: 7, size: 1, blobRef: "z" })), null);
+});
+
+test("progress and sizes read as words", () => {
+  assert.equal(describeProgress({ stage: "uploading", done: 3, total: 9 }), "Uploading — 3 of 9");
+  assert.equal(describeProgress({ stage: "sealing" }), "Encrypting…");
+  assert.equal(describeProgress({ stage: "somethingNew" }), "somethingNew…");
+  assert.equal(formatBytes(512), "512 B");
+  assert.equal(formatBytes(1536), "1.5 KiB");
+  assert.equal(formatBytes(ROOM_FILE_MAX_BYTES), "64.0 MiB");
 });
 
 // ── a download is released only once verified ──────────────────────────────
