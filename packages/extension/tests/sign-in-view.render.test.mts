@@ -894,3 +894,39 @@ test("a join request the community refused shows its message plainly", async () 
   assert.match(screen.text(), /sending the join request to the community/);
   await screen.unmount();
 });
+
+test("Approved closes the window by itself; Declined waits for Close", async () => {
+  const { send } = script(ENROLLED);
+  let closed = 0;
+  const screen = await render(
+    h(SignInView, {
+      flowId: "f",
+      send,
+      uv: {
+        stored: async () => ENROLMENT,
+        create: async () => ENROLMENT,
+        remember: async () => {},
+        assert: async () => ASSERTION,
+      },
+      close: () => void closed++,
+      approvedCloseMs: 0,
+    }),
+  );
+  await screen.settle();
+  await screen.click(
+    screen.container.querySelector('[data-testid="continue"]')!,
+  );
+  await screen.type(
+    screen.container.querySelector('[data-testid="number"]')!,
+    "47",
+  );
+  await screen.click(screen.container.querySelector('[data-testid="prove"]')!);
+  await screen.click(
+    screen.container.querySelector('[data-testid="approve"]')!,
+  );
+  await screen.settle();
+  assert.match(screen.text(), /Approved/);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(closed, 1);
+  await screen.unmount();
+});

@@ -111,7 +111,14 @@ export interface SignInViewProps {
   close?: () => void;
   /** Epoch ms. Injected so a test (or a screenshot) can hold the clock. */
   now?: () => number;
+  /** How long the Approved screen shows before the window closes itself.
+   *  Injected so a test need not wait. */
+  approvedCloseMs?: number;
 }
+
+/** Long enough to read "Approved", short enough that the website — which is
+ *  already carrying on — is not left behind a window with nothing to do. */
+const APPROVED_CLOSE_MS = 1200;
 
 // ── Presentation ─────────────────────────────────────────────────────────────
 
@@ -642,7 +649,14 @@ const REFUSED_TITLE: Record<
 
 // ── The window ───────────────────────────────────────────────────────────────
 
-export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
+export function SignInView({
+  flowId,
+  send,
+  uv,
+  close,
+  now,
+  approvedCloseMs = APPROVED_CLOSE_MS,
+}: SignInViewProps) {
   const sendStep =
     send ??
     ((step: SignInStep) =>
@@ -729,6 +743,17 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
     void run({ step: "prepare" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Approved is the end of the person's part: the website redeems the grant on
+  // its own, so the window closes itself rather than waiting on a Close click.
+  // A decline or a failure stays open — those say something to read.
+  const approved = screen.kind === "done" && screen.decision === "approve";
+  useEffect(() => {
+    if (!approved) return;
+    const t = setTimeout(closeWindow, approvedCloseMs);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approved]);
 
   const approve = async () => {
     // A cancelled gesture leaves the review open: the person may approve again
@@ -1467,7 +1492,7 @@ export function SignInView({ flowId, send, uv, close, now }: SignInViewProps) {
           primary={closeAction}
           escape={closeAction}
         >
-          <Message>Return to the website to continue.</Message>
+          <Message>Taking you back to the website…</Message>
         </Screen>
       ) : (
         <Screen
