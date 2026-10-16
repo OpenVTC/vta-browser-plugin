@@ -78,8 +78,9 @@ export interface RoomGrant {
 // replaces what was remembered, so a rename shows once the room is offered
 // again. Rooms a member owns have no name here.
 //
-// All of it sits behind `RoomPageGates.roomNames`, the one place a name is
-// looked up — a sealed in-room profile, when there is one, goes there too.
+// All of it sits behind `RoomPageGates.displayNames`, the one place a name is
+// looked up, which lays the room's own profile (`rooms/keys/profile/read`,
+// held in memory, never stored here) over these remembered labels.
 
 /** `chrome.storage.local` key prefix for remembered room names. One record per (VTA, community). */
 export const ROOM_NAMES_PREFIX = "room-names:";
@@ -147,6 +148,26 @@ export function rememberedRoomLabels(all: Readonly<Record<string, unknown>>, vta
     }
   }
   return Object.fromEntries(Object.entries(best).map(([roomId, n]) => [roomId, n.label]));
+}
+
+/**
+ * The community each remembered room name came from, room by room — the host a
+ * console can ask for the room's own profile (`rooms/keys/profile/read`), since
+ * nothing else maps a room to its host. The most recently seen wins.
+ */
+export function rememberedRoomHosts(all: Readonly<Record<string, unknown>>, vtaDid: string): Record<string, string> {
+  const prefix = `${ROOM_NAMES_PREFIX}${vtaDid}|`;
+  const best: Record<string, { host: string; seenAt: number }> = {};
+  for (const [key, value] of Object.entries(all)) {
+    if (!key.startsWith(prefix)) continue;
+    const host = key.slice(prefix.length);
+    if (!host.startsWith("did:")) continue;
+    for (const [roomId, n] of Object.entries(mergeRoomNames(value, {}, 0))) {
+      const had = best[roomId];
+      if (!had || n.seenAt > had.seenAt) best[roomId] = { host, seenAt: n.seenAt };
+    }
+  }
+  return Object.fromEntries(Object.entries(best).map(([roomId, b]) => [roomId, b.host]));
 }
 
 /** The storage key holding one origin's grants under one VTA. */

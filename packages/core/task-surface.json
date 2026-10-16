@@ -1052,6 +1052,18 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/rooms/keys/profile/read/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_PROFILE_READ_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/keys/profile/write/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_PROFILE_WRITE_0_1"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/rooms/keys/read/0.1",
       "consts": [
         "TASK_ROOMS_KEYS_READ_0_1"

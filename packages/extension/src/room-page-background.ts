@@ -28,6 +28,7 @@ import type {
   RoomFilesOpen,
   RoomFilesPageMessage,
   RoomFilesPageOpen,
+  RoomProfileSummary,
   RoomsPageOp,
   RuntimeRoomsPageResponse,
 } from "./bridge-protocol.js";
@@ -94,7 +95,17 @@ export interface RoomPageBackgroundDeps {
 }
 
 /** A room's name, as a page or the share prompt is shown it. */
-type RoomNames = Record<string, { label: string; visibility?: string }>;
+type RoomNames = Record<
+  string,
+  {
+    label: string;
+    visibility?: string;
+    labelSource?: "profile" | "community";
+    description?: string;
+    profileStale?: boolean;
+    renameRefused?: boolean;
+  }
+>;
 
 /** How long a community's resolved portal is trusted before it is resolved again. */
 const PORTAL_CACHE_MS = 5 * 60 * 1000;
@@ -121,6 +132,12 @@ export class RoomPageGates {
   private readonly portals = new Map<string, { portalOrigin: string; endpoint: string; at: number }>();
   /** When each (VTA, community, member)'s offers were last read for room names. */
   private readonly namesReadAt = new Map<string, number>();
+  /**
+   * Each room's own profile, as the member's VTA last read it, by
+   * (VTA, community, room, member). Held in memory for {@link ROOM_NAMES_CACHE_MS},
+   * never stored: a profile is the room's content, read for the view that shows it.
+   */
+  private readonly profiles = new Map<string, { at: number; summary: RoomProfileSummary | null }>();
 
   constructor(private readonly deps: RoomPageBackgroundDeps) {}
 
@@ -319,6 +336,57 @@ export class RoomPageGates {
     );
   }
 
+  /**
+   * Each of `rooms`' own profile, read by the member's VTA as the member it is
+   * held as — at most once a minute per room and member, never polled. Never
+   * throws: a room whose profile could not be read has none.
+   */
+  private async roomProfiles(
+    vta: ActiveVta,
+    hostDid: string,
+    rooms: readonly { roomId: string; member: string }[],
+  ): Promise<Record<string, RoomProfileSummary>> {
+    const now = this.deps.now();
+    const at = (r: { roomId: string; member: string }) => `${vta.vtaDid}|${hostDid}|${r.roomId}|${r.member}`;
+    const stale = rooms.filter((r) => {
+      const hit = this.profiles.get(at(r));
+      return hit === undefined || now - hit.at >= ROOM_NAMES_CACHE_MS;
+    });
+    if (stale.length > 0) {
+      let read: Record<string, RoomProfileSummary> = {};
+      try {
+        const res = await this.deps.offscreen(vta, { op: "roomProfiles", hostDid, rooms: stale });
+        if (res.ok && res.result && typeof res.result === "object" && !Array.isArray(res.result)) {
+          read = res.result as Record<string, RoomProfileSummary>;
+        }
+      } catch {
+        // Nothing learned this time.
+      }
+      for (const r of stale) this.profiles.set(at(r), { at: now, summary: read[r.roomId] ?? null });
+    }
+    const out: Record<string, RoomProfileSummary> = {};
+    for (const r of rooms) {
+      const s = this.profiles.get(at(r))?.summary;
+      if (s && out[r.roomId] === undefined) out[r.roomId] = s;
+    }
+    return out;
+  }
+
+  /**
+   * The names to show for `rooms`: the room's own profile name where it has one,
+   * else the community's offer label (`roomNames`), else none (the DID).
+   */
+  private async displayNames(
+    vta: ActiveVta,
+    hostDid: string,
+    members: readonly string[],
+    rooms: readonly { roomId: string; member: string }[],
+  ): Promise<RoomNames> {
+    const offered = await this.roomNames(vta, hostDid, members);
+    const profiles = await this.roomProfiles(vta, hostDid, rooms);
+    return withProfiles(offered, profiles);
+  }
+
   /** The live shares for this origin and community, joined with what the VTA still holds. */
   private async views(origin: string, hostDid: string, vta: ActiveVta): Promise<PageRoomView[]> {
     const grants = liveGrants(
@@ -328,10 +396,11 @@ export class RoomPageGates {
     );
     if (grants.length === 0) return [];
     const held = (await this.offscreen(vta, { op: "held" })) as HeldEntry[];
-    const names = await this.roomNames(
+    const names = await this.displayNames(
       vta,
       hostDid,
       grants.map((g) => g.member),
+      grants.filter((g) => held.some((h) => h.roomId === g.roomId && h.member === g.member)),
     );
     return grants.map((g) => {
       // Held as the member it is shared as: the same room held as somebody
@@ -344,12 +413,7 @@ export class RoomPageGates {
         ...(h ? { epoch: h.epoch, earliestReadableEpoch: h.earliestReadableEpoch } : {}),
         sharedAt: new Date(g.grantedAt).toISOString(),
         expiresAt: new Date(g.expiresAt).toISOString(),
-        ...(names[g.roomId]
-          ? {
-              label: names[g.roomId]!.label,
-              ...(names[g.roomId]!.visibility !== undefined ? { visibility: names[g.roomId]!.visibility } : {}),
-            }
-          : {}),
+        ...(names[g.roomId] ? names[g.roomId] : {}),
       };
     });
   }
@@ -367,10 +431,12 @@ export class RoomPageGates {
     // Who the member is at this community, by the wallet's own record — the
     // page's word only picks among these, never adds to them.
     const members = (await this.offscreen(vta, { op: "members", hostDid })) as string[];
-    const names = await this.roomNames(
+    const usable = members.filter((m) => m !== hostDid);
+    const names = await this.displayNames(
       vta,
       hostDid,
-      members.filter((m) => m !== hostDid),
+      usable,
+      held.flatMap((h) => (h.member !== undefined && usable.includes(h.member) ? [{ roomId: h.roomId, member: h.member }] : [])),
     );
     const { rows, others } = shareRows(
       held,
@@ -604,4 +670,37 @@ export class RoomPageGates {
       post({ kind: "ready" });
     }
   }
+}
+
+/**
+ * `offered` names with each room's own profile laid over them: a profile name
+ * wins over the community's offer label (`labelSource` says which it is), and
+ * the profile's description and its two facts — stale, a refused rename — ride
+ * along. A profile without a name changes nothing but those facts.
+ */
+export function withProfiles(
+  offered: Readonly<RoomNames>,
+  profiles: Readonly<Record<string, RoomProfileSummary>>,
+): RoomNames {
+  const out: RoomNames = {};
+  for (const [roomId, n] of Object.entries(offered)) out[roomId] = { ...n, labelSource: "community" };
+  for (const [roomId, p] of Object.entries(profiles)) {
+    const had = out[roomId];
+    const facts = {
+      ...(p.stale ? { profileStale: true } : {}),
+      ...(p.renameRefused ? { renameRefused: true } : {}),
+    };
+    if (p.status === "found" && p.name !== undefined) {
+      out[roomId] = {
+        label: p.name,
+        ...(had?.visibility !== undefined ? { visibility: had.visibility } : {}),
+        labelSource: "profile",
+        ...(p.description !== undefined ? { description: p.description } : {}),
+        ...facts,
+      };
+    } else if (had) {
+      out[roomId] = { ...had, ...facts };
+    }
+  }
+  return out;
 }

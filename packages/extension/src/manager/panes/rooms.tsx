@@ -40,7 +40,8 @@ import { RoomRecords } from "./rooms-records.js";
 import { IssueInRoomsName } from "./rooms-owner.js";
 import { RoomShares } from "./rooms-shares.js";
 import { RoomOffers } from "./rooms-offers.js";
-import { rememberedRoomLabels } from "../../room-page-policy.js";
+import { rememberedRoomHosts, rememberedRoomLabels } from "../../room-page-policy.js";
+import { RoomProfileDetails, roomDisplayName, useRoomProfiles } from "./rooms-profile.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
@@ -124,14 +125,26 @@ export function RoomsPane({
   // community's offers when its member portal listed them (`room-page-background.ts`).
   // Absent outside the extension (the pane's render tests), and for a room a member owns.
   const [labels, setLabels] = useState<Record<string, string>>({});
+  // And the community each name came from: the host the room's own profile is
+  // read from. A room no community has named here is read once its host is
+  // named, under the row (`RoomRecords`).
+  const [hosts, setHosts] = useState<Record<string, string>>({});
   useEffect(() => {
     const store = globalThis.chrome?.storage?.local;
     if (!store) return;
     store
       .get(null)
-      .then((all) => setLabels(rememberedRoomLabels(all, parties.service.did)))
-      .catch(() => setLabels({}));
+      .then((all) => {
+        setLabels(rememberedRoomLabels(all, parties.service.did));
+        setHosts(rememberedRoomHosts(all, parties.service.did));
+      })
+      .catch(() => {
+        setLabels({});
+        setHosts({});
+      });
   }, [parties.service.did, rooms]);
+  // The room's own profile, read once per listing — never polled.
+  const profiles = useRoomProfiles(parties, rooms, hosts);
 
   const names = useAgentNames((rooms ?? []).map((r) => r.member));
   // A room held as more than one member: the rows must say which is which.
@@ -143,16 +156,24 @@ export function RoomsPane({
     {
       key: "room",
       header: "Room",
-      render: (r) => (
-        <span style={{ display: "grid", gap: 2 }}>
-          {labels[r.roomId] !== undefined && (
-            <span style={{ fontSize: t.sm }} title="The name its community gave it">
-              {labels[r.roomId]}
-            </span>
-          )}
-          <code style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>{r.roomId}</code>
-        </span>
-      ),
+      render: (r) => {
+        const shown = roomDisplayName({ profile: profiles[r.roomId], community: labels[r.roomId] });
+        return (
+          <span style={{ display: "grid", gap: 2 }}>
+            {shown && (
+              <span
+                style={{ fontSize: t.sm }}
+                title={shown.source === "profile" ? "The name the room gives itself" : "The name its community gave it"}
+              >
+                {shown.source === "profile" && profiles[r.roomId]?.emoji ? `${profiles[r.roomId]!.emoji} ` : ""}
+                {shown.name}
+              </span>
+            )}
+            <RoomProfileDetails view={profiles[r.roomId]} />
+            <code style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>{r.roomId}</code>
+          </span>
+        );
+      },
     },
     {
       key: "member",

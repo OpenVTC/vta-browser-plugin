@@ -998,10 +998,25 @@ portal the page is. The community lists an accepted offer only for days, so a
 name is **remembered** under `room-names:<vtaDid>|<hostDid>` in
 `chrome.storage.local`; a fresh reading replaces it, so a rename shows once the
 room is offered again. Any failure means no name, never an error: the page
-shows the room's DID. `RoomPageGates.roomNames` is the one place a name is
-looked up — when rooms gain a sealed in-room profile, it goes there. The
-console's rooms and shares panes show the remembered names. A room a member
-owns has none here.
+shows the room's DID. `RoomPageGates.displayNames` is the one place a name
+is looked up, and it lays the room's own **profile** over the offer label.
+
+**A room's own profile wins** (trust-tasks-tf #807). A room's name, description,
+tags and emoji are sealed inside the room, at a location only a key holder can
+compute, so the wallet asks the member's VTA (`rooms/keys/profile/read/0.1`,
+`@openvtc/pnm-core/rooms`'s `roomsKeysProfileRead`), which reads, opens and
+judges it as the member. Read it through `roomProfileView` and nothing else: it
+keeps the text inert (control and bidi characters stripped, bounded) and turns
+the VTA's `rejected` list into the one fact a member is owed — somebody without
+the standing to (`noAuthority`, `timing`, `revoked`) tried to rename the room —
+said in words beside `stale`. A profile is **held in memory for the view**
+(`RoomPageGates.profiles`, at most one reading a minute per room and member)
+and never written to `chrome.storage`; it is the room's content, unlike an
+offer label. Display order everywhere: the member's own label (#806) > the
+profile name > the community's offer label > the DID. The console reads
+profiles for rooms whose community it knows (`rememberedRoomHosts`) and, for any
+row, once its host is named under the row (`RoomProfileAt`). A VTA without the
+task leaves everything as it was.
 
 **A private room is never shared with a portal.** Its host is not to learn
 which member acts, and the portal is the host's own page and knows who is
