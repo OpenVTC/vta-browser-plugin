@@ -77,6 +77,18 @@ const REFUSED: { prefix: string; why: string }[] = [
       "shares with it through window.vtaWallet.rooms, whose verbs are fixed, whose " +
       "flows run in the wallet, and whose every write the member confirms.",
   },
+  // A community's offers of its rooms. Accepting one admits the member to a
+  // room's encrypted group with a key package their agent mints, so a page
+  // that got one signed through the generic prompt would have joined them to a
+  // room on a "Sign <type>" line that says none of that. The portal asks
+  // through `window.vtaWallet.rooms.acceptOffer`, whose window does.
+  {
+    prefix: "https://trusttasks.org/spec/vtc/rooms/offers/",
+    why:
+      "Accepting a community's offer of a room joins the member to it, and a generic prompt cannot say so. " +
+      "A community's own member portal lists offers with window.vtaWallet.rooms.offers and asks to accept one " +
+      "with window.vtaWallet.rooms.acceptOffer, which the member decides in the wallet's own window.",
+  },
   // A mediator's own operations surface (`@openvtc/pnm-core/mediator`). A page
   // routing one of these to an agent would be misaddressed anyway — they are
   // served by the relay, not the agent — but the refusal is about what they

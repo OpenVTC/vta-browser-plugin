@@ -23,6 +23,8 @@ import {
   toggleShareRow,
 } from "./room-page-policy.js";
 import { Did } from "./ui.js";
+import { OfferConsent } from "./room-offer-consent.js";
+import type { RoomOfferConsentView } from "./room-offers-policy.js";
 
 function originHost(o: string): string {
   try {
@@ -85,18 +87,24 @@ export function RoomConsent({
   consentId: string;
   decide: (approved: boolean, selectedRooms?: string[]) => void;
 }) {
-  const [view, setView] = useState<RoomShareConsentView | RoomWriteConsentView | null>(null);
+  const [view, setView] = useState<RoomShareConsentView | RoomWriteConsentView | RoomOfferConsentView | null>(null);
   useEffect(() => {
     const key = `${ROOM_CONSENT_PREFIX}${consentId}`;
     void chrome.storage.session.get(key).then((v: Record<string, unknown>) => {
-      setView((v[key] as RoomShareConsentView | RoomWriteConsentView) ?? null);
+      setView((v[key] as RoomShareConsentView | RoomWriteConsentView | RoomOfferConsentView) ?? null);
     });
   }, [consentId]);
 
   if (!view) return <div style={{ padding: 20, fontSize: 13 }}>Loading request…</div>;
   return (
     <div style={{ padding: 20, fontSize: 13, display: "grid", gap: 14 }}>
-      {view.kind === "share" ? <Share view={view} decide={decide} /> : <Write view={view} decide={decide} />}
+      {view.kind === "share" ? (
+        <Share view={view} decide={decide} />
+      ) : view.kind === "offer" ? (
+        <OfferConsent view={view} decide={decide} />
+      ) : (
+        <Write view={view} decide={decide} />
+      )}
     </div>
   );
 }

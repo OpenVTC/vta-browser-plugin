@@ -512,7 +512,12 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // portal's room list). The snapshot, resynced from vta-sdk 0.70.0, also now
   // lists `rooms/blobs/chunk` and `rooms/blobs/upload/{commit,abort}` — host
   // verbs the SDK's own client builds for `act` — so they count here too.
-  const expected = 220;
+  //
+  // 220 → 223: accepting one of those offers from the wallet
+  // (`rooms/offer-accept.ts`) — `vtc/rooms/offers/accept/0.1` as the member,
+  // with `rooms/keys/key-package/0.1` and `rooms/keys/welcome/0.1` at the
+  // member's own VTA, the CLI's `pnm rooms offers accept` step for step.
+  const expected = 223;
   assert.equal(
     implemented.size,
     expected,

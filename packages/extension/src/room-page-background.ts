@@ -85,6 +85,8 @@ export interface RoomPageBackgroundDeps {
   prompt(view: RoomShareConsentView | RoomWriteConsentView): Promise<{ approved: boolean; selectedRooms?: string[] }>;
   /** Open a transfer with the offscreen document (`ROOM_FILES_PORT`). */
   openTransfer(): Promise<PortLike>;
+  /** The community's offers of its rooms (`room-offers-background.ts`). Absent: the portal sees none. */
+  offers?: PortalOffers;
   now(): number;
   /** The room names remembered for one community under one VTA (`roomNamesKey`). Absent: none kept. */
   loadRoomNames?(vtaDid: string, hostDid: string): Promise<unknown>;
@@ -99,6 +101,19 @@ const PORTAL_CACHE_MS = 5 * 60 * 1000;
 
 /** How long one member's offers stand for the names of a community's rooms before they are read again. */
 export const ROOM_NAMES_CACHE_MS = 60 * 1000;
+
+/** What a portal may ask of the wallet about its community's offers. */
+export interface PortalOffers {
+  forPortal(vta: ActiveVta, hostDid: string, members: readonly string[]): Promise<{ offers: unknown[]; needsOrigin?: string }>;
+  accept(req: {
+    communityDid: string;
+    roomId: string;
+    member?: string;
+    origin: string;
+    vta: ActiveVta;
+    members: readonly string[];
+  }): Promise<unknown>;
+}
 
 class RoomPageRefusal extends Error {}
 
@@ -202,6 +217,29 @@ export class RoomPageGates {
                   ...(p.sinceVersion !== undefined ? { sinceVersion: p.sinceVersion } : {}),
                 },
         );
+      }
+      case "offers":
+      case "acceptOffer": {
+        // The community's own offers, to the identities the member uses here by
+        // the wallet's record — never the community's DID, never the page's word.
+        if (!this.deps.offers) throw new RoomPageRefusal("this wallet does not handle room offers");
+        const { vta } = await this.atPortal(origin, p.hostDid, { needReach: false });
+        const members = ((await this.offscreen(vta, { op: "members", hostDid: p.hostDid })) as string[]).filter(
+          (m) => m !== p.hostDid,
+        );
+        if (p.op === "offers") return this.deps.offers.forPortal(vta, p.hostDid, members);
+        if (p.member !== undefined && !members.includes(p.member)) {
+          throw new RoomPageRefusal(`${p.member} is not an identity you use at this community`);
+        }
+        // The member decides in the wallet's own window; the page only asked.
+        return this.deps.offers.accept({
+          communityDid: p.hostDid,
+          roomId: p.roomId,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+          origin,
+          vta,
+          members,
+        });
       }
       case "putNote": {
         const { vta } = await this.atPortal(origin, p.hostDid, { needReach: true });

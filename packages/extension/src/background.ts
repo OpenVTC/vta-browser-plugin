@@ -49,8 +49,11 @@ import {
 } from "./active-vta.js";
 import { checkOriginPin, pinOrigin, readOriginPin, type OriginPinStatus } from "./origin-pin.js";
 import { RoomPageGates, type PortLike } from "./room-page-background.js";
+import { RoomOffers, RoomOffersRefusal } from "./room-offers-background.js";
+import type { RoomOfferConsentView } from "./room-offers-policy.js";
 import {
   grantsKey,
+  mergeRoomNames,
   roomNamesKey,
   ROOM_CONSENT_PREFIX,
   type RoomGrant,
@@ -156,6 +159,11 @@ import {
   RUNTIME_MANAGER_TASK,
   RUNTIME_ROOM_FILES_PREPARE,
   RUNTIME_ROOMS_PAGE,
+  RUNTIME_ROOM_OFFERS,
+  OFFSCREEN_ROOM_OFFERS,
+  type OffscreenRoomOffersResponse,
+  type RuntimeRoomOffersRequest,
+  type RuntimeRoomOffersResponse,
   ROOM_FILES_PAGE_PORT,
   OFFSCREEN_ROOMS_PAGE,
   type OffscreenRoomsPageResponse,
@@ -757,10 +765,18 @@ async function refreshPendingBadge(): Promise<void> {
   try {
     const pending = await listPendingInbound(new IndexedDBKVStore());
     const waiting = pending.filter((p: { isApprover: boolean }) => p.isApprover).length;
-    await chrome.action.setBadgeText({ text: waiting > 0 ? String(waiting) : "" });
     if (waiting > 0) {
+      await chrome.action.setBadgeText({ text: String(waiting) });
       await chrome.action.setBadgeBackgroundColor({ color: "#8B1A1A" });
+      return;
     }
+    // Below an approval, never beside it: a room offer waits for the member,
+    // where an approval holds up an operation. Its own colour, so the two are
+    // not read as one count. Written by the last offers listing for the
+    // active agent (`ROOM_OFFERS_OPEN_KEY`).
+    const offers = await openRoomOffersForActive();
+    await chrome.action.setBadgeText({ text: offers > 0 ? String(offers) : "" });
+    if (offers > 0) await chrome.action.setBadgeBackgroundColor({ color: "#1F5FAD" });
   } catch (err) {
     // Never let a cosmetic surface break a wake path.
     console.warn("[pnm consent] could not refresh the pending badge:", err);
@@ -789,9 +805,9 @@ chrome.runtime.onConnect.addListener((port) => {
 // confirmed — are `room-page-background.ts`; this wires them to the browser.
 // VTI `data-rooms-files.md` §8.5.
 
-/** Raise a room prompt (share or write) and wait. Closed or unopened is a denial. */
+/** Raise a room prompt (share, write or accept an offer) and wait. Closed or unopened is a denial. */
 async function requestRoomConsent(
-  view: RoomShareConsentView | RoomWriteConsentView,
+  view: RoomShareConsentView | RoomWriteConsentView | RoomOfferConsentView,
 ): Promise<{ approved: boolean; selectedRooms?: string[] }> {
   const consentId = crypto.randomUUID();
   await chrome.storage.session.set({ [`${ROOM_CONSENT_PREFIX}${consentId}`]: view });
@@ -811,7 +827,64 @@ async function requestRoomConsent(
   });
 }
 
+// ── A community's offers of its rooms ───────────────────────────────────────
+//
+// The console's Offers section and a community's own portal both come here
+// (`room-offers-background.ts`); every accept is confirmed in the wallet's own
+// window first, and the work runs in the offscreen document.
+
+/** `chrome.storage.local`: how many offers wait, for which agent — the badge's count. */
+const ROOM_OFFERS_OPEN_KEY = "room-offers-open";
+
+async function openRoomOffersForActive(): Promise<number> {
+  const stored = (await chrome.storage.local.get(ROOM_OFFERS_OPEN_KEY))[ROOM_OFFERS_OPEN_KEY] as
+    | { vtaDid?: unknown; count?: unknown }
+    | undefined;
+  if (!stored || typeof stored.count !== "number" || stored.count <= 0) return 0;
+  const active = await readActiveConnection();
+  return active.ok && active.conn.vtaDid === stored.vtaDid ? stored.count : 0;
+}
+
+async function activeOffersVta(): Promise<
+  { ok: true; vta: { vtaDid: string; restBaseUrl?: string } } | { ok: false; error: string }
+> {
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
+  return {
+    ok: true,
+    vta: { vtaDid: active.conn.vtaDid, ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}) },
+  };
+}
+
+const roomOffers = new RoomOffers({
+  active: activeOffersVta,
+  async offscreen(vta, params) {
+    await ensureOffscreenDocument();
+    const reply = (await chrome.runtime.sendMessage({
+      target: OFFSCREEN_TARGET,
+      type: OFFSCREEN_ROOM_OFFERS,
+      vtaDid: vta.vtaDid,
+      ...(vta.restBaseUrl ? { restBaseUrl: vta.restBaseUrl } : {}),
+      params,
+    })) as OffscreenRoomOffersResponse | undefined;
+    return reply ?? { ok: false, error: "the offscreen document did not answer" };
+  },
+  canReach: (url) => hasOriginPermission(url),
+  prompt: requestRoomConsent,
+  async rememberNames(vtaDid, communityDid, names) {
+    const key = roomNamesKey(vtaDid, communityDid);
+    const remembered = (await chrome.storage.local.get(key))[key];
+    await chrome.storage.local.set({ [key]: mergeRoomNames(remembered, names, Date.now()) });
+  },
+  async setOpenCount(vtaDid, count) {
+    await chrome.storage.local.set({ [ROOM_OFFERS_OPEN_KEY]: { vtaDid, count } });
+    await refreshPendingBadge();
+  },
+  now: () => Date.now(),
+});
+
 const roomPageGates = new RoomPageGates({
+  offers: roomOffers,
   async active() {
     const active = await readActiveConnection();
     if (!active.ok) return { ok: false, error: active.error };
@@ -3806,6 +3879,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_ROOM_OFFERS) {
+    // Console only. A portal reaches its own community's offers through
+    // `window.vtaWallet.rooms`, whose gates hold it to that community.
+    if (!isExtensionPageSender(sender)) {
+      console.warn(`[background] rejecting ${RUNTIME_ROOM_OFFERS} from non-extension sender url=${sender.url}`);
+      sendResponse({ ok: false, error: "room offers are not page-reachable" } satisfies RuntimeRoomOffersResponse);
+      return false;
+    }
+    const { params } = message as RuntimeRoomOffersRequest;
+    (params?.op === "accept"
+      ? roomOffers.accept({ communityDid: params.communityDid, member: params.member, roomId: params.roomId })
+      : roomOffers.overview({ force: params?.op === "overview" && params.force === true })
+    )
+      .then((result) => sendResponse({ ok: true, result } satisfies RuntimeRoomOffersResponse))
+      .catch((e: unknown) =>
+        sendResponse({
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+          ...(e instanceof RoomOffersRefusal && e.code ? { code: e.code } : {}),
+        } satisfies RuntimeRoomOffersResponse),
       );
     return true; // async sendResponse
   }

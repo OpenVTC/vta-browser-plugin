@@ -286,7 +286,7 @@ function tags(v: unknown): string | null {
   return null;
 }
 
-const OPS = new Set(["list", "choose", "forget", "info", "browse", "read", "putNote"]);
+const OPS = new Set(["list", "choose", "forget", "info", "browse", "read", "putNote", "offers", "acceptOffer"]);
 
 /** Why a page's room call is malformed, or `null` when it is well formed. Checked before anything else. */
 export function roomsPageParamsRefusal(raw: unknown): string | null {
@@ -296,9 +296,9 @@ export function roomsPageParamsRefusal(raw: unknown): string | null {
   const op = p as RoomsPageOp & Record<string, unknown>;
   const first =
     did(op.hostDid, "hostDid") ??
-    (op.op === "list" || op.op === "choose" ? null : did(op.roomId, "roomId")) ??
+    (op.op === "list" || op.op === "choose" || op.op === "offers" ? null : did(op.roomId, "roomId")) ??
     (op.op === "choose" && op.suggest !== undefined ? did(op.suggest, "suggest") : null) ??
-    (op.op === "choose" && op.member !== undefined ? did(op.member, "member") : null);
+    ((op.op === "choose" || op.op === "acceptOffer") && op.member !== undefined ? did(op.member, "member") : null);
   if (first) return first;
   switch (op.op) {
     case "browse":
