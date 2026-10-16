@@ -109,7 +109,7 @@ export async function runRoomsPageOp(
       roomId: r.roomId,
       epoch: r.epoch,
       earliestReadableEpoch: r.earliestReadableEpoch,
-      ...(r.member !== undefined ? { member: r.member } : {}),
+      member: r.member,
       ...(r.context !== undefined ? { context: r.context } : {}),
       ...(r.actions !== undefined ? { actions: r.actions } : {}),
     }));

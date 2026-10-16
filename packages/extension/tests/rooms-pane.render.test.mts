@@ -20,10 +20,13 @@ import assert from "node:assert/strict";
 import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { RoomsPane } from "../src/manager/panes/rooms.js";
 
-const LIST = "rooms/keys/list/0.1";
+const LIST = "rooms/keys/list/0.2";
 
-const room = (roomId: string, epoch: number, earliestReadableEpoch: number) => ({
+const MEMBER = "did:key:z6MkMember";
+
+const room = (roomId: string, epoch: number, earliestReadableEpoch: number, member = MEMBER) => ({
   roomId,
+  member,
   epoch,
   earliestReadableEpoch,
 });
@@ -116,7 +119,8 @@ test("the listing goes to the agent, and asks the rooms family nothing else", as
   const { a } = await mount([room("did:webvh:example.com:rooms:northwind", 2, 1)]);
   const calls = roomsCalls(a);
   assert.equal(calls.length, 1, `expected one rooms call, got: ${calls.map((c) => c.type).join(", ")}`);
-  assert.match(calls[0]!.type, /rooms\/keys\/list\/0\.1$/);
+  assert.match(calls[0]!.type, /rooms\/keys\/list\/0\.2$/);
+  assert.deepEqual(calls[0]!.payload, { includePersonal: true }, "the member's own console asks for their labels");
 });
 
 // A failed listing must not render as an empty one — "this agent holds keys to
@@ -140,7 +144,7 @@ test("two members of one room are two labelled rows", async () => {
   const COMMUNITY = "did:webvh:QmCommunity:community.example";
   const a = agent({
     [LIST]: {
-      rooms: [room(ROOM, 7, 1), room(ROOM, 7, 7)],
+      rooms: [room(ROOM, 7, 1, COMMUNITY), room(ROOM, 7, 7, PARTIES.service.did)],
       ext: {
         "org.openvtc.rooms": {
           held: [
@@ -164,4 +168,53 @@ test("two members of one room are two labelled rows", async () => {
   assert.equal(text.match(/one of two places/g)?.length, 2, "both rows say the room is held twice");
   assert.match(text, /whole history/);
   assert.match(text, /from joining/);
+});
+
+// ── Your own name for a room ────────────────────────────────────────────────
+
+// rooms/keys/label's display order: the member's own name first, then the
+// community's, then the DID — and the personal name never hides the others, so
+// a member can see a room was renamed after they named it.
+test("your own name comes first, and the room's other names stay beside it", async () => {
+  const ROOM = "did:webvh:example.com:rooms:northwind";
+  const a = agent({
+    [LIST]: {
+      rooms: [
+        {
+          ...room(ROOM, 7, 1),
+          personal: {
+            label: "Northwind tender",
+            description: "Pricing room.",
+            tags: ["work", "bids"],
+            updatedAt: "2026-10-16T09:00:00Z",
+          },
+        },
+      ],
+    },
+    [SERVERS]: { servers: [] },
+    [SERVICES]: { services: [] },
+  });
+  const screen = await render(h(RoomsPane, { parties: PARTIES, contexts: [] } as never), {
+    chrome: {
+      runtime: { sendMessage: a.sendMessage },
+      storage: {
+        local: {
+          get: async () => ({
+            [`room-names:${PARTIES.service.did}|did:webvh:QmCommunity:community.example`]: {
+              [ROOM]: { label: "Community pricing", seenAt: 1 },
+            },
+          }),
+        },
+      },
+    } as never,
+  });
+  await screen.settle();
+  const text = screen.text();
+  assert.match(text, /Northwind tender · your name for it/);
+  assert.match(text, /community's name: Community pricing/, "the community's name stays reachable");
+  assert.ok(text.indexOf("Northwind tender") < text.indexOf("Community pricing"), "yours first");
+  assert.match(text, /work · bids/);
+  assert.match(text, /Pricing room\./);
+  assert.ok(text.includes(ROOM), "the DID stays on the row");
+  assert.ok(text.indexOf("Northwind tender") < text.indexOf(ROOM), "your name before the DID");
 });

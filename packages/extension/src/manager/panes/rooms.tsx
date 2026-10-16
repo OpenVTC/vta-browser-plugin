@@ -28,6 +28,14 @@
 // once per member, and every row says which member it is and what place it
 // holds; everything done from a row acts as that member and names it, because
 // the agent refuses to choose between them.
+//
+// **Your name for a room comes first.** A row is named, in order, by the
+// member's own private label (`rooms/keys/label`, read with `includePersonal`),
+// then the name the room's community gave it on its offer, then its DID — and a
+// personal name never hides the others: the community's name and the DID stay
+// on the row beside it, so a member can see the room was renamed after they
+// named it. (A room's own profile name slots in after the personal label once
+// rooms carry one.)
 
 import { useCallback, useEffect, useState } from "react";
 import { heldRoomKey, roomsKeysList, type HeldRoom } from "@openvtc/pnm-core/rooms";
@@ -36,6 +44,7 @@ import { useAgentNames } from "../../use-agent-names.js";
 import { Note, Panel } from "../../ui.js";
 import { CreateRoom } from "./rooms-create.js";
 import { FetchHistory } from "./rooms-backfill.js";
+import { RoomLabel } from "./rooms-label.js";
 import { RoomRecords } from "./rooms-records.js";
 import { IssueInRoomsName } from "./rooms-owner.js";
 import { RoomShares } from "./rooms-shares.js";
@@ -110,7 +119,8 @@ export function RoomsPane({
   const load = useCallback(async () => {
     setError(null);
     try {
-      setRooms(await roomsKeysList(managerSender, { ...parties }));
+      // The member's own console: the one surface that asks for their labels.
+      setRooms(await roomsKeysList(managerSender, { ...parties }, { includePersonal: true }));
     } catch (e) {
       setRooms(null);
       setError(e instanceof Error ? e.message : String(e));
@@ -157,17 +167,33 @@ export function RoomsPane({
       key: "room",
       header: "Room",
       render: (r) => {
-        const shown = roomDisplayName({ profile: profiles[r.roomId], community: labels[r.roomId] });
+        const personal = r.personal?.label;
+        const shown = roomDisplayName({ personal, profile: profiles[r.roomId], community: labels[r.roomId] });
+        // Under your own name, the name the room or its community gives it, muted.
+        const theirs = personal !== undefined
+          ? roomDisplayName({ profile: profiles[r.roomId], community: labels[r.roomId] })
+          : undefined;
+        const titles = {
+          personal: "Your own name for it — only you see it",
+          profile: "The name the room gives itself",
+          community: "The name its community gave it",
+        } as const;
         return (
           <span style={{ display: "grid", gap: 2 }}>
             {shown && (
-              <span
-                style={{ fontSize: t.sm }}
-                title={shown.source === "profile" ? "The name the room gives itself" : "The name its community gave it"}
-              >
+              <span style={{ fontSize: t.sm }} title={titles[shown.source]}>
                 {shown.source === "profile" && profiles[r.roomId]?.emoji ? `${profiles[r.roomId]!.emoji} ` : ""}
                 {shown.name}
+                {shown.source === "personal" && <span style={{ fontSize: t.xs, color: c.muted }}> · your name for it</span>}
               </span>
+            )}
+            {theirs && (
+              <span style={{ fontSize: t.xs, color: c.muted }} title={titles[theirs.source]}>
+                {theirs.source === "profile" ? "the room's name" : "community's name"}: {theirs.name}
+              </span>
+            )}
+            {r.personal?.tags !== undefined && (
+              <span style={{ fontSize: t.xs, color: c.muted }}>{r.personal.tags.join(" · ")}</span>
             )}
             <RoomProfileDetails view={profiles[r.roomId]} />
             <code style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>{r.roomId}</code>
@@ -232,6 +258,12 @@ export function RoomsPane({
                       {twice.has(r.roomId) ? ", not as the other place this agent holds in it" : ""}.
                     </p>
                   )}
+                  {r.personal?.description !== undefined && (
+                    <p style={{ margin: "0 0 6px", whiteSpace: "pre-wrap" }}>{r.personal.description}</p>
+                  )}
+                  {r.personal?.notes !== undefined && (
+                    <p style={{ margin: "0 0 6px", whiteSpace: "pre-wrap" }}>{r.personal.notes}</p>
+                  )}
                   <p style={{ margin: "0 0 6px" }}>{s.why}</p>
                   <p style={{ margin: 0 }}>
                     Holding keys is not permission to act. Whether this agent may still write
@@ -249,6 +281,7 @@ export function RoomsPane({
                       history is incomplete: what a member can open now is not
                       contingent on what they cannot. */}
                   <RoomRecords parties={parties} room={r} />
+                  <RoomLabel parties={parties} room={r} onSaved={() => void load()} />
                 </div>
               );
             }}
