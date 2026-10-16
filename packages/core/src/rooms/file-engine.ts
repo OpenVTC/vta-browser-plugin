@@ -261,6 +261,7 @@ export async function putRoomFile(ctx: RoomFileContext, file: RoomFileInput): Pr
     roomId: ctx.roomId,
     fileId,
     purpose: "seal",
+    ...(ctx.member !== undefined ? { member: ctx.member } : {}),
   });
   let ciphertext: Uint8Array;
   let chunkSize: number;
@@ -442,6 +443,7 @@ export async function getRoomFile(
     key,
     version: record.version,
     sealed: record.sealed,
+    ...(ctx.member !== undefined ? { member: ctx.member } : {}),
   });
   const verified = await verifyRecordBody(
     base64url.decode(plaintext),
@@ -476,6 +478,7 @@ export async function getRoomFile(
     fileId: file.fileId,
     purpose: "open",
     epoch: file.epoch,
+    ...(ctx.member !== undefined ? { member: ctx.member } : {}),
   });
   // `withKey` checks the host's blob manifest against the author's file
   // manifest — the blob the author named, and the shape their segment size and

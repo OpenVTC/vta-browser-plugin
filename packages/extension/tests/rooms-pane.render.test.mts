@@ -127,3 +127,41 @@ test("a listing that failed is not drawn as a listing that was empty", async () 
   });
   assert.doesNotMatch(screen.text(), /before an invitation has been accepted/);
 });
+
+// ── One room, two members ───────────────────────────────────────────────────
+
+// One agent can hold two members of a room: the community's own place in a room
+// the community owns, and an administrator's own membership in it. The agent
+// lists the room twice, and the two rows must say which is which — the member,
+// and the place it holds — or the member reads one room listed twice with
+// different histories as a fault.
+test("two members of one room are two labelled rows", async () => {
+  const ROOM = "did:webvh:example.com:rooms:northwind";
+  const COMMUNITY = "did:webvh:QmCommunity:community.example";
+  const a = agent({
+    [LIST]: {
+      rooms: [room(ROOM, 7, 1), room(ROOM, 7, 7)],
+      ext: {
+        "org.openvtc.rooms": {
+          held: [
+            { member: COMMUNITY, context: "vtc-test", actions: ["read", "write", "curate", "admin"] },
+            { member: PARTIES.service.did, context: "default", actions: ["read", "write"] },
+          ],
+        },
+      },
+    },
+    [SERVERS]: { servers: [] },
+    [SERVICES]: { services: [] },
+  });
+  const screen = await render(h(RoomsPane, { parties: PARTIES, contexts: [] } as never), {
+    chrome: { runtime: { sendMessage: a.sendMessage } },
+  });
+  const text = screen.text();
+  assert.match(text, /administers the room/);
+  assert.match(text, /context vtc-test/);
+  assert.match(text, /this agent's own DID/, "the member who is the agent itself says so");
+  assert.match(text, /context default/);
+  assert.equal(text.match(/one of two places/g)?.length, 2, "both rows say the room is held twice");
+  assert.match(text, /whole history/);
+  assert.match(text, /from joining/);
+});

@@ -93,6 +93,14 @@ export interface PersonaRoom {
   holder: TaskParty;
   vta: { did: string; sender: TrustTaskSender };
   host: { did: string; sender: CompletedDocumentSender };
+  /**
+   * The member to act as: a persona DID the VTA holds. Every request made for
+   * this room names it — `issuer` on `rooms/keys/act`, the author of a sealed
+   * body, `ext["org.openvtc.rooms"].member` on the custody tasks — so a VTA
+   * holding two members of the room is never asked to choose (it refuses, and
+   * must). Omitted only where the caller has no member to name yet.
+   */
+  member?: string;
 }
 
 /**
@@ -150,6 +158,9 @@ export async function roomsKeysAct(
     refuse("the document it returned is not the one it was asked to complete");
   }
   if (completed.issuer !== principal) refuse(`the document is issued by ${String(completed.issuer)}, not ${principal}`);
+  if (document.issuer !== undefined && principal !== document.issuer) {
+    refuse(`it acted as ${principal}, not ${String(document.issuer)}, the member named`);
+  }
   if (!completed.proof) refuse("the document carries no proof");
   const asked = document.payload as Record<string, unknown>;
   const got = (completed.payload ?? {}) as Record<string, unknown>;
@@ -194,7 +205,7 @@ function actFailure(e: unknown): Error {
       const hint = {
         notAMember: "Your VTA holds no credential this room issued to an identity you may act as.",
         principalAmbiguous:
-          "You may act as more than one member of this room; act from the context of the one you mean.",
+          "Your agent holds this room as more than one member, and the request did not say which one to act as.",
         actionNotHeld: "Your own credentials for this room do not allow that.",
         issuerNotPrincipal: "That identity is not a member of this room you may act as.",
       }[code];
@@ -214,7 +225,7 @@ export async function actAndSend<Res>(
   type: string,
   responseType: string,
   payload: Record<string, unknown>,
-  issuer?: string,
+  issuer: string | undefined = room.member,
 ): Promise<{ principal: string; reply: Res }> {
   const vta = { holder: room.holder, service: { did: room.vta.did } };
   let completed: { principal: string; document: Record<string, unknown> };
@@ -239,6 +250,7 @@ export async function roomsKeysSealAsPrincipal(
   sender: TrustTaskSender,
   parties: RoomsCaller,
   params: { roomId: string; key: string; version: number; body: Record<string, unknown> },
+  // `author` in the body names the member, so no `ext` member is needed here.
 ): Promise<RoomsKeysSealV2ResponsePayload["sealed"]> {
   const payload: RoomsKeysSealV2Payload = {
     roomId: params.roomId,
@@ -328,6 +340,9 @@ export async function writeSealedAsMember(
   body: UnsignedRecordBody,
   blobRef?: string,
 ): Promise<number> {
+  if (room.member !== undefined && body.author !== room.member) {
+    throw new Error(`a record written as ${room.member} cannot name ${body.author} as its author`);
+  }
   const vta = { holder: room.holder, service: { did: room.vta.did } };
   let intended = (await roomHeadVersionAsMember(room)) + 1;
   let expected = 0;

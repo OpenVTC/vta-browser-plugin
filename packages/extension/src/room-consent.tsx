@@ -14,7 +14,14 @@
 import { useEffect, useState } from "react";
 
 import { requestOriginPermission } from "./host-permissions.js";
-import { ROOM_CONSENT_PREFIX, type RoomShareConsentView, type RoomWriteConsentView } from "./room-page-policy.js";
+import {
+  ROOM_CONSENT_PREFIX,
+  type RoomShareConsentView,
+  type RoomShareRow,
+  type RoomWriteConsentView,
+  shareButtonWords,
+  toggleShareRow,
+} from "./room-page-policy.js";
 import { Did } from "./ui.js";
 
 function originHost(o: string): string {
@@ -94,6 +101,16 @@ export function RoomConsent({
   );
 }
 
+/** A member, briefly: a DID's method and its tail. */
+function shortMember(did: string): string {
+  return did.length > 48 ? `${did.slice(0, 24)}…${did.slice(-14)}` : did;
+}
+
+/** What a share row says about the member's place in the room. */
+function roleWords(role: RoomShareRow["role"]): string {
+  return role === "administers" ? "administers the room" : role === "member" ? "member" : "place not reported";
+}
+
 function Share({
   view,
   decide,
@@ -101,17 +118,14 @@ function Share({
   view: RoomShareConsentView;
   decide: (approved: boolean, selectedRooms?: string[]) => void;
 }) {
-  const [ticked, setTicked] = useState<Set<string>>(
-    () => new Set(view.rooms.filter((r) => r.shared || r.suggested).map((r) => r.roomId)),
-  );
+  const [ticked, setTicked] = useState<Set<string>>(() => new Set(view.rooms.filter((r) => r.ticked).map((r) => r.key)));
   const [error, setError] = useState<string | null>(null);
-  const toggle = (id: string) =>
-    setTicked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  const toggle = (key: string) => setTicked((prev) => toggleShareRow(view.rooms, prev, key));
+  // A room offered as more than one identity is the one place the member must
+  // choose who acts; say so beside it.
+  const asMany = new Set(
+    view.rooms.filter((r, i) => view.rooms.findIndex((o) => o.roomId === r.roomId) !== i).map((r) => r.roomId),
+  );
 
   async function share(): Promise<void> {
     // The permission request must be the first await in the click, or the
@@ -135,27 +149,49 @@ function Share({
         each addition is shown to you here first. It sees no other room, and no key.
       </div>
       <div>
-        <div style={label}>Rooms your agent holds</div>
-        {view.rooms.length === 0 ? (
-          <div style={card}>Your agent holds keys to no rooms.</div>
+        <div style={label}>Rooms you hold as the identity you use here</div>
+        {view.members.length === 0 ? (
+          <div style={card}>
+            You have not signed in to this community with an identity your agent holds, so there is no one to share a
+            room as. Sign in to the portal with your wallet first.
+          </div>
+        ) : view.rooms.length === 0 ? (
+          <div style={card}>Your agent holds no room as the identity you use here.</div>
         ) : (
-          <div style={{ ...card, display: "grid", gap: 6, maxHeight: 300, overflow: "auto" }}>
+          <div style={{ ...card, display: "grid", gap: 8, maxHeight: 300, overflow: "auto" }}>
             {view.rooms.map((r) => (
-              <label key={r.roomId} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                <input type="checkbox" checked={ticked.has(r.roomId)} onChange={() => toggle(r.roomId)} />
+              <label key={r.key} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <input
+                  type="checkbox"
+                  checked={ticked.has(r.key)}
+                  onChange={() => toggle(r.key)}
+                  aria-label={`Share ${r.roomId} as ${r.member}`}
+                />
                 <span style={{ display: "grid", gap: 2 }}>
                   <Did value={r.roomId} />
+                  <span style={{ fontSize: 11 }} title={r.member}>
+                    as <code>{shortMember(r.member)}</code>
+                    {r.context ? ` · context ${r.context}` : ""} · {roleWords(r.role)}
+                  </span>
                   <span style={{ fontSize: 11, color: "var(--w-muted)" }}>
-                    {r.shared ? "shared with this portal" : r.suggested ? "the page asked for this one" : "not shared"}
+                    {r.shared ? "shared with this portal" : r.ticked ? "the page asked for this one" : "not shared"}
+                    {asMany.has(r.roomId) ? " · you hold this room as more than one identity: tick the one to use here" : ""}
                   </span>
                 </span>
               </label>
             ))}
           </div>
         )}
+        {view.others > 0 && (
+          <div style={{ fontSize: 11, color: "var(--w-muted)", marginTop: 6 }}>
+            {view.others === 1 ? "1 other room your agent holds is" : `${view.others} other rooms your agent holds are`}{" "}
+            held only as other identities — the community's own among them, for a room it owns — and{" "}
+            {view.others === 1 ? "is" : "are"} not offered to this page.
+          </div>
+        )}
       </div>
       <div style={{ fontSize: 11, color: "var(--w-muted)" }}>
-        Each room is checked with the community before it is shared. A private room is never shared with a
+        Each room is checked with the community, as you, before it is shared. A private room is never shared with a
         portal: its host is not to learn who reads it. Shares last 30 days, and you can revoke them in the
         wallet's console.
       </div>
@@ -164,7 +200,7 @@ function Share({
         <button autoFocus onClick={() => decide(false)} style={{ padding: "8px 16px", fontSize: 13 }}>
           Cancel
         </button>
-        <Primary onClick={() => void share()}>Share {ticked.size === 1 ? "1 room" : `${ticked.size} rooms`}</Primary>
+        <Primary onClick={() => void share()}>{shareButtonWords(ticked.size)}</Primary>
       </div>
     </>
   );

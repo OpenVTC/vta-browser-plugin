@@ -70,6 +70,8 @@ export type RoomFilesProgress = Extract<RoomFilesMessage, { kind: "progress" }>;
 export interface RoomFileTarget {
   roomId: string;
   hostDid: string;
+  /** The member (persona DID) to act as: the row's, from `rooms/keys/list`. */
+  member?: string;
 }
 
 export interface TransferOptions {
@@ -171,6 +173,7 @@ export async function putRoomFileFromConsole(
     ...(prepared.restBaseUrl ? { restBaseUrl: prepared.restBaseUrl } : {}),
     roomId: target.roomId,
     hostDid: target.hostDid,
+    ...(target.member !== undefined ? { member: target.member } : {}),
     name,
     size: file.size,
     ...(file.type ? { mediaType: file.type } : {}),
@@ -206,6 +209,7 @@ export async function getRoomFileIntoConsole(
     ...(prepared.restBaseUrl ? { restBaseUrl: prepared.restBaseUrl } : {}),
     roomId: target.roomId,
     hostDid: target.hostDid,
+    ...(target.member !== undefined ? { member: target.member } : {}),
     key,
   };
   // Provisional until `got`. Held here, never handed out, dropped on failure.

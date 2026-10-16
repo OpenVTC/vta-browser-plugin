@@ -201,8 +201,10 @@ export interface VtaWalletRooms {
   /** The rooms the member has shared with this page. Never prompts. */
   list(params: { hostDid: string }): Promise<{ rooms: PageRoomView[] }>;
   /** Ask the member which of their rooms to share with this page; resolves with
-   *  every room shared. `suggest` pre-ticks one the page links to. */
-  choose(params: { hostDid: string; suggest?: string }): Promise<{
+   *  every room shared. `suggest` pre-ticks one the page links to; `member`
+   *  is who the page says is signed in, which picks among the identities the
+   *  wallet holds for this community and never adds one. */
+  choose(params: { hostDid: string; suggest?: string; member?: string }): Promise<{
     rooms: PageRoomView[];
     refused: { roomId: string; reason: string }[];
   }>;
@@ -489,7 +491,12 @@ if (!window.vtaWallet) {
     rooms: {
       list: (p) => call("rooms", { op: "list", hostDid: p.hostDid }),
       choose: (p) =>
-        call("rooms", { op: "choose", hostDid: p.hostDid, ...(p.suggest !== undefined ? { suggest: p.suggest } : {}) }),
+        call("rooms", {
+          op: "choose",
+          hostDid: p.hostDid,
+          ...(p.suggest !== undefined ? { suggest: p.suggest } : {}),
+          ...(p.member !== undefined ? { member: p.member } : {}),
+        }),
       forget: (p) => call("rooms", { op: "forget", hostDid: p.hostDid, roomId: p.roomId }),
       info: (p) => call("rooms", { op: "info", hostDid: p.hostDid, roomId: p.roomId }),
       browse: (p) => call("rooms", { ...p, op: "browse" }),
