@@ -346,3 +346,10 @@ test("liveGrants drops other communities", () => {
   const g = withGrants([], { ...at, hostDid: "did:web:other.example" }, [ROOM], NOW);
   assert.deepEqual(liveGrants(g, at, NOW), []);
 });
+
+test("nothing a page adds to a call reaches the offscreen document", async () => {
+  const h = await sharedHarness();
+  await h.gates.handle(PORTAL, { op: "read", hostDid: HOST, roomId: ROOM, key: "k", host: "did:key:zElsewhere", extra: 1 });
+  const read = h.asked.find((a) => a.op === "read")!;
+  assert.deepEqual(read, { op: "read", hostDid: HOST, roomId: ROOM, key: "k" });
+});

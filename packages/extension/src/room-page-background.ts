@@ -161,8 +161,21 @@ export class RoomPageGates {
       case "read": {
         const { vta } = await this.atPortal(origin, p.hostDid, { needReach: true });
         await this.granted(origin, p.hostDid, vta, p.roomId);
-        const { op, ...rest } = p;
-        return this.offscreen(vta, { op, ...rest } as OffscreenRoomsPageOp);
+        // Rebuilt member by member: nothing the page added rides along.
+        const at = { hostDid: p.hostDid, roomId: p.roomId };
+        return this.offscreen(
+          vta,
+          p.op === "info"
+            ? { op: "info", ...at }
+            : p.op === "read"
+              ? { op: "read", ...at, key: p.key }
+              : {
+                  op: "browse",
+                  ...at,
+                  ...(p.prefix !== undefined ? { prefix: p.prefix } : {}),
+                  ...(p.sinceVersion !== undefined ? { sinceVersion: p.sinceVersion } : {}),
+                },
+        );
       }
       case "putNote": {
         const { vta } = await this.atPortal(origin, p.hostDid, { needReach: true });
@@ -178,7 +191,15 @@ export class RoomPageGates {
           what: { note: true, title: p.title, excerpt: excerpt(p.body), bodyChars: [...(p.body ?? "")].length },
         });
         if (!decision.approved) throw new RoomPageRefusal("the member declined to add this note");
-        return this.offscreen(vta, { ...p, op: "putNote" });
+        return this.offscreen(vta, {
+          op: "putNote",
+          hostDid: p.hostDid,
+          roomId: p.roomId,
+          title: p.title,
+          ...(p.body !== undefined ? { body: p.body } : {}),
+          ...(p.description !== undefined ? { description: p.description } : {}),
+          ...(p.tags !== undefined ? { tags: p.tags } : {}),
+        });
       }
     }
   }
