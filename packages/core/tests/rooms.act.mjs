@@ -4,7 +4,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { roomsKeysAct, unsignedRoomRequest, actAndSend, RoomActError } from "../dist/rooms/index.js";
+import {
+  roomsKeysAct,
+  unsignedRoomRequest,
+  actAndSend,
+  RoomActError,
+  roomsKeysList,
+  roomsKeysBrowse,
+  roomsKeysRead,
+  roomsKeysOpen,
+  roomsKeysBackfill,
+  heldRoomKey,
+} from "../dist/rooms/index.js";
+import { roomsKeysFileKey } from "../dist/rooms/files.js";
 
 const WALLET = { did: "did:key:zWallet" };
 const VTA = { did: "did:webvh:QmAgent:agent.example" };
@@ -72,6 +84,92 @@ test("the host receives the completed document, and a VTA refusal says what to d
   const refusing = { ...room, vta: { did: VTA.did, sender: { send: () => Promise.reject(new Error("rooms/keys/act:principalAmbiguous")) } } };
   await assert.rejects(
     actAndSend(refusing, INFO, `${INFO}#response`, { roomId: ROOM }),
-    (e) => e instanceof RoomActError && e.code === "principalAmbiguous" && /context of the one you mean/.test(e.message),
+    (e) => e instanceof RoomActError && e.code === "principalAmbiguous" && /more than one member/.test(e.message),
   );
+});
+
+// ── Two members of one room on one VTA ──────────────────────────────────────
+
+const COMMUNITY = "did:webvh:QmCommunity:community.example";
+
+test("a room's member is named in every act, and an answer as anyone else is refused", async () => {
+  const sent = [];
+  const agent = vta();
+  const room = {
+    roomId: ROOM,
+    member: PERSONA,
+    holder: WALLET,
+    vta: { did: VTA.did, sender: agent },
+    host: { did: HOST, sender: { async sendCompleted(doc) { sent.push(doc); return { roomId: ROOM }; } } },
+  };
+  await actAndSend(room, INFO, `${INFO}#response`, { roomId: ROOM });
+  assert.equal(agent.sent[0].payload.document.issuer, PERSONA, "the VTA is told whom to act as");
+
+  // A VTA that acts as the community when the member was named is not believed.
+  const wrong = {
+    async send(envelope) {
+      const doc = structuredClone(envelope.payload.document);
+      doc.issuer = COMMUNITY;
+      doc.proof = { type: "DataIntegrityProof" };
+      return { principal: COMMUNITY, document: doc };
+    },
+  };
+  await assert.rejects(
+    roomsKeysAct(wrong, { holder: WALLET, service: VTA }, unsignedRoomRequest(INFO, HOST, { roomId: ROOM }, PERSONA)),
+    /acted as did:webvh:QmCommunity/,
+  );
+});
+
+test("the VTA's listing says whose each entry is, and two members of one room are two rows", async () => {
+  const sender = {
+    async send() {
+      return {
+        rooms: [
+          { roomId: ROOM, epoch: 3, earliestReadableEpoch: 1 },
+          { roomId: ROOM, epoch: 3, earliestReadableEpoch: 3 },
+        ],
+        ext: {
+          "org.openvtc.rooms": {
+            held: [
+              { member: COMMUNITY, context: "vtc-test", actions: ["read", "write", "curate", "admin"] },
+              { member: PERSONA, context: "default", actions: ["read", "write"] },
+            ],
+          },
+        },
+      };
+    },
+  };
+  const rooms = await roomsKeysList(sender, { holder: WALLET, service: VTA });
+  assert.deepEqual(
+    rooms.map((r) => [r.member, r.context, r.actions?.includes("admin")]),
+    [
+      [COMMUNITY, "vtc-test", true],
+      [PERSONA, "default", false],
+    ],
+  );
+  assert.notEqual(heldRoomKey(rooms[0]), heldRoomKey(rooms[1]), "two rows, two keys");
+});
+
+test("every custody task names the member it acts as", async () => {
+  const sent = [];
+  const sender = {
+    async send(envelope) {
+      sent.push(envelope);
+      return { key: "A".repeat(43), epoch: 1, plaintext: "", records: [], complete: true };
+    },
+  };
+  const parties = { holder: WALLET, service: VTA };
+  const member = PERSONA;
+  await roomsKeysBrowse(sender, { ...parties, roomId: ROOM, host: HOST, member });
+  await roomsKeysRead(sender, { ...parties, roomId: ROOM, host: HOST, key: "k", member });
+  await roomsKeysOpen(sender, { ...parties, roomId: ROOM, key: "k", version: 1, sealed: { ciphertext: "c", nonce: "n", epoch: 1 }, member });
+  await roomsKeysBackfill(sender, { ...parties, roomId: ROOM, host: HOST, member });
+  await roomsKeysFileKey(sender, { ...parties, roomId: ROOM, fileId: "f", purpose: "seal", member });
+  assert.equal(sent.length, 5);
+  for (const e of sent) {
+    assert.deepEqual(e.payload.ext, { "org.openvtc.rooms": { member: PERSONA } }, e.type);
+  }
+  // No member named: no ext, as before.
+  await roomsKeysBrowse(sender, { ...parties, roomId: ROOM, host: HOST });
+  assert.equal(sent.at(-1).payload.ext, undefined);
 });

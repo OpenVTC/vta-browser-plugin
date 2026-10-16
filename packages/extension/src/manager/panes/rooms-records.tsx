@@ -221,6 +221,7 @@ function OpenedRecord({
         roomId: room.roomId,
         host,
         key: recordKey,
+        ...(room.member !== undefined ? { member: room.member } : {}),
       });
       setVerification(res.verification as unknown as Verification);
       if (res.plaintext) setBody(decodeBody(res.plaintext));
@@ -305,6 +306,7 @@ export function RoomRecords({ parties, room }: { parties: Parties; room: HeldRoo
         ...parties,
         roomId: room.roomId,
         host,
+        ...(room.member !== undefined ? { member: room.member } : {}),
       });
       setRows((res.records ?? []) as unknown as RecordRow[]);
       setVerification(res.verification as unknown as Verification);

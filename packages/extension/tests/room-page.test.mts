@@ -13,11 +13,16 @@ import { RoomPageGates, type PortLike, type RoomPageBackgroundDeps } from "../sr
 import {
   ROOM_GRANT_TTL_MS,
   liveGrants,
+  membersAt,
   portalRefusal,
   roomFilesPageOpenRefusal,
   roomGrantRefusal,
   roomsPageParamsRefusal,
+  selectedShares,
+  shareButtonWords,
   shareRefusal,
+  shareRows,
+  toggleShareRow,
   withGrants,
   type RoomGrant,
   type RoomShareConsentView,
@@ -34,6 +39,12 @@ const ROOM = "did:webvh:QmRoom:rooms.example";
 const OTHER_ROOM = "did:webvh:QmOther:rooms.example";
 const PRIVATE_ROOM = "did:webvh:QmPrivate:rooms.example";
 const MEMBER = "did:webvh:QmAlice:people.example";
+/** A second identity the member signs in to this community with. */
+const MEMBER_2 = "did:webvh:QmAliceWork:people.example";
+/** A room the VTA holds only as the community itself. */
+const COMMUNITY_ROOM = "did:webvh:QmCommunityOnly:rooms.example";
+/** A share row's key: the room, as one member. */
+const as = (roomId: string, member = MEMBER) => `${roomId}|${member}`;
 const NOW = 1_800_000_000_000;
 
 // ── The policy ──────────────────────────────────────────────────────────────
@@ -61,7 +72,7 @@ test("only the community's own portal origin, compared exactly", () => {
 
 test("a grant is for one origin, community, VTA and room, and lapses", () => {
   const at = { origin: PORTAL, hostDid: HOST, vtaDid: VTA };
-  const grants = withGrants([], at, [ROOM], NOW);
+  const grants = withGrants([], at, [{ roomId: ROOM, member: MEMBER }], NOW);
   assert.equal(roomGrantRefusal(grants, at, ROOM, NOW), null);
   assert.ok(roomGrantRefusal(grants, at, OTHER_ROOM, NOW));
   assert.ok(roomGrantRefusal(grants, { ...at, origin: "https://evil.example" }, ROOM, NOW));
@@ -85,6 +96,10 @@ interface Harness {
   asked: { op: string; [k: string]: unknown }[];
   answer: { approved: boolean; selectedRooms?: string[] };
   inner: FakePort[];
+  /** The identities the member uses at HOST, as the wallet's vault says. */
+  members: string[];
+  /** What the VTA lists: one entry per (room, member). */
+  held: { roomId: string; member?: string; actions?: string[] }[];
 }
 
 function harness(over: Partial<RoomPageBackgroundDeps> = {}): Harness {
@@ -95,6 +110,16 @@ function harness(over: Partial<RoomPageBackgroundDeps> = {}): Harness {
     asked: [],
     answer: { approved: true },
     inner: [],
+    members: [MEMBER],
+    // The live case: the VTA also holds the community's own place in ROOM, and
+    // a room only the community holds.
+    held: [
+      { roomId: ROOM, member: HOST, actions: ["read", "write", "curate", "admin"] },
+      { roomId: ROOM, member: MEMBER, actions: ["read", "write"] },
+      { roomId: OTHER_ROOM, member: MEMBER },
+      { roomId: PRIVATE_ROOM, member: MEMBER },
+      { roomId: COMMUNITY_ROOM, member: HOST, actions: ["admin"] },
+    ],
   };
   const deps: RoomPageBackgroundDeps = {
     active: async () => ({ ok: true, vta: { vtaDid: VTA } }),
@@ -104,10 +129,9 @@ function harness(over: Partial<RoomPageBackgroundDeps> = {}): Harness {
         case "portal":
           return { ok: true, result: { portalOrigin: PORTAL, endpoint: `${PORTAL}/v1/trust-tasks` } };
         case "held":
-          return {
-            ok: true,
-            result: [ROOM, OTHER_ROOM, PRIVATE_ROOM].map((roomId) => ({ roomId, epoch: 3, earliestReadableEpoch: 1 })),
-          };
+          return { ok: true, result: h.held.map((r) => ({ ...r, epoch: 3, earliestReadableEpoch: 1 })) };
+        case "members":
+          return { ok: true, result: h.members };
         case "info":
           if (op.roomId === OTHER_ROOM) return { ok: false, error: "rooms/info: notFound" };
           return {
@@ -116,7 +140,7 @@ function harness(over: Partial<RoomPageBackgroundDeps> = {}): Harness {
               roomId: op.roomId,
               visibility: op.roomId === PRIVATE_ROOM ? "private" : "attributed",
               epoch: 3,
-              member: MEMBER,
+              member: op.member,
               limits: {},
               usage: {},
             },
@@ -154,15 +178,21 @@ test("a page that is not the community's portal gets nothing, and no prompt", as
 
 test("choose shares what the member ticks, checked with the host, and never a private room", async () => {
   const h = harness();
-  h.answer = { approved: true, selectedRooms: [ROOM, OTHER_ROOM, PRIVATE_ROOM, "did:key:zNotOffered"] };
+  h.answer = {
+    approved: true,
+    selectedRooms: [as(ROOM), as(OTHER_ROOM), as(PRIVATE_ROOM), as(ROOM, HOST), "did:key:zNotOffered|did:key:z"],
+  };
   const res = await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST, suggest: ROOM });
   assert.ok(res.ok);
-  const { rooms, refused } = res.result as { rooms: { roomId: string }[]; refused: { roomId: string; reason: string }[] };
-  assert.deepEqual(rooms.map((r) => r.roomId), [ROOM]);
+  const { rooms, refused } = res.result as {
+    rooms: { roomId: string; member: string }[];
+    refused: { roomId: string; reason: string }[];
+  };
+  assert.deepEqual(rooms.map((r) => [r.roomId, r.member]), [[ROOM, MEMBER]]);
   assert.deepEqual(refused.map((r) => r.roomId).sort(), [OTHER_ROOM, PRIVATE_ROOM].sort());
   const view = h.prompts[0] as RoomShareConsentView;
   assert.equal(view.kind, "share");
-  assert.ok(view.rooms.find((r) => r.roomId === ROOM)!.suggested);
+  assert.ok(view.rooms.find((r) => r.roomId === ROOM)!.ticked);
 
   // Unticking a shared room unshares it.
   h.answer = { approved: true, selectedRooms: [] };
@@ -179,7 +209,7 @@ test("list never prompts, and reads need a share", async () => {
   assert.equal(read.ok, false);
   assert.ok(!h.asked.some((a) => a.op === "read"));
 
-  h.answer = { approved: true, selectedRooms: [ROOM] };
+  h.answer = { approved: true, selectedRooms: [as(ROOM)] };
   await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST });
   const prompts = h.prompts.length;
   const ok = await h.gates.handle(PORTAL, { op: "read", hostDid: HOST, roomId: ROOM, key: "k" });
@@ -189,7 +219,7 @@ test("list never prompts, and reads need a share", async () => {
 
 test("every note is confirmed, showing who signs and what is written", async () => {
   const h = harness();
-  h.answer = { approved: true, selectedRooms: [ROOM] };
+  h.answer = { approved: true, selectedRooms: [as(ROOM)] };
   await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST });
 
   h.answer = { approved: false };
@@ -234,7 +264,7 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
 
 async function sharedHarness(): Promise<Harness> {
   const h = harness();
-  h.answer = { approved: true, selectedRooms: [ROOM] };
+  h.answer = { approved: true, selectedRooms: [as(ROOM)] };
   await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST });
   return h;
 }
@@ -246,7 +276,7 @@ test("a download's bytes reach the page only after the whole file verified", asy
   page.receive({ kind: "get", hostDid: HOST, roomId: ROOM, key: "k" });
   await settle();
   const inner = h.inner[0]!;
-  assert.deepEqual(inner.posted[0], { kind: "get", vtaDid: VTA, roomId: ROOM, hostDid: HOST, key: "k" });
+  assert.deepEqual(inner.posted[0], { kind: "get", vtaDid: VTA, roomId: ROOM, hostDid: HOST, member: MEMBER, key: "k" });
 
   inner.receive({ kind: "provisional", data: "AAAA" });
   inner.receive({ kind: "progress", stage: "downloading", done: 1, total: 2 });
@@ -343,7 +373,7 @@ test("a retracted record is its tombstone, and an open room's cleartext says it 
 
 test("liveGrants drops other communities", () => {
   const at = { origin: PORTAL, hostDid: HOST, vtaDid: VTA };
-  const g = withGrants([], { ...at, hostDid: "did:web:other.example" }, [ROOM], NOW);
+  const g = withGrants([], { ...at, hostDid: "did:web:other.example" }, [{ roomId: ROOM, member: MEMBER }], NOW);
   assert.deepEqual(liveGrants(g, at, NOW), []);
 });
 
@@ -351,5 +381,115 @@ test("nothing a page adds to a call reaches the offscreen document", async () =>
   const h = await sharedHarness();
   await h.gates.handle(PORTAL, { op: "read", hostDid: HOST, roomId: ROOM, key: "k", host: "did:key:zElsewhere", extra: 1 });
   const read = h.asked.find((a) => a.op === "read")!;
-  assert.deepEqual(read, { op: "read", hostDid: HOST, roomId: ROOM, key: "k" });
+  assert.deepEqual(read, { op: "read", hostDid: HOST, roomId: ROOM, member: MEMBER, key: "k" });
+});
+
+// ── Two members of one room ─────────────────────────────────────────────────
+//
+// One VTA holding two members of a room — the community's own place in a room
+// the community owns, and an administrator's own membership — lists the room
+// twice. The share prompt offers it only as the identity the member uses at
+// this community, never as the community; the count says what is ticked; and
+// every request for the page names the member, so the VTA never has to choose.
+
+test("two members of one room: offered only as the member signed in here, never as the community", async () => {
+  const h = harness();
+  h.answer = { approved: false };
+  await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST, suggest: ROOM });
+  const view = h.prompts[0] as RoomShareConsentView;
+  assert.deepEqual(view.members, [MEMBER]);
+  assert.deepEqual(
+    view.rooms.filter((r) => r.roomId === ROOM).map((r) => [r.member, r.role]),
+    [[MEMBER, "member"]],
+    "one row for the room, as the member; the community's own place is not offered",
+  );
+  assert.ok(!view.rooms.some((r) => r.member === HOST));
+  assert.equal(view.others, 1, "the room only the community holds is counted, not offered");
+  const ticked = view.rooms.filter((r) => r.ticked);
+  assert.deepEqual(ticked.map((r) => r.key), [as(ROOM)]);
+  assert.equal(shareButtonWords(ticked.length), "Share 1 room");
+});
+
+test("a share names its member, and every request for the page carries it", async () => {
+  const h = harness();
+  h.answer = { approved: true, selectedRooms: [as(ROOM)] };
+  await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST });
+  const confirm = h.asked.find((a) => a.op === "info")!;
+  assert.equal(confirm.member, MEMBER, "the host confirms the room as the member, not as whoever the VTA picks");
+  const saved = h.grants.get(`${PORTAL}|${VTA}`)!;
+  assert.deepEqual(saved.map((g) => [g.roomId, g.member]), [[ROOM, MEMBER]]);
+
+  await h.gates.handle(PORTAL, { op: "info", hostDid: HOST, roomId: ROOM });
+  await h.gates.handle(PORTAL, { op: "browse", hostDid: HOST, roomId: ROOM });
+  await h.gates.handle(PORTAL, { op: "read", hostDid: HOST, roomId: ROOM, key: "k" });
+  h.answer = { approved: true };
+  await h.gates.handle(PORTAL, { op: "putNote", hostDid: HOST, roomId: ROOM, title: "t" });
+  for (const op of ["info", "browse", "read", "putNote"]) {
+    const asked = h.asked.filter((a) => a.op === op);
+    assert.ok(asked.length > 0, op);
+    assert.ok(asked.every((a) => a.member === MEMBER), `${op} names the member`);
+  }
+  const list = await h.gates.handle(PORTAL, { op: "list", hostDid: HOST });
+  assert.ok(list.ok);
+  const [view] = (list.result as { rooms: { member: string; held: boolean }[] }).rooms;
+  assert.equal(view!.member, MEMBER);
+  assert.equal(view!.held, true, "held as the member it is shared as");
+});
+
+test("two identities used here: the member picks, the page's word only chooses among them", () => {
+  const held = [
+    { roomId: ROOM, member: MEMBER },
+    { roomId: ROOM, member: MEMBER_2 },
+    { roomId: ROOM, member: HOST },
+  ];
+  const plain = shareRows(held, [MEMBER, MEMBER_2, HOST], HOST, [], { suggest: ROOM });
+  assert.deepEqual(plain.rows.map((r) => r.member), [MEMBER, MEMBER_2], "the community's DID is never an identity here");
+  assert.ok(!plain.rows.some((r) => r.ticked), "two candidates and no word on which: nothing is picked");
+
+  const hinted = shareRows(held, [MEMBER, MEMBER_2], HOST, [], { suggest: ROOM, member: MEMBER_2 });
+  assert.deepEqual(hinted.rows.filter((r) => r.ticked).map((r) => r.member), [MEMBER_2]);
+
+  const stranger = shareRows(held, [MEMBER, MEMBER_2], HOST, [], { suggest: ROOM, member: "did:key:zStranger" });
+  assert.ok(!stranger.rows.some((r) => r.ticked), "a page naming someone else picks nobody");
+  assert.ok(!stranger.rows.some((r) => r.member === "did:key:zStranger"), "and adds nobody");
+
+  // Ticking a room as one identity unticks it as the other; the count follows the ticks.
+  let ticked = toggleShareRow(plain.rows, new Set(), as(ROOM, MEMBER));
+  ticked = toggleShareRow(plain.rows, ticked, as(ROOM, MEMBER_2));
+  assert.deepEqual([...ticked], [as(ROOM, MEMBER_2)]);
+  assert.equal(shareButtonWords(ticked.size), "Share 1 room");
+
+  // An answer naming the room as both is refused rather than resolved.
+  const both = selectedShares(plain.rows, [as(ROOM, MEMBER), as(ROOM, MEMBER_2)]);
+  assert.equal(both.ok, false);
+  const one = selectedShares(plain.rows, [as(ROOM, MEMBER_2), as(ROOM, HOST)]);
+  assert.deepEqual(one, { ok: true, shares: [{ roomId: ROOM, member: MEMBER_2 }] });
+});
+
+test("no identity used here: nothing is offered", async () => {
+  const h = harness();
+  h.members = [];
+  h.answer = { approved: true, selectedRooms: [as(ROOM)] };
+  const res = await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST });
+  assert.ok(res.ok);
+  const view = h.prompts[0] as RoomShareConsentView;
+  assert.deepEqual(view.rooms, []);
+  assert.deepEqual((res.result as { rooms: unknown[] }).rooms, []);
+});
+
+test("the identities used at a community are its vault entries' principals, never the community", () => {
+  const entries = [
+    { secretKind: "didSelfIssued", principalDid: MEMBER, targets: [{ kind: "did", did: HOST }] },
+    { secretKind: "didSelfIssued", principalDid: HOST, targets: [{ kind: "did", did: HOST }] },
+    { secretKind: "didSelfIssued", principalDid: MEMBER_2, targets: [{ kind: "did", did: "did:web:elsewhere.example" }] },
+    { secretKind: "password", principalDid: MEMBER_2, targets: [{ kind: "did", did: HOST }] },
+  ];
+  assert.deepEqual(membersAt(entries, HOST), [MEMBER]);
+});
+
+test("a share made before shares named a member is asked for again", () => {
+  const at = { origin: PORTAL, hostDid: HOST, vtaDid: VTA };
+  const old = [{ ...at, roomId: ROOM, grantedAt: NOW, expiresAt: NOW + 1000 }] as unknown as RoomGrant[];
+  assert.deepEqual(liveGrants(old, at, NOW), []);
+  assert.ok(roomGrantRefusal(old, at, ROOM, NOW));
 });

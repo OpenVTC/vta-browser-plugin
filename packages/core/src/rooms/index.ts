@@ -76,8 +76,41 @@ async function call<Res>(
   });
 }
 
-/** One room this VTA can open. */
-export type HeldRoom = RoomsKeysListResponsePayload["rooms"][number];
+import { ROOMS_MEMBER_EXT, memberExt } from "./member.js";
+export { ROOMS_MEMBER_EXT, memberExt };
+
+/**
+ * One room this VTA can open, **for one member**.
+ *
+ * `member` is the persona DID the entry is held as, from the listing's
+ * `ext["org.openvtc.rooms"].held` (index for index with `rooms`). `context` is
+ * the trust context its key lives in, and `actions` what the room's grant to it
+ * confers — an `admin` grant is the room's administering place (a community's
+ * own, for a room it owns), anything else a member's. Both are descriptions,
+ * never authority: the host decides what a member may do.
+ */
+export type HeldRoom = RoomsKeysListResponsePayload["rooms"][number] & {
+  member?: string;
+  context?: string;
+  actions?: string[];
+};
+
+/** Whose each `rooms/keys/list` entry is, read member by member from `ext`. */
+function heldBy(ext: unknown, i: number): { member?: string; context?: string; actions?: string[] } {
+  const held = (ext as Record<string, { held?: unknown } | undefined> | undefined)?.[ROOMS_MEMBER_EXT]?.held;
+  const h = Array.isArray(held) ? (held[i] as Record<string, unknown> | undefined) : undefined;
+  if (!h || typeof h !== "object") return {};
+  const out: { member?: string; context?: string; actions?: string[] } = {};
+  if (typeof h.member === "string" && h.member.startsWith("did:")) out.member = h.member;
+  if (typeof h.context === "string") out.context = h.context;
+  if (Array.isArray(h.actions)) out.actions = h.actions.filter((a): a is string => typeof a === "string");
+  return out;
+}
+
+/** A row key for a held room: the room and the member it is held as. */
+export function heldRoomKey(r: Pick<HeldRoom, "roomId" | "member">): string {
+  return `${r.roomId}|${r.member ?? ""}`;
+}
 
 /**
  * The rooms this VTA holds keys for — **custody, not membership**.
@@ -105,11 +138,13 @@ export async function roomsKeysList(
     "rooms/keys/list/0.1",
     {} satisfies RoomsKeysListPayload,
   );
-  return res.rooms ?? [];
+  return (res.rooms ?? []).map((r, i) => ({ ...r, ...heldBy(res.ext, i) }));
 }
 
 export interface RoomsOpenParams extends RoomsCaller {
   roomId: string;
+  /** The member to open as, where the VTA holds more than one of the room ({@link memberExt}). */
+  member?: string;
   key: string;
   version: number;
   sealed: { ciphertext: string; nonce: string; epoch: number };
@@ -127,14 +162,14 @@ export async function roomsKeysOpen(
   sender: TrustTaskSender,
   params: RoomsOpenParams,
 ): Promise<string> {
-  const { holder, service, ...rest } = params;
+  const { holder, service, member, ...rest } = params;
   const res = await call<RoomsKeysOpenResponsePayload>(
     sender,
     { holder, service },
     KEYS_OPEN,
     KEYS_OPEN_RESPONSE,
     "rooms/keys/open/0.1",
-    rest as unknown as RoomsKeysOpenPayload,
+    { ...rest, ...memberExt(member) } as unknown as RoomsKeysOpenPayload,
   );
   return res.plaintext;
 }
@@ -150,6 +185,8 @@ export interface RoomsSealParams extends RoomsCaller {
   version: number;
   /** The record body, base64url. */
   plaintext: string;
+  /** The member whose group seals it, where the VTA holds more than one of the room. */
+  member?: string;
 }
 
 /** Seal a record body for storage. Does not write — see the module note. */
@@ -157,14 +194,14 @@ export async function roomsKeysSeal(
   sender: TrustTaskSender,
   params: RoomsSealParams,
 ): Promise<RoomsKeysSealResponsePayload["sealed"]> {
-  const { holder, service, ...rest } = params;
+  const { holder, service, member, ...rest } = params;
   const res = await call<RoomsKeysSealResponsePayload>(
     sender,
     { holder, service },
     KEYS_SEAL,
     KEYS_SEAL_RESPONSE,
     "rooms/keys/seal/0.1",
-    rest as unknown as RoomsKeysSealPayload,
+    { ...rest, ...memberExt(member) } as unknown as RoomsKeysSealPayload,
   );
   return res.sealed;
 }
@@ -305,13 +342,14 @@ import {
  */
 export async function roomsKeysBackfill(
   sender: TrustTaskSender,
-  params: RoomsCaller & { roomId: string; host: string; fromEpoch?: number; limit?: number },
+  params: RoomsCaller & { roomId: string; host: string; fromEpoch?: number; limit?: number; member?: string },
 ): Promise<RoomsKeysBackfillResponsePayload> {
   const payload: RoomsKeysBackfillPayload = {
     roomId: params.roomId,
     host: params.host,
     ...(params.fromEpoch !== undefined ? { fromEpoch: params.fromEpoch } : {}),
     ...(params.limit !== undefined ? { limit: params.limit } : {}),
+    ...memberExt(params.member),
   };
   return call<RoomsKeysBackfillResponsePayload>(
     sender,
@@ -360,12 +398,13 @@ import {
  */
 export async function roomsKeysRead(
   sender: TrustTaskSender,
-  params: RoomsCaller & { roomId: string; host: string; key: string },
+  params: RoomsCaller & { roomId: string; host: string; key: string; member?: string },
 ): Promise<RoomsKeysReadResponsePayload> {
   const payload: RoomsKeysReadPayload = {
     roomId: params.roomId,
     host: params.host,
     key: params.key,
+    ...memberExt(params.member),
   };
   return call<RoomsKeysReadResponsePayload>(
     sender,
@@ -406,6 +445,8 @@ export async function roomsKeysBrowse(
     prefix?: string;
     sinceVersion?: number;
     limit?: number;
+    /** The member to read as, where the VTA holds more than one of the room. */
+    member?: string;
   },
 ): Promise<RoomsKeysBrowseResponsePayload> {
   const payload: RoomsKeysBrowsePayload = {
@@ -414,6 +455,7 @@ export async function roomsKeysBrowse(
     ...(params.prefix !== undefined ? { prefix: params.prefix } : {}),
     ...(params.sinceVersion !== undefined ? { sinceVersion: params.sinceVersion } : {}),
     ...(params.limit !== undefined ? { limit: params.limit } : {}),
+    ...memberExt(params.member),
   };
   return call<RoomsKeysBrowseResponsePayload>(
     sender,
@@ -427,9 +469,10 @@ export async function roomsKeysBrowse(
 
 export async function roomsKeysChain(
   sender: TrustTaskSender,
-  params: RoomsCaller & { roomId: string; links: EpochLink[] },
+  params: RoomsCaller & { roomId: string; links: EpochLink[]; member?: string },
 ): Promise<RoomsKeysChainResponsePayload> {
   const payload: RoomsKeysChainPayload = {
+    ...memberExt(params.member),
     roomId: params.roomId,
     // `links` is `[EpochLink, ...EpochLink[]]` — the schema's `minItems: 1`. A
     // caller with nothing to deliver must not send an empty delivery, so the

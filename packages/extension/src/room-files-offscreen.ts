@@ -196,6 +196,9 @@ async function run(
     holder: { did: signing.did },
     vta: { did: open.vtaDid, sender: vtaSender },
     host: { did: open.hostDid, sender: host.completed },
+    // Every request names the member, so a VTA holding two members of the
+    // room is never asked to choose between them.
+    ...(open.member !== undefined ? { member: open.member } : {}),
     uploadChannel: host.signedBy,
     cipher,
     onProgress: (p) => post({ kind: "progress", ...p }),

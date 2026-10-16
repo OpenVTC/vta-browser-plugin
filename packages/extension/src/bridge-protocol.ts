@@ -630,8 +630,9 @@ export interface RuntimeConsentResult {
    *  treats an approval that arrives without it as a denial rather than
    *  guessing a persona on the operator's behalf. */
   selectedDid?: string;
-  /** Room-share prompt only: the rooms the member ticked to share with the
-   *  page's origin (`data-rooms-files.md` §8.5). Ignored on a denial. */
+  /** Room-share prompt only: the rows the member ticked to share with the
+   *  page's origin (`data-rooms-files.md` §8.5), each `heldRoomKey` — the room
+   *  and the member it is shared as. Ignored on a denial. */
   selectedRooms?: string[];
 }
 
@@ -2424,7 +2425,10 @@ export const RUNTIME_ROOMS_PAGE = "vta-wallet/rooms-page" as const;
 
 export type RoomsPageOp =
   | { op: "list"; hostDid: string }
-  | { op: "choose"; hostDid: string; suggest?: string }
+  /** `member` is the DID the page says is signed in. A hint only: the wallet
+   *  offers just the identities it holds for this community, and uses this to
+   *  pre-tick among them, never to add one. */
+  | { op: "choose"; hostDid: string; suggest?: string; member?: string }
   | { op: "forget"; hostDid: string; roomId: string }
   | { op: "info"; hostDid: string; roomId: string }
   | { op: "browse"; hostDid: string; roomId: string; prefix?: string; sinceVersion?: number }
@@ -2451,6 +2455,8 @@ export type RuntimeRoomsPageResponse = { ok: true; result: unknown } | { ok: fal
 /** A room the member shared with this page's origin. */
 export interface PageRoomView {
   roomId: string;
+  /** The member (persona DID) the wallet acts as in this room for this page. */
+  member: string;
   /** The epoch the member's VTA is at, and the earliest it can read. */
   epoch?: number;
   earliestReadableEpoch?: number;
@@ -2907,15 +2913,20 @@ export const OFFSCREEN_ROOMS_PAGE = "offscreen/rooms-page" as const;
 export type OffscreenRoomsPageOp =
   /** The host's portal origin and Trust-Task endpoint, from its verified DID document. */
   | { op: "portal"; hostDid: string }
-  /** The rooms the member's VTA holds keys for. */
+  /** The rooms the member's VTA holds keys for, one entry per (room, member). */
   | { op: "held" }
-  | { op: "info"; hostDid: string; roomId: string }
-  | { op: "browse"; hostDid: string; roomId: string; prefix?: string; sinceVersion?: number }
-  | { op: "read"; hostDid: string; roomId: string; key: string }
+  /** The identities the member uses at `hostDid`: the principals of their
+   *  `didSelfIssued` vault entries naming it — never `hostDid` itself. */
+  | { op: "members"; hostDid: string }
+  // `member`: the persona the request acts as — the share's, never the page's.
+  | { op: "info"; hostDid: string; roomId: string; member: string }
+  | { op: "browse"; hostDid: string; roomId: string; member: string; prefix?: string; sinceVersion?: number }
+  | { op: "read"; hostDid: string; roomId: string; member: string; key: string }
   | {
       op: "putNote";
       hostDid: string;
       roomId: string;
+      member: string;
       title: string;
       body?: string;
       description?: string;
@@ -2944,6 +2955,9 @@ interface RoomFilesTarget {
   restBaseUrl?: string;
   roomId: string;
   hostDid: string;
+  /** The member (persona DID) to act as. Required where the VTA holds more
+   *  than one member of the room: it refuses rather than choose. */
+  member?: string;
 }
 
 /** console → offscreen, once, as the port's first message. */

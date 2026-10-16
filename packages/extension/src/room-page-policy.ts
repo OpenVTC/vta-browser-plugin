@@ -21,6 +21,19 @@
 // share with this origin. A share is a **grant**: (origin, host, VTA, room),
 // for 30 days, revocable. Reads ride it; every write is confirmed on its own.
 //
+// ## As whom: the member signed in there, never the community itself
+//
+// One VTA can hold two members of one room: an administrator whose VTA also
+// holds the community's own place in a room the community owns, or a person
+// with two personas in it. The VTA lists the room once per member and refuses
+// to choose between them, so a share names the member too — the persona the
+// wallet acts as for that page — and every request made for the page names it.
+// Only identities the member uses at this community are offered (their
+// `didSelfIssued` vault entries naming its DID, which is how the wallet signs
+// in there), and never the community's own DID: a portal is the community's
+// page, and acting there as the community would hand the page the community's
+// standing in the room. Where more than one is left, the member picks.
+//
 // ## What a page may not have
 //
 // Never a key, a presentation, a signed document, the agent's or the host's
@@ -49,6 +62,8 @@ export interface RoomGrant {
   /** The member's VTA, which holds the room's keys. */
   vtaDid: string;
   roomId: string;
+  /** The member (persona DID) the wallet acts as in this room for this page. */
+  member: string;
   grantedAt: number;
   expiresAt: number;
 }
@@ -58,15 +73,44 @@ export function grantsKey(origin: string, vtaDid: string): string {
   return `${ROOM_GRANTS_PREFIX}${vtaDid}|${origin}`;
 }
 
-/** The grants still in force for this origin, community and VTA. */
+/**
+ * The grants still in force for this origin, community and VTA. A grant that
+ * names no member (made before shares named one) is not in force: which member
+ * it meant is not something to guess, so the member is asked again.
+ */
 export function liveGrants(
   grants: readonly RoomGrant[],
   at: { origin: string; hostDid: string; vtaDid: string },
   now: number,
 ): RoomGrant[] {
   return grants.filter(
-    (g) => g.origin === at.origin && g.hostDid === at.hostDid && g.vtaDid === at.vtaDid && g.expiresAt > now,
+    (g) =>
+      g.origin === at.origin &&
+      g.hostDid === at.hostDid &&
+      g.vtaDid === at.vtaDid &&
+      g.expiresAt > now &&
+      typeof g.member === "string" &&
+      g.member.startsWith("did:"),
   );
+}
+
+/** The live grant of `roomId` to this page, or a refusal fit for the page. */
+export function roomGrant(
+  grants: readonly RoomGrant[],
+  at: { origin: string; hostDid: string; vtaDid: string },
+  roomId: string,
+  now: number,
+): { ok: true; grant: RoomGrant } | { ok: false; error: string } {
+  const grant = liveGrants(grants, at, now).find((g) => g.roomId === roomId);
+  if (grant) return { ok: true, grant };
+  // One answer whether the room was never shared, has lapsed, or does not
+  // exist: the page learns nothing about rooms it was not given.
+  return {
+    ok: false,
+    error:
+      `${at.origin} has not been given that room. Ask the member to share it ` +
+      `(window.vtaWallet.rooms.choose), which they do in their wallet's own window.`,
+  };
 }
 
 /** Why `roomId` may not be used by this page, or `null` when it may. */
@@ -76,23 +120,18 @@ export function roomGrantRefusal(
   roomId: string,
   now: number,
 ): string | null {
-  if (liveGrants(grants, at, now).some((g) => g.roomId === roomId)) return null;
-  // One answer whether the room was never shared, has lapsed, or does not
-  // exist: the page learns nothing about rooms it was not given.
-  return (
-    `${at.origin} has not been given that room. Ask the member to share it ` +
-    `(window.vtaWallet.rooms.choose), which they do in their wallet's own window.`
-  );
+  const r = roomGrant(grants, at, roomId, now);
+  return r.ok ? null : r.error;
 }
 
-/** `grants` with `roomIds` granted afresh to `at`, each for {@link ROOM_GRANT_TTL_MS}. */
+/** `grants` with each of `shares` granted afresh to `at`, for {@link ROOM_GRANT_TTL_MS}. One grant per room. */
 export function withGrants(
   grants: readonly RoomGrant[],
   at: { origin: string; hostDid: string; vtaDid: string },
-  roomIds: readonly string[],
+  shares: readonly { roomId: string; member: string }[],
   now: number,
 ): RoomGrant[] {
-  const fresh = new Set(roomIds);
+  const fresh = new Map(shares.map((s) => [s.roomId, s.member]));
   const kept = grants.filter(
     (g) =>
       g.expiresAt > now &&
@@ -100,7 +139,13 @@ export function withGrants(
   );
   return [
     ...kept,
-    ...[...fresh].map((roomId) => ({ ...at, roomId, grantedAt: now, expiresAt: now + ROOM_GRANT_TTL_MS })),
+    ...[...fresh].map(([roomId, member]) => ({
+      ...at,
+      roomId,
+      member,
+      grantedAt: now,
+      expiresAt: now + ROOM_GRANT_TTL_MS,
+    })),
   ];
 }
 
@@ -171,7 +216,8 @@ export function roomsPageParamsRefusal(raw: unknown): string | null {
   const first =
     did(op.hostDid, "hostDid") ??
     (op.op === "list" || op.op === "choose" ? null : did(op.roomId, "roomId")) ??
-    (op.op === "choose" && op.suggest !== undefined ? did(op.suggest, "suggest") : null);
+    (op.op === "choose" && op.suggest !== undefined ? did(op.suggest, "suggest") : null) ??
+    (op.op === "choose" && op.member !== undefined ? did(op.member, "member") : null);
   if (first) return first;
   switch (op.op) {
     case "browse":
@@ -218,13 +264,35 @@ export function roomFilesPageOpenRefusal(raw: unknown): string | null {
 
 // ── The prompts ─────────────────────────────────────────────────────────────
 
+/** One row of the share prompt: a room, as one member. */
+export interface RoomShareRow {
+  /** `heldRoomKey`: the room and the member. What the prompt sends back. */
+  key: string;
+  roomId: string;
+  /** The persona DID the wallet would act as. */
+  member: string;
+  /** The trust context the member's key lives in, when the VTA said. */
+  context?: string;
+  /** The member's place in the room: one that administers it, or a member. */
+  role: "administers" | "member" | "unknown";
+  shared: boolean;
+  /** Pre-ticked: shared already, or the room the page linked to as the member signed in there. */
+  ticked: boolean;
+}
+
 /** What the share prompt shows. Stored in session storage under the consent id. */
 export interface RoomShareConsentView {
   kind: "share";
   origin: string;
   hostDid: string;
-  /** Every room the member's VTA holds, with whether it is already shared here. */
-  rooms: { roomId: string; shared: boolean; suggested: boolean }[];
+  /** Every room the member's VTA holds as an identity they use at this
+   *  community — one row per (room, member). */
+  rooms: RoomShareRow[];
+  /** The identities the member uses at this community, as the wallet knows them. */
+  members: string[];
+  /** Rooms the VTA holds only as other identities (the community's own among
+   *  them): not offered here, only counted, so the member knows why. */
+  others: number;
   /** The host's Trust-Task endpoint origin when the wallet may not reach it yet:
    *  the prompt asks for it in the Share click. */
   needsOrigin?: string;
@@ -249,6 +317,134 @@ export function excerpt(body: string | undefined, n = 280): string {
   if (!body) return "";
   const chars = [...body];
   return chars.length <= n ? body : `${chars.slice(0, n).join("")}…`;
+}
+
+/** What the room's grant to a member confers, in one word. */
+export function roleOf(actions: readonly string[] | undefined): RoomShareRow["role"] {
+  if (actions === undefined) return "unknown";
+  return actions.includes("admin") ? "administers" : "member";
+}
+
+/** The key of a share row: the room and the member (`heldRoomKey`). */
+export function shareRowKey(roomId: string, member: string): string {
+  return `${roomId}|${member}`;
+}
+
+/**
+ * The share prompt's rows.
+ *
+ * `held` is the VTA's listing, one entry per (room, member). `members` the
+ * identities the member uses at `hostDid` (their vault entries naming it).
+ * Offered: an entry held as one of those identities — never as `hostDid`
+ * itself, and never one whose member the VTA did not say. Pre-ticked: what is
+ * shared now, as the member it is shared as; and the room the page suggested,
+ * as the member the page says is signed in, or as the only identity offered
+ * for it. Never two rows of one room.
+ */
+export function shareRows(
+  held: readonly { roomId: string; member?: string; context?: string; actions?: string[] }[],
+  members: readonly string[],
+  hostDid: string,
+  live: readonly RoomGrant[],
+  hint: { suggest?: string; member?: string },
+): { rows: RoomShareRow[]; others: number } {
+  const usable = new Set(members.filter((m) => m !== hostDid));
+  const rows: RoomShareRow[] = [];
+  const otherRooms = new Set<string>();
+  const seen = new Set<string>();
+  for (const h of held) {
+    if (!h.member || !usable.has(h.member)) {
+      otherRooms.add(h.roomId);
+      continue;
+    }
+    const key = shareRowKey(h.roomId, h.member);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const shared = live.some((g) => g.roomId === h.roomId && g.member === h.member);
+    rows.push({
+      key,
+      roomId: h.roomId,
+      member: h.member,
+      ...(h.context !== undefined ? { context: h.context } : {}),
+      role: roleOf(h.actions),
+      shared,
+      ticked: shared,
+    });
+  }
+  if (hint.suggest !== undefined && !rows.some((r) => r.roomId === hint.suggest && r.ticked)) {
+    const forRoom = rows.filter((r) => r.roomId === hint.suggest);
+    const pick =
+      forRoom.length === 1 ? forRoom[0] : forRoom.find((r) => hint.member !== undefined && r.member === hint.member);
+    if (pick) pick.ticked = true;
+  }
+  const offered = new Set(rows.map((r) => r.roomId));
+  return { rows, others: [...otherRooms].filter((r) => !offered.has(r)).length };
+}
+
+/**
+ * The shares a share prompt's answer makes: the rows ticked, each one the
+ * prompt offered — a key it did not offer is ignored — and at most one member
+ * per room. Two members of one room ticked is refused: the page acts as one.
+ */
+export function selectedShares(
+  rows: readonly RoomShareRow[],
+  selected: readonly string[],
+): { ok: true; shares: { roomId: string; member: string }[] } | { ok: false; error: string } {
+  const byKey = new Map(rows.map((r) => [r.key, r]));
+  const shares = new Map<string, string>();
+  for (const key of new Set(selected)) {
+    const row = byKey.get(key);
+    if (!row) continue;
+    if (shares.has(row.roomId) && shares.get(row.roomId) !== row.member) {
+      return { ok: false, error: `${row.roomId} was ticked as two members; a page uses a room as one` };
+    }
+    shares.set(row.roomId, row.member);
+  }
+  return { ok: true, shares: [...shares].map(([roomId, member]) => ({ roomId, member })) };
+}
+
+/** The ticked rows after `key` is toggled: one member per room, so ticking a
+ *  room as one member unticks it as any other. */
+export function toggleShareRow(rows: readonly RoomShareRow[], ticked: ReadonlySet<string>, key: string): Set<string> {
+  const next = new Set(ticked);
+  if (next.has(key)) {
+    next.delete(key);
+    return next;
+  }
+  const row = rows.find((r) => r.key === key);
+  if (!row) return next;
+  for (const other of rows) if (other.roomId === row.roomId) next.delete(other.key);
+  next.add(key);
+  return next;
+}
+
+/** The share button's words: counted from the ticks, so it says what is ticked. */
+export function shareButtonWords(ticked: number): string {
+  return `Share ${ticked === 1 ? "1 room" : `${ticked} rooms`}`;
+}
+
+/**
+ * The identities a member uses at `hostDid`: the principals of their
+ * `didSelfIssued` vault entries naming it — how the wallet signs in there —
+ * never `hostDid` itself.
+ */
+export function membersAt(
+  entries: readonly { secretKind: string; principalDid?: string; targets: ReadonlyArray<{ kind: string; did?: string }> }[],
+  hostDid: string,
+): string[] {
+  const out = new Set<string>();
+  for (const e of entries) {
+    if (
+      e.secretKind === "didSelfIssued" &&
+      typeof e.principalDid === "string" &&
+      e.principalDid.startsWith("did:") &&
+      e.principalDid !== hostDid &&
+      e.targets.some((t) => t.kind === "did" && t.did === hostDid)
+    ) {
+      out.add(e.principalDid);
+    }
+  }
+  return [...out];
 }
 
 /** Why a room may not be shared with a portal page, or `null` when it may. */

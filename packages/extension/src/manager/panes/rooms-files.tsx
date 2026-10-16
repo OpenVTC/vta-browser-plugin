@@ -118,7 +118,7 @@ export function PutRoomFile({
       try {
         if (!(await allowed)) throw new Error(REFUSED_HOST);
         const res = await putRoomFileFromConsole(
-          { roomId: room.roomId, hostDid: host },
+          { roomId: room.roomId, hostDid: host, ...(room.member !== undefined ? { member: room.member } : {}) },
           file,
           title.trim() ? { title: title.trim() } : {},
           { signal: ctl.signal, onProgress: (p) => setLine(describeProgress(p)) },
@@ -229,10 +229,14 @@ export function GetRoomFile({
     void (async () => {
       try {
         if (!(await allowed)) throw new Error(REFUSED_HOST);
-        const res = await getRoomFileIntoConsole({ roomId: room.roomId, hostDid: host }, recordKey, {
-          signal: ctl.signal,
-          onProgress: (p) => setLine(describeProgress(p)),
-        });
+        const res = await getRoomFileIntoConsole(
+          { roomId: room.roomId, hostDid: host, ...(room.member !== undefined ? { member: room.member } : {}) },
+          recordKey,
+          {
+            signal: ctl.signal,
+            onProgress: (p) => setLine(describeProgress(p)),
+          },
+        );
         setGot(res);
         save(res);
       } catch (e) {

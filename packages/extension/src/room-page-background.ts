@@ -36,15 +36,27 @@ import {
   liveGrants,
   portalRefusal,
   roomFilesPageOpenRefusal,
-  roomGrantRefusal,
+  roomGrant,
   roomsPageParamsRefusal,
+  selectedShares,
   shareRefusal,
+  shareRows,
   withGrants,
   withoutGrant,
   type RoomGrant,
   type RoomShareConsentView,
   type RoomWriteConsentView,
 } from "./room-page-policy.js";
+
+/** One entry of the VTA's listing, as the offscreen document reports it. */
+interface HeldEntry {
+  roomId: string;
+  epoch: number;
+  earliestReadableEpoch: number;
+  member?: string;
+  context?: string;
+  actions?: string[];
+}
 
 /** The active VTA connection, as the background reads it. */
 export interface ActiveVta {
@@ -116,11 +128,12 @@ export class RoomPageGates {
     return { vta: active.vta, endpoint };
   }
 
-  /** Gate 3. */
-  private async granted(origin: string, hostDid: string, vta: ActiveVta, roomId: string): Promise<void> {
+  /** Gate 3. Returns the member the share acts as: every request for the page names it. */
+  private async granted(origin: string, hostDid: string, vta: ActiveVta, roomId: string): Promise<string> {
     const grants = await this.deps.loadGrants(origin, vta.vtaDid);
-    const refusal = roomGrantRefusal(grants, { origin, hostDid, vtaDid: vta.vtaDid }, roomId, this.deps.now());
-    if (refusal) throw new RoomPageRefusal(refusal);
+    const r = roomGrant(grants, { origin, hostDid, vtaDid: vta.vtaDid }, roomId, this.deps.now());
+    if (!r.ok) throw new RoomPageRefusal(r.error);
+    return r.grant.member;
   }
 
   private async offscreen(vta: ActiveVta, op: OffscreenRoomsPageOp): Promise<unknown> {
@@ -147,7 +160,7 @@ export class RoomPageGates {
         return { rooms: await this.views(origin, p.hostDid, vta) };
       }
       case "choose":
-        return this.choose(origin, p.hostDid, p.suggest);
+        return this.choose(origin, p.hostDid, { suggest: p.suggest, member: p.member });
       case "forget": {
         const { vta } = await this.atPortal(origin, p.hostDid, { needReach: false });
         const grants = await this.deps.loadGrants(origin, vta.vtaDid);
@@ -160,9 +173,9 @@ export class RoomPageGates {
       case "browse":
       case "read": {
         const { vta } = await this.atPortal(origin, p.hostDid, { needReach: true });
-        await this.granted(origin, p.hostDid, vta, p.roomId);
+        const member = await this.granted(origin, p.hostDid, vta, p.roomId);
         // Rebuilt member by member: nothing the page added rides along.
-        const at = { hostDid: p.hostDid, roomId: p.roomId };
+        const at = { hostDid: p.hostDid, roomId: p.roomId, member };
         return this.offscreen(
           vta,
           p.op === "info"
@@ -179,8 +192,13 @@ export class RoomPageGates {
       }
       case "putNote": {
         const { vta } = await this.atPortal(origin, p.hostDid, { needReach: true });
-        await this.granted(origin, p.hostDid, vta, p.roomId);
-        const info = (await this.offscreen(vta, { op: "info", hostDid: p.hostDid, roomId: p.roomId })) as PageRoomInfoView;
+        const member = await this.granted(origin, p.hostDid, vta, p.roomId);
+        const info = (await this.offscreen(vta, {
+          op: "info",
+          hostDid: p.hostDid,
+          roomId: p.roomId,
+          member,
+        })) as PageRoomInfoView;
         const decision = await this.deps.prompt({
           kind: "write",
           origin,
@@ -195,6 +213,7 @@ export class RoomPageGates {
           op: "putNote",
           hostDid: p.hostDid,
           roomId: p.roomId,
+          member,
           title: p.title,
           ...(p.body !== undefined ? { body: p.body } : {}),
           ...(p.description !== undefined ? { description: p.description } : {}),
@@ -212,15 +231,14 @@ export class RoomPageGates {
       this.deps.now(),
     );
     if (grants.length === 0) return [];
-    const held = new Map(
-      ((await this.offscreen(vta, { op: "held" })) as { roomId: string; epoch: number; earliestReadableEpoch: number }[]).map(
-        (r) => [r.roomId, r],
-      ),
-    );
+    const held = (await this.offscreen(vta, { op: "held" })) as HeldEntry[];
     return grants.map((g) => {
-      const h = held.get(g.roomId);
+      // Held as the member it is shared as: the same room held as somebody
+      // else is not this share's.
+      const h = held.find((r) => r.roomId === g.roomId && r.member === g.member);
       return {
         roomId: g.roomId,
+        member: g.member,
         held: h !== undefined,
         ...(h ? { epoch: h.epoch, earliestReadableEpoch: h.earliestReadableEpoch } : {}),
         sharedAt: new Date(g.grantedAt).toISOString(),
@@ -232,43 +250,54 @@ export class RoomPageGates {
   private async choose(
     origin: string,
     hostDid: string,
-    suggest: string | undefined,
+    hint: { suggest?: string | undefined; member?: string | undefined },
   ): Promise<{ rooms: PageRoomView[]; refused: { roomId: string; reason: string }[] }> {
     const { vta, endpoint } = await this.atPortal(origin, hostDid, { needReach: false });
     const at = { origin, hostDid, vtaDid: vta.vtaDid };
     const now = this.deps.now();
     const grants = await this.deps.loadGrants(origin, vta.vtaDid);
-    const shared = new Set(liveGrants(grants, at, now).map((g) => g.roomId));
-    const held = (await this.offscreen(vta, { op: "held" })) as { roomId: string }[];
+    const held = (await this.offscreen(vta, { op: "held" })) as HeldEntry[];
+    // Who the member is at this community, by the wallet's own record — the
+    // page's word only picks among these, never adds to them.
+    const members = (await this.offscreen(vta, { op: "members", hostDid })) as string[];
+    const { rows, others } = shareRows(held, members, hostDid, liveGrants(grants, at, now), {
+      ...(hint.suggest !== undefined ? { suggest: hint.suggest } : {}),
+      ...(hint.member !== undefined ? { member: hint.member } : {}),
+    });
     const reach = await this.deps.canReach(endpoint);
     const decision = await this.deps.prompt({
       kind: "share",
       origin,
       hostDid,
-      rooms: held.map((r) => ({ roomId: r.roomId, shared: shared.has(r.roomId), suggested: r.roomId === suggest })),
+      rooms: rows,
+      members,
+      others,
       ...(reach ? {} : { needsOrigin: new URL(endpoint).origin }),
     });
     if (!decision.approved) return { rooms: await this.views(origin, hostDid, vta), refused: [] };
 
-    // Only rooms the window offered: a selection naming anything else is ignored.
-    const offered = new Set(held.map((r) => r.roomId));
-    const selected = [...new Set((decision.selectedRooms ?? []).filter((r) => offered.has(r)))];
+    // Only rows the window offered: a selection naming anything else is ignored.
+    const picked = selectedShares(rows, decision.selectedRooms ?? []);
+    if (!picked.ok) throw new RoomPageRefusal(picked.error);
     const refused: { roomId: string; reason: string }[] = [];
-    const ok: string[] = [];
-    for (const roomId of selected) {
-      // Confirm with the host, as the member, that it holds the room — and
+    const ok: { roomId: string; member: string }[] = [];
+    for (const share of picked.shares) {
+      // Confirm with the host, as that member, that it holds the room — and
       // read its tier. Only for rooms the member just chose to share here.
-      const res = await this.deps.offscreen(vta, { op: "info", hostDid, roomId });
+      const res = await this.deps.offscreen(vta, { op: "info", hostDid, ...share });
       if (!res.ok) {
-        refused.push({ roomId, reason: `the community could not confirm it holds this room: ${res.error}` });
+        refused.push({
+          roomId: share.roomId,
+          reason: `the community could not confirm it holds this room for ${share.member}: ${res.error}`,
+        });
         continue;
       }
       const why = shareRefusal((res.result as PageRoomInfoView).visibility);
       if (why) {
-        refused.push({ roomId, reason: `not shared: ${why}` });
+        refused.push({ roomId: share.roomId, reason: `not shared: ${why}` });
         continue;
       }
-      ok.push(roomId);
+      ok.push(share);
     }
     // The selection is the whole of what is shared here now: an unticked room is unshared.
     let next = grants.filter((g) => !(g.origin === origin && g.hostDid === hostDid && g.vtaDid === vta.vtaDid));
@@ -349,9 +378,10 @@ export class RoomPageGates {
     if (malformed) return finish({ kind: "failed", error: malformed });
     const o = raw as RoomFilesPageOpen;
     let vta: ActiveVta;
+    let member: string;
     try {
       ({ vta } = await this.atPortal(origin, o.hostDid, { needReach: true }));
-      await this.granted(origin, o.hostDid, vta, o.roomId);
+      member = await this.granted(origin, o.hostDid, vta, o.roomId);
     } catch (e) {
       return finish({ kind: "failed", error: e instanceof Error ? e.message : String(e) });
     }
@@ -360,10 +390,16 @@ export class RoomPageGates {
       ...(vta.restBaseUrl ? { restBaseUrl: vta.restBaseUrl } : {}),
       roomId: o.roomId,
       hostDid: o.hostDid,
+      member,
     };
 
     if (o.kind === "put") {
-      const info = (await this.offscreen(vta, { op: "info", hostDid: o.hostDid, roomId: o.roomId })) as PageRoomInfoView;
+      const info = (await this.offscreen(vta, {
+        op: "info",
+        hostDid: o.hostDid,
+        roomId: o.roomId,
+        member,
+      })) as PageRoomInfoView;
       const decision = await this.deps.prompt({
         kind: "write",
         origin,

@@ -67,7 +67,10 @@ export function RoomShares() {
                 <code style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all", color: c.muted }}>
                   {grant.roomId}
                 </code>
-                <span style={{ fontSize: t.xs, color: c.muted }}>
+                <span style={{ fontSize: t.xs, color: c.muted, wordBreak: "break-all" }}>
+                  {typeof grant.member === "string"
+                    ? `as ${grant.member} · `
+                    : "shared before shares named an identity: the portal will ask again · "}
                   until {new Date(grant.expiresAt).toLocaleDateString()}
                 </span>
               </div>

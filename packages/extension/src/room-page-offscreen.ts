@@ -29,6 +29,7 @@ import {
 import { RoomHostChannel, verifyRecordBody } from "@openvtc/pnm-core/rooms/files";
 import { base64url } from "@openvtc/vti-didcomm-js";
 
+import { membersAt } from "./room-page-policy.js";
 import type {
   OffscreenRoomsPageOp,
   PageListingView,
@@ -44,6 +45,11 @@ export interface RoomPageDeps {
   portal?(hostDid: string): Promise<{ portalOrigin: string; endpoint: string }>;
   /** A channel for documents the VTA completed. Defaults to HTTPS at `endpoint`. */
   completed?(hostDid: string, endpoint: string): PersonaRoom["host"]["sender"];
+  /** The member's `didSelfIssued` vault entries, read whole: the identities they sign in with. */
+  identities?(
+    vtaDid: string,
+    restBaseUrl?: string,
+  ): Promise<{ secretKind: string; principalDid?: string; targets: ReadonlyArray<{ kind: string; did?: string }> }[]>;
   now?(): number;
 }
 
@@ -83,17 +89,32 @@ export async function runRoomsPageOp(
   const now = deps.now ?? Date.now;
   if (op.op === "portal") return (deps.portal ?? ((d) => resolvePortal(d, now)))(op.hostDid);
 
+  if (op.op === "members") {
+    if (!deps.identities) throw new Error("the wallet cannot read which identities you use at this community");
+    return membersAt(await deps.identities(vta.vtaDid, vta.restBaseUrl), op.hostDid);
+  }
+
   const { sender, holderDid } = await deps.agent(vta.vtaDid, vta.restBaseUrl);
   const parties = { holder: { did: holderDid }, service: { did: vta.vtaDid } };
   if (op.op === "held") {
     const rooms = await roomsKeysList(sender, parties);
-    return rooms.map((r) => ({ roomId: r.roomId, epoch: r.epoch, earliestReadableEpoch: r.earliestReadableEpoch }));
+    // One entry per (room, member), each saying whose it is.
+    return rooms.map((r) => ({
+      roomId: r.roomId,
+      epoch: r.epoch,
+      earliestReadableEpoch: r.earliestReadableEpoch,
+      ...(r.member !== undefined ? { member: r.member } : {}),
+      ...(r.context !== undefined ? { context: r.context } : {}),
+      ...(r.actions !== undefined ? { actions: r.actions } : {}),
+    }));
   }
 
-  const room = async (roomId: string): Promise<PersonaRoom> => {
+  // Every request for a page names the share's member: the VTA never picks one.
+  const room = async (roomId: string, member: string): Promise<PersonaRoom> => {
     const { endpoint } = await (deps.portal ?? ((d) => resolvePortal(d, now)))(op.hostDid);
     return {
       roomId,
+      member,
       holder: { did: holderDid },
       vta: { did: vta.vtaDid, sender },
       host: {
@@ -108,7 +129,7 @@ export async function runRoomsPageOp(
 
   switch (op.op) {
     case "info": {
-      const { principal, info } = await roomInfoAsMember(await room(op.roomId));
+      const { principal, info } = await roomInfoAsMember(await room(op.roomId, op.member));
       return {
         roomId: info.roomId,
         visibility: info.visibility,
@@ -123,6 +144,7 @@ export async function runRoomsPageOp(
         ...parties,
         roomId: op.roomId,
         host: op.hostDid,
+        member: op.member,
         ...(op.prefix !== undefined ? { prefix: op.prefix } : {}),
         ...(op.sinceVersion !== undefined ? { sinceVersion: op.sinceVersion } : {}),
       });
@@ -133,9 +155,13 @@ export async function runRoomsPageOp(
       } satisfies PageListingView;
     }
     case "read":
-      return readView(op.roomId, op.key, await roomsKeysRead(sender, { ...parties, roomId: op.roomId, host: op.hostDid, key: op.key }));
+      return readView(
+        op.roomId,
+        op.key,
+        await roomsKeysRead(sender, { ...parties, roomId: op.roomId, host: op.hostDid, key: op.key, member: op.member }),
+      );
     case "putNote": {
-      const r = await room(op.roomId);
+      const r = await room(op.roomId, op.member);
       const { principal, info } = await roomInfoAsMember(r);
       if (info.visibility === "open") {
         throw new Error("this room is open: notes from the portal go in attributed rooms, whose records are sealed");

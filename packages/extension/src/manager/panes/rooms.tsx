@@ -21,9 +21,18 @@
 //
 // Reading a sealed record is two hops on purpose: the host serves ciphertext it
 // cannot read, and the member's own VTA opens it. Nothing here ever holds a key.
+//
+// **One row per (room, member).** One agent can hold two members of a room — an
+// administrator whose agent also holds the community's own place in a room the
+// community owns, or a person with two personas in it. The agent lists the room
+// once per member, and every row says which member it is and what place it
+// holds; everything done from a row acts as that member and names it, because
+// the agent refuses to choose between them.
 
 import { useCallback, useEffect, useState } from "react";
-import { roomsKeysList, type HeldRoom } from "@openvtc/pnm-core/rooms";
+import { heldRoomKey, roomsKeysList, type HeldRoom } from "@openvtc/pnm-core/rooms";
+import { displayAgentName, type AgentName } from "../../agent-name.js";
+import { useAgentNames } from "../../use-agent-names.js";
 import { Note, Panel } from "../../ui.js";
 import { CreateRoom } from "./rooms-create.js";
 import { FetchHistory } from "./rooms-backfill.js";
@@ -63,6 +72,28 @@ function standing(room: HeldRoom): { label: string; tone: string; why: string } 
   };
 }
 
+/** Who a row acts as, in words: a name its document claims, else the DID shortened. */
+export function memberLabel(
+  room: Pick<HeldRoom, "member">,
+  agentDid: string,
+  names: Readonly<Record<string, AgentName>>,
+): string {
+  if (!room.member) return "member not reported by this agent";
+  const name = names[room.member];
+  const who = name
+    ? displayAgentName(name)
+    : room.member.length > 44
+      ? `${room.member.slice(0, 22)}…${room.member.slice(-14)}`
+      : room.member;
+  return room.member === agentDid ? `${who} (this agent's own DID)` : who;
+}
+
+/** The place a member holds in the room, from the actions its grant confers. */
+export function placeLabel(room: Pick<HeldRoom, "actions">): string {
+  if (!room.actions) return "";
+  return room.actions.includes("admin") ? "administers the room" : "member";
+}
+
 export function RoomsPane({
   parties,
   contexts,
@@ -87,6 +118,12 @@ export function RoomsPane({
     void load();
   }, [load]);
 
+  const names = useAgentNames((rooms ?? []).map((r) => r.member));
+  // A room held as more than one member: the rows must say which is which.
+  const twice = new Set(
+    (rooms ?? []).filter((r, i, all) => all.findIndex((o) => o.roomId === r.roomId) !== i).map((r) => r.roomId),
+  );
+
   const columns: Column<HeldRoom>[] = [
     {
       key: "room",
@@ -95,6 +132,20 @@ export function RoomsPane({
         <code style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
           {r.roomId}
         </code>
+      ),
+    },
+    {
+      key: "member",
+      header: "As",
+      render: (r) => (
+        <span style={{ display: "grid", gap: 2 }} title={r.member}>
+          <span style={{ fontSize: t.xs, wordBreak: "break-all" }}>{memberLabel(r, parties.service.did, names)}</span>
+          <span style={{ fontSize: t.xs, color: c.muted }}>
+            {[placeLabel(r), r.context ? `context ${r.context}` : "", twice.has(r.roomId) ? "one of two places" : ""]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+        </span>
       ),
     },
     {
@@ -129,11 +180,17 @@ export function RoomsPane({
           <Table
             columns={columns}
             rows={rooms}
-            rowKey={(r) => r.roomId}
+            rowKey={heldRoomKey}
             expanded={(r) => {
               const s = standing(r);
               return (
                 <div style={{ fontSize: t.sm, color: c.muted }}>
+                  {r.member && (
+                    <p style={{ margin: "0 0 6px" }}>
+                      Everything below acts in this room as <code style={{ wordBreak: "break-all" }}>{r.member}</code>
+                      {twice.has(r.roomId) ? ", not as the other place this agent holds in it" : ""}.
+                    </p>
+                  )}
                   <p style={{ margin: "0 0 6px" }}>{s.why}</p>
                   <p style={{ margin: 0 }}>
                     Holding keys is not permission to act. Whether this agent may still write

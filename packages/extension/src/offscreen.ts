@@ -631,6 +631,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
           const { signing } = await loadHolder(vtaDid);
           return { sender: session, holderDid: signing.did };
         },
+        // The identities the member signs in with — the sign-in flow's own
+        // listing, so the two agree on who the member is at a community.
+        identities: (vtaDid, restBaseUrl) => listSelfIssued(vtaDid, restBaseUrl),
       },
       { vtaDid: req.vtaDid, ...(req.restBaseUrl ? { restBaseUrl: req.restBaseUrl } : {}) },
       req.params,
@@ -1443,28 +1446,34 @@ async function buildVtaSession(
 // holder's VTA session. `K_a` lives inside it, in this document's memory only:
 // if the document is torn down mid-flow the key is gone and the request simply
 // expires at the community, which is the correct failure for a throwaway key.
+/**
+ * Every `didSelfIssued` vault entry, read to the end: the identities the
+ * member signs in with, and where. The community's DID is not sent as a
+ * filter: the match happens here (VTI-LNK-073). Shared by the sign-in flow
+ * and a portal's room shares, so both agree on who the member is there.
+ */
+async function listSelfIssued(vtaDid: string, restBaseUrl?: string): Promise<SignInVaultEntry[]> {
+  const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+  return collectPages<SignInVaultEntry>("vault/list (didSelfIssued)", async (cursor) => {
+    const page = await vaultList(session, {
+      holder,
+      service,
+      filter: { secretKind: "didSelfIssued", ...(cursor ? { cursor } : {}) },
+    });
+    return {
+      items: page.entries as unknown as SignInVaultEntry[],
+      ...(page.cursor ? { nextCursor: page.cursor } : {}),
+    };
+  });
+}
+
 const signInFlows = new SignInFlows({
   now: () => Date.now(),
   // A ceiling the member grants; the community ends the session at the
   // earlier of this and its own limit (base design §7.6).
   grantLifetimeMs: 12 * 60 * 60 * 1000,
   vta: (vtaDid, restBaseUrl) => ({
-    listIdentities: async () => {
-      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-      // Every didSelfIssued entry, read to the end. The community's DID is not
-      // sent as a filter: the match happens here (VTI-LNK-073).
-      return collectPages<SignInVaultEntry>("vault/list (didSelfIssued)", async (cursor) => {
-        const page = await vaultList(session, {
-          holder,
-          service,
-          filter: { secretKind: "didSelfIssued", ...(cursor ? { cursor } : {}) },
-        });
-        return {
-          items: page.entries as unknown as SignInVaultEntry[],
-          ...(page.cursor ? { nextCursor: page.cursor } : {}),
-        };
-      });
-    },
+    listIdentities: () => listSelfIssued(vtaDid, restBaseUrl),
     listPersonas: async () => {
       const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
       const dids = await vtaListDids(session, { holder, service });

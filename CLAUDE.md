@@ -968,6 +968,25 @@ roomId)` in `chrome.storage.local` under `room-grants:`, for 30 days, listed and
 revocable in the console (`manager/panes/rooms-shares.tsx`). A page asking
 about a room it was not given gets one sentence whatever the reason.
 
+**A share names the member it acts as, and every request for the page names
+it.** One VTA can hold two members of one room — the community's own place in
+a room the community owns, beside an administrator's own membership, or two
+personas of one person. `rooms/keys/list` then lists the room once per member,
+saying whose each entry is in `ext["org.openvtc.rooms"].held` (index for index),
+and the VTA **refuses to choose** between them: `rooms/keys/act` takes the member
+as the document's `issuer`, the custody tasks (`browse`, `read`, `open`,
+`file-key`, `backfill`, `chain`) as `ext["org.openvtc.rooms"].member`
+(`@openvtc/pnm-core/rooms`'s `memberExt`; `PersonaRoom.member` threads it). So
+the share prompt offers one row per (room, member), and only as an identity the
+member uses at that community — the principals of their `didSelfIssued` vault
+entries naming its DID (`membersAt`, the sign-in flow's own listing) — never as
+the community's DID itself. A page's `choose({ member })` only picks among those.
+Where two remain, the member picks; one member per room; the button counts the
+ticks. The grant stores the member (`RoomGrant.member`), and a grant without one
+is not in force: the page asks again rather than the wallet guessing. The
+console's rooms pane is one row per (room, member) too, keyed by `heldRoomKey`,
+and everything done from a row names that row's member.
+
 **A private room is never shared with a portal.** Its host is not to learn
 which member acts, and the portal is the host's own page and knows who is
 signed in.
@@ -984,8 +1003,11 @@ DID document, or comparing origins loosely; letting a page name a room's host
 for a room it was not shared; passing a VTA or host reply to the page as is
 (views are built member by member); a share prompt that the page can
 pre-approve, or a write with a "remember" box; posting a provisional download
-byte; or adding a `rooms/*` URI to `provider.js`, `content.js` or
-`background.js` — CI fails the build on the last.
+byte; offering a room as the community's own DID, or as any identity the
+member does not use at that community; sending a room request for a page or a
+console row without naming its member (the VTA refuses, and it must); keying a
+row or a tick by room alone; or adding a `rooms/*` URI to `provider.js`,
+`content.js` or `background.js` — CI fails the build on the last.
 
 ## The Mediator Lens: the relay, seen from inside
 

@@ -45,6 +45,7 @@ import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 import type { RoomsCaller } from "./index.js";
+import { memberExt } from "./member.js";
 
 import {
   TYPE_URI as UPLOAD_CHUNK,
@@ -173,6 +174,8 @@ export async function roomsKeysFileKey(
     fileId: string;
     purpose: "seal" | "open";
     epoch?: number;
+    /** The member whose group derives it, where the VTA holds more than one of the room. */
+    member?: string;
   },
 ): Promise<{ key: string; epoch: number }> {
   const payload: RoomsKeysFileKeyPayload = {
@@ -180,6 +183,7 @@ export async function roomsKeysFileKey(
     fileId: params.fileId,
     purpose: params.purpose,
     ...(params.epoch !== undefined ? { epoch: params.epoch } : {}),
+    ...memberExt(params.member),
   };
   const res = await call<RoomsKeysFileKeyResponsePayload>(
     sender,

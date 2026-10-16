@@ -137,6 +137,7 @@ export function FetchHistory({
           // `earliestReadableEpoch` already, so the rung below it is where the
           // useful part of the chain starts.
           fromEpoch: Math.max(1, room.earliestReadableEpoch - 1),
+          ...(room.member !== undefined ? { member: room.member } : {}),
         });
         setOutcome({
           earliestReadableEpoch: res.earliestReadableEpoch,
