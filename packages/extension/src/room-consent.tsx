@@ -1,0 +1,227 @@
+/// <reference types="chrome" />
+
+// The two room prompts a portal page can raise (P7b; VTI `data-rooms-files.md`
+// §8.5). Both are drawn by the wallet, from what the background stored — the
+// page draws neither and can change neither.
+//
+//   - **Share**: the rooms the member's VTA holds, ticked where already shared
+//     with this portal. The member chooses; the selection is the whole of what
+//     is shared here afterwards. A page cannot see this list, only what it is
+//     given.
+//   - **Write**: one note or one file, in one room, signed as the member. The
+//     prompt says what will be written, and there is no "remember".
+
+import { useEffect, useState } from "react";
+
+import { requestOriginPermission } from "./host-permissions.js";
+import { ROOM_CONSENT_PREFIX, type RoomShareConsentView, type RoomWriteConsentView } from "./room-page-policy.js";
+import { Did } from "./ui.js";
+
+function originHost(o: string): string {
+  try {
+    return new URL(o).host;
+  } catch {
+    return o;
+  }
+}
+
+function bytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+const label: React.CSSProperties = {
+  fontSize: 10.5,
+  fontWeight: 700,
+  letterSpacing: 0.6,
+  textTransform: "uppercase",
+  color: "var(--w-muted)",
+  marginBottom: 4,
+};
+
+const card: React.CSSProperties = {
+  border: "1px solid var(--w-line)",
+  borderRadius: 6,
+  padding: 10,
+  background: "var(--w-raised)",
+};
+
+const buttons: React.CSSProperties = { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 };
+
+function Primary(props: { onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
+  return (
+    <button
+      disabled={props.disabled}
+      onClick={props.onClick}
+      style={{
+        padding: "8px 18px",
+        fontSize: 13,
+        fontWeight: 700,
+        border: "none",
+        borderRadius: 8,
+        color: "var(--w-accent-ink)",
+        background: "var(--w-accent)",
+        opacity: props.disabled ? 0.45 : 1,
+        cursor: props.disabled ? "not-allowed" : "pointer",
+      }}
+    >
+      {props.children}
+    </button>
+  );
+}
+
+export function RoomConsent({
+  consentId,
+  decide,
+}: {
+  consentId: string;
+  decide: (approved: boolean, selectedRooms?: string[]) => void;
+}) {
+  const [view, setView] = useState<RoomShareConsentView | RoomWriteConsentView | null>(null);
+  useEffect(() => {
+    const key = `${ROOM_CONSENT_PREFIX}${consentId}`;
+    void chrome.storage.session.get(key).then((v: Record<string, unknown>) => {
+      setView((v[key] as RoomShareConsentView | RoomWriteConsentView) ?? null);
+    });
+  }, [consentId]);
+
+  if (!view) return <div style={{ padding: 20, fontSize: 13 }}>Loading request…</div>;
+  return (
+    <div style={{ padding: 20, fontSize: 13, display: "grid", gap: 14 }}>
+      {view.kind === "share" ? <Share view={view} decide={decide} /> : <Write view={view} decide={decide} />}
+    </div>
+  );
+}
+
+function Share({
+  view,
+  decide,
+}: {
+  view: RoomShareConsentView;
+  decide: (approved: boolean, selectedRooms?: string[]) => void;
+}) {
+  const [ticked, setTicked] = useState<Set<string>>(
+    () => new Set(view.rooms.filter((r) => r.shared || r.suggested).map((r) => r.roomId)),
+  );
+  const [error, setError] = useState<string | null>(null);
+  const toggle = (id: string) =>
+    setTicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  async function share(): Promise<void> {
+    // The permission request must be the first await in the click, or the
+    // gesture is spent (`host-permissions.ts`).
+    if (view.needsOrigin) {
+      const granted = await requestOriginPermission(view.needsOrigin).catch(() => false);
+      if (!granted) {
+        setError(`The wallet needs to reach ${originHost(view.needsOrigin)} to use these rooms.`);
+        return;
+      }
+    }
+    decide(true, [...ticked]);
+  }
+
+  return (
+    <>
+      <strong style={{ fontSize: 14 }}>Share rooms with {originHost(view.origin)}?</strong>
+      <div style={{ color: "var(--w-muted)", lineHeight: 1.45 }}>
+        This is the member portal of <Did value={view.hostDid} />, by its DID document. Tick the rooms that belong
+        to this community. The page will be able to <b>read</b> them, and to <b>ask</b> to add notes and files —
+        each addition is shown to you here first. It sees no other room, and no key.
+      </div>
+      <div>
+        <div style={label}>Rooms your agent holds</div>
+        {view.rooms.length === 0 ? (
+          <div style={card}>Your agent holds keys to no rooms.</div>
+        ) : (
+          <div style={{ ...card, display: "grid", gap: 6, maxHeight: 300, overflow: "auto" }}>
+            {view.rooms.map((r) => (
+              <label key={r.roomId} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <input type="checkbox" checked={ticked.has(r.roomId)} onChange={() => toggle(r.roomId)} />
+                <span style={{ display: "grid", gap: 2 }}>
+                  <Did value={r.roomId} />
+                  <span style={{ fontSize: 11, color: "var(--w-muted)" }}>
+                    {r.shared ? "shared with this portal" : r.suggested ? "the page asked for this one" : "not shared"}
+                  </span>
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+      <div style={{ fontSize: 11, color: "var(--w-muted)" }}>
+        Each room is checked with the community before it is shared. A private room is never shared with a
+        portal: its host is not to learn who reads it. Shares last 30 days, and you can revoke them in the
+        wallet's console.
+      </div>
+      {error && <div style={{ color: "var(--w-danger)" }}>{error}</div>}
+      <div style={buttons}>
+        <button autoFocus onClick={() => decide(false)} style={{ padding: "8px 16px", fontSize: 13 }}>
+          Cancel
+        </button>
+        <Primary onClick={() => void share()}>Share {ticked.size === 1 ? "1 room" : `${ticked.size} rooms`}</Primary>
+      </div>
+    </>
+  );
+}
+
+function Write({ view, decide }: { view: RoomWriteConsentView; decide: (approved: boolean) => void }) {
+  const isFile = "file" in view.what;
+  return (
+    <>
+      <strong style={{ fontSize: 14 }}>
+        Add {isFile ? "a file" : "a note"} to this room as you?
+      </strong>
+      <div style={{ color: "var(--w-muted)", lineHeight: 1.45 }}>
+        {originHost(view.origin)} asks to write to a room, signed as you. Every member of the room will read it as
+        yours.
+      </div>
+      <div>
+        <div style={label}>Room</div>
+        <div style={card}>
+          <Did value={view.roomId} />
+          <div style={{ fontSize: 11, color: "var(--w-muted)", marginTop: 4 }}>
+            {view.visibility} room, hosted by <Did value={view.hostDid} />
+          </div>
+        </div>
+      </div>
+      <div>
+        <div style={label}>Signed as</div>
+        <div style={card}>
+          <Did value={view.member} />
+        </div>
+      </div>
+      <div>
+        <div style={label}>What will be written</div>
+        <div style={{ ...card, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {"file" in view.what ? (
+            <>
+              <b>{view.what.name}</b> · {bytes(view.what.size)}
+              {view.what.mediaType ? ` · ${view.what.mediaType}` : ""}
+              {view.what.title ? <div>Title: {view.what.title}</div> : null}
+            </>
+          ) : (
+            <>
+              <b>{view.what.title}</b>
+              {view.what.excerpt ? <div style={{ marginTop: 6 }}>{view.what.excerpt}</div> : null}
+              <div style={{ fontSize: 11, color: "var(--w-muted)", marginTop: 6 }}>
+                {view.what.bodyChars} characters
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+      <div style={buttons}>
+        <button autoFocus onClick={() => decide(false)} style={{ padding: "8px 16px", fontSize: 13 }}>
+          Deny
+        </button>
+        <Primary onClick={() => decide(true)}>Add {isFile ? "file" : "note"}</Primary>
+      </div>
+    </>
+  );
+}

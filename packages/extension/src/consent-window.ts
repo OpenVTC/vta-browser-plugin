@@ -47,6 +47,7 @@ export type ConsentDecision = (
   remember: boolean,
   prfOutputB64u?: string,
   selectedDid?: string,
+  selectedRooms?: string[],
 ) => void;
 
 /** The subset of `chrome.windows` this file drives — narrow so a test can
@@ -158,10 +159,14 @@ export function deliverConsentResult(
     remember?: boolean;
     prfOutputB64u?: string;
     selectedDid?: string;
+    selectedRooms?: string[];
   },
 ): boolean {
   const decision = pending.get(result.consentId);
   if (!decision) return false;
-  decision(result.approved, !!result.remember, result.prfOutputB64u, result.selectedDid);
+  const rooms = Array.isArray(result.selectedRooms)
+    ? result.selectedRooms.filter((r): r is string => typeof r === "string")
+    : undefined;
+  decision(result.approved, !!result.remember, result.prfOutputB64u, result.selectedDid, rooms);
   return true;
 }

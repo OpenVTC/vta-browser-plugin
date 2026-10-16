@@ -48,6 +48,14 @@ import {
   readAllVtaDids,
 } from "./active-vta.js";
 import { checkOriginPin, pinOrigin, readOriginPin, type OriginPinStatus } from "./origin-pin.js";
+import { RoomPageGates, type PortLike } from "./room-page-background.js";
+import {
+  grantsKey,
+  ROOM_CONSENT_PREFIX,
+  type RoomGrant,
+  type RoomShareConsentView,
+  type RoomWriteConsentView,
+} from "./room-page-policy.js";
 import { isOriginTrusted, trustOrigin } from "./trusted-sites.js";
 import { promptMayRemember, trustMaySkipPrompt } from "./login-consent.js";
 import {
@@ -146,6 +154,11 @@ import {
   type RuntimeDiscloseResponse,
   RUNTIME_MANAGER_TASK,
   RUNTIME_ROOM_FILES_PREPARE,
+  RUNTIME_ROOMS_PAGE,
+  ROOM_FILES_PAGE_PORT,
+  OFFSCREEN_ROOMS_PAGE,
+  type OffscreenRoomsPageResponse,
+  type RuntimeRoomsPageRequest,
   OFFSCREEN_ROOM_HOST_ENDPOINT,
   ROOM_FILES_PORT,
   type RuntimeRoomFilesPrepareRequest,
@@ -766,6 +779,86 @@ void refreshPendingBadge();
 // it is let go at once.
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === ROOM_FILES_PORT) port.disconnect();
+});
+
+// ── Data rooms for a page (P7b) ─────────────────────────────────────────────
+//
+// `window.vtaWallet.rooms.*`. The gates — the page is the community's portal by
+// its DID document, the member shared the room with it, and a write is
+// confirmed — are `room-page-background.ts`; this wires them to the browser.
+// VTI `data-rooms-files.md` §8.5.
+
+/** Raise a room prompt (share or write) and wait. Closed or unopened is a denial. */
+async function requestRoomConsent(
+  view: RoomShareConsentView | RoomWriteConsentView,
+): Promise<{ approved: boolean; selectedRooms?: string[] }> {
+  const consentId = crypto.randomUUID();
+  await chrome.storage.session.set({ [`${ROOM_CONSENT_PREFIX}${consentId}`]: view });
+  const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=room`;
+  const bounds = await consentWindowBounds(view.kind === "share" ? 640 : 560);
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (approved: boolean, selectedRooms?: string[]) => {
+      if (settled) return;
+      settled = true;
+      pendingConsents.delete(consentId);
+      void chrome.storage.session.remove(`${ROOM_CONSENT_PREFIX}${consentId}`);
+      resolve(approved ? { approved: true, ...(selectedRooms ? { selectedRooms } : {}) } : { approved: false });
+    };
+    pendingConsents.set(consentId, (approved, _remember, _prf, _did, selectedRooms) => settle(approved, selectedRooms));
+    openConsentWindow({ url, bounds, deny: () => settle(false), tag: "[pnm rooms]", what: "room window" });
+  });
+}
+
+const roomPageGates = new RoomPageGates({
+  async active() {
+    const active = await readActiveConnection();
+    if (!active.ok) return { ok: false, error: active.error };
+    return {
+      ok: true,
+      vta: { vtaDid: active.conn.vtaDid, ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}) },
+    };
+  },
+  async offscreen(vta, params) {
+    await ensureOffscreenDocument();
+    const reply = (await chrome.runtime.sendMessage({
+      target: OFFSCREEN_TARGET,
+      type: OFFSCREEN_ROOMS_PAGE,
+      vtaDid: vta.vtaDid,
+      ...(vta.restBaseUrl ? { restBaseUrl: vta.restBaseUrl } : {}),
+      params,
+    })) as OffscreenRoomsPageResponse | undefined;
+    return reply ?? { ok: false, error: "the offscreen document did not answer" };
+  },
+  canReach: (url) => hasOriginPermission(url),
+  async loadGrants(origin, vtaDid) {
+    const key = grantsKey(origin, vtaDid);
+    const stored = (await chrome.storage.local.get(key))[key];
+    return Array.isArray(stored) ? (stored as RoomGrant[]) : [];
+  },
+  async saveGrants(origin, vtaDid, grants) {
+    const key = grantsKey(origin, vtaDid);
+    if (grants.length === 0) await chrome.storage.local.remove(key);
+    else await chrome.storage.local.set({ [key]: grants });
+  },
+  prompt: requestRoomConsent,
+  async openTransfer() {
+    await ensureOffscreenDocument();
+    return chrome.runtime.connect({ name: ROOM_FILES_PORT }) as unknown as PortLike;
+  },
+  now: () => Date.now(),
+});
+
+// One file transfer from a page. The origin is the port's browser-attested one;
+// a port from an extension page is not a page's and is refused.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== ROOM_FILES_PAGE_PORT) return;
+  const origin = port.sender ? attestedOrigin(port.sender) : undefined;
+  if (!origin || !port.sender?.tab || isExtensionPageSender(port.sender)) {
+    port.disconnect();
+    return;
+  }
+  roomPageGates.servePort(port as unknown as PortLike, origin);
 });
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -3435,6 +3528,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
+    return true; // async sendResponse
+  }
+
+  if (msgType === RUNTIME_ROOMS_PAGE) {
+    const req = message as RuntimeRoomsPageRequest;
+    // `origin` was overwritten above with the browser-attested one.
+    roomPageGates
+      .handle(req.origin, req.params)
+      .then(sendResponse)
+      .catch((e: unknown) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
     return true; // async sendResponse
   }
 

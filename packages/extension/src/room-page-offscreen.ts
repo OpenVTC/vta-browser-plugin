@@ -1,0 +1,246 @@
+/// <reference types="chrome" />
+
+// The room work behind a page's `window.vtaWallet.rooms.*` call — the offscreen
+// document's half (P7b; VTI `data-rooms-files.md` §8.5).
+//
+// The background has already checked, before anything reaches here, that the
+// page is the community's own portal and that the member shared the room with
+// it (`room-page-policy.ts`). This module does the work and builds the **view**
+// the page receives: never a task result as such, never a presentation, never a
+// signed document. Record bodies are verified (signature, location, author)
+// before a word of them goes into a view; a body that fails is refused, not
+// shown with a warning.
+//
+// Every request a host receives is the member's, completed by their VTA as the
+// persona (`@openvtc/pnm-core/rooms`'s `actAndSend`); the VTA's own reads
+// (`rooms/keys/{browse,read}`) go out as the persona too.
+
+import { CONTACT_METHODS, type TrustTaskSender } from "@openvtc/pnm-core";
+import { resolveCommunityDocument, selectSignInServices, verifyDomainLinkage } from "@openvtc/pnm-core/vtc";
+import {
+  opaqueRecordKey,
+  roomInfoAsMember,
+  roomsKeysBrowse,
+  roomsKeysList,
+  roomsKeysRead,
+  writeSealedAsMember,
+  type PersonaRoom,
+} from "@openvtc/pnm-core/rooms";
+import { RoomHostChannel, verifyRecordBody } from "@openvtc/pnm-core/rooms/files";
+import { base64url } from "@openvtc/vti-didcomm-js";
+
+import type {
+  OffscreenRoomsPageOp,
+  PageListingView,
+  PageRecordSummary,
+  PageRecordView,
+  PageRoomInfoView,
+} from "./bridge-protocol.js";
+
+export interface RoomPageDeps {
+  /** The member's VTA session and the wallet's DID (the caller of the VTA tasks). */
+  agent(vtaDid: string, restBaseUrl?: string): Promise<{ sender: TrustTaskSender; holderDid: string }>;
+  /** The host's portal and endpoint. Defaults to its verified DID document. */
+  portal?(hostDid: string): Promise<{ portalOrigin: string; endpoint: string }>;
+  /** A channel for documents the VTA completed. Defaults to HTTPS at `endpoint`. */
+  completed?(hostDid: string, endpoint: string): PersonaRoom["host"]["sender"];
+  now?(): number;
+}
+
+/**
+ * The community's portal origin and Trust-Task endpoint, from its DID document,
+ * resolved and verified afresh — as the trigger-link sign-in does. A
+ * domain-linked contact must also be linked by its portal's DID Configuration.
+ */
+export async function resolvePortal(
+  hostDid: string,
+  now: () => number = Date.now,
+): Promise<{ portalOrigin: string; endpoint: string }> {
+  const resolved = await resolveCommunityDocument(hostDid, { contactMethods: CONTACT_METHODS });
+  if (!resolved.ok) throw new Error(`${hostDid}'s DID document could not be verified (${resolved.reason})`);
+  const selected = selectSignInServices(resolved.doc);
+  if (!selected.ok) {
+    throw new Error(`${hostDid}'s DID document names no usable ${selected.service} service`);
+  }
+  if (resolved.route === "domain-linked") {
+    const linkage = await verifyDomainLinkage({
+      did: hostDid,
+      didDocument: resolved.doc,
+      origin: selected.services.portalOrigin,
+      now: now(),
+    });
+    if (!linkage.ok) throw new Error(`${selected.services.portalOrigin} is not linked to ${hostDid}`);
+  }
+  return { portalOrigin: selected.services.portalOrigin, endpoint: selected.services.trustTaskEndpoint };
+}
+
+/** Run one page operation. Throws with a message fit for the page. */
+export async function runRoomsPageOp(
+  deps: RoomPageDeps,
+  vta: { vtaDid: string; restBaseUrl?: string },
+  op: OffscreenRoomsPageOp,
+): Promise<unknown> {
+  const now = deps.now ?? Date.now;
+  if (op.op === "portal") return (deps.portal ?? ((d) => resolvePortal(d, now)))(op.hostDid);
+
+  const { sender, holderDid } = await deps.agent(vta.vtaDid, vta.restBaseUrl);
+  const parties = { holder: { did: holderDid }, service: { did: vta.vtaDid } };
+  if (op.op === "held") {
+    const rooms = await roomsKeysList(sender, parties);
+    return rooms.map((r) => ({ roomId: r.roomId, epoch: r.epoch, earliestReadableEpoch: r.earliestReadableEpoch }));
+  }
+
+  const room = async (roomId: string): Promise<PersonaRoom> => {
+    const { endpoint } = await (deps.portal ?? ((d) => resolvePortal(d, now)))(op.hostDid);
+    return {
+      roomId,
+      holder: { did: holderDid },
+      vta: { did: vta.vtaDid, sender },
+      host: {
+        did: op.hostDid,
+        sender: (deps.completed ?? ((hostDid, ep) => new RoomHostChannel({ hostDid, endpoint: ep })))(
+          op.hostDid,
+          endpoint,
+        ),
+      },
+    };
+  };
+
+  switch (op.op) {
+    case "info": {
+      const { principal, info } = await roomInfoAsMember(await room(op.roomId));
+      return {
+        roomId: info.roomId,
+        visibility: info.visibility,
+        epoch: info.epoch,
+        member: principal,
+        limits: info.limits,
+        usage: info.usage,
+      } satisfies PageRoomInfoView;
+    }
+    case "browse": {
+      const listing = await roomsKeysBrowse(sender, {
+        ...parties,
+        roomId: op.roomId,
+        host: op.hostDid,
+        ...(op.prefix !== undefined ? { prefix: op.prefix } : {}),
+        ...(op.sinceVersion !== undefined ? { sinceVersion: op.sinceVersion } : {}),
+      });
+      return {
+        records: (listing.records ?? []).map((r) => summary(r as unknown as Record<string, unknown>)),
+        complete: listing.complete === true,
+        verification: listing.verification,
+      } satisfies PageListingView;
+    }
+    case "read":
+      return readView(op.roomId, op.key, await roomsKeysRead(sender, { ...parties, roomId: op.roomId, host: op.hostDid, key: op.key }));
+    case "putNote": {
+      const r = await room(op.roomId);
+      const { principal, info } = await roomInfoAsMember(r);
+      if (info.visibility === "open") {
+        throw new Error("this room is open: notes from the portal go in attributed rooms, whose records are sealed");
+      }
+      const key = opaqueRecordKey();
+      const version = await writeSealedAsMember(r, {
+        roomId: op.roomId,
+        key,
+        author: principal,
+        title: op.title,
+        ...(op.body !== undefined ? { body: op.body } : {}),
+        ...(op.description !== undefined ? { description: op.description } : {}),
+        ...(op.tags !== undefined ? { tags: op.tags } : {}),
+      });
+      return { key, version };
+    }
+  }
+}
+
+/** A listing row, member by member: nothing the host sent beyond these. */
+function summary(r: Record<string, unknown>): PageRecordSummary {
+  const out: PageRecordSummary = {
+    key: String(r.key),
+    version: Number(r.version),
+    updatedAt: String(r.updatedAt),
+  };
+  if (typeof r.status === "string") out.status = r.status;
+  if (typeof r.epoch === "number") out.epoch = r.epoch;
+  if (typeof r.author === "string") out.author = r.author;
+  if (typeof r.title === "string") out.title = r.title;
+  if (typeof r.description === "string") out.description = r.description;
+  return out;
+}
+
+/**
+ * One record as a page may see it. On a sealed room the body is verified —
+ * signed by its author for `assertionMethod`, for this room, key and version,
+ * and (on `attributed`) by the author the host recorded — before any of it is
+ * put in the view. A body that fails is refused.
+ */
+export async function readView(
+  roomId: string,
+  key: string,
+  read: {
+    key: string;
+    version: number;
+    status?: string;
+    updatedAt?: string;
+    author?: string;
+    plaintext?: string;
+    cleartext?: Record<string, unknown>;
+    verification: unknown;
+  },
+  resolveDid?: (did: string) => Promise<Record<string, unknown>>,
+): Promise<PageRecordView> {
+  if (read.key !== key) throw new Error(`the agent answered for record ${read.key}, not ${key}`);
+  const base: PageRecordView = {
+    key: read.key,
+    version: read.version,
+    status: read.status ?? "active",
+    updatedAt: read.updatedAt ?? "",
+    sealed: read.cleartext === undefined,
+    verification: read.verification,
+    ...(read.author !== undefined ? { author: read.author } : {}),
+  };
+  if (read.plaintext !== undefined) {
+    const body = await verifyRecordBody(
+      base64url.decode(read.plaintext),
+      { roomId, key, version: read.version },
+      read.author,
+      resolveDid ? { resolveDid } : {},
+    );
+    return {
+      ...base,
+      author: body.author,
+      ...(body.title !== undefined ? { title: body.title } : {}),
+      ...(body.description !== undefined ? { description: body.description } : {}),
+      ...(body.body !== undefined ? { body: body.body } : {}),
+      ...(body.tags !== undefined ? { tags: [...body.tags] } : {}),
+      ...(body.file
+        ? {
+            file: {
+              name: body.file.name,
+              size: body.file.size,
+              ...(body.file.mediaType !== undefined ? { mediaType: body.file.mediaType } : {}),
+            },
+          }
+        : {}),
+    };
+  }
+  if (read.cleartext !== undefined) {
+    const c = read.cleartext;
+    const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+    const title = str(c.title);
+    const description = str(c.description);
+    const body = str(c.body);
+    const tags = Array.isArray(c.tags) ? c.tags.filter((t): t is string => typeof t === "string") : undefined;
+    return {
+      ...base,
+      ...(title !== undefined ? { title } : {}),
+      ...(description !== undefined ? { description } : {}),
+      ...(body !== undefined ? { body } : {}),
+      ...(tags !== undefined ? { tags } : {}),
+    };
+  }
+  // A retracted record: the tombstone is the answer.
+  return base;
+}

@@ -29,6 +29,7 @@ import { CreateRoom } from "./rooms-create.js";
 import { FetchHistory } from "./rooms-backfill.js";
 import { RoomRecords } from "./rooms-records.js";
 import { IssueInRoomsName } from "./rooms-owner.js";
+import { RoomShares } from "./rooms-shares.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
@@ -175,6 +176,7 @@ export function RoomsPane({
           not the other in both directions, so pairing them per-row would suggest
           a correspondence that does not hold. */}
       <IssueInRoomsName parties={parties} />
+      <RoomShares />
     </>
   );
 }

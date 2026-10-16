@@ -30,6 +30,12 @@ import type {
   WalletDefaultsResult,
   WalletProfileParams,
   WalletProfileResult,
+  RoomsPageOp,
+  PageRoomView,
+  PageRoomInfoView,
+  PageListingView,
+  PageRecordView,
+  RoomFilesPageMessage,
 } from "./bridge-protocol.js";
 
 // Bundled as a standalone page-world script, so it must be self-contained
@@ -174,6 +180,75 @@ interface VtaWallet {
    *  statement. The decision carrying it, signed `asDid` `subject` through
    *  `signTrustTask`, is then signed once without a second prompt. */
   approveDecision(params: ApproveDecisionParams): Promise<ApproverStatementResult>;
+  /** Data rooms, for the community's own portal (VTI `data-rooms-files.md`
+   *  §8.5). Every call names `hostDid` — the community whose portal this page
+   *  is — and is refused unless this page's origin is that DID document's
+   *  `SignInPortal`. A page sees only the rooms the member shared with it, in
+   *  the wallet's own window; reads need nothing more, and every write is
+   *  confirmed by the member. Nothing here returns a key, a presentation or a
+   *  signed document. */
+  rooms: VtaWalletRooms;
+}
+
+/** Progress of a file transfer, for a progress bar. */
+export interface RoomTransferProgress {
+  stage: string;
+  done?: number;
+  total?: number;
+}
+
+export interface VtaWalletRooms {
+  /** The rooms the member has shared with this page. Never prompts. */
+  list(params: { hostDid: string }): Promise<{ rooms: PageRoomView[] }>;
+  /** Ask the member which of their rooms to share with this page; resolves with
+   *  every room shared. `suggest` pre-ticks one the page links to. */
+  choose(params: { hostDid: string; suggest?: string }): Promise<{
+    rooms: PageRoomView[];
+    refused: { roomId: string; reason: string }[];
+  }>;
+  /** Stop using a room here. The member can also revoke it in the wallet. */
+  forget(params: { hostDid: string; roomId: string }): Promise<{ forgotten: boolean }>;
+  /** The room's tier, epoch, limits and usage, and who the member is in it. */
+  info(params: { hostDid: string; roomId: string }): Promise<PageRoomInfoView>;
+  /** The room's records: metadata, never bodies. */
+  browse(params: { hostDid: string; roomId: string; prefix?: string; sinceVersion?: number }): Promise<PageListingView>;
+  /** One record, verified. */
+  read(params: { hostDid: string; roomId: string; key: string }): Promise<PageRecordView>;
+  /** Write a note as the member, after they confirm it. */
+  putNote(params: {
+    hostDid: string;
+    roomId: string;
+    title: string;
+    body?: string;
+    description?: string;
+    tags?: string[];
+  }): Promise<{ key: string; version: number }>;
+  /** A record's file, once the whole of it has verified against its author's digest. */
+  getFile(params: {
+    hostDid: string;
+    roomId: string;
+    key: string;
+    onProgress?: (p: RoomTransferProgress) => void;
+  }): Promise<{
+    file: { name: string; mediaType?: string; size: number };
+    author: string;
+    version: number;
+    title?: string;
+    description?: string;
+    tags?: string[];
+    blob: Blob;
+  }>;
+  /** Encrypt and add a file as the member, after they confirm it. */
+  putFile(params: {
+    hostDid: string;
+    roomId: string;
+    file: Blob;
+    name: string;
+    title?: string;
+    description?: string;
+    tags?: string[];
+    onProgress?: (p: RoomTransferProgress) => void;
+  }): Promise<{ key: string; version: number; size: number }>;
 }
 
 declare global {
@@ -209,6 +284,12 @@ window.addEventListener("message", (event: MessageEvent) => {
     return;
   }
 
+  if ("kind" in data && (data as { kind?: unknown }).kind === "roomFile") {
+    const frame = data as unknown as { id: string; msg: RoomFilesPageMessage | { kind: "closed" } };
+    transfers.get(frame.id)?.(frame.msg);
+    return;
+  }
+
   // Otherwise it's a request/response — fulfil the pending promise.
   if (!("id" in data)) return;
   const entry = pending.get(data.id);
@@ -239,6 +320,7 @@ function call<T>(
     | ApproveStepUpParams
     | AttestApproverParams
     | ApproveDecisionParams
+    | RoomsPageOp
     | Record<string, never>,
 ): Promise<T> {
   const id = crypto.randomUUID();
@@ -262,6 +344,128 @@ function legacy<T>(method: "login" | "loginDidcomm" | "proxyLogin", run: () => P
   return run();
 }
 
+// ── Room-file transfers ──────────────────────────────────────────────────────
+//
+// One id per transfer; the content script opens one port per id. Bytes cross
+// as base64url, in slices, because the extension's ports carry JSON.
+
+const transfers = new Map<string, (msg: RoomFilesPageMessage | { kind: "closed" }) => void>();
+const SLICE_BYTES = 256 * 1024;
+
+function toB64u(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function fromB64u(text: string): Uint8Array {
+  const pad = text.length % 4 === 0 ? "" : "=".repeat(4 - (text.length % 4));
+  const bin = atob(text.replace(/-/g, "+").replace(/_/g, "/") + pad);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function postFrame(id: string, msg: unknown): void {
+  window.postMessage({ source: INPAGE_SOURCE, kind: "roomFile", id, msg }, window.origin);
+}
+
+function getRoomFile(params: Parameters<VtaWalletRooms["getFile"]>[0]): ReturnType<VtaWalletRooms["getFile"]> {
+  const id = crypto.randomUUID();
+  const { onProgress, ...open } = params;
+  return new Promise((resolve, reject) => {
+    const parts: Uint8Array[] = [];
+    let meta: Extract<RoomFilesPageMessage, { kind: "got" }> | undefined;
+    transfers.set(id, (msg) => {
+      switch (msg.kind) {
+        case "progress":
+          onProgress?.({ stage: msg.stage, ...(msg.done !== undefined ? { done: msg.done } : {}), ...(msg.total !== undefined ? { total: msg.total } : {}) });
+          return;
+        case "got":
+          meta = msg;
+          return;
+        case "data":
+          parts.push(fromB64u(msg.data));
+          return;
+        case "done": {
+          transfers.delete(id);
+          postFrame(id, { kind: "cancel" });
+          if (!meta) return reject(new Error("the wallet finished a download it never described"));
+          const { kind: _kind, ...rest } = meta;
+          void _kind;
+          const type = meta.file.mediaType ?? "application/octet-stream";
+          resolve({ ...rest, blob: new Blob(parts as BlobPart[], { type }) });
+          return;
+        }
+        case "failed":
+          transfers.delete(id);
+          reject(new Error(msg.error));
+          return;
+        case "closed":
+          transfers.delete(id);
+          reject(new Error("the wallet stopped the download"));
+          return;
+        default:
+          return;
+      }
+    });
+    postFrame(id, { kind: "get", hostDid: open.hostDid, roomId: open.roomId, key: open.key });
+  });
+}
+
+function putRoomFile(params: Parameters<VtaWalletRooms["putFile"]>[0]): ReturnType<VtaWalletRooms["putFile"]> {
+  const id = crypto.randomUUID();
+  const { onProgress, file, ...meta } = params;
+  return new Promise((resolve, reject) => {
+    transfers.set(id, (msg) => {
+      switch (msg.kind) {
+        case "progress":
+          onProgress?.({ stage: msg.stage, ...(msg.done !== undefined ? { done: msg.done } : {}), ...(msg.total !== undefined ? { total: msg.total } : {}) });
+          return;
+        case "ready":
+          // The member confirmed: send the bytes, in order, then end.
+          void (async () => {
+            for (let at = 0; at < file.size; at += SLICE_BYTES) {
+              const slice = new Uint8Array(await file.slice(at, at + SLICE_BYTES).arrayBuffer());
+              postFrame(id, { kind: "data", data: toB64u(slice) });
+            }
+            postFrame(id, { kind: "end" });
+          })().catch((e: unknown) => {
+            transfers.delete(id);
+            postFrame(id, { kind: "cancel" });
+            reject(e instanceof Error ? e : new Error(String(e)));
+          });
+          return;
+        case "put":
+          transfers.delete(id);
+          postFrame(id, { kind: "cancel" });
+          resolve({ key: msg.key, version: msg.version, size: msg.size });
+          return;
+        case "failed":
+          transfers.delete(id);
+          reject(new Error(msg.error));
+          return;
+        case "closed":
+          transfers.delete(id);
+          reject(new Error("the wallet stopped the upload"));
+          return;
+        default:
+          return;
+      }
+    });
+    postFrame(id, {
+      kind: "put",
+      hostDid: meta.hostDid,
+      roomId: meta.roomId,
+      name: meta.name,
+      size: file.size,
+      ...(file.type ? { mediaType: file.type } : {}),
+      ...(meta.title !== undefined ? { title: meta.title } : {}),
+      ...(meta.description !== undefined ? { description: meta.description } : {}),
+      ...(meta.tags !== undefined ? { tags: meta.tags } : {}),
+    });
+  });
+}
+
 // Define the provider once. A second injection (e.g. SPA re-navigation that
 // re-runs the content script) must not clobber an existing one.
 if (!window.vtaWallet) {
@@ -282,5 +486,17 @@ if (!window.vtaWallet) {
     approveStepUp: (params) => call<ApproverStatementResult>("approveStepUp", params),
     attestApprover: (params) => call<ApproverStatementResult>("attestApprover", params),
     approveDecision: (params) => call<ApproverStatementResult>("approveDecision", params),
+    rooms: {
+      list: (p) => call("rooms", { op: "list", hostDid: p.hostDid }),
+      choose: (p) =>
+        call("rooms", { op: "choose", hostDid: p.hostDid, ...(p.suggest !== undefined ? { suggest: p.suggest } : {}) }),
+      forget: (p) => call("rooms", { op: "forget", hostDid: p.hostDid, roomId: p.roomId }),
+      info: (p) => call("rooms", { op: "info", hostDid: p.hostDid, roomId: p.roomId }),
+      browse: (p) => call("rooms", { ...p, op: "browse" }),
+      read: (p) => call("rooms", { op: "read", hostDid: p.hostDid, roomId: p.roomId, key: p.key }),
+      putNote: (p) => call("rooms", { ...p, op: "putNote" }),
+      getFile: getRoomFile,
+      putFile: putRoomFile,
+    },
   };
 }
