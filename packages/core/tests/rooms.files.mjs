@@ -11,10 +11,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  roomsBlobsChunk,
+  readChunkReply,
   roomsBlobsUploadChunk,
   roomsKeysFileKey,
-  roomsRecordsPutV2,
   sameDigest,
   signRecordBody,
   verifyRecordBody,
@@ -27,7 +26,6 @@ const HOLDER = { did: "did:key:zMember" };
 const AGENT = { did: "did:webvh:QmAgent:agent.example" };
 const HOST = { did: "did:webvh:QmHost:host.example" };
 const ROOM = "did:webvh:QmRoom:rooms.example";
-const PRESENTATION = { membership: "vmc", authority: ["leaf", "root"] };
 
 const b64url = (bytes) => Buffer.from(bytes).toString("base64url");
 
@@ -78,7 +76,7 @@ test("opening refuses a key released for a different epoch", async () => {
 
 // ── the host ────────────────────────────────────────────────────────────────
 
-test("a chunk travels as base64url and comes back as bytes", async () => {
+test("an upload chunk travels as base64url, under 0.2, signed by whoever the channel signs as", async () => {
   const data = new Uint8Array([0, 1, 2, 250, 251, 252]);
   const up = recorder({ uploadId: "u", index: 0, stored: true, remainingCount: 0, expiresAt: "x" });
   await roomsBlobsUploadChunk(up, {
@@ -86,36 +84,14 @@ test("a chunk travels as base64url and comes back as bytes", async () => {
   });
   assert.equal(up.sent[0].envelope.payload.data, b64url(data));
   assert.equal(up.sent[0].envelope.recipient, HOST.did);
+  assert.match(up.sent[0].envelope.type, /rooms\/blobs\/upload\/chunk\/0\.2$/);
+});
 
-  const down = recorder({ index: 2, digestMultibase: "zD", data: b64url(data) });
-  const got = await roomsBlobsChunk(down, { holder: HOLDER, service: HOST, downloadId: "d", index: 2 });
+test("a download chunk comes back as bytes, and one answered for another index is refused", () => {
+  const data = new Uint8Array([0, 1, 2, 250, 251, 252]);
+  const got = readChunkReply(HOST.did, 2, { index: 2, digestMultibase: "zD", data: b64url(data) });
   assert.deepEqual([...got.data], [...data]);
-});
-
-test("a chunk answered for another index is refused", async () => {
-  const channel = recorder({ index: 1, digestMultibase: "zD", data: "" });
-  await assert.rejects(
-    roomsBlobsChunk(channel, { holder: HOLDER, service: HOST, downloadId: "d", index: 0 }),
-    /chunk 1 to a request for 0/,
-  );
-});
-
-test("a record put names its blob, and only when there is one", async () => {
-  const sealed = { ciphertext: "c", nonce: "n", epoch: 2 };
-  const withFile = recorder({ key: "k", version: 1 });
-  await roomsRecordsPutV2(withFile, {
-    holder: HOLDER, service: HOST, roomId: ROOM, presentation: PRESENTATION,
-    key: "k", sealed, blobRef: "zRef", expectedVersion: 0,
-  });
-  assert.deepEqual(withFile.sent[0].envelope.payload.blobs, ["zRef"]);
-  assert.equal(withFile.sent[0].envelope.payload.expectedVersion, 0, "0 is create-only, not absent");
-  assert.match(withFile.sent[0].envelope.type, /rooms\/records\/put\/0\.2$/);
-
-  const note = recorder({ key: "k", version: 1 });
-  await roomsRecordsPutV2(note, {
-    holder: HOLDER, service: HOST, roomId: ROOM, presentation: PRESENTATION, key: "k", sealed,
-  });
-  assert.ok(!("blobs" in note.sent[0].envelope.payload));
+  assert.throws(() => readChunkReply(HOST.did, 0, { index: 1, digestMultibase: "zD", data: "" }), /chunk 1 to a request for 0/);
 });
 
 // One digest has two conforming spellings; comparing strings would refuse a

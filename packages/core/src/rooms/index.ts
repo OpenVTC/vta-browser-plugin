@@ -819,3 +819,6 @@ export async function roomsOwnerIssueAuthority(
     rest as unknown as RoomsOwnerIssueAuthorityPayload,
   );
 }
+
+// Acting as the member — the persona, never this wallet (`rooms/keys/act`).
+export * from "./act.js";

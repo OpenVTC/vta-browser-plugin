@@ -182,7 +182,7 @@ export async function putRoomFileFromConsole(
   return transfer<PutResult>(
     open,
     opts,
-    (m) => (m.kind === "put" ? { key: m.key, version: m.version, blobRef: m.blobRef, size: m.size } : undefined),
+    (m) => (m.kind === "put" ? { key: m.key, version: m.version, blobRef: m.blobRef, size: m.size, author: m.author } : undefined),
     async (post) => {
       for (let at = 0; at < file.size; at += SLICE_BYTES) {
         const slice = new Uint8Array(await file.slice(at, at + SLICE_BYTES).arrayBuffer());
@@ -269,7 +269,6 @@ export function roomFileClaimOf(bodyText: string): RoomFileClaim | null {
 }
 
 const STAGE_WORDS: Record<string, string> = {
-  presenting: "Asking your agent for this room's credentials",
   checking: "Checking the room takes files",
   sealing: "Encrypting",
   uploading: "Uploading",

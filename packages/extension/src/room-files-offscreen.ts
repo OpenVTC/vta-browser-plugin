@@ -27,6 +27,7 @@ import {
   type RoomFileContext,
 } from "@openvtc/pnm-core/rooms/files";
 import type { SigningIdentity, TrustTaskSender } from "@openvtc/pnm-core";
+import type { CompletedDocumentSender } from "@openvtc/pnm-core/rooms";
 import { base64url } from "@openvtc/vti-didcomm-js";
 
 import {
@@ -41,13 +42,24 @@ export interface RoomFilesDeps {
   agent(vtaDid: string, restBaseUrl?: string): Promise<{ sender: TrustTaskSender; signing: SigningIdentity }>;
   /** Whether the port was opened by one of this extension's own pages. */
   fromExtensionPage(port: chrome.runtime.Port): boolean;
-  /** The channel to the room's host. Defaults to HTTPS at the endpoint its DID
-   *  document names, signed by `signing`; replaced only by tests. */
-  host?(hostDid: string, signing: SigningIdentity): Promise<TrustTaskSender>;
+  /** The channels to the room's host: one for documents the member's VTA
+   *  completed, one per upload key. Defaults to HTTPS at the endpoint the host's
+   *  DID document names; replaced only by tests. */
+  host?(hostDid: string): Promise<RoomHostChannels>;
 }
 
-async function hostChannel(hostDid: string, signing: SigningIdentity): Promise<TrustTaskSender> {
-  return new RoomHostChannel({ hostDid, endpoint: await roomHostEndpoint(hostDid), signing });
+/** What `run` sends to the host on: completed documents, and an upload key's own. */
+export interface RoomHostChannels {
+  completed: CompletedDocumentSender;
+  signedBy(key: SigningIdentity): TrustTaskSender;
+}
+
+async function hostChannels(hostDid: string): Promise<RoomHostChannels> {
+  const endpoint = await roomHostEndpoint(hostDid);
+  return {
+    completed: new RoomHostChannel({ hostDid, endpoint }),
+    signedBy: (signing) => new RoomHostChannel({ hostDid, endpoint, signing }),
+  };
 }
 
 let cipherLoad: Promise<RoomFileCipher> | undefined;
@@ -176,13 +188,15 @@ async function run(
     deps.agent(open.vtaDid, open.restBaseUrl),
     loadCipher(),
   ]);
-  const hostSender = await (deps.host ?? hostChannel)(open.hostDid, signing);
+  const host = await (deps.host ?? hostChannels)(open.hostDid);
   const ctx: RoomFileContext = {
     roomId: open.roomId,
+    // The wallet asks its VTA; the VTA acts as the member. The wallet's own DID
+    // reaches no host.
     holder: { did: signing.did },
-    signing,
     vta: { did: open.vtaDid, sender: vtaSender },
-    host: { did: open.hostDid, sender: hostSender },
+    host: { did: open.hostDid, sender: host.completed },
+    uploadChannel: host.signedBy,
     cipher,
     onProgress: (p) => post({ kind: "progress", ...p }),
     signal,

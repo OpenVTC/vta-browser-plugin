@@ -23,6 +23,8 @@ import { base58btcEncode, jcsCanonicalize, sha256 } from "../dist/trust-tasks/ca
 
 const ROOM = "did:webvh:QmRoom:rooms.example";
 const SIGNER = signingIdentityFromSecret(new Uint8Array(32).fill(9));
+/** The member's persona: a key the VTA holds. The wallet (SIGNER) holds none of it. */
+const PERSONA = signingIdentityFromSecret(new Uint8Array(32).fill(11));
 const VTA_DID = "did:webvh:QmAgent:agent.example";
 const HOST_DID = "did:webvh:QmHost:host.example";
 const FILE_KEY = Buffer.alloc(32, 7).toString("base64url");
@@ -32,13 +34,26 @@ const b64u = (bytes) => Buffer.from(bytes).toString("base64url");
 const fromB64u = (s) => new Uint8Array(Buffer.from(s, "base64url"));
 const slug = (type) => type.replace("https://trusttasks.org/spec/", "");
 
+/** `rooms/keys/act`'s table, as much of it as these flows use. */
+const ACTION = {
+  "rooms/info/0.1": "read",
+  "rooms/records/list/0.1": "read",
+  "rooms/records/get/0.2": "read",
+  "rooms/records/put/0.2": "write",
+  "rooms/blobs/upload/begin/0.2": "write",
+  "rooms/blobs/get/0.2": "read",
+  "rooms/blobs/chunk/0.1": "read",
+};
+/** Documents that carry no presentation: their authority is the transfer. */
+const NO_PRESENTATION = new Set(["rooms/blobs/chunk/0.1"]);
+
 /** A BlobRef, as the host computes it: the digest of the canonical manifest. */
 async function blobRefOf(manifest) {
   const hash = await sha256(jcsCanonicalize(manifest));
   return `z${base58btcEncode(Uint8Array.from([0x12, 0x20, ...hash]))}`;
 }
 
-/** The member's VTA: presentations, the file key, and sealing that binds the version. */
+/** The member's VTA: completing as the persona, the file key, and sealing that binds the version. */
 function fakeVta() {
   const asked = [];
   return {
@@ -47,16 +62,35 @@ function fakeVta() {
       async send(envelope) {
         const p = envelope.payload;
         asked.push(slug(envelope.type));
+        assert.equal(envelope.issuer, SIGNER.did, "the wallet asks its own VTA");
         switch (slug(envelope.type)) {
-          case "rooms/keys/present/0.2":
-            return { presentation: { membership: "vmc", authority: [`leaf-${p.action}`, "root"] } };
+          case "rooms/keys/act/0.1": {
+            const doc = structuredClone(p.document);
+            assert.equal(doc.proof, undefined, "act takes an unsigned document");
+            assert.equal(doc.payload.presentation, undefined, "and no presentation");
+            const action = ACTION[slug(doc.type)];
+            if (!action) throw new Error(`rooms/keys/act:typeNotActable ${doc.type}`);
+            if (doc.issuer !== undefined && doc.issuer !== PERSONA.did) throw new Error("rooms/keys/act:issuerNotPrincipal");
+            doc.issuer = PERSONA.did;
+            if (!NO_PRESENTATION.has(slug(doc.type))) {
+              doc.payload.presentation = { membership: "vmc", authority: [`leaf-${action}`, "root"] };
+            }
+            await signTrustTask({ envelope: doc, signing: PERSONA, proofPurpose: "authentication" });
+            return { principal: PERSONA.did, document: doc };
+          }
           case "rooms/keys/file-key/0.1":
             return { key: FILE_KEY, epoch: EPOCH };
           // A stand-in for the record AEAD: the version is bound in, so a body
           // sealed for one version does not open at another — the property the
-          // re-seal loop exists for.
-          case "rooms/keys/seal/0.1":
-            return { sealed: { ciphertext: p.plaintext, nonce: `v${p.version}`, epoch: EPOCH } };
+          // re-seal loop exists for. The body is signed as its author, the persona.
+          case "rooms/keys/seal/0.2": {
+            assert.equal(p.signAsPrincipal, true);
+            const body = JSON.parse(Buffer.from(p.plaintext, "base64url").toString());
+            assert.equal(body.author, PERSONA.did, "the body names the persona as its author");
+            assert.equal(body.proof, undefined);
+            await signTrustTask({ envelope: body, signing: PERSONA, proofPurpose: "assertionMethod" });
+            return { sealed: { ciphertext: b64u(Buffer.from(JSON.stringify(body))), nonce: `v${p.version}`, epoch: EPOCH } };
+          }
           case "rooms/keys/open/0.1":
             if (p.sealed.nonce !== `v${p.version}`) throw new Error("sealed for another version");
             return { plaintext: p.sealed.ciphertext };
@@ -78,87 +112,109 @@ function fakeHost(opts = {}) {
     version: opts.head ?? 0,
     aborted: [],
     racesLeft: opts.races ?? 0,
+    signers: [],
   };
   const presented = (p, action) => {
     assert.equal(p.presentation.authority[0], `leaf-${action}`, `a ${action} presentation`);
   };
-  state.sender = {
-    async send(envelope) {
-      const p = envelope.payload;
-      const s = slug(envelope.type);
-      state.asked.push(s);
-      assert.equal(envelope.recipient, HOST_DID);
-      switch (s) {
-        case "rooms/info/0.1":
-          presented(p, "read");
-          return {
-            roomId: ROOM,
-            visibility: opts.visibility ?? "attributed",
-            epoch: EPOCH,
-            limits: { filesEnabled: opts.filesEnabled ?? true },
-            usage: { room: { files: 0, bytes: 0, reservedBytes: 0 } },
-          };
-        case "rooms/blobs/upload/begin/0.1": {
-          presented(p, "write");
-          const ref = await blobRefOf(p.manifest);
-          if (state.blobs.has(ref)) return { uploadId: "u0", missing: [], alreadyCommitted: true, expiresAt: "x" };
-          const id = `u${state.uploads.size + 1}`;
-          state.uploads.set(id, { manifest: p.manifest, ref, chunks: [] });
-          return { uploadId: id, missing: p.manifest.chunks.chunkDigests.map((_, i) => i), expiresAt: "x" };
-        }
-        case "rooms/blobs/upload/chunk/0.1": {
-          if (opts.failChunk === p.index) throw new Error("connection reset");
-          state.uploads.get(p.uploadId).chunks[p.index] = fromB64u(p.data);
-          return { uploadId: p.uploadId, index: p.index, stored: true, remainingCount: 0, expiresAt: "x" };
-        }
-        case "rooms/blobs/upload/abort/0.1":
-          state.aborted.push(p.uploadId);
-          return {};
-        case "rooms/blobs/upload/commit/0.1": {
-          const u = state.uploads.get(p.uploadId);
-          state.blobs.set(u.ref, u);
-          return { blobRef: opts.commitAs ?? u.ref, size: u.manifest.size };
-        }
-        case "rooms/records/list/0.1":
-          presented(p, "read");
-          return { records: [], headVersion: state.version };
-        case "rooms/records/put/0.2": {
-          presented(p, "write");
-          // Another member's write lands between this one's seal and its put.
-          if (state.racesLeft > 0) {
-            state.racesLeft--;
-            state.version++;
-          }
-          if (p.expectedVersion !== undefined && p.expectedVersion !== 0) {
-            assert.equal(p.expectedVersion, state.records.get(p.key)?.version, "a rewrite names what landed");
-          }
-          const version = ++state.version;
-          state.records.set(p.key, { version, sealed: p.sealed, blobs: p.blobs, author: envelope.issuer });
-          return { key: p.key, version };
-        }
-        case "rooms/records/get/0.2": {
-          presented(p, "read");
-          const r = state.records.get(p.key);
-          return { key: p.key, version: r.version, author: r.author, sealed: r.sealed, blobs: r.blobs };
-        }
-        case "rooms/blobs/get/0.1": {
-          presented(p, "read");
-          const blob = state.blobs.get(p.blobRef);
-          return { manifest: blob.manifest, downloadId: `d:${blob.ref}`, expiresAt: "x" };
-        }
-        case "rooms/blobs/chunk/0.1": {
-          const blob = state.blobs.get(p.downloadId.slice(2));
-          return {
-            index: p.index,
-            digestMultibase: blob.manifest.chunks.chunkDigests[p.index],
-            data: b64u(blob.chunks[p.index]),
-          };
-        }
-        default:
-          throw new Error(`the host does not serve ${envelope.type}`);
+  const answer = async (envelope) => {
+    const p = envelope.payload;
+    const s = slug(envelope.type);
+    state.asked.push(s);
+    state.signers.push(envelope.issuer);
+    assert.equal(envelope.recipient, HOST_DID);
+    assert.notEqual(envelope.issuer, SIGNER.did, "the wallet's own DID reaches no host");
+    switch (s) {
+      case "rooms/info/0.1":
+        presented(p, "read");
+        return {
+          roomId: ROOM,
+          visibility: opts.visibility ?? "attributed",
+          epoch: EPOCH,
+          limits: { filesEnabled: opts.filesEnabled ?? true },
+          usage: { room: { files: 0, bytes: 0, reservedBytes: 0 } },
+        };
+      case "rooms/blobs/upload/begin/0.2": {
+        presented(p, "write");
+        assert.equal(envelope.issuer, PERSONA.did);
+        assert.equal(p.directParts, undefined, "a browser asks for proxied transfer");
+        const ref = await blobRefOf(p.manifest);
+        if (state.blobs.has(ref)) return { uploadId: "u0", mode: "proxied", missing: [], alreadyCommitted: true, expiresAt: "x" };
+        const id = `u${state.uploads.size + 1}`;
+        state.uploads.set(id, { manifest: p.manifest, ref, chunks: [], key: p.uploadKey });
+        return { uploadId: id, mode: "proxied", missing: p.manifest.chunks.chunkDigests.map((_, i) => i), expiresAt: "x" };
       }
+      case "rooms/blobs/upload/chunk/0.2": {
+        if (opts.failChunk === p.index) throw new Error("connection reset");
+        const u = state.uploads.get(p.uploadId);
+        assert.equal(envelope.issuer, u.key, "a chunk is signed by its upload's key");
+        u.chunks[p.index] = fromB64u(p.data);
+        return { uploadId: p.uploadId, index: p.index, stored: true, remainingCount: 0, expiresAt: "x" };
+      }
+      case "rooms/blobs/upload/abort/0.2":
+        assert.equal(envelope.issuer, state.uploads.get(p.uploadId).key);
+        state.aborted.push(p.uploadId);
+        return { uploadId: p.uploadId, aborted: true };
+      case "rooms/blobs/upload/commit/0.2": {
+        const u = state.uploads.get(p.uploadId);
+        assert.equal(envelope.issuer, u.key);
+        state.blobs.set(u.ref, u);
+        return { blobRef: opts.commitAs ?? u.ref, size: u.manifest.size };
+      }
+      case "rooms/records/list/0.1":
+        presented(p, "read");
+        return { records: [], headVersion: state.version };
+      case "rooms/records/put/0.2": {
+        presented(p, "write");
+        // Another member's write lands between this one's seal and its put.
+        if (state.racesLeft > 0) {
+          state.racesLeft--;
+          state.version++;
+        }
+        if (p.expectedVersion !== undefined && p.expectedVersion !== 0) {
+          assert.equal(p.expectedVersion, state.records.get(p.key)?.version, "a rewrite names what landed");
+        }
+        const version = ++state.version;
+        state.records.set(p.key, { version, sealed: p.sealed, blobs: p.blobs, author: envelope.issuer });
+        return { key: p.key, version };
+      }
+      case "rooms/records/get/0.2": {
+        presented(p, "read");
+        const r = state.records.get(p.key);
+        return { roomId: ROOM, key: p.key, version: r.version, author: r.author, sealed: r.sealed, blobs: r.blobs };
+      }
+      case "rooms/blobs/get/0.2": {
+        presented(p, "read");
+        assert.equal(p.direct, false, "a browser asks for a proxied download");
+        const blob = state.blobs.get(p.blobRef);
+        return { mode: "proxied", manifest: blob.manifest, downloadId: `d:${blob.ref}`, expiresAt: "x" };
+      }
+      case "rooms/blobs/chunk/0.1": {
+        assert.equal(envelope.issuer, PERSONA.did, "a download chunk is asked for as the member");
+        const blob = state.blobs.get(p.downloadId.slice(2));
+        return {
+          index: p.index,
+          digestMultibase: blob.manifest.chunks.chunkDigests[p.index],
+          data: b64u(blob.chunks[p.index]),
+        };
+      }
+      default:
+        throw new Error(`the host does not serve ${envelope.type}`);
+    }
+  };
+  state.sender = {
+    async sendCompleted(doc) {
+      assert.ok(doc.proof, "a completed document carries its proof");
+      return answer(doc);
     },
   };
+  // A channel signed by the upload key, as `RoomHostChannel` is in the offscreen document.
+  state.uploadChannel = (key) => ({
+    async send(envelope) {
+      await signTrustTask({ envelope, signing: key, proofPurpose: "authentication" });
+      return answer(envelope);
+    },
+  });
   return state;
 }
 
@@ -166,9 +222,9 @@ function context(vta, host, extra = {}) {
   return {
     roomId: ROOM,
     holder: { did: SIGNER.did },
-    signing: SIGNER,
     vta: { did: VTA_DID, sender: vta.sender },
     host: { did: HOST_DID, sender: host.sender },
+    uploadChannel: host.uploadChannel,
     cipher,
     ...extra,
   };
@@ -204,7 +260,8 @@ test("a file put here comes back byte for byte, with its author's manifest", asy
 
   const { got, bytes: back } = await getAll(context(vta, host), put.key);
   assert.deepEqual(new Uint8Array(back), bytes);
-  assert.equal(got.author, SIGNER.did);
+  assert.equal(got.author, PERSONA.did, "the persona wrote it, not the wallet");
+  assert.equal(put.author, PERSONA.did);
   assert.equal(got.file.name, "term sheet.pdf");
   assert.equal(got.title, "Term sheet");
   assert.deepEqual(got.tags, ["deal"]);
@@ -247,11 +304,11 @@ test("the same file uploaded twice is stored once", async () => {
   const first = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
   const blob = host.blobs.get(first.blobRef);
   host.blobs.clear();
-  const chunkCalls = () => host.asked.filter((s) => s === "rooms/blobs/upload/chunk/0.1").length;
+  const chunkCalls = () => host.asked.filter((s) => s === "rooms/blobs/upload/chunk/0.2").length;
   const before = chunkCalls();
-  const realSend = host.sender.send;
-  host.sender.send = async (env) => {
-    if (slug(env.type) === "rooms/blobs/upload/begin/0.1") host.blobs.set(await blobRefOf(env.payload.manifest), blob);
+  const realSend = host.sender.sendCompleted;
+  host.sender.sendCompleted = async (env) => {
+    if (slug(env.type) === "rooms/blobs/upload/begin/0.2") host.blobs.set(await blobRefOf(env.payload.manifest), blob);
     return realSend(env);
   };
   await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
@@ -305,7 +362,7 @@ test("a chunk altered by the host is refused, and nothing is released", async ()
   const vta = fakeVta();
   const host = fakeHost();
   const put = await putRoomFile(context(vta, host), { name: "a.bin", bytes: sample() });
-  const ctx = context(vta, { sender: { send: (env) => tamperingSend(env, host, 1) } });
+  const ctx = context(vta, { ...host, sender: { sendCompleted: (env) => tamperingSend(env, host, 1) } });
   await assert.rejects(
     getRoomFile(ctx, put.key, () => undefined),
     (e) => e instanceof RoomFileError && e.code === "hostMisbehaved",
@@ -314,7 +371,7 @@ test("a chunk altered by the host is refused, and nothing is released", async ()
 
 /** The honest host's answers, with one chunk's bytes flipped in transit. */
 async function tamperingSend(envelope, honest, index) {
-  const reply = await honest.sender.send(envelope);
+  const reply = await honest.sender.sendCompleted(envelope);
   if (slug(envelope.type) === "rooms/blobs/chunk/0.1" && reply.index === index) {
     const data = fromB64u(reply.data);
     data[0] ^= 1;
@@ -331,12 +388,12 @@ test("a host serving another file's blob under this record is refused", async ()
   const host = fakeHost();
   const mine = await putRoomFile(context(vta, host), { name: "mine.txt", bytes: sample(10) });
   const other = await putRoomFile(context(vta, host), { name: "other.txt", bytes: sample(20) });
-  const swapped = { send: async (env) => {
-    if (slug(env.type) === "rooms/blobs/get/0.1") env.payload.blobRef = other.blobRef;
-    return host.sender.send(env);
+  const swapped = { sendCompleted: async (env) => {
+    if (slug(env.type) === "rooms/blobs/get/0.2") env = { ...env, payload: { ...env.payload, blobRef: other.blobRef } };
+    return host.sender.sendCompleted(env);
   } };
   const opened = [];
-  await assert.rejects(getRoomFile(context(vta, { sender: swapped }), mine.key, (p) => opened.push(p)));
+  await assert.rejects(getRoomFile(context(vta, { ...host, sender: swapped }), mine.key, (p) => opened.push(p)));
   assert.deepEqual(opened, [], "nothing was opened under the wrong manifest");
 });
 
@@ -344,12 +401,12 @@ test("a record that no longer names its blob is reported as released", async () 
   const vta = fakeVta();
   const host = fakeHost();
   const put = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
-  const stripped = { send: async (env) => {
-    const r = await host.sender.send(env);
+  const stripped = { sendCompleted: async (env) => {
+    const r = await host.sender.sendCompleted(env);
     return slug(env.type) === "rooms/records/get/0.2" ? { ...r, blobs: undefined } : r;
   } };
   await assert.rejects(
-    getRoomFile(context(vta, { sender: stripped }), put.key, () => undefined),
+    getRoomFile(context(vta, { ...host, sender: stripped }), put.key, () => undefined),
     (e) => e instanceof RoomFileError && e.code === "blobNotNamed",
   );
 });
@@ -358,13 +415,13 @@ test("a body signed by someone other than the recorded author is refused before 
   const vta = fakeVta();
   const host = fakeHost();
   const put = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
-  const misattributed = { send: async (env) => {
-    const r = await host.sender.send(env);
+  const misattributed = { sendCompleted: async (env) => {
+    const r = await host.sender.sendCompleted(env);
     return slug(env.type) === "rooms/records/get/0.2" ? { ...r, author: "did:key:zSomeoneElse" } : r;
   } };
   const asked = host.asked.length;
-  await assert.rejects(getRoomFile(context(vta, { sender: misattributed }), put.key, () => undefined), /host recorded/);
-  assert.ok(!host.asked.slice(asked).includes("rooms/blobs/get/0.1"));
+  await assert.rejects(getRoomFile(context(vta, { ...host, sender: misattributed }), put.key, () => undefined), /host recorded/);
+  assert.ok(!host.asked.slice(asked).includes("rooms/blobs/get/0.2"));
 });
 
 // ── The host channel ────────────────────────────────────────────────────────
@@ -436,5 +493,24 @@ test("a reply threaded to another request is refused", async () => {
 test("a document addressed to another party is not signed or sent", async () => {
   const f = stubFetch((doc) => signedReply(doc));
   await assert.rejects(hostChannel(f.impl).send({ ...request(), recipient: "did:key:zElsewhere" }), /addressed to/);
+  assert.equal(f.sent.length, 0);
+});
+
+test("a completed document goes out unchanged, and its reply must be the host's, to the member", async () => {
+  const PERSONA_KEY = signingIdentityFromSecret(new Uint8Array(32).fill(12));
+  const f = stubFetch((doc) => signedReply(doc));
+  const channel = new RoomHostChannel({ hostDid: HOST_SIGNER.did, endpoint: ENDPOINT, fetch: f.impl });
+  const doc = { ...request(), issuer: PERSONA_KEY.did };
+  await signTrustTask({ envelope: doc, signing: PERSONA_KEY, proofPurpose: "authentication" });
+  const before = JSON.stringify(doc);
+  await channel.sendCompleted(doc, { expectedResponseType: "https://trusttasks.org/spec/rooms/info/0.1#response" });
+  assert.equal(JSON.stringify(f.sent[0].doc), before, "sent exactly as the VTA completed it");
+  await assert.rejects(channel.send(request()), /signs nothing/, "a channel with no key signs nothing");
+});
+
+test("a document with no proof is not sent as a completed one", async () => {
+  const f = stubFetch((doc) => signedReply(doc));
+  const channel = new RoomHostChannel({ hostDid: HOST_SIGNER.did, endpoint: ENDPOINT, fetch: f.impl });
+  await assert.rejects(channel.sendCompleted(request()), /without an issuer or a proof/);
   assert.equal(f.sent.length, 0);
 });

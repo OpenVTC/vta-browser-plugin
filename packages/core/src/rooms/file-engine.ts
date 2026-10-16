@@ -1,23 +1,30 @@
 // Putting a file in a room, and getting one out — end to end.
 //
 // The same flow as `pnm rooms file put` / `get` (`vta-cli-common::commands::rooms`),
-// step for step, so a file either writes opens in the other:
+// step for step, so a file either writes opens in the other. **Every request
+// the host receives is the member's** — completed by their VTA as the persona
+// (`rooms/keys/act`, see `./act.ts`) — except a proxied upload's chunks, commit
+// and abort, which are signed by a key minted here for that one upload:
 //
-//   put  present(read) → rooms/info (sealed tier, files enabled) → present(write)
-//        → file-key(seal) → seal locally → upload begin / chunks / commit
-//        → sign the record body → rooms/keys/seal → records/put/0.2 naming the blob,
-//          re-sealing for the version the host actually assigned.
-//   get  present(read) → records/get/0.2 → rooms/keys/open → verify the body
-//        → the record names the file's blob → blobs/get → file-key(open)
-//        → each chunk checked against the manifest, then opened → finish.
+//   put  rooms/info (sealed tier, files enabled; who the member is)
+//        → file-key(seal) → seal locally → upload begin/0.2 (proxied, naming the
+//        upload key) → chunks / commit under the upload key
+//        → the VTA signs the record body as the member and seals it
+//          (rooms/keys/seal/0.2) → records/put/0.2 naming the blob, re-sealing
+//          for the version the host actually assigned.
+//   get  records/get/0.2 → rooms/keys/open → verify the body
+//        → the record names the file's blob → blobs/get/0.2 (proxied)
+//        → file-key(open) → each chunk (blobs/chunk, as the member) checked
+//          against the manifest, then opened → finish.
 //
-// ## What runs where
+// The wallet's own DID reaches no host: it is only the caller of the VTA tasks.
 //
-// Two senders, because there are two recipients: the member's own **VTA**
-// (presentations, the file key, sealing and opening the record body) and the
-// room's **host** (everything else). The host channel is signed by the same DID
-// the VTA minted the presentations for — a presentation is granted to its
-// caller, and a host refuses one presented by anyone else.
+// ## Proxied, for now
+//
+// A browser asks for proxied transfer: it omits `directParts` on begin and
+// asks `direct: false` on get. A direct transfer reaches the storage
+// provider's origin, which the extension holds no permission for
+// (`data-rooms-files.md` §8.5). The CLI keeps direct mode.
 //
 // The cipher is `@openvtc/vti-rooms-wasm`, passed in rather than imported, so
 // this module carries no wasm and runs under test with the real one or a fake.
@@ -26,31 +33,54 @@
 //
 // It is fetched, handed to the sealer or opener, and dropped. JavaScript cannot
 // zero a string; what it can do is not keep one, not log one and not return
-// one, and nothing here does.
+// one, and nothing here does. The upload key is the same: minted, used for one
+// upload's documents, and dropped.
 
 import { base64url } from "@openvtc/vti-didcomm-js";
 
-import type { SigningIdentity } from "../siop/self-issued.js";
-import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
-import { roomsKeysOpen, roomsKeysPresent, roomsKeysSeal, type Presentation, type RoomAction } from "./index.js";
+import { generateSigningIdentity, type SigningIdentity } from "../siop/self-issued.js";
+import type { TrustTaskSender } from "../vta/channel.js";
+import { roomsKeysOpen } from "./index.js";
 import {
-  roomsBlobsChunk,
-  roomsBlobsGet,
+  actAndSend,
+  roomInfoAsMember,
+  VersionRaceError,
+  writeSealedAsMember,
+  opaqueRecordKey,
+  type PersonaRoom,
+} from "./act.js";
+import {
+  readChunkReply,
   roomsBlobsUploadAbort,
-  roomsBlobsUploadBegin,
   roomsBlobsUploadChunk,
   roomsBlobsUploadCommit,
-  roomsHeadVersion,
-  roomsInfo,
   roomsKeysFileKey,
-  roomsRecordsGetV2,
-  roomsRecordsPutV2,
   sameDigest,
-  signRecordBody,
   verifyRecordBody,
   type FileManifest,
-  type SealedRecordBody,
 } from "./files.js";
+
+import {
+  TYPE_URI as UPLOAD_BEGIN,
+  RESPONSE_TYPE_URI as UPLOAD_BEGIN_RESPONSE,
+  type RoomsBlobsUploadBeginPayload,
+  type RoomsBlobsUploadBeginResponsePayload,
+} from "@openvtc/trust-tasks/rooms/blobs/upload/begin/0.2/payload";
+import {
+  TYPE_URI as BLOBS_GET,
+  RESPONSE_TYPE_URI as BLOBS_GET_RESPONSE,
+  type RoomsBlobsGetResponsePayload,
+} from "@openvtc/trust-tasks/rooms/blobs/get/0.2/payload";
+import {
+  TYPE_URI as BLOBS_CHUNK,
+  RESPONSE_TYPE_URI as BLOBS_CHUNK_RESPONSE,
+  type RoomsBlobsChunkResponsePayload,
+} from "@openvtc/trust-tasks/rooms/blobs/chunk/0.1/payload";
+import {
+  TYPE_URI as RECORDS_GET,
+  RESPONSE_TYPE_URI as RECORDS_GET_RESPONSE,
+  type RoomsRecordsGetResponsePayload,
+} from "@openvtc/trust-tasks/rooms/records/get/0.2/payload";
 
 // ── The cipher, as this module needs it ─────────────────────────────────────
 
@@ -93,14 +123,12 @@ export interface RoomFileCipher {
 
 // ── Parties and progress ────────────────────────────────────────────────────
 
-export interface RoomFileContext {
-  roomId: string;
-  /** The wallet's DID: the presentations are minted for it and it signs both legs. */
-  holder: TaskParty;
-  /** Signs the record body. Its DID must be `holder.did` — the body's author. */
-  signing: SigningIdentity;
-  vta: { did: string; sender: TrustTaskSender };
-  host: { did: string; sender: TrustTaskSender };
+export interface RoomFileContext extends PersonaRoom {
+  /**
+   * A channel to the host that signs with `key`: the upload's single-use key,
+   * for a proxied upload's chunk, commit and abort documents.
+   */
+  uploadChannel(key: SigningIdentity): TrustTaskSender;
   cipher: RoomFileCipher;
   /** Stage changes and chunk counts, for a progress bar. Never carries data. */
   onProgress?: (p: RoomFileProgress) => void;
@@ -109,7 +137,6 @@ export interface RoomFileContext {
 }
 
 export type RoomFileStage =
-  | "presenting"
   | "checking"
   | "sealing"
   | "uploading"
@@ -155,9 +182,6 @@ export class RoomFileError extends Error {
  */
 export const ROOM_FILE_MAX_BYTES = 64 * 1024 * 1024;
 
-/** How many times a write re-seals for the version the host assigned. The CLI's figure. */
-const SEALED_WRITE_ATTEMPTS = 4;
-
 function check(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new RoomFileError("aborted", "stopped before it finished");
 }
@@ -166,23 +190,13 @@ function randomId(bytes: number): string {
   return base64url.encode(crypto.getRandomValues(new Uint8Array(bytes)));
 }
 
-/** A `DigestMultibase` (sha2-256 multihash, base58btc) of `bytes`, for comparing with `sameDigest`. */
+/** A `DigestMultibase` (sha2-256 multihash, base64url) of `bytes`, for comparing with `sameDigest`. */
 async function digestOf(bytes: Uint8Array): Promise<string> {
   const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource));
   const mh = new Uint8Array(2 + hash.length);
   mh.set([0x12, 0x20], 0);
   mh.set(hash, 2);
   return `u${base64url.encode(mh)}`;
-}
-
-async function present(ctx: RoomFileContext, action: RoomAction): Promise<Presentation> {
-  const { presentation } = await roomsKeysPresent(ctx.vta.sender, {
-    holder: ctx.holder,
-    service: { did: ctx.vta.did },
-    roomId: ctx.roomId,
-    action,
-  });
-  return presentation;
 }
 
 // ── Put ─────────────────────────────────────────────────────────────────────
@@ -205,6 +219,8 @@ export interface RoomFilePut {
   version: number;
   blobRef: string;
   size: number;
+  /** The member the record was written as: the persona their VTA acted as. */
+  author: string;
 }
 
 /**
@@ -213,7 +229,6 @@ export interface RoomFilePut {
  */
 export async function putRoomFile(ctx: RoomFileContext, file: RoomFileInput): Promise<RoomFilePut> {
   const progress = (p: RoomFileProgress) => ctx.onProgress?.(p);
-  const hostCall = { holder: ctx.holder, service: { did: ctx.host.did }, roomId: ctx.roomId };
   if (file.bytes.length > ROOM_FILE_MAX_BYTES) {
     throw new RoomFileError(
       "tooLarge",
@@ -222,11 +237,8 @@ export async function putRoomFile(ctx: RoomFileContext, file: RoomFileInput): Pr
     );
   }
 
-  progress({ stage: "presenting" });
-  const read = await present(ctx, "read");
-  check(ctx.signal);
   progress({ stage: "checking" });
-  const info = await roomsInfo(ctx.host.sender, { ...hostCall, presentation: read });
+  const { principal, info } = await roomInfoAsMember(ctx);
   if (info.visibility === "open") {
     throw new RoomFileError(
       "openRoom",
@@ -237,7 +249,6 @@ export async function putRoomFile(ctx: RoomFileContext, file: RoomFileInput): Pr
   if (!info.limits.filesEnabled) {
     throw new RoomFileError("filesDisabled", `${ctx.host.did} does not accept files in this room`);
   }
-  const write = await present(ctx, "write");
   check(ctx.signal);
 
   // A fresh id for every file: the segment nonces are counters, so two files
@@ -253,7 +264,7 @@ export async function putRoomFile(ctx: RoomFileContext, file: RoomFileInput): Pr
   });
   let ciphertext: Uint8Array;
   let chunkSize: number;
-  let manifests: { blob: Parameters<typeof roomsBlobsUploadBegin>[1]["manifest"]; file: FileManifest };
+  let manifests: { blob: RoomsBlobsUploadBeginPayload["manifest"]; file: FileManifest };
   const sealer = ctx.cipher.FileSealer.withKey(
     ctx.roomId,
     fileId,
@@ -291,13 +302,35 @@ export async function putRoomFile(ctx: RoomFileContext, file: RoomFileInput): Pr
   check(ctx.signal);
 
   progress({ stage: "uploading", done: 0, total: chunks.length });
-  const begun = await roomsBlobsUploadBegin(ctx.host.sender, { ...hostCall, presentation: write, manifest: manifests.blob });
+  // The upload key: minted here for this upload alone, from no key held for
+  // anything else, and dropped when the upload ends.
+  const uploadKey = generateSigningIdentity();
+  // No presentation: the VTA inserts the member's `write`, as `act` requires.
+  // No `directParts`: this client accepts proxied transfer only.
+  const begin: Omit<RoomsBlobsUploadBeginPayload, "presentation"> = {
+    roomId: ctx.roomId,
+    uploadKey: uploadKey.did,
+    manifest: manifests.blob,
+  };
+  const { reply: begun } = await actAndSend<RoomsBlobsUploadBeginResponsePayload>(
+    ctx,
+    UPLOAD_BEGIN,
+    UPLOAD_BEGIN_RESPONSE,
+    begin as unknown as Record<string, unknown>,
+  );
   let blobRef: string;
   if (begun.alreadyCommitted === true) {
     blobRef = manifests.file.blobRef;
   } else {
+    if (begun.mode !== "proxied") {
+      throw new RoomFileError(
+        "hostMisbehaved",
+        `${ctx.host.did} answered a proxied-only upload in ${String(begun.mode)} mode`,
+      );
+    }
     const uploadId = begun.uploadId;
-    const parties = { holder: ctx.holder, service: { did: ctx.host.did } };
+    const channel = ctx.uploadChannel(uploadKey);
+    const parties = { holder: { did: uploadKey.did }, service: { did: ctx.host.did } };
     try {
       let done = 0;
       for (const index of begun.missing) {
@@ -306,7 +339,7 @@ export async function putRoomFile(ctx: RoomFileContext, file: RoomFileInput): Pr
         if (!Number.isSafeInteger(index) || chunk === undefined) {
           throw new RoomFileError("hostMisbehaved", `${ctx.host.did} asked for chunk ${index}, which does not exist`);
         }
-        await roomsBlobsUploadChunk(ctx.host.sender, {
+        await roomsBlobsUploadChunk(channel, {
           ...parties,
           uploadId,
           index,
@@ -317,10 +350,10 @@ export async function putRoomFile(ctx: RoomFileContext, file: RoomFileInput): Pr
       }
     } catch (e) {
       // Release what `begin` reserved rather than leaving it to expire.
-      await roomsBlobsUploadAbort(ctx.host.sender, { ...parties, uploadId }).catch(() => undefined);
+      await roomsBlobsUploadAbort(channel, { ...parties, uploadId }).catch(() => undefined);
       throw e;
     }
-    blobRef = (await roomsBlobsUploadCommit(ctx.host.sender, { ...parties, uploadId })).blobRef;
+    blobRef = (await roomsBlobsUploadCommit(channel, { ...parties, uploadId })).blobRef;
   }
   if (!sameDigest(blobRef, manifests.file.blobRef)) {
     throw new RoomFileError(
@@ -330,74 +363,33 @@ export async function putRoomFile(ctx: RoomFileContext, file: RoomFileInput): Pr
   }
 
   progress({ stage: "writing" });
-  const key = randomId(16);
-  const body: SealedRecordBody = {
-    roomId: ctx.roomId,
-    key,
-    version: 1,
-    author: ctx.holder.did,
-    ...(file.title !== undefined ? { title: file.title } : {}),
-    ...(file.description !== undefined ? { description: file.description } : {}),
-    ...(file.tags !== undefined ? { tags: file.tags } : {}),
-    file: manifests.file,
-  };
-  const version = await writeSealed(ctx, read, write, body, blobRef);
-  return { key, version, blobRef, size: file.bytes.length };
-}
-
-/**
- * Sign the body, seal it through the VTA and put it, re-sealing for the version
- * the host assigned whenever that is not the one sealed for.
- *
- * The version is bound into both the record's associated data and its signed
- * body, and the host assigns it from a room-wide counter, so it is predicted
- * from the room's head and a miss is corrected by a rewrite — over exactly the
- * version that landed, never blind.
- */
-async function writeSealed(
-  ctx: RoomFileContext,
-  read: Presentation,
-  write: Presentation,
-  body: SealedRecordBody,
-  blobRef: string,
-): Promise<number> {
-  const vta = { holder: ctx.holder, service: { did: ctx.vta.did } };
-  const host = { holder: ctx.holder, service: { did: ctx.host.did } };
-  const head = await roomsHeadVersion(ctx.host.sender, { ...host, roomId: ctx.roomId, presentation: read });
-  let intended = head + 1;
-  // Create-only: a record key this fresh exists nowhere, and if it somehow did
-  // this must not overwrite it.
-  let expected = 0;
-  let landed = 0;
-  for (let attempt = 0; attempt < SEALED_WRITE_ATTEMPTS; attempt++) {
-    const signed = await signRecordBody({ ...body, version: intended }, ctx.signing);
-    const sealed = await roomsKeysSeal(ctx.vta.sender, {
-      ...vta,
-      roomId: ctx.roomId,
-      key: body.key,
-      version: intended,
-      plaintext: base64url.encode(signed),
-    });
-    landed = (
-      await roomsRecordsPutV2(ctx.host.sender, {
-        ...host,
+  const key = opaqueRecordKey();
+  let version: number;
+  try {
+    version = await writeSealedAsMember(
+      ctx,
+      {
         roomId: ctx.roomId,
-        presentation: write,
-        key: body.key,
-        sealed,
-        blobRef,
-        expectedVersion: expected,
-      })
-    ).version;
-    if (landed === intended) return landed;
-    expected = landed;
-    intended = landed + 1;
+        key,
+        author: principal,
+        ...(file.title !== undefined ? { title: file.title } : {}),
+        ...(file.description !== undefined ? { description: file.description } : {}),
+        ...(file.tags !== undefined ? { tags: file.tags } : {}),
+        file: manifests.file as unknown as Record<string, unknown>,
+      },
+      blobRef,
+    );
+  } catch (e) {
+    if (e instanceof VersionRaceError) {
+      throw new RoomFileError(
+        "versionRace",
+        `${e.key} is stored at version ${e.landed} but sealed for another, so it does not open: the room kept ` +
+          `moving. Put the file again.`,
+      );
+    }
+    throw e;
   }
-  throw new RoomFileError(
-    "versionRace",
-    `${body.key} is stored at version ${landed} but sealed for another, so it does not open: the room kept ` +
-      `moving under ${SEALED_WRITE_ATTEMPTS} attempts. Put the file again.`,
-  );
+  return { key, version, blobRef, size: file.bytes.length, author: principal };
 }
 
 // ── Get ─────────────────────────────────────────────────────────────────────
@@ -430,13 +422,14 @@ export async function getRoomFile(
 ): Promise<RoomFileGot> {
   const progress = (p: RoomFileProgress) => ctx.onProgress?.(p);
   const vta = { holder: ctx.holder, service: { did: ctx.vta.did } };
-  const host = { holder: ctx.holder, service: { did: ctx.host.did } };
 
-  progress({ stage: "presenting" });
-  const read = await present(ctx, "read");
-  check(ctx.signal);
   progress({ stage: "reading" });
-  const record = await roomsRecordsGetV2(ctx.host.sender, { ...host, roomId: ctx.roomId, presentation: read, key });
+  const { principal, reply: record } = await actAndSend<RoomsRecordsGetResponsePayload>(
+    ctx,
+    RECORDS_GET,
+    RECORDS_GET_RESPONSE,
+    { roomId: ctx.roomId, key },
+  );
   if (!record.sealed) {
     throw new RoomFileError(
       "noFile",
@@ -467,12 +460,15 @@ export async function getRoomFile(
   }
   check(ctx.signal);
 
-  const started = await roomsBlobsGet(ctx.host.sender, {
-    ...host,
+  const { reply: started } = await actAndSend<RoomsBlobsGetResponsePayload>(ctx, BLOBS_GET, BLOBS_GET_RESPONSE, {
     roomId: ctx.roomId,
-    presentation: read,
     blobRef: file.blobRef,
+    direct: false,
   });
+  const downloadId = started.downloadId;
+  if (started.mode !== "proxied" || typeof downloadId !== "string") {
+    throw new RoomFileError("hostMisbehaved", `${ctx.host.did} answered a proxied download with no download handle`);
+  }
   const blob = started.manifest;
   const fileKey = await roomsKeysFileKey(ctx.vta.sender, {
     ...vta,
@@ -490,7 +486,16 @@ export async function getRoomFile(
     progress({ stage: "downloading", done: 0, total });
     for (let index = 0; index < total; index++) {
       check(ctx.signal);
-      const chunk = await roomsBlobsChunk(ctx.host.sender, { ...host, downloadId: started.downloadId, index });
+      // A chunk request names no room, so it names the member: the download is
+      // theirs, opened by their own get.
+      const { reply } = await actAndSend<RoomsBlobsChunkResponsePayload>(
+        ctx,
+        BLOBS_CHUNK,
+        BLOBS_CHUNK_RESPONSE,
+        { downloadId, index },
+        principal,
+      );
+      const chunk = readChunkReply(ctx.host.did, index, reply);
       // Against the manifest, not against the digest the host sent beside the
       // bytes: both are the host's word, and only one of them is committed.
       if (!sameDigest(await digestOf(chunk.data), blob.chunks.chunkDigests[index]!)) {
