@@ -1,4 +1,12 @@
-// The channel to a room's host — HTTPS, signed by the caller, no bearer.
+// The channel to a room's host — HTTPS, no bearer.
+//
+// Two kinds of document travel on it. A **completed** document — one the
+// member's VTA finished as the member (`rooms/keys/act`), presentation and
+// proof included — goes out exactly as it came back (`sendCompleted`): nothing
+// here signs it, and nothing here could, since the member's key is the VTA's.
+// A document signed **here** (`send`) is one signed by a key this context
+// holds: the single-use upload key a proxied upload's chunks, commit and abort
+// are signed by (`rooms/blobs/upload/*/0.2`).
 //
 // A room call carries no session. The host authorises it from the presentation
 // in the payload, which the member's VTA minted for the DID that signs the
@@ -28,8 +36,9 @@ export interface RoomHostChannelOptions {
   hostDid: string;
   /** The dispatcher URL, `<TrustTaskHTTPS base>/trust-tasks`. See {@link roomHostEndpoint}. */
   endpoint: string;
-  /** Signs every request. Its DID must be the one the presentation was minted for. */
-  signing: ChannelSigner;
+  /** Signs what `send` sends: an upload's single-use key. Absent on a channel
+   *  that carries only completed documents (`sendCompleted`). */
+  signing?: ChannelSigner;
   fetch?: typeof fetch;
   netPolicy?: NetPolicy;
 }
@@ -38,13 +47,13 @@ export interface RoomHostChannelOptions {
 export class RoomHostChannel implements TrustTaskSender {
   readonly hostDid: string;
   private readonly endpoint: string;
-  private readonly signer: TaskSigner;
+  private readonly signer: TaskSigner | undefined;
   private readonly policyFetch: typeof fetch;
 
   constructor(opts: RoomHostChannelOptions) {
     this.hostDid = opts.hostDid;
     this.endpoint = opts.endpoint;
-    this.signer = asTaskSigner(opts.signing);
+    this.signer = opts.signing ? asTaskSigner(opts.signing) : undefined;
     this.policyFetch = guardedFetch(opts.fetch, {
       label: "room host",
       schemes: ["https:"],
@@ -56,13 +65,47 @@ export class RoomHostChannel implements TrustTaskSender {
     const label = opts.operationLabel ?? envelope.type;
     // A document addressed elsewhere would be signed by this caller and handed
     // to a host it does not name — refused before it is signed.
+    this.checkAddressed(envelope, label);
+    if (!this.signer) {
+      throw new VtaClientError(
+        "e.client.identity",
+        `${label}: this channel to ${this.hostDid} carries completed documents only, and signs nothing`,
+      );
+    }
+    await signOutboundTask(envelope, this.signer);
+    return this.post<Res>(envelope, label, opts);
+  }
+
+  /**
+   * Send a document the member's VTA completed (`rooms/keys/act`), unchanged.
+   *
+   * It must already carry its proof and its issuer — the member — and be
+   * addressed to this host. The reply is believed only once it is the host's,
+   * threaded to this document and addressed back to the member.
+   */
+  async sendCompleted<Res>(document: Record<string, unknown>, opts: SendOpts = {}): Promise<Res> {
+    const envelope = document as unknown as TrustTask<unknown>;
+    const label = opts.operationLabel ?? String(envelope.type);
+    this.checkAddressed(envelope, label);
+    if (typeof envelope.issuer !== "string" || !(document as { proof?: unknown }).proof) {
+      throw new VtaClientError(
+        "e.client.identity",
+        `${label}: the document came back from the VTA without an issuer or a proof, so it is not one the member signed`,
+      );
+    }
+    return this.post<Res>(envelope, label, opts);
+  }
+
+  private checkAddressed(envelope: TrustTask<unknown>, label: string): void {
     if (envelope.recipient !== this.hostDid) {
       throw new VtaClientError(
         "e.client.parse",
         `${label}: the document is addressed to ${String(envelope.recipient)}, not to the host ${this.hostDid}`,
       );
     }
-    await signOutboundTask(envelope, this.signer);
+  }
+
+  private async post<Res>(envelope: TrustTask<unknown>, label: string, opts: SendOpts): Promise<Res> {
     const timeoutMs = opts.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
     let res: Response;
     try {

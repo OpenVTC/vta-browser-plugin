@@ -2790,7 +2790,8 @@ export type RoomFilesMessage =
   /** Plaintext that has opened but is not yet the file its author signed. Held,
    *  never released, until `got`; discarded on `failed`. */
   | { kind: "provisional"; data: string /* base64url */ }
-  | { kind: "put"; key: string; version: number; blobRef: string; size: number }
+  /** `author`: the member the record was written as — the persona, never the wallet. */
+  | { kind: "put"; key: string; version: number; blobRef: string; size: number; author: string }
   | {
       kind: "got";
       /** The author's manifest. Untrusted text from another member. */

@@ -198,11 +198,11 @@ test("an upload is sent in slices and ended, and resolves on the record", async 
   const file = new Blob([new Uint8Array(500_000).fill(7)], { type: "application/pdf" });
   pair.offscreen.onMessage.addListener((m: unknown) => {
     if ((m as { kind: string }).kind === "end") {
-      pair.offscreen.postMessage({ kind: "put", key: "k", version: 3, blobRef: "zRef", size: 500_000 });
+      pair.offscreen.postMessage({ kind: "put", key: "k", version: 3, blobRef: "zRef", size: 500_000, author: "did:webvh:QmAlice:people.example" });
     }
   });
   const put = await putRoomFileFromConsole(TARGET, file, { name: "a.pdf" }, { connect: () => pair.console as never, prepare: PREPARED });
-  assert.deepEqual(put, { key: "k", version: 3, blobRef: "zRef", size: 500_000 });
+  assert.deepEqual(put, { key: "k", version: 3, blobRef: "zRef", size: 500_000, author: "did:webvh:QmAlice:people.example" });
   const sent = pair.console.posted as Array<{ kind: string; size?: number; mediaType?: string; data?: string }>;
   assert.equal(sent[0]!.kind, "put");
   assert.equal(sent[0]!.size, 500_000);

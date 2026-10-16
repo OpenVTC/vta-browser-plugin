@@ -501,7 +501,12 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // imports, and CI bans its URI from every other bundle: what it returns is
   // key material. The host-served half of room files (`rooms/blobs/*`,
   // `rooms/info`) is in NOT_IN_SDK, beside the other host verbs.
-  const expected = 213;
+  //
+  // 213 → 216 is acting as the member (`data-rooms-files.md` §8.5):
+  // `rooms/keys/act/0.1` is new, and the snapshot, resynced from vta-sdk 0.69.0,
+  // now lists `rooms/info` and `rooms/records/get` — host verbs the SDK names
+  // since its own client builds them for `act` — so they count here too.
+  const expected = 216;
   assert.equal(
     implemented.size,
     expected,

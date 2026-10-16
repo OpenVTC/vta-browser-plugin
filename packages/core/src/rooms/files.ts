@@ -21,9 +21,11 @@
 //
 // ## Two recipients, as for the rest of `rooms/*`
 //
-// `rooms/keys/file-key` goes to the member's **own VTA**. Everything else here
-// goes to the room's **host**, which stores ciphertext it cannot read and
-// authorises each call from the presentation the VTA minted for this caller.
+// `rooms/keys/file-key` goes to the member's **own VTA**. Everything else goes
+// to the room's **host**, which stores ciphertext it cannot read. The member's
+// own requests reach it completed by their VTA as the member
+// (`rooms/keys/act`, `./act.ts`); a proxied upload's chunks, commit and abort
+// are signed by that upload's single-use key.
 //
 // ## A file's manifest is believed only through the author's signature
 //
@@ -42,68 +44,27 @@ import { signTrustTask } from "../trust-tasks/sign.js";
 import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
-import type { RoomsCaller, RoomsHostCall } from "./index.js";
+import type { RoomsCaller } from "./index.js";
 
-import {
-  TYPE_URI as INFO,
-  RESPONSE_TYPE_URI as INFO_RESPONSE,
-  type RoomsInfoPayload,
-  type RoomsInfoResponsePayload,
-} from "@openvtc/trust-tasks/rooms/info/0.1/payload";
-import {
-  TYPE_URI as RECORDS_LIST,
-  RESPONSE_TYPE_URI as RECORDS_LIST_RESPONSE,
-  type RoomsRecordsListPayload,
-  type RoomsRecordsListResponsePayload,
-} from "@openvtc/trust-tasks/rooms/records/list/0.1/payload";
-import {
-  TYPE_URI as RECORDS_GET,
-  RESPONSE_TYPE_URI as RECORDS_GET_RESPONSE,
-  type RoomsRecordsGetPayload,
-  type RoomsRecordsGetResponsePayload,
-} from "@openvtc/trust-tasks/rooms/records/get/0.2/payload";
-import {
-  TYPE_URI as RECORDS_PUT,
-  RESPONSE_TYPE_URI as RECORDS_PUT_RESPONSE,
-  type RoomsRecordsPutPayload,
-  type RoomsRecordsPutResponsePayload,
-} from "@openvtc/trust-tasks/rooms/records/put/0.2/payload";
-import {
-  TYPE_URI as UPLOAD_BEGIN,
-  RESPONSE_TYPE_URI as UPLOAD_BEGIN_RESPONSE,
-  type RoomsBlobsUploadBeginPayload,
-  type RoomsBlobsUploadBeginResponsePayload,
-} from "@openvtc/trust-tasks/rooms/blobs/upload/begin/0.1/payload";
 import {
   TYPE_URI as UPLOAD_CHUNK,
   RESPONSE_TYPE_URI as UPLOAD_CHUNK_RESPONSE,
   type RoomsBlobsUploadChunkPayload,
   type RoomsBlobsUploadChunkResponsePayload,
-} from "@openvtc/trust-tasks/rooms/blobs/upload/chunk/0.1/payload";
+} from "@openvtc/trust-tasks/rooms/blobs/upload/chunk/0.2/payload";
 import {
   TYPE_URI as UPLOAD_COMMIT,
   RESPONSE_TYPE_URI as UPLOAD_COMMIT_RESPONSE,
   type RoomsBlobsUploadCommitPayload,
   type RoomsBlobsUploadCommitResponsePayload,
-} from "@openvtc/trust-tasks/rooms/blobs/upload/commit/0.1/payload";
+} from "@openvtc/trust-tasks/rooms/blobs/upload/commit/0.2/payload";
 import {
   TYPE_URI as UPLOAD_ABORT,
   RESPONSE_TYPE_URI as UPLOAD_ABORT_RESPONSE,
   type RoomsBlobsUploadAbortPayload,
   type RoomsBlobsUploadAbortResponsePayload,
-} from "@openvtc/trust-tasks/rooms/blobs/upload/abort/0.1/payload";
-import {
-  TYPE_URI as BLOBS_GET,
-  RESPONSE_TYPE_URI as BLOBS_GET_RESPONSE,
-  type RoomsBlobsGetPayload,
-  type RoomsBlobsGetResponsePayload,
-} from "@openvtc/trust-tasks/rooms/blobs/get/0.1/payload";
-import {
-  TYPE_URI as BLOBS_CHUNK,
-  RESPONSE_TYPE_URI as BLOBS_CHUNK_RESPONSE,
-  type RoomsBlobsChunkPayload,
-  type RoomsBlobsChunkResponsePayload,
-} from "@openvtc/trust-tasks/rooms/blobs/chunk/0.1/payload";
+} from "@openvtc/trust-tasks/rooms/blobs/upload/abort/0.2/payload";
+import type { RoomsBlobsChunkResponsePayload } from "@openvtc/trust-tasks/rooms/blobs/chunk/0.1/payload";
 import {
   TYPE_URI as KEYS_FILE_KEY,
   RESPONSE_TYPE_URI as KEYS_FILE_KEY_RESPONSE,
@@ -131,101 +92,14 @@ async function call<Res>(
   });
 }
 
-// ── The host ────────────────────────────────────────────────────────────────
-
-/** The room's tier, epoch, limits and usage — what a surface checks before an upload. */
-export async function roomsInfo(
-  sender: TrustTaskSender,
-  params: RoomsHostCall,
-): Promise<RoomsInfoResponsePayload> {
-  const payload: RoomsInfoPayload = { roomId: params.roomId, presentation: params.presentation };
-  return call(sender, params, INFO, INFO_RESPONSE, "rooms/info/0.1", payload);
-}
-
-/**
- * The room's head version: the version the next write is predicted to take,
- * less one. `0` for a room holding no records, and for a host that keeps no
- * record tree (which then corrects the prediction on the put).
- */
-export async function roomsHeadVersion(
-  sender: TrustTaskSender,
-  params: RoomsHostCall,
-): Promise<number> {
-  const payload: RoomsRecordsListPayload = {
-    roomId: params.roomId,
-    presentation: params.presentation,
-    limit: 1,
-  };
-  const res = await call<RoomsRecordsListResponsePayload>(
-    sender,
-    params,
-    RECORDS_LIST,
-    RECORDS_LIST_RESPONSE,
-    "rooms/records/list/0.1",
-    payload,
-  );
-  return res.headVersion ?? 0;
-}
-
-/** One record, with the blobs the host says it names. Open `sealed` with the VTA. */
-export async function roomsRecordsGetV2(
-  sender: TrustTaskSender,
-  params: RoomsHostCall & { key: string },
-): Promise<RoomsRecordsGetResponsePayload> {
-  const payload: RoomsRecordsGetPayload = {
-    roomId: params.roomId,
-    key: params.key,
-    presentation: params.presentation,
-  };
-  return call(sender, params, RECORDS_GET, RECORDS_GET_RESPONSE, "rooms/records/get/0.2", payload);
-}
-
-/**
- * Store a sealed record, naming the blob its file is in.
- *
- * The host refuses a record that names a blob not committed in this room, so the
- * upload is committed first and this is the last step. `version` is not a
- * parameter: the host assigns it, and the caller sealed for the one it predicted
- * (see `roomsWriteSealed` in `@openvtc/pnm-core/rooms` for why that matters).
- */
-export async function roomsRecordsPutV2(
-  sender: TrustTaskSender,
-  params: RoomsHostCall & {
-    key: string;
-    expectedVersion?: number;
-    sealed: { ciphertext: string; nonce: string; epoch: number };
-    blobRef?: string;
-  },
-): Promise<RoomsRecordsPutResponsePayload> {
-  const payload: RoomsRecordsPutPayload = {
-    roomId: params.roomId,
-    key: params.key,
-    presentation: params.presentation,
-    sealed: params.sealed,
-    ...(params.expectedVersion !== undefined ? { expectedVersion: params.expectedVersion } : {}),
-    ...(params.blobRef !== undefined ? { blobs: [params.blobRef] } : {}),
-  };
-  return call(sender, params, RECORDS_PUT, RECORDS_PUT_RESPONSE, "rooms/records/put/0.2", payload);
-}
-
-/**
- * Open an upload, committing to the ciphertext manifest before any byte moves.
- *
- * `missing` is every chunk the host still needs: all of them on a first call,
- * fewer when resuming an upload of the same manifest. `alreadyCommitted` means
- * this exact blob is in the room already, and nothing needs sending.
- */
-export async function roomsBlobsUploadBegin(
-  sender: TrustTaskSender,
-  params: RoomsHostCall & { manifest: RoomsBlobsUploadBeginPayload["manifest"] },
-): Promise<RoomsBlobsUploadBeginResponsePayload> {
-  const payload: RoomsBlobsUploadBeginPayload = {
-    roomId: params.roomId,
-    presentation: params.presentation,
-    manifest: params.manifest,
-  };
-  return call(sender, params, UPLOAD_BEGIN, UPLOAD_BEGIN_RESPONSE, "rooms/blobs/upload/begin/0.1", payload);
-}
+// ── The host, under an upload's single-use key ──────────────────────────────
+//
+// A proxied upload's begin is the member's act (completed by their VTA through
+// `rooms/keys/act`); its chunks, commit and abort are signed by the `uploadKey`
+// the begin named — a `did:key` minted for that one upload, so the member's key
+// holder never signs over a file's bytes (`rooms/blobs/upload/begin/0.2`). The
+// host binds the key to the upload and charges the member. `holder` below is
+// that key's DID, and `sender` a channel signed by it.
 
 /** Send one chunk. Idempotent: resending a stored chunk is a success. */
 export async function roomsBlobsUploadChunk(
@@ -238,7 +112,7 @@ export async function roomsBlobsUploadChunk(
     digestMultibase: params.digestMultibase,
     data: base64url.encode(params.data),
   };
-  return call(sender, params, UPLOAD_CHUNK, UPLOAD_CHUNK_RESPONSE, "rooms/blobs/upload/chunk/0.1", payload);
+  return call(sender, params, UPLOAD_CHUNK, UPLOAD_CHUNK_RESPONSE, "rooms/blobs/upload/chunk/0.2", payload);
 }
 
 /** Finish an upload: the host checks the whole blob against the manifest and stores it. */
@@ -247,7 +121,7 @@ export async function roomsBlobsUploadCommit(
   params: RoomsCaller & { uploadId: string },
 ): Promise<RoomsBlobsUploadCommitResponsePayload> {
   const payload: RoomsBlobsUploadCommitPayload = { uploadId: params.uploadId };
-  return call(sender, params, UPLOAD_COMMIT, UPLOAD_COMMIT_RESPONSE, "rooms/blobs/upload/commit/0.1", payload);
+  return call(sender, params, UPLOAD_COMMIT, UPLOAD_COMMIT_RESPONSE, "rooms/blobs/upload/commit/0.2", payload);
 }
 
 /** Abandon an upload and release what `begin` reserved. Safe to repeat. */
@@ -256,48 +130,21 @@ export async function roomsBlobsUploadAbort(
   params: RoomsCaller & { uploadId: string },
 ): Promise<RoomsBlobsUploadAbortResponsePayload> {
   const payload: RoomsBlobsUploadAbortPayload = { uploadId: params.uploadId };
-  return call(sender, params, UPLOAD_ABORT, UPLOAD_ABORT_RESPONSE, "rooms/blobs/upload/abort/0.1", payload);
+  return call(sender, params, UPLOAD_ABORT, UPLOAD_ABORT_RESPONSE, "rooms/blobs/upload/abort/0.2", payload);
 }
 
 /**
- * Open a download: the blob's ciphertext manifest and a handle for its chunks.
- *
- * The manifest is the host's word. Check it against the author's file manifest
- * (`FileOpener.withKey` does) before trusting a byte fetched under it.
+ * Read a `rooms/blobs/chunk/0.1` reply. A reply for another index is refused
+ * here. The chunk's digest is the host's claim; the caller compares the bytes
+ * with the manifest's, and the AEAD decides.
  */
-export async function roomsBlobsGet(
-  sender: TrustTaskSender,
-  params: RoomsHostCall & { blobRef: string },
-): Promise<RoomsBlobsGetResponsePayload> {
-  const payload: RoomsBlobsGetPayload = {
-    roomId: params.roomId,
-    presentation: params.presentation,
-    blobRef: params.blobRef,
-  };
-  return call(sender, params, BLOBS_GET, BLOBS_GET_RESPONSE, "rooms/blobs/get/0.1", payload);
-}
-
-/**
- * Fetch one chunk of an open download.
- *
- * A reply for another index is refused here. The chunk's digest is the host's
- * claim; the caller compares it with the manifest's, and the AEAD decides.
- */
-export async function roomsBlobsChunk(
-  sender: TrustTaskSender,
-  params: RoomsCaller & { downloadId: string; index: number },
-): Promise<{ index: number; digestMultibase: string; data: Uint8Array }> {
-  const payload: RoomsBlobsChunkPayload = { downloadId: params.downloadId, index: params.index };
-  const res = await call<RoomsBlobsChunkResponsePayload>(
-    sender,
-    params,
-    BLOBS_CHUNK,
-    BLOBS_CHUNK_RESPONSE,
-    "rooms/blobs/chunk/0.1",
-    payload,
-  );
-  if (res.index !== params.index) {
-    throw new Error(`${params.service.did} answered chunk ${res.index} to a request for ${params.index}`);
+export function readChunkReply(
+  hostDid: string,
+  index: number,
+  res: RoomsBlobsChunkResponsePayload,
+): { index: number; digestMultibase: string; data: Uint8Array } {
+  if (res.index !== index) {
+    throw new Error(`${hostDid} answered chunk ${res.index} to a request for ${index}`);
   }
   return { index: res.index, digestMultibase: res.digestMultibase, data: base64url.decode(res.data) };
 }

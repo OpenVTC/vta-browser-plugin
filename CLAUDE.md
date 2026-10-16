@@ -906,16 +906,36 @@ are read *through the agent* (`rooms/keys/{browse,read}`): the console's bridge
 carries only `type` and `payload` to the wallet's own VTA, so the agent makes the
 host call. Files cannot go that way — their bytes must not pass through the VTA
 — so the offscreen document calls the host directly (`RoomHostChannel`: HTTPS to
-the host's `TrustTaskHTTPS` endpoint, signed by the wallet's DID, no bearer, the
-reply believed only once it is signed by the host and threaded to the request).
-The VTA's part is what it alone can do: the presentations (`rooms/keys/present`,
-granted to the wallet's DID, which is why the host leg must be signed by that
-same DID), the file key, and sealing and opening the record body. The flow is
-`@openvtc/pnm-core/rooms/files`'s `putRoomFile` / `getRoomFile`, step for step
-the CLI's `pnm rooms file put` / `get`, so a file either writes opens in the
-other. The host's origin needs a just-in-time host permission, requested in the
-console's click (`prepareRoomFiles` → `requestOriginPermission`). Key handling
-is in "Key material never reaches a browser" below.
+the host's `TrustTaskHTTPS` endpoint, no bearer, the reply believed only once it
+is signed by the host, threaded to the request and addressed to its issuer).
+The flow is `@openvtc/pnm-core/rooms/files`'s `putRoomFile` / `getRoomFile`,
+step for step the CLI's `pnm rooms file put` / `get`, so a file either writes
+opens in the other. The host's origin needs a just-in-time host permission,
+requested in the console's click (`prepareRoomFiles` → `requestOriginPermission`).
+Key handling is in "Key material never reaches a browser" below.
+
+**The member is the persona, never the wallet** (VTI `data-rooms-files.md`
+§8.5). A room admitted the member's persona — a DID their VTA holds — and the
+wallet holds none of its keys. So every request the host receives is built here
+**unsigned** and completed by the VTA as the persona (`rooms/keys/act`,
+`@openvtc/pnm-core/rooms`'s `actAndSend`), then sent unchanged
+(`RoomHostChannel.sendCompleted`); a record body is signed by the VTA as the
+persona and sealed in one call (`rooms/keys/seal/0.2`, `signAsPrincipal`). The
+one exception is a proxied upload's chunks, commit and abort, signed by a
+`did:key` minted in the offscreen document for that upload alone
+(`rooms/blobs/upload/*/0.2`'s `uploadKey`) and dropped after. The wallet's own
+DID is only ever the caller of the VTA tasks; a host never sees it. Transfers
+from the browser are **proxied**: begin omits `directParts` and get asks
+`direct: false`, because a direct target is on the storage provider's origin,
+which the extension holds no permission for.
+
+**What breaks it:** signing a host-bound room request with the wallet's key
+(the host would record the wallet's `did:key` as a member and author);
+`rooms/keys/present` for the wallet's own DID on a member's path (it is for
+delegation, not for being the member); sending a completed document on any
+channel but HTTPS (DIDComm and TSP consumers require the sender to be the
+signer, and the socket is the wallet's); or accepting a completed document
+without checking it is the request that was built (`roomsKeysAct` does).
 
 ## The Mediator Lens: the relay, seen from inside
 
