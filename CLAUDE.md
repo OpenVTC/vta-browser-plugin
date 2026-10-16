@@ -937,6 +937,56 @@ channel but HTTPS (DIDComm and TSP consumers require the sender to be the
 signer, and the socket is the wallet's); or accepting a completed document
 without checking it is the request that was built (`roomsKeysAct` does).
 
+## A portal page uses rooms through the wallet's own methods (P7b)
+
+`window.vtaWallet.rooms.{list, choose, forget, info, browse, read, putNote,
+getFile, putFile}` is how a community's member portal shows a member their rooms
+(VTI `data-rooms-files.md` §8.5). It does **not** loosen "a page is not a
+member": `requestTask` and `signTrustTask` still refuse the whole `rooms/`
+family. The methods fix the verb, run the flow in the extension, and return
+views the wallet built (`PageRoomView`, `PageRecordView`, … in
+`bridge-protocol.ts`) — never a task reply, a presentation, a signed document
+or a key. The gates are `room-page-background.ts` (`RoomPageGates`), the rules
+`room-page-policy.ts`, the work `room-page-offscreen.ts`.
+
+**Four gates, in order, before the offscreen document does anything.** (1) The
+call is well formed. (2) The page is the community's portal: every call names
+`hostDid`, and the page's **browser-attested** origin must equal the origin of
+that DID document's first usable `SignInPortal`, resolved and verified as the
+trigger-link sign-in does (domain-linked contacts also need their DID
+Configuration); host requests go to the same document's `TrustTaskHTTPS`. (3)
+The member shared the room with that origin. (4) A write is confirmed.
+
+**Rooms are shared by the member, one by one, because nothing else can say
+which rooms a community hosts.** A room's DID names no host (deliberately: a
+room may be registered with several), and `rooms/keys/list` returns identifiers
+only. So `choose` opens `confirm.html?kind=room` listing the rooms the VTA
+holds; the member ticks those that belong; each is confirmed with the host as
+the member (`rooms/info`) before it is shared; the selection is the whole of
+what is shared afterwards. A share is a grant `(origin, hostDid, vtaDid,
+roomId)` in `chrome.storage.local` under `room-grants:`, for 30 days, listed and
+revocable in the console (`manager/panes/rooms-shares.tsx`). A page asking
+about a room it was not given gets one sentence whatever the reason.
+
+**A private room is never shared with a portal.** Its host is not to learn
+which member acts, and the portal is the host's own page and knows who is
+signed in.
+
+**Reads ride the share; every write is confirmed**, in a window naming the
+room, the persona that will sign and what will be written (title and excerpt,
+or file name and size), with no "remember". A file's bytes reach the page only
+after the whole file verified against its author's digest: the background holds
+the offscreen document's provisional pieces and releases them on `got`, and
+drops them on anything else.
+
+**What breaks it:** taking `hostDid`'s portal from anything but its verified
+DID document, or comparing origins loosely; letting a page name a room's host
+for a room it was not shared; passing a VTA or host reply to the page as is
+(views are built member by member); a share prompt that the page can
+pre-approve, or a write with a "remember" box; posting a provisional download
+byte; or adding a `rooms/*` URI to `provider.js`, `content.js` or
+`background.js` — CI fails the build on the last.
+
 ## The Mediator Lens: the relay, seen from inside
 
 `manager/panes/mediator.tsx` asks the **mediator**, not the agent. An Affinidi

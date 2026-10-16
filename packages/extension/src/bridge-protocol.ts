@@ -39,7 +39,8 @@ export type BridgeMethod =
   | "approverIdentity"
   | "approveStepUp"
   | "attestApprover"
-  | "approveDecision";
+  | "approveDecision"
+  | "rooms";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2).
  *  @deprecated Legacy sign-in (sign-in contract C7); kept working. New pages
@@ -629,6 +630,9 @@ export interface RuntimeConsentResult {
    *  treats an approval that arrives without it as a denial rather than
    *  guessing a persona on the operator's behalf. */
   selectedDid?: string;
+  /** Room-share prompt only: the rooms the member ticked to share with the
+   *  page's origin (`data-rooms-files.md` §8.5). Ignored on a denial. */
+  selectedRooms?: string[];
 }
 
 /** confirm popup → background: resolve + verify an RP DID. */
@@ -2402,6 +2406,149 @@ export type MonitorMessage =
  *  this file. */
 export const RUNTIME_TRIGGER_LINK = "vta-wallet/trigger-link" as const;
 
+// ─── Data rooms for a page: `window.vtaWallet.rooms` (P7b) ──────────────────
+//
+// VTI `docs/05-design-notes/data-rooms-files.md` §8.5. A page never drives a
+// `rooms/*` task: `requestTask` and `signTrustTask` still refuse the whole
+// family (`page-task-policy.ts`). It calls these methods, whose verbs are fixed,
+// whose flows run in the extension, and whose answers are views the wallet
+// built — never a task result, a presentation, a signed document or a key.
+//
+// Every call names `hostDid`, the community whose portal the page claims to be.
+// The background refuses unless the page's browser-attested origin is the
+// origin of that DID document's `SignInPortal`, and acts only on rooms the
+// member shared with that origin (`room-page-policy.ts`).
+
+/** page → background, through the content script: one room operation. */
+export const RUNTIME_ROOMS_PAGE = "vta-wallet/rooms-page" as const;
+
+export type RoomsPageOp =
+  | { op: "list"; hostDid: string }
+  | { op: "choose"; hostDid: string; suggest?: string }
+  | { op: "forget"; hostDid: string; roomId: string }
+  | { op: "info"; hostDid: string; roomId: string }
+  | { op: "browse"; hostDid: string; roomId: string; prefix?: string; sinceVersion?: number }
+  | { op: "read"; hostDid: string; roomId: string; key: string }
+  | {
+      op: "putNote";
+      hostDid: string;
+      roomId: string;
+      title: string;
+      body?: string;
+      description?: string;
+      tags?: string[];
+    };
+
+export interface RuntimeRoomsPageRequest {
+  type: typeof RUNTIME_ROOMS_PAGE;
+  /** Overwritten by the background with the browser-attested origin. */
+  origin: string;
+  params: RoomsPageOp;
+}
+
+export type RuntimeRoomsPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
+
+/** A room the member shared with this page's origin. */
+export interface PageRoomView {
+  roomId: string;
+  /** The epoch the member's VTA is at, and the earliest it can read. */
+  epoch?: number;
+  earliestReadableEpoch?: number;
+  /** False when the VTA no longer holds keys for it (removed, or not yet welcomed). */
+  held: boolean;
+  sharedAt: string;
+  expiresAt: string;
+}
+
+/** `rooms.info`: the room as its host reports it to the member. */
+export interface PageRoomInfoView {
+  roomId: string;
+  visibility: string;
+  epoch: number;
+  /** The member the wallet acts as in this room. */
+  member: string;
+  limits: unknown;
+  usage: unknown;
+}
+
+/** One row of `rooms.browse`: metadata, never a body. */
+export interface PageRecordSummary {
+  key: string;
+  version: number;
+  updatedAt: string;
+  status?: string;
+  epoch?: number;
+  author?: string;
+  /** `open` rooms only: on a sealed room the title is inside the body. */
+  title?: string;
+  description?: string;
+}
+
+export interface PageListingView {
+  records: PageRecordSummary[];
+  complete: boolean;
+  /** The member's VTA's account of what it checked. A verdict, never a failure. */
+  verification: unknown;
+}
+
+/** `rooms.read`: one record, verified before any of it is shown. */
+export interface PageRecordView {
+  key: string;
+  version: number;
+  status: string;
+  updatedAt: string;
+  author?: string;
+  title?: string;
+  description?: string;
+  /** Markdown, untrusted text from another member: render it inert. */
+  body?: string;
+  tags?: string[];
+  file?: { name: string; mediaType?: string; size: number };
+  /** False on an `open` room, where the host stores and can alter cleartext. */
+  sealed: boolean;
+  verification: unknown;
+}
+
+/** page ⇄ background: one file transfer, over a port the content script opens. */
+export const ROOM_FILES_PAGE_PORT = "vta-wallet/room-files-page" as const;
+
+/** page → background, once, as the port's first message. */
+export type RoomFilesPageOpen =
+  | { kind: "get"; hostDid: string; roomId: string; key: string }
+  | {
+      kind: "put";
+      hostDid: string;
+      roomId: string;
+      name: string;
+      mediaType?: string;
+      size: number;
+      title?: string;
+      description?: string;
+      tags?: string[];
+    };
+
+/** page → background, after `ready` on a put: the file, in order, then `end`. */
+export type RoomFilesPageUpload = { kind: "data"; data: string /* base64url */ } | { kind: "end" };
+
+/** background → page. A download's bytes come only after the whole file verified. */
+export type RoomFilesPageMessage =
+  | { kind: "progress"; stage: string; done?: number; total?: number }
+  /** The member confirmed the upload: send the bytes. */
+  | { kind: "ready" }
+  | { kind: "put"; key: string; version: number; size: number }
+  | {
+      kind: "got";
+      file: { name: string; mediaType?: string; size: number };
+      author: string;
+      version: number;
+      title?: string;
+      description?: string;
+      tags?: string[];
+    }
+  | { kind: "data"; data: string /* base64url */ }
+  | { kind: "done" }
+  | { kind: "failed"; error: string };
+
 export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
@@ -2420,6 +2567,7 @@ export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_APPROVE_STEP_UP,
   RUNTIME_ATTEST_APPROVER,
   RUNTIME_APPROVE_DECISION,
+  RUNTIME_ROOMS_PAGE,
   // Not a provider method: the content script's own click listener sends it
   // (`trigger-link-click.ts`). Listed so the background takes the activation
   // origin from the browser, never from the body (VTI-LNK-056).
@@ -2751,6 +2899,38 @@ export interface OffscreenRoomHostEndpointRequest {
 }
 
 export type OffscreenRoomHostEndpointResponse = { ok: true; endpoint: string } | { ok: false; error: string };
+
+/** background → offscreen: the room work behind a page's `rooms.*` call. Sent
+ *  only after the background has checked the page's portal and grant. */
+export const OFFSCREEN_ROOMS_PAGE = "offscreen/rooms-page" as const;
+
+export type OffscreenRoomsPageOp =
+  /** The host's portal origin and Trust-Task endpoint, from its verified DID document. */
+  | { op: "portal"; hostDid: string }
+  /** The rooms the member's VTA holds keys for. */
+  | { op: "held" }
+  | { op: "info"; hostDid: string; roomId: string }
+  | { op: "browse"; hostDid: string; roomId: string; prefix?: string; sinceVersion?: number }
+  | { op: "read"; hostDid: string; roomId: string; key: string }
+  | {
+      op: "putNote";
+      hostDid: string;
+      roomId: string;
+      title: string;
+      body?: string;
+      description?: string;
+      tags?: string[];
+    };
+
+export interface OffscreenRoomsPageRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_ROOMS_PAGE;
+  vtaDid: string;
+  restBaseUrl?: string;
+  params: OffscreenRoomsPageOp;
+}
+
+export type OffscreenRoomsPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
 
 /**
  * Port name for one file transfer, console → offscreen. The port's lifetime is

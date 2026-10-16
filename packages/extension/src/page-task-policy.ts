@@ -43,6 +43,12 @@
 //
 // The refusal is the family, not those three, because the boundary is "a page
 // is not a member" rather than a judgement about particular verbs.
+//
+// That boundary stands. What a community's own portal gets instead (P7b) is
+// `window.vtaWallet.rooms` (`room-page-background.ts`): the wallet fixes the
+// verb and runs the flow, the page must be the portal its community's DID
+// document names, it sees only rooms the member shared with it, and every write
+// is confirmed. It never receives a task's reply as such.
 
 /**
  * The task families a page may never drive directly, with what to say instead.
@@ -67,8 +73,9 @@ const REFUSED: { prefix: string; why: string }[] = [
       "holds none of them. Reading a record returns plaintext the room withholds " +
       "even from its host; listing keys discloses what the holder is a member of; " +
       "and the owner verbs mint credentials in the room's name, which is authority " +
-      "to admit or promote. A member drives their rooms from their own wallet, " +
-      "where the screen can say which room, which epoch, and what is being given.",
+      "to admit or promote. A community's own member portal uses the rooms a member " +
+      "shares with it through window.vtaWallet.rooms, whose verbs are fixed, whose " +
+      "flows run in the wallet, and whose every write the member confirms.",
   },
   // A mediator's own operations surface (`@openvtc/pnm-core/mediator`). A page
   // routing one of these to an agent would be misaddressed anyway — they are

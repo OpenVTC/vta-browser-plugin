@@ -301,6 +301,21 @@ jobs:
           grep -qF "$task" "packages/extension/dist/$offscreen" || { echo "::error::$offscreen no longer contains $task — the offscreen document cannot seal or open a room file"; exit 1; }
           echo "OK: $task appears only in $offscreen"
 
+      # A page uses rooms only through `window.vtaWallet.rooms`, whose verbs are
+      # fixed and whose flows run in the extension (VTI data-rooms-files.md
+      # §8.5). The two page-world bundles and the worker never name a rooms/*
+      # task: a URI there would mean a page could pick a verb, or the worker
+      # had started building room requests itself.
+      - name: Assert no page-reachable bundle names a rooms task
+        run: |
+          # A task URI, not the bare family prefix `page-task-policy.ts` refuses by.
+          leaked=$(grep -lE 'trusttasks\.org/spec/rooms/[a-z]' packages/extension/dist/provider.js packages/extension/dist/content.js packages/extension/dist/background.js || true)
+          if [ -n "$leaked" ]; then
+            echo "::error::$leaked names a rooms/* task. Pages reach rooms only through the wallet's own room methods; see CLAUDE.md, \"A portal page uses rooms through the wallet's own methods\"."
+            exit 1
+          fi
+          echo "OK: provider.js, content.js and background.js name no rooms/* task"
+
       # The console's isolation rests on it being one self-contained file: the
       # guard above names exactly one exception, so a second chunk would be a
       # file nothing checks. Losing `codeSplitting: false` in a future upgrade

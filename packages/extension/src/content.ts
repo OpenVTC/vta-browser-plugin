@@ -46,6 +46,8 @@ const RUNTIME_ATTEST_APPROVER = "vta-wallet/attest-approver";
 const RUNTIME_APPROVE_DECISION = "vta-wallet/approve-decision";
 const RUNTIME_BROADCAST_EVENT = "vta-wallet/broadcast-event";
 const RUNTIME_TRIGGER_LINK = "vta-wallet/trigger-link";
+const RUNTIME_ROOMS_PAGE = "vta-wallet/rooms-page";
+const ROOM_FILES_PAGE_PORT = "vta-wallet/room-files-page";
 
 // ─── 1. Inject the provider into the page world. ───
 // The content script runs in an isolated world, so assigning
@@ -84,6 +86,7 @@ const RUNTIME_TYPE_BY_METHOD: Record<BridgeMethod, string> = {
   approveStepUp: RUNTIME_APPROVE_STEP_UP,
   attestApprover: RUNTIME_ATTEST_APPROVER,
   approveDecision: RUNTIME_APPROVE_DECISION,
+  rooms: RUNTIME_ROOMS_PAGE,
 };
 
 // ─── 2. Relay provider → background → provider. ───
@@ -100,6 +103,10 @@ window.addEventListener("message", (event: MessageEvent) => {
   if (event.origin !== window.origin) return;
   const req = event.data as InpageRequest | undefined;
   if (!req || req.source !== INPAGE_SOURCE) return;
+  if ((req as unknown as { kind?: unknown }).kind === "roomFile") {
+    relayRoomFile(req as unknown as RoomFileFrame);
+    return;
+  }
 
   void (async () => {
     let response: ContentResponse;
@@ -139,6 +146,52 @@ window.addEventListener("message", (event: MessageEvent) => {
     window.postMessage(response, window.origin);
   })();
 });
+
+// ─── 2b. Room-file transfers: one port per transfer, page ⇄ background. ───
+//
+// `window.vtaWallet.rooms.{getFile,putFile}` (P7b). The page's frames carry a
+// transfer id and one protocol message (`RoomFilesPageOpen`, then data on a
+// put); each transfer gets its own port to the background, which checks the
+// page's portal and grant on the port's browser-attested origin — never on
+// anything in a frame — and relays to the offscreen document. Closing the port
+// stops the transfer. What comes back is posted to the page as it arrives:
+// progress, and a download's bytes only once the whole file has verified.
+interface RoomFileFrame {
+  source: typeof INPAGE_SOURCE;
+  kind: "roomFile";
+  id: string;
+  msg: { kind?: unknown } & Record<string, unknown>;
+}
+
+const roomFilePorts = new Map<string, chrome.runtime.Port>();
+
+function relayRoomFile(frame: RoomFileFrame): void {
+  if (typeof frame.id !== "string" || !frame.msg || typeof frame.msg !== "object") return;
+  const back = (msg: unknown) =>
+    window.postMessage({ source: CONTENT_SOURCE, kind: "roomFile", id: frame.id, msg }, window.origin);
+  let port = roomFilePorts.get(frame.id);
+  if (frame.msg.kind === "cancel") {
+    port?.disconnect();
+    roomFilePorts.delete(frame.id);
+    return;
+  }
+  if (!port) {
+    try {
+      port = chrome.runtime.connect({ name: ROOM_FILES_PAGE_PORT });
+    } catch (e) {
+      back({ kind: "failed", error: e instanceof Error ? e.message : String(e) });
+      return;
+    }
+    roomFilePorts.set(frame.id, port);
+    port.onMessage.addListener((m: unknown) => back(m));
+    port.onDisconnect.addListener(() => {
+      void chrome.runtime.lastError;
+      roomFilePorts.delete(frame.id);
+      back({ kind: "closed" });
+    });
+  }
+  port.postMessage(frame.msg);
+}
 
 // ─── 3. Forward background broadcasts (wallet lifecycle events) into
 //        the page world. ───

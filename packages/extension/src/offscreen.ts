@@ -214,6 +214,12 @@ import {
   type OffscreenRoomHostEndpointResponse,
 } from "./bridge-protocol.js";
 import { installRoomFilesPort, resolveRoomHostEndpoint } from "./room-files-offscreen.js";
+import { runRoomsPageOp } from "./room-page-offscreen.js";
+import {
+  OFFSCREEN_ROOMS_PAGE,
+  type OffscreenRoomsPageRequest,
+  type OffscreenRoomsPageResponse,
+} from "./bridge-protocol.js";
 import {
   OFFSCREEN_SIGN_IN_STEP,
   type OffscreenSignInStepRequest,
@@ -609,6 +615,33 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       );
     return true; // async sendResponse
   }
+  if (msg.type === OFFSCREEN_ROOMS_PAGE) {
+    // Only the background sends this, after checking the page's portal and
+    // grant (`room-page-background.ts`); a content script reaching this
+    // listener directly is refused.
+    if (!isExtensionContextSender(sender)) {
+      sendResponse({ ok: false, error: "room work is asked for by the wallet" } satisfies OffscreenRoomsPageResponse);
+      return false;
+    }
+    const req = message as OffscreenRoomsPageRequest;
+    runRoomsPageOp(
+      {
+        async agent(vtaDid, restBaseUrl) {
+          const { session } = await getVtaSession(vtaDid, restBaseUrl);
+          const { signing } = await loadHolder(vtaDid);
+          return { sender: session, holderDid: signing.did };
+        },
+      },
+      { vtaDid: req.vtaDid, ...(req.restBaseUrl ? { restBaseUrl: req.restBaseUrl } : {}) },
+      req.params,
+    )
+      .then((result) => sendResponse({ ok: true, result } satisfies OffscreenRoomsPageResponse))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) } satisfies OffscreenRoomsPageResponse),
+      );
+    return true; // async sendResponse
+  }
+
   if (msg.type === OFFSCREEN_ROOM_HOST_ENDPOINT) {
     // Gated like the lens: the console asks this through the background, and
     // a content script reaching the listener directly is refused here.

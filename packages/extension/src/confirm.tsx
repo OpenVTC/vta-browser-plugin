@@ -26,6 +26,7 @@ import { base64url } from "@openvtc/vti-didcomm-js";
 import { runApproverUnlockCeremony } from "./webauthn-prf-unlock.js";
 import { DisclosureConsent } from "./disclosure-consent.js";
 import { ApproverConsent } from "./approver-consent.js";
+import { RoomConsent } from "./room-consent.js";
 import { consentResultSender } from "./consent-result.js";
 import { DidQrButton } from "./did-qr-view.js";
 import { SessionKeyNotice } from "./session-key-notice.js";
@@ -55,6 +56,9 @@ const isDisclosureConsent = params.get("kind") === "disclosure";
 // `approveDecision`, `attestApprover`, and the one-off approver setup): a community's approver
 // signs a statement after a biometric. See `approver-consent.tsx`.
 const isStepUpApproverConsent = params.get("kind") === "approver";
+// `kind=room` selects a data-room prompt: sharing rooms with a portal page, or
+// one write to a room (`room-consent.tsx`).
+const isRoomConsent = params.get("kind") === "room";
 /** Wallet sign-in from a trigger link (sign-in-view.tsx). Names a flow id and
  *  nothing else; the link and the origin stay in the background's record. */
 const signInFlowId = params.get("kind") === "sign-in" ? params.get("flow") : null;
@@ -1443,6 +1447,13 @@ if (root) {
     <StrictMode>
       {signInFlowId ? (
         <SignInView flowId={signInFlowId} />
+      ) : isRoomConsent ? (
+        <RoomConsent
+          consentId={consentId}
+          decide={(ok, rooms) =>
+            void sendConsentResult({ approved: ok, remember: false, ...(ok && rooms ? { selectedRooms: rooms } : {}) })
+          }
+        />
       ) : isStepUpApproverConsent ? (
         <ApproverConsent consentId={consentId} decide={(ok, prf) => decide(ok, false, prf)} />
       ) : isDisclosureConsent ? (
