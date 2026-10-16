@@ -2464,6 +2464,15 @@ export interface PageRoomView {
   held: boolean;
   sharedAt: string;
   expiresAt: string;
+  /**
+   * The room's name, for a room this community owns: the label its
+   * administrators gave it, as the community's offer to the member carried it
+   * (`vtc/rooms/offers/list`). Absent for a room a member owns, and whenever
+   * the wallet has not learned one — the page then shows the room's DID.
+   */
+  label?: string;
+  /** The room's tier, as the same offer carried it. */
+  visibility?: string;
 }
 
 /** `rooms.info`: the room as its host reports it to the member. */
@@ -2918,6 +2927,10 @@ export type OffscreenRoomsPageOp =
   /** The identities the member uses at `hostDid`: the principals of their
    *  `didSelfIssued` vault entries naming it — never `hostDid` itself. */
   | { op: "members"; hostDid: string }
+  /** The names of `hostDid`'s own rooms, from its offers to each of `members`
+   *  (`vtc/rooms/offers/list`, signed as that member): `{ [roomId]: { label, visibility? } }`.
+   *  A member whose offers could not be read contributes nothing. */
+  | { op: "roomNames"; hostDid: string; members: string[] }
   // `member`: the persona the request acts as — the share's, never the page's.
   | { op: "info"; hostDid: string; roomId: string; member: string }
   | { op: "browse"; hostDid: string; roomId: string; member: string; prefix?: string; sinceVersion?: number }

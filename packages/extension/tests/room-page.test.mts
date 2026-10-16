@@ -9,10 +9,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { RoomPageGates, type PortLike, type RoomPageBackgroundDeps } from "../src/room-page-background.ts";
+import {
+  ROOM_NAMES_CACHE_MS,
+  RoomPageGates,
+  type PortLike,
+  type RoomPageBackgroundDeps,
+} from "../src/room-page-background.ts";
 import {
   ROOM_GRANT_TTL_MS,
+  ROOM_NAMES_MAX,
   liveGrants,
+  mergeRoomNames,
+  rememberedRoomLabels,
+  roomNamesKey,
   membersAt,
   portalRefusal,
   roomFilesPageOpenRefusal,
@@ -28,7 +37,7 @@ import {
   type RoomShareConsentView,
   type RoomWriteConsentView,
 } from "../src/room-page-policy.ts";
-import { readView } from "../src/room-page-offscreen.ts";
+import { readView, runRoomsPageOp } from "../src/room-page-offscreen.ts";
 import { signRecordBody } from "@openvtc/pnm-core/rooms/files";
 import { signingIdentityFromSecret } from "@openvtc/pnm-core";
 
@@ -100,6 +109,8 @@ interface Harness {
   members: string[];
   /** What the VTA lists: one entry per (room, member). */
   held: { roomId: string; member?: string; actions?: string[] }[];
+  /** The names the community's offers give its rooms, or a failed reading. */
+  names: Record<string, { label: string; visibility?: string }> | "fail";
 }
 
 function harness(over: Partial<RoomPageBackgroundDeps> = {}): Harness {
@@ -120,6 +131,7 @@ function harness(over: Partial<RoomPageBackgroundDeps> = {}): Harness {
       { roomId: PRIVATE_ROOM, member: MEMBER },
       { roomId: COMMUNITY_ROOM, member: HOST, actions: ["admin"] },
     ],
+    names: {},
   };
   const deps: RoomPageBackgroundDeps = {
     active: async () => ({ ok: true, vta: { vtaDid: VTA } }),
@@ -132,6 +144,8 @@ function harness(over: Partial<RoomPageBackgroundDeps> = {}): Harness {
           return { ok: true, result: h.held.map((r) => ({ ...r, epoch: 3, earliestReadableEpoch: 1 })) };
         case "members":
           return { ok: true, result: h.members };
+        case "roomNames":
+          return h.names === "fail" ? { ok: false, error: "offers: notAMember" } : { ok: true, result: h.names };
         case "info":
           if (op.roomId === OTHER_ROOM) return { ok: false, error: "rooms/info: notFound" };
           return {
@@ -492,4 +506,139 @@ test("a share made before shares named a member is asked for again", () => {
   const old = [{ ...at, roomId: ROOM, grantedAt: NOW, expiresAt: NOW + 1000 }] as unknown as RoomGrant[];
   assert.deepEqual(liveGrants(old, at, NOW), []);
   assert.ok(roomGrantRefusal(old, at, ROOM, NOW));
+});
+
+// ── The names of the community's own rooms ──────────────────────────────────
+
+/** A harness that remembers room names, with a clock the test moves. */
+function namingHarness() {
+  const store = new Map<string, unknown>();
+  const clock = { now: NOW };
+  const h = harness({
+    now: () => clock.now,
+    loadRoomNames: async (vtaDid, hostDid) => store.get(roomNamesKey(vtaDid, hostDid)),
+    saveRoomNames: async (vtaDid, hostDid, names) => void store.set(roomNamesKey(vtaDid, hostDid), names),
+  });
+  return { h, store, clock };
+}
+
+async function shareAndList(h: Harness) {
+  h.answer = { approved: true, selectedRooms: [as(ROOM)] };
+  await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST });
+  const list = await h.gates.handle(PORTAL, { op: "list", hostDid: HOST });
+  assert.ok(list.ok);
+  return (list.result as { rooms: { roomId: string; label?: string; visibility?: string }[] }).rooms;
+}
+
+test("a community's own room is listed by its name, read from the community's offers to the member", async () => {
+  const { h } = namingHarness();
+  h.names = { [ROOM]: { label: "Board pack", visibility: "attributed" } };
+  const [room] = await shareAndList(h);
+  assert.equal(room!.label, "Board pack");
+  assert.equal(room!.visibility, "attributed");
+  const asked = h.asked.filter((a) => a.op === "roomNames");
+  assert.ok(asked.length > 0);
+  assert.ok(
+    asked.every((a) => a.hostDid === HOST && (a.members as string[]).every((m) => m === MEMBER)),
+    "read at this portal's community, as the member, never as the community",
+  );
+  // The share prompt names it too.
+  h.answer = { approved: false };
+  await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST });
+  const view = h.prompts.at(-1) as RoomShareConsentView;
+  assert.equal(view.rooms.find((r) => r.roomId === ROOM)!.label, "Board pack");
+  assert.equal(view.rooms.find((r) => r.roomId === OTHER_ROOM)!.label, undefined, "a member's own room has no name here");
+});
+
+test("a failed reading leaves rooms unnamed, and the list still answers", async () => {
+  const { h } = namingHarness();
+  h.names = "fail";
+  const [room] = await shareAndList(h);
+  assert.equal(room!.roomId, ROOM);
+  assert.equal(room!.label, undefined);
+});
+
+test("offers are read at most once a minute per member, and a name outlives its offer", async () => {
+  const { h, clock } = namingHarness();
+  h.names = { [ROOM]: { label: "Board pack" } };
+  await shareAndList(h);
+  const reads = () => h.asked.filter((a) => a.op === "roomNames").length;
+  const before = reads();
+  await h.gates.handle(PORTAL, { op: "list", hostDid: HOST });
+  assert.equal(reads(), before, "inside the minute: no new reading");
+
+  // The community stops listing the accepted offer: the room keeps its name.
+  h.names = {};
+  clock.now += ROOM_NAMES_CACHE_MS;
+  const later = await h.gates.handle(PORTAL, { op: "list", hostDid: HOST });
+  assert.equal(reads(), before + 1);
+  assert.equal((later.result as { rooms: { label?: string }[] }).rooms[0]!.label, "Board pack");
+
+  // Renamed and offered again: the new name replaces the old.
+  h.names = { [ROOM]: { label: "Board papers" } };
+  clock.now += ROOM_NAMES_CACHE_MS;
+  const renamed = await h.gates.handle(PORTAL, { op: "list", hostDid: HOST });
+  assert.equal((renamed.result as { rooms: { label?: string }[] }).rooms[0]!.label, "Board papers");
+});
+
+test("remembered names: fresh over old, bounded, and read back for the console by VTA", () => {
+  const merged = mergeRoomNames(
+    { [ROOM]: { label: "Old", seenAt: 1 }, junk: { label: 3 }, [OTHER_ROOM]: { label: "Kept", seenAt: 2 } },
+    { [ROOM]: { label: "New", visibility: "private" } },
+    NOW,
+  );
+  assert.deepEqual(merged[ROOM], { label: "New", visibility: "private", seenAt: NOW });
+  assert.equal(merged[OTHER_ROOM]!.label, "Kept");
+  assert.equal(merged.junk, undefined);
+  assert.deepEqual(mergeRoomNames("not a record", {}, NOW), {});
+
+  const many = Object.fromEntries(
+    Array.from({ length: ROOM_NAMES_MAX + 5 }, (_, i) => [`did:key:z${i}`, { label: `r${i}`, seenAt: i }]),
+  );
+  const bounded = mergeRoomNames(many, {}, NOW);
+  assert.equal(Object.keys(bounded).length, ROOM_NAMES_MAX);
+  assert.equal(bounded["did:key:z0"], undefined, "the least recently seen go first");
+
+  const all = {
+    [roomNamesKey(VTA, HOST)]: { [ROOM]: { label: "Board pack", seenAt: 5 } },
+    [roomNamesKey(VTA, "did:web:other.example")]: { [ROOM]: { label: "Newer", seenAt: 9 } },
+    [roomNamesKey("did:key:zOtherVta", HOST)]: { [OTHER_ROOM]: { label: "Not this agent's", seenAt: 1 } },
+    "room-grants:x": [],
+  };
+  assert.deepEqual(rememberedRoomLabels(all, VTA), { [ROOM]: "Newer" });
+});
+
+test("the offscreen reading: each member's offers, signed as that member, at the community; one failing costs only its own", async () => {
+  const actedAs: string[] = [];
+  const sentTo: string[] = [];
+  const names = await runRoomsPageOp(
+    {
+      agent: async () => ({
+        holderDid: "did:key:zWallet",
+        sender: {
+          async send<Res>(envelope: { type: string; payload: { document: Record<string, unknown> } }) {
+            const doc = structuredClone(envelope.payload.document);
+            actedAs.push(String(doc.issuer));
+            if (doc.issuer === MEMBER_2) throw new Error("rooms/keys/act:issuerNotPrincipal");
+            doc.proof = { type: "DataIntegrityProof" };
+            return { principal: doc.issuer, document: doc } as Res;
+          },
+        } as never,
+      }),
+      portal: async () => ({ portalOrigin: PORTAL, endpoint: `${PORTAL}/v1/trust-tasks` }),
+      completed: (hostDid, endpoint) => ({
+        async sendCompleted<Res>(doc: Record<string, unknown>) {
+          sentTo.push(`${hostDid} ${endpoint} ${String(doc.recipient)}`);
+          return {
+            items: [{ roomId: ROOM, host: HOST, label: "Board pack", visibility: "attributed", state: "accepted" }],
+          } as Res;
+        },
+      }),
+    },
+    { vtaDid: VTA },
+    { op: "roomNames", hostDid: HOST, members: [MEMBER, MEMBER_2, MEMBER] },
+  );
+  assert.deepEqual(names, { [ROOM]: { label: "Board pack", visibility: "attributed" } });
+  assert.deepEqual(actedAs, [MEMBER, MEMBER_2], "each member once");
+  assert.deepEqual(sentTo, [`${HOST} ${PORTAL}/v1/trust-tasks ${HOST}`]);
 });

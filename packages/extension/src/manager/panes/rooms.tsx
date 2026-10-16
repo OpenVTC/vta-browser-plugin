@@ -39,6 +39,7 @@ import { FetchHistory } from "./rooms-backfill.js";
 import { RoomRecords } from "./rooms-records.js";
 import { IssueInRoomsName } from "./rooms-owner.js";
 import { RoomShares } from "./rooms-shares.js";
+import { rememberedRoomLabels } from "../../room-page-policy.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
@@ -118,6 +119,19 @@ export function RoomsPane({
     void load();
   }, [load]);
 
+  // The names of rooms a community owns, as the wallet learned them from that
+  // community's offers when its member portal listed them (`room-page-background.ts`).
+  // Absent outside the extension (the pane's render tests), and for a room a member owns.
+  const [labels, setLabels] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const store = globalThis.chrome?.storage?.local;
+    if (!store) return;
+    store
+      .get(null)
+      .then((all) => setLabels(rememberedRoomLabels(all, parties.service.did)))
+      .catch(() => setLabels({}));
+  }, [parties.service.did, rooms]);
+
   const names = useAgentNames((rooms ?? []).map((r) => r.member));
   // A room held as more than one member: the rows must say which is which.
   const twice = new Set(
@@ -129,9 +143,14 @@ export function RoomsPane({
       key: "room",
       header: "Room",
       render: (r) => (
-        <code style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
-          {r.roomId}
-        </code>
+        <span style={{ display: "grid", gap: 2 }}>
+          {labels[r.roomId] !== undefined && (
+            <span style={{ fontSize: t.sm }} title="The name its community gave it">
+              {labels[r.roomId]}
+            </span>
+          )}
+          <code style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>{r.roomId}</code>
+        </span>
       ),
     },
     {
