@@ -506,7 +506,13 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // `rooms/keys/act/0.1` is new, and the snapshot, resynced from vta-sdk 0.69.0,
   // now lists `rooms/info` and `rooms/records/get` — host verbs the SDK names
   // since its own client builds them for `act` — so they count here too.
-  const expected = 216;
+  //
+  // 216 → 220: `vtc/rooms/offers/list/0.1`, read as the member through
+  // `rooms/keys/act/0.3` for the names of a community's own rooms (the
+  // portal's room list). The snapshot, resynced from vta-sdk 0.70.0, also now
+  // lists `rooms/blobs/chunk` and `rooms/blobs/upload/{commit,abort}` — host
+  // verbs the SDK's own client builds for `act` — so they count here too.
+  const expected = 220;
   assert.equal(
     implemented.size,
     expected,

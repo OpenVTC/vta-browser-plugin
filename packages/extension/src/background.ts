@@ -51,6 +51,7 @@ import { checkOriginPin, pinOrigin, readOriginPin, type OriginPinStatus } from "
 import { RoomPageGates, type PortLike } from "./room-page-background.js";
 import {
   grantsKey,
+  roomNamesKey,
   ROOM_CONSENT_PREFIX,
   type RoomGrant,
   type RoomShareConsentView,
@@ -840,6 +841,13 @@ const roomPageGates = new RoomPageGates({
     const key = grantsKey(origin, vtaDid);
     if (grants.length === 0) await chrome.storage.local.remove(key);
     else await chrome.storage.local.set({ [key]: grants });
+  },
+  async loadRoomNames(vtaDid, hostDid) {
+    const key = roomNamesKey(vtaDid, hostDid);
+    return (await chrome.storage.local.get(key))[key];
+  },
+  async saveRoomNames(vtaDid, hostDid, names) {
+    await chrome.storage.local.set({ [roomNamesKey(vtaDid, hostDid)]: names });
   },
   prompt: requestRoomConsent,
   async openTransfer() {

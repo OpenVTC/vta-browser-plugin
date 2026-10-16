@@ -44,6 +44,10 @@ import {
   type UnsignedRoomRequest,
 } from "@openvtc/trust-tasks/rooms/keys/act/0.1/payload";
 import {
+  TYPE_URI as KEYS_ACT_V3,
+  RESPONSE_TYPE_URI as KEYS_ACT_V3_RESPONSE,
+} from "@openvtc/trust-tasks/rooms/keys/act/0.3/payload";
+import {
   TYPE_URI as KEYS_SEAL_V2,
   RESPONSE_TYPE_URI as KEYS_SEAL_V2_RESPONSE,
   type RoomsKeysSealPayload as RoomsKeysSealV2Payload,
@@ -137,15 +141,21 @@ export async function roomsKeysAct(
   sender: TrustTaskSender,
   parties: RoomsCaller,
   document: UnsignedRoomRequest,
+  /**
+   * `0.3` for a community's offer types (`vtc/rooms/offers/*`), which only it
+   * completes; `0.1` — what every VTA serving rooms speaks — for the rest.
+   */
+  version: "0.1" | "0.3" = "0.1",
 ): Promise<{ principal: string; document: Record<string, unknown> }> {
   const payload: RoomsKeysActPayload = { document };
-  const envelope = buildTrustTask(KEYS_ACT, payload, {
+  const envelope = buildTrustTask(version === "0.3" ? KEYS_ACT_V3 : KEYS_ACT, payload, {
     issuer: parties.holder.did,
     recipient: parties.service.did,
   });
+  // 0.3's request and response members are 0.1's; only the table grew.
   const res = await sender.send<RoomsKeysActResponsePayload>(envelope, {
-    expectedResponseType: KEYS_ACT_RESPONSE,
-    operationLabel: "rooms/keys/act/0.1",
+    expectedResponseType: version === "0.3" ? KEYS_ACT_V3_RESPONSE : KEYS_ACT_RESPONSE,
+    operationLabel: `rooms/keys/act/${version}`,
   });
   const completed = res.document as Record<string, unknown>;
   const principal = res.principal;

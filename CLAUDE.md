@@ -987,6 +987,22 @@ is not in force: the page asks again rather than the wallet guessing. The
 console's rooms pane is one row per (room, member) too, keyed by `heldRoomKey`,
 and everything done from a row names that row's member.
 
+**A community's own rooms are shown by name.** A room the community owns has
+a label its administrators gave it, and the community's offer to the member
+carries it (`vtc/rooms/offers/list/0.1`, built unsigned and completed by the
+VTA as the member with `rooms/keys/act/0.3`, sent to the community's
+`TrustTaskHTTPS` unchanged — `@openvtc/pnm-core/rooms`'s `communityRoomOffers`).
+`list` and `choose` read it for the members the shares (or the share prompt)
+act as, at most once a minute per member, and only at the community whose
+portal the page is. The community lists an accepted offer only for days, so a
+name is **remembered** under `room-names:<vtaDid>|<hostDid>` in
+`chrome.storage.local`; a fresh reading replaces it, so a rename shows once the
+room is offered again. Any failure means no name, never an error: the page
+shows the room's DID. `RoomPageGates.roomNames` is the one place a name is
+looked up — when rooms gain a sealed in-room profile, it goes there. The
+console's rooms and shares panes show the remembered names. A room a member
+owns has none here.
+
 **A private room is never shared with a portal.** Its host is not to learn
 which member acts, and the portal is the host's own page and knows who is
 signed in.

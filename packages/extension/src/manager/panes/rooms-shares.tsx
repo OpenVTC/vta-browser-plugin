@@ -7,28 +7,34 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { ROOM_GRANTS_PREFIX, type RoomGrant } from "../../room-page-policy.js";
+import { ROOM_GRANTS_PREFIX, rememberedRoomLabels, type RoomGrant } from "../../room-page-policy.js";
 import { Button, Note, Panel } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 
-async function readAll(): Promise<{ key: string; grants: RoomGrant[] }[]> {
+async function readAll(): Promise<{ key: string; grants: RoomGrant[]; all: Record<string, unknown> }[]> {
   // Absent outside the extension (the pane's render tests): no shares to show.
   const store = globalThis.chrome?.storage?.local;
   if (!store) return [];
   const all = await store.get(null);
   return Object.entries(all)
     .filter(([k, v]) => k.startsWith(ROOM_GRANTS_PREFIX) && Array.isArray(v))
-    .map(([key, v]) => ({ key, grants: v as RoomGrant[] }));
+    .map(([key, v]) => ({ key, grants: v as RoomGrant[], all }));
 }
 
 export function RoomShares() {
-  const [rows, setRows] = useState<{ key: string; grant: RoomGrant }[] | null>(null);
+  const [rows, setRows] = useState<{ key: string; grant: RoomGrant; label?: string }[] | null>(null);
 
   const load = useCallback(async () => {
     const now = Date.now();
     setRows(
-      (await readAll()).flatMap(({ key, grants }) =>
-        grants.filter((g) => g.expiresAt > now).map((grant) => ({ key, grant })),
+      (await readAll()).flatMap(({ key, grants, all }) =>
+        grants
+          .filter((g) => g.expiresAt > now)
+          .map((grant) => {
+            // The name the room's community gave it, when it owns the room.
+            const label = rememberedRoomLabels(all, grant.vtaDid)[grant.roomId];
+            return { key, grant, ...(label !== undefined ? { label } : {}) };
+          }),
       ),
     );
   }, []);
@@ -57,13 +63,14 @@ export function RoomShares() {
         <Note>No portal can use your rooms.</Note>
       ) : (
         <div style={{ display: "grid", gap: 8 }}>
-          {rows.map(({ key, grant }) => (
+          {rows.map(({ key, grant, label }) => (
             <div
               key={`${key}|${grant.hostDid}|${grant.roomId}`}
               style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between" }}
             >
               <div style={{ display: "grid", gap: 2, fontSize: t.sm }}>
                 <span>{grant.origin}</span>
+                {label !== undefined && <span>{label}</span>}
                 <code style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all", color: c.muted }}>
                   {grant.roomId}
                 </code>

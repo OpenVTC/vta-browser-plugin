@@ -865,3 +865,6 @@ export async function roomsOwnerIssueAuthority(
 
 // Acting as the member — the persona, never this wallet (`rooms/keys/act`).
 export * from "./act.js";
+
+// A community's offers of its own rooms, read as the member — for their names.
+export * from "./offers.js";

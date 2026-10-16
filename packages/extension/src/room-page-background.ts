@@ -34,6 +34,7 @@ import type {
 import {
   excerpt,
   liveGrants,
+  mergeRoomNames,
   portalRefusal,
   roomFilesPageOpenRefusal,
   roomGrant,
@@ -43,6 +44,7 @@ import {
   shareRows,
   withGrants,
   withoutGrant,
+  type RememberedRoomName,
   type RoomGrant,
   type RoomShareConsentView,
   type RoomWriteConsentView,
@@ -84,15 +86,26 @@ export interface RoomPageBackgroundDeps {
   /** Open a transfer with the offscreen document (`ROOM_FILES_PORT`). */
   openTransfer(): Promise<PortLike>;
   now(): number;
+  /** The room names remembered for one community under one VTA (`roomNamesKey`). Absent: none kept. */
+  loadRoomNames?(vtaDid: string, hostDid: string): Promise<unknown>;
+  saveRoomNames?(vtaDid: string, hostDid: string, names: Record<string, RememberedRoomName>): Promise<void>;
 }
+
+/** A room's name, as a page or the share prompt is shown it. */
+type RoomNames = Record<string, { label: string; visibility?: string }>;
 
 /** How long a community's resolved portal is trusted before it is resolved again. */
 const PORTAL_CACHE_MS = 5 * 60 * 1000;
+
+/** How long one member's offers stand for the names of a community's rooms before they are read again. */
+export const ROOM_NAMES_CACHE_MS = 60 * 1000;
 
 class RoomPageRefusal extends Error {}
 
 export class RoomPageGates {
   private readonly portals = new Map<string, { portalOrigin: string; endpoint: string; at: number }>();
+  /** When each (VTA, community, member)'s offers were last read for room names. */
+  private readonly namesReadAt = new Map<string, number>();
 
   constructor(private readonly deps: RoomPageBackgroundDeps) {}
 
@@ -223,6 +236,51 @@ export class RoomPageGates {
     }
   }
 
+  /**
+   * The names of `hostDid`'s own rooms, as far as the wallet knows them — the
+   * one place a room's name is looked up.
+   *
+   * Read from the community's offers to each of `members` (signed as that
+   * member, at the community whose portal this is), at most once a minute per
+   * member, and remembered: the community stops listing an accepted offer after
+   * a few days, and the room keeps its name. Never throws — a failure leaves
+   * whatever was remembered, and the page shows a room's DID where there is no
+   * name.
+   */
+  private async roomNames(vta: ActiveVta, hostDid: string, members: readonly string[]): Promise<RoomNames> {
+    const now = this.deps.now();
+    let remembered: unknown;
+    try {
+      remembered = this.deps.loadRoomNames ? await this.deps.loadRoomNames(vta.vtaDid, hostDid) : undefined;
+    } catch {
+      remembered = undefined;
+    }
+    const at = (m: string) => `${vta.vtaDid}|${hostDid}|${m}`;
+    const stale = [...new Set(members)].filter((m) => {
+      const read = this.namesReadAt.get(at(m));
+      return read === undefined || now - read >= ROOM_NAMES_CACHE_MS;
+    });
+    let names = mergeRoomNames(remembered, {}, now);
+    if (stale.length > 0) {
+      for (const m of stale) this.namesReadAt.set(at(m), now);
+      try {
+        const res = await this.deps.offscreen(vta, { op: "roomNames", hostDid, members: stale });
+        if (res.ok && res.result && typeof res.result === "object" && !Array.isArray(res.result)) {
+          names = mergeRoomNames(remembered, res.result as RoomNames, now);
+          await this.deps.saveRoomNames?.(vta.vtaDid, hostDid, names);
+        }
+      } catch {
+        // Nothing learned this time; what was remembered stands.
+      }
+    }
+    return Object.fromEntries(
+      Object.entries(names).map(([roomId, n]) => [
+        roomId,
+        { label: n.label, ...(n.visibility !== undefined ? { visibility: n.visibility } : {}) },
+      ]),
+    );
+  }
+
   /** The live shares for this origin and community, joined with what the VTA still holds. */
   private async views(origin: string, hostDid: string, vta: ActiveVta): Promise<PageRoomView[]> {
     const grants = liveGrants(
@@ -232,6 +290,11 @@ export class RoomPageGates {
     );
     if (grants.length === 0) return [];
     const held = (await this.offscreen(vta, { op: "held" })) as HeldEntry[];
+    const names = await this.roomNames(
+      vta,
+      hostDid,
+      grants.map((g) => g.member),
+    );
     return grants.map((g) => {
       // Held as the member it is shared as: the same room held as somebody
       // else is not this share's.
@@ -243,6 +306,12 @@ export class RoomPageGates {
         ...(h ? { epoch: h.epoch, earliestReadableEpoch: h.earliestReadableEpoch } : {}),
         sharedAt: new Date(g.grantedAt).toISOString(),
         expiresAt: new Date(g.expiresAt).toISOString(),
+        ...(names[g.roomId]
+          ? {
+              label: names[g.roomId]!.label,
+              ...(names[g.roomId]!.visibility !== undefined ? { visibility: names[g.roomId]!.visibility } : {}),
+            }
+          : {}),
       };
     });
   }
@@ -260,10 +329,22 @@ export class RoomPageGates {
     // Who the member is at this community, by the wallet's own record — the
     // page's word only picks among these, never adds to them.
     const members = (await this.offscreen(vta, { op: "members", hostDid })) as string[];
-    const { rows, others } = shareRows(held, members, hostDid, liveGrants(grants, at, now), {
-      ...(hint.suggest !== undefined ? { suggest: hint.suggest } : {}),
-      ...(hint.member !== undefined ? { member: hint.member } : {}),
-    });
+    const names = await this.roomNames(
+      vta,
+      hostDid,
+      members.filter((m) => m !== hostDid),
+    );
+    const { rows, others } = shareRows(
+      held,
+      members,
+      hostDid,
+      liveGrants(grants, at, now),
+      {
+        ...(hint.suggest !== undefined ? { suggest: hint.suggest } : {}),
+        ...(hint.member !== undefined ? { member: hint.member } : {}),
+      },
+      names,
+    );
     const reach = await this.deps.canReach(endpoint);
     const decision = await this.deps.prompt({
       kind: "share",

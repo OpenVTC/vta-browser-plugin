@@ -18,8 +18,11 @@
 import { CONTACT_METHODS, type TrustTaskSender } from "@openvtc/pnm-core";
 import { resolveCommunityDocument, selectSignInServices, verifyDomainLinkage } from "@openvtc/pnm-core/vtc";
 import {
+  communityRoomOffers,
   opaqueRecordKey,
   roomInfoAsMember,
+  roomNamesFromOffers,
+  type CommunityRoomName,
   roomsKeysBrowse,
   roomsKeysList,
   roomsKeysRead,
@@ -107,6 +110,32 @@ export async function runRoomsPageOp(
       ...(r.context !== undefined ? { context: r.context } : {}),
       ...(r.actions !== undefined ? { actions: r.actions } : {}),
     }));
+  }
+
+  if (op.op === "roomNames") {
+    // The community's own answer, member by member: each read is signed as that
+    // member, and one that fails (an identity with no offers, a VTA without
+    // act 0.3) costs only its own names.
+    const { endpoint } = await (deps.portal ?? ((d) => resolvePortal(d, now)))(op.hostDid);
+    const community = {
+      did: op.hostDid,
+      sender: (deps.completed ?? ((hostDid, ep) => new RoomHostChannel({ hostDid, endpoint: ep })))(op.hostDid, endpoint),
+    };
+    const names: Record<string, CommunityRoomName> = {};
+    for (const member of new Set(op.members)) {
+      try {
+        const offers = await communityRoomOffers({
+          holder: { did: holderDid },
+          vta: { did: vta.vtaDid, sender },
+          community,
+          member,
+        });
+        Object.assign(names, roomNamesFromOffers(offers));
+      } catch {
+        // No names from this member: the page shows DIDs, as before.
+      }
+    }
+    return names;
   }
 
   // Every request for a page names the share's member: the VTA never picks one.

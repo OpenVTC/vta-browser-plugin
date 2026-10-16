@@ -68,6 +68,87 @@ export interface RoomGrant {
   expiresAt: number;
 }
 
+// ── The names of a community's rooms ───────────────────────────────────────
+//
+// A room the community owns has a label its administrators gave it, and the
+// community's offer to a member carries it (`vtc/rooms/offers/list`). The
+// community lists an accepted offer only while a repeated accept can be
+// answered (seven days at the reference community), so the wallet remembers a
+// name once it has seen it: a long-held room keeps its name. A fresh reading
+// replaces what was remembered, so a rename shows once the room is offered
+// again. Rooms a member owns have no name here.
+//
+// All of it sits behind `RoomPageGates.roomNames`, the one place a name is
+// looked up — a sealed in-room profile, when there is one, goes there too.
+
+/** `chrome.storage.local` key prefix for remembered room names. One record per (VTA, community). */
+export const ROOM_NAMES_PREFIX = "room-names:";
+
+/** A room's name, as remembered: when it was last read from the community. */
+export interface RememberedRoomName {
+  label: string;
+  visibility?: string;
+  seenAt: number;
+}
+
+/** The storage key holding one community's room names under one VTA. */
+export function roomNamesKey(vtaDid: string, hostDid: string): string {
+  return `${ROOM_NAMES_PREFIX}${vtaDid}|${hostDid}`;
+}
+
+/** How many room names one (VTA, community) record keeps. */
+export const ROOM_NAMES_MAX = 500;
+
+/**
+ * What to remember after a reading: `fresh` over `remembered`, room by room,
+ * the most recently seen kept when there are more than {@link ROOM_NAMES_MAX}.
+ * A stored record that is not one this wallet wrote is ignored.
+ */
+export function mergeRoomNames(
+  remembered: unknown,
+  fresh: Readonly<Record<string, { label: string; visibility?: string }>>,
+  now: number,
+): Record<string, RememberedRoomName> {
+  const out: Record<string, RememberedRoomName> = {};
+  if (remembered && typeof remembered === "object" && !Array.isArray(remembered)) {
+    for (const [roomId, v] of Object.entries(remembered as Record<string, unknown>)) {
+      const r = v as Partial<RememberedRoomName> | null;
+      if (!r || typeof r.label !== "string" || r.label === "" || typeof r.seenAt !== "number") continue;
+      out[roomId] = {
+        label: r.label,
+        ...(typeof r.visibility === "string" ? { visibility: r.visibility } : {}),
+        seenAt: r.seenAt,
+      };
+    }
+  }
+  for (const [roomId, n] of Object.entries(fresh)) {
+    if (typeof n?.label !== "string" || n.label === "") continue;
+    out[roomId] = { label: n.label, ...(n.visibility !== undefined ? { visibility: n.visibility } : {}), seenAt: now };
+  }
+  const entries = Object.entries(out);
+  if (entries.length <= ROOM_NAMES_MAX) return out;
+  return Object.fromEntries(entries.sort((a, b) => b[1].seenAt - a[1].seenAt).slice(0, ROOM_NAMES_MAX));
+}
+
+/**
+ * Every remembered room name under `vtaDid`, room by room, from a whole
+ * `chrome.storage.local` read — for the console, which shows a name wherever
+ * one of the agent's communities has given it. The most recently seen wins
+ * when two communities name one room.
+ */
+export function rememberedRoomLabels(all: Readonly<Record<string, unknown>>, vtaDid: string): Record<string, string> {
+  const prefix = `${ROOM_NAMES_PREFIX}${vtaDid}|`;
+  const best: Record<string, RememberedRoomName> = {};
+  for (const [key, value] of Object.entries(all)) {
+    if (!key.startsWith(prefix)) continue;
+    for (const [roomId, n] of Object.entries(mergeRoomNames(value, {}, 0))) {
+      const had = best[roomId];
+      if (!had || n.seenAt > had.seenAt) best[roomId] = n;
+    }
+  }
+  return Object.fromEntries(Object.entries(best).map(([roomId, n]) => [roomId, n.label]));
+}
+
 /** The storage key holding one origin's grants under one VTA. */
 export function grantsKey(origin: string, vtaDid: string): string {
   return `${ROOM_GRANTS_PREFIX}${vtaDid}|${origin}`;
@@ -275,6 +356,8 @@ export interface RoomShareRow {
   context?: string;
   /** The member's place in the room: one that administers it, or a member. */
   role: "administers" | "member" | "unknown";
+  /** The room's name, when the community owns it and the wallet knows it. */
+  label?: string;
   shared: boolean;
   /** Pre-ticked: shared already, or the room the page linked to as the member signed in there. */
   ticked: boolean;
@@ -347,6 +430,7 @@ export function shareRows(
   hostDid: string,
   live: readonly RoomGrant[],
   hint: { suggest?: string; member?: string },
+  names: Readonly<Record<string, { label: string }>> = {},
 ): { rows: RoomShareRow[]; others: number } {
   const usable = new Set(members.filter((m) => m !== hostDid));
   const rows: RoomShareRow[] = [];
@@ -367,6 +451,7 @@ export function shareRows(
       member: h.member,
       ...(h.context !== undefined ? { context: h.context } : {}),
       role: roleOf(h.actions),
+      ...(names[h.roomId] ? { label: names[h.roomId]!.label } : {}),
       shared,
       ticked: shared,
     });

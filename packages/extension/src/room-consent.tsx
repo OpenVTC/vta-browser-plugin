@@ -165,9 +165,12 @@ function Share({
                   type="checkbox"
                   checked={ticked.has(r.key)}
                   onChange={() => toggle(r.key)}
-                  aria-label={`Share ${r.roomId} as ${r.member}`}
+                  aria-label={`Share ${r.label ?? r.roomId} as ${r.member}`}
                 />
                 <span style={{ display: "grid", gap: 2 }}>
+                  {/* A community's own room by the name its administrators gave
+                      it, the DID beneath; any other room by its DID alone. */}
+                  {r.label !== undefined && <strong style={{ fontSize: 13 }}>{r.label}</strong>}
                   <Did value={r.roomId} />
                   <span style={{ fontSize: 11 }} title={r.member}>
                     as <code>{shortMember(r.member)}</code>
