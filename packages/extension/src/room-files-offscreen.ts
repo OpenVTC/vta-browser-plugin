@@ -105,8 +105,9 @@ export function serveRoomFilesPort(port: chrome.runtime.Port, deps: RoomFilesDep
     if (!open) return;
     try {
       port.postMessage(m);
-    } catch {
+    } catch (e) {
       // Nobody is reading; stop rather than finish a transfer for no one.
+      console.warn(`[room files] ${what}: could not send ${m.kind} to the console:`, e instanceof Error ? e.message : String(e));
       open = false;
       abort.abort();
     }
@@ -125,8 +126,12 @@ export function serveRoomFilesPort(port: chrome.runtime.Port, deps: RoomFilesDep
     abort.abort();
   });
   const finish = (m: RoomFilesMessage) => {
-    if (m.kind !== "failed") console.info(`[room files] ${what}: ${m.kind}`);
     post(m);
+    // Said after the send, and only if it went: "got" here means the console
+    // was handed the file, not merely that this document finished.
+    if (m.kind !== "failed") {
+      console.info(open ? `[room files] ${what}: ${m.kind}, sent to the console` : `[room files] ${what}: ${m.kind}, but the console was gone`);
+    }
     if (open) {
       open = false;
       port.disconnect();
