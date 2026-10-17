@@ -1308,6 +1308,17 @@ and kept to exactly one context:
   reach and turns them into a `Blob` only once the offscreen document reports
   the file verified against its author's digest; on anything else they are
   dropped.
+- **Nothing but the two ends may touch that port.** `chrome.runtime.connect`
+  from the console reaches every extension context, the service worker
+  included, and **`port.disconnect()` from any one receiver closes the whole
+  channel** — the console hears it at once, the offscreen document is never
+  told and carries on for nobody. The worker used to "let it go at once", and
+  every console download failed 1–2 ms in with "the wallet's background
+  document closed before the transfer finished". A receiver that merely goes
+  away only drops itself, so the worker ignores the port; the console's stall
+  timeout (`TRANSFER_STALL_MS`) covers an offscreen document dying mid-way,
+  which the worker's held end would otherwise hide. `room-files.test.mts`
+  fails if `background.ts` singles the port out again.
 - **A CI guard bans the URI from every bundle but the offscreen entry chunk** —
   `manager.js` included, which makes it the one material guard whose permitted
   file is not the console — and asserts it is still present there.

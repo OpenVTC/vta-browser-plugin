@@ -16,6 +16,10 @@ import {
 } from "@openvtc/pnm-core/rooms";
 import { c, t } from "../../theme.js";
 import { managerSender } from "../sender.js";
+import { createLimiter } from "../limit.js";
+
+/** Profile reads for a listing, a few at a time (`limit.ts`). */
+const PROFILES = createLimiter(3);
 import type { Parties } from "../use-vta.js";
 
 /**
@@ -51,25 +55,30 @@ export function useRoomProfiles(
   useEffect(() => {
     let live = true;
     const wanted = JSON.parse(want) as { roomId: string; host: string; member?: string }[];
-    void (async () => {
-      const out: Record<string, RoomProfileView> = {};
-      for (const r of wanted) {
-        if (out[r.roomId]) continue;
-        try {
-          const res = await roomsKeysProfileRead(managerSender, {
-            ...parties,
-            roomId: r.roomId,
-            host: r.host,
-            ...(r.member !== undefined ? { member: r.member } : {}),
-          });
-          out[r.roomId] = roomProfileView(res);
-        } catch {
+    // Each profile lands on its card as it arrives, a few reads at a time:
+    // waiting for the last one before showing any made every name wait for
+    // the slowest host.
+    const seen = new Set<string>();
+    for (const r of wanted) {
+      if (seen.has(r.roomId)) continue;
+      seen.add(r.roomId);
+      PROFILES.run(() =>
+        roomsKeysProfileRead(managerSender, {
+          ...parties,
+          roomId: r.roomId,
+          host: r.host,
+          ...(r.member !== undefined ? { member: r.member } : {}),
+        }),
+      ).then(
+        (res) => {
+          if (live) setProfiles((prev) => ({ ...prev, [r.roomId]: roomProfileView(res) }));
+        },
+        () => {
           // An agent that does not serve the task, or a room it cannot read:
-          // the row keeps the community's name, or its DID.
-        }
-      }
-      if (live) setProfiles(out);
-    })();
+          // the card keeps the community's name, or its DID.
+        },
+      );
+    }
     return () => {
       live = false;
     };
