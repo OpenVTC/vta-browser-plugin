@@ -99,6 +99,8 @@ export function installRoomFilesPort(deps: RoomFilesDeps): void {
 export function serveRoomFilesPort(port: chrome.runtime.Port, deps: RoomFilesDeps): void {
   const abort = new AbortController();
   let open = true;
+  /** What this port is doing, for the log: the verb and the record, never its contents. */
+  let what = "transfer";
   const post = (m: RoomFilesMessage) => {
     if (!open) return;
     try {
@@ -115,10 +117,15 @@ export function serveRoomFilesPort(port: chrome.runtime.Port, deps: RoomFilesDep
   port.onDisconnect.addListener(() => {
     // Read so Chrome does not log it as unchecked.
     void globalThis.chrome?.runtime?.lastError;
+    // The console going away mid-transfer is worth a line: from its side the
+    // same event reads as this document having closed, and only one end can
+    // tell the two apart.
+    if (open) console.info(`[room files] ${what} stopped: the console closed the transfer`);
     open = false;
     abort.abort();
   });
   const finish = (m: RoomFilesMessage) => {
+    if (m.kind !== "failed") console.info(`[room files] ${what}: ${m.kind}`);
     post(m);
     if (open) {
       open = false;
@@ -127,6 +134,8 @@ export function serveRoomFilesPort(port: chrome.runtime.Port, deps: RoomFilesDep
   };
   const fail = (e: unknown) => {
     const code = (e as { code?: unknown })?.code;
+    // The error and its code only: never a key, a body or a byte.
+    console.warn(`[room files] ${what} failed${typeof code === "string" ? ` (${code})` : ""}:`, e instanceof Error ? e.message : String(e));
     finish({
       kind: "failed",
       error: e instanceof Error ? e.message : String(e),
@@ -142,6 +151,8 @@ export function serveRoomFilesPort(port: chrome.runtime.Port, deps: RoomFilesDep
     try {
       if (!started) {
         started = true;
+        what = msg.kind === "get" ? `get ${msg.key}` : msg.kind === "put" ? `put of ${msg.size} bytes` : String(msg.kind);
+        console.info(`[room files] ${what} in ${"roomId" in msg ? msg.roomId : "?"}: started`);
         if (msg.kind === "get") {
           void run(deps, msg, abort.signal, post).then(finish, fail);
         } else if (msg.kind === "put") {

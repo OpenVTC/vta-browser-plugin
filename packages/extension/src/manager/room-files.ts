@@ -105,6 +105,8 @@ function transfer<T>(
   return new Promise<T>((resolve, reject) => {
     const port = (opts.connect ?? (() => chrome.runtime.connect({ name: ROOM_FILES_PORT })))();
     let settled = false;
+    const since = Date.now();
+    let heard = 0;
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
@@ -123,6 +125,7 @@ function transfer<T>(
     port.onMessage.addListener((raw: unknown) => {
       const m = raw as RoomFilesMessage;
       if (settled) return;
+      heard++;
       if (m.kind === "progress") {
         opts.onProgress?.(m);
         return;
@@ -139,7 +142,15 @@ function transfer<T>(
       }
     });
     port.onDisconnect.addListener(() => {
-      void globalThis.chrome?.runtime?.lastError;
+      const why = globalThis.chrome?.runtime?.lastError?.message;
+      // Whether the offscreen document ever answered tells "never reached it"
+      // from "dropped part-way" — the two look the same in the message below.
+      if (!settled) {
+        console.warn(
+          `[room files] ${open.kind} transfer dropped after ${Date.now() - since} ms, ` +
+            `${heard} ${heard === 1 ? "message" : "messages"} heard${why ? `: ${why}` : ""}`,
+        );
+      }
       settle(() => reject(new RoomFilesError("the wallet's background document closed before the transfer finished")));
     });
 
