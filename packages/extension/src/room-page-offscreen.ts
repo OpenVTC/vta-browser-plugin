@@ -26,6 +26,8 @@ import {
   roomsKeysBrowse,
   roomsKeysList,
   roomsKeysRead,
+  roomProfileView,
+  roomsKeysProfileRead,
   writeSealedAsMember,
   type PersonaRoom,
 } from "@openvtc/pnm-core/rooms";
@@ -39,6 +41,7 @@ import type {
   PageRecordSummary,
   PageRecordView,
   PageRoomInfoView,
+  RoomProfileSummary,
 } from "./bridge-protocol.js";
 
 export interface RoomPageDeps {
@@ -136,6 +139,23 @@ export async function runRoomsPageOp(
       }
     }
     return names;
+  }
+
+  if (op.op === "roomProfiles") {
+    // Each room's own profile, read by the member's VTA as that member. A VTA
+    // that does not serve the task, or a room it cannot read, costs only that
+    // room's profile: the page falls back to the community's name, or the DID.
+    const out: Record<string, RoomProfileSummary> = {};
+    for (const { roomId, member } of op.rooms) {
+      if (out[roomId]) continue;
+      try {
+        const res = await roomsKeysProfileRead(sender, { ...parties, roomId, host: op.hostDid, member });
+        out[roomId] = profileSummary(roomProfileView(res));
+      } catch {
+        // No profile for this room this time.
+      }
+    }
+    return out;
   }
 
   // Every request for a page names the share's member: the VTA never picks one.
@@ -298,4 +318,16 @@ export async function readView(
   }
   // A retracted record: the tombstone is the answer.
   return base;
+}
+
+/** The part of a profile a view keeps: its text, and the two facts a member is told. */
+export function profileSummary(view: ReturnType<typeof roomProfileView>): RoomProfileSummary {
+  return {
+    status: view.status,
+    ...(view.name !== undefined ? { name: view.name } : {}),
+    ...(view.description !== undefined ? { description: view.description } : {}),
+    ...(view.emoji !== undefined ? { emoji: view.emoji } : {}),
+    stale: view.stale,
+    renameRefused: view.renameRefused,
+  };
 }

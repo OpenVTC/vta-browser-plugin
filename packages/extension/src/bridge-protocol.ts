@@ -2470,14 +2470,37 @@ export interface PageRoomView {
   sharedAt: string;
   expiresAt: string;
   /**
-   * The room's name, for a room this community owns: the label its
-   * administrators gave it, as the community's offer to the member carried it
-   * (`vtc/rooms/offers/list`). Absent for a room a member owns, and whenever
-   * the wallet has not learned one — the page then shows the room's DID.
+   * The room's name: its own profile's name where it has one
+   * (`rooms/keys/profile/read`), else — for a room this community owns — the
+   * label its administrators gave it, as the community's offer to the member
+   * carried it (`vtc/rooms/offers/list`). Absent whenever the wallet has
+   * learned neither — the page then shows the room's DID. Plain text.
    */
   label?: string;
   /** The room's tier, as the same offer carried it. */
   visibility?: string;
+  /**
+   * Where `label` came from: `profile` — the room's own profile, sealed inside
+   * it and read by the member's VTA (`rooms/keys/profile/read`), which wins —
+   * or `community`, the label of the community's offer.
+   */
+  labelSource?: "profile" | "community";
+  /** What the room says it is for, from its profile. Plain text, never markup. */
+  description?: string;
+  /** The profile predates the room's latest epoch advance and was not written again since. */
+  profileStale?: boolean;
+  /** Somebody without the standing to name the room wrote a newer profile; it was ignored. */
+  renameRefused?: boolean;
+}
+
+/** What the wallet keeps of one room's profile for a view — text only, already inert. */
+export interface RoomProfileSummary {
+  status: "found" | "absent" | "cleared";
+  name?: string;
+  description?: string;
+  emoji?: string;
+  stale: boolean;
+  renameRefused: boolean;
 }
 
 /** `rooms.info`: the room as its host reports it to the member. */
@@ -2936,6 +2959,10 @@ export type OffscreenRoomsPageOp =
    *  (`vtc/rooms/offers/list`, signed as that member): `{ [roomId]: { label, visibility? } }`.
    *  A member whose offers could not be read contributes nothing. */
   | { op: "roomNames"; hostDid: string; members: string[] }
+  /** Each room's own profile, read from `hostDid` as its member by the member's
+   *  VTA (`rooms/keys/profile/read`): `{ [roomId]: RoomProfileSummary }`. A room
+   *  whose profile could not be read contributes nothing. */
+  | { op: "roomProfiles"; hostDid: string; rooms: { roomId: string; member: string }[] }
   // `member`: the persona the request acts as — the share's, never the page's.
   | { op: "info"; hostDid: string; roomId: string; member: string }
   | { op: "browse"; hostDid: string; roomId: string; member: string; prefix?: string; sinceVersion?: number }

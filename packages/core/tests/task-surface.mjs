@@ -517,7 +517,9 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // (`rooms/offer-accept.ts`) — `vtc/rooms/offers/accept/0.1` as the member,
   // with `rooms/keys/key-package/0.1` and `rooms/keys/welcome/0.1` at the
   // member's own VTA, the CLI's `pnm rooms offers accept` step for step.
-  const expected = 223;
+  // 223 → 224: `rooms/keys/profile/read/0.1`, the room's own name read through
+  // the member's VTA (trust-tasks-tf #807). `write` stays the CLI's for now.
+  const expected = 224;
   assert.equal(
     implemented.size,
     expected,

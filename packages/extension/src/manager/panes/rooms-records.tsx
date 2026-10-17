@@ -36,6 +36,7 @@ import type { Parties } from "../use-vta.js";
 import type { RoomFilesPrepared } from "../../bridge-protocol.js";
 import { prepareRoomFiles, roomFileClaimOf } from "../room-files.js";
 import { GetRoomFile, PutRoomFile, RoomFilesUnavailable } from "./rooms-files.js";
+import { RoomProfileAt } from "./rooms-profile.js";
 
 const fieldStyle: React.CSSProperties = {
   boxSizing: "border-box",
@@ -365,6 +366,10 @@ export function RoomRecords({ parties, room }: { parties: Parties; room: HeldRoo
 
       {error && <LoadError what="this room's records" error={error} />}
       {busy && rows === null && !error && <Loading what="records" />}
+
+      {rows !== null && listedHost && (
+        <RoomProfileAt parties={parties} roomId={room.roomId} member={room.member} host={listedHost} />
+      )}
 
       {rows !== null && (
         <>

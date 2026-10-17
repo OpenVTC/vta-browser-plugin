@@ -872,3 +872,6 @@ export * from "./offers.js";
 // Accepting one of those offers: credentials into the VTA, a KeyPackage it
 // mints, the acceptance as the member, and the Welcome back to the VTA.
 export * from "./offer-accept.js";
+
+// The room's own profile — what it calls itself, read through the member's VTA.
+export * from "./profile.js";

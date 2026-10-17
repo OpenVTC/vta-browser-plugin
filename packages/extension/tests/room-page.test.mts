@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import {
   ROOM_NAMES_CACHE_MS,
   RoomPageGates,
+  withProfiles,
   type PortLike,
   type RoomPageBackgroundDeps,
 } from "../src/room-page-background.ts";
@@ -20,6 +21,7 @@ import {
   ROOM_NAMES_MAX,
   liveGrants,
   mergeRoomNames,
+  rememberedRoomHosts,
   rememberedRoomLabels,
   roomNamesKey,
   membersAt,
@@ -39,6 +41,7 @@ import {
 } from "../src/room-page-policy.ts";
 import { readView, runRoomsPageOp } from "../src/room-page-offscreen.ts";
 import { signRecordBody } from "@openvtc/pnm-core/rooms/files";
+import type { RoomProfileSummary } from "../src/bridge-protocol.ts";
 import { signingIdentityFromSecret } from "@openvtc/pnm-core";
 
 const PORTAL = "https://members.northwind.example";
@@ -111,6 +114,8 @@ interface Harness {
   held: { roomId: string; member?: string; actions?: string[] }[];
   /** The names the community's offers give its rooms, or a failed reading. */
   names: Record<string, { label: string; visibility?: string }> | "fail";
+  /** Each room's own profile, as the member's VTA reads it, or a failed reading. */
+  profiles: Record<string, RoomProfileSummary> | "fail";
 }
 
 function harness(over: Partial<RoomPageBackgroundDeps> = {}): Harness {
@@ -132,6 +137,7 @@ function harness(over: Partial<RoomPageBackgroundDeps> = {}): Harness {
       { roomId: COMMUNITY_ROOM, member: HOST, actions: ["admin"] },
     ],
     names: {},
+    profiles: {},
   };
   const deps: RoomPageBackgroundDeps = {
     active: async () => ({ ok: true, vta: { vtaDid: VTA } }),
@@ -146,6 +152,10 @@ function harness(over: Partial<RoomPageBackgroundDeps> = {}): Harness {
           return { ok: true, result: h.members };
         case "roomNames":
           return h.names === "fail" ? { ok: false, error: "offers: notAMember" } : { ok: true, result: h.names };
+        case "roomProfiles":
+          return h.profiles === "fail"
+            ? { ok: false, error: "unsupportedType" }
+            : { ok: true, result: h.profiles };
         case "info":
           if (op.roomId === OTHER_ROOM) return { ok: false, error: "rooms/info: notFound" };
           return {
@@ -606,6 +616,8 @@ test("remembered names: fresh over old, bounded, and read back for the console b
     "room-grants:x": [],
   };
   assert.deepEqual(rememberedRoomLabels(all, VTA), { [ROOM]: "Newer" });
+  // And the community each came from: where the console reads the room's own profile.
+  assert.deepEqual(rememberedRoomHosts(all, VTA), { [ROOM]: "did:web:other.example" });
 });
 
 test("the offscreen reading: each member's offers, signed as that member, at the community; one failing costs only its own", async () => {
@@ -641,4 +653,146 @@ test("the offscreen reading: each member's offers, signed as that member, at the
   assert.deepEqual(names, { [ROOM]: { label: "Board pack", visibility: "attributed" } });
   assert.deepEqual(actedAs, [MEMBER, MEMBER_2], "each member once");
   assert.deepEqual(sentTo, [`${HOST} ${PORTAL}/v1/trust-tasks ${HOST}`]);
+});
+
+// ── The room's own profile ──────────────────────────────────────────────────
+
+type ListedRoom = {
+  roomId: string;
+  label?: string;
+  labelSource?: string;
+  description?: string;
+  profileStale?: boolean;
+  renameRefused?: boolean;
+  visibility?: string;
+};
+
+test("the room's own profile names it over the community's offer label, with its description", async () => {
+  const { h } = namingHarness();
+  h.names = { [ROOM]: { label: "Board pack", visibility: "attributed" } };
+  h.profiles = { [ROOM]: { status: "found", name: "Board papers 2027", description: "For the board", stale: false, renameRefused: false } };
+  const [room] = (await shareAndList(h)) as ListedRoom[];
+  assert.equal(room!.label, "Board papers 2027");
+  assert.equal(room!.labelSource, "profile");
+  assert.equal(room!.description, "For the board");
+  assert.equal(room!.visibility, "attributed", "the tier still comes from the offer");
+  assert.equal(room!.renameRefused, undefined);
+  const asked = h.asked.filter((a) => a.op === "roomProfiles");
+  assert.ok(asked.length > 0);
+  assert.ok(
+    asked.every(
+      (a) => a.hostDid === HOST && (a.rooms as { member: string }[]).every((r) => r.member === MEMBER),
+    ),
+    "read from this community, as the member each room is held as",
+  );
+  // The share prompt shows the profile name too.
+  h.answer = { approved: false };
+  await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST });
+  const view = h.prompts.at(-1) as RoomShareConsentView;
+  assert.equal(view.rooms.find((r) => r.roomId === ROOM)!.label, "Board papers 2027");
+});
+
+test("without a profile the offer label stands; without either, the DID", async () => {
+  const { h } = namingHarness();
+  h.names = { [ROOM]: { label: "Board pack" } };
+  h.profiles = { [ROOM]: { status: "absent", stale: false, renameRefused: false } };
+  const [room] = (await shareAndList(h)) as ListedRoom[];
+  assert.equal(room!.label, "Board pack");
+  assert.equal(room!.labelSource, "community");
+
+  const { h: bare } = namingHarness();
+  bare.profiles = "fail";
+  const [unnamed] = (await shareAndList(bare)) as ListedRoom[];
+  assert.equal(unnamed!.label, undefined, "a VTA without the task leaves the room unnamed, the list answering");
+});
+
+test("a refused rename and a stale profile reach the page as facts", async () => {
+  const { h } = namingHarness();
+  h.profiles = { [ROOM]: { status: "found", name: "Board pack", stale: true, renameRefused: true } };
+  const [room] = (await shareAndList(h)) as ListedRoom[];
+  assert.equal(room!.label, "Board pack");
+  assert.equal(room!.profileStale, true);
+  assert.equal(room!.renameRefused, true);
+
+  // A refused rename with no accepted profile still says so, over the offer label.
+  const { h: h2 } = namingHarness();
+  h2.names = { [ROOM]: { label: "Offered name" } };
+  h2.profiles = { [ROOM]: { status: "absent", stale: false, renameRefused: true } };
+  const [r2] = (await shareAndList(h2)) as ListedRoom[];
+  assert.equal(r2!.label, "Offered name");
+  assert.equal(r2!.renameRefused, true);
+});
+
+test("profiles are read at most once a minute per room and member, never stored", async () => {
+  const { h, store, clock } = namingHarness();
+  h.profiles = { [ROOM]: { status: "found", name: "Board pack", stale: false, renameRefused: false } };
+  await shareAndList(h);
+  const reads = () => h.asked.filter((a) => a.op === "roomProfiles").length;
+  const before = reads();
+  await h.gates.handle(PORTAL, { op: "list", hostDid: HOST });
+  assert.equal(reads(), before, "inside the minute: no new reading");
+  clock.now += ROOM_NAMES_CACHE_MS;
+  await h.gates.handle(PORTAL, { op: "list", hostDid: HOST });
+  assert.equal(reads(), before + 1);
+  assert.ok(
+    ![...store.values()].some((v) => JSON.stringify(v).includes("Board pack")),
+    "the profile is held for the view, not written to storage",
+  );
+});
+
+test("withProfiles: profile over offer, facts kept, nameless profiles add nothing but facts", () => {
+  const merged = withProfiles(
+    { [ROOM]: { label: "Offer", visibility: "private" }, [OTHER_ROOM]: { label: "Other" } },
+    {
+      [ROOM]: { status: "found", name: "Own", stale: false, renameRefused: false },
+      [OTHER_ROOM]: { status: "cleared", stale: false, renameRefused: false },
+      [PRIVATE_ROOM]: { status: "absent", stale: false, renameRefused: true },
+    },
+  );
+  assert.deepEqual(merged[ROOM], { label: "Own", visibility: "private", labelSource: "profile" });
+  assert.deepEqual(merged[OTHER_ROOM], { label: "Other", labelSource: "community" });
+  assert.equal(merged[PRIVATE_ROOM], undefined, "no name to show, so no entry");
+});
+
+test("the offscreen profile reading: through the member's VTA, as the member, one failing costs only its own", async () => {
+  const asked: { type: string; payload: Record<string, unknown>; recipient: string }[] = [];
+  const out = await runRoomsPageOp(
+    {
+      agent: async () => ({
+        holderDid: "did:key:zWallet",
+        sender: {
+          async send<Res>(envelope: { type: string; payload: Record<string, unknown>; recipient: string }) {
+            asked.push(envelope);
+            if (envelope.payload.roomId === OTHER_ROOM) throw new Error("unsupportedType");
+            return {
+              roomId: envelope.payload.roomId,
+              status: "found",
+              profile: { name: "Board\u001b[2J pack", description: "Papers" },
+              stale: false,
+              rejected: [{ epoch: 4, version: 9, reason: "noAuthority", author: "did:example:mallory" }],
+            } as Res;
+          },
+        } as never,
+      }),
+    },
+    { vtaDid: VTA },
+    {
+      op: "roomProfiles",
+      hostDid: HOST,
+      rooms: [
+        { roomId: ROOM, member: MEMBER },
+        { roomId: OTHER_ROOM, member: MEMBER },
+      ],
+    },
+  );
+  assert.deepEqual(out, {
+    [ROOM]: { status: "found", name: "Board[2J pack", description: "Papers", stale: false, renameRefused: true },
+  });
+  assert.equal(asked[0]!.type, "https://trusttasks.org/spec/rooms/keys/profile/read/0.1");
+  assert.equal(asked[0]!.recipient, VTA, "asked of the member's own VTA");
+  assert.deepEqual(asked[0]!.payload, {
+    roomId: ROOM,
+    host: HOST,
+    ext: { "org.openvtc.rooms": { member: MEMBER } },
+  });
 });
