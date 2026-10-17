@@ -36,6 +36,12 @@
 // disagrees with the DID document after a rotation. A wrong key here produces a
 // credential that fails to verify against the room's DID document — loud, and at
 // first use rather than silently.
+//
+// The one thing the console does know is the key of a room **it created**: the
+// create flow holds the pair when it registers the room, and `room-hosts.ts`
+// remembers it beside the host. Those rooms are offered as a pick that fills
+// both fields, which stay editable — a hint, not a binding. Gone stale after a
+// rotation, it fails exactly as a mistyped key does: loudly, at first use.
 
 import { useCallback, useState } from "react";
 import {
@@ -143,10 +149,20 @@ function Issued({ issued, onDone }: { issued: IssuedCredential; onDone: () => vo
   );
 }
 
-export function IssueInRoomsName({ parties }: { parties: Parties }) {
+export function IssueInRoomsName({
+  parties,
+  owned = [],
+  initial,
+}: {
+  parties: Parties;
+  /** Rooms this console created, offered as a pick that fills both fields. */
+  owned?: readonly { roomId: string; signingKeyId: string; name?: string | undefined }[];
+  /** The room to start on, when opened from that room's detail. */
+  initial?: { roomId: string; signingKeyId: string } | undefined;
+}) {
   const [verb, setVerb] = useState<Verb>("invite");
-  const [roomId, setRoomId] = useState("");
-  const [signingKeyId, setSigningKeyId] = useState("");
+  const [roomId, setRoomId] = useState(initial?.roomId ?? "");
+  const [signingKeyId, setSigningKeyId] = useState(initial?.signingKeyId ?? "");
   const [subject, setSubject] = useState("");
   const [validUntil, setValidUntil] = useState("");
   const [actions, setActions] = useState<RoomAction[]>(["read"]);
@@ -216,6 +232,42 @@ export function IssueInRoomsName({ parties }: { parties: Parties }) {
       </div>
       <p style={{ margin: 0, fontSize: t.sm, color: c.muted }}>{chosen.what}</p>
 
+      {owned.length > 0 && (
+        <div style={{ display: "grid", gap: 6 }}>
+          <span style={{ fontSize: t.xs, color: c.muted }}>ROOMS YOU CREATED HERE</span>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {owned.map((o) => {
+              const on = o.roomId === roomId.trim() && o.signingKeyId === signingKeyId.trim();
+              return (
+                <button
+                  key={o.roomId}
+                  aria-pressed={on}
+                  title={o.roomId}
+                  onClick={() => {
+                    setRoomId(o.roomId);
+                    setSigningKeyId(o.signingKeyId);
+                  }}
+                  style={{
+                    font: "inherit",
+                    fontSize: t.sm,
+                    padding: "5px 11px",
+                    cursor: "pointer",
+                    borderRadius: "var(--w-r-sm)",
+                    border: `1px solid ${on ? c.accent : c.line}`,
+                    background: on ? c.accentSoft : c.surface,
+                    color: c.text,
+                  }}
+                >
+                  {o.name ?? `${o.roomId.slice(0, 18)}…${o.roomId.slice(-10)}`}
+                </button>
+              );
+            })}
+          </div>
+          <span style={{ fontSize: t.xs, color: c.faint }}>
+            Fills the room and the key it was created with. For any other room, type both below.
+          </span>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
         <label style={{ display: "grid", gap: 4, flex: "1 1 20rem" }}>
           <span style={{ fontSize: t.xs, color: c.muted }}>ROOM DID</span>

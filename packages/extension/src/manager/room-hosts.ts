@@ -38,6 +38,9 @@ interface StoredRoomHost {
   host: string;
   source: "created" | "used";
   seenAt: number;
+  /** For a room this console created: the key it was minted with, to pre-fill
+   *  the owner's issuing form. A hint like the host — see `rooms-owner.tsx`. */
+  signingKeyId?: string;
 }
 
 /** The storage key holding one VTA's remembered hosts. */
@@ -54,7 +57,12 @@ function readStored(value: unknown): Record<string, StoredRoomHost> {
     if (!r || typeof r.host !== "string" || !r.host.startsWith("did:")) continue;
     if (r.source !== "created" && r.source !== "used") continue;
     if (typeof r.seenAt !== "number") continue;
-    out[roomId] = { host: r.host, source: r.source, seenAt: r.seenAt };
+    out[roomId] = {
+      host: r.host,
+      source: r.source,
+      seenAt: r.seenAt,
+      ...(typeof r.signingKeyId === "string" && r.signingKeyId ? { signingKeyId: r.signingKeyId } : {}),
+    };
   }
   return out;
 }
@@ -66,9 +74,18 @@ export function withRoomHost(
   host: string,
   source: "created" | "used",
   now: number,
+  signingKeyId?: string,
 ): Record<string, StoredRoomHost> {
   const out = readStored(stored);
-  out[roomId] = { host, source, seenAt: now };
+  // A later listing of a room created here keeps it created, and its key.
+  const had = out[roomId];
+  const keep = had?.source === "created" && source === "used";
+  out[roomId] = {
+    host,
+    source: keep ? "created" : source,
+    seenAt: now,
+    ...((signingKeyId ?? (keep ? had.signingKeyId : undefined)) ? { signingKeyId: signingKeyId ?? had!.signingKeyId! } : {}),
+  };
   const entries = Object.entries(out);
   if (entries.length <= ROOM_HOSTS_MAX) return out;
   return Object.fromEntries(entries.sort((a, b) => b[1].seenAt - a[1].seenAt).slice(0, ROOM_HOSTS_MAX));
@@ -90,6 +107,20 @@ export function knownRoomHosts(all: Readonly<Record<string, unknown>>, vtaDid: s
   return out;
 }
 
+/** A room this console created, with the key it was minted with. */
+export interface OwnedRoom {
+  roomId: string;
+  signingKeyId: string;
+}
+
+/** The rooms this console created under `vtaDid`, newest first. */
+export function ownedRooms(all: Readonly<Record<string, unknown>>, vtaDid: string): OwnedRoom[] {
+  return Object.entries(readStored(all[roomHostsKey(vtaDid)]))
+    .filter(([, r]) => r.source === "created" && r.signingKeyId)
+    .sort((a, b) => b[1].seenAt - a[1].seenAt)
+    .map(([roomId, r]) => ({ roomId, signingKeyId: r.signingKeyId! }));
+}
+
 /**
  * Remember that `host` served `roomId`. Best effort: a page outside the
  * extension (the render tests), or storage that refuses, leaves the hint
@@ -100,13 +131,14 @@ export async function rememberRoomHost(
   roomId: string,
   host: string,
   source: "created" | "used",
+  signingKeyId?: string,
 ): Promise<void> {
   const store = globalThis.chrome?.storage?.local;
   if (!store?.set) return;
   const key = roomHostsKey(vtaDid);
   try {
     const got = await store.get(key);
-    await store.set({ [key]: withRoomHost(got?.[key], roomId, host, source, Date.now()) });
+    await store.set({ [key]: withRoomHost(got?.[key], roomId, host, source, Date.now(), signingKeyId) });
   } catch {
     // A hint, not a record: nothing depends on it having been written.
   }

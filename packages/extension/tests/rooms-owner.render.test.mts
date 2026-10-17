@@ -157,3 +157,26 @@ test("the missing-key message says it is not derived", async () => {
   await screen.type(text[0]!, ROOM);
   assert.match(screen.text(), /not looked up from the room's DID/);
 });
+
+// ── A room this console created ─────────────────────────────────────────────
+
+// The console knows the key of a room it created, and only that: such a room
+// is a pick that fills both fields, which stay editable — a hint, not a lookup.
+test("a room created here fills the room and its key, and both stay editable", async () => {
+  const a = agent({ [INVITE]: SIGNED });
+  const screen = await render(
+    h(IssueInRoomsName, { parties: PARTIES, owned: [{ roomId: ROOM, signingKeyId: KEY, name: "Northwind" }] } as never),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await screen.click(screen.button("Northwind"));
+  const values = screen.all("input").map((el) => (el as HTMLInputElement).value);
+  assert.ok(values.includes(ROOM));
+  assert.ok(values.includes(KEY));
+  const text = screen.all("input").filter((el) => (el as HTMLInputElement).type === "text" || (el as HTMLInputElement).type === "");
+  assert.ok(text.every((el) => !(el as HTMLInputElement).readOnly && !(el as HTMLInputElement).disabled));
+});
+
+test("with no room created here, nothing is offered and the fields start empty", async () => {
+  const screen = await render(h(IssueInRoomsName, { parties: PARTIES } as never));
+  assert.doesNotMatch(screen.text(), /ROOMS YOU CREATED HERE/);
+});
