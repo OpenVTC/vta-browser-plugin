@@ -10,8 +10,8 @@ import type { WebvhServerRecord } from "@openvtc/pnm-core/webvh";
 import type { ContextRecord } from "@openvtc/pnm-core";
 import { Did, Note } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
-import { contextHeading } from "../format.js";
 import { didPath, pathProblem } from "../webvh-path.js";
+import { ContextPicker } from "../context-picker.js";
 
 export const fieldStyle: React.CSSProperties = {
   boxSizing: "border-box",
@@ -210,6 +210,7 @@ export function Step({
   );
 }
 
+/** The context a room and its host live in — a tree, since contexts nest (`context-picker.tsx`). */
 export function ContextSelect({
   name,
   options,
@@ -221,16 +222,7 @@ export function ContextSelect({
   value: string;
   onChange: (id: string) => void;
 }) {
-  return (
-    <select aria-label={name} style={fieldStyle} value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">Choose…</option>
-      {options.map((ctx) => (
-        <option key={ctx.id} value={ctx.id}>
-          {contextHeading(ctx, ctx.id)}
-        </option>
-      ))}
-    </select>
-  );
+  return <ContextPicker name={name} options={options} value={value} onChange={onChange} />;
 }
 
 export function ServerSelect({

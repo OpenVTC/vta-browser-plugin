@@ -965,7 +965,8 @@ holds; the member ticks those that belong; each is confirmed with the host as
 the member (`rooms/info`) before it is shared; the selection is the whole of
 what is shared afterwards. A share is a grant `(origin, hostDid, vtaDid,
 roomId)` in `chrome.storage.local` under `room-grants:`, for 30 days, listed and
-revocable in the console (`manager/panes/rooms-shares.tsx`). A page asking
+revocable in the console's **Communities** tab, beside the room it shares
+(`rooms-shares.tsx` reads, `rooms-communities.tsx` draws). A page asking
 about a room it was not given gets one sentence whatever the reason.
 
 **A share names the member it acts as, and every request for the page names
@@ -1060,7 +1061,11 @@ A community that owns a room offers its members admission
 (`vtc/rooms/community/members/add`). The wallet lists and accepts those offers
 the way `pnm rooms offers list|accept` does (VTI
 `vta-cli-common::commands::rooms`), so a member never needs the CLI: from the
-console's Data rooms page (**Offers**, `manager/panes/rooms-offers.tsx`) and
+console's Data rooms page (**Communities**: `rooms-offers.tsx`'s
+`useRoomOffers` reads and accepts, `rooms-communities.tsx` draws each community
+as one lane — offered → held → shared with its portal, joined by
+`community-lanes.ts`, with a gap drawn as its state, e.g. accepted but the keys
+not arrived) and
 from the community's own portal (`window.vtaWallet.rooms.{offers,acceptOffer}`).
 
 **Who is asked, and as whom, comes from the wallet's own sign-in record.** Each

@@ -26,7 +26,7 @@ import { didHost } from "../../did-display.js";
 import { Button, Did, Note, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { Popover, usePopoverAnchor } from "../popover.js";
-import type { KnownRoomHost } from "../room-hosts.js";
+import type { KnownRoomHost, OwnedRoom } from "../room-hosts.js";
 import { memberLabel, placeLabel, placeWord, shortDid, standing } from "../room-words.js";
 import type { RoomEntry } from "../room-groups.js";
 import type { Parties } from "../use-vta.js";
@@ -207,6 +207,8 @@ export function RoomDetail({
   onBack,
   onChanged,
   onHost,
+  owned,
+  onIssue,
 }: {
   parties: Parties;
   entry: RoomEntry;
@@ -220,6 +222,9 @@ export function RoomDetail({
   onChanged: () => void;
   /** A host answered for this room: remember it. */
   onHost: (host: string) => void;
+  /** Set when this console created the room, and so knows its signing key. */
+  owned?: OwnedRoom | undefined;
+  onIssue?: ((room: OwnedRoom) => void) | undefined;
 }) {
   const [at, setAt] = useState(0);
   const [sub, setSub] = useState<Sub>("records");
@@ -297,6 +302,11 @@ export function RoomDetail({
           >
             Your label
           </button>
+          {owned && onIssue && (
+            <Button onClick={() => onIssue(owned)} title="You created this room here, so this console knows the key it signs with">
+              Issue in its name
+            </Button>
+          )}
         </div>
 
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", paddingTop: 12, borderTop: `1px solid ${c.lineSoft}` }}>

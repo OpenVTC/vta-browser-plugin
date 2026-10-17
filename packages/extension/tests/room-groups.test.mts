@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { knownRoomHosts, roomHostsKey, withRoomHost, ROOM_HOSTS_MAX } from "../src/manager/room-hosts.js";
+import { knownRoomHosts, ownedRooms, roomHostsKey, withRoomHost, ROOM_HOSTS_MAX } from "../src/manager/room-hosts.js";
 import { groupRooms, mostReadable, roomEntries } from "../src/manager/room-groups.js";
 import { roomNamesKey } from "../src/room-page-policy.js";
 
@@ -89,4 +89,23 @@ test("by context, each place is under its own context, unreported ones last", ()
     ["context:y", ["a:m2"]],
     ["context:", ["b:m1"]],
   ]);
+});
+
+test("a room created here stays created, with its key, when it is later listed", () => {
+  let stored: unknown = withRoomHost({}, "r", MIRROR, "created", 1, "key-1");
+  stored = withRoomHost(stored, "r", COMMUNITY, "used", 2);
+  const all = { [roomHostsKey(VTA)]: stored };
+  assert.deepEqual(knownRoomHosts(all, VTA).r, { host: COMMUNITY, source: "created" });
+  assert.deepEqual(ownedRooms(all, VTA), [{ roomId: "r", signingKeyId: "key-1" }]);
+});
+
+test("only rooms created here, with a key, are owned", () => {
+  const all = {
+    [roomHostsKey(VTA)]: {
+      a: { host: MIRROR, source: "used", seenAt: 1, signingKeyId: "k" },
+      b: { host: MIRROR, source: "created", seenAt: 2 },
+      c: { host: MIRROR, source: "created", seenAt: 3, signingKeyId: "kc" },
+    },
+  };
+  assert.deepEqual(ownedRooms(all, VTA), [{ roomId: "c", signingKeyId: "kc" }]);
 });

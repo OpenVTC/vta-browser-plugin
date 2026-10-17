@@ -205,12 +205,15 @@ export function GetRoomFile({
   prepared,
   recordKey,
   claim,
+  showTitle = true,
 }: {
   room: HeldRoom;
   host: string;
   prepared: RoomFilesPrepared | null;
   recordKey: string;
   claim: RoomFileClaim;
+  /** Off where the record's title is already the heading above. */
+  showTitle?: boolean;
 }) {
   const [line, setLine] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -252,7 +255,7 @@ export function GetRoomFile({
   return (
     <div style={{ display: "grid", gap: 8 }}>
       <div style={{ fontSize: t.sm }}>
-        {(got?.title ?? claim.title) && <div style={{ fontWeight: 600 }}>{got?.title ?? claim.title}</div>}
+        {showTitle && (got?.title ?? claim.title) && <div style={{ fontWeight: 600 }}>{got?.title ?? claim.title}</div>}
         <code style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
           {safeFileName(shown.name)}
         </code>{" "}

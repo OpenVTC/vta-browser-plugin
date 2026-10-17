@@ -34,8 +34,9 @@
 // offer label, then nothing — and a personal name never hides the others: the
 // room's or community's name and the DID stay on the card beside it.
 //
-// The rest of the family has its own tab: offers waiting for the member, rooms
-// shared with community portals, the owner's issuing tools, and creating one.
+// The rest of the family has its own tab: the communities the member signs in
+// to — what each offered, what became a room, what its portal may see, as one
+// lane (`rooms-communities.tsx`) — the owner's issuing tools, and creating one.
 
 import { useCallback, useEffect, useState } from "react";
 import { roomsKeysList, type HeldRoom } from "@openvtc/pnm-core/rooms";
@@ -48,19 +49,20 @@ import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { Loading, LoadError } from "../table.js";
 import { groupRooms, mostReadable, roomEntries, type GroupBy, type RoomEntry, type RoomGroup } from "../room-groups.js";
-import { knownRoomHosts, rememberRoomHost, type KnownRoomHost } from "../room-hosts.js";
+import { knownRoomHosts, ownedRooms, rememberRoomHost, type KnownRoomHost, type OwnedRoom } from "../room-hosts.js";
 import { memberLabel, placeWord, shortDid, standing } from "../room-words.js";
 import type { ContextRecord } from "@openvtc/pnm-core";
 import type { RoomProfileView } from "@openvtc/pnm-core/rooms";
 import type { Parties } from "../use-vta.js";
 import { CreateRoom } from "./rooms-create.js";
 import { IssueInRoomsName } from "./rooms-owner.js";
-import { RoomShares } from "./rooms-shares.js";
-import { RoomOffers } from "./rooms-offers.js";
+import { useRoomShares } from "./rooms-shares.js";
+import { useRoomOffers } from "./rooms-offers.js";
+import { RoomCommunities } from "./rooms-communities.js";
 import { roomDisplayName, useRoomProfiles } from "./rooms-profile.js";
 import { profileNotices, RoomDetail, RoomTile, Segmented, TabStrip } from "./rooms-detail.js";
 
-type Tab = "rooms" | "offers" | "shared" | "owner" | "new";
+type Tab = "rooms" | "communities" | "owner" | "new";
 
 const INTRO_DISMISSED = "rooms-intro-dismissed";
 
@@ -233,7 +235,6 @@ export function RoomsPane({
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [by, setBy] = useState<GroupBy>("host");
-  const [offers, setOffers] = useState(0);
   const [introHidden, setIntroHidden] = useState(readDismissed);
   const agentDid = parties.service.did;
 
@@ -252,6 +253,14 @@ export function RoomsPane({
     void load();
   }, [load]);
 
+  // Owned by the pane, whichever tab shows them: the open count is a badge.
+  const reload = useCallback(() => void load(), [load]);
+  const offerState = useRoomOffers({ onAccepted: reload });
+  const offers = offerState.overview?.openCount ?? 0;
+  const shareState = useRoomShares();
+  const [owned, setOwned] = useState<OwnedRoom[]>([]);
+  const [ownerStart, setOwnerStart] = useState<OwnedRoom | undefined>(undefined);
+
   // The names communities gave rooms on their offers, and where each room was
   // last found. Absent outside the extension (the pane's render tests).
   const [labels, setLabels] = useState<Record<string, string>>({});
@@ -264,17 +273,22 @@ export function RoomsPane({
       .then((all) => {
         setLabels(rememberedRoomLabels(all, agentDid));
         setHosts(knownRoomHosts(all, agentDid));
+        setOwned(ownedRooms(all, agentDid));
       })
       .catch(() => {
         setLabels({});
         setHosts({});
+        setOwned([]);
       });
   }, [agentDid, rooms]);
 
   const remember = useCallback(
-    (roomId: string, host: string, source: "created" | "used") => {
-      setHosts((prev) => (prev[roomId]?.host === host ? prev : { ...prev, [roomId]: { host, source } }));
-      void rememberRoomHost(agentDid, roomId, host, source);
+    (roomId: string, host: string, source: "created" | "used", signingKeyId?: string) => {
+      setHosts((prev) =>
+        prev[roomId]?.host === host ? prev : { ...prev, [roomId]: { host, source: prev[roomId]?.source === "created" ? "created" : source } },
+      );
+      if (signingKeyId) setOwned((prev) => [{ roomId, signingKeyId }, ...prev.filter((o) => o.roomId !== roomId)]);
+      void rememberRoomHost(agentDid, roomId, host, source, signingKeyId);
     },
     [agentDid],
   );
@@ -336,7 +350,7 @@ export function RoomsPane({
         No rooms. This agent has been given keys to none — which is also what it looks like before an
         invitation has been accepted.{" "}
         {offers > 0 && (
-          <Button kind="quiet" onClick={() => setTab("offers")}>
+          <Button kind="quiet" onClick={() => setTab("communities")}>
             See {offers === 1 ? "the offer" : `${offers} offers`} waiting
           </Button>
         )}
@@ -402,19 +416,19 @@ export function RoomsPane({
         onPick={(k) => {
           setTab(k);
           setOpen(null);
+          setOwnerStart(undefined);
         }}
         tabs={[
           { key: "rooms", label: "My rooms" },
           {
-            key: "offers",
+            key: "communities",
             label: (
               <>
-                Offers
+                Communities
                 {offers > 0 && <Pill tone="accent">{offers}</Pill>}
               </>
             ),
           },
-          { key: "shared", label: "Shared with sites" },
           { key: "owner", label: "Owner tools" },
           ...(tab === "new" ? [{ key: "new" as const, label: "New room" }] : []),
         ]}
@@ -433,6 +447,11 @@ export function RoomsPane({
             onBack={() => setOpen(null)}
             onChanged={() => void load()}
             onHost={(host) => remember(opened.roomId, host, "used")}
+            owned={owned.find((o) => o.roomId === opened.roomId)}
+            onIssue={(o) => {
+              setOwnerStart(o);
+              setTab("owner");
+            }}
           />
         ) : (
           <>
@@ -441,19 +460,38 @@ export function RoomsPane({
           </>
         ))}
 
-      {/* Mounted whatever the tab, hidden when not current: it polls, and its
-          count is the tab's badge. Accepting one is what puts a room in the list. */}
-      <div hidden={tab !== "offers"}>
-        <RoomOffers onAccepted={() => void load()} onCount={setOffers} />
-      </div>
-
-      {tab === "shared" && <RoomShares />}
+      {tab === "communities" && (
+        <RoomCommunities
+          agentDid={agentDid}
+          offers={offerState}
+          shares={shareState}
+          entries={entries}
+          hosts={hosts}
+          names={names}
+          profiles={profiles}
+          onOpen={(roomId) => {
+            setTab("rooms");
+            setOpen(roomId);
+          }}
+        />
+      )}
 
       {/* Its own tab rather than per room: issuing is about a room the owner
           has, and the list is key custody — a room can appear in one and not
           the other in both directions, so pairing them per card would suggest a
           correspondence that does not hold. */}
-      {tab === "owner" && <IssueInRoomsName parties={parties} />}
+      {tab === "owner" && (
+        <IssueInRoomsName
+          key={ownerStart?.roomId ?? ""}
+          parties={parties}
+          owned={owned.map((o) => {
+            const personal = rooms?.find((r) => r.roomId === o.roomId && r.personal?.label)?.personal?.label;
+            const name = roomDisplayName({ personal, profile: profiles[o.roomId], community: labels[o.roomId] })?.name;
+            return { ...o, ...(name !== undefined ? { name } : {}) };
+          })}
+          initial={ownerStart}
+        />
+      )}
 
       {tab === "new" && (
         <div style={{ display: "grid", gap: 10 }}>
@@ -463,8 +501,8 @@ export function RoomsPane({
           <CreateRoom
             parties={parties}
             contexts={contexts}
-            onCreated={({ roomId, host }) => {
-              remember(roomId, host, "created");
+            onCreated={({ roomId, host, signingKeyId }) => {
+              remember(roomId, host, "created", signingKeyId);
               void load();
               setTab("rooms");
             }}
