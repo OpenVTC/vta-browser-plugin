@@ -1028,9 +1028,21 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/rooms/keys/label/0.1",
+      "consts": [
+        "TASK_ROOMS_KEYS_LABEL_0_1"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/rooms/keys/list/0.1",
       "consts": [
         "TASK_ROOMS_KEYS_LIST_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/keys/list/0.2",
+      "consts": [
+        "TASK_ROOMS_KEYS_LIST_0_2"
       ]
     },
     {

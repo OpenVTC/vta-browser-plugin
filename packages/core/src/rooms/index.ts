@@ -37,7 +37,14 @@ import {
   RESPONSE_TYPE_URI as KEYS_LIST_RESPONSE,
   type RoomsKeysListPayload,
   type RoomsKeysListResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/list/0.1/payload";
+  type PersonalLabel,
+} from "@openvtc/trust-tasks/rooms/keys/list/0.2/payload";
+import {
+  TYPE_URI as KEYS_LABEL,
+  RESPONSE_TYPE_URI as KEYS_LABEL_RESPONSE,
+  type RoomsKeysLabelPayload,
+  type RoomsKeysLabelResponsePayload,
+} from "@openvtc/trust-tasks/rooms/keys/label/0.1/payload";
 import {
   TYPE_URI as KEYS_OPEN,
   RESPONSE_TYPE_URI as KEYS_OPEN_RESPONSE,
@@ -79,29 +86,33 @@ async function call<Res>(
 import { ROOMS_MEMBER_EXT, memberExt } from "./member.js";
 export { ROOMS_MEMBER_EXT, memberExt };
 
+export type { PersonalLabel };
+
 /**
  * One room this VTA can open, **for one member**.
  *
- * `member` is the persona DID the entry is held as, from the listing's
- * `ext["org.openvtc.rooms"].held` (index for index with `rooms`). `context` is
- * the trust context its key lives in, and `actions` what the room's grant to it
- * confers — an `admin` grant is the room's administering place (a community's
- * own, for a room it owns), anything else a member's. Both are descriptions,
- * never authority: the host decides what a member may do.
+ * `member` is the persona DID the entry is held as (`rooms/keys/list/0.2`).
+ * `context` is the trust context its key lives in, and `actions` what the
+ * room's grant to it confers — read from the listing's
+ * `ext["org.openvtc.rooms"].held`, index for index with `rooms`. An `admin`
+ * grant is the room's administering place (a community's own, for a room it
+ * owns), anything else a member's. Both are descriptions, never authority: the
+ * host decides what a member may do.
+ *
+ * `personal` is the member's own private label for the room, present only when
+ * the list was asked for with `includePersonal` and the member has one.
  */
 export type HeldRoom = RoomsKeysListResponsePayload["rooms"][number] & {
-  member?: string;
   context?: string;
   actions?: string[];
 };
 
-/** Whose each `rooms/keys/list` entry is, read member by member from `ext`. */
-function heldBy(ext: unknown, i: number): { member?: string; context?: string; actions?: string[] } {
+/** The trust context and grant of each `rooms/keys/list` entry, read from `ext`. */
+function heldBy(ext: unknown, i: number): { context?: string; actions?: string[] } {
   const held = (ext as Record<string, { held?: unknown } | undefined> | undefined)?.[ROOMS_MEMBER_EXT]?.held;
   const h = Array.isArray(held) ? (held[i] as Record<string, unknown> | undefined) : undefined;
   if (!h || typeof h !== "object") return {};
-  const out: { member?: string; context?: string; actions?: string[] } = {};
-  if (typeof h.member === "string" && h.member.startsWith("did:")) out.member = h.member;
+  const out: { context?: string; actions?: string[] } = {};
   if (typeof h.context === "string") out.context = h.context;
   if (Array.isArray(h.actions)) out.actions = h.actions.filter((a): a is string => typeof a === "string");
   return out;
@@ -109,11 +120,23 @@ function heldBy(ext: unknown, i: number): { member?: string; context?: string; a
 
 /** A row key for a held room: the room and the member it is held as. */
 export function heldRoomKey(r: Pick<HeldRoom, "roomId" | "member">): string {
-  return `${r.roomId}|${r.member ?? ""}`;
+  return `${r.roomId}|${r.member}`;
+}
+
+export interface RoomsListOptions {
+  /**
+   * Ask for each entry's personal label (`rooms/keys/label`). **Only for the
+   * member's own surfaces.** A label is what the member calls a room for
+   * themselves, and a list that will be handed on — to a member portal, or any
+   * page — is asked for without it, so the wallet never holds a label it is not
+   * going to show (`rooms/keys/list/0.2` consumer item 3). Default `false`.
+   */
+  includePersonal?: boolean;
 }
 
 /**
- * The rooms this VTA holds keys for — **custody, not membership**.
+ * The rooms this VTA holds keys for — **custody, not membership** — one entry
+ * per room and member (`rooms/keys/list/0.2`).
  *
  * A room whose Welcome never arrived is absent even where a good membership
  * credential is held, and a VTA not yet told of a removal still lists a room it
@@ -129,16 +152,111 @@ export function heldRoomKey(r: Pick<HeldRoom, "roomId" | "member">): string {
 export async function roomsKeysList(
   sender: TrustTaskSender,
   parties: RoomsCaller,
+  options: RoomsListOptions = {},
 ): Promise<HeldRoom[]> {
+  const payload: RoomsKeysListPayload = options.includePersonal === true ? { includePersonal: true } : {};
   const res = await call<RoomsKeysListResponsePayload>(
     sender,
     parties,
     KEYS_LIST,
     KEYS_LIST_RESPONSE,
-    "rooms/keys/list/0.1",
-    {} satisfies RoomsKeysListPayload,
+    "rooms/keys/list/0.2",
+    payload,
   );
-  return (res.rooms ?? []).map((r, i) => ({ ...r, ...heldBy(res.ext, i) }));
+  return (res.rooms ?? []).map((r, i) => {
+    const room: HeldRoom = { ...r, ...heldBy(res.ext, i) };
+    // Never carry a label the caller did not ask for, whatever came back.
+    if (options.includePersonal !== true) delete room.personal;
+    return room;
+  });
+}
+
+/** What {@link roomsKeysLabel} changes; a detail left out stays as it is. */
+export interface RoomLabelEdit {
+  /** The member's name for the room: one line, up to 128 characters. */
+  label?: string;
+  /** Up to 1000 characters; line breaks allowed. */
+  description?: string;
+  /** Up to 4000 characters; line breaks allowed. */
+  notes?: string;
+  /** One to sixteen tags of up to 32 characters, replacing the whole set. */
+  tags?: string[];
+  removeLabel?: boolean;
+  removeDescription?: boolean;
+  removeNotes?: boolean;
+  removeTags?: boolean;
+}
+
+export interface RoomsLabelParams extends RoomsCaller, RoomLabelEdit {
+  roomId: string;
+  /** The member the label is for — the row's `member`; never inferred. */
+  member: string;
+}
+
+/**
+ * The `rooms/keys/label/0.1` payload for an edit: each detail given replaces
+ * the stored one, each removal removes one, and the rest stay. Refuses an edit
+ * that changes nothing or both gives and removes one detail, before anything is
+ * sent.
+ */
+export function roomLabelPayload(roomId: string, member: string, edit: RoomLabelEdit): RoomsKeysLabelPayload {
+  const out: RoomsKeysLabelPayload = { roomId, member };
+  let changes = 0;
+  const pair = <K extends "label" | "description" | "notes">(key: K, remove: boolean | undefined) => {
+    const v = edit[key];
+    if (v !== undefined && remove === true) throw new Error(`rooms/keys/label: \`${key}\` is both given and removed`);
+    if (v !== undefined) {
+      out[key] = v;
+      changes++;
+    } else if (remove === true) {
+      changes++;
+    }
+  };
+  pair("label", edit.removeLabel);
+  if (edit.removeLabel === true && edit.label === undefined) out.removeLabel = true;
+  pair("description", edit.removeDescription);
+  if (edit.removeDescription === true && edit.description === undefined) out.removeDescription = true;
+  pair("notes", edit.removeNotes);
+  if (edit.removeNotes === true && edit.notes === undefined) out.removeNotes = true;
+  if (edit.tags !== undefined && edit.removeTags === true) throw new Error("rooms/keys/label: `tags` is both given and removed");
+  if (edit.tags !== undefined) {
+    if (edit.tags.length === 0) throw new Error("rooms/keys/label: give at least one tag, or remove them all");
+    if (edit.tags.length > 16) throw new Error("rooms/keys/label: at most 16 tags");
+    // One to sixteen, checked just above — the tuple type the schema generates.
+    out.tags = edit.tags as NonNullable<RoomsKeysLabelPayload["tags"]>;
+    changes++;
+  } else if (edit.removeTags === true) {
+    out.removeTags = true;
+    changes++;
+  }
+  if (changes === 0) throw new Error("rooms/keys/label: the edit changes nothing");
+  return out;
+}
+
+/**
+ * Set, change or remove the member's own private name, description, notes and
+ * tags for a room they hold (`rooms/keys/label/0.1`). Kept by their VTA beside
+ * the room's keys and sent nowhere else. Idempotent: a repeat answers
+ * `changed: false`. Returns the label as it now stands (`personal` absent once
+ * the last detail is removed).
+ *
+ * A label is the member's alone: never put one in anything sent to a room, its
+ * host or a community, and never hand one to a page the member has not chosen
+ * to show it to.
+ */
+export async function roomsKeysLabel(
+  sender: TrustTaskSender,
+  params: RoomsLabelParams,
+): Promise<RoomsKeysLabelResponsePayload> {
+  const { holder, service, roomId, member, ...edit } = params;
+  return call<RoomsKeysLabelResponsePayload>(
+    sender,
+    { holder, service },
+    KEYS_LABEL,
+    KEYS_LABEL_RESPONSE,
+    "rooms/keys/label/0.1",
+    roomLabelPayload(roomId, member, edit),
+  );
 }
 
 export interface RoomsOpenParams extends RoomsCaller {

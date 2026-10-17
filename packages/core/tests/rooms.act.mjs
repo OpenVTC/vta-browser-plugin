@@ -120,13 +120,13 @@ test("a room's member is named in every act, and an answer as anyone else is ref
   );
 });
 
-test("the VTA's listing says whose each entry is, and two members of one room are two rows", async () => {
+test("each listed entry names its member (list 0.2), and two members of one room are two rows", async () => {
   const sender = {
     async send() {
       return {
         rooms: [
-          { roomId: ROOM, epoch: 3, earliestReadableEpoch: 1 },
-          { roomId: ROOM, epoch: 3, earliestReadableEpoch: 3 },
+          { roomId: ROOM, member: COMMUNITY, epoch: 3, earliestReadableEpoch: 1 },
+          { roomId: ROOM, member: PERSONA, epoch: 3, earliestReadableEpoch: 3 },
         ],
         ext: {
           "org.openvtc.rooms": {

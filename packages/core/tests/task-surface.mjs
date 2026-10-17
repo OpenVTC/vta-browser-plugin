@@ -519,7 +519,10 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // member's own VTA, the CLI's `pnm rooms offers accept` step for step.
   // 223 → 224: `rooms/keys/profile/read/0.1`, the room's own name read through
   // the member's VTA (trust-tasks-tf #807). `write` stays the CLI's for now.
-  const expected = 224;
+  // 224 → 225: `rooms/keys/label/0.1`, the member's own name for a room (the
+  // console's Data rooms rows). `rooms/keys/list` moved 0.1 → 0.2 in place, so it
+  // is still one family.
+  const expected = 225;
   assert.equal(
     implemented.size,
     expected,

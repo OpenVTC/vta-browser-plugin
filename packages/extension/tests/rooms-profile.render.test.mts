@@ -12,7 +12,7 @@ import { RoomsPane } from "../src/manager/panes/rooms.js";
 import { roomDisplayName } from "../src/manager/panes/rooms-profile.js";
 import { roomNamesKey } from "../src/room-page-policy.js";
 
-const LIST = "rooms/keys/list/0.1";
+const LIST = "rooms/keys/list/0.2";
 const PROFILE = "rooms/keys/profile/read/0.1";
 const SERVERS = "vta/webvh/servers/list/1.0";
 const SERVICES = "vta/services/list/1.0";
@@ -25,8 +25,7 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
 const mount = async (profile: unknown, remembered = true) => {
   const a = agent({
     [LIST]: {
-      rooms: [{ roomId: ROOM, epoch: 4, earliestReadableEpoch: 1 }],
-      ext: { "org.openvtc.rooms": { held: [{ member: MEMBER }] } },
+      rooms: [{ roomId: ROOM, member: MEMBER, epoch: 4, earliestReadableEpoch: 1 }],
     },
     [PROFILE]: profile,
     [SERVERS]: { servers: [] },

@@ -796,3 +796,38 @@ test("the offscreen profile reading: through the member's VTA, as the member, on
     ext: { "org.openvtc.rooms": { member: MEMBER } },
   });
 });
+
+// rooms/keys/list/0.2 consumer item 3: a wallet answering a page asks for the
+// member's rooms WITHOUT their personal labels, and passes none on — even if an
+// agent answered with one.
+test("a portal's list of held rooms never asks for, or carries, the member's own labels", async () => {
+  const asked: unknown[] = [];
+  const held = (await runRoomsPageOp(
+    {
+      agent: async () => ({
+        holderDid: "did:key:zWallet",
+        sender: {
+          async send<Res>(envelope: { type: string; payload: unknown }) {
+            asked.push(envelope.payload);
+            return {
+              rooms: [
+                {
+                  roomId: ROOM,
+                  member: MEMBER,
+                  epoch: 2,
+                  earliestReadableEpoch: 1,
+                  personal: { label: "What I call it", updatedAt: "2026-10-16T09:00:00Z" },
+                },
+              ],
+            } as Res;
+          },
+        } as never,
+      }),
+    } as never,
+    { vtaDid: VTA },
+    { op: "held", hostDid: HOST } as never,
+  )) as unknown[];
+  assert.deepEqual(asked, [{}], "no includePersonal");
+  assert.ok(!JSON.stringify(held).includes("What I call it"), JSON.stringify(held));
+  assert.deepEqual(held, [{ roomId: ROOM, member: MEMBER, epoch: 2, earliestReadableEpoch: 1 }]);
+});
