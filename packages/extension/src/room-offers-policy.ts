@@ -3,8 +3,9 @@
 //
 // A community that owns a room offers its members admission
 // (`vtc/rooms/community/members/add`), and the member takes it up with
-// `vtc/rooms/offers/{list,accept}/0.1`, signed as the DID the offer is addressed
-// to by their own VTA (`rooms/keys/act/0.3`). The CLI does it with
+// `vtc/rooms/offers/list/0.2` (0.1 from a party that does not serve it yet) and
+// `vtc/rooms/offers/accept/0.1`, signed as the DID the offer is addressed to by
+// their own VTA (`rooms/keys/act/0.4`, or 0.3 from a VTA without it). The CLI does it with
 // `pnm rooms offers list|accept`; the wallet does the same, from its console's
 // Data rooms page and from the community's own member portal.
 //
@@ -23,8 +24,10 @@
 //
 // The member portal is the community's own page, and the offers it would show
 // are the community's own to that member — so the portal may list them, through
-// the wallet, as views the wallet built: the room, its label and tier, the
-// actions, the dates. Never an offer's credentials. Accepting is the member's
+// the wallet, as views the wallet built: the room, its label, what it is for
+// (its description, from list 0.2) and tier, the actions, the dates. Never an
+// offer's credentials, and never the room's tags (the community never sends
+// them). Accepting is the member's
 // decision in the wallet's own window; the page only asks.
 
 /**
@@ -83,6 +86,12 @@ export interface OfferView {
   roomId: string;
   /** The room's label, trimmed and bounded; `""` when it has none. */
   label: string;
+  /**
+   * What the room is for, as the community's administrators wrote it, trimmed
+   * and bounded; `""` when the room has none or the offer was read at list 0.1.
+   * Plain text: shown, never interpreted.
+   */
+  description: string;
   visibility: string;
   actions: string[];
   validUntil: string;
@@ -111,6 +120,18 @@ export function offerLabel(raw: unknown): string {
   return [...raw.trim()].slice(0, OFFER_LABEL_MAX).join("");
 }
 
+/** The longest description the wallet shows: the schema's own bound (`RoomDescription`). */
+export const OFFER_DESCRIPTION_MAX = 1000;
+
+/**
+ * A room description as the community sent it, made safe to show: trimmed,
+ * bounded, shown as text and never interpreted — as markup or as instructions.
+ */
+export function offerDescription(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  return [...raw.trim()].slice(0, OFFER_DESCRIPTION_MAX).join("");
+}
+
 /** What accepting does, in the member's words — the confirm window and the console both say it. */
 export function acceptWords(visibility: string): string {
   return visibility === "open"
@@ -130,6 +151,8 @@ export interface RoomOfferConsentView {
   member: string;
   roomId: string;
   label: string;
+  /** What the room is for, as the community wrote it (bounded text); absent when it said nothing. */
+  description?: string;
   visibility: string;
   actions: string[];
   validUntil: string;
@@ -144,6 +167,8 @@ export interface PageOfferView {
   roomId: string;
   member: string;
   label: string;
+  /** What the room is for (bounded text); absent when the community said nothing. */
+  description?: string;
   visibility: string;
   actions: string[];
   validUntil: string;
@@ -158,6 +183,7 @@ export function pageOfferView(o: OfferView): PageOfferView {
     roomId: o.roomId,
     member: o.member,
     label: o.label,
+    ...(o.description !== "" ? { description: o.description } : {}),
     visibility: o.visibility,
     actions: [...o.actions],
     validUntil: o.validUntil,

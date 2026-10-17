@@ -289,6 +289,7 @@ export class RoomOffers {
         member: offer.member,
         roomId: offer.roomId,
         label: offer.label,
+        ...(offer.description !== "" ? { description: offer.description } : {}),
         visibility: offer.visibility,
         actions: offer.actions,
         validUntil: offer.validUntil,

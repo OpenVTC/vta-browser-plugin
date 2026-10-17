@@ -218,7 +218,9 @@ export interface VtaWalletRooms {
   /** One record, verified. */
   read(params: { hostDid: string; roomId: string; key: string }): Promise<PageRecordView>;
   /** This community's offers of its rooms to the identities the member uses
-   *  here: label, tier, actions and dates — never an offer's credentials. Never
+   *  here: label, what the room is for (`description`, plain text, when the
+   *  community says), tier, actions and dates — never an offer's credentials,
+   *  never the room's tags. Never
    *  prompts. `needsOrigin` when the member has not yet let the wallet reach
    *  the community (they allow it from the wallet's console, or when sharing a
    *  room here). */

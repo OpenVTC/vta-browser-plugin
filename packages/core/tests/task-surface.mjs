@@ -522,6 +522,10 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // 224 → 225: `rooms/keys/label/0.1`, the member's own name for a room (the
   // console's Data rooms rows). `rooms/keys/list` moved 0.1 → 0.2 in place, so it
   // is still one family.
+  // 225 → 225: `rooms/keys/act/0.4` and `vtc/rooms/offers/list/0.2` (each offered
+  // room's description, trust-tasks-tf #810) are new versions of families this
+  // library already implements, so the count holds; the snapshot, resynced from
+  // vta-sdk 0.70.0 with act 0.4, lists both.
   const expected = 225;
   assert.equal(
     implemented.size,

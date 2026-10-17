@@ -46,6 +46,7 @@ function view(over: Partial<OfferView> = {}): OfferView {
     member: MEMBER,
     roomId: BOARD,
     label: "Board pack",
+    description: "Papers for the board.",
     visibility: "private",
     actions: ["read", "write"],
     validUntil: "2027-10-01T00:00:00Z",
@@ -194,6 +195,7 @@ test("an accept is confirmed in the wallet's window, naming the community, the r
   assert.equal(v.roomId, BOARD);
   assert.equal(v.member, MEMBER);
   assert.equal(v.label, "Board pack");
+  assert.equal(v.description, "Papers for the board.", "the window shows what the room is for");
   assert.equal(v.origin, undefined, "the console asked, not a page");
 
   h.answer = { approved: true };
@@ -247,7 +249,9 @@ test("only the community's own portal sees its offers, as views with no credenti
   assert.ok(res.ok);
   const { offers } = res.result as { offers: Record<string, unknown>[] };
   assert.deepEqual(offers.map((o) => [o.roomId, o.member]), [[BOARD, MEMBER]]);
+  assert.equal(offers[0]!.description, "Papers for the board.", "the portal is told what the room is for");
   assert.equal("credentials" in offers[0]!, false);
+  assert.equal("tags" in offers[0]!, false);
   assert.ok(!h.asked.some((a) => a.op === "list" && a.member === COMMUNITY), "never as the community");
 });
 
@@ -296,6 +300,7 @@ test("the offscreen listing builds views with no credential, and flags an accept
           items: [
             {
               roomId: BOARD, host: COMMUNITY, label: "  Board pack ", visibility: "private", actions: ["read"],
+              description: `  <script>alert(1)</script> ${"x".repeat(2000)}`,
               validUntil: "2027-10-01T00:00:00Z", offeredAt: "2026-10-14T10:00:00Z", state: "accepted",
               credentials: { invitation: "i", membership: "{}", authority: "{}" },
             },
@@ -312,6 +317,8 @@ test("the offscreen listing builds views with no credential, and flags an accept
   const views = (await runRoomOffersOp(deps, { vtaDid: VTA }, { op: "list", communityDid: COMMUNITY, member: MEMBER })) as OfferView[];
   assert.equal(views.length, 1, "an offer naming another host is not shown");
   assert.equal(views[0]!.label, "Board pack");
+  assert.ok(views[0]!.description.startsWith("<script>alert(1)</script> x"), "trimmed, kept as text");
+  assert.equal([...views[0]!.description].length, 1000, "bounded like a label");
   assert.equal(views[0]!.inProgress, true);
   assert.equal("credentials" in views[0]!, false);
   assert.equal(sent[0]!.issuer, MEMBER);

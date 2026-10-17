@@ -8,12 +8,13 @@
 //    every later room request. Stored under their own ids, so a repeat replaces.
 // 3. On a sealed tier (`attributed`, `private`) the VTA mints a KeyPackage
 //    against the offer's invitation (`rooms/keys/key-package`). **Never the
-//    wallet**: `rooms/keys/act/0.3` completes an acceptance only with a
+//    wallet**: `rooms/keys/act` (0.3 and later) completes an acceptance only with a
 //    KeyPackage the same VTA minted for that member and room (its recipient
 //    item 10), because a leaf minted anywhere else would have keys somebody
 //    else holds.
 // 4. The acceptance is built unsigned, completed by the VTA as the member
-//    (`rooms/keys/act/0.3`), and sent to the community unchanged.
+//    (`rooms/keys/act` at the version that read the offers — 0.4, or 0.3 from a
+//    VTA without it), and sent to the community unchanged.
 // 5. The community answers with the Welcome, which goes to the member's own VTA
 //    (`rooms/keys/welcome`) and nowhere else.
 //
@@ -32,7 +33,14 @@ import type { TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import { roomsKeysAct, unsignedRoomRequest } from "./act.js";
-import { communityRoomOffers, OfferReadError, type CommunityRoomOffer, type OfferReader } from "./offers.js";
+import {
+  isUnsupportedRefusal,
+  OfferReadError,
+  readCommunityRoomOffers,
+  type CommunityRoomOffer,
+  type OfferActVersion,
+  type OfferReader,
+} from "./offers.js";
 
 import {
   TYPE_URI as OFFERS_ACCEPT,
@@ -104,7 +112,7 @@ export function readPendingOfferAccept(raw: unknown): PendingOfferAccept | undef
 // ── Errors ──────────────────────────────────────────────────────────────────
 
 export type RoomOfferErrorCode =
-  /** The VTA does not serve `rooms/keys/act/0.3`. */
+  /** The VTA serves neither `rooms/keys/act/0.4` nor `0.3`. */
   | "actUnsupported"
   /**
    * The party makes no room offers: it does not serve `vtc/rooms/offers/list`
@@ -176,8 +184,8 @@ function actRefusal(e: unknown, reader: OfferReader): RoomOfferError {
   if (local === "unsupportedType" || local === "unsupportedVersion") {
     return new RoomOfferError(
       "actUnsupported",
-      "Your agent does not serve rooms/keys/act 0.3, the version that signs a reply to a community's offer as " +
-        "you. It must be updated before offers can be read or accepted from the wallet.",
+      "Your agent does not serve rooms/keys/act 0.3 or later, the versions that sign a reply to a community's " +
+        "offer as you. It must be updated before offers can be read or accepted from the wallet.",
     );
   }
   if (local === "permissionDenied" || clientCode(e) === "e.p.msg.forbidden") {
@@ -313,8 +321,9 @@ export async function acceptCommunityRoomOffer(
 
   deps.progress?.("reading");
   let offers: CommunityRoomOffer[];
+  let act: OfferActVersion;
   try {
-    offers = await communityRoomOffers(reader);
+    ({ offers, act } = await readCommunityRoomOffers(reader));
   } catch (e) {
     throw e instanceof RoomOfferError ? e : listRefusal(e, reader);
   }
@@ -419,7 +428,8 @@ export async function acceptCommunityRoomOffer(
       reader.vta.sender,
       vtaParties,
       unsignedRoomRequest(OFFERS_ACCEPT, reader.community.did, payload as unknown as Record<string, unknown>, reader.member),
-      "0.3",
+      // The version that just read the offers: 0.4, or 0.3 from a VTA without it.
+      act,
     ));
   } catch (e) {
     const err = actRefusal(e, reader);
@@ -483,9 +493,11 @@ export async function acceptCommunityRoomOffer(
 
 /**
  * Reading the offers failed: the VTA's refusal, or the community's — each
- * mapped by the party that produced it. `unsupportedType` from the VTA is an
- * agent without act 0.3; from the community it is a party that makes no room
- * offers, which is not the member's agent's fault and not a failure at all.
+ * mapped by the party that produced it. By the time one gets here the read has
+ * already fallen back from act 0.4 / list 0.2 to list 0.1 (`offers.ts`), so
+ * `unsupportedType` from the VTA is an agent without act 0.3; from the
+ * community it is a party that makes no room offers at all, which is not the
+ * member's agent's fault and not a failure at all.
  */
 function listRefusal(e: unknown, reader: OfferReader): RoomOfferError {
   if (e instanceof OfferReadError) {
@@ -498,8 +510,8 @@ function listRefusal(e: unknown, reader: OfferReader): RoomOfferError {
 function communityListRefusal(e: unknown, reader: OfferReader): RoomOfferError {
   const local = taskErrorLocalCode(e);
   const who = reader.community.did;
-  if (local === "unsupportedType" || local === "unsupportedVersion") {
-    return new RoomOfferError("noRoomOffers", `${who} makes no room offers: it does not serve vtc/rooms/offers/list 0.1.`);
+  if (isUnsupportedRefusal(e)) {
+    return new RoomOfferError("noRoomOffers", `${who} makes no room offers: it does not serve vtc/rooms/offers/list.`);
   }
   if (local === "notAMember") {
     return new RoomOfferError("notAMember", `${who} says ${reader.member} is not an active member of the community.`);

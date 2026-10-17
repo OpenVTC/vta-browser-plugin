@@ -97,6 +97,7 @@ const offer = (state: "open" | "accepted", inProgress = false) => ({
   member: MEMBER,
   roomId: ROOM,
   label: "Pricing",
+  description: "",
   visibility: "private",
   actions: ["read", "write"],
   validUntil: "2027-01-01T00:00:00Z",
@@ -119,6 +120,13 @@ test("a new offer is marked new, can be accepted, and is not yet a room", async 
   assert.ok(screen.button("Accept"));
   assert.match(text, /Joined\s*not yet/);
   assert.match(text, /On its website\s*not shared/);
+  await screen.unmount();
+});
+
+test("an offer shows what its room is for, as text and never as markup", async () => {
+  const screen = await mount(withOffer({ ...offer("open"), description: "Price lists <img src=x onerror=alert(1)> for Q3" }));
+  assert.match(screen.text(), /Price lists <img src=x onerror=alert\(1\)> for Q3/);
+  assert.equal(screen.all("img").length, 0, "the description is a text node, not markup");
   await screen.unmount();
 });
 

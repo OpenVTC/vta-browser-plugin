@@ -3,15 +3,15 @@
 // Accepting a community's offer of a room — the wallet's own window.
 //
 // Drawn from what the background stored (`RoomOfferConsentView`), never from a
-// page: it names the community, the room (its label as the community wrote it,
-// labelled as theirs, and its DID), the identity the member joins as, and what
+// page: it names the community, the room (its label and what it is for, as the
+// community wrote them, labelled as theirs and shown as text, and its DID), the identity the member joins as, and what
 // accepting does. A portal page can ask for this window; only the member can
 // answer it. There is no "remember".
 
 import { useState } from "react";
 
 import { requestOriginPermission } from "./host-permissions.js";
-import { acceptWords, type RoomOfferConsentView } from "./room-offers-policy.js";
+import { acceptWords, offerDescription, type RoomOfferConsentView } from "./room-offers-policy.js";
 import { Did } from "./ui.js";
 
 function originHost(o: string): string {
@@ -107,6 +107,14 @@ export function OfferConsent({ view, decide }: { view: RoomOfferConsentView; dec
           {view.label ? (
             <div style={{ fontWeight: 600, marginBottom: 4, wordBreak: "break-word" }} title="The name the community gave it">
               {view.label}
+            </div>
+          ) : null}
+          {offerDescription(view.description) ? (
+            <div
+              style={{ fontSize: 12, marginBottom: 4, wordBreak: "break-word", whiteSpace: "pre-line" }}
+              title="What the community says the room is for"
+            >
+              {offerDescription(view.description)}
             </div>
           ) : null}
           <Did value={view.roomId} />

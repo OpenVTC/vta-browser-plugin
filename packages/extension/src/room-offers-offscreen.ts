@@ -7,7 +7,9 @@
 // it (`room-offers-background.ts`). This module does the work, as the CLI's
 // `pnm rooms offers list|accept` do: each request to the community is built
 // unsigned, completed by the member's VTA as the identity the offer is
-// addressed to (`rooms/keys/act/0.3`), and sent to the community's
+// addressed to (`rooms/keys/act/0.4`, or 0.3 from a VTA without it, reading
+// `vtc/rooms/offers/list/0.2` or — from a party without it — 0.1), and sent to
+// the community's
 // `TrustTaskHTTPS` endpoint — resolved from its DID document, never guessed —
 // unchanged (`@openvtc/pnm-core/rooms`). What goes back is a view the wallet
 // built: never an offer's credentials, a KeyPackage or a Welcome.
@@ -35,6 +37,7 @@ import type { OffscreenRoomOffersOp } from "./bridge-protocol.js";
 import {
   isOfferSource,
   NO_ROOM_OFFERS,
+  offerDescription,
   offerLabel,
   offerSources,
   type OfferView,
@@ -127,6 +130,7 @@ export async function runRoomOffersOp(
         member: op.member,
         roomId: o.roomId,
         label: offerLabel(o.label),
+        description: offerDescription(o.description),
         visibility: o.visibility,
         actions: [...o.actions],
         validUntil: o.validUntil,

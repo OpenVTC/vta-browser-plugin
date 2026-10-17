@@ -986,6 +986,12 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/rooms/keys/act/0.4",
+      "consts": [
+        "TASK_ROOMS_KEYS_ACT_0_4"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/rooms/keys/backfill/0.1",
       "consts": [
         "TASK_ROOMS_KEYS_BACKFILL_0_1"
@@ -2116,6 +2122,9 @@
     },
     {
       "uri": "https://trusttasks.org/spec/vtc/rooms/offers/list/0.1"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vtc/rooms/offers/list/0.2"
     },
     {
       "uri": "https://trusttasks.org/spec/vtc/vetting/revoke-statement/0.1",
