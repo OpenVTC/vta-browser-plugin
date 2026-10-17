@@ -107,13 +107,16 @@ function Result({ outcome, room }: { outcome: Outcome; room: HeldRoom }) {
 export function FetchHistory({
   parties,
   room,
+  host,
   onFetched,
 }: {
   parties: Parties;
   room: HeldRoom;
+  /** Where the room was last found, to start from; the field stays editable. */
+  host?: string | undefined;
   onFetched: () => void;
 }) {
-  const [hostDid, setHostDid] = useState("");
+  const [hostDid, setHostDid] = useState(host ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<ConsentRequiredError | null>(null);
@@ -169,12 +172,12 @@ export function FetchHistory({
         </Button>
       </div>
 
-      <p style={{ margin: 0, fontSize: t.xs, color: c.faint }}>
+      {!host && <p style={{ margin: 0, fontSize: t.xs, color: c.faint }}>
         Your agent knows which rooms it can open, not who stores them — a room can
         change hosts without anything it holds changing, so it does not keep one.
         It presents your credentials to the host itself; they do not pass through
         this console.
-      </p>
+      </p>}
 
       {outcome && <Result outcome={outcome} room={room} />}
       {error && <Note tone="danger">{error}</Note>}

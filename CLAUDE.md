@@ -984,8 +984,22 @@ the community's DID itself. A page's `choose({ member })` only picks among those
 Where two remain, the member picks; one member per room; the button counts the
 ticks. The grant stores the member (`RoomGrant.member`), and a grant without one
 is not in force: the page asks again rather than the wallet guessing. The
-console's rooms pane is one row per (room, member) too, keyed by `heldRoomKey`,
-and everything done from a row names that row's member.
+console's rooms pane draws one **card** per room and says when it is held more
+than once; its detail acts as one place at a time, chosen in an *Acting as*
+switch, with everything under it keyed by `heldRoomKey` and naming that place's
+member (`rooms-detail.tsx`).
+
+**Where a room was last found is a hint the console keeps, not a host the agent
+keeps.** The agent deliberately holds no host for a room, so the pane used to
+ask for one on every visit. `room-hosts.ts` remembers, under
+`room-hosts:<vtaDid>` in `chrome.storage.local`, a host this console created
+the room at or that answered a listing for it, and reads a community's offer
+(`room-names:`) as the same kind of hint. The pane groups cards by it and lists
+records from it straight away, always with *Change*. A wrong hint costs one
+refused listing and grants nothing: every request still goes through the agent.
+What breaks it: treating the hint as authoritative (hiding *Change*, or
+refusing a room whose hint is stale), or writing one for a host that did not
+answer.
 
 **A community's own rooms are shown by name.** A room the community owns has
 a label its administrators gave it, and the community's offer to the member

@@ -65,7 +65,14 @@ function acceptedWords(r: OfferAcceptedView): string {
   return "Accepted. The room is open, so there is no group to join: your agent holds its credentials.";
 }
 
-export function RoomOffers({ onAccepted }: { onAccepted?: () => void }) {
+export function RoomOffers({
+  onAccepted,
+  onCount,
+}: {
+  onAccepted?: () => void;
+  /** Each reading's open-offer count, for a tab badge. */
+  onCount?: (open: number) => void;
+}) {
   const [overview, setOverview] = useState<OffersOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -85,10 +92,11 @@ export function RoomOffers({ onAccepted }: { onAccepted?: () => void }) {
       }
       setError(null);
       setOverview(res.result as OffersOverview);
+      onCount?.((res.result as OffersOverview).openCount);
     } catch (e) {
       if (live.current) setError(e instanceof Error ? e.message : String(e));
     }
-  }, []);
+  }, [onCount]);
 
   useEffect(() => {
     live.current = true;
