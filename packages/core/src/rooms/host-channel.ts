@@ -132,6 +132,25 @@ export class RoomHostChannel implements TrustTaskSender {
 }
 
 /**
+ * A party whose DID document advertises no `TrustTaskHTTPS` service: there is
+ * nowhere to send it a room request. Its own class (still `e.client.parse`) so
+ * a caller can tell "this party takes no room requests" from a document that
+ * could not be read — match it with {@link isNoTrustTaskService} (R3.7).
+ */
+export class NoTrustTaskServiceError extends VtaClientError {
+  readonly reason = "noTrustTaskService" as const;
+  constructor(readonly did: string) {
+    super("e.client.parse", `${did} advertises no TrustTaskHTTPS service, so there is nowhere to send a room request`);
+    this.name = "NoTrustTaskServiceError";
+  }
+}
+
+/** Whether `e` says the party advertises no `TrustTaskHTTPS` service. Structural, so it survives a second copy of this module. */
+export function isNoTrustTaskService(e: unknown): boolean {
+  return (e as { reason?: unknown } | null)?.reason === "noTrustTaskService";
+}
+
+/**
  * The host's dispatcher URL, from its DID document.
  *
  * Refuses a host that advertises no `TrustTaskHTTPS` service rather than
@@ -144,11 +163,6 @@ export async function roomHostEndpoint(
 ): Promise<string> {
   const doc = await resolve(hostDid);
   const base = trustTaskBaseFromDocument(doc);
-  if (!base) {
-    throw new VtaClientError(
-      "e.client.parse",
-      `${hostDid} advertises no TrustTaskHTTPS service, so there is nowhere to send a room request`,
-    );
-  }
+  if (!base) throw new NoTrustTaskServiceError(hostDid);
   return trustTaskUrl(base);
 }

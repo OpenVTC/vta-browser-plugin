@@ -40,6 +40,29 @@ export interface OfferReader {
   member: string;
 }
 
+/**
+ * The party a failed offer read came from: the member's VTA, refusing to
+ * complete the request as the member (`act`), or the community, refusing or
+ * failing to answer it (`community`).
+ *
+ * Reading offers talks to two parties in turn, and a refusal means something
+ * different from each: `unsupportedType` from the VTA is an agent that must be
+ * updated, from the community a party that makes no room offers. So the read
+ * says which one answered, and a caller maps the refusal by its source.
+ */
+export type OfferReadStage = "act" | "community";
+
+/** A failed offer read, tagged with the party that produced it. `inner` is that party's error, unchanged. */
+export class OfferReadError extends Error {
+  constructor(
+    readonly stage: OfferReadStage,
+    readonly inner: unknown,
+  ) {
+    super(inner instanceof Error ? inner.message : String(inner));
+    this.name = "OfferReadError";
+  }
+}
+
 /** Pages read at most: 100 offers a page is more rooms than any member is offered. */
 const MAX_PAGES = 10;
 
@@ -53,18 +76,31 @@ export async function communityRoomOffers(reader: OfferReader): Promise<Offer[]>
   let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
     const payload: VTCRoomsOffersListPayload = cursor !== undefined ? { cursor } : {};
-    const { document } = await roomsKeysAct(
-      reader.vta.sender,
-      { holder: reader.holder, service: { did: reader.vta.did } },
-      unsignedRoomRequest(OFFERS_LIST, reader.community.did, payload as Record<string, unknown>, reader.member),
-      "0.3",
-    );
-    const reply = await reader.community.sender.sendCompleted<VTCRoomsOffersListResponsePayload>(document, {
-      expectedResponseType: OFFERS_LIST_RESPONSE,
-      operationLabel: "vtc/rooms/offers/list/0.1",
-    });
+    let document: Record<string, unknown>;
+    try {
+      ({ document } = await roomsKeysAct(
+        reader.vta.sender,
+        { holder: reader.holder, service: { did: reader.vta.did } },
+        unsignedRoomRequest(OFFERS_LIST, reader.community.did, payload as Record<string, unknown>, reader.member),
+        "0.3",
+      ));
+    } catch (e) {
+      throw new OfferReadError("act", e);
+    }
+    let reply: VTCRoomsOffersListResponsePayload;
+    try {
+      reply = await reader.community.sender.sendCompleted<VTCRoomsOffersListResponsePayload>(document, {
+        expectedResponseType: OFFERS_LIST_RESPONSE,
+        operationLabel: "vtc/rooms/offers/list/0.1",
+      });
+    } catch (e) {
+      throw new OfferReadError("community", e);
+    }
     if (!reply || !Array.isArray(reply.items)) {
-      throw new Error(`${reader.community.did} answered vtc/rooms/offers/list without items`);
+      throw new OfferReadError(
+        "community",
+        new Error(`${reader.community.did} answered vtc/rooms/offers/list without items`),
+      );
     }
     items.push(...reply.items);
     if (typeof reply.nextCursor !== "string" || reply.nextCursor === "") return items;

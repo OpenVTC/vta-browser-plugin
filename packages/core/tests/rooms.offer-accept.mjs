@@ -325,3 +325,20 @@ test("a KeyPackage the VTA has let go is dropped, so the next attempt mints afre
   assert.equal(r.joined, true);
   assert.equal(vta.minted, 1);
 });
+
+test("the community refusing the offer read during an accept is the community's refusal, not the agent's", async () => {
+  for (const [code, want] of [["unsupportedType", "noRoomOffers"], ["permissionDenied", "communityRefused"]]) {
+    const vtc = community();
+    const inner = vtc.sender.sendCompleted;
+    vtc.sender.sendCompleted = async (doc, opts) => {
+      if (doc.type === LIST) throw new VtaClientError("e.p.msg.bad_request", "refused", { details: { code } });
+      return inner(doc, opts);
+    };
+    const s = setup({ vtc });
+    await assert.rejects(acceptCommunityRoomOffer(s.reader, BOARD, s.deps), (e) => {
+      assert.equal(e.code, want);
+      assert.doesNotMatch(e.message, /Your agent|act 0\.3/);
+      return true;
+    });
+  }
+});

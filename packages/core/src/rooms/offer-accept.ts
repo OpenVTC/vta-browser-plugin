@@ -32,7 +32,7 @@ import type { TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import { roomsKeysAct, unsignedRoomRequest } from "./act.js";
-import { communityRoomOffers, type CommunityRoomOffer, type OfferReader } from "./offers.js";
+import { communityRoomOffers, OfferReadError, type CommunityRoomOffer, type OfferReader } from "./offers.js";
 
 import {
   TYPE_URI as OFFERS_ACCEPT,
@@ -106,6 +106,15 @@ export function readPendingOfferAccept(raw: unknown): PendingOfferAccept | undef
 export type RoomOfferErrorCode =
   /** The VTA does not serve `rooms/keys/act/0.3`. */
   | "actUnsupported"
+  /**
+   * The party makes no room offers: it does not serve `vtc/rooms/offers/list`
+   * (a DID-hosting service, a community without rooms), or advertises no
+   * `TrustTaskHTTPS` service to send one to. Nothing the member can act on —
+   * a surface shows it quietly, never as a failure.
+   */
+  | "noRoomOffers"
+  /** The community refused to answer the member (a refusal other than `notAMember`). */
+  | "communityRefused"
   /** The VTA refused this wallet a capability the step needs. */
   | "capability"
   /** The VTA holds no key of the member this wallet may act as. */
@@ -241,7 +250,7 @@ function communityRefusal(e: unknown, reader: OfferReader, roomId: string, seale
       true,
     );
   }
-  return new RoomOfferError("other", text(e));
+  return new RoomOfferError("other", `${who} did not take the acceptance: ${text(e)}`);
 }
 
 // ── The flow ────────────────────────────────────────────────────────────────
@@ -472,14 +481,37 @@ export async function acceptCommunityRoomOffer(
   return done(visibility, true, accepted.epoch, pending !== undefined);
 }
 
-/** Reading the offers failed: the VTA's refusal, or the community's. */
+/**
+ * Reading the offers failed: the VTA's refusal, or the community's — each
+ * mapped by the party that produced it. `unsupportedType` from the VTA is an
+ * agent without act 0.3; from the community it is a party that makes no room
+ * offers, which is not the member's agent's fault and not a failure at all.
+ */
 function listRefusal(e: unknown, reader: OfferReader): RoomOfferError {
-  const act = actRefusal(e, reader);
-  if (act.code !== "other") return act;
-  if (taskErrorLocalCode(e) === "notAMember") {
-    return new RoomOfferError("notAMember", `${reader.community.did} says ${reader.member} is not an active member of the community.`);
+  if (e instanceof OfferReadError) {
+    return e.stage === "act" ? actRefusal(e.inner, reader) : communityListRefusal(e.inner, reader);
   }
-  return act;
+  return new RoomOfferError("other", text(e));
+}
+
+/** What the community's refusal to list `reader.member`'s offers means. */
+function communityListRefusal(e: unknown, reader: OfferReader): RoomOfferError {
+  const local = taskErrorLocalCode(e);
+  const who = reader.community.did;
+  if (local === "unsupportedType" || local === "unsupportedVersion") {
+    return new RoomOfferError("noRoomOffers", `${who} makes no room offers: it does not serve vtc/rooms/offers/list 0.1.`);
+  }
+  if (local === "notAMember") {
+    return new RoomOfferError("notAMember", `${who} says ${reader.member} is not an active member of the community.`);
+  }
+  if (local === "permissionDenied" || clientCode(e) === "e.p.msg.forbidden") {
+    return new RoomOfferError("communityRefused", `${who} refused to list its offers to ${reader.member}: ${text(e)}`);
+  }
+  const client = clientCode(e);
+  if (client === "e.client.timeout" || client === "e.client.network") {
+    return new RoomOfferError("noAnswer", `${who} did not answer the request for its offers (${text(e)}).`, true);
+  }
+  return new RoomOfferError("other", `${who} did not list its offers: ${text(e)}`);
 }
 
 /** Why reading `reader.member`'s offers failed, in words a member can act on. */
