@@ -33,6 +33,7 @@ import { displayAgentName } from "../../agent-name.js";
 import { useAgentNames } from "../../use-agent-names.js";
 import { shortDid } from "../room-words.js";
 import { formatBytes } from "../room-files.js";
+import { createLimiter } from "../limit.js";
 import { didHost } from "../../did-display.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
@@ -308,17 +309,30 @@ function RecordItem({
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  const open = useCallback(async () => {
+  // A row can be scrolled away or the room left before its read lands.
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
+
+  /** Read the record — through the background queue when nobody asked for it. */
+  const open = useCallback(async (queued = false) => {
     setBusy(true);
     setError(null);
     try {
-      const res = await roomsKeysRead(managerSender, {
-        ...parties,
-        roomId: room.roomId,
-        host,
-        key: row.key,
-        ...(room.member !== undefined ? { member: room.member } : {}),
-      });
+      const read = () =>
+        roomsKeysRead(managerSender, {
+          ...parties,
+          roomId: room.roomId,
+          host,
+          key: row.key,
+          ...(room.member !== undefined ? { member: room.member } : {}),
+        });
+      const res = await (queued ? READS.run(read) : read());
+      if (!live.current) return;
       // A retracted record has no body, and that is an answer rather than a
       // failure — the tombstone is what the room retains of it.
       const text = res.plaintext
@@ -330,16 +344,16 @@ function RecordItem({
             : "(no body)";
       setOpened({ text, ...readNote(text), verification: (res.verification as unknown as Verification) ?? null });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (live.current) setError(e instanceof Error ? e.message : String(e));
     }
-    setBusy(false);
+    if (live.current) setBusy(false);
   }, [parties, room, host, row.key]);
 
   const started = useRef(false);
   useEffect(() => {
     if (!autoOpen || started.current) return;
     started.current = true;
-    void open();
+    void open(true);
   }, [autoOpen, open]);
 
   const claim = opened ? roomFileClaimOf(opened.text) : null;
@@ -383,7 +397,7 @@ function RecordItem({
           <span style={{ fontSize: t.base, fontWeight: 600, color: opened || row.title ? c.text : c.muted, wordBreak: "break-word" }}>
             {title}
           </span>
-          {preview && !expanded && (
+          {preview && !expanded && !claim && (
             <span
               style={{
                 fontSize: t.sm,
@@ -410,12 +424,16 @@ function RecordItem({
           <Note tone="danger">{error}</Note>
         </div>
       )}
+      {/* A file is shown whether or not the row is expanded: its thumbnail and
+          download are the point of it, and the rest is behind the expand. */}
+      {opened && claim && (
+        <div style={{ padding: "0 14px 12px 38px" }}>
+          <GetRoomFile room={room} host={host} prepared={prepared} recordKey={row.key} claim={claim} showTitle={false} autoPreview={autoOpen} />
+        </div>
+      )}
       {expanded && (
         <div style={{ display: "grid", gap: 10, padding: "0 14px 14px 38px" }}>
           {busy && !opened && <Loading what="the record" />}
-          {opened && claim && (
-            <GetRoomFile room={room} host={host} prepared={prepared} recordKey={row.key} claim={claim} showTitle={false} />
-          )}
           {opened && !claim && (
             <div style={{ fontSize: t.base, color: c.text, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.55 }}>
               {opened.body ?? (opened.title ? "" : opened.text)}
@@ -443,6 +461,9 @@ function RecordItem({
 
 /** How many of the newest records are opened as the list arrives. */
 export const AUTO_OPEN = 5;
+
+/** The records opened unasked, a few at a time and newest first (`limit.ts`). */
+const READS = createLimiter(2);
 
 /**
  * Browse a room's records at a host, and open the ones that matter.
