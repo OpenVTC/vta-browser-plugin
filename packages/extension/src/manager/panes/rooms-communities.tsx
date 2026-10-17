@@ -1,13 +1,20 @@
-// Communities: each one as a lane, each room as a path across it.
+// Communities: each one as a lane, each room as a row with a three-step track.
 //
-//   Offered to you  →  In your rooms  →  Its portal can see
+//   ● Offered ──── ● Joined ──── ○ On its website
+//
+// The steps are three facts about one room, not a pipeline it moves along, so
+// the room is named once and each fact is a dot: filled when it holds, ringed
+// when it waits on the member (an offer to accept) or is stuck (accepted, keys
+// not arrived), hollow when it does not hold — in words, never blank. "On its
+// website" is a share with the community's member portal; the step's hint says
+// what that lets the site do.
 //
 // This replaces two tabs, Offers and Shared with sites, which described one
 // relationship from either end. The model is `community-lanes.ts`; this only
 // draws it. Each column is a different source — the community's offer, the
 // agent's key custody, this wallet's own grant — so a gap is drawn as the state
 // it is (not offered here, keys not arrived yet, not shared) rather than left
-// blank, and the arrow between two cells is solid only where both are present.
+// blank. The identities a room is held as are long and live in its detail.
 //
 // Accepting still raises the wallet's own window (`useRoomOffers`); revoking a
 // share stops the portal reading the room at once and cannot recall what it was
@@ -18,201 +25,231 @@ import type { RoomProfileView } from "@openvtc/pnm-core/rooms";
 import { displayAgentName, type AgentName } from "../../agent-name.js";
 import { didHost } from "../../did-display.js";
 import { isActionable, type OfferView } from "../../room-offers-policy.js";
-import { Button, Note, Pill } from "../../ui.js";
-import { c, t, font } from "../../theme.js";
+import { Button, Did, Note, Pill } from "../../ui.js";
+import { c, t } from "../../theme.js";
 import { communityLanes, rowStage, type Lane, type LaneRow } from "../community-lanes.js";
 import type { RoomEntry } from "../room-groups.js";
 import type { KnownRoomHost } from "../room-hosts.js";
 import { mostReadable } from "../room-groups.js";
-import { memberLabel, placeWord, shortDid, standing } from "../room-words.js";
+import { placeWord, shortDid, standing } from "../room-words.js";
 import { day, host, offerKey, type RoomOffersState } from "./rooms-offers.js";
 import type { RoomSharesState, ShareRow } from "./rooms-shares.js";
 import { roomDisplayName } from "./rooms-profile.js";
 
-const COLUMNS = "minmax(0, 1fr) 28px minmax(0, 1fr) 28px minmax(0, 1fr)";
-
-function communityName(did: string, names: Readonly<Record<string, AgentName>>): string {
-  const n = names[did];
-  return n ? displayAgentName(n) : (didHost(did) ?? shortDid(did));
+/**
+ * What a lane is called: the site a member signs in to, which is the name they
+ * know it by. The DID's own host is where its document lives, which can be
+ * another party altogether (a DID-hosting service), so it comes last.
+ */
+function laneTitle(lane: Lane, names: Readonly<Record<string, AgentName>>): string {
+  const site = lane.portals[0] ?? lane.offers?.endpointOrigin;
+  if (site) return host(site);
+  const n = names[lane.communityDid];
+  return n ? displayAgentName(n) : (didHost(lane.communityDid) ?? shortDid(lane.communityDid));
 }
 
-function Arrow({ on }: { on: boolean }) {
-  return (
-    <span
-      aria-hidden="true"
-      style={{ display: "grid", placeItems: "center", color: on ? c.accent : c.line, fontSize: t.md, fontWeight: 700 }}
-    >
-      →
-    </span>
-  );
+type StepState = "done" | "waiting" | "warn" | "todo";
+
+interface Step {
+  label: string;
+  /** Said on hover: what the step means, for the one whose name cannot carry it. */
+  hint?: string;
+  state: StepState;
+  lines: ReactNode[];
 }
 
-function Cell({ children, filled }: { children: ReactNode; filled: boolean }) {
-  return (
-    <div
-      style={{
-        display: "grid",
-        gap: 6,
-        alignContent: "start",
-        padding: "10px 12px",
-        borderRadius: "var(--w-r-sm)",
-        border: filled ? `1px solid ${c.line}` : `1px dashed ${c.line}`,
-        background: filled ? c.surface : "transparent",
-        minWidth: 0,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
+const DOT: Record<StepState, React.CSSProperties> = {
+  done: { background: c.ok, border: `2px solid ${c.ok}` },
+  waiting: { background: c.surface, border: `4px solid ${c.accent}` },
+  warn: { background: c.surface, border: `4px solid ${c.warn}` },
+  todo: { background: c.surface, border: `2px solid ${c.line}` },
+};
 
-const quiet = (text: string) => <span style={{ fontSize: t.sm, color: c.faint }}>{text}</span>;
-
-function OfferCell({
-  row,
-  offers,
-}: {
-  row: LaneRow;
-  offers: RoomOffersState;
-}) {
-  if (row.offers.length === 0) {
-    return <Cell filled={false}>{quiet("Not from an offer here")}</Cell>;
-  }
+/** Three facts about one room, drawn as a track: done, waiting on you, or not yet. */
+function Track({ steps }: { steps: Step[] }) {
   return (
-    <Cell filled>
-      {row.offers.map((o: OfferView) => {
-        const k = offerKey(o);
-        const result = offers.outcome[k];
-        const pill = o.inProgress ? (
-          <Pill tone="warn">unfinished</Pill>
-        ) : o.state === "open" ? (
-          <Pill tone="accent">new</Pill>
-        ) : (
-          <Pill tone="ok">accepted</Pill>
-        );
-        return (
-          <div key={k} style={{ display: "grid", gap: 4 }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <span style={{ fontSize: t.base, fontWeight: 600, wordBreak: "break-word" }} title="The name the community gave it">
-                {o.label || "Unnamed room"}
-              </span>
-              {pill}
-            </div>
-            <span style={{ fontSize: t.xs, color: c.muted }}>
-              to <span title={o.member}>{shortDid(o.member)}</span> · {o.visibility} · {o.actions.join(", ")} · until{" "}
-              {day(o.validUntil)}
-              {o.inProgress ? " · an accept began here and did not finish" : ""}
-            </span>
-            {isActionable(o) && (
-              <div>
-                <Button kind="primary" disabled={offers.busy !== null} onClick={() => void offers.accept(o)}>
-                  {offers.busy === k ? "Confirm in the wallet window…" : o.inProgress ? "Finish accepting" : "Accept…"}
-                </Button>
-              </div>
+    <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gridTemplateColumns: `repeat(${steps.length}, minmax(0, 1fr))` }}>
+      {steps.map((st, i) => (
+        <li key={st.label} style={{ display: "grid", gap: 4, alignContent: "start", minWidth: 0 }}>
+          <span style={{ display: "flex", alignItems: "center" }}>
+            <span
+              aria-hidden="true"
+              style={{ width: 12, height: 12, borderRadius: "50%", boxSizing: "border-box", flex: "0 0 auto", ...DOT[st.state] }}
+            />
+            {i < steps.length - 1 && (
+              <span
+                aria-hidden="true"
+                style={{ flex: 1, height: 2, margin: "0 6px", background: st.state === "done" ? c.ok : c.line }}
+              />
             )}
-            {result && <span style={{ fontSize: t.sm, color: result.ok ? c.ok : c.danger }}>{result.text}</span>}
-          </div>
-        );
-      })}
-    </Cell>
+          </span>
+          <span
+            title={st.hint}
+            style={{
+              fontSize: t.sm,
+              fontWeight: 600,
+              color: st.state === "todo" ? c.faint : c.text,
+              cursor: st.hint ? "help" : "default",
+              textDecoration: st.hint ? "underline dotted" : "none",
+              textUnderlineOffset: 3,
+            }}
+          >
+            {st.label}
+          </span>
+          {st.lines.map((l, j) => (
+            <span key={j} style={{ fontSize: t.xs, color: st.state === "warn" ? c.warn : c.muted, paddingRight: 12 }}>
+              {l}
+            </span>
+          ))}
+        </li>
+      ))}
+    </ol>
   );
 }
 
-function HeldCell({
+function offeredStep(row: LaneRow): Step {
+  const open = row.offers.find((o) => o.state === "open" && !o.inProgress);
+  const unfinished = row.offers.find((o) => o.inProgress);
+  const accepted = row.offers.find((o) => o.state === "accepted" && !o.inProgress);
+  if (unfinished) {
+    return { label: "Offered", state: "warn", lines: ["an accept began here and did not finish"] };
+  }
+  if (open) {
+    return {
+      label: "Offered",
+      state: "waiting",
+      lines: [
+        <>
+          <Pill tone="accent">new</Pill> to <span title={open.member}>{shortDid(open.member)}</span>
+        </>,
+        `${open.visibility} · ${open.actions.join(", ")} · until ${day(open.validUntil)}`,
+      ],
+    };
+  }
+  if (accepted) {
+    return { label: "Offered", state: "done", lines: ["accepted", `until ${day(accepted.validUntil)}`] };
+  }
+  return { label: "Offered", state: "todo", lines: ["not from an offer here"] };
+}
+
+function joinedStep(row: LaneRow): Step {
+  const entry = row.held;
+  if (entry) {
+    const s = standing(mostReadable(entry));
+    const words = [...new Set(entry.places.map(placeWord).filter(Boolean))].join(" · ");
+    return {
+      label: "Joined",
+      state: "done",
+      lines: [
+        ...(words ? [words] : []),
+        <span title={s.why} style={{ color: s.tone === "ok" ? c.ok : c.warn }}>
+          {s.label}
+        </span>,
+      ],
+    };
+  }
+  if (rowStage(row) === "awaiting-keys") {
+    return {
+      label: "Joined",
+      state: "warn",
+      lines: ["Accepted — the room's keys have not reached your agent yet, so it is not in your rooms."],
+    };
+  }
+  return { label: "Joined", state: "todo", lines: ["not yet"] };
+}
+
+const WEBSITE_HINT =
+  "The community's member site can list and read this room while you are signed in there. " +
+  "Anything it asks to write is still confirmed in the wallet's own window.";
+
+function websiteStep(row: LaneRow, shares: RoomSharesState): Step {
+  if (row.shares.length === 0) {
+    return { label: "On its website", hint: WEBSITE_HINT, state: "todo", lines: ["not shared"] };
+  }
+  return {
+    label: "On its website",
+    hint: WEBSITE_HINT,
+    state: "done",
+    lines: row.shares.flatMap((s: ShareRow) => [
+      `${host(s.grant.origin)} · until ${new Date(s.grant.expiresAt).toLocaleDateString()}`,
+      <button
+        onClick={() => void shares.revoke(s)}
+        style={{ font: "inherit", fontSize: t.xs, fontWeight: 600, padding: 0, border: "none", background: "transparent", color: c.danger, cursor: "pointer" }}
+      >
+        Stop sharing
+      </button>,
+    ]),
+  };
+}
+
+function RoomRow({
   row,
-  agentDid,
-  names,
   profile,
+  offers,
+  shares,
   onOpen,
 }: {
   row: LaneRow;
-  agentDid: string;
-  names: Readonly<Record<string, AgentName>>;
   profile: RoomProfileView | undefined;
+  offers: RoomOffersState;
+  shares: RoomSharesState;
   onOpen: (roomId: string) => void;
 }) {
   const entry: RoomEntry | undefined = row.held;
-  if (!entry) {
-    return (
-      <Cell filled={false}>
-        {rowStage(row) === "awaiting-keys" ? (
-          <span style={{ fontSize: t.sm, color: c.warn }}>
-            Accepted — the room's keys have not reached your agent yet, so it is not in your rooms.
-          </span>
+  const personal = entry?.places.find((p) => p.personal?.label)?.personal?.label;
+  const name = roomDisplayName({ personal, profile, community: row.label })?.name ?? "Unnamed room";
+  const actionable = row.offers.filter(isActionable);
+  return (
+    <div style={{ display: "grid", gap: 10, padding: "14px 0", borderTop: `1px solid ${c.lineSoft}` }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        {entry ? (
+          <button
+            onClick={() => onOpen(entry.roomId)}
+            aria-label={`Open ${name} in your rooms`}
+            style={{ all: "unset", cursor: "pointer", fontSize: t.base, fontWeight: 650, color: c.accent, wordBreak: "break-word" }}
+          >
+            {name}
+          </button>
         ) : (
-          quiet("Not in your rooms")
-        )}
-      </Cell>
-    );
-  }
-  const personal = entry.places.find((p) => p.personal?.label)?.personal?.label;
-  const shown = roomDisplayName({ personal, profile, community: row.label });
-  const s = standing(mostReadable(entry));
-  const words = [...new Set(entry.places.map(placeWord).filter(Boolean))];
-  return (
-    <Cell filled>
-      <button
-        onClick={() => onOpen(entry.roomId)}
-        style={{ all: "unset", cursor: "pointer", display: "grid", gap: 6 }}
-        aria-label={`Open ${shown?.name ?? "this room"} in your rooms`}
-      >
-        <span style={{ fontSize: t.base, fontWeight: 600, color: c.accent, wordBreak: "break-word" }}>
-          {shown?.name ?? "Unnamed room"}
-        </span>
-        <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {words.map((w) => (
-            <Pill key={w} tone="accent">
-              {w}
-            </Pill>
-          ))}
-          <span title={s.why}>
-            <Pill tone={s.tone}>{s.label}</Pill>
+          <span style={{ fontSize: t.base, fontWeight: 650, wordBreak: "break-word" }} title="The name the community gave it">
+            {name}
           </span>
-        </span>
-        <span style={{ fontSize: t.xs, color: c.muted }}>
-          as {entry.places.map((p) => memberLabel(p, agentDid, names)).join(" and ")}
-        </span>
-      </button>
-    </Cell>
-  );
-}
-
-function ShareCell({ row, shares }: { row: LaneRow; shares: RoomSharesState }) {
-  if (row.shares.length === 0) {
-    return (
-      <Cell filled={false}>
-        {quiet("Not shared")}
-        {row.held && (
-          <span style={{ fontSize: t.xs, color: c.faint }}>Its portal asks, in the wallet's window, when it wants it.</span>
         )}
-      </Cell>
-    );
-  }
-  return (
-    <Cell filled>
-      {row.shares.map((s: ShareRow) => (
-        <div key={`${s.key}|${s.grant.member}`} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-          <span style={{ display: "grid", gap: 2, flex: 1, minWidth: 0 }}>
-            <span style={{ fontSize: t.base, fontWeight: 600 }}>{host(s.grant.origin)}</span>
-            <span style={{ fontSize: t.xs, color: c.muted }}>
-              {typeof s.grant.member === "string"
-                ? `as ${shortDid(s.grant.member)}`
-                : "shared before shares named an identity: the portal will ask again"}{" "}
-              · until {new Date(s.grant.expiresAt).toLocaleDateString()}
-            </span>
-          </span>
-          <Button kind="danger" onClick={() => void shares.revoke(s)}>
-            Revoke
-          </Button>
+        <span style={{ flex: 1 }} />
+        {actionable.map((o) => {
+          const k = offerKey(o);
+          return (
+            <Button key={k} kind="primary" disabled={offers.busy !== null} onClick={() => void offers.accept(o)}>
+              {offers.busy === k
+                ? "Confirm in the wallet window…"
+                : o.inProgress
+                  ? "Finish accepting"
+                  : actionable.length > 1
+                    ? `Accept as ${shortDid(o.member)}…`
+                    : "Accept…"}
+            </Button>
+          );
+        })}
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <div style={{ minWidth: 560 }}>
+          <Track steps={[offeredStep(row), joinedStep(row), websiteStep(row, shares)]} />
         </div>
-      ))}
-    </Cell>
+      </div>
+      {row.offers.map((o) => {
+        const result = offers.outcome[offerKey(o)];
+        return result ? (
+          <span key={offerKey(o)} style={{ fontSize: t.sm, color: result.ok ? c.ok : c.danger }}>
+            {result.text}
+          </span>
+        ) : null;
+      })}
+    </div>
   );
 }
 
 function LaneView({
   lane,
-  agentDid,
   names,
   profiles,
   offers,
@@ -220,7 +257,6 @@ function LaneView({
   onOpen,
 }: {
   lane: Lane;
-  agentDid: string;
   names: Readonly<Record<string, AgentName>>;
   profiles: Readonly<Record<string, RoomProfileView>>;
   offers: RoomOffersState;
@@ -235,25 +271,17 @@ function LaneView({
         background: c.surface,
         border: `1px solid ${c.line}`,
         borderRadius: "var(--w-r-lg)",
-        padding: "16px 18px",
+        padding: "16px 18px 4px",
         display: "grid",
-        gap: 12,
+        gap: 10,
       }}
     >
-      <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
-        <h3 style={{ margin: 0, fontSize: t.md, fontWeight: 650 }}>{communityName(lane.communityDid, names)}</h3>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <h3 style={{ margin: 0, fontSize: t.md, fontWeight: 650 }}>{laneTitle(lane, names)}</h3>
         <Pill tone="accent">community</Pill>
-        {waiting > 0 && <Pill tone="accent">{waiting} waiting</Pill>}
-        {lane.portals.map((o) => (
-          <span key={o} style={{ fontSize: t.xs, color: c.muted }}>
-            portal {host(o)}
-          </span>
-        ))}
-        <code
-          style={{ fontFamily: font.mono, fontSize: t.xs, color: c.faint, wordBreak: "break-all", flex: "1 1 18rem", textAlign: "right" }}
-        >
-          {lane.communityDid}
-        </code>
+        {waiting > 0 && <Pill tone="warn">{waiting} waiting on you</Pill>}
+        <span style={{ flex: 1 }} />
+        <Did value={lane.communityDid} size={t.xs} />
       </div>
 
       {cv?.error && <Note tone="danger">The wallet could not find where this community takes requests: {cv.error}</Note>}
@@ -275,29 +303,20 @@ function LaneView({
 
       {lane.rows.length === 0 ? (
         cv?.reachable && cv.members.every((m) => !m.error) ? (
-          <div style={{ fontSize: t.sm, color: c.muted }}>No offers from this community.</div>
+          <div style={{ fontSize: t.sm, color: c.muted, paddingBottom: 12 }}>No offers from this community.</div>
         ) : null
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <div style={{ display: "grid", gridTemplateColumns: COLUMNS, gap: "8px 0", minWidth: 720 }}>
-            {["Offered to you", "", "In your rooms", "", "Its portal can see"].map((h, i) => (
-              <span
-                key={i}
-                style={{ fontSize: t.xs, textTransform: "uppercase", letterSpacing: "0.1em", fontWeight: 650, color: c.faint }}
-              >
-                {h}
-              </span>
-            ))}
-            {lane.rows.map((row) => (
-              <div key={row.roomId} style={{ display: "contents" }}>
-                <OfferCell row={row} offers={offers} />
-                <Arrow on={row.offers.length > 0 && !!row.held} />
-                <HeldCell row={row} agentDid={agentDid} names={names} profile={profiles[row.roomId]} onOpen={onOpen} />
-                <Arrow on={!!row.held && row.shares.length > 0} />
-                <ShareCell row={row} shares={shares} />
-              </div>
-            ))}
-          </div>
+        <div>
+          {lane.rows.map((row) => (
+            <RoomRow
+              key={row.roomId}
+              row={row}
+              profile={profiles[row.roomId]}
+              offers={offers}
+              shares={shares}
+              onOpen={onOpen}
+            />
+          ))}
         </div>
       )}
     </section>
@@ -361,7 +380,6 @@ export function RoomCommunities({
             <LaneView
               key={l.communityDid}
               lane={l}
-              agentDid={agentDid}
               names={names}
               profiles={profiles}
               offers={offers}

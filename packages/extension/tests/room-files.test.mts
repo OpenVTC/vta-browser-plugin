@@ -277,3 +277,27 @@ test("a failure in the flow reaches the console with its message", async () => {
   assert.match(await failure(pair), /the agent was reached/);
   assert.equal(pair.offscreen.connected, false, "the offscreen end hangs up after a terminal message");
 });
+
+// The background worker holds the transfer port too and must not let it go
+// (a receiver's disconnect closes the whole channel), so an offscreen document
+// that dies mid-transfer would otherwise go unheard. Silence is a failure.
+test("a transfer that goes silent is given up, and its port closed", async () => {
+  const pair = portPair();
+  const pending = getRoomFileIntoConsole(TARGET, "k", { connect: () => pair.console as never, prepare: PREPARED, stallMs: 20 });
+  await assert.rejects(pending, /no word from the wallet's background document/);
+  assert.equal(pair.console.connected, false);
+});
+
+// The bug this file's stall test exists for, pinned at its source. A receiver
+// calling `disconnect()` closes the whole channel, so the worker answering this
+// port by letting it go failed every console download 1–2 ms in. It may open
+// the port (the portal path does); it must never be a receiver that closes it.
+test("the background worker never closes a console's transfer port", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const src = await readFile(new URL("../src/background.ts", import.meta.url), "utf8");
+  const code = src
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join("\n");
+  assert.doesNotMatch(code, /===\s*ROOM_FILES_PORT\b/, "the worker must not single this port out at all");
+});
