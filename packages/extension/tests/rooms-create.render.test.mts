@@ -87,6 +87,9 @@ const keyRecord = (keyId: string, keyType = "ed25519") => ({
   keyId, keyType, status: "active", publicKey: "z6Mk", createdAt: AT,
 });
 
+/** What the background says when asked for a host's HTTPS endpoint; `undefined` leaves it to the agent fake. */
+let hostEndpoint: unknown = undefined;
+
 const mount = async (answers: Record<string, unknown>, contexts: unknown[] = CONTEXTS) => {
   const a = agent({
     [SERVERS]: { servers: [{ id: "webvh-1", did: "did:webvh:QmS:webvh.example", label: "Primary", createdAt: "x", updatedAt: "x" }] },
@@ -95,9 +98,14 @@ const mount = async (answers: Record<string, unknown>, contexts: unknown[] = CON
     [KEYS_LIST]: { keys: [], total: 0, offset: 0, limit: 0 },
     ...answers,
   });
+  const answer = hostEndpoint as ((hostDid: string) => unknown) | undefined;
+  const sendMessage = (m: { type?: string; hostDid?: string }) => {
+    const said = m?.type === "vta-wallet/room-files-prepare" && answer ? answer(m.hostDid ?? "") : undefined;
+    return said !== undefined ? Promise.resolve(said) : a.sendMessage(m as never);
+  };
   const screen = await render(
     h(CreateRoom, { parties: PARTIES, contexts, onCreated: () => {} } as never),
-    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+    { chrome: { runtime: { sendMessage } } },
   );
   return { a, screen };
 };
@@ -654,4 +662,50 @@ test("a new host advertises TSP only when asked", async () => {
   const { a, screen } = await mount({ [DIDS_CREATE]: HOST_MINTED });
   await mintAHost(screen);
   assert.equal(mintOf(a, "room-host").payload.addTspService, undefined);
+});
+
+// ── A host that cannot be registered with ───────────────────────────────────
+
+// The agent can tell a host about a room only over HTTPS, so a host whose DID
+// document publishes no Trust-Task HTTPS endpoint cannot be registered with —
+// and the form used to find out only after minting the room's identity, which
+// it then left orphaned. The check closes step 3 before anything is minted.
+test("a host with no HTTPS endpoint closes the room's steps, before anything is minted", async () => {
+  const OUTSIDE = "did:webvh:QmOutside:airport-electric.example";
+  hostEndpoint = (did: string) =>
+    did === OUTSIDE ? { ok: false, error: `${OUTSIDE} advertises no TrustTaskHTTPS service`, code: "noTrustTaskService" } : undefined;
+  try {
+    const { a, screen } = await mount({ [DIDS_CREATE]: MINTED, [REGISTER]: REGISTERED });
+    await fillAll(screen);
+    await screen.click(radio(screen, "host-paste"));
+    await screen.type(field(screen, "Host DID"), OUTSIDE);
+    await screen.settle();
+    assert.match(screen.text(), /This host cannot be registered with yet/);
+    assert.match(screen.text(), /publishes no HTTPS endpoint/);
+    const create = screen.button("Create room") as HTMLButtonElement;
+    assert.equal(create.disabled, true);
+    await screen.click(create);
+    assert.equal(a.of("webvh/dids/create").length, 0, "no identity minted for a room that could not be registered");
+  } finally {
+    hostEndpoint = undefined;
+  }
+});
+
+// A resolution that failed for any other reason is not a verdict about the
+// host: it does not close the step.
+test("a host that could not be resolved just now does not close the step", async () => {
+  const OUTSIDE = "did:webvh:QmOutside:rooms.elsewhere.example";
+  hostEndpoint = (did: string) => (did === OUTSIDE ? { ok: false, error: "network down" } : undefined);
+  try {
+    const { a, screen } = await mount({ [DIDS_CREATE]: MINTED, [REGISTER]: REGISTERED });
+    await fillAll(screen);
+    await screen.click(radio(screen, "host-paste"));
+    await screen.type(field(screen, "Host DID"), OUTSIDE);
+    await screen.settle();
+    assert.doesNotMatch(screen.text(), /cannot be registered with yet/);
+    await screen.click(screen.button("Create room"));
+    assert.equal(a.of("owner/register")[0]!.payload.host, OUTSIDE);
+  } finally {
+    hostEndpoint = undefined;
+  }
 });

@@ -61,7 +61,7 @@ export class RoomFilesError extends Error {
 
 export async function prepareRoomFiles(hostDid: string): Promise<RoomFilesPrepared> {
   const reply = await sendToBackground<RuntimeRoomFilesPrepareResponse>({ type: RUNTIME_ROOM_FILES_PREPARE, hostDid });
-  if (!reply.ok) throw new RoomFilesError(reply.error);
+  if (!reply.ok) throw new RoomFilesError(reply.error, reply.code);
   return reply.result;
 }
 

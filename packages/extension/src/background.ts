@@ -2367,7 +2367,7 @@ async function handleRoomFilesPrepare(
     type: OFFSCREEN_ROOM_HOST_ENDPOINT,
     hostDid: req.hostDid,
   })) as OffscreenRoomHostEndpointResponse;
-  if (!resolved.ok) return { ok: false, error: resolved.error };
+  if (!resolved.ok) return { ok: false, error: resolved.error, ...(resolved.code ? { code: resolved.code } : {}) };
   return {
     ok: true,
     result: {

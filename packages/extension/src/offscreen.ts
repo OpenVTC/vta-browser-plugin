@@ -213,7 +213,7 @@ import {
   type OffscreenRoomHostEndpointRequest,
   type OffscreenRoomHostEndpointResponse,
 } from "./bridge-protocol.js";
-import { installRoomFilesPort, resolveRoomHostEndpoint } from "./room-files-offscreen.js";
+import { installRoomFilesPort, isNoTrustTaskService, resolveRoomHostEndpoint } from "./room-files-offscreen.js";
 import { runRoomsPageOp } from "./room-page-offscreen.js";
 import { OfferOpError, runRoomOffersOp } from "./room-offers-offscreen.js";
 import {
@@ -696,7 +696,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     resolveRoomHostEndpoint((message as OffscreenRoomHostEndpointRequest).hostDid)
       .then((endpoint) => sendResponse({ ok: true, endpoint } satisfies OffscreenRoomHostEndpointResponse))
       .catch((e: unknown) =>
-        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) } satisfies OffscreenRoomHostEndpointResponse),
+        sendResponse({
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+          ...(isNoTrustTaskService(e) ? { code: "noTrustTaskService" } : {}),
+        } satisfies OffscreenRoomHostEndpointResponse),
       );
     return true; // async sendResponse
   }

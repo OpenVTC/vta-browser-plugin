@@ -2933,7 +2933,7 @@ export interface RoomFilesPrepared {
   restBaseUrl?: string;
 }
 
-export type RuntimeRoomFilesPrepareResponse = { ok: true; result: RoomFilesPrepared } | { ok: false; error: string };
+export type RuntimeRoomFilesPrepareResponse = { ok: true; result: RoomFilesPrepared } | { ok: false; error: string; code?: string };
 
 export interface OffscreenRoomHostEndpointRequest {
   target: typeof OFFSCREEN_TARGET;
@@ -2941,7 +2941,9 @@ export interface OffscreenRoomHostEndpointRequest {
   hostDid: string;
 }
 
-export type OffscreenRoomHostEndpointResponse = { ok: true; endpoint: string } | { ok: false; error: string };
+/** `code` is `noTrustTaskService` when the host's DID document advertises no
+ *  Trust-Task HTTPS endpoint — matched by code, never by message (R3.7). */
+export type OffscreenRoomHostEndpointResponse = { ok: true; endpoint: string } | { ok: false; error: string; code?: string };
 
 /** background → offscreen: the room work behind a page's `rooms.*` call. Sent
  *  only after the background has checked the page's portal and grant. */
