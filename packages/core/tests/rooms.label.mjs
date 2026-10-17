@@ -76,3 +76,50 @@ test("an edit that changes nothing, or gives and removes one detail, is refused 
   assert.throws(() => roomLabelPayload(ROOM, MEMBER, { tags: [] }), /at least one tag/);
   assert.deepEqual(roomLabelPayload(ROOM, MEMBER, { removeTags: true }), { roomId: ROOM, member: MEMBER, removeTags: true });
 });
+
+// A VTA one release behind serves rooms/keys/list 0.1 only. The wallet falls
+// back to it rather than stop listing rooms: the member comes from 0.1's
+// `ext["org.openvtc.rooms"].held`, and there are no personal labels to return.
+function olderAgent(v01Reply) {
+  const sent = [];
+  return {
+    sent,
+    send(envelope, opts) {
+      sent.push({ envelope, opts });
+      if (/rooms\/keys\/list\/0\.2$/.test(envelope.type)) {
+        const e = new Error("unsupported version");
+        e.details = { code: "unsupportedVersion" };
+        return Promise.reject(e);
+      }
+      return Promise.resolve(v01Reply);
+    },
+  };
+}
+
+test("a VTA that serves only list 0.1 still lists rooms, with their members and no labels", async () => {
+  const channel = olderAgent({
+    rooms: [{ roomId: ROOM, epoch: 4, earliestReadableEpoch: 1 }],
+    ext: { "org.openvtc.rooms": { held: [{ member: MEMBER, context: "alice", actions: ["read"] }] } },
+  });
+  const rooms = await roomsKeysList(channel, { holder: HOLDER, service: AGENT }, { includePersonal: true });
+  assert.equal(channel.sent.length, 2);
+  assert.match(channel.sent[1].envelope.type, /rooms\/keys\/list\/0\.1$/);
+  assert.deepEqual(channel.sent[1].envelope.payload, {}, "0.1 has no includePersonal");
+  assert.deepEqual(rooms, [
+    { roomId: ROOM, epoch: 4, earliestReadableEpoch: 1, member: MEMBER, context: "alice", actions: ["read"] },
+  ]);
+});
+
+test("any other refusal of list 0.2 is not retried as 0.1", async () => {
+  const sent = [];
+  const channel = {
+    send(envelope) {
+      sent.push(envelope);
+      const e = new Error("permission denied");
+      e.details = { code: "permissionDenied" };
+      return Promise.reject(e);
+    },
+  };
+  await assert.rejects(roomsKeysList(channel, { holder: HOLDER, service: AGENT }), /permission denied/);
+  assert.equal(sent.length, 1);
+});
