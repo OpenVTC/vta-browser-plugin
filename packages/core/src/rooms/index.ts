@@ -40,6 +40,11 @@ import {
   type PersonalLabel,
 } from "@openvtc/trust-tasks/rooms/keys/list/0.2/payload";
 import {
+  TYPE_URI as KEYS_LIST_V01,
+  RESPONSE_TYPE_URI as KEYS_LIST_V01_RESPONSE,
+  type RoomsKeysListResponsePayload as RoomsKeysListV01ResponsePayload,
+} from "@openvtc/trust-tasks/rooms/keys/list/0.1/payload";
+import {
   TYPE_URI as KEYS_LABEL,
   RESPONSE_TYPE_URI as KEYS_LABEL_RESPONSE,
   type RoomsKeysLabelPayload,
@@ -108,11 +113,12 @@ export type HeldRoom = RoomsKeysListResponsePayload["rooms"][number] & {
 };
 
 /** The trust context and grant of each `rooms/keys/list` entry, read from `ext`. */
-function heldBy(ext: unknown, i: number): { context?: string; actions?: string[] } {
+function heldBy(ext: unknown, i: number): { context?: string; actions?: string[]; member?: string } {
   const held = (ext as Record<string, { held?: unknown } | undefined> | undefined)?.[ROOMS_MEMBER_EXT]?.held;
   const h = Array.isArray(held) ? (held[i] as Record<string, unknown> | undefined) : undefined;
   if (!h || typeof h !== "object") return {};
-  const out: { context?: string; actions?: string[] } = {};
+  const out: { context?: string; actions?: string[]; member?: string } = {};
+  if (typeof h.member === "string") out.member = h.member;
   if (typeof h.context === "string") out.context = h.context;
   if (Array.isArray(h.actions)) out.actions = h.actions.filter((a): a is string => typeof a === "string");
   return out;
@@ -155,19 +161,59 @@ export async function roomsKeysList(
   options: RoomsListOptions = {},
 ): Promise<HeldRoom[]> {
   const payload: RoomsKeysListPayload = options.includePersonal === true ? { includePersonal: true } : {};
-  const res = await call<RoomsKeysListResponsePayload>(
-    sender,
-    parties,
-    KEYS_LIST,
-    KEYS_LIST_RESPONSE,
-    "rooms/keys/list/0.2",
-    payload,
-  );
+  let res: RoomsKeysListResponsePayload;
+  try {
+    res = await call<RoomsKeysListResponsePayload>(
+      sender,
+      parties,
+      KEYS_LIST,
+      KEYS_LIST_RESPONSE,
+      "rooms/keys/list/0.2",
+      payload,
+    );
+  } catch (e) {
+    if (!servesOnlyAnOlderList(e)) throw e;
+    return roomsKeysListV01(sender, parties);
+  }
   return (res.rooms ?? []).map((r, i) => {
-    const room: HeldRoom = { ...r, ...heldBy(res.ext, i) };
+    const { member: _fromExt, ...held } = heldBy(res.ext, i);
+    const room: HeldRoom = { ...r, ...held };
     // Never carry a label the caller did not ask for, whatever came back.
     if (options.includePersonal !== true) delete room.personal;
     return room;
+  });
+}
+
+/**
+ * Whether the member's VTA refused `rooms/keys/list/0.2` for its version, which a
+ * VTA one release behind does: it serves 0.1. Members update their VTAs on their
+ * own schedule, so the wallet does not stop listing rooms until they do.
+ */
+function servesOnlyAnOlderList(e: unknown): boolean {
+  const details = (e as { details?: unknown } | null)?.details;
+  const code = details && typeof details === "object" ? (details as { code?: unknown }).code : undefined;
+  if (typeof code !== "string") return false;
+  const local = code.slice(code.lastIndexOf(":") + 1);
+  return local === "unsupportedVersion" || local === "unsupportedType";
+}
+
+/**
+ * `rooms/keys/list/0.1`, for a VTA that does not serve 0.2. It names each
+ * entry's member in `ext["org.openvtc.rooms"].held` rather than on the entry, and
+ * has no personal labels, so none are returned whatever was asked.
+ */
+async function roomsKeysListV01(sender: TrustTaskSender, parties: RoomsCaller): Promise<HeldRoom[]> {
+  const res = await call<RoomsKeysListV01ResponsePayload>(
+    sender,
+    parties,
+    KEYS_LIST_V01,
+    KEYS_LIST_V01_RESPONSE,
+    "rooms/keys/list/0.1",
+    {},
+  );
+  return (res.rooms ?? []).map((r, i) => {
+    const held = heldBy(res.ext, i);
+    return { ...r, ...held } as HeldRoom;
   });
 }
 
