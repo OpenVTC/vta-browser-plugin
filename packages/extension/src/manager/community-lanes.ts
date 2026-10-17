@@ -48,7 +48,9 @@ export type RowStage = "offered" | "awaiting-keys" | "held" | "shared";
 export function rowStage(row: LaneRow): RowStage {
   if (row.shares.length > 0 && row.held) return "shared";
   if (row.held) return "held";
-  if (row.offers.some((o) => o.state === "accepted" && !o.inProgress)) return "awaiting-keys";
+  // Joined an open room, which has no keys to hold.
+  if (row.offers.some((o) => o.state === "joined")) return "held";
+  if (row.offers.some((o) => o.state === "unfinished" || o.state === "needsReadmission")) return "awaiting-keys";
   return "offered";
 }
 

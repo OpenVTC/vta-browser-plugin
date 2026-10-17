@@ -7,28 +7,27 @@
 // it (`room-offers-background.ts`). This module does the work, as the CLI's
 // `pnm rooms offers list|accept` do: each request to the community is built
 // unsigned, completed by the member's VTA as the identity the offer is
-// addressed to (`rooms/keys/act/0.4`, or 0.3 from a VTA without it, reading
-// `vtc/rooms/offers/list/0.2` or — from a party without it — 0.1), and sent to
-// the community's
+// addressed to (`rooms/keys/act/0.5`), and sent to the community's
 // `TrustTaskHTTPS` endpoint — resolved from its DID document, never guessed —
 // unchanged (`@openvtc/pnm-core/rooms`). What goes back is a view the wallet
 // built: never an offer's credentials, a KeyPackage or a Welcome.
 //
-// An accept in progress is journaled here (IndexedDB, which this document has
-// and `chrome.storage` it has not) before the acceptance leaves, so a torn-down
-// document, a closed console or a lost answer resumes with the same KeyPackage.
+// **The wallet keeps no record of the member's rooms or of an accept in
+// progress.** The member reaches these rooms from the portal, `pnm` and OpenVTC
+// too, so the list is the community's record (`vtc/rooms/memberships/list`)
+// beside the VTA's custody (`rooms/keys/list`), read the way every surface reads
+// them; and an accept interrupted here — or anywhere — is finished by accepting
+// again, because the VTA gives the same KeyPackage (`rooms/keys/key-package/0.2`).
 
 import { credVaultReceive, type TrustTaskSender } from "@openvtc/pnm-core";
 import {
   acceptCommunityRoomOffer,
-  communityRoomOffers,
-  offerAcceptKey,
+  communityRoomMemberships,
   offerListRefusal,
-  readPendingOfferAccept,
+  roomStanding,
   roomsKeysList,
   RoomOfferError,
   type CompletedDocumentSender,
-  type OfferAcceptJournal,
   type OfferReader,
 } from "@openvtc/pnm-core/rooms";
 import { isNoTrustTaskService, RoomHostChannel, roomHostEndpoint } from "@openvtc/pnm-core/rooms/files";
@@ -49,14 +48,12 @@ export interface RoomOffersOffscreenDeps {
   agent(vtaDid: string, restBaseUrl?: string): Promise<{ sender: TrustTaskSender; holderDid: string }>;
   /** The member's `didSelfIssued` vault entries, read whole. */
   identities(vtaDid: string, restBaseUrl?: string): Promise<SignInVaultEntryLike[]>;
-  journal: OfferAcceptJournal;
   /** The community's dispatcher URL. Defaults to its DID document's `TrustTaskHTTPS`. */
   endpoint?(communityDid: string): Promise<string>;
   /** A channel for documents the VTA completed. Defaults to HTTPS at `endpoint`. */
   completed?(communityDid: string, endpoint: string): CompletedDocumentSender;
   /** Store a credential in the member's VTA vault. Defaults to `vault/credentials/receive`. */
   receive?(sender: TrustTaskSender, holderDid: string, vtaDid: string, credential: Record<string, unknown>): Promise<void>;
-  now?(): number;
 }
 
 /** A refusal the background can tell apart: the core's code rides along (R3.7). */
@@ -109,34 +106,39 @@ export async function runRoomOffersOp(
     member: op.member,
   };
 
+  const vtaParties = { holder: { did: holderDid }, service: { did: vta.vtaDid } };
   if (op.op === "list") {
-    let offers;
+    let rooms;
     try {
-      offers = await communityRoomOffers(reader);
+      rooms = await communityRoomMemberships(reader);
     } catch (e) {
       const err = offerListRefusal(e, reader);
       throw new OfferOpError(err.message, err.code);
     }
+    // Custody, for this member only: a room held as another identity is not this one's.
+    const held = new Set(
+      (await roomsKeysList(sender, vtaParties)).filter((r) => r.member === op.member).map((r) => r.roomId),
+    );
     const views: OfferView[] = [];
-    for (const o of offers) {
-      // The community's own rooms only: an offer naming another host is not one
-      // this wallet can carry out, so it is not shown as one.
-      if (o.host !== op.communityDid) continue;
-      const pending = readPendingOfferAccept(
-        await deps.journal.get(offerAcceptKey(vta.vtaDid, op.communityDid, op.member, o.roomId)),
-      );
+    for (const r of rooms) {
+      // The community's own rooms only: one naming another host is not one this
+      // wallet can carry out, so it is not shown as one.
+      if (r.host !== op.communityDid) continue;
+      const description = offerDescription(r.description);
       views.push({
         communityDid: op.communityDid,
         member: op.member,
-        roomId: o.roomId,
-        label: offerLabel(o.label),
-        description: offerDescription(o.description),
-        visibility: o.visibility,
-        actions: [...o.actions],
-        validUntil: o.validUntil,
-        offeredAt: o.offeredAt,
-        state: o.state,
-        inProgress: pending !== undefined,
+        roomId: r.roomId,
+        label: offerLabel(r.label),
+        visibility: r.visibility,
+        actions: [...r.actions],
+        validUntil: r.validUntil,
+        offeredAt: r.offeredAt,
+        ...(description !== undefined ? { description } : {}),
+        ...(r.admittedAt !== undefined ? { admittedAt: r.admittedAt } : {}),
+        ...(r.removedAt !== undefined ? { removedAt: r.removedAt } : {}),
+        ...(r.repeatAcceptUntil !== undefined ? { repeatAcceptUntil: r.repeatAcceptUntil } : {}),
+        state: roomStanding(r, held.has(r.roomId)),
       });
     }
     return views;
@@ -150,13 +152,11 @@ export async function runRoomOffersOp(
     });
   try {
     return await acceptCommunityRoomOffer(reader, op.roomId, {
-      journal: deps.journal,
       receive: (credential) => receive(sender, holderDid, vta.vtaDid, credential),
       async joined(roomId, member) {
-        const held = await roomsKeysList(sender, { holder: { did: holderDid }, service: { did: vta.vtaDid } });
+        const held = await roomsKeysList(sender, vtaParties);
         return held.some((r) => r.roomId === roomId && r.member === member);
       },
-      ...(deps.now ? { now: deps.now } : {}),
     });
   } catch (e) {
     if (e instanceof RoomOfferError) throw new OfferOpError(e.message, e.code);

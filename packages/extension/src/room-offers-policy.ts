@@ -3,9 +3,8 @@
 //
 // A community that owns a room offers its members admission
 // (`vtc/rooms/community/members/add`), and the member takes it up with
-// `vtc/rooms/offers/list/0.2` (0.1 from a party that does not serve it yet) and
-// `vtc/rooms/offers/accept/0.1`, signed as the DID the offer is addressed to by
-// their own VTA (`rooms/keys/act/0.4`, or 0.3 from a VTA without it). The CLI does it with
+// `vtc/rooms/offers/{list,accept}/0.1`, signed as the DID the offer is addressed
+// to by their own VTA (`rooms/keys/act/0.5`). The CLI does it with
 // `pnm rooms offers list|accept`; the wallet does the same, from its console's
 // Data rooms page and from the community's own member portal.
 //
@@ -24,10 +23,8 @@
 //
 // The member portal is the community's own page, and the offers it would show
 // are the community's own to that member — so the portal may list them, through
-// the wallet, as views the wallet built: the room, its label, what it is for
-// (its description, from list 0.2) and tier, the actions, the dates. Never an
-// offer's credentials, and never the room's tags (the community never sends
-// them). Accepting is the member's
+// the wallet, as views the wallet built: the room, its label and tier, the
+// actions, the dates. Never an offer's credentials. Accepting is the member's
 // decision in the wallet's own window; the page only asks.
 
 /**
@@ -78,7 +75,15 @@ export function isOfferSource(sources: readonly OfferSource[], communityDid: str
   return member !== communityDid && sources.some((s) => s.communityDid === communityDid && s.members.includes(member));
 }
 
-/** One offer, as the wallet shows it: no credential, ever. */
+/**
+ * Where one room stands, as every surface shows it — the community's record
+ * (`vtc/rooms/memberships/list`) beside the VTA's custody (`rooms/keys/list`):
+ * `@openvtc/pnm-core/rooms`'s `roomStanding`. The portal, `pnm` and OpenVTC read
+ * the same two records, so a room accepted in one shows the same in all of them.
+ */
+export type OfferStanding = "offered" | "joined" | "unfinished" | "needsReadmission" | "removed";
+
+/** One room the community offered the member, as the wallet shows it: no credential, ever. */
 export interface OfferView {
   communityDid: string;
   /** The identity the offer is addressed to, which accepting joins as. */
@@ -86,28 +91,29 @@ export interface OfferView {
   roomId: string;
   /** The room's label, trimmed and bounded; `""` when it has none. */
   label: string;
-  /**
-   * What the room is for, as the community's administrators wrote it, trimmed
-   * and bounded; `""` when the room has none or the offer was read at list 0.1.
-   * Plain text: shown, never interpreted.
-   */
-  description: string;
   visibility: string;
   actions: string[];
   validUntil: string;
   offeredAt: string;
-  state: "open" | "accepted";
-  /** An accept of this offer began here and has not finished: accepting again finishes it, with the same key package. */
-  inProgress: boolean;
+  /** The room's description, as its administrators wrote it, made safe to show; absent when it has none. */
+  description?: string;
+  admittedAt?: string;
+  removedAt?: string;
+  /** While a sealed room's acceptance can still be finished, from any surface. */
+  repeatAcceptUntil?: string;
+  state: OfferStanding;
 }
 
-/** An offer the member can still act on: open, or one whose accept began here. */
-export function isActionable(o: Pick<OfferView, "state" | "inProgress">): boolean {
-  return o.state === "open" || o.inProgress;
+/**
+ * A room the member can still act on: an offer, or an acceptance begun anywhere
+ * — here, in `pnm`, in OpenVTC — that accepting again finishes.
+ */
+export function isActionable(o: Pick<OfferView, "state">): boolean {
+  return o.state === "offered" || o.state === "unfinished";
 }
 
 /** How many offers wait for the member — what the badge counts. */
-export function openOfferCount(offers: readonly Pick<OfferView, "state" | "inProgress">[]): number {
+export function openOfferCount(offers: readonly Pick<OfferView, "state">[]): number {
   return offers.filter(isActionable).length;
 }
 
@@ -120,16 +126,14 @@ export function offerLabel(raw: unknown): string {
   return [...raw.trim()].slice(0, OFFER_LABEL_MAX).join("");
 }
 
-/** The longest description the wallet shows: the schema's own bound (`RoomDescription`). */
+/** The longest description the wallet shows (the schema's own bound). */
 export const OFFER_DESCRIPTION_MAX = 1000;
 
-/**
- * A room description as the community sent it, made safe to show: trimmed,
- * bounded, shown as text and never interpreted — as markup or as instructions.
- */
-export function offerDescription(raw: unknown): string {
-  if (typeof raw !== "string") return "";
-  return [...raw.trim()].slice(0, OFFER_DESCRIPTION_MAX).join("");
+/** A room's description as the community sent it, made safe to show; `undefined` when it has none. */
+export function offerDescription(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const text = [...raw.trim()].slice(0, OFFER_DESCRIPTION_MAX).join("");
+  return text === "" ? undefined : text;
 }
 
 /** What accepting does, in the member's words — the confirm window and the console both say it. */
@@ -151,30 +155,31 @@ export interface RoomOfferConsentView {
   member: string;
   roomId: string;
   label: string;
-  /** What the room is for, as the community wrote it (bounded text); absent when it said nothing. */
-  description?: string;
   visibility: string;
   actions: string[];
   validUntil: string;
-  /** An accept that began here and did not finish: this finishes it. */
+  /** What the room is for, as the community wrote it (bounded text); absent when it said nothing. */
+  description?: string;
+  /** An acceptance begun somewhere — here or on another surface — and not finished: this finishes it. */
   resume: boolean;
   /** The community's Trust-Task origin, when the wallet may not reach it yet: asked for in the click. */
   needsOrigin?: string;
 }
 
-/** An offer as the community's portal page may see it. */
+/** A room the community offered, as the community's portal page may see it. */
 export interface PageOfferView {
   roomId: string;
   member: string;
   label: string;
-  /** What the room is for (bounded text); absent when the community said nothing. */
-  description?: string;
   visibility: string;
   actions: string[];
   validUntil: string;
   offeredAt: string;
-  state: "open" | "accepted";
-  inProgress: boolean;
+  description?: string;
+  admittedAt?: string;
+  removedAt?: string;
+  repeatAcceptUntil?: string;
+  state: OfferStanding;
 }
 
 /** Member by member: nothing of the community's answer rides along. */
@@ -183,13 +188,15 @@ export function pageOfferView(o: OfferView): PageOfferView {
     roomId: o.roomId,
     member: o.member,
     label: o.label,
-    ...(o.description !== "" ? { description: o.description } : {}),
     visibility: o.visibility,
     actions: [...o.actions],
     validUntil: o.validUntil,
     offeredAt: o.offeredAt,
+    ...(o.description !== undefined ? { description: o.description } : {}),
+    ...(o.admittedAt !== undefined ? { admittedAt: o.admittedAt } : {}),
+    ...(o.removedAt !== undefined ? { removedAt: o.removedAt } : {}),
+    ...(o.repeatAcceptUntil !== undefined ? { repeatAcceptUntil: o.repeatAcceptUntil } : {}),
     state: o.state,
-    inProgress: o.inProgress,
   };
 }
 
@@ -206,7 +213,7 @@ export function pickOffer(
   const forRoom = offers.filter((o) => o.roomId === roomId && isActionable(o) && (member === undefined || o.member === member));
   if (forRoom.length === 1) return { ok: true, offer: forRoom[0]! };
   if (forRoom.length === 0) {
-    return { ok: false, error: "There is no open offer of that room to you here." };
+    return { ok: false, error: "There is no open offer of that room to you here, and nothing to finish." };
   }
   return {
     ok: false,

@@ -2472,8 +2472,8 @@ export interface PageRoomView {
   /**
    * The room's name: its own profile's name where it has one
    * (`rooms/keys/profile/read`), else — for a room this community owns — the
-   * label its administrators gave it, as the community's offer to the member
-   * carried it (`vtc/rooms/offers/list`). Absent whenever the wallet has
+   * label its administrators gave it, as the community's record of the member's
+   * rooms carries it (`vtc/rooms/memberships/list`). Absent whenever the wallet has
    * learned neither — the page then shows the room's DID. Plain text.
    */
   label?: string;
@@ -2957,9 +2957,9 @@ export type OffscreenRoomsPageOp =
   /** The identities the member uses at `hostDid`: the principals of their
    *  `didSelfIssued` vault entries naming it — never `hostDid` itself. */
   | { op: "members"; hostDid: string }
-  /** The names of `hostDid`'s own rooms, from its offers to each of `members`
-   *  (`vtc/rooms/offers/list`, signed as that member): `{ [roomId]: { label, visibility? } }`.
-   *  A member whose offers could not be read contributes nothing. */
+  /** The names of `hostDid`'s own rooms, from its record of each of `members`
+   *  (`vtc/rooms/memberships/list`, signed as that member): `{ [roomId]: { label, visibility? } }`.
+   *  A member whose record could not be read contributes nothing. */
   | { op: "roomNames"; hostDid: string; members: string[] }
   /** Each room's own profile, read from `hostDid` as its member by the member's
    *  VTA (`rooms/keys/profile/read`): `{ [roomId]: RoomProfileSummary }`. A room
@@ -3108,7 +3108,7 @@ export interface OffersOverview {
   communities: OffersCommunityView[];
   /**
    * Parties the member signs in to that make no room offers — no
-   * `TrustTaskHTTPS` service, or `vtc/rooms/offers/list` not served (code
+   * `TrustTaskHTTPS` service, or `vtc/rooms/memberships/list` not served (code
    * `noRoomOffers`). Left out of `communities`: nothing there to act on.
    */
   noOffers: string[];

@@ -7,6 +7,7 @@
 // share, with every gap drawn as the state it is.
 
 import { test } from "node:test";
+import type { OfferStanding } from "../src/room-offers-policy.js";
 import assert from "node:assert/strict";
 import { h, render } from "./harness/dom.mjs";
 import { useRoomOffers } from "../src/manager/panes/rooms-offers.js";
@@ -92,7 +93,7 @@ test("a community that fails still shows its error, named as the community", asy
 
 const ROOM = "did:webvh:QmNorthwind:northwind.example:room-dids:pricing";
 
-const offer = (state: "open" | "accepted", inProgress = false) => ({
+const offer = (state: OfferStanding) => ({
   communityDid: COMMUNITY,
   member: MEMBER,
   roomId: ROOM,
@@ -103,7 +104,6 @@ const offer = (state: "open" | "accepted", inProgress = false) => ({
   validUntil: "2027-01-01T00:00:00Z",
   offeredAt: "2026-10-01T00:00:00Z",
   state,
-  inProgress,
 });
 
 const withOffer = (o: ReturnType<typeof offer>): OffersOverview => ({
@@ -113,7 +113,7 @@ const withOffer = (o: ReturnType<typeof offer>): OffersOverview => ({
 });
 
 test("a new offer is marked new, can be accepted, and is not yet a room", async () => {
-  const screen = await mount(withOffer(offer("open")));
+  const screen = await mount(withOffer(offer("offered")));
   const text = screen.text();
   assert.match(text, /Pricing/);
   assert.ok(screen.all("span").some((el) => el.textContent === "new"), "marked new");
@@ -132,11 +132,20 @@ test("an offer shows what its room is for, as text and never as markup", async (
 
 // Accepted is not the same as held: the keys arrive with the Welcome, and until
 // they do the room is not in the member's rooms. Saying "accepted" alone would
-// let them look for it there and conclude it was lost.
-test("accepted with no keys yet says the keys have not arrived", async () => {
-  const screen = await mount(withOffer(offer("accepted")));
-  assert.match(screen.text(), /accepted/);
+// let them look for it there and conclude it was lost. Accepted anywhere — the
+// portal, pnm, OpenVTC — and not finished, it is finished here.
+test("accepted somewhere with no keys yet says so, and finishes here", async () => {
+  const screen = await mount(withOffer(offer("unfinished")));
+  assert.match(screen.text(), /unfinished/);
   assert.match(screen.text(), /keys have not reached your agent yet/);
+  assert.ok(screen.button("Finish accepting"));
+  await screen.unmount();
+});
+
+test("an acceptance too old to finish says who can help, and offers nothing to press", async () => {
+  const screen = await mount(withOffer(offer("needsReadmission")));
+  assert.match(screen.text(), /needs re-admission/);
+  assert.match(screen.text(), /re-admit you/);
   assert.equal(screen.all("button").filter((b) => /Accept/.test(b.textContent ?? "")).length, 0);
   await screen.unmount();
 });
@@ -144,7 +153,7 @@ test("accepted with no keys yet says the keys have not arrived", async () => {
 test("offered, held and shared is one row across the lane, with the share revocable", async () => {
   const grant = { origin: "https://portal.northwind.example", hostDid: COMMUNITY, vtaDid: VTA, roomId: ROOM, member: MEMBER, grantedAt: 1, expiresAt: Date.now() + 86_400_000 };
   const other = { ...grant, vtaDid: "did:webvh:QmOther:other.example", roomId: "did:webvh:elsewhere" };
-  const screen = await mount(withOffer(offer("accepted")), {
+  const screen = await mount(withOffer(offer("joined")), {
     entries: [{ roomId: ROOM, places: [{ roomId: ROOM, member: MEMBER, epoch: 3, earliestReadableEpoch: 1, actions: ["read", "write"] }] }],
     stored: { [`${ROOM_GRANTS_PREFIX}portal`]: [grant, other] },
   });

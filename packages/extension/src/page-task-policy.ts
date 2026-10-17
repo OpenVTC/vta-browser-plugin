@@ -89,6 +89,15 @@ const REFUSED: { prefix: string; why: string }[] = [
       "A community's own member portal lists offers with window.vtaWallet.rooms.offers and asks to accept one " +
       "with window.vtaWallet.rooms.acceptOffer, which the member decides in the wallet's own window.",
   },
+  // A community's record of the member's rooms. It says which of the community's
+  // rooms this member is in, and the portal already reads it, as the member's
+  // other surfaces do, through `window.vtaWallet.rooms.offers`.
+  {
+    prefix: "https://trusttasks.org/spec/vtc/rooms/memberships/",
+    why:
+      "The community's record of which of its rooms the member is in is read by the wallet, as the member. " +
+      "A community's own member portal lists it with window.vtaWallet.rooms.offers.",
+  },
   // A mediator's own operations surface (`@openvtc/pnm-core/mediator`). A page
   // routing one of these to an agent would be misaddressed anyway — they are
   // served by the relay, not the agent — but the refusal is about what they

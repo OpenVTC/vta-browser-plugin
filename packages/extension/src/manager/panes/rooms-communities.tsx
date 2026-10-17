@@ -108,11 +108,27 @@ function Track({ steps }: { steps: Step[] }) {
 }
 
 function offeredStep(row: LaneRow): Step {
-  const open = row.offers.find((o) => o.state === "open" && !o.inProgress);
-  const unfinished = row.offers.find((o) => o.inProgress);
-  const accepted = row.offers.find((o) => o.state === "accepted" && !o.inProgress);
+  const open = row.offers.find((o) => o.state === "offered");
+  const unfinished = row.offers.find((o) => o.state === "unfinished");
+  const readmit = row.offers.find((o) => o.state === "needsReadmission");
+  const joined = row.offers.find((o) => o.state === "joined");
+  const removed = row.offers.find((o) => o.state === "removed");
   if (unfinished) {
-    return { label: "Offered", state: "warn", lines: ["an accept began here and did not finish"] };
+    return {
+      label: "Offered",
+      state: "warn",
+      lines: [<Pill tone="warn">unfinished</Pill>, "accepted, here or elsewhere, and not finished — finish it here"],
+    };
+  }
+  if (readmit) {
+    return {
+      label: "Offered",
+      state: "warn",
+      lines: [
+        <Pill tone="danger">needs re-admission</Pill>,
+        "accepted, but your agent never joined and the community no longer keeps what it needs: ask an administrator to re-admit you",
+      ],
+    };
   }
   if (open) {
     return {
@@ -126,8 +142,11 @@ function offeredStep(row: LaneRow): Step {
       ],
     };
   }
-  if (accepted) {
-    return { label: "Offered", state: "done", lines: ["accepted", `until ${day(accepted.validUntil)}`] };
+  if (joined) {
+    return { label: "Offered", state: "done", lines: ["accepted", `until ${day(joined.validUntil)}`] };
+  }
+  if (removed) {
+    return { label: "Offered", state: "todo", lines: [<Pill tone="off">removed</Pill>] };
   }
   return { label: "Offered", state: "todo", lines: ["not from an offer here"] };
 }
@@ -147,6 +166,9 @@ function joinedStep(row: LaneRow): Step {
         </span>,
       ],
     };
+  }
+  if (row.offers.some((o) => o.state === "needsReadmission")) {
+    return { label: "Joined", state: "warn", lines: ["never — your agent did not join before the community stopped keeping the room's keys for you"] };
   }
   if (rowStage(row) === "awaiting-keys") {
     return {
@@ -222,7 +244,7 @@ function RoomRow({
             <Button key={k} kind="primary" disabled={offers.busy !== null} onClick={() => void offers.accept(o)}>
               {offers.busy === k
                 ? "Confirm in the wallet window…"
-                : o.inProgress
+                : o.state === "unfinished"
                   ? "Finish accepting"
                   : actionable.length > 1
                     ? `Accept as ${shortDid(o.member)}…`

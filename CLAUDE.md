@@ -1026,13 +1026,14 @@ answer.
 
 **A community's own rooms are shown by name.** A room the community owns has
 a label its administrators gave it, and the community's offer to the member
-carries it (`vtc/rooms/offers/list/0.1`, built unsigned and completed by the
-VTA as the member with `rooms/keys/act/0.3`, sent to the community's
-`TrustTaskHTTPS` unchanged — `@openvtc/pnm-core/rooms`'s `communityRoomOffers`).
+carries it (`vtc/rooms/memberships/list/0.1`, built unsigned and completed by
+the VTA as the member with `rooms/keys/act/0.5`, sent to the community's
+`TrustTaskHTTPS` unchanged — `@openvtc/pnm-core/rooms`'s
+`communityRoomMemberships`).
 `list` and `choose` read it for the members the shares (or the share prompt)
 act as, at most once a minute per member, and only at the community whose
-portal the page is. The community lists an accepted offer only for days, so a
-name is **remembered** under `room-names:<vtaDid>|<hostDid>` in
+portal the page is. The record lists a room for as long as the community keeps
+it, accepted or not; a name is still **remembered** under `room-names:<vtaDid>|<hostDid>` in
 `chrome.storage.local`; a fresh reading replaces it, so a rename shows once the
 room is offered again. Any failure means no name, never an error: the page
 shows the room's DID. `RoomPageGates.displayNames` is the one place a name
@@ -1103,27 +1104,39 @@ asks in the click). One community's offers to one identity are read at most
 once a minute (`OFFERS_LIST_INTERVAL_MS`); the console polls every five minutes
 while open.
 
-**Every request is the member's, completed by the VTA.** The list and the
+**What the console and the portal list is the community's record, not the
+wallet's.** The member reaches these rooms from the portal, `pnm` and OpenVTC
+too, so each row is a room from `vtc/rooms/memberships/list` (offered, admitted
+or removed, for as long as the community keeps it) read beside the VTA's custody
+(`roomsKeysList`, for that member), and its `state` is the standing every
+surface derives from those two (`roomStanding`): `offered`, `joined`,
+`unfinished` (accepted somewhere and not held — accepting again finishes it),
+`needsReadmission` (too late to finish: an administrator re-admits) or
+`removed`. The wallet keeps no record of an accept of its own, so a room
+accepted in OpenVTC shows joined here, and one interrupted here is finished
+there (`vtc/rooms/memberships/list/0.1`, *One record, every surface*).
+
+**Every request is the member's, completed by the VTA.** The lists and the
 acceptance are built unsigned and completed as the member with
-`rooms/keys/act/0.3` (the version that admits the offer types; a VTA without it
-gets "must be updated"), then sent to the community unchanged over HTTPS;
-`roomsKeysAct` refuses an answer made as anyone else. On a sealed tier the
-**VTA mints the KeyPackage** (`rooms/keys/key-package`) — act 0.3 completes an
-acceptance only with one it minted — and joins from the Welcome
+`rooms/keys/act/0.5` (the version that admits the community's types; a VTA
+without it gets "must be updated"), then sent to the community unchanged over
+HTTPS; `roomsKeysAct` refuses an answer made as anyone else. On a sealed tier
+the **VTA gives the KeyPackage** (`rooms/keys/key-package/0.2`) — act completes
+an acceptance only with one it minted — and joins from the Welcome
 (`rooms/keys/welcome`). The offer's membership and authority credentials go
 into the VTA's vault first (`vault/credentials/receive`). All of it is
 `@openvtc/pnm-core/rooms`'s `acceptCommunityRoomOffer`, run in the offscreen
 document (`room-offers-offscreen.ts`); the background (`room-offers-background.ts`)
 names no rooms task.
 
-**A lost answer is retried with the same KeyPackage.** The community answers a
-repeat carrying the same KeyPackage with the same Welcome, and one carrying a
-different KeyPackage with `alreadyAccepted` — after which only an administrator
-can help. So the KeyPackage is journaled (IndexedDB, `OFFER_ACCEPT_PREFIX`)
-**before** the acceptance leaves, every later attempt sends that one, and the
-journal is dropped only once the VTA has joined (an `alreadyJoined` from
-`rooms/keys/welcome` counts). An offer with an accept in progress shows *Finish
-accepting*.
+**A lost answer is retried with the same KeyPackage — from any surface.** The
+community answers a repeat carrying the same KeyPackage with the same Welcome,
+and one carrying a different KeyPackage with `alreadyAccepted` — after which
+only an administrator can help. The VTA, not the wallet, keeps the KeyPackage:
+`key-package/0.2` returns the one it holds for the room, member and invitation
+(`alreadyMinted`), so every attempt — here after a timeout, or in `pnm` or
+OpenVTC — sends that one, and an `alreadyJoined` from `rooms/keys/welcome` is
+joined. A row standing `unfinished` shows *Finish accepting*.
 
 **Accepting is the member's decision, in the wallet's window.** Console or
 portal, `RoomOffers.accept` raises `confirm.html?kind=room` with an `offer`
@@ -1141,9 +1154,10 @@ cannot have the wallet sign or request a `vtc/rooms/offers/*` task
 so it keeps the badge (red); with none waiting the badge shows the last
 listing's open offers for the active agent (blue).
 
-**What breaks it:** minting a KeyPackage anywhere but the member's VTA; sending
-an acceptance before its KeyPackage is journaled, or a different KeyPackage on a
-retry; asking as the community's DID, or as an identity the sign-in record does
+**What breaks it:** minting a KeyPackage anywhere but the member's VTA, or
+asking for one with `key-package/0.1` (which replaces the one held); keeping a
+record of the member's rooms or of an accept in progress in the wallet, which
+another surface cannot see; asking as the community's DID, or as an identity the sign-in record does
 not name; passing an offer's credentials to the console or a page; accepting
 without the window; or importing `@openvtc/pnm-core/rooms` into the background.
 
