@@ -10,100 +10,215 @@
 // membership credential is held; a VTA not yet told of a removal still lists a
 // room it can read and can no longer write to. So the pane never presents this
 // as authority — the host decides that, from credentials the room issued, and
-// the honest failure is a refusal at the point of use.
+// the honest failure is a refusal at the point of use. That is said **once**,
+// above the cards, rather than under every room.
 //
-// **Two epochs per room, because neither alone is enough.** `epoch` behind the
-// room's own means a commit was not delivered and records written since will
-// not open. `earliest` equal to `epoch` means the epoch key chain has not
-// arrived, so history before joining is unreadable. Different repairs, and a
-// member shown only "you can't read this" reads it as loss rather than as a
-// delivery that has not happened. The pane says which it is.
+// **Two epochs per room, because neither alone is enough.** A card carries one
+// history pill (`standing()` in `room-words.ts`) for its most readable place;
+// the detail's Access tab says what the pair means and offers the repair.
 //
-// Reading a sealed record is two hops on purpose: the host serves ciphertext it
-// cannot read, and the member's own VTA opens it. Nothing here ever holds a key.
+// **One card per room, one place at a time.** One agent can hold two members of
+// a room — an administrator whose agent also holds the community's own place in
+// a room the community owns, or a person with two personas in it. The card says
+// so; the detail acts as one place chosen on screen (`rooms-detail.tsx`), and
+// every request from it names that member, because the agent refuses to choose.
 //
-// **One row per (room, member).** One agent can hold two members of a room — an
-// administrator whose agent also holds the community's own place in a room the
-// community owns, or a person with two personas in it. The agent lists the room
-// once per member, and every row says which member it is and what place it
-// holds; everything done from a row acts as that member and names it, because
-// the agent refuses to choose between them.
+// **Grouped by where the room was last found.** Nothing authoritative maps a
+// room to its host, so the groups come from what this wallet has seen itself
+// (`room-hosts.ts`): a community's offer, a room this console created, a host
+// that answered a listing. A room with none sits under *Host not known yet*
+// until its records are listed once. Grouping by trust context needs no hint.
 //
-// **Your name for a room comes first.** A row is named, in order, by the
-// member's own private label (`rooms/keys/label`, read with `includePersonal`),
-// then the name the room's community gave it on its offer, then its DID — and a
-// personal name never hides the others: the community's name and the DID stay
-// on the row beside it, so a member can see the room was renamed after they
-// named it. (A room's own profile name slots in after the personal label once
-// rooms carry one.)
+// **Your name for a room comes first.** A card is named, in order, by the
+// member's own private label, the room's own profile name, the community's
+// offer label, then nothing — and a personal name never hides the others: the
+// room's or community's name and the DID stay on the card beside it.
+//
+// The rest of the family has its own tab: offers waiting for the member, rooms
+// shared with community portals, the owner's issuing tools, and creating one.
 
 import { useCallback, useEffect, useState } from "react";
-import { heldRoomKey, roomsKeysList, type HeldRoom } from "@openvtc/pnm-core/rooms";
+import { roomsKeysList, type HeldRoom } from "@openvtc/pnm-core/rooms";
 import { displayAgentName, type AgentName } from "../../agent-name.js";
+import { didHost } from "../../did-display.js";
 import { useAgentNames } from "../../use-agent-names.js";
-import { Note, Panel } from "../../ui.js";
+import { Button, Pill } from "../../ui.js";
+import { rememberedRoomLabels } from "../../room-page-policy.js";
+import { c, t, font } from "../../theme.js";
+import { managerSender } from "../sender.js";
+import { Loading, LoadError } from "../table.js";
+import { groupRooms, mostReadable, roomEntries, type GroupBy, type RoomEntry, type RoomGroup } from "../room-groups.js";
+import { knownRoomHosts, rememberRoomHost, type KnownRoomHost } from "../room-hosts.js";
+import { memberLabel, placeWord, shortDid, standing } from "../room-words.js";
+import type { ContextRecord } from "@openvtc/pnm-core";
+import type { RoomProfileView } from "@openvtc/pnm-core/rooms";
+import type { Parties } from "../use-vta.js";
 import { CreateRoom } from "./rooms-create.js";
-import { FetchHistory } from "./rooms-backfill.js";
-import { RoomLabel } from "./rooms-label.js";
-import { RoomRecords } from "./rooms-records.js";
 import { IssueInRoomsName } from "./rooms-owner.js";
 import { RoomShares } from "./rooms-shares.js";
 import { RoomOffers } from "./rooms-offers.js";
-import { rememberedRoomHosts, rememberedRoomLabels } from "../../room-page-policy.js";
-import { RoomProfileDetails, roomDisplayName, useRoomProfiles } from "./rooms-profile.js";
-import { c, t, font } from "../../theme.js";
-import { managerSender } from "../sender.js";
-import { Loading, LoadError, Table, type Column } from "../table.js";
-import type { ContextRecord } from "@openvtc/pnm-core";
-import type { Parties } from "../use-vta.js";
+import { roomDisplayName, useRoomProfiles } from "./rooms-profile.js";
+import { profileNotices, RoomDetail, RoomTile, Segmented, TabStrip } from "./rooms-detail.js";
 
-/** What the two epochs mean together, in the words a member needs. */
-function standing(room: HeldRoom): { label: string; tone: string; why: string } {
-  if (room.earliestReadableEpoch <= 1) {
-    return {
-      label: "whole history",
-      tone: c.ok,
-      why: "Every record this room retains can be opened.",
-    };
+type Tab = "rooms" | "offers" | "shared" | "owner" | "new";
+
+const INTRO_DISMISSED = "rooms-intro-dismissed";
+
+function readDismissed(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(INTRO_DISMISSED) === "1";
+  } catch {
+    return false;
   }
-  if (room.earliestReadableEpoch >= room.epoch) {
-    return {
-      label: "from joining",
-      tone: c.warn,
-      why:
-        "Readable from the epoch this agent joined at. Anything written before that needs " +
-        "the room's epoch key chain, which has not been delivered here.",
-    };
-  }
-  return {
-    label: `back to epoch ${room.earliestReadableEpoch}`,
-    tone: c.warn,
-    why:
-      "Part of the chain has arrived. Records older than this epoch were either severed " +
-      "deliberately or their rungs were never delivered — from here the two look the same.",
-  };
 }
 
-/** Who a row acts as, in words: a name its document claims, else the DID shortened. */
-export function memberLabel(
-  room: Pick<HeldRoom, "member">,
-  agentDid: string,
-  names: Readonly<Record<string, AgentName>>,
-): string {
-  if (!room.member) return "member not reported by this agent";
-  const name = names[room.member];
-  const who = name
-    ? displayAgentName(name)
-    : room.member.length > 44
-      ? `${room.member.slice(0, 22)}…${room.member.slice(-14)}`
-      : room.member;
-  return room.member === agentDid ? `${who} (this agent's own DID)` : who;
+/** A host group's heading: the name its document claims, else its domain, else the DID cut short. */
+function hostName(did: string, names: Readonly<Record<string, AgentName>>): string {
+  const n = names[did];
+  return n ? displayAgentName(n) : (didHost(did) ?? shortDid(did));
 }
 
-/** The place a member holds in the room, from the actions its grant confers. */
-export function placeLabel(room: Pick<HeldRoom, "actions">): string {
-  if (!room.actions) return "";
-  return room.actions.includes("admin") ? "administers the room" : "member";
+const HOST_KIND: Record<KnownRoomHost["source"], { word: string; tone: "accent" | "ok" | "off" }> = {
+  community: { word: "community", tone: "accent" },
+  created: { word: "created here", tone: "ok" },
+  used: { word: "host", tone: "off" },
+};
+
+function RoomCard({
+  entry,
+  agentDid,
+  names,
+  profile,
+  community,
+  onOpen,
+}: {
+  entry: RoomEntry;
+  agentDid: string;
+  names: Readonly<Record<string, AgentName>>;
+  profile: RoomProfileView | undefined;
+  community: string | undefined;
+  onOpen: () => void;
+}) {
+  // A card is the room; its personal label is whichever place carries one.
+  const personal = entry.places.find((p) => p.personal?.label)?.personal;
+  const shown = roomDisplayName({ personal: personal?.label, profile, community });
+  const theirs = personal?.label !== undefined ? roomDisplayName({ profile, community }) : undefined;
+  const best = standing(mostReadable(entry));
+  const words = [...new Set(entry.places.map(placeWord).filter(Boolean))];
+  const tags = personal?.tags ?? profile?.tags;
+  const notices = profileNotices(profile);
+  const multi = entry.places.length > 1;
+
+  return (
+    <button
+      onClick={onOpen}
+      aria-label={`Open ${shown?.name ?? "this room"}`}
+      style={{
+        all: "unset",
+        boxSizing: "border-box",
+        cursor: "pointer",
+        display: "flex",
+        flexDirection: "column",
+        gap: 9,
+        background: c.surface,
+        border: `1px solid ${c.line}`,
+        borderRadius: "var(--w-r-md)",
+        padding: "14px 16px",
+        minWidth: 0,
+      }}
+    >
+      <span style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+        <RoomTile name={shown?.name} />
+        <span style={{ display: "grid", gap: 1, minWidth: 0 }}>
+          <span style={{ fontSize: t.base, fontWeight: 650, color: c.text, wordBreak: "break-word" }}>
+            {shown?.source === "profile" && profile?.emoji ? `${profile.emoji} ` : ""}
+            {shown?.name ?? "Unnamed room"}
+            {shown?.source === "personal" && (
+              <span style={{ fontSize: t.xs, fontWeight: 500, color: c.muted }}> · your name for it</span>
+            )}
+          </span>
+          {theirs && (
+            <span style={{ fontSize: t.xs, color: c.muted }}>
+              {theirs.source === "profile" ? "the room's name" : "community's name"}: {theirs.name}
+            </span>
+          )}
+        </span>
+      </span>
+      <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {words.map((w) => (
+          <Pill key={w} tone="accent">
+            {w}
+          </Pill>
+        ))}
+        <span title={best.why}>
+          <Pill tone={best.tone}>{best.label}</Pill>
+        </span>
+      </span>
+      <span style={{ fontSize: t.sm, color: c.muted }}>
+        {multi
+          ? `Held as ${entry.places.length} identities: ${entry.places.map((p) => memberLabel(p, agentDid, names)).join(" and ")}`
+          : `as ${memberLabel(entry.places[0]!, agentDid, names)}`}
+      </span>
+      {(personal?.description ?? profile?.description) && (
+        <span
+          style={{
+            fontSize: t.xs,
+            color: c.muted,
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }}
+        >
+          {personal?.description ?? profile?.description}
+        </span>
+      )}
+      {notices.map((n) => (
+        <span key={n} role="note" style={{ fontSize: t.xs, color: c.warn }}>
+          {n}
+        </span>
+      ))}
+      {tags && tags.length > 0 && <span style={{ fontSize: t.xs, color: c.muted }}>{tags.join(" · ")}</span>}
+      <code style={{ fontFamily: font.mono, fontSize: t.xs, color: c.faint, wordBreak: "break-all", marginTop: "auto" }}>
+        {entry.roomId}
+      </code>
+    </button>
+  );
+}
+
+function GroupHeading({
+  group,
+  names,
+}: {
+  group: RoomGroup;
+  names: Readonly<Record<string, AgentName>>;
+}) {
+  const count = `${group.entries.length} ${group.entries.length === 1 ? "room" : "rooms"}`;
+  let title: string;
+  let kind: { word: string; tone: "accent" | "ok" | "off" | "warn" };
+  let sub: string | undefined;
+  if (group.kind === "host") {
+    title = hostName(group.host.host, names);
+    kind = HOST_KIND[group.host.source];
+    sub = group.host.host;
+  } else if (group.kind === "unknown") {
+    title = "Host not known yet";
+    kind = { word: "unknown", tone: "off" };
+    sub = "Your agent holds these rooms' keys, but this wallet has not seen where they live. Open one and list its records once.";
+  } else {
+    title = group.context ? `context ${group.context}` : "Context not reported";
+    kind = { word: "context", tone: "off" };
+  }
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", paddingBottom: 6, borderBottom: `1px solid ${c.lineSoft}` }}>
+      <h3 style={{ margin: 0, fontSize: t.md, fontWeight: 650, wordBreak: "break-word" }}>{title}</h3>
+      <Pill tone={kind.tone}>{kind.word}</Pill>
+      {sub && (
+        <span style={{ fontSize: t.xs, color: c.faint, wordBreak: "break-all", flex: "1 1 20rem", minWidth: 0 }}>{sub}</span>
+      )}
+      <span style={{ fontSize: t.sm, color: c.faint, marginLeft: "auto" }}>{count}</span>
+    </div>
+  );
 }
 
 export function RoomsPane({
@@ -113,8 +228,14 @@ export function RoomsPane({
   parties: Parties;
   contexts: ContextRecord[];
 }) {
+  const [tab, setTab] = useState<Tab>("rooms");
   const [rooms, setRooms] = useState<HeldRoom[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  const [by, setBy] = useState<GroupBy>("host");
+  const [offers, setOffers] = useState(0);
+  const [introHidden, setIntroHidden] = useState(readDismissed);
+  const agentDid = parties.service.did;
 
   const load = useCallback(async () => {
     setError(null);
@@ -131,186 +252,225 @@ export function RoomsPane({
     void load();
   }, [load]);
 
-  // The names of rooms a community owns, as the wallet learned them from that
-  // community's offers when its member portal listed them (`room-page-background.ts`).
-  // Absent outside the extension (the pane's render tests), and for a room a member owns.
+  // The names communities gave rooms on their offers, and where each room was
+  // last found. Absent outside the extension (the pane's render tests).
   const [labels, setLabels] = useState<Record<string, string>>({});
-  // And the community each name came from: the host the room's own profile is
-  // read from. A room no community has named here is read once its host is
-  // named, under the row (`RoomRecords`).
-  const [hosts, setHosts] = useState<Record<string, string>>({});
+  const [hosts, setHosts] = useState<Record<string, KnownRoomHost>>({});
   useEffect(() => {
     const store = globalThis.chrome?.storage?.local;
     if (!store) return;
     store
       .get(null)
       .then((all) => {
-        setLabels(rememberedRoomLabels(all, parties.service.did));
-        setHosts(rememberedRoomHosts(all, parties.service.did));
+        setLabels(rememberedRoomLabels(all, agentDid));
+        setHosts(knownRoomHosts(all, agentDid));
       })
       .catch(() => {
         setLabels({});
         setHosts({});
       });
-  }, [parties.service.did, rooms]);
-  // The room's own profile, read once per listing — never polled.
-  const profiles = useRoomProfiles(parties, rooms, hosts);
+  }, [agentDid, rooms]);
 
-  const names = useAgentNames((rooms ?? []).map((r) => r.member));
-  // A room held as more than one member: the rows must say which is which.
-  const twice = new Set(
-    (rooms ?? []).filter((r, i, all) => all.findIndex((o) => o.roomId === r.roomId) !== i).map((r) => r.roomId),
+  const remember = useCallback(
+    (roomId: string, host: string, source: "created" | "used") => {
+      setHosts((prev) => (prev[roomId]?.host === host ? prev : { ...prev, [roomId]: { host, source } }));
+      void rememberRoomHost(agentDid, roomId, host, source);
+    },
+    [agentDid],
   );
 
-  const columns: Column<HeldRoom>[] = [
-    {
-      key: "room",
-      header: "Room",
-      render: (r) => {
-        const personal = r.personal?.label;
-        const shown = roomDisplayName({ personal, profile: profiles[r.roomId], community: labels[r.roomId] });
-        // Under your own name, the name the room or its community gives it, muted.
-        const theirs = personal !== undefined
-          ? roomDisplayName({ profile: profiles[r.roomId], community: labels[r.roomId] })
-          : undefined;
-        const titles = {
-          personal: "Your own name for it — only you see it",
-          profile: "The name the room gives itself",
-          community: "The name its community gave it",
-        } as const;
-        return (
-          <span style={{ display: "grid", gap: 2 }}>
-            {shown && (
-              <span style={{ fontSize: t.sm }} title={titles[shown.source]}>
-                {shown.source === "profile" && profiles[r.roomId]?.emoji ? `${profiles[r.roomId]!.emoji} ` : ""}
-                {shown.name}
-                {shown.source === "personal" && <span style={{ fontSize: t.xs, color: c.muted }}> · your name for it</span>}
-              </span>
-            )}
-            {theirs && (
-              <span style={{ fontSize: t.xs, color: c.muted }} title={titles[theirs.source]}>
-                {theirs.source === "profile" ? "the room's name" : "community's name"}: {theirs.name}
-              </span>
-            )}
-            {r.personal?.tags !== undefined && (
-              <span style={{ fontSize: t.xs, color: c.muted }}>{r.personal.tags.join(" · ")}</span>
-            )}
-            <RoomProfileDetails view={profiles[r.roomId]} />
-            <code style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>{r.roomId}</code>
-          </span>
-        );
-      },
-    },
-    {
-      key: "member",
-      header: "As",
-      render: (r) => (
-        <span style={{ display: "grid", gap: 2 }} title={r.member}>
-          <span style={{ fontSize: t.xs, wordBreak: "break-all" }}>{memberLabel(r, parties.service.did, names)}</span>
-          <span style={{ fontSize: t.xs, color: c.muted }}>
-            {[placeLabel(r), r.context ? `context ${r.context}` : "", twice.has(r.roomId) ? "one of two places" : ""]
-              .filter(Boolean)
-              .join(" · ")}
-          </span>
-        </span>
-      ),
-    },
-    {
-      key: "epoch",
-      header: "Epoch",
-      width: "5rem",
-      render: (r) => <span style={{ fontFamily: font.mono }}>{r.epoch}</span>,
-    },
-    {
-      key: "readable",
-      header: "Readable",
-      width: "12rem",
-      render: (r) => {
-        const s = standing(r);
-        return <span style={{ color: s.tone }}>{s.label}</span>;
-      },
-    },
-  ];
+  // The room's own profile, read once per listing from its known host — never polled.
+  const hostDids = Object.fromEntries(Object.entries(hosts).map(([roomId, h]) => [roomId, h.host]));
+  const profiles = useRoomProfiles(parties, rooms, hostDids);
 
-  const list = (
-    <Panel
-      title="Data rooms"
-      description="Shared spaces this agent holds keys for. Listed by what it can open — which is
-        not the same as what its principal is a member of."
+  const names = useAgentNames([
+    ...(rooms ?? []).map((r) => r.member),
+    ...Object.values(hosts).map((h) => h.host),
+  ]);
+
+  const entries = roomEntries(rooms ?? []);
+  const opened = open === null ? undefined : entries.find((e) => e.roomId === open);
+  const places = rooms?.length ?? 0;
+
+  const intro = !introHidden && (
+    <div
+      role="note"
+      style={{
+        display: "flex",
+        gap: 12,
+        alignItems: "flex-start",
+        background: "var(--w-accent-wash)",
+        border: `1px solid ${c.accentSoft}`,
+        borderRadius: "var(--w-r-md)",
+        padding: "11px 14px",
+      }}
     >
-      {error ? (
-        <LoadError what="its rooms" error={error} />
-      ) : rooms === null ? (
-        <Loading what="rooms" />
-      ) : (
-        <>
-          <Table
-            columns={columns}
-            rows={rooms}
-            rowKey={heldRoomKey}
-            expanded={(r) => {
-              const s = standing(r);
-              return (
-                <div style={{ fontSize: t.sm, color: c.muted }}>
-                  {r.member && (
-                    <p style={{ margin: "0 0 6px" }}>
-                      Everything below acts in this room as <code style={{ wordBreak: "break-all" }}>{r.member}</code>
-                      {twice.has(r.roomId) ? ", not as the other place this agent holds in it" : ""}.
-                    </p>
-                  )}
-                  {r.personal?.description !== undefined && (
-                    <p style={{ margin: "0 0 6px", whiteSpace: "pre-wrap" }}>{r.personal.description}</p>
-                  )}
-                  {r.personal?.notes !== undefined && (
-                    <p style={{ margin: "0 0 6px", whiteSpace: "pre-wrap" }}>{r.personal.notes}</p>
-                  )}
-                  <p style={{ margin: "0 0 6px" }}>{s.why}</p>
-                  <p style={{ margin: 0 }}>
-                    Holding keys is not permission to act. Whether this agent may still write
-                    here is decided by the host, from credentials the room issued — so a room
-                    it can read may still refuse a write.
-                  </p>
-                  {/* Offered only where there is something to repair. A room
-                      that already reads to its first epoch has no chain left to
-                      fetch, and a button that did nothing would teach an
-                      operator to distrust the one that does. */}
-                  {r.earliestReadableEpoch > 1 && (
-                    <FetchHistory parties={parties} room={r} onFetched={() => void load()} />
-                  )}
-                  {/* Reading is offered on every room, including one whose
-                      history is incomplete: what a member can open now is not
-                      contingent on what they cannot. */}
-                  <RoomRecords parties={parties} room={r} />
-                  <RoomLabel parties={parties} room={r} onSaved={() => void load()} />
-                </div>
-              );
-            }}
-            empty="No rooms. This agent has been given keys to none — which is also what it
-              looks like before an invitation has been accepted."
-          />
-          <Note>
-            Membership credentials are not shown here and cannot be: this is what the agent
-            can decrypt, taken from its own key custody. A room the principal belongs to
-            whose Welcome never arrived does not appear.
-          </Note>
-        </>
-      )}
-    </Panel>
+      <p style={{ margin: 0, flex: 1, fontSize: t.sm, color: c.text, lineHeight: 1.55, maxWidth: "92ch" }}>
+        These are the rooms your agent can <strong>open</strong> — its key custody, not its memberships.
+        Holding keys is not permission to act: whether you may write is decided by the host, from
+        credentials the room issued. A room you belong to whose Welcome never arrived is not listed.
+      </p>
+      <Button
+        kind="quiet"
+        onClick={() => {
+          setIntroHidden(true);
+          try {
+            globalThis.localStorage?.setItem(INTRO_DISMISSED, "1");
+          } catch {
+            // Per-viewer convenience only; it simply shows again.
+          }
+        }}
+      >
+        Got it
+      </Button>
+    </div>
   );
+
+  const list =
+    error ? (
+      <LoadError what="its rooms" error={error} />
+    ) : rooms === null ? (
+      <Loading what="rooms" />
+    ) : entries.length === 0 ? (
+      <div style={{ fontSize: t.sm, color: c.faint, lineHeight: 1.55 }}>
+        No rooms. This agent has been given keys to none — which is also what it looks like before an
+        invitation has been accepted.{" "}
+        {offers > 0 && (
+          <Button kind="quiet" onClick={() => setTab("offers")}>
+            See {offers === 1 ? "the offer" : `${offers} offers`} waiting
+          </Button>
+        )}
+      </div>
+    ) : (
+      <div style={{ display: "grid", gap: 22 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: t.sm, color: c.muted }}>Group by</span>
+          <Segmented<GroupBy>
+            label="Group rooms by"
+            current={by}
+            onPick={setBy}
+            options={[
+              { key: "host", label: "Where it lives" },
+              { key: "context", label: "Context" },
+            ]}
+          />
+          <span style={{ fontSize: t.sm, color: c.faint, marginLeft: "auto" }}>
+            {entries.length} {entries.length === 1 ? "room" : "rooms"}
+            {places !== entries.length ? ` · ${places} places` : ""}
+          </span>
+        </div>
+        {groupRooms(entries, hosts, by).map((g) => (
+          <section key={g.key} style={{ display: "grid", gap: 10 }}>
+            <GroupHeading group={g} names={names} />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(270px, 1fr))", gap: 12 }}>
+              {g.entries.map((e) => (
+                <RoomCard
+                  key={e.roomId + "|" + e.places.map((p) => p.member).join(",")}
+                  entry={e}
+                  agentDid={agentDid}
+                  names={names}
+                  profile={profiles[e.roomId]}
+                  community={labels[e.roomId]}
+                  onOpen={() => setOpen(e.roomId)}
+                />
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    );
 
   return (
-    <>
-      {/* First: an offer is something waiting for the member, and accepting
-          one is what puts a room in the list below. */}
-      <RoomOffers onAccepted={() => void load()} />
-      {list}
-      <CreateRoom parties={parties} contexts={contexts} onCreated={() => void load()} />
-      {/* Below the list rather than beside it: issuing is about a room the owner
-          already has, and the list is key custody — a room can appear in one and
-          not the other in both directions, so pairing them per-row would suggest
-          a correspondence that does not hold. */}
-      <IssueInRoomsName parties={parties} />
-      <RoomShares />
-    </>
+    <div style={{ display: "grid", gap: 18 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 320px", display: "grid", gap: 4 }}>
+          <h2 style={{ margin: 0, fontSize: t.xl, fontWeight: 700 }}>Data rooms</h2>
+          <p style={{ margin: 0, fontSize: t.sm, color: c.muted }}>
+            Shared spaces your agent holds keys for, grouped by where each was last found.
+          </p>
+        </div>
+        {tab !== "new" && (
+          <Button kind="primary" onClick={() => setTab("new")}>
+            New room
+          </Button>
+        )}
+      </div>
+
+      <TabStrip<Tab>
+        label="Data rooms"
+        current={tab}
+        onPick={(k) => {
+          setTab(k);
+          setOpen(null);
+        }}
+        tabs={[
+          { key: "rooms", label: "My rooms" },
+          {
+            key: "offers",
+            label: (
+              <>
+                Offers
+                {offers > 0 && <Pill tone="accent">{offers}</Pill>}
+              </>
+            ),
+          },
+          { key: "shared", label: "Shared with sites" },
+          { key: "owner", label: "Owner tools" },
+          ...(tab === "new" ? [{ key: "new" as const, label: "New room" }] : []),
+        ]}
+      />
+
+      {tab === "rooms" &&
+        (opened ? (
+          <RoomDetail
+            key={opened.roomId}
+            parties={parties}
+            entry={opened}
+            host={hosts[opened.roomId]}
+            community={labels[opened.roomId]}
+            profile={profiles[opened.roomId]}
+            names={names}
+            onBack={() => setOpen(null)}
+            onChanged={() => void load()}
+            onHost={(host) => remember(opened.roomId, host, "used")}
+          />
+        ) : (
+          <>
+            {intro}
+            {list}
+          </>
+        ))}
+
+      {/* Mounted whatever the tab, hidden when not current: it polls, and its
+          count is the tab's badge. Accepting one is what puts a room in the list. */}
+      <div hidden={tab !== "offers"}>
+        <RoomOffers onAccepted={() => void load()} onCount={setOffers} />
+      </div>
+
+      {tab === "shared" && <RoomShares />}
+
+      {/* Its own tab rather than per room: issuing is about a room the owner
+          has, and the list is key custody — a room can appear in one and not
+          the other in both directions, so pairing them per card would suggest a
+          correspondence that does not hold. */}
+      {tab === "owner" && <IssueInRoomsName parties={parties} />}
+
+      {tab === "new" && (
+        <div style={{ display: "grid", gap: 10 }}>
+          <Button kind="quiet" onClick={() => setTab("rooms")} style={{ justifySelf: "start", paddingLeft: 0 }}>
+            ← All rooms
+          </Button>
+          <CreateRoom
+            parties={parties}
+            contexts={contexts}
+            onCreated={({ roomId, host }) => {
+              remember(roomId, host, "created");
+              void load();
+              setTab("rooms");
+            }}
+          />
+        </div>
+      )}
+    </div>
   );
 }

@@ -22,13 +22,14 @@
 // So `Verdict` below says *what was observed*, never how alarmed to be, and
 // always says that reading still works and writing will not.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   roomsKeysBrowse,
   roomsKeysRead,
   type HeldRoom,
 } from "@openvtc/pnm-core/rooms";
 import { Button, Note } from "../../ui.js";
+import { didHost } from "../../did-display.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { Loading, LoadError, Table, type Column } from "../table.js";
@@ -36,7 +37,6 @@ import type { Parties } from "../use-vta.js";
 import type { RoomFilesPrepared } from "../../bridge-protocol.js";
 import { prepareRoomFiles, roomFileClaimOf } from "../room-files.js";
 import { GetRoomFile, PutRoomFile, RoomFilesUnavailable } from "./rooms-files.js";
-import { RoomProfileAt } from "./rooms-profile.js";
 
 const fieldStyle: React.CSSProperties = {
   boxSizing: "border-box",
@@ -272,13 +272,25 @@ function OpenedRecord({
 /**
  * Browse a room's records at a host, and open the ones that matter.
  *
- * The host is asked for rather than remembered, for the same reason
- * `FetchHistory` asks: nothing maps a room to its host, a room is portable, and
- * a room may have more than one — a mirror serving reads while its primary takes
- * writes.
+ * Nothing authoritative maps a room to its host — a room is portable, and may
+ * have more than one, a mirror serving reads while its primary takes writes —
+ * so `host` is only where this wallet last found it (`room-hosts.ts`). Given
+ * one, the listing starts there and offers *Change*; without one, it asks.
+ * `onListed` hears each host that answered, so the pane can remember it.
  */
-export function RoomRecords({ parties, room }: { parties: Parties; room: HeldRoom }) {
-  const [hostDid, setHostDid] = useState("");
+export function RoomRecords({
+  parties,
+  room,
+  host: knownHost,
+  onListed,
+}: {
+  parties: Parties;
+  room: HeldRoom;
+  host?: string | undefined;
+  onListed?: ((host: string) => void) | undefined;
+}) {
+  const [hostDid, setHostDid] = useState(knownHost ?? "");
+  const [askHost, setAskHost] = useState(!knownHost);
   const [rows, setRows] = useState<RecordRow[] | null>(null);
   const [verification, setVerification] = useState<Verification | null>(null);
   const [complete, setComplete] = useState<boolean | undefined>(undefined);
@@ -290,9 +302,11 @@ export function RoomRecords({ parties, room }: { parties: Parties; room: HeldRoo
   const [prepared, setPrepared] = useState<RoomFilesPrepared | null>(null);
   const [filesError, setFilesError] = useState<string | null>(null);
 
-  const browse = useCallback(async () => {
-    const host = hostDid.trim();
+  const started = useRef(false);
+  const browse = useCallback(async (asked: string) => {
+    const host = asked.trim();
     if (!host) return;
+    started.current = true;
     setBusy(true);
     setError(null);
     setRows(null);
@@ -312,11 +326,23 @@ export function RoomRecords({ parties, room }: { parties: Parties; room: HeldRoo
       setRows((res.records ?? []) as unknown as RecordRow[]);
       setVerification(res.verification as unknown as Verification);
       setComplete(res.complete);
+      setAskHost(false);
+      onListed?.(host);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      // A host that did not answer is one to correct, so the field comes back.
+      setAskHost(true);
     }
     setBusy(false);
-  }, [parties, room, hostDid]);
+  }, [parties, room, onListed]);
+
+  // Where the room was last found: list it straight away, once — and not again
+  // when the host this listing just found comes back down as the known one.
+  useEffect(() => {
+    if (started.current || !knownHost) return;
+    started.current = true;
+    void browse(knownHost);
+  }, [knownHost, browse]);
 
   const columns: Column<RecordRow>[] = [
     {
@@ -348,28 +374,39 @@ export function RoomRecords({ parties, room }: { parties: Parties; room: HeldRoo
 
   return (
     <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-        <label style={{ display: "grid", gap: 4, flex: "1 1 22rem" }}>
-          <span style={{ fontSize: t.xs, color: c.muted }}>
-            HOST DID <span style={{ color: c.faint }}>— who serves this room</span>
-          </span>
-          <input
-            style={fieldStyle}
-            value={hostDid}
-            onChange={(e) => setHostDid(e.target.value)}
-          />
-        </label>
-        <Button disabled={busy || !hostDid.trim()} onClick={() => void browse()}>
-          {busy ? "Listing…" : "List the records"}
-        </Button>
-      </div>
+      {askHost ? (
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <label style={{ display: "grid", gap: 4, flex: "1 1 22rem" }}>
+            <span style={{ fontSize: t.xs, color: c.muted }}>
+              HOST DID <span style={{ color: c.faint }}>— who serves this room</span>
+            </span>
+            <input
+              style={fieldStyle}
+              value={hostDid}
+              onChange={(e) => setHostDid(e.target.value)}
+            />
+          </label>
+          <Button disabled={busy || !hostDid.trim()} onClick={() => void browse(hostDid)}>
+            {busy ? "Listing…" : "List the records"}
+          </Button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: t.sm, color: c.muted }}>
+          <span>Served by</span>
+          <strong style={{ color: c.text, fontWeight: 600 }} title={listedHost || hostDid}>
+            {didHost(listedHost || hostDid) ?? listedHost ?? hostDid}
+          </strong>
+          <Button kind="quiet" onClick={() => setAskHost(true)}>
+            Change
+          </Button>
+          <Button kind="quiet" disabled={busy} onClick={() => void browse(listedHost || hostDid)}>
+            {busy ? "Listing…" : "Refresh"}
+          </Button>
+        </div>
+      )}
 
       {error && <LoadError what="this room's records" error={error} />}
       {busy && rows === null && !error && <Loading what="records" />}
-
-      {rows !== null && listedHost && (
-        <RoomProfileAt parties={parties} roomId={room.roomId} member={room.member} host={listedHost} />
-      )}
 
       {rows !== null && (
         <>
@@ -398,7 +435,7 @@ export function RoomRecords({ parties, room }: { parties: Parties; room: HeldRoo
           )}
           {filesError && <RoomFilesUnavailable error={filesError} />}
           {prepared && (
-            <PutRoomFile room={room} host={listedHost} prepared={prepared} onPut={() => void browse()} />
+            <PutRoomFile room={room} host={listedHost} prepared={prepared} onPut={() => void browse(listedHost)} />
           )}
         </>
       )}

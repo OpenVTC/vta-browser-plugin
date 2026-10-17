@@ -242,7 +242,8 @@ export function CreateRoom({
 }: {
   parties: Parties;
   contexts: ContextRecord[];
-  onCreated: () => void;
+  /** The room just registered, and the host it was registered with. */
+  onCreated: (created: { roomId: string; host: string }) => void;
 }) {
   // ── Step 1: the context ──
   const [contextId, setContextId] = useState("");
@@ -580,7 +581,7 @@ export function CreateRoom({
       // A name is one room's; kept, the next room would ask for a taken path.
       setRoomPath(SERVER_CHOOSES);
       setListsVersion((v) => v + 1);
-      onCreated();
+      onCreated({ roomId: room!.did, host: hostDid });
     }
   }, [
     parties, identity, contextId, serverId, roomPath, roomTsp, mediatorDid, hostDid, visibility, retention,
