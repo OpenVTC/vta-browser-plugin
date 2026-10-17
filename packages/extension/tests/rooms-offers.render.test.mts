@@ -117,8 +117,8 @@ test("a new offer is marked new, can be accepted, and is not yet a room", async 
   assert.match(text, /Pricing/);
   assert.ok(screen.all("span").some((el) => el.textContent === "new"), "marked new");
   assert.ok(screen.button("Accept"));
-  assert.match(text, /Not in your rooms/);
-  assert.match(text, /Not shared/);
+  assert.match(text, /Joined\s*not yet/);
+  assert.match(text, /On its website\s*not shared/);
   await screen.unmount();
 });
 
@@ -142,8 +142,12 @@ test("offered, held and shared is one row across the lane, with the share revoca
   });
   const text = screen.text();
   assert.match(text, /whole history/);
-  assert.match(text, /portal\.northwind\.example/);
-  assert.ok(screen.button("Revoke"));
+  assert.match(text, /portal\.northwind\.example · until/);
+  assert.ok(screen.button("Stop sharing"));
+  // Titled by the site a member signs in to, not the DID's own host; the room
+  // is named once, not once per step.
+  assert.equal(screen.all("h3")[0]!.textContent, "portal.northwind.example");
+  assert.equal((text.match(/Pricing/g) ?? []).length, 1);
   assert.doesNotMatch(text, /elsewhere/, "a share made through another agent is not this agent's");
   await screen.unmount();
 });
