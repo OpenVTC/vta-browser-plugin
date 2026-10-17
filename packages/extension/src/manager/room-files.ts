@@ -74,9 +74,19 @@ export interface RoomFileTarget {
   member?: string;
 }
 
+/**
+ * How long a transfer may go without a word from the offscreen document before
+ * it is given up. Every step sends progress, so silence this long is a
+ * document that has gone, not a slow one — and the background worker holds the
+ * port too (see `background.ts`), so its going is otherwise unheard.
+ */
+export const TRANSFER_STALL_MS = 90_000;
+
 export interface TransferOptions {
   onProgress?: (p: RoomFilesProgress) => void;
   signal?: AbortSignal;
+  /** Replaced only by tests; {@link TRANSFER_STALL_MS} otherwise. */
+  stallMs?: number;
   /** Replaced only by tests. */
   connect?: () => chrome.runtime.Port;
   /** Replaced only by tests. */
@@ -107,9 +117,22 @@ function transfer<T>(
     let settled = false;
     const since = Date.now();
     let heard = 0;
+    let stall: ReturnType<typeof setTimeout> | undefined;
+    const quiet = opts.stallMs ?? TRANSFER_STALL_MS;
+    const watch = () => {
+      if (stall !== undefined) clearTimeout(stall);
+      stall = setTimeout(
+        () =>
+          settle(() =>
+            reject(new RoomFilesError(`no word from the wallet's background document for ${Math.round(quiet / 1000)} s`, "stalled")),
+          ),
+        quiet,
+      );
+    };
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
+      if (stall !== undefined) clearTimeout(stall);
       opts.signal?.removeEventListener("abort", onAbort);
       fn();
       try {
@@ -126,6 +149,7 @@ function transfer<T>(
       const m = raw as RoomFilesMessage;
       if (settled) return;
       heard++;
+      watch();
       if (m.kind === "progress") {
         opts.onProgress?.(m);
         return;
@@ -155,6 +179,7 @@ function transfer<T>(
     });
 
     port.postMessage(open);
+    watch();
     if (upload) {
       upload((m) => {
         if (!settled) port.postMessage(m);

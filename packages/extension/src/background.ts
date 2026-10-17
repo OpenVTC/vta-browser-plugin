@@ -789,14 +789,21 @@ async function refreshPendingBadge(): Promise<void> {
 void refreshPendingBadge();
 
 // A room-file transfer runs between the console and the offscreen document.
-// This worker is not part of it, but every extension context with an
-// `onConnect` listener receives the port, and the console's end hears a
-// disconnect only once *every* other end has closed. Holding this one would
-// leave the console waiting forever on an offscreen document that has gone, so
-// it is let go at once.
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name === ROOM_FILES_PORT) port.disconnect();
-});
+// This worker is not part of it, but every extension context receives the
+// port, this one included — and it must leave it alone. **`port.disconnect()`
+// from any one receiver closes the whole channel**: the console's end hears
+// it at once while the offscreen document, never told, carries on with a
+// transfer nobody is reading. This worker used to "let it go at once", and
+// every console download failed 1–2 ms after it began, with no message heard
+// ("the wallet's background document closed before the transfer finished").
+//
+// A receiver that merely goes away — this worker idling out, a document
+// unloading — only drops itself, so ignoring the port is safe. What holding it
+// costs is the case the old line was guarding: an offscreen document that dies
+// mid-transfer is not heard of while this worker still holds its end. The
+// console's stall timeout covers that (`TRANSFER_STALL_MS`, room-files.ts).
+//
+// So there is deliberately no `onConnect` listener for ROOM_FILES_PORT here.
 
 // ── Data rooms for a page (P7b) ─────────────────────────────────────────────
 //
