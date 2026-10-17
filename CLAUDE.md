@@ -1025,6 +1025,72 @@ console row without naming its member (the VTA refuses, and it must); keying a
 row or a tick by room alone; or adding a `rooms/*` URI to `provider.js`,
 `content.js` or `background.js` — CI fails the build on the last.
 
+## A community's offers of its rooms: accepted from the wallet, as the member
+
+A community that owns a room offers its members admission
+(`vtc/rooms/community/members/add`). The wallet lists and accepts those offers
+the way `pnm rooms offers list|accept` does (VTI
+`vta-cli-common::commands::rooms`), so a member never needs the CLI: from the
+console's Data rooms page (**Offers**, `manager/panes/rooms-offers.tsx`) and
+from the community's own portal (`window.vtaWallet.rooms.{offers,acceptOffer}`).
+
+**Who is asked, and as whom, comes from the wallet's own sign-in record.** Each
+`didSelfIssued` vault entry names an identity (`principalDid`) and the
+community it signs in to (`targets[].did`); `offerSources`
+(`room-offers-policy.ts`) turns those into (community, member) pairs, and only
+those are asked — **never the community's own DID**, which an administrator's
+agent also holds. The offscreen document re-reads the pairs beside the keys
+rather than trusting the caller. The community's endpoint is its DID document's
+`TrustTaskHTTPS` (`roomHostEndpoint`), never guessed, and nothing is read from a
+community the member has not let the wallet reach (the console's *Allow* button
+asks in the click). One community's offers to one identity are read at most
+once a minute (`OFFERS_LIST_INTERVAL_MS`); the console polls every five minutes
+while open.
+
+**Every request is the member's, completed by the VTA.** The list and the
+acceptance are built unsigned and completed as the member with
+`rooms/keys/act/0.3` (the version that admits the offer types; a VTA without it
+gets "must be updated"), then sent to the community unchanged over HTTPS;
+`roomsKeysAct` refuses an answer made as anyone else. On a sealed tier the
+**VTA mints the KeyPackage** (`rooms/keys/key-package`) — act 0.3 completes an
+acceptance only with one it minted — and joins from the Welcome
+(`rooms/keys/welcome`). The offer's membership and authority credentials go
+into the VTA's vault first (`vault/credentials/receive`). All of it is
+`@openvtc/pnm-core/rooms`'s `acceptCommunityRoomOffer`, run in the offscreen
+document (`room-offers-offscreen.ts`); the background (`room-offers-background.ts`)
+names no rooms task.
+
+**A lost answer is retried with the same KeyPackage.** The community answers a
+repeat carrying the same KeyPackage with the same Welcome, and one carrying a
+different KeyPackage with `alreadyAccepted` — after which only an administrator
+can help. So the KeyPackage is journaled (IndexedDB, `OFFER_ACCEPT_PREFIX`)
+**before** the acceptance leaves, every later attempt sends that one, and the
+journal is dropped only once the VTA has joined (an `alreadyJoined` from
+`rooms/keys/welcome` counts). An offer with an accept in progress shows *Finish
+accepting*.
+
+**Accepting is the member's decision, in the wallet's window.** Console or
+portal, `RoomOffers.accept` raises `confirm.html?kind=room` with an `offer`
+view (`room-offer-consent.tsx`) naming the community, the room (its label,
+marked as the community's), the identity it joins as and what accepting does.
+There is no "remember". The portal sees views only (`PageOfferView`: never an
+offer's credentials, a KeyPackage or a Welcome), only for the community whose
+`SignInPortal` it is, and only for identities the wallet uses there; a page
+cannot have the wallet sign or request a `vtc/rooms/offers/*` task
+(`page-task-policy.ts`). Errors carry the core's stable code
+(`RoomOfferError.code`), and a capability refusal prints the
+`pnm acl update <wallet DID> --capabilities-all` that restores it.
+
+**The badge counts offers below approvals.** An approval holds up an operation,
+so it keeps the badge (red); with none waiting the badge shows the last
+listing's open offers for the active agent (blue).
+
+**What breaks it:** minting a KeyPackage anywhere but the member's VTA; sending
+an acceptance before its KeyPackage is journaled, or a different KeyPackage on a
+retry; asking as the community's DID, or as an identity the sign-in record does
+not name; passing an offer's credentials to the console or a page; accepting
+without the window; or importing `@openvtc/pnm-core/rooms` into the background.
+
 ## The Mediator Lens: the relay, seen from inside
 
 `manager/panes/mediator.tsx` asks the **mediator**, not the agent. An Affinidi

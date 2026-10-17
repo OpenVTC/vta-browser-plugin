@@ -215,6 +215,12 @@ import {
 } from "./bridge-protocol.js";
 import { installRoomFilesPort, resolveRoomHostEndpoint } from "./room-files-offscreen.js";
 import { runRoomsPageOp } from "./room-page-offscreen.js";
+import { OfferOpError, runRoomOffersOp } from "./room-offers-offscreen.js";
+import {
+  OFFSCREEN_ROOM_OFFERS,
+  type OffscreenRoomOffersRequest,
+  type OffscreenRoomOffersResponse,
+} from "./bridge-protocol.js";
 import {
   OFFSCREEN_ROOMS_PAGE,
   type OffscreenRoomsPageRequest,
@@ -641,6 +647,41 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       .then((result) => sendResponse({ ok: true, result } satisfies OffscreenRoomsPageResponse))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) } satisfies OffscreenRoomsPageResponse),
+      );
+    return true; // async sendResponse
+  }
+
+  if (msg.type === OFFSCREEN_ROOM_OFFERS) {
+    // Only the background sends this — for the console, or for a community's
+    // own portal after its gates (`room-offers-background.ts`). A content
+    // script reaching this listener directly is refused.
+    if (!isExtensionContextSender(sender)) {
+      sendResponse({ ok: false, error: "room offers are asked for by the wallet" } satisfies OffscreenRoomOffersResponse);
+      return false;
+    }
+    const req = message as OffscreenRoomOffersRequest;
+    runRoomOffersOp(
+      {
+        async agent(vtaDid, restBaseUrl) {
+          const { session } = await getVtaSession(vtaDid, restBaseUrl);
+          const { signing } = await loadHolder(vtaDid);
+          return { sender: session, holderDid: signing.did };
+        },
+        // Where the member signs in: the sign-in flow's own listing.
+        identities: (vtaDid, restBaseUrl) => listSelfIssued(vtaDid, restBaseUrl),
+        // An accept in progress, kept so a repeat sends the same key package.
+        journal: new IndexedDBKVStore(),
+      },
+      { vtaDid: req.vtaDid, ...(req.restBaseUrl ? { restBaseUrl: req.restBaseUrl } : {}) },
+      req.params,
+    )
+      .then((result) => sendResponse({ ok: true, result } satisfies OffscreenRoomOffersResponse))
+      .catch((e: unknown) =>
+        sendResponse({
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+          ...(e instanceof OfferOpError && e.code ? { code: e.code } : {}),
+        } satisfies OffscreenRoomOffersResponse),
       );
     return true; // async sendResponse
   }

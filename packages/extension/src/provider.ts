@@ -37,6 +37,7 @@ import type {
   PageRecordView,
   RoomFilesPageMessage,
 } from "./bridge-protocol.js";
+import type { PageOfferView } from "./room-offers-policy.js";
 
 // Bundled as a standalone page-world script, so it must be self-contained
 // (no shared-chunk imports). Inline the protocol constants — keep in sync
@@ -216,6 +217,24 @@ export interface VtaWalletRooms {
   browse(params: { hostDid: string; roomId: string; prefix?: string; sinceVersion?: number }): Promise<PageListingView>;
   /** One record, verified. */
   read(params: { hostDid: string; roomId: string; key: string }): Promise<PageRecordView>;
+  /** This community's offers of its rooms to the identities the member uses
+   *  here: label, tier, actions and dates — never an offer's credentials. Never
+   *  prompts. `needsOrigin` when the member has not yet let the wallet reach
+   *  the community (they allow it from the wallet's console, or when sharing a
+   *  room here). */
+  offers(params: { hostDid: string }): Promise<{ offers: PageOfferView[]; needsOrigin?: string }>;
+  /** Ask the member to accept one offer. The wallet shows its own window naming
+   *  the community, the room and the identity it joins as; the member decides
+   *  there. `member` picks among the identities offered the room. To use the
+   *  room here afterwards, share it (`choose`, with `suggest: roomId`). */
+  acceptOffer(params: { hostDid: string; roomId: string; member?: string }): Promise<{
+    roomId: string;
+    member: string;
+    visibility: string;
+    joined: boolean;
+    epoch?: number;
+    resumed: boolean;
+  }>;
   /** Write a note as the member, after they confirm it. */
   putNote(params: {
     hostDid: string;
@@ -502,6 +521,14 @@ if (!window.vtaWallet) {
       browse: (p) => call("rooms", { ...p, op: "browse" }),
       read: (p) => call("rooms", { op: "read", hostDid: p.hostDid, roomId: p.roomId, key: p.key }),
       putNote: (p) => call("rooms", { ...p, op: "putNote" }),
+      offers: (p) => call("rooms", { op: "offers", hostDid: p.hostDid }),
+      acceptOffer: (p) =>
+        call("rooms", {
+          op: "acceptOffer",
+          hostDid: p.hostDid,
+          roomId: p.roomId,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+        }),
       getFile: getRoomFile,
       putFile: putRoomFile,
     },

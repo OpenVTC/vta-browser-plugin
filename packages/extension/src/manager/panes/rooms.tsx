@@ -39,6 +39,7 @@ import { FetchHistory } from "./rooms-backfill.js";
 import { RoomRecords } from "./rooms-records.js";
 import { IssueInRoomsName } from "./rooms-owner.js";
 import { RoomShares } from "./rooms-shares.js";
+import { RoomOffers } from "./rooms-offers.js";
 import { rememberedRoomLabels } from "../../room-page-policy.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
@@ -245,6 +246,9 @@ export function RoomsPane({
 
   return (
     <>
+      {/* First: an offer is something waiting for the member, and accepting
+          one is what puts a room in the list below. */}
+      <RoomOffers onAccepted={() => void load()} />
       {list}
       <CreateRoom parties={parties} contexts={contexts} onCreated={() => void load()} />
       {/* Below the list rather than beside it: issuing is about a room the owner

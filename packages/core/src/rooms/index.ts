@@ -868,3 +868,7 @@ export * from "./act.js";
 
 // A community's offers of its own rooms, read as the member — for their names.
 export * from "./offers.js";
+
+// Accepting one of those offers: credentials into the VTA, a KeyPackage it
+// mints, the acceptance as the member, and the Welcome back to the VTA.
+export * from "./offer-accept.js";

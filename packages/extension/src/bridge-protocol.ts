@@ -2433,6 +2433,11 @@ export type RoomsPageOp =
   | { op: "info"; hostDid: string; roomId: string }
   | { op: "browse"; hostDid: string; roomId: string; prefix?: string; sinceVersion?: number }
   | { op: "read"; hostDid: string; roomId: string; key: string }
+  /** This community's offers of its rooms to the identities the member uses here. Never prompts. */
+  | { op: "offers"; hostDid: string }
+  /** Ask to accept one: the member decides in the wallet's own window. `member`
+   *  picks among the identities offered the room, never adds one. */
+  | { op: "acceptOffer"; hostDid: string; roomId: string; member?: string }
   | {
       op: "putNote";
       hostDid: string;
@@ -3010,3 +3015,82 @@ export type RoomFilesMessage =
       tags?: string[];
     }
   | { kind: "failed"; error: string; code?: string };
+
+// ── A community's offers of its rooms ───────────────────────────────────────
+//
+// `vtc/rooms/offers/{list,accept}/0.1`, as the member, from the wallet: the
+// console's Data rooms page lists the offers of every community the member
+// signs in to, and accepts one after the member confirms it in the wallet's own
+// window. The work runs in the offscreen document (`room-offers-offscreen.ts`);
+// the background decides who may ask and raises the confirm window
+// (`room-offers-background.ts`). See `room-offers-policy.ts`.
+
+/** console → background: list offers, or accept one. Extension pages only. */
+export const RUNTIME_ROOM_OFFERS = "vta-wallet/room-offers" as const;
+
+export type RoomOffersConsoleOp =
+  /** Every community the member signs in to, and its offers to each identity used there. `force` reads afresh. */
+  | { op: "overview"; force?: boolean }
+  /** Accept one offer, after the member confirms it in the wallet's window. */
+  | { op: "accept"; communityDid: string; member: string; roomId: string };
+
+export interface RuntimeRoomOffersRequest {
+  type: typeof RUNTIME_ROOM_OFFERS;
+  params: RoomOffersConsoleOp;
+}
+
+export type RuntimeRoomOffersResponse = { ok: true; result: unknown } | { ok: false; error: string; code?: string };
+
+/** One community in the console's overview. */
+export interface OffersCommunityView {
+  communityDid: string;
+  /** The community's Trust-Task origin, from its DID document. */
+  endpointOrigin?: string;
+  /** False until the member lets the wallet reach `endpointOrigin` (asked in a click). */
+  reachable: boolean;
+  /** Why the community's endpoint could not be found. */
+  error?: string;
+  members: { member: string; offers: import("./room-offers-policy.js").OfferView[]; error?: string; code?: string }[];
+}
+
+export interface OffersOverview {
+  vtaDid: string;
+  communities: OffersCommunityView[];
+  /** Offers that wait for the member: what the badge shows. */
+  openCount: number;
+  readAt: string;
+}
+
+/** What an accept reports back. */
+export interface OfferAcceptedView {
+  communityDid: string;
+  member: string;
+  roomId: string;
+  visibility: string;
+  joined: boolean;
+  epoch?: number;
+  resumed: boolean;
+}
+
+/** background → offscreen: the offer work. */
+export const OFFSCREEN_ROOM_OFFERS = "offscreen/room-offers" as const;
+
+export type OffscreenRoomOffersOp =
+  /** Every (community, member) the wallet's sign-in entries name. */
+  | { op: "sources" }
+  /** The community's Trust-Task dispatcher URL, from its DID document. */
+  | { op: "endpoint"; communityDid: string }
+  /** The community's offers to `member`, as views (no credential). */
+  | { op: "list"; communityDid: string; member: string }
+  /** Accept one; the member has confirmed it. */
+  | { op: "accept"; communityDid: string; member: string; roomId: string };
+
+export interface OffscreenRoomOffersRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_ROOM_OFFERS;
+  vtaDid: string;
+  restBaseUrl?: string;
+  params: OffscreenRoomOffersOp;
+}
+
+export type OffscreenRoomOffersResponse = { ok: true; result: unknown } | { ok: false; error: string; code?: string };
