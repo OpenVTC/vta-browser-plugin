@@ -347,8 +347,13 @@ export function GetRoomFile({
           }
           await show(res);
         } catch (e) {
+          // A transfer stopped because its row was left, or its effect was
+          // re-run (React's development double mount), is not a failure, and
+          // must not overwrite what the run that replaced it says.
+          if (ctl.signal.aborted && stop.current !== ctl) return;
           setError(e instanceof Error ? e.message : String(e));
         }
+        if (stop.current !== ctl) return;
         stop.current = null;
         setLine(null);
         setBusy(false);
@@ -367,7 +372,21 @@ export function GetRoomFile({
     started.current = true;
     setAuto(true);
     run("preview", Promise.resolve(true), true);
-  }, [autoPreview, prepared, claim, run]);
+    // Undone with the effect, so a re-run starts it again rather than finding
+    // it marked started and aborted.
+    return () => {
+      if (stop.current) {
+        const ctl = stop.current;
+        stop.current = null;
+        ctl.abort();
+      }
+      started.current = false;
+    };
+    // Keyed on the claim's fields, not the object: the record row parses a new
+    // one every render, and re-running this would abort the fetch each time.
+    // `run` changes when the fetch lands (`got`), which must not re-run it either.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoPreview, prepared?.granted, claim.name, claim.size, claim.mediaType]);
 
   const file = got ? got.file : claim;
   const name = safeFileName(file.name);
