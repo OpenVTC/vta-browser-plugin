@@ -3083,6 +3083,12 @@ export interface OffersCommunityView {
 export interface OffersOverview {
   vtaDid: string;
   communities: OffersCommunityView[];
+  /**
+   * Parties the member signs in to that make no room offers — no
+   * `TrustTaskHTTPS` service, or `vtc/rooms/offers/list` not served (code
+   * `noRoomOffers`). Left out of `communities`: nothing there to act on.
+   */
+  noOffers: string[];
   /** Offers that wait for the member: what the badge shows. */
   openCount: number;
   readAt: string;

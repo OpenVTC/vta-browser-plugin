@@ -27,6 +27,16 @@
 // actions, the dates. Never an offer's credentials. Accepting is the member's
 // decision in the wallet's own window; the page only asks.
 
+/**
+ * The code of a party that makes no room offers: it advertises no
+ * `TrustTaskHTTPS` service, or answers `vtc/rooms/offers/list` with
+ * `unsupportedType` / `unsupportedVersion` (a DID-hosting service the member
+ * signs in to, a community without rooms). Every party the member signs in to
+ * is a source, so this is the ordinary answer of most of them — nothing the
+ * member can act on, and never shown as an error.
+ */
+export const NO_ROOM_OFFERS = "noRoomOffers";
+
 /** A `didSelfIssued` vault entry, as much of one as the sources need (`membersAt` reads the same). */
 export interface SignInVaultEntryLike {
   secretKind: string;

@@ -114,3 +114,90 @@ test("names are taken from offers that carry a label, trimmed and bounded", () =
   assert.equal(names["did:key:zLong"].label.length, 200);
   assert.equal(names["did:key:zNoLabel"], undefined);
 });
+
+// ── Who a failed read is blamed on ──────────────────────────────────────────
+//
+// Reading offers asks two parties in turn: the member's VTA completes the
+// request (`rooms/keys/act/0.3`), then the community answers it. The same
+// refusal code means different things from each, so it is mapped by the party
+// that produced it — a DID-hosting service the member signs in to, which has
+// no rooms, must not read as the member's agent lacking act 0.3.
+
+import { offerListRefusal, OfferReadError } from "../dist/rooms/index.js";
+import { isNoTrustTaskService, NoTrustTaskServiceError, roomHostEndpoint } from "../dist/rooms/files.js";
+import { VtaClientError } from "../dist/index.js";
+
+const refusal = (code) => new VtaClientError("e.p.msg.bad_request", `refused: ${code}`, { details: { code } });
+
+function readerWith({ vtaSend, communitySend }) {
+  return {
+    holder: WALLET,
+    vta: { did: VTA.did, sender: vtaSend ? { send: vtaSend } : vta() },
+    community: { did: COMMUNITY, sender: { sendCompleted: communitySend ?? (async () => ({ items: [] })) } },
+    member: MEMBER,
+  };
+}
+
+async function failedRead(reader) {
+  try {
+    await communityRoomOffers(reader);
+  } catch (e) {
+    return { raw: e, mapped: offerListRefusal(e, reader) };
+  }
+  assert.fail("the read did not fail");
+}
+
+for (const code of ["unsupportedType", "vtc/rooms/offers/list:unsupportedVersion"]) {
+  test(`a community answering ${code} to offers/list makes no room offers — it is not the agent lacking act 0.3`, async () => {
+    const reader = readerWith({ communitySend: async () => { throw refusal(code); } });
+    const { raw, mapped } = await failedRead(reader);
+    assert.ok(raw instanceof OfferReadError && raw.stage === "community", "the read names the community as the source");
+    assert.equal(mapped.code, "noRoomOffers");
+    assert.doesNotMatch(mapped.message, /act 0\.3|Your agent/);
+    assert.match(mapped.message, /QmCommunity/);
+  });
+}
+
+test("the VTA refusing act with unsupportedType is still the agent lacking act 0.3", async () => {
+  let reached = false;
+  const reader = readerWith({
+    vtaSend: async () => { throw refusal("unsupportedType"); },
+    communitySend: async () => { reached = true; return { items: [] }; },
+  });
+  const { raw, mapped } = await failedRead(reader);
+  assert.equal(raw.stage, "act");
+  assert.equal(mapped.code, "actUnsupported");
+  assert.match(mapped.message, /rooms\/keys\/act 0\.3/);
+  assert.equal(reached, false, "nothing reached the community");
+});
+
+test("a community refusing the member, or not answering, is a real failure — and it is the community's", async () => {
+  const denied = await failedRead(readerWith({ communitySend: async () => { throw refusal("permissionDenied"); } }));
+  assert.equal(denied.mapped.code, "communityRefused");
+  assert.match(denied.mapped.message, /QmCommunity/);
+  assert.doesNotMatch(denied.mapped.message, /Your agent|room-present/, "never blamed on the member's VTA");
+
+  const down = await failedRead(
+    readerWith({ communitySend: async () => { throw new VtaClientError("e.client.network", "room host could not be reached"); } }),
+  );
+  assert.equal(down.mapped.code, "noAnswer");
+  assert.equal(down.mapped.retryable, true);
+  assert.match(down.mapped.message, /community\.example did not answer/);
+
+  const notMember = await failedRead(readerWith({ communitySend: async () => { throw refusal("notAMember"); } }));
+  assert.equal(notMember.mapped.code, "notAMember");
+
+  const vtaDenied = await failedRead(readerWith({ vtaSend: async () => { throw refusal("permissionDenied"); } }));
+  assert.equal(vtaDenied.mapped.code, "capability", "the VTA's own refusal is still the agent's");
+});
+
+test("a party advertising no TrustTaskHTTPS service is told apart by type, not by its words", async () => {
+  const doc = { id: COMMUNITY, service: [{ id: "#didcomm", type: "DIDCommMessaging", serviceEndpoint: "did:web:mediator.example" }] };
+  await assert.rejects(roomHostEndpoint(COMMUNITY, async () => doc), (e) => {
+    assert.ok(e instanceof NoTrustTaskServiceError);
+    assert.ok(isNoTrustTaskService(e));
+    assert.equal(e.code, "e.client.parse");
+    return true;
+  });
+  assert.equal(isNoTrustTaskService(new VtaClientError("e.client.parse", "advertises no TrustTaskHTTPS service")), false);
+});

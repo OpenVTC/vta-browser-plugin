@@ -12,6 +12,11 @@
 // CLI does it (`room-offers-offscreen.ts`). Nothing here sees an offer's
 // credentials, a key package or a Welcome.
 //
+// A party the member signs in to that makes no room offers — a DID-hosting
+// service, a community without rooms (`noOffers`) — is left off the card: it is
+// not a failure and there is nothing to do about it. A community that does
+// serve offers and failed keeps its error, named as whoever produced it.
+//
 // The list is read when the page opens and every five minutes while it stays
 // open; the background reads one community's offers to one identity at most
 // once a minute whatever asks.
@@ -147,6 +152,10 @@ export function RoomOffers({ onAccepted }: { onAccepted?: () => void }) {
       {error && <Note tone="danger">Offers could not be read: {error}</Note>}
       {overview === null ? (
         error ? null : <div style={{ fontSize: t.sm, color: c.muted }}>Reading offers…</div>
+      ) : communities.length === 0 && (overview.noOffers?.length ?? 0) > 0 ? (
+        <div style={{ fontSize: t.sm, color: c.muted }}>
+          None of the places you sign in to with this wallet offers rooms.
+        </div>
       ) : communities.length === 0 ? (
         <Note>
           You do not sign in to any community with this wallet yet, so there is nobody to ask for offers. Sign in to a

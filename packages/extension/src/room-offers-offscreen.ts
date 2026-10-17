@@ -29,11 +29,12 @@ import {
   type OfferAcceptJournal,
   type OfferReader,
 } from "@openvtc/pnm-core/rooms";
-import { RoomHostChannel, roomHostEndpoint } from "@openvtc/pnm-core/rooms/files";
+import { isNoTrustTaskService, RoomHostChannel, roomHostEndpoint } from "@openvtc/pnm-core/rooms/files";
 
 import type { OffscreenRoomOffersOp } from "./bridge-protocol.js";
 import {
   isOfferSource,
+  NO_ROOM_OFFERS,
   offerLabel,
   offerSources,
   type OfferView,
@@ -72,7 +73,17 @@ export async function runRoomOffersOp(
   vta: { vtaDid: string; restBaseUrl?: string },
   op: OffscreenRoomOffersOp,
 ): Promise<unknown> {
-  const endpointOf = deps.endpoint ?? ((did: string) => roomHostEndpoint(did));
+  const resolveEndpoint = deps.endpoint ?? ((did: string) => roomHostEndpoint(did));
+  // A party that advertises nowhere to send a room request makes no room
+  // offers: a quiet outcome, told apart by its code, never a failure.
+  const endpointOf = async (did: string): Promise<string> => {
+    try {
+      return await resolveEndpoint(did);
+    } catch (e) {
+      if (isNoTrustTaskService(e)) throw new OfferOpError(e instanceof Error ? e.message : String(e), NO_ROOM_OFFERS);
+      throw e;
+    }
+  };
   if (op.op === "sources") return offerSources(await deps.identities(vta.vtaDid, vta.restBaseUrl));
   if (op.op === "endpoint") return { endpoint: await endpointOf(op.communityDid) };
 

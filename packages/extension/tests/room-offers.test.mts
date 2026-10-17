@@ -321,3 +321,83 @@ test("the offscreen listing builds views with no credential, and flags an accept
     /not an identity you sign in to/,
   );
 });
+
+// ── Parties that make no room offers ────────────────────────────────────────
+//
+// Every party the member signs in to is a source — a DID-hosting service, a
+// community without rooms — and most of them make no room offers. Advertising
+// no TrustTaskHTTPS service, or answering offers/list with unsupportedType, is
+// that ordinary answer (code `noRoomOffers`): the party is left off the card,
+// never shown as an error. A community that does serve offers and fails keeps
+// its error.
+
+import { NoTrustTaskServiceError } from "@openvtc/pnm-core/rooms/files";
+
+const HOSTING = "did:webvh:QmHosting:webvh.example";
+const OLD_VTC = "did:webvh:QmOld:webvh.example:vtc-local";
+
+function quietHarness(list: Record<string, { ok: true; result: OfferView[] } | { ok: false; error: string; code?: string }>) {
+  const sources = [
+    { communityDid: COMMUNITY, members: [MEMBER] },
+    { communityDid: HOSTING, members: [MEMBER] },
+    { communityDid: OLD_VTC, members: [MEMBER] },
+  ];
+  return harness({
+    async offscreen(_vta, op) {
+      switch (op.op) {
+        case "sources":
+          return { ok: true, result: sources };
+        case "endpoint":
+          return op.communityDid === OLD_VTC
+            ? { ok: false, error: `${OLD_VTC} advertises no TrustTaskHTTPS service`, code: "noRoomOffers" }
+            : { ok: true, result: { endpoint: op.communityDid === HOSTING ? "https://webvh.example/trust-tasks" : ENDPOINT } };
+        case "list":
+          return list[op.communityDid] ?? { ok: true, result: [] };
+      }
+      return { ok: false, error: `unexpected ${op.op}` };
+    },
+  });
+}
+
+test("a party with no TrustTaskHTTPS, or that does not serve offers/list, is left off the card — not an error", async () => {
+  const h = quietHarness({
+    [COMMUNITY]: { ok: true, result: [view()] },
+    [HOSTING]: { ok: false, error: `${HOSTING} makes no room offers`, code: "noRoomOffers" },
+  });
+  const o = await h.offers.overview();
+  assert.deepEqual(o.communities.map((c) => c.communityDid), [COMMUNITY]);
+  assert.deepEqual(o.noOffers.sort(), [HOSTING, OLD_VTC].sort());
+  assert.equal(o.openCount, 1);
+});
+
+test("a community that serves offers and fails keeps its error, attributed to it", async () => {
+  const h = quietHarness({
+    [COMMUNITY]: { ok: false, error: `${COMMUNITY} did not answer the request for its offers`, code: "noAnswer" },
+  });
+  const o = await h.offers.overview();
+  const c = o.communities.find((x) => x.communityDid === COMMUNITY)!;
+  assert.equal(c.members[0]!.code, "noAnswer");
+  assert.match(c.members[0]!.error!, /QmNorthwind/);
+});
+
+test("the portal of a party that takes no room requests sees an empty list, not a refusal", async () => {
+  const h = quietHarness({});
+  assert.deepEqual(await h.offers.forPortal({ vtaDid: VTA }, OLD_VTC, [MEMBER]), { offers: [] });
+});
+
+test("the offscreen endpoint lookup gives a party with no TrustTaskHTTPS the quiet code", async () => {
+  const deps = {
+    agent: async () => {
+      throw new Error("no agent is asked to find an endpoint");
+    },
+    identities: async () => ENTRIES,
+    journal: new InMemoryKVStore(),
+    endpoint: async (did: string) => {
+      throw new NoTrustTaskServiceError(did);
+    },
+  };
+  await assert.rejects(
+    runRoomOffersOp(deps, { vtaDid: VTA }, { op: "endpoint", communityDid: OLD_VTC }),
+    (e: Error & { code?: string }) => e.code === "noRoomOffers",
+  );
+});
