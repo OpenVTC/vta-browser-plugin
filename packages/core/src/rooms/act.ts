@@ -73,6 +73,11 @@ import {
   type RoomsRecordsPutResponsePayload as RoomsRecordsPutV1ResponsePayload,
 } from "@openvtc/trust-tasks/rooms/records/put/0.1/payload";
 import {
+  TYPE_URI as RECORDS_CURATE,
+  RESPONSE_TYPE_URI as RECORDS_CURATE_RESPONSE,
+  type RoomsRecordsCurateResponsePayload,
+} from "@openvtc/trust-tasks/rooms/records/curate/0.1/payload";
+import {
   TYPE_URI as RECORDS_PUT_V2,
   RESPONSE_TYPE_URI as RECORDS_PUT_V2_RESPONSE,
   type RoomsRecordsPutResponsePayload as RoomsRecordsPutV2ResponsePayload,
@@ -350,7 +355,12 @@ export class VersionRaceError extends Error {
 /**
  * Have the VTA sign `body` as the member and seal it, and put it as the member,
  * re-sealing at the version the host assigned whenever that is not the one
- * sealed for. Returns the version written. Create-only: the key is fresh.
+ * sealed for. Returns the version written.
+ *
+ * Create-only by default: the key is fresh, and `expectedVersion` 0 makes the
+ * host refuse it if it is not. Pass `replaces` — the version the writer read —
+ * to replace a record instead: the host refuses the put if anything has been
+ * written over it since, so an edit never silently undoes someone else's.
  *
  * The record's associated data and its signed body both name the version, and
  * the host assigns it from a room-wide counter, so the version is predicted
@@ -361,13 +371,14 @@ export async function writeSealedAsMember(
   room: PersonaRoom,
   body: UnsignedRecordBody,
   blobRef?: string,
+  opts: { replaces?: number } = {},
 ): Promise<number> {
   if (room.member !== undefined && body.author !== room.member) {
     throw new Error(`a record written as ${room.member} cannot name ${body.author} as its author`);
   }
   const vta = { holder: room.holder, service: { did: room.vta.did } };
   let intended = (await roomHeadVersionAsMember(room)) + 1;
-  let expected = 0;
+  let expected = opts.replaces ?? 0;
   let landed = 0;
   for (let attempt = 0; attempt < SEALED_WRITE_ATTEMPTS; attempt++) {
     const sealed = await roomsKeysSealAsPrincipal(room.vta.sender, vta, {
@@ -395,6 +406,64 @@ export async function writeSealedAsMember(
     intended = landed + 1;
   }
   throw new VersionRaceError(body.key, landed);
+}
+
+/**
+ * Put a record in the clear, as the member — for an `open` room, whose records
+ * the host stores and reads. `replaces`, as for {@link writeSealedAsMember}.
+ */
+export async function putCleartextAsMember(
+  room: PersonaRoom,
+  params: { key: string; title?: string; body?: string; replaces?: number },
+): Promise<number> {
+  const cleartext: Record<string, unknown> = {};
+  if (params.title !== undefined) cleartext.title = params.title;
+  if (params.body !== undefined) cleartext.body = params.body;
+  const { reply } = await actAndSend<RoomsRecordsPutV1ResponsePayload>(room, RECORDS_PUT_V1, RECORDS_PUT_V1_RESPONSE, {
+    roomId: room.roomId,
+    key: params.key,
+    cleartext,
+    expectedVersion: params.replaces ?? 0,
+  });
+  return reply.version;
+}
+
+/** What a member may do to a record's standing (`rooms/records/curate/0.1`). */
+export interface CurateParams {
+  key: string;
+  /** `retracted` drops the body and keeps a tombstone; `deprecated` demotes it; `active` restores a demoted one. */
+  status?: "active" | "deprecated" | "retracted";
+  pinned?: boolean;
+  /** Why, for the room's audit trail. */
+  reason?: string;
+  /** The version the member read; the host refuses if the record has moved since. */
+  expectedVersion?: number;
+}
+
+/**
+ * Curate a record, as the member. The VTA presents the member's own authority
+ * narrowed to `curate` — which `write` does not imply, so a member who may add
+ * to a room may still be refused this — and the host decides.
+ */
+export async function curateRecordAsMember(
+  room: PersonaRoom,
+  params: CurateParams,
+): Promise<RoomsRecordsCurateResponsePayload> {
+  const payload: Record<string, unknown> = { roomId: room.roomId, key: params.key };
+  if (params.status !== undefined) payload.status = params.status;
+  if (params.pinned !== undefined) payload.pinned = params.pinned;
+  if (params.reason !== undefined && params.reason !== "") payload.reason = params.reason;
+  if (params.expectedVersion !== undefined) payload.expectedVersion = params.expectedVersion;
+  const { reply } = await actAndSend<RoomsRecordsCurateResponsePayload>(
+    room,
+    RECORDS_CURATE,
+    RECORDS_CURATE_RESPONSE,
+    payload,
+  );
+  if (reply.key !== params.key) {
+    throw new Error(`${room.host.did} answered rooms/records/curate for ${reply.key}, not ${params.key}`);
+  }
+  return reply;
 }
 
 /** The body as the schema serialises it: absent members omitted, never `null`. */

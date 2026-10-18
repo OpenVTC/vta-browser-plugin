@@ -901,8 +901,8 @@ VTA; drawing a failed listing as an empty one ("this agent holds keys to no
 rooms" is a claim, and an agent that did not answer has made none); or rendering
 one epoch and calling it the answer.
 
-**Files are the one rooms flow the wallet runs against the host itself.** Records
-are read *through the agent* (`rooms/keys/{browse,read}`): the console's bridge
+**Files, and the console's writes, are the rooms flows the wallet runs against
+the host itself.** Records are read *through the agent* (`rooms/keys/{browse,read}`): the console's bridge
 carries only `type` and `payload` to the wallet's own VTA, so the agent makes the
 host call. Files cannot go that way — their bytes must not pass through the VTA
 — so the offscreen document calls the host directly (`RoomHostChannel`: HTTPS to
@@ -913,6 +913,28 @@ step for step the CLI's `pnm rooms file put` / `get`, so a file either writes
 opens in the other. The host's origin needs a just-in-time host permission,
 requested in the console's click (`prepareRoomFiles` → `requestOriginPermission`).
 Key handling is in "Key material never reaches a browser" below.
+
+**Writing and curating records from the console take the same road.** A new
+note, an edit (`replaces`: the version read, so the host refuses an edit over
+someone else's) and a retraction (`rooms/records/curate/0.1`, `retracted`) are
+`note` and
+`curate` opens on the room-files port, run by the offscreen document as the
+member (`writeSealedAsMember` / `putCleartextAsMember` / `curateRecordAsMember`)
+— sealed or in the clear as `rooms/info` says, never assumed. The console
+(`rooms-record-actions.tsx`) says *Retract*, never *Delete*: the body is dropped
+and a tombstone with the member's reason stays, and anyone who read it may still
+have it; a reason is required. Editing needs `write`, retracting `curate`, which
+`write` does not imply; an action the place's agent says it lacks
+(`HeldRoom.actions`) is shown as such, not offered.
+
+**Archive, restore and pin are deliberately not offered.** Every curation moves
+the record to a new version (vti-rooms `curate_record`), and only a retraction
+drops the body — but a sealed body is bound to the version it was sealed at
+(`RecordLocation`), so archiving a record in a sealed room left it unreadable to
+every member, and restoring moved it again. Re-offer them once VTI keeps the
+sealed-at version. An archived record that does not open says so, by its
+`status`, not by the error's text (R3.7). Pinning has a second reason: the
+listing does not say which records are pinned.
 
 **The member is the persona, never the wallet** (VTI `data-rooms-files.md`
 §8.5). A room admitted the member's persona — a DID their VTA holds — and the
