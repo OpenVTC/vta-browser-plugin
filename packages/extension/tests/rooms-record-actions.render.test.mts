@@ -23,14 +23,14 @@ const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url")
 const head = { dataCommitment: "zQm", recordCount: 1, headVersion: 5 };
 
 /** A room with one note by `author`, an agent that reads it, and a port that answers writes. */
-const mount = async ({ author = ME, actions }: { author?: string; actions?: string[] } = {}) => {
+const mount = async ({ author = ME, actions, status = "active" }: { author?: string; actions?: string[]; status?: string } = {}) => {
   const a = agent({
-    [BROWSE]: { roomId: ROOM, records: [{ key: "n1", version: 5, status: "active" }], complete: true, verification: { priorRoots: "agree", count: "agrees", head } },
+    [BROWSE]: { roomId: ROOM, records: [{ key: "n1", version: 5, status }], complete: true, verification: { priorRoots: "agree", count: "agrees", head } },
     [READ]: {
       roomId: ROOM,
       key: "n1",
       version: 5,
-      status: "active",
+      status,
       plaintext: b64({ title: "Mascot Name", body: "Settled on Trustie", author }),
       verification: { trace: "verified", priorRoots: "agree", head },
     },
@@ -124,25 +124,45 @@ test("a retraction needs a reason, says it is not an erase, and sends the versio
   );
 });
 
-// Archiving keeps a sealed body but moves the record to a new version, and the
-// body is bound to the version it was sealed at — so on a sealed room it left
-// the record unreadable to everyone (vti-rooms curate_record). Not offered
-// until that is fixed; retraction, which drops the body, is.
-test("archive and restore are not offered", async () => {
+// Archiving demotes a record and keeps its body; a sealed body stays readable
+// because the host keeps the version it was sealed at (VTI #2185). One click
+// each way, no reason asked: nothing is lost.
+test("archive sends deprecated at the version read, with no confirmation", async () => {
+  const { a, screen, opened } = await mount();
+  await screen.click(screen.button("Mascot Name"));
+  await screen.click(screen.button("Archive"));
+  await settle(screen);
+  assert.deepEqual(
+    { kind: opened[0]!.kind, key: opened[0]!.key, status: opened[0]!.status, expectedVersion: opened[0]!.expectedVersion, reason: opened[0]!.reason },
+    { kind: "curate", key: "n1", status: "deprecated", expectedVersion: 5, reason: undefined },
+  );
+  assert.equal(a.of("keys/browse").length, 2, "listed again");
+});
+
+test("an archived record offers Restore, which sends active", async () => {
+  const { screen, opened } = await mount({ status: "deprecated" });
+  await screen.click(screen.button("Mascot Name"));
+  assert.equal(screen.all("button").some((b) => b.textContent === "Archive"), false);
+  await screen.click(screen.button("Restore"));
+  await settle(screen);
+  assert.equal(opened[0]!.status, "active");
+  assert.equal(opened[0]!.expectedVersion, 5);
+});
+
+test("pin is not offered", async () => {
   const { screen } = await mount();
   await screen.click(screen.button("Mascot Name"));
-  const labels = screen.all("button").map((b) => b.textContent ?? "");
-  assert.equal(labels.some((l) => /^(Archive|Restore)/.test(l)), false);
-  assert.ok(screen.button("Retract…"));
+  assert.equal(screen.all("button").some((b) => /^(Pin|Unpin)/.test(b.textContent ?? "")), false);
 });
 
 // Where the agent said what the place holds, an action it lacks is shown as
 // such — not offered, then refused by the host.
-test("without the curate grant, retracting is not offered as if it were", async () => {
+test("without the curate grant, archiving and retracting are not offered as if they were", async () => {
   const { screen } = await mount({ actions: ["read", "write"] });
   await screen.click(screen.button("Mascot Name"));
   assert.equal((screen.button("Retract…") as HTMLButtonElement).disabled, true);
-  assert.match(screen.text(), /Retracting needs the room's curate grant/);
+  assert.equal((screen.button("Archive") as HTMLButtonElement).disabled, true);
+  assert.match(screen.text(), /Archiving and retracting need the room's curate grant/);
   assert.equal((screen.button("Write a note") as HTMLButtonElement).disabled, false);
 });
 
@@ -150,24 +170,4 @@ test("without the write grant, nothing new can be written", async () => {
   const { screen } = await mount({ actions: ["read"] });
   assert.equal((screen.button("Write a note") as HTMLButtonElement).disabled, true);
   assert.match(screen.text(), /do not include write/);
-});
-
-// A record archived before this (or by another client) no longer opens on a
-// sealed room. The row says why, by its standing — not by the error's words.
-test("an archived record that does not open says it is not lost", async () => {
-  const a = agent({
-    [BROWSE]: { roomId: ROOM, records: [{ key: "n1", version: 7, status: "deprecated" }], complete: true, verification: { priorRoots: "agree", count: "agrees", head } },
-    [READ]: () => {
-      throw new Error("rooms/keys/read/0.1 failed: record did not open");
-    },
-  });
-  const sendMessage = (m: { type?: string }) =>
-    m?.type === "vta-wallet/room-files-prepare" ? Promise.resolve({ ok: true, result: PREPARED }) : a.sendMessage(m as never);
-  const screen = await render(h(RoomRecords, { parties: PARTIES, room: { roomId: ROOM, member: ME, epoch: 3, earliestReadableEpoch: 1 }, host: HOST } as never), {
-    chrome: { runtime: { sendMessage, connect: () => ({}) } } as never,
-  });
-  await settle(screen);
-  await settle(screen);
-  assert.match(screen.text(), /archived/);
-  assert.match(screen.text(), /the content is still on the host/);
 });

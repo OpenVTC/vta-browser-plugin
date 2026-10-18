@@ -927,14 +927,15 @@ have it; a reason is required. Editing needs `write`, retracting `curate`, which
 `write` does not imply; an action the place's agent says it lacks
 (`HeldRoom.actions`) is shown as such, not offered.
 
-**Archive, restore and pin are deliberately not offered.** Every curation moves
-the record to a new version (vti-rooms `curate_record`), and only a retraction
-drops the body — but a sealed body is bound to the version it was sealed at
-(`RecordLocation`), so archiving a record in a sealed room left it unreadable to
-every member, and restoring moved it again. Re-offer them once VTI keeps the
-sealed-at version. An archived record that does not open says so, by its
-`status`, not by the error's text (R3.7). Pinning has a second reason: the
-listing does not say which records are pinned.
+**Archive and restore are offered; pin is not.** Every curation moves the
+record to a new version (vti-rooms `curate_record`), and a sealed body is bound
+to the version it was sealed at (`RecordLocation`) — so the host keeps that
+version beside the record (`SealedRecord.version`, trust-tasks-tf #816) and the
+VTA opens it there (VTI #2185). Before that, archiving a record in a sealed
+room left it unreadable to every member, which is why these were withdrawn
+once. Archiving keeps the body, so it takes one click and no reason; a
+retraction drops it, so it is confirmed and asks why. Pinning stays off because
+the listing does not say which records are pinned.
 
 **The member is the persona, never the wallet** (VTI `data-rooms-files.md`
 §8.5). A room admitted the member's persona — a DID their VTA holds — and the
