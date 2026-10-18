@@ -429,16 +429,6 @@ function RecordItem({
       {error && (
         <div style={{ padding: "0 14px 10px", display: "grid", gap: 6 }}>
           <Note tone="danger">{error}</Note>
-          {/* Said by the record's standing, not by the error's text (R3.7): an
-              archived sealed record is the one case a curation is known to
-              leave unreadable, and the member deserves to know it is not lost. */}
-          {row.status === "deprecated" && (
-            <span style={{ fontSize: t.xs, color: c.muted }}>
-              This record was archived. Archiving moved it to a new version, and a sealed record is bound to the version
-              it was written at, so it no longer opens — the content is still on the host. This is a fault in the room
-              software, not in your copy; it can be recovered once that is fixed.
-            </span>
-          )}
         </div>
       )}
       {/* A file is shown whether or not the row is expanded: its thumbnail and
