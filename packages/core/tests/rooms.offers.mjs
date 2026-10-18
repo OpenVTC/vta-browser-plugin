@@ -1,17 +1,10 @@
-// A community's offers of its own rooms, read as the member for their names and
-// what each is for (`vtc/rooms/offers/list/0.2`, completed by the VTA with
-// `rooms/keys/act/0.4`), falling back to list 0.1 — through act 0.3 for a VTA
-// without 0.4 — when either party does not serve the newer version.
+// A community's offers of its own rooms, read as the member for their names
+// (`vtc/rooms/offers/list/0.2`, completed by the VTA with `rooms/keys/act/0.5`).
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import {
-  communityRoomOffers,
-  readCommunityRoomOffers,
-  roomDescriptionText,
-  roomNamesFromOffers,
-} from "../dist/rooms/index.js";
+import { communityRoomMemberships, communityRoomOffers, roomNamesFromOffers, roomStanding, isAcceptable } from "../dist/rooms/index.js";
 
 const WALLET = { did: "did:key:zWallet" };
 const VTA = { did: "did:webvh:QmAgent:agent.example" };
@@ -20,9 +13,6 @@ const MEMBER = "did:webvh:QmAlice:people.example";
 const BOARD = "did:webvh:QmBoard:community.example:room-dids:board";
 const PICNIC = "did:webvh:QmPicnic:community.example:room-dids:picnic";
 const OFFERS = "https://trusttasks.org/spec/vtc/rooms/offers/list/0.2";
-const OFFERS_V1 = "https://trusttasks.org/spec/vtc/rooms/offers/list/0.1";
-const ACT_V4 = "https://trusttasks.org/spec/rooms/keys/act/0.4";
-const ACT_V3 = "https://trusttasks.org/spec/rooms/keys/act/0.3";
 
 function offer(roomId, label, state = "open") {
   return {
@@ -51,11 +41,11 @@ function vta() {
   };
 }
 
-test("offers are read as the member, at list 0.2 through act 0.4, page by page, with each room's description", async () => {
+test("offers are read as the member, through act 0.5, page by page", async () => {
   const agent = vta();
   const community = [];
   const pages = [
-    { items: [{ ...offer(BOARD, "Board pack"), description: "Papers for the board." }], nextCursor: "p2" },
+    { items: [offer(BOARD, "Board pack")], nextCursor: "p2" },
     { items: [offer(PICNIC, "Summer picnic", "accepted")] },
   ];
   const offers = await communityRoomOffers({
@@ -73,11 +63,8 @@ test("offers are read as the member, at list 0.2 through act 0.4, page by page, 
     member: MEMBER,
   });
   assert.deepEqual(offers.map((o) => o.roomId), [BOARD, PICNIC]);
-  assert.equal(offers[0].description, "Papers for the board.");
-  assert.equal(offers[1].description, undefined);
 
-  assert.equal(agent.sent[0].type, ACT_V4);
-  assert.equal(agent.sent[1].type, ACT_V4, "every page at the version that answered");
+  assert.equal(agent.sent[0].type, "https://trusttasks.org/spec/rooms/keys/act/0.5");
   assert.equal(agent.sent[0].issuer, WALLET.did, "the wallet asks its VTA");
   const asked = agent.sent[0].payload.document;
   assert.equal(asked.type, OFFERS);
@@ -85,116 +72,41 @@ test("offers are read as the member, at list 0.2 through act 0.4, page by page, 
   assert.equal(asked.recipient, COMMUNITY);
   assert.deepEqual(asked.payload, {});
   assert.deepEqual(agent.sent[1].payload.document.payload, { cursor: "p2" });
-  assert.equal(agent.sent[1].payload.document.type, OFFERS);
 
   assert.equal(community[0].doc.issuer, MEMBER, "the community sees the member, never the wallet");
   assert.equal(community[0].opts.expectedResponseType, `${OFFERS}#response`);
 });
 
-const unsupported = (code) => {
-  const e = new Error(`refused: ${code}`);
-  e.details = { code };
-  return e;
-};
-
-test("a VTA without act 0.4 reads at list 0.1 through act 0.3, and the offers carry no description", async () => {
-  const asked = [];
-  const agent = {
-    async send(envelope) {
-      asked.push([envelope.type, envelope.payload.document.type]);
-      if (envelope.type === ACT_V4) throw unsupported("unsupportedType");
-      const doc = structuredClone(envelope.payload.document);
-      doc.proof = { type: "DataIntegrityProof" };
-      return { principal: doc.issuer, document: doc };
-    },
-  };
-  const toCommunity = [];
-  const read = await readCommunityRoomOffers({
+test("the community's record of the member's rooms is read as the member, through act 0.5, page by page", async () => {
+  const agent = vta();
+  const pages = [
+    { items: [{ roomId: BOARD, host: COMMUNITY, label: "Board pack", visibility: "private", actions: ["read"], validUntil: "2027-10-01T00:00:00Z", state: "admitted", offeredAt: "2026-10-14T10:00:00Z", admittedAt: "2026-10-14T11:00:00Z", repeatAcceptUntil: "2026-10-21T11:00:00Z" }], nextCursor: "m2" },
+    { items: [{ roomId: PICNIC, host: COMMUNITY, label: "Summer picnic", visibility: "open", actions: ["read"], validUntil: "2027-10-01T00:00:00Z", state: "removed", offeredAt: "2026-06-01T10:00:00Z", admittedAt: "2026-06-01T11:00:00Z", removedAt: "2026-09-01T00:00:00Z" }] },
+  ];
+  const seen = [];
+  const rooms = await communityRoomMemberships({
     holder: WALLET,
     vta: { did: VTA.did, sender: agent },
-    community: {
-      did: COMMUNITY,
-      sender: {
-        async sendCompleted(doc, opts) {
-          toCommunity.push([doc.type, opts.expectedResponseType]);
-          return { items: [offer(BOARD, "Board pack")] };
-        },
-      },
-    },
+    community: { did: COMMUNITY, sender: { async sendCompleted(doc, opts) { seen.push({ doc, opts }); return pages.shift(); } } },
     member: MEMBER,
   });
-  assert.deepEqual(asked, [
-    [ACT_V4, OFFERS],
-    [ACT_V3, OFFERS_V1],
-  ]);
-  assert.deepEqual(toCommunity, [[OFFERS_V1, `${OFFERS_V1}#response`]], "list 0.2 never reached the community");
-  assert.equal(read.act, "0.3");
-  assert.equal(read.list, "0.1");
-  assert.equal(read.offers[0].description, undefined);
+  assert.deepEqual(rooms.map((r) => r.state), ["admitted", "removed"]);
+  assert.equal(agent.sent[0].type, "https://trusttasks.org/spec/rooms/keys/act/0.5");
+  assert.equal(seen[0].doc.type, "https://trusttasks.org/spec/vtc/rooms/memberships/list/0.1");
+  assert.equal(seen[0].doc.issuer, MEMBER);
+  assert.deepEqual(seen[1].doc.payload, { cursor: "m2" });
 });
 
-for (const code of ["unsupportedType", "vtc/rooms/offers/list:unsupportedVersion"]) {
-  test(`a community answering ${code} to list 0.2 is read at list 0.1, still through act 0.4`, async () => {
-    const agent = vta();
-    const toCommunity = [];
-    const read = await readCommunityRoomOffers({
-      holder: WALLET,
-      vta: { did: VTA.did, sender: agent },
-      community: {
-        did: COMMUNITY,
-        sender: {
-          async sendCompleted(doc) {
-            toCommunity.push(doc.type);
-            if (doc.type === OFFERS) throw unsupported(code);
-            return { items: [offer(BOARD, "Board pack")] };
-          },
-        },
-      },
-      member: MEMBER,
-    });
-    assert.deepEqual(toCommunity, [OFFERS, OFFERS_V1]);
-    assert.deepEqual(
-      agent.sent.map((e) => [e.type, e.payload.document.type]),
-      [
-        [ACT_V4, OFFERS],
-        [ACT_V4, OFFERS_V1],
-      ],
-    );
-    assert.equal(read.act, "0.4");
-    assert.equal(read.list, "0.1");
-    assert.deepEqual(read.offers.map((o) => o.roomId), [BOARD]);
-  });
-}
-
-test("a refusal other than unsupported is not a reason to read an older version", async () => {
-  const agent = vta();
-  let calls = 0;
-  await assert.rejects(
-    readCommunityRoomOffers({
-      holder: WALLET,
-      vta: { did: VTA.did, sender: agent },
-      community: {
-        did: COMMUNITY,
-        sender: {
-          async sendCompleted() {
-            calls++;
-            throw unsupported("vtc/rooms/offers/list:notAMember");
-          },
-        },
-      },
-      member: MEMBER,
-    }),
-    (e) => e.stage === "community",
-  );
-  assert.equal(calls, 1);
-  assert.equal(agent.sent.length, 1);
-});
-
-test("a description is text, trimmed and bounded", () => {
-  assert.equal(roomDescriptionText("  Papers <b>here</b>  "), "Papers <b>here</b>");
-  assert.equal(roomDescriptionText("x".repeat(5000)).length, 1000);
-  assert.equal(roomDescriptionText(42), "");
-  assert.equal(roomDescriptionText(undefined), "");
+test("every surface reads one standing from the community's state and the VTA's custody", () => {
+  const sealed = { visibility: "private" };
+  assert.equal(roomStanding({ ...sealed, state: "offered" }, false), "offered");
+  assert.equal(roomStanding({ visibility: "open", state: "admitted" }, false), "joined");
+  assert.equal(roomStanding({ ...sealed, state: "admitted", repeatAcceptUntil: "x" }, true), "joined");
+  assert.equal(roomStanding({ ...sealed, state: "admitted", repeatAcceptUntil: "x" }, false), "unfinished");
+  assert.equal(roomStanding({ ...sealed, state: "admitted" }, false), "needsReadmission");
+  assert.equal(roomStanding({ ...sealed, state: "removed" }, true), "removed");
+  assert.ok(isAcceptable("unfinished") && isAcceptable("offered"));
+  assert.ok(!isAcceptable("joined") && !isAcceptable("needsReadmission"));
 });
 
 test("a VTA that signs as someone else is not believed", async () => {
@@ -238,10 +150,10 @@ test("names are taken from offers that carry a label, trimmed and bounded", () =
 // ── Who a failed read is blamed on ──────────────────────────────────────────
 //
 // Reading offers asks two parties in turn: the member's VTA completes the
-// request (`rooms/keys/act/0.4`, else 0.3), then the community answers it. The same
+// request (`rooms/keys/act/0.5`), then the community answers it. The same
 // refusal code means different things from each, so it is mapped by the party
 // that produced it — a DID-hosting service the member signs in to, which has
-// no rooms, must not read as the member's agent lacking act 0.3.
+// no rooms, must not read as the member's agent lacking act 0.5.
 
 import { offerListRefusal, OfferReadError } from "../dist/rooms/index.js";
 import { isNoTrustTaskService, NoTrustTaskServiceError, roomHostEndpoint } from "../dist/rooms/files.js";
@@ -268,11 +180,9 @@ async function failedRead(reader) {
 }
 
 for (const code of ["unsupportedType", "vtc/rooms/offers/list:unsupportedVersion"]) {
-  test(`a community answering ${code} to offers/list makes no room offers — it is not the agent lacking act 0.3`, async () => {
-    const asked = [];
-    const reader = readerWith({ communitySend: async (doc) => { asked.push(doc.type); throw refusal(code); } });
+  test(`a community answering ${code} to offers/list makes no room offers — it is not the agent lacking act 0.5`, async () => {
+    const reader = readerWith({ communitySend: async () => { throw refusal(code); } });
     const { raw, mapped } = await failedRead(reader);
-    assert.deepEqual(asked, [OFFERS, OFFERS_V1], "list 0.2, then 0.1, before it is called no offers");
     assert.ok(raw instanceof OfferReadError && raw.stage === "community", "the read names the community as the source");
     assert.equal(mapped.code, "noRoomOffers");
     assert.doesNotMatch(mapped.message, /act 0\.3|Your agent/);
@@ -280,18 +190,16 @@ for (const code of ["unsupportedType", "vtc/rooms/offers/list:unsupportedVersion
   });
 }
 
-test("the VTA refusing act 0.4 and 0.3 with unsupportedType is still the agent lacking act 0.3", async () => {
+test("the VTA refusing act with unsupportedType is still the agent lacking act 0.5", async () => {
   let reached = false;
-  const acts = [];
   const reader = readerWith({
-    vtaSend: async (envelope) => { acts.push(envelope.type); throw refusal("unsupportedType"); },
+    vtaSend: async () => { throw refusal("unsupportedType"); },
     communitySend: async () => { reached = true; return { items: [] }; },
   });
   const { raw, mapped } = await failedRead(reader);
   assert.equal(raw.stage, "act");
   assert.equal(mapped.code, "actUnsupported");
-  assert.match(mapped.message, /rooms\/keys\/act 0\.3/);
-  assert.deepEqual(acts, [ACT_V4, ACT_V3]);
+  assert.match(mapped.message, /rooms\/keys\/act 0\.5/);
   assert.equal(reached, false, "nothing reached the community");
 });
 

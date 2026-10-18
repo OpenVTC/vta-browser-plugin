@@ -669,8 +669,6 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         },
         // Where the member signs in: the sign-in flow's own listing.
         identities: (vtaDid, restBaseUrl) => listSelfIssued(vtaDid, restBaseUrl),
-        // An accept in progress, kept so a repeat sends the same key package.
-        journal: new IndexedDBKVStore(),
       },
       { vtaDid: req.vtaDid, ...(req.restBaseUrl ? { restBaseUrl: req.restBaseUrl } : {}) },
       req.params,

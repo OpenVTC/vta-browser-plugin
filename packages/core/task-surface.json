@@ -992,6 +992,12 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/rooms/keys/act/0.5",
+      "consts": [
+        "TASK_ROOMS_KEYS_ACT_0_5"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/rooms/keys/backfill/0.1",
       "consts": [
         "TASK_ROOMS_KEYS_BACKFILL_0_1"
@@ -1031,6 +1037,12 @@
       "uri": "https://trusttasks.org/spec/rooms/keys/key-package/0.1",
       "consts": [
         "TASK_ROOMS_KEYS_KEY_PACKAGE_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/keys/key-package/0.2",
+      "consts": [
+        "TASK_ROOMS_KEYS_KEY_PACKAGE_0_2"
       ]
     },
     {
@@ -2116,6 +2128,12 @@
     },
     {
       "uri": "https://trusttasks.org/spec/vtc/rooms/community/members/add/0.1"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vtc/rooms/community/members/list/0.1"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vtc/rooms/memberships/list/0.1"
     },
     {
       "uri": "https://trusttasks.org/spec/vtc/rooms/offers/accept/0.1"

@@ -18,7 +18,7 @@
 import { CONTACT_METHODS, type TrustTaskSender } from "@openvtc/pnm-core";
 import { resolveCommunityDocument, selectSignInServices, verifyDomainLinkage } from "@openvtc/pnm-core/vtc";
 import {
-  communityRoomOffers,
+  communityRoomMemberships,
   opaqueRecordKey,
   roomInfoAsMember,
   roomNamesFromOffers,
@@ -116,9 +116,10 @@ export async function runRoomsPageOp(
   }
 
   if (op.op === "roomNames") {
-    // The community's own answer, member by member: each read is signed as that
-    // member, and one that fails (an identity with no offers, a VTA without
-    // act 0.3) costs only its own names.
+    // The community's own record, member by member: each read is signed as that
+    // member, and one that fails (an identity with no rooms, a VTA without
+    // act 0.5) costs only its own names. The record lists a room for as long as
+    // the community keeps it — an accepted one too, long after its offer closed.
     const { endpoint } = await (deps.portal ?? ((d) => resolvePortal(d, now)))(op.hostDid);
     const community = {
       did: op.hostDid,
@@ -127,13 +128,13 @@ export async function runRoomsPageOp(
     const names: Record<string, CommunityRoomName> = {};
     for (const member of new Set(op.members)) {
       try {
-        const offers = await communityRoomOffers({
+        const rooms = await communityRoomMemberships({
           holder: { did: holderDid },
           vta: { did: vta.vtaDid, sender },
           community,
           member,
         });
-        Object.assign(names, roomNamesFromOffers(offers));
+        Object.assign(names, roomNamesFromOffers(rooms));
       } catch {
         // No names from this member: the page shows DIDs, as before.
       }

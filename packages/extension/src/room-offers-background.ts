@@ -289,11 +289,11 @@ export class RoomOffers {
         member: offer.member,
         roomId: offer.roomId,
         label: offer.label,
-        ...(offer.description !== "" ? { description: offer.description } : {}),
+        ...(offer.description !== undefined ? { description: offer.description } : {}),
         visibility: offer.visibility,
         actions: offer.actions,
         validUntil: offer.validUntil,
-        resume: offer.inProgress,
+        resume: offer.state === "unfinished",
       });
       if (!decision.approved) throw new RoomOffersRefusal("the member declined the offer here; it stays open", "declined");
       try {

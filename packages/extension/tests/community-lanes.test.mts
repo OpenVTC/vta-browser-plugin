@@ -8,12 +8,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { communityLanes, rowStage } from "../src/manager/community-lanes.js";
+import type { OfferStanding } from "../src/room-offers-policy.js";
 
 const AGENT = "did:webvh:QmAgent:agent.example";
 const A = "did:webvh:QmA:a.example";
 const B = "did:webvh:QmB:b.example";
 
-const offer = (communityDid: string, roomId: string, state: "open" | "accepted", label = "") => ({
+const offer = (communityDid: string, roomId: string, state: OfferStanding, label = "") => ({
   communityDid,
   member: "did:example:me",
   roomId,
@@ -23,7 +24,6 @@ const offer = (communityDid: string, roomId: string, state: "open" | "accepted",
   validUntil: "2027-01-01T00:00:00Z",
   offeredAt: "2026-01-01T00:00:00Z",
   state,
-  inProgress: false,
 });
 const community = (did: string, offers: ReturnType<typeof offer>[]) => ({
   communityDid: did,
@@ -38,7 +38,7 @@ const held = (roomId: string) => ({ roomId, places: [{ roomId, member: "did:exam
 
 test("offers, holdings and shares of one room are one row", () => {
   const lanes = communityLanes({
-    communities: [community(A, [offer(A, "r1", "accepted", "One")])],
+    communities: [community(A, [offer(A, "r1", "joined", "One")])],
     shares: [share(A, "r1")],
     entries: [held("r1")],
     hosts: {},
@@ -56,7 +56,7 @@ test("offers, holdings and shares of one room are one row", () => {
 
 test("each gap is its own stage", () => {
   const lanes = communityLanes({
-    communities: [community(A, [offer(A, "open", "open"), offer(A, "waiting", "accepted")])],
+    communities: [community(A, [offer(A, "open", "offered"), offer(A, "waiting", "unfinished")])],
     shares: [],
     entries: [],
     hosts: {},
@@ -84,7 +84,7 @@ test("a held room joins the community it was last found at", () => {
 
 test("a community with an offer waiting comes first, and its waiting rows lead", () => {
   const lanes = communityLanes({
-    communities: [community(A, [offer(A, "done", "accepted")]), community(B, [offer(B, "x", "accepted"), offer(B, "y", "open")])],
+    communities: [community(A, [offer(A, "done", "joined")]), community(B, [offer(B, "x", "joined"), offer(B, "y", "offered")])],
     shares: [],
     entries: [],
     hosts: {},

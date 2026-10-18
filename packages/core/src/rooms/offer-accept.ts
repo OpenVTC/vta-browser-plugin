@@ -3,44 +3,38 @@
 // (`vta-cli-common::commands::rooms::cmd_rooms_offers_accept`).
 //
 // 1. The offer is read as the member (`communityRoomOffers`, `offers.ts`).
-// 2. Its membership and authority credentials go into the member's VTA vault
+// 2. A sealed room the VTA already holds is joined — from another surface — and
+//    nothing more is done.
+// 3. Its membership and authority credentials go into the member's VTA vault
 //    (`vault/credentials/receive`), where the presentation oracle finds them for
 //    every later room request. Stored under their own ids, so a repeat replaces.
-// 3. On a sealed tier (`attributed`, `private`) the VTA mints a KeyPackage
-//    against the offer's invitation (`rooms/keys/key-package`). **Never the
-//    wallet**: `rooms/keys/act` (0.3 and later) completes an acceptance only with a
-//    KeyPackage the same VTA minted for that member and room (its recipient
-//    item 10), because a leaf minted anywhere else would have keys somebody
-//    else holds.
-// 4. The acceptance is built unsigned, completed by the VTA as the member
-//    (`rooms/keys/act` at the version that read the offers — 0.4, or 0.3 from a
-//    VTA without it), and sent to the community unchanged.
-// 5. The community answers with the Welcome, which goes to the member's own VTA
+// 4. On a sealed tier (`attributed`, `private`) the VTA gives the KeyPackage for
+//    the offer's invitation (`rooms/keys/key-package/0.2`). **Never the wallet**:
+//    `rooms/keys/act` completes an acceptance only with a KeyPackage the same VTA
+//    minted for that member and room (its recipient item 10), because a leaf
+//    minted anywhere else would have keys somebody else holds.
+// 5. The acceptance is built unsigned, completed by the VTA as the member
+//    (`rooms/keys/act/0.5`), and sent to the community unchanged.
+// 6. The community answers with the Welcome, which goes to the member's own VTA
 //    (`rooms/keys/welcome`) and nowhere else.
 //
-// ## A lost answer is retried with the same KeyPackage
+// ## Any surface finishes what another began
 //
-// The community keeps the Welcome it got for an offer and answers a repeat that
-// carries the **same** KeyPackage with the same Welcome (accept 0.1, "Repeating
-// an accept"; its VTA answers its own repeat the same way, group/add 0.2 item
-// 8). A repeat with a **different** KeyPackage is `alreadyAccepted`, and the
-// member is then stuck until an administrator removes and re-admits them. So the
-// KeyPackage is written to the journal **before** the acceptance is sent, and
-// every later attempt — after a timeout, a closed tab, a torn-down document —
-// sends that one. The journal is dropped only once the VTA has joined.
+// The member may accept the same offer from the portal, `pnm` or OpenVTC, so no
+// surface keeps its own record of an acceptance in progress
+// (`vtc/rooms/memberships/list/0.1` Surface item 1). Every step answers a repeat
+// with its first answer instead: the VTA returns the KeyPackage it already holds
+// for the room, member and invitation (`key-package/0.2`, `alreadyMinted`), the
+// community answers an acceptance carrying it with the Welcome it kept, and the
+// VTA answers a Welcome it already processed `alreadyJoined`, which is joined. So
+// running this again — after a timeout, a closed tab, from another surface —
+// finishes whatever was done, and never sends a second KeyPackage.
 
 import type { TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
 import { roomsKeysAct, unsignedRoomRequest } from "./act.js";
-import {
-  isUnsupportedRefusal,
-  OfferReadError,
-  readCommunityRoomOffers,
-  type CommunityRoomOffer,
-  type OfferActVersion,
-  type OfferReader,
-} from "./offers.js";
+import { communityRoomOffers, OfferReadError, type CommunityRoomOffer, type OfferReader } from "./offers.js";
 
 import {
   TYPE_URI as OFFERS_ACCEPT,
@@ -53,7 +47,7 @@ import {
   RESPONSE_TYPE_URI as KEYS_KEY_PACKAGE_RESPONSE,
   type RoomsKeysKeyPackagePayload,
   type RoomsKeysKeyPackageResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/key-package/0.1/payload";
+} from "@openvtc/trust-tasks/rooms/keys/key-package/0.2/payload";
 import {
   TYPE_URI as KEYS_WELCOME,
   RESPONSE_TYPE_URI as KEYS_WELCOME_RESPONSE,
@@ -61,58 +55,10 @@ import {
   type RoomsKeysWelcomeResponsePayload,
 } from "@openvtc/trust-tasks/rooms/keys/welcome/0.1/payload";
 
-// ── The journal ─────────────────────────────────────────────────────────────
-
-/** Where an accept in progress is kept: as much of a key-value store as it needs. */
-export interface OfferAcceptJournal {
-  get<T = unknown>(key: string): Promise<T | undefined>;
-  put(key: string, value: unknown): Promise<void>;
-  delete(key: string): Promise<void>;
-}
-
-/** Key prefix of an accept in progress. */
-export const OFFER_ACCEPT_PREFIX = "pnm/room-offer-accept/v1/";
-
-/** The journal key of one accept: one per (VTA, community, member, room). */
-export function offerAcceptKey(vtaDid: string, communityDid: string, member: string, roomId: string): string {
-  return `${OFFER_ACCEPT_PREFIX}${[vtaDid, communityDid, member, roomId].map(encodeURIComponent).join("|")}`;
-}
-
-/**
- * A sealed-tier accept that has begun. Nothing here is secret: the invitation
- * names the member and opens nothing, and a KeyPackage is public — its private
- * half never leaves the VTA. It is kept so a repeat sends the **same** one.
- */
-export interface PendingOfferAccept {
-  v: 1;
-  vtaDid: string;
-  communityDid: string;
-  member: string;
-  roomId: string;
-  visibility: string;
-  invitation: string;
-  keyPackage?: string;
-  /** When the VTA said it lets the KeyPackage's private half go. */
-  keyPackageExpiresAt?: string;
-  startedAt: string;
-}
-
-/** A stored record, or `undefined` for anything this wallet did not write. */
-export function readPendingOfferAccept(raw: unknown): PendingOfferAccept | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const r = raw as Record<string, unknown>;
-  const str = (k: string) => typeof r[k] === "string" && (r[k] as string) !== "";
-  if (r.v !== 1 || !["vtaDid", "communityDid", "member", "roomId", "visibility", "invitation", "startedAt"].every(str)) {
-    return undefined;
-  }
-  if (r.keyPackage !== undefined && !str("keyPackage")) return undefined;
-  return r as unknown as PendingOfferAccept;
-}
-
 // ── Errors ──────────────────────────────────────────────────────────────────
 
 export type RoomOfferErrorCode =
-  /** The VTA serves neither `rooms/keys/act/0.4` nor `0.3`. */
+  /** The VTA does not serve `rooms/keys/act/0.5` or `rooms/keys/key-package/0.2`. */
   | "actUnsupported"
   /**
    * The party makes no room offers: it does not serve `vtc/rooms/offers/list`
@@ -184,8 +130,8 @@ function actRefusal(e: unknown, reader: OfferReader): RoomOfferError {
   if (local === "unsupportedType" || local === "unsupportedVersion") {
     return new RoomOfferError(
       "actUnsupported",
-      "Your agent does not serve rooms/keys/act 0.3 or later, the versions that sign a reply to a community's " +
-        "offer as you. It must be updated before offers can be read or accepted from the wallet.",
+      "Your agent does not serve rooms/keys/act 0.5, the version that signs your requests to a community about " +
+        "its rooms as you. It must be updated before offers can be read or accepted from the wallet.",
     );
   }
   if (local === "permissionDenied" || clientCode(e) === "e.p.msg.forbidden") {
@@ -206,8 +152,8 @@ function actRefusal(e: unknown, reader: OfferReader): RoomOfferError {
   if (local === "keyPackageNotHeld") {
     return new RoomOfferError(
       "keyPackageNotHeld",
-      "Your agent no longer holds the key package it minted for this room (it has been used, or it expired). " +
-        `Accept again and it mints a fresh one. (${text(e)})`,
+      "Your agent no longer holds the key package it gave for this room (it has been used, or it expired). " +
+        `Accept again and it gives a fresh one. (${text(e)})`,
     );
   }
   return new RoomOfferError("other", text(e));
@@ -233,8 +179,8 @@ function communityRefusal(e: unknown, reader: OfferReader, roomId: string, seale
     case "admissionPending":
       return new RoomOfferError(
         "admissionPending",
-        `${who} could not yet confirm the admission with its own agent. Accept again: the same key package is sent, ` +
-          "and the community settles the admission before answering.",
+        `${who} could not yet confirm the admission with its own agent. Accept again — here or anywhere else: your ` +
+          "agent gives the same key package, and the community settles the admission before answering.",
         true,
       );
     case "keyHolderRefused": {
@@ -254,7 +200,7 @@ function communityRefusal(e: unknown, reader: OfferReader, roomId: string, seale
   if (client === "e.client.timeout" || client === "e.client.network") {
     return new RoomOfferError(
       "noAnswer",
-      `${who} did not answer (${text(e)}). Accept again${sealed ? ": the same key package is sent, so if it did admit you, it answers with the same Welcome" : ""}.`,
+      `${who} did not answer (${text(e)}). Accept again${sealed ? " — here or anywhere else: your agent gives the same key package, so if the community did admit you, it answers with the same Welcome" : ""}.`,
       true,
     );
   }
@@ -267,12 +213,10 @@ function communityRefusal(e: unknown, reader: OfferReader, roomId: string, seale
 export type OfferAcceptStage = "reading" | "storing" | "keyPackage" | "accepting" | "joining";
 
 export interface AcceptOfferDeps {
-  journal: OfferAcceptJournal;
   /** Store one credential in the member's VTA vault (`vault/credentials/receive`). */
   receive(credential: Record<string, unknown>): Promise<void>;
   /** Whether the VTA already holds the room's group as `member` (`rooms/keys/list`). */
   joined(roomId: string, member: string): Promise<boolean>;
-  now?(): number;
   progress?(stage: OfferAcceptStage): void;
 }
 
@@ -285,7 +229,11 @@ export interface AcceptedRoomOffer {
   joined: boolean;
   /** The room epoch the member was admitted at, where known. */
   epoch?: number;
-  /** The community answered an acceptance this wallet had already sent, or the member was in already. */
+  /**
+   * This finished an acceptance already begun — here or on another surface (the
+   * VTA held the KeyPackage already), or one the member had completed (the VTA
+   * holds the room).
+   */
   resumed: boolean;
 }
 
@@ -297,17 +245,15 @@ export function isSealedOffer(visibility: string): boolean {
 /**
  * Accept the offer of `roomId` that `reader.community` made to `reader.member`.
  *
- * Idempotent: an accept that was interrupted is finished, with the KeyPackage
- * it began with; one that already finished answers as such.
+ * Idempotent across surfaces: an accept begun anywhere — here, in `pnm`, in
+ * OpenVTC — is finished with the KeyPackage it began with, and one already
+ * finished answers as such.
  */
 export async function acceptCommunityRoomOffer(
   reader: OfferReader,
   roomId: string,
   deps: AcceptOfferDeps,
 ): Promise<AcceptedRoomOffer> {
-  const now = deps.now ?? Date.now;
-  const key = offerAcceptKey(reader.vta.did, reader.community.did, reader.member, roomId);
-  const pending = readPendingOfferAccept(await deps.journal.get(key));
   const vtaParties = { holder: reader.holder, service: { did: reader.vta.did } };
   const done = (visibility: string, joined: boolean, epoch: number | undefined, resumed: boolean): AcceptedRoomOffer => ({
     roomId,
@@ -321,103 +267,69 @@ export async function acceptCommunityRoomOffer(
 
   deps.progress?.("reading");
   let offers: CommunityRoomOffer[];
-  let act: OfferActVersion;
   try {
-    ({ offers, act } = await readCommunityRoomOffers(reader));
+    offers = await communityRoomOffers(reader);
   } catch (e) {
     throw e instanceof RoomOfferError ? e : listRefusal(e, reader);
   }
   const offer = offers.find((o) => o.roomId === roomId);
-
-  if (!offer && !pending) {
-    throw new RoomOfferError("notFound", `${reader.community.did} has no offer of ${roomId} to ${reader.member}.`);
+  if (!offer) {
+    throw new RoomOfferError(
+      "notFound",
+      `${reader.community.did} has no open or recently accepted offer of ${roomId} to ${reader.member}. If it was ` +
+        "accepted long ago and never joined, ask an administrator to remove you from the room and offer it again.",
+    );
   }
-  if (offer && offer.host !== reader.community.did) {
+  if (offer.host !== reader.community.did) {
     // The community offers its own rooms; an offer naming another host is not one this flow can carry out.
     throw new RoomOfferError("other", `the offer of ${roomId} names ${offer.host} as its host, not ${reader.community.did}`);
   }
-  const visibility = offer?.visibility ?? pending!.visibility;
+  const visibility = offer.visibility;
   const sealed = isSealedOffer(visibility);
-  const invitation = offer?.credentials.invitation ?? pending!.invitation;
+  const invitation = offer.credentials.invitation;
 
-  // Accepted, and not by this wallet's journal: by another surface (pnm), or a
-  // journal that was lost. Done if the VTA is in; otherwise only the community
-  // can undo it, since a second KeyPackage is refused.
-  if (offer?.state === "accepted" && !pending?.keyPackage) {
+  // Joined already — from another surface, or an earlier run whose answer was lost.
+  if (offer.state === "accepted") {
     if (!sealed) return done(visibility, false, undefined, true);
     if (await deps.joined(roomId, reader.member)) return done(visibility, true, undefined, true);
-    throw new RoomOfferError(
-      "alreadyAccepted",
-      `This offer was accepted already, from somewhere other than this wallet, and your agent has not joined the ` +
-        `room. Finish it where it was started (\`pnm rooms offers accept … --key-package <file>\`), or ask an ` +
-        `administrator to remove you from the room and offer it again.`,
-    );
   }
 
-  if (offer) {
-    deps.progress?.("storing");
-    for (const [what, raw] of [
-      ["membership", offer.credentials.membership],
-      ["authority", offer.credentials.authority],
-    ] as const) {
-      let credential: Record<string, unknown>;
-      try {
-        credential = JSON.parse(raw) as Record<string, unknown>;
-      } catch (e) {
-        throw new RoomOfferError("other", `the offer's ${what} credential is not JSON: ${text(e)}`);
+  deps.progress?.("storing");
+  for (const [what, raw] of [
+    ["membership", offer.credentials.membership],
+    ["authority", offer.credentials.authority],
+  ] as const) {
+    let credential: Record<string, unknown>;
+    try {
+      credential = JSON.parse(raw) as Record<string, unknown>;
+    } catch (e) {
+      throw new RoomOfferError("other", `the offer's ${what} credential is not JSON: ${text(e)}`);
+    }
+    if (!credential || typeof credential !== "object" || Array.isArray(credential)) {
+      throw new RoomOfferError("other", `the offer's ${what} credential is not a credential`);
+    }
+    try {
+      await deps.receive(credential);
+    } catch (e) {
+      if (taskErrorLocalCode(e) === "permissionDenied" || clientCode(e) === "e.p.msg.forbidden") {
+        throw new RoomOfferError(
+          "capability",
+          `Your agent's credential vault refused the ${what} credential: this wallet's credential there ` +
+            `(${reader.holder.did}) does not carry the vault-write capability. Someone holding the whole agent ` +
+            `can restore what its role carries with \`${capabilityFixCommand(reader.holder.did)}\`. (${text(e)})`,
+        );
       }
-      if (!credential || typeof credential !== "object" || Array.isArray(credential)) {
-        throw new RoomOfferError("other", `the offer's ${what} credential is not a credential`);
-      }
-      try {
-        await deps.receive(credential);
-      } catch (e) {
-        if (taskErrorLocalCode(e) === "permissionDenied" || clientCode(e) === "e.p.msg.forbidden") {
-          throw new RoomOfferError(
-            "capability",
-            `Your agent's credential vault refused the ${what} credential: this wallet's credential there ` +
-              `(${reader.holder.did}) does not carry the vault-write capability. Someone holding the whole agent ` +
-              `can restore what its role carries with \`${capabilityFixCommand(reader.holder.did)}\`. (${text(e)})`,
-          );
-        }
-        throw new RoomOfferError("other", `Your agent's credential vault refused the ${what} credential: ${text(e)}`);
-      }
+      throw new RoomOfferError("other", `Your agent's credential vault refused the ${what} credential: ${text(e)}`);
     }
   }
 
   let keyPackage: string | undefined;
+  let resumed = false;
   if (sealed) {
-    const held =
-      pending?.keyPackage !== undefined &&
-      (pending.keyPackageExpiresAt === undefined || Date.parse(pending.keyPackageExpiresAt) > now());
-    if (held) {
-      keyPackage = pending!.keyPackage;
-    } else {
-      if (pending?.keyPackage !== undefined && offer?.state !== "open") {
-        throw new RoomOfferError(
-          "alreadyAccepted",
-          "The key package this accept began with has expired at your agent, and the community has the acceptance " +
-            "already. Ask an administrator to remove you from the room and offer it again.",
-        );
-      }
-      deps.progress?.("keyPackage");
-      const minted = await mintKeyPackage(reader.vta.sender, vtaParties, roomId, invitation);
-      keyPackage = minted.keyPackage;
-      // Written before the acceptance leaves: every repeat sends this one.
-      const record: PendingOfferAccept = {
-        v: 1,
-        vtaDid: reader.vta.did,
-        communityDid: reader.community.did,
-        member: reader.member,
-        roomId,
-        visibility,
-        invitation,
-        keyPackage,
-        ...(minted.expiresAt !== undefined ? { keyPackageExpiresAt: minted.expiresAt } : {}),
-        startedAt: pending?.startedAt ?? new Date(now()).toISOString(),
-      };
-      await deps.journal.put(key, record);
-    }
+    deps.progress?.("keyPackage");
+    const given = await keyPackageFor(reader, vtaParties, roomId, invitation);
+    keyPackage = given.keyPackage;
+    resumed = given.alreadyMinted;
   }
 
   deps.progress?.("accepting");
@@ -428,14 +340,10 @@ export async function acceptCommunityRoomOffer(
       reader.vta.sender,
       vtaParties,
       unsignedRoomRequest(OFFERS_ACCEPT, reader.community.did, payload as unknown as Record<string, unknown>, reader.member),
-      // The version that just read the offers: 0.4, or 0.3 from a VTA without it.
-      act,
+      "0.5",
     ));
   } catch (e) {
-    const err = actRefusal(e, reader);
-    // The VTA has let this KeyPackage go: a repeat must mint, not resend.
-    if (err.code === "keyPackageNotHeld" && pending) await deps.journal.delete(key);
-    throw err;
+    throw actRefusal(e, reader);
   }
   let accepted: VTCRoomsOffersAcceptResponsePayload;
   try {
@@ -446,20 +354,15 @@ export async function acceptCommunityRoomOffer(
   } catch (e) {
     const err = communityRefusal(e, reader, roomId, sealed);
     if (err.code === "alreadyAccepted" && sealed && (await deps.joined(roomId, reader.member).catch(() => false))) {
-      await deps.journal.delete(key);
       return done(visibility, true, undefined, true);
     }
-    if (!err.retryable && err.code !== "other") await deps.journal.delete(key);
     throw err;
   }
   if (accepted.roomId !== roomId || accepted.state !== "admitted") {
     throw new RoomOfferError("other", `${reader.community.did} answered the acceptance of ${roomId} for ${accepted.roomId} (${accepted.state})`);
   }
 
-  if (!sealed) {
-    await deps.journal.delete(key);
-    return done(visibility, false, accepted.epoch, pending !== undefined);
-  }
+  if (!sealed) return done(visibility, false, accepted.epoch, offer.state === "accepted");
   if (typeof accepted.welcome !== "string" || accepted.welcome === "") {
     throw new RoomOfferError(
       "welcomeMissing",
@@ -477,7 +380,7 @@ export async function acceptCommunityRoomOffer(
       ...(accepted.ratchetTree !== undefined ? { ratchetTree: accepted.ratchetTree } : {}),
     });
   } catch (e) {
-    // Joined already — by an earlier attempt whose answer was lost.
+    // Joined already — another surface handed the same Welcome over first.
     if (taskErrorLocalCode(e) !== "alreadyJoined") {
       throw new RoomOfferError(
         "joinFailed",
@@ -486,18 +389,16 @@ export async function acceptCommunityRoomOffer(
         true,
       );
     }
+    resumed = true;
   }
-  await deps.journal.delete(key);
-  return done(visibility, true, accepted.epoch, pending !== undefined);
+  return done(visibility, true, accepted.epoch, resumed || offer.state === "accepted");
 }
 
 /**
  * Reading the offers failed: the VTA's refusal, or the community's — each
- * mapped by the party that produced it. By the time one gets here the read has
- * already fallen back from act 0.4 / list 0.2 to list 0.1 (`offers.ts`), so
- * `unsupportedType` from the VTA is an agent without act 0.3; from the
- * community it is a party that makes no room offers at all, which is not the
- * member's agent's fault and not a failure at all.
+ * mapped by the party that produced it. `unsupportedType` from the VTA is an
+ * agent without act 0.5; from the community it is a party that makes no room
+ * offers, which is not the member's agent's fault and not a failure at all.
  */
 function listRefusal(e: unknown, reader: OfferReader): RoomOfferError {
   if (e instanceof OfferReadError) {
@@ -510,8 +411,8 @@ function listRefusal(e: unknown, reader: OfferReader): RoomOfferError {
 function communityListRefusal(e: unknown, reader: OfferReader): RoomOfferError {
   const local = taskErrorLocalCode(e);
   const who = reader.community.did;
-  if (isUnsupportedRefusal(e)) {
-    return new RoomOfferError("noRoomOffers", `${who} makes no room offers: it does not serve vtc/rooms/offers/list.`);
+  if (local === "unsupportedType" || local === "unsupportedVersion") {
+    return new RoomOfferError("noRoomOffers", `${who} makes no room offers: it does not serve the room requests a member makes (${text(e)}).`);
   }
   if (local === "notAMember") {
     return new RoomOfferError("notAMember", `${who} says ${reader.member} is not an active member of the community.`);
@@ -531,24 +432,38 @@ export function offerListRefusal(e: unknown, reader: OfferReader): RoomOfferErro
   return e instanceof RoomOfferError ? e : listRefusal(e, reader);
 }
 
-async function mintKeyPackage(
-  sender: TrustTaskSender,
+/**
+ * The KeyPackage for the offer's invitation, from the VTA (`rooms/keys/key-package/0.2`):
+ * the one it already holds for this room, member and invitation — which another
+ * surface may already have sent — or a new one.
+ */
+async function keyPackageFor(
+  reader: OfferReader,
   parties: { holder: { did: string }; service: { did: string } },
   roomId: string,
   invitation: string,
 ): Promise<RoomsKeysKeyPackageResponsePayload> {
   const payload: RoomsKeysKeyPackagePayload = { roomId, invitation };
   try {
-    const res = await sender.send<RoomsKeysKeyPackageResponsePayload>(
+    const res = await reader.vta.sender.send<RoomsKeysKeyPackageResponsePayload>(
       buildTrustTask(KEYS_KEY_PACKAGE, payload, { issuer: parties.holder.did, recipient: parties.service.did }),
-      { expectedResponseType: KEYS_KEY_PACKAGE_RESPONSE, operationLabel: "rooms/keys/key-package/0.1" },
+      { expectedResponseType: KEYS_KEY_PACKAGE_RESPONSE, operationLabel: "rooms/keys/key-package/0.2" },
     );
     if (typeof res?.keyPackage !== "string" || res.keyPackage === "") {
       throw new Error("the answer carries no key package");
     }
+    if (typeof res.alreadyMinted !== "boolean") throw new Error("the answer does not say whether it was already minted");
     return res;
   } catch (e) {
-    throw new RoomOfferError("other", `Your agent did not mint a key package for ${roomId}: ${text(e)}`);
+    const local = taskErrorLocalCode(e);
+    if (local === "unsupportedType" || local === "unsupportedVersion") {
+      throw new RoomOfferError(
+        "actUnsupported",
+        "Your agent does not serve rooms/keys/key-package 0.2, which gives the same key package to every surface " +
+          "you accept from. It must be updated before rooms can be accepted from the wallet.",
+      );
+    }
+    throw new RoomOfferError("other", `Your agent did not give a key package for ${roomId}: ${text(e)}`);
   }
 }
 

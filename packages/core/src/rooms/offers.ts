@@ -1,64 +1,53 @@
-// A community's offers of its own rooms — `vtc/rooms/offers/list/0.2` (0.1
-// where a party does not serve it yet), read as the member.
+// A community's offers of its own rooms — `vtc/rooms/offers/list/0.2` — and its
+// record of where each admission stands — `vtc/rooms/memberships/list/0.1` — read
+// as the member.
 //
 // A community that owns a room offers its members admission to it
 // (`vtc/rooms/community/members/add`), and the offer carries the room's
-// `label`, `visibility` and — from list 0.2 — its `description`, as the
-// community's administrators set them. The member reads their offers with a
-// document signed as the DID the offers are addressed to — a persona their VTA
-// holds — so the wallet builds the request unsigned and has the VTA complete it
-// as that DID (`rooms/keys/act`, which inserts no presentation for the offer
-// types), then sends it to the community unchanged. That is the CLI's
-// `pnm rooms offers list`, step for step.
+// `label`, `visibility` and `description` as the community's administrators set them. The
+// member reads their offers with a document signed as the DID the offers are
+// addressed to — a persona their VTA holds — so the wallet builds the request
+// unsigned and has the VTA complete it as that DID (`rooms/keys/act/0.5`, which
+// inserts no presentation for the community's types), then sends it to the
+// community unchanged. That is the CLI's `pnm rooms offers list`, step for step.
 //
-// ## Two parties, two versions, two schedules
+// ## One record, every surface
 //
-// List 0.2 is completed only by `rooms/keys/act/0.4`: 0.3's table is closed
-// and refuses it `typeNotActable`. Members and communities upgrade on their own
-// schedules, so the read asks act 0.4 + list 0.2 first and falls back to list
-// 0.1 when either party does not serve the newer version:
+// The member reaches these rooms from the community's portal (through this
+// wallet), from `pnm`, from OpenVTC. None keeps its own note of which rooms the
+// member accepted: each reads the community's record
+// (`communityRoomMemberships`) beside the VTA's custody (`roomsKeysList`) and
+// derives the same standing (`roomStanding`), so a room accepted in one is joined
+// in all of them (`vtc/rooms/memberships/list/0.1`, *One record, every surface*).
 //
-// - the member's **VTA** answers act 0.4 `unsupportedType` /
-//   `unsupportedVersion` → act 0.3 + list 0.1;
-// - the **community** answers list 0.2 `unsupportedType` /
-//   `unsupportedVersion` → act 0.4 + list 0.1 (the VTA has just shown it
-//   serves 0.4).
-//
-// The versions that answered are kept for the rest of the read (every page) and
-// handed to the accept, which signs its acceptance at the same act version. A
-// failure after the fallback is tagged with the party that produced it, as
-// before (`OfferReadError`): an agent without act 0.3, or a party that makes no
-// room offers at all.
-//
-// The wallet reads offers for the **names** of the community's rooms and what
-// each is for: what the room's DID alone does not tell a person. A label and a
-// description are the community's metadata about a room it owns, never the
-// room's content, and are shown as text, never interpreted. A room's `tags` are
-// its administrators' filing and the community never sends them.
+// The wallet reads offers here only for the **names** of the community's rooms:
+// what the room's DID alone does not tell a person. A label is the community's
+// metadata about a room it owns, never the room's content. Rooms a member owns
+// have no such name (a sealed in-room profile is the answer for those).
 
 import type { TrustTaskSender, TaskParty } from "../vta/channel.js";
 
 import { roomsKeysAct, unsignedRoomRequest, type CompletedDocumentSender } from "./act.js";
 
 import {
-  TYPE_URI as OFFERS_LIST_V1,
-  RESPONSE_TYPE_URI as OFFERS_LIST_V1_RESPONSE,
-  type VTCRoomsOffersListPayload as OffersListV1Payload,
-  type VTCRoomsOffersListResponsePayload as OffersListV1Response,
-} from "@openvtc/trust-tasks/vtc/rooms/offers/list/0.1/payload";
-import {
-  TYPE_URI as OFFERS_LIST_V2,
-  RESPONSE_TYPE_URI as OFFERS_LIST_V2_RESPONSE,
-  type VTCRoomsOffersListPayload as OffersListV2Payload,
-  type VTCRoomsOffersListResponsePayload as OffersListV2Response,
+  TYPE_URI as OFFERS_LIST,
+  RESPONSE_TYPE_URI as OFFERS_LIST_RESPONSE,
+  type VTCRoomsOffersListPayload,
+  type VTCRoomsOffersListResponsePayload,
   type OfferV2,
 } from "@openvtc/trust-tasks/vtc/rooms/offers/list/0.2/payload";
 
-/**
- * One offer: list 0.2's `OfferV2`, which is 0.1's `Offer` plus the room's
- * `description` when it has one. An offer read at 0.1 has none.
- */
+import {
+  TYPE_URI as MEMBERSHIPS_LIST,
+  RESPONSE_TYPE_URI as MEMBERSHIPS_LIST_RESPONSE,
+  type VTCRoomsMembershipsListPayload,
+  type VTCRoomsMembershipsListResponsePayload,
+  type RoomMembership,
+} from "@openvtc/trust-tasks/vtc/rooms/memberships/list/0.1/payload";
+
+/** One offer: list 0.2's `OfferV2` — the room's label, tier and, when it has one, its `description`. */
 export type { OfferV2 as CommunityRoomOffer };
+export type { RoomMembership as CommunityRoomMembership };
 
 /** What reading a member's offers needs: the wallet, the member's VTA, the community, the member. */
 export interface OfferReader {
@@ -94,35 +83,8 @@ export class OfferReadError extends Error {
   }
 }
 
-/** The `rooms/keys/act` version that signs a reply to a community's offer. */
-export type OfferActVersion = "0.4" | "0.3";
-
-/** The `vtc/rooms/offers/list` version a community answered. */
-export type OffersListVersion = "0.2" | "0.1";
-
-/** A member's offers, and the versions that read them. */
-export interface CommunityRoomOffers {
-  offers: OfferV2[];
-  /** The act version the member's VTA completed the listing at — the one to sign an acceptance at. */
-  act: OfferActVersion;
-  /** The listing version the community answered. At `0.1` no offer carries a description. */
-  list: OffersListVersion;
-}
-
 /** Pages read at most: 100 offers a page is more rooms than any member is offered. */
 const MAX_PAGES = 10;
-
-/**
- * Whether `e` is a refusal saying the party does not serve the task at the
- * version asked (`unsupportedType` / `unsupportedVersion`, by its local part).
- */
-export function isUnsupportedRefusal(e: unknown): boolean {
-  const details = (e as { details?: unknown } | null)?.details;
-  const code = details && typeof details === "object" ? (details as { code?: unknown }).code : undefined;
-  if (typeof code !== "string") return false;
-  const local = code.slice(code.lastIndexOf(":") + 1);
-  return local === "unsupportedType" || local === "unsupportedVersion";
-}
 
 /**
  * Every offer `reader.community` has made to `reader.member` and still lists:
@@ -130,86 +92,101 @@ export function isUnsupportedRefusal(e: unknown): boolean {
  * reference community keeps those seven days).
  */
 export async function communityRoomOffers(reader: OfferReader): Promise<OfferV2[]> {
-  return (await readCommunityRoomOffers(reader)).offers;
+  return readPages<VTCRoomsOffersListPayload, VTCRoomsOffersListResponsePayload, OfferV2>(
+    reader,
+    OFFERS_LIST,
+    OFFERS_LIST_RESPONSE,
+    "vtc/rooms/offers/list/0.2",
+  );
 }
 
 /**
- * {@link communityRoomOffers}, with the versions that answered: act 0.4 + list
- * 0.2 where both parties serve them, else list 0.1 (through act 0.3 when the
- * VTA lacks 0.4).
+ * The community's record of every room it has offered `reader.member`, in every
+ * state — `offered`, `admitted`, `removed` — for as long as it keeps the record
+ * (`vtc/rooms/memberships/list/0.1`). No credentials: those come with an open
+ * offer (`communityRoomOffers`).
  */
-export async function readCommunityRoomOffers(reader: OfferReader): Promise<CommunityRoomOffers> {
-  try {
-    return { offers: await readAt(reader, "0.4", "0.2"), act: "0.4", list: "0.2" };
-  } catch (e) {
-    if (!(e instanceof OfferReadError) || !isUnsupportedRefusal(e.inner)) throw e;
-    // The VTA without act 0.4 → act 0.3, which completes list 0.1; the
-    // community without list 0.2 → list 0.1, still through act 0.4.
-    const act: OfferActVersion = e.stage === "act" ? "0.3" : "0.4";
-    return { offers: await readAt(reader, act, "0.1"), act, list: "0.1" };
-  }
+export async function communityRoomMemberships(reader: OfferReader): Promise<RoomMembership[]> {
+  return readPages<VTCRoomsMembershipsListPayload, VTCRoomsMembershipsListResponsePayload, RoomMembership>(
+    reader,
+    MEMBERSHIPS_LIST,
+    MEMBERSHIPS_LIST_RESPONSE,
+    "vtc/rooms/memberships/list/0.1",
+  );
 }
 
-/** Every page of the listing at `list`, each completed by the VTA at `act`. */
-async function readAt(reader: OfferReader, act: OfferActVersion, list: OffersListVersion): Promise<OfferV2[]> {
-  const type = list === "0.2" ? OFFERS_LIST_V2 : OFFERS_LIST_V1;
-  const responseType = list === "0.2" ? OFFERS_LIST_V2_RESPONSE : OFFERS_LIST_V1_RESPONSE;
-  const items: OfferV2[] = [];
+/** A paged list the community answers as the member, through the VTA. */
+async function readPages<P extends { cursor?: string }, R extends { items: T[]; nextCursor?: string }, T>(
+  reader: OfferReader,
+  type: string,
+  responseType: string,
+  label: string,
+): Promise<T[]> {
+  const items: T[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
-    // The two versions' requests are the same: an optional cursor.
-    const payload: OffersListV1Payload & OffersListV2Payload = cursor !== undefined ? { cursor } : {};
+    const payload = (cursor !== undefined ? { cursor } : {}) as P;
     let document: Record<string, unknown>;
     try {
       ({ document } = await roomsKeysAct(
         reader.vta.sender,
         { holder: reader.holder, service: { did: reader.vta.did } },
         unsignedRoomRequest(type, reader.community.did, payload as Record<string, unknown>, reader.member),
-        act,
+        "0.5",
       ));
     } catch (e) {
       throw new OfferReadError("act", e);
     }
-    let reply: OffersListV1Response | OffersListV2Response;
+    let reply: R;
     try {
-      reply = await reader.community.sender.sendCompleted<OffersListV1Response | OffersListV2Response>(document, {
+      reply = await reader.community.sender.sendCompleted<R>(document, {
         expectedResponseType: responseType,
-        operationLabel: `vtc/rooms/offers/list/${list}`,
+        operationLabel: label,
       });
     } catch (e) {
       throw new OfferReadError("community", e);
     }
     if (!reply || !Array.isArray(reply.items)) {
-      throw new OfferReadError(
-        "community",
-        new Error(`${reader.community.did} answered vtc/rooms/offers/list without items`),
-      );
+      throw new OfferReadError("community", new Error(`${reader.community.did} answered ${label} without items`));
     }
-    // A 0.1 `Offer` is an `OfferV2` without `description`.
-    items.push(...(reply.items as OfferV2[]));
+    items.push(...reply.items);
     if (typeof reply.nextCursor !== "string" || reply.nextCursor === "") return items;
     cursor = reply.nextCursor;
   }
   return items;
 }
 
+/**
+ * Where one room stands, as every surface shows it
+ * (`vtc/rooms/memberships/list/0.1`, *One record, every surface*).
+ *
+ * - `offered` — an offer to accept;
+ * - `joined` — admitted, and openable: an open room, or a sealed one the VTA holds;
+ * - `unfinished` — admitted to a sealed room the VTA does not hold, while the
+ *   community keeps the Welcome: an acceptance begun somewhere, to finish;
+ * - `needsReadmission` — the same after the community stopped keeping it: only an
+ *   administrator re-admitting the member repairs it;
+ * - `removed`.
+ */
+export type RoomStanding = "offered" | "joined" | "unfinished" | "needsReadmission" | "removed";
+
+/** The table: the community's `state` and tier, and whether the VTA holds the room's group for the member. */
+export function roomStanding(room: Pick<RoomMembership, "state" | "visibility" | "repeatAcceptUntil">, held: boolean): RoomStanding {
+  if (room.state === "offered") return "offered";
+  if (room.state === "removed") return "removed";
+  if (room.visibility === "open" || held) return "joined";
+  return room.repeatAcceptUntil !== undefined ? "unfinished" : "needsReadmission";
+}
+
+/** Whether accepting is what the member can do next. */
+export function isAcceptable(standing: RoomStanding): boolean {
+  return standing === "offered" || standing === "unfinished";
+}
+
 /** A community room's name, as its offer carries it. */
 export interface CommunityRoomName {
   label: string;
   visibility?: string;
-}
-
-/** The longest description a surface shows: `RoomDescription`'s own bound. */
-export const ROOM_DESCRIPTION_MAX = 1000;
-
-/**
- * A room description as the community sent it, made safe to show: a string,
- * trimmed and cut to {@link ROOM_DESCRIPTION_MAX} characters; `""` for
- * anything else. Shown as text, never interpreted as markup or instructions.
- */
-export function roomDescriptionText(raw: unknown): string {
-  if (typeof raw !== "string") return "";
-  return [...raw.trim()].slice(0, ROOM_DESCRIPTION_MAX).join("");
 }
 
 /**

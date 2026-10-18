@@ -18,8 +18,6 @@ import {
 } from "../src/room-offers-policy.ts";
 import { RoomPageGates, type RoomPageBackgroundDeps } from "../src/room-page-background.ts";
 import { pageTaskRefusal } from "../src/page-task-policy.ts";
-import { InMemoryKVStore } from "@openvtc/pnm-core";
-import { offerAcceptKey } from "@openvtc/pnm-core/rooms";
 
 const VTA = "did:webvh:QmAgent:agent.example";
 const COMMUNITY = "did:webvh:QmNorthwind:northwind.example";
@@ -46,13 +44,11 @@ function view(over: Partial<OfferView> = {}): OfferView {
     member: MEMBER,
     roomId: BOARD,
     label: "Board pack",
-    description: "Papers for the board.",
     visibility: "private",
     actions: ["read", "write"],
     validUntil: "2027-10-01T00:00:00Z",
     offeredAt: "2026-10-14T10:00:00Z",
-    state: "open",
-    inProgress: false,
+    state: "offered",
     ...over,
   };
 }
@@ -71,9 +67,13 @@ test("one room offered to two identities: the portal must name which one joins",
   assert.equal(pickOffer(offers, BOARD).ok, false);
   const picked = pickOffer(offers, BOARD, MEMBER_2);
   assert.ok(picked.ok && picked.offer.member === MEMBER_2);
-  assert.equal(pickOffer([view({ state: "accepted" })], BOARD).ok, false, "an accepted offer is not accepted again");
-  assert.ok(pickOffer([view({ state: "accepted", inProgress: true })], BOARD).ok, "…unless its accept began here");
-  assert.equal(openOfferCount([view(), view({ state: "accepted" }), view({ state: "accepted", inProgress: true })]), 2);
+  assert.equal(pickOffer([view({ state: "joined" })], BOARD).ok, false, "a joined room is not accepted again");
+  assert.ok(pickOffer([view({ state: "unfinished" })], BOARD).ok, "…but one accepted anywhere and not finished is");
+  assert.equal(pickOffer([view({ state: "needsReadmission" })], BOARD).ok, false, "only an administrator repairs that");
+  assert.equal(
+    openOfferCount([view(), view({ state: "joined" }), view({ state: "unfinished" }), view({ state: "removed" })]),
+    2,
+  );
 });
 
 test("the window says what accepting does, by tier", () => {
@@ -83,6 +83,7 @@ test("the window says what accepting does, by tier", () => {
 
 test("a page may not have the wallet sign or request an offer task", () => {
   assert.match(pageTaskRefusal("https://trusttasks.org/spec/vtc/rooms/offers/accept/0.1")!, /acceptOffer/);
+  assert.match(pageTaskRefusal("https://trusttasks.org/spec/vtc/rooms/memberships/list/0.1")!, /rooms\.offers/);
 });
 
 // ── The background ──────────────────────────────────────────────────────────
@@ -195,7 +196,6 @@ test("an accept is confirmed in the wallet's window, naming the community, the r
   assert.equal(v.roomId, BOARD);
   assert.equal(v.member, MEMBER);
   assert.equal(v.label, "Board pack");
-  assert.equal(v.description, "Papers for the board.", "the window shows what the room is for");
   assert.equal(v.origin, undefined, "the console asked, not a page");
 
   h.answer = { approved: true };
@@ -249,9 +249,7 @@ test("only the community's own portal sees its offers, as views with no credenti
   assert.ok(res.ok);
   const { offers } = res.result as { offers: Record<string, unknown>[] };
   assert.deepEqual(offers.map((o) => [o.roomId, o.member]), [[BOARD, MEMBER]]);
-  assert.equal(offers[0]!.description, "Papers for the board.", "the portal is told what the room is for");
   assert.equal("credentials" in offers[0]!, false);
-  assert.equal("tags" in offers[0]!, false);
   assert.ok(!h.asked.some((a) => a.op === "list" && a.member === COMMUNITY), "never as the community");
 });
 
@@ -272,56 +270,62 @@ test("a portal's accept is the member's decision in the wallet's window, and nam
 
 // ── The offscreen document ──────────────────────────────────────────────────
 
-test("the offscreen listing builds views with no credential, and flags an accept in progress", async () => {
-  const journal = new InMemoryKVStore();
-  await journal.put(offerAcceptKey(VTA, COMMUNITY, MEMBER, BOARD), {
-    v: 1, vtaDid: VTA, communityDid: COMMUNITY, member: MEMBER, roomId: BOARD,
-    visibility: "private", invitation: "i", keyPackage: "kp", startedAt: "2026-10-14T10:00:00Z",
-  });
+const PICNIC = "did:webvh:QmPicnic:northwind.example:room-dids:picnic";
+const KEYS_LIST = "https://trusttasks.org/spec/rooms/keys/list/0.2";
+
+test("the offscreen listing is the community's record beside the VTA's custody, as every surface reads them", async () => {
   const sent: Record<string, unknown>[] = [];
   const deps = {
     agent: async () => ({
       holderDid: "did:key:zWallet",
       sender: {
-        async send<Res>(envelope: { payload: { document: Record<string, unknown> } }): Promise<Res> {
-          const doc = structuredClone(envelope.payload.document);
+        async send<Res>(envelope: { type: string; payload: { document?: Record<string, unknown> } }): Promise<Res> {
+          if (envelope.type === KEYS_LIST) {
+            // The VTA holds the picnic as this member, and the board only as another identity.
+            return {
+              rooms: [
+                { roomId: PICNIC, member: MEMBER, epoch: 3, earliestReadableEpoch: 1 },
+                { roomId: BOARD, member: MEMBER_2, epoch: 3, earliestReadableEpoch: 1 },
+              ],
+            } as Res;
+          }
+          const doc = structuredClone(envelope.payload.document!);
           doc.proof = { type: "DataIntegrityProof" };
           return { principal: doc.issuer, document: doc } as Res;
         },
       },
     }),
     identities: async () => ENTRIES,
-    journal,
     endpoint: async () => ENDPOINT,
     completed: () => ({
       async sendCompleted<Res>(doc: Record<string, unknown>): Promise<Res> {
         sent.push(doc);
+        const room = (over: Record<string, unknown>) => ({
+          host: COMMUNITY, visibility: "private", actions: ["read"],
+          validUntil: "2027-10-01T00:00:00Z", offeredAt: "2026-10-14T10:00:00Z", ...over,
+        });
         return {
           items: [
-            {
-              roomId: BOARD, host: COMMUNITY, label: "  Board pack ", visibility: "private", actions: ["read"],
-              description: `  <script>alert(1)</script> ${"x".repeat(2000)}`,
-              validUntil: "2027-10-01T00:00:00Z", offeredAt: "2026-10-14T10:00:00Z", state: "accepted",
-              credentials: { invitation: "i", membership: "{}", authority: "{}" },
-            },
-            {
-              roomId: "did:key:zElsewhere", host: "did:key:zOtherHost", label: "x", visibility: "open", actions: ["read"],
-              validUntil: "2027-10-01T00:00:00Z", offeredAt: "2026-10-14T10:00:00Z", state: "open",
-              credentials: { invitation: "i", membership: "{}", authority: "{}" },
-            },
+            room({ roomId: BOARD, label: "  Board pack ", description: " Papers for the board. ", state: "admitted",
+              admittedAt: "2026-10-17T09:58:00Z", repeatAcceptUntil: "2026-10-24T09:58:00Z" }),
+            room({ roomId: PICNIC, label: "Picnic", state: "admitted", admittedAt: "2026-10-01T00:00:00Z" }),
+            room({ roomId: "did:key:zElsewhere", host: "did:key:zOtherHost", label: "x", state: "offered" }),
           ],
         } as Res;
       },
     }),
   };
   const views = (await runRoomOffersOp(deps, { vtaDid: VTA }, { op: "list", communityDid: COMMUNITY, member: MEMBER })) as OfferView[];
-  assert.equal(views.length, 1, "an offer naming another host is not shown");
-  assert.equal(views[0]!.label, "Board pack");
-  assert.ok(views[0]!.description.startsWith("<script>alert(1)</script> x"), "trimmed, kept as text");
-  assert.equal([...views[0]!.description].length, 1000, "bounded like a label");
-  assert.equal(views[0]!.inProgress, true);
-  assert.equal("credentials" in views[0]!, false);
+  assert.equal(views.length, 2, "a room naming another host is not shown");
+  const board = views.find((v) => v.roomId === BOARD)!;
+  assert.equal(board.label, "Board pack");
+  assert.equal(board.description, "Papers for the board.");
+  assert.equal("tags" in board, false, "never the room's tags");
+  assert.equal(board.state, "unfinished", "accepted somewhere, not held as this member: finish it here");
+  assert.equal(views.find((v) => v.roomId === PICNIC)!.state, "joined");
+  assert.equal("credentials" in board, false);
   assert.equal(sent[0]!.issuer, MEMBER);
+  assert.equal(sent[0]!.type, "https://trusttasks.org/spec/vtc/rooms/memberships/list/0.1");
 
   await assert.rejects(
     runRoomOffersOp(deps, { vtaDid: VTA }, { op: "list", communityDid: COMMUNITY, member: COMMUNITY }),
@@ -398,7 +402,6 @@ test("the offscreen endpoint lookup gives a party with no TrustTaskHTTPS the qui
       throw new Error("no agent is asked to find an endpoint");
     },
     identities: async () => ENTRIES,
-    journal: new InMemoryKVStore(),
     endpoint: async (did: string) => {
       throw new NoTrustTaskServiceError(did);
     },

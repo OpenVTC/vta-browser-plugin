@@ -217,17 +217,18 @@ export interface VtaWalletRooms {
   browse(params: { hostDid: string; roomId: string; prefix?: string; sinceVersion?: number }): Promise<PageListingView>;
   /** One record, verified. */
   read(params: { hostDid: string; roomId: string; key: string }): Promise<PageRecordView>;
-  /** This community's offers of its rooms to the identities the member uses
-   *  here: label, what the room is for (`description`, plain text, when the
-   *  community says), tier, actions and dates — never an offer's credentials,
-   *  never the room's tags. Never
-   *  prompts. `needsOrigin` when the member has not yet let the wallet reach
+  /** Every room this community has offered the identities the member uses here,
+   *  and where each stands — `offered`, `joined`, `unfinished` (accepted
+   *  somewhere, here or elsewhere, and not finished), `needsReadmission`,
+   *  `removed` — as the member's other surfaces show it too: the community's
+   *  record beside the member's agent's keys. Label, tier, actions and dates —
+   *  never an offer's credentials. Never prompts. `needsOrigin` when the member has not yet let the wallet reach
    *  the community (they allow it from the wallet's console, or when sharing a
    *  room here). */
   offers(params: { hostDid: string }): Promise<{ offers: PageOfferView[]; needsOrigin?: string }>;
-  /** Ask the member to accept one offer. The wallet shows its own window naming
-   *  the community, the room and the identity it joins as; the member decides
-   *  there. `member` picks among the identities offered the room. To use the
+  /** Ask the member to accept one offer, or finish one accepted anywhere and not
+   *  joined. The wallet shows its own window naming the community, the room and
+   *  the identity it joins as; the member decides there. `member` picks among the identities offered the room. To use the
    *  room here afterwards, share it (`choose`, with `suggest: roomId`). */
   acceptOffer(params: { hostDid: string; roomId: string; member?: string }): Promise<{
     roomId: string;

@@ -642,7 +642,7 @@ test("the offscreen reading: each member's offers, signed as that member, at the
         async sendCompleted<Res>(doc: Record<string, unknown>) {
           sentTo.push(`${hostDid} ${endpoint} ${String(doc.recipient)}`);
           return {
-            items: [{ roomId: ROOM, host: HOST, label: "Board pack", visibility: "attributed", state: "accepted" }],
+            items: [{ roomId: ROOM, host: HOST, label: "Board pack", visibility: "attributed", state: "admitted" }],
           } as Res;
         },
       }),

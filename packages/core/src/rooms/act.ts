@@ -44,13 +44,9 @@ import {
   type UnsignedRoomRequest,
 } from "@openvtc/trust-tasks/rooms/keys/act/0.1/payload";
 import {
-  TYPE_URI as KEYS_ACT_V3,
-  RESPONSE_TYPE_URI as KEYS_ACT_V3_RESPONSE,
-} from "@openvtc/trust-tasks/rooms/keys/act/0.3/payload";
-import {
-  TYPE_URI as KEYS_ACT_V4,
-  RESPONSE_TYPE_URI as KEYS_ACT_V4_RESPONSE,
-} from "@openvtc/trust-tasks/rooms/keys/act/0.4/payload";
+  TYPE_URI as KEYS_ACT_V5,
+  RESPONSE_TYPE_URI as KEYS_ACT_V5_RESPONSE,
+} from "@openvtc/trust-tasks/rooms/keys/act/0.5/payload";
 import {
   TYPE_URI as KEYS_SEAL_V2,
   RESPONSE_TYPE_URI as KEYS_SEAL_V2_RESPONSE,
@@ -151,27 +147,20 @@ export async function roomsKeysAct(
   parties: RoomsCaller,
   document: UnsignedRoomRequest,
   /**
-   * `0.4` for `vtc/rooms/offers/list/0.2`, which only it completes, and — with
-   * `0.3` as the fallback for a VTA without 0.4 — for the other offer types
-   * (`vtc/rooms/offers/list/0.1`, `vtc/rooms/offers/accept/0.1`); `0.1` — what
-   * every VTA serving rooms speaks — for the rest.
+   * `0.5` for a member's requests to a community about the rooms it offers them
+   * (`vtc/rooms/offers/*`, `vtc/rooms/memberships/list`), which only it completes;
+   * `0.1` — what every VTA serving rooms speaks — for the rest.
    */
-  version: "0.1" | "0.3" | "0.4" = "0.1",
+  version: "0.1" | "0.5" = "0.1",
 ): Promise<{ principal: string; document: Record<string, unknown> }> {
   const payload: RoomsKeysActPayload = { document };
-  const [type, responseType] =
-    version === "0.4"
-      ? [KEYS_ACT_V4, KEYS_ACT_V4_RESPONSE]
-      : version === "0.3"
-        ? [KEYS_ACT_V3, KEYS_ACT_V3_RESPONSE]
-        : [KEYS_ACT, KEYS_ACT_RESPONSE];
-  const envelope = buildTrustTask(type, payload, {
+  const envelope = buildTrustTask(version === "0.5" ? KEYS_ACT_V5 : KEYS_ACT, payload, {
     issuer: parties.holder.did,
     recipient: parties.service.did,
   });
-  // 0.3's and 0.4's request and response members are 0.1's; only the table grew.
+  // 0.5's request and response members are 0.1's; only the table grew.
   const res = await sender.send<RoomsKeysActResponsePayload>(envelope, {
-    expectedResponseType: responseType,
+    expectedResponseType: version === "0.5" ? KEYS_ACT_V5_RESPONSE : KEYS_ACT_RESPONSE,
     operationLabel: `rooms/keys/act/${version}`,
   });
   const completed = res.document as Record<string, unknown>;
