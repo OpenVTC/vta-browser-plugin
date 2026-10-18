@@ -231,6 +231,18 @@ function RoomRow({
           );
         })}
       </div>
+      {(() => {
+        // What the community says the room is for (vtc/rooms/offers/list 0.2), as text only.
+        const description = row.offers.find((o) => o.description)?.description;
+        return description ? (
+          <span
+            style={{ fontSize: t.sm, color: c.text, wordBreak: "break-word", whiteSpace: "pre-line" }}
+            title="What the community says the room is for"
+          >
+            {description}
+          </span>
+        ) : null;
+      })()}
       <div style={{ overflowX: "auto" }}>
         <div style={{ minWidth: 560 }}>
           <Track steps={[offeredStep(row), joinedStep(row), websiteStep(row, shares)]} />

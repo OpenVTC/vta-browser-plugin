@@ -1,7 +1,8 @@
 // Accepting a community's offer of a room (`vtc/rooms/offers/accept/0.1`), the
 // CLI's `pnm rooms offers accept` step for step: credentials into the VTA, a
 // KeyPackage the VTA mints, the acceptance completed by the VTA as the member
-// (`rooms/keys/act/0.3`), and the Welcome back to the VTA. A lost answer is
+// (`rooms/keys/act/0.4`, or 0.3 from a VTA without it — the version that read
+// the offers), and the Welcome back to the VTA. A lost answer is
 // retried with the SAME KeyPackage, so the community answers with the same
 // Welcome (accept 0.1 "Repeating an accept"; group/add 0.2 item 8).
 
@@ -22,7 +23,9 @@ const MEMBER = "did:webvh:QmAlice:people.example";
 const BOARD = "did:webvh:QmBoard:community.example:room-dids:board";
 const SPEC = "https://trusttasks.org/spec/";
 const ACT3 = `${SPEC}rooms/keys/act/0.3`;
+const ACT4 = `${SPEC}rooms/keys/act/0.4`;
 const LIST = `${SPEC}vtc/rooms/offers/list/0.1`;
+const LIST2 = `${SPEC}vtc/rooms/offers/list/0.2`;
 const ACCEPT = `${SPEC}vtc/rooms/offers/accept/0.1`;
 const KEY_PACKAGE = `${SPEC}rooms/keys/key-package/0.1`;
 const WELCOME = `${SPEC}rooms/keys/welcome/0.1`;
@@ -68,7 +71,8 @@ function memberVta(over = {}) {
       sent.push(envelope);
       if (over[envelope.type]) return over[envelope.type](envelope);
       switch (envelope.type) {
-        case ACT3: {
+        case ACT3:
+        case ACT4: {
           const doc = structuredClone(envelope.payload.document);
           doc.proof = { type: "DataIntegrityProof" };
           return { principal: doc.issuer, document: doc };
@@ -99,7 +103,7 @@ function community({ offers = [offer()], accept } = {}) {
     sender: {
       async sendCompleted(doc, opts) {
         docs.push({ doc, opts });
-        if (doc.type === LIST) return { items: offers };
+        if (doc.type === LIST || doc.type === LIST2) return { items: offers };
         if (doc.type === ACCEPT) {
           if (accept) return accept(doc);
           const kp = doc.payload.keyPackage;
@@ -152,8 +156,9 @@ test("a sealed room: credentials stored, a KeyPackage the VTA minted, accepted a
   assert.equal(accept.issuer, MEMBER, "the community sees the member");
   assert.equal(accept.recipient, COMMUNITY);
   assert.deepEqual(accept.payload, { roomId: BOARD, keyPackage: "kp-1" });
-  const asked = s.vta.sent.filter((e) => e.type === ACT3).map((e) => e.payload.document.type);
-  assert.deepEqual(asked, [LIST, ACCEPT], "both requests are completed by the VTA at act 0.3");
+  const asked = s.vta.sent.filter((e) => e.type === ACT4).map((e) => e.payload.document.type);
+  assert.deepEqual(asked, [LIST2, ACCEPT], "both requests are completed by the VTA at act 0.4");
+  assert.equal(s.vta.sent.some((e) => e.type === ACT3), false);
 
   assert.equal(journalAtAccept[0]?.keyPackage, "kp-1", "the KeyPackage is journaled before the acceptance leaves");
   const welcome = s.vta.sent.find((e) => e.type === WELCOME);
@@ -235,7 +240,7 @@ test("community still settling (admissionPending): retryable, and the KeyPackage
 
 test("a VTA answer made as anyone but the member is refused, and nothing reaches the community", async () => {
   const vta = memberVta({
-    [ACT3]: (envelope) => {
+    [ACT4]: (envelope) => {
       const doc = structuredClone(envelope.payload.document);
       doc.issuer = COMMUNITY;
       doc.proof = { type: "DataIntegrityProof" };
@@ -249,11 +254,10 @@ test("a VTA answer made as anyone but the member is refused, and nothing reaches
 });
 
 test("a VTA without act 0.3 is told it must be updated", async () => {
-  const vta = memberVta({
-    [ACT3]: () => {
-      throw new VtaClientError("e.p.msg.bad_request", "no such task", { details: { code: "unsupportedType" } });
-    },
-  });
+  const unsupported = () => {
+    throw new VtaClientError("e.p.msg.bad_request", "no such task", { details: { code: "unsupportedType" } });
+  };
+  const vta = memberVta({ [ACT4]: unsupported, [ACT3]: unsupported });
   const s = setup({ vta });
   await assert.rejects(acceptCommunityRoomOffer(s.reader, BOARD, s.deps), (e) => {
     assert.equal(e.code, "actUnsupported");
@@ -264,7 +268,7 @@ test("a VTA without act 0.3 is told it must be updated", async () => {
 
 test("a missing capability names the command that restores it", async () => {
   const vta = memberVta({
-    [ACT3]: () => {
+    [ACT4]: () => {
       throw new VtaClientError("e.p.msg.forbidden", "denied", { details: { code: "permissionDenied" } });
     },
   });
@@ -308,7 +312,7 @@ test("a KeyPackage the VTA has let go is dropped, so the next attempt mints afre
   });
   let refuse = true;
   const vta = memberVta({
-    [ACT3]: (envelope) => {
+    [ACT4]: (envelope) => {
       if (envelope.payload.document.type === ACCEPT && refuse) {
         refuse = false;
         throw new VtaClientError("e.p.msg.bad_request", "not held", { details: { code: "rooms/keys/act:keyPackageNotHeld" } });
@@ -331,7 +335,9 @@ test("the community refusing the offer read during an accept is the community's 
     const vtc = community();
     const inner = vtc.sender.sendCompleted;
     vtc.sender.sendCompleted = async (doc, opts) => {
-      if (doc.type === LIST) throw new VtaClientError("e.p.msg.bad_request", "refused", { details: { code } });
+      if (doc.type === LIST || doc.type === LIST2) {
+        throw new VtaClientError("e.p.msg.bad_request", "refused", { details: { code } });
+      }
       return inner(doc, opts);
     };
     const s = setup({ vtc });
@@ -341,4 +347,46 @@ test("the community refusing the offer read during an accept is the community's 
       return true;
     });
   }
+});
+
+// ── Members and communities upgrade on their own schedules ──────────────────
+
+test("a VTA without act 0.4: the offers are read at list 0.1 and the acceptance signed at act 0.3", async () => {
+  const vta = memberVta({
+    [ACT4]: () => {
+      throw new VtaClientError("e.p.msg.bad_request", "no such task", { details: { code: "unsupportedType" } });
+    },
+  });
+  const s = setup({ vta });
+  const r = await acceptCommunityRoomOffer(s.reader, BOARD, s.deps);
+  assert.equal(r.joined, true);
+  const at3 = s.vta.sent.filter((e) => e.type === ACT3).map((e) => e.payload.document.type);
+  assert.deepEqual(at3, [LIST, ACCEPT]);
+  const at4 = s.vta.sent.filter((e) => e.type === ACT4).map((e) => e.payload.document.type);
+  assert.deepEqual(at4, [LIST2], "act 0.4 was asked once, for the listing, and not again");
+  assert.deepEqual(s.vtc.docs.map((d) => d.doc.type), [LIST, ACCEPT]);
+});
+
+test("a community without list 0.2: the offers are read at list 0.1, still through act 0.4, and accepted there", async () => {
+  const vtc = community();
+  const inner = vtc.sender.sendCompleted;
+  vtc.sender.sendCompleted = async (doc, opts) => {
+    if (doc.type === LIST2) {
+      throw new VtaClientError("e.p.msg.bad_request", "no such version", {
+        details: { code: "unsupportedVersion" },
+      });
+    }
+    return inner(doc, opts);
+  };
+  const s = setup({ vtc });
+  const r = await acceptCommunityRoomOffer(s.reader, BOARD, s.deps);
+  assert.equal(r.joined, true);
+  assert.deepEqual(
+    s.vta.sent.filter((e) => e.type === ACT4 || e.type === ACT3).map((e) => [e.type, e.payload.document.type]),
+    [
+      [ACT4, LIST2],
+      [ACT4, LIST],
+      [ACT4, ACCEPT],
+    ],
+  );
 });
