@@ -1475,6 +1475,14 @@ export function SignInView({
             {portalOrigin} as <ShortDid value={screen.identifiedAs} />, for this
             session only. Approving asks for your passkey.
           </p>
+          {screen.signingScope && screen.signingScope.length > 0 && (
+            <Note tone="accent">
+              <span data-testid="signing-scope">
+                It also lets that browser act as you, for this session, in:{" "}
+                {screen.signingScope.map(scopeLabel).join(", ")}.
+              </span>
+            </Note>
+          )}
           {deadline !== undefined && (
             <Countdown deadline={deadline} now={clock} />
           )}
@@ -1541,5 +1549,18 @@ export function SignInView({
     case "uv-challenge":
     case "uv-enrolled":
       return null;
+  }
+}
+
+/** What a signing-scope family lets the website do, in words. An unknown
+ *  family is shown as itself. */
+function scopeLabel(family: string): string {
+  switch (family) {
+    case "vtc/directory":
+      return "the member directory (reading it, and editing your own card)";
+    case "vtc/groups":
+      return "community groups";
+    default:
+      return family;
   }
 }
