@@ -22,6 +22,7 @@ import {
   putRoomFile,
   RoomHostChannel,
   roomHostEndpoint,
+  isNoTrustTaskService,
   ROOM_FILE_MAX_BYTES,
   type RoomFileCipher,
   type RoomFileContext,
@@ -76,6 +77,9 @@ function loadCipher(): Promise<RoomFileCipher> {
   );
   return cipherLoad;
 }
+
+/** Whether a resolution failed because the host publishes no Trust-Task HTTPS endpoint. */
+export { isNoTrustTaskService };
 
 /** The host's dispatcher URL — for the background's permission check. */
 export function resolveRoomHostEndpoint(hostDid: string): Promise<string> {

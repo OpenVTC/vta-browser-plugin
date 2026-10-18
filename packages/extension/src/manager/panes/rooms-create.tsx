@@ -100,6 +100,7 @@ import { contextHeading } from "../format.js";
 import { pathProblem } from "../webvh-path.js";
 import { coveringWildcard, hostGrantCommand, hostnameOf, roomHostCommand } from "../room-host-setup.js";
 import type { Parties } from "../use-vta.js";
+import { prepareRoomFiles } from "../room-files.js";
 import {
   agentMediators,
   Choice,
@@ -385,6 +386,33 @@ export function CreateRoom({
             : ""
           : hostPasted.trim();
 
+  // Whether the host can be registered with at all. Your agent can only start a
+  // conversation with a room host over HTTPS (`OUTBOUND_SUPPORTED` in
+  // vta-service's room_host.rs), and the registration is signed by this
+  // wallet's holder, so TSP and DIDComm — which authenticate the agent as its
+  // own DID — could not carry it even if the agent spoke them. A host whose DID
+  // document publishes no Trust-Task HTTPS endpoint therefore cannot be told
+  // about a room, and the form used to find that out only after minting the
+  // room's identity, leaving it orphaned. Checked here, before step 3 opens.
+  //
+  // Only a definite "publishes none" (`noTrustTaskService`, by code) closes the
+  // step; a host that could not be resolved just now is not a verdict, and the
+  // registration will say what it finds.
+  const [hostCheck, setHostCheck] = useState<{ did: string; noHttps: boolean } | null>(null);
+  useEffect(() => {
+    if (!hostDid) return;
+    let live = true;
+    prepareRoomFiles(hostDid).then(
+      () => live && setHostCheck({ did: hostDid, noHttps: false }),
+      (e: unknown) =>
+        live && setHostCheck({ did: hostDid, noHttps: (e as { code?: unknown } | null)?.code === "noTrustTaskService" }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [hostDid]);
+  const hostHasNoHttps = hostCheck?.did === hostDid && hostCheck.noHttps;
+
   const pickableHosts = (dids ?? []).filter((d) => d.did !== contextDid && d.did !== parties.service.did);
   const roomChoices = (dids ?? []).filter(
     (d) => d.did !== contextDid && d.did !== hostDid && d.did !== parties.service.did,
@@ -406,7 +434,7 @@ export function CreateRoom({
   // speaking first — so the hint reads top to bottom the way the form does.
   const contextMissing = !contextId ? "Step 1: choose the context the host and its rooms live in." : null;
 
-  const hostMissing = !contextId
+  const hostStepMissing = !contextId
     ? null
     : hostSource === "context"
       ? contextDid ? null : "Step 2: this context has no DID yet — mint one for the host."
@@ -425,6 +453,12 @@ export function CreateRoom({
           : !hostPasted.trim()
             ? "Step 2: paste the DID of the host."
             : null;
+
+  const hostMissing =
+    hostStepMissing ??
+    (hostHasNoHttps
+      ? "Step 2: this host publishes no HTTPS endpoint, and your agent can register a room with a host only over HTTPS."
+      : null);
 
   const missing =
     source === "mint"
@@ -895,6 +929,17 @@ export function CreateRoom({
                 onChange={(e) => setHostPasted(e.target.value)}
               />
             </Field>
+          )}
+          {hostHasNoHttps && (
+            <Note tone="danger">
+              <strong>This host cannot be registered with yet.</strong> Its DID document publishes no
+              Trust-Task HTTPS endpoint, and your agent can tell a host about a room only over HTTPS today —
+              it has no outbound TSP or DIDComm to a room host, and those would authenticate it as the agent
+              rather than as the room's owner anyway. Creating the room here would mint its identity and then
+              fail to register it. Choose a host whose DID document carries an HTTPS URL — one minted here
+              with a <strong>Host URL</strong> does — or, for a host someone else runs, ask its operator to
+              publish one.
+            </Note>
           )}
         </Step>
 
