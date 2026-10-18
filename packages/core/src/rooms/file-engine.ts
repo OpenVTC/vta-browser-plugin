@@ -40,7 +40,7 @@ import { base64url } from "@openvtc/vti-didcomm-js";
 
 import { generateSigningIdentity, type SigningIdentity } from "../siop/self-issued.js";
 import type { TrustTaskSender } from "../vta/channel.js";
-import { roomsKeysOpen } from "./index.js";
+import { roomsKeysOpenAt, sealedAt } from "./index.js";
 import {
   actAndSend,
   roomInfoAsMember,
@@ -437,17 +437,22 @@ export async function getRoomFile(
       "the record has no sealed body: it is on an open room, or it has been retracted",
     );
   }
-  const plaintext = await roomsKeysOpen(ctx.vta.sender, {
+  // Opened, and its signed location checked, at the version the body was
+  // sealed at: a curation moves a record past it (`SealedRecord.version`), and
+  // a record curated before hosts kept that is found by the VTA, which says
+  // where it opened.
+  const sealed = record.sealed as typeof record.sealed & { version?: number };
+  const { plaintext, sealedAt: openedAt } = await roomsKeysOpenAt(ctx.vta.sender, {
     ...vta,
     roomId: ctx.roomId,
     key,
-    version: record.version,
-    sealed: record.sealed,
+    version: sealedAt(sealed, record.version),
+    sealed,
     ...(ctx.member !== undefined ? { member: ctx.member } : {}),
   });
   const verified = await verifyRecordBody(
     base64url.decode(plaintext),
-    { roomId: ctx.roomId, key, version: record.version },
+    { roomId: ctx.roomId, key, version: openedAt },
     record.author,
   );
   const file = verified.file;

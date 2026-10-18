@@ -310,8 +310,10 @@ export interface RoomsOpenParams extends RoomsCaller {
   /** The member to open as, where the VTA holds more than one of the room ({@link memberExt}). */
   member?: string;
   key: string;
+  /** Where the body was sealed: {@link sealedAt}, not necessarily the record's version. */
   version: number;
-  sealed: { ciphertext: string; nonce: string; epoch: number };
+  /** The host's sealed object; its `version`, if any, is not forwarded. */
+  sealed: { ciphertext: string; nonce: string; epoch: number; version?: number };
 }
 
 /**
@@ -326,16 +328,65 @@ export async function roomsKeysOpen(
   sender: TrustTaskSender,
   params: RoomsOpenParams,
 ): Promise<string> {
-  const { holder, service, member, ...rest } = params;
+  return (await roomsKeysOpenAt(sender, params)).plaintext;
+}
+
+/**
+ * The version a sealed body was sealed at, for a record now at `recordVersion`:
+ * the host's `sealed.version` where it served one, else the record's own.
+ *
+ * A curation moves a record to a new version and keeps its body, and the body
+ * stays bound — by the AEAD and by its author's signed location — to the
+ * version it was written at (rooms `_shared/0.1` `SealedRecord.version`). A
+ * `sealed.version` above the record's is refused: a body cannot have been
+ * sealed for a version the room had not reached.
+ */
+export function sealedAt(sealed: { version?: number }, recordVersion: number): number {
+  const v = sealed.version;
+  if (v === undefined) return recordVersion;
+  if (!Number.isSafeInteger(v) || v < 1 || v > recordVersion) {
+    throw new Error(
+      `the host says this body was sealed at version ${String(v)}, which is not a version at or before the record's ${recordVersion}`,
+    );
+  }
+  return v;
+}
+
+/**
+ * {@link roomsKeysOpen}, and the version the body opened at — the location a
+ * reader verifies the author's signature against.
+ *
+ * `params.version` is where the caller believes the body was sealed
+ * ({@link sealedAt}). A record curated by a host that predates
+ * `sealed.version` opens there for nobody, so the VTA searches earlier
+ * versions and names the one that opened in `ext["org.openvtc.rooms"].sealedAt`.
+ * Only the three members `rooms/keys/open` takes are sent of `sealed`.
+ */
+export async function roomsKeysOpenAt(
+  sender: TrustTaskSender,
+  params: RoomsOpenParams,
+): Promise<{ plaintext: string; sealedAt: number }> {
+  const { holder, service, member, sealed, ...rest } = params;
   const res = await call<RoomsKeysOpenResponsePayload>(
     sender,
     { holder, service },
     KEYS_OPEN,
     KEYS_OPEN_RESPONSE,
     "rooms/keys/open/0.1",
-    { ...rest, ...memberExt(member) } as unknown as RoomsKeysOpenPayload,
+    {
+      ...rest,
+      sealed: { ciphertext: sealed.ciphertext, nonce: sealed.nonce, epoch: sealed.epoch },
+      ...memberExt(member),
+    } as unknown as RoomsKeysOpenPayload,
   );
-  return res.plaintext;
+  const named = (res.ext as Record<string, { sealedAt?: unknown } | undefined> | undefined)?.[ROOMS_MEMBER_EXT]?.sealedAt;
+  if (named === undefined) return { plaintext: res.plaintext, sealedAt: params.version };
+  if (typeof named !== "number" || !Number.isSafeInteger(named) || named < 1 || named > params.version) {
+    throw new Error(
+      `${service.did} opened the record at version ${String(named)}, which is not at or before the ${params.version} it was asked for`,
+    );
+  }
+  return { plaintext: res.plaintext, sealedAt: named };
 }
 
 export interface RoomsSealParams extends RoomsCaller {

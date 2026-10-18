@@ -514,3 +514,83 @@ test("a document with no proof is not sent as a completed one", async () => {
   await assert.rejects(channel.sendCompleted(request()), /without an issuer or a proof/);
   assert.equal(f.sent.length, 0);
 });
+
+// ── A record curated since it was written ───────────────────────────────────
+//
+// A curation moves a record to a new version and keeps its body, which stays
+// bound to the version it was sealed at (`SealedRecord.version`). A file
+// record archived or pinned since it was uploaded must still download.
+
+/** The host, with its record moved `by` versions past its body, `told` whether it says where the body was sealed. */
+function curated(host, by, told) {
+  return {
+    ...host,
+    sender: {
+      sendCompleted: async (env) => {
+        const r = await host.sender.sendCompleted(env);
+        if (slug(env.type) !== "rooms/records/get/0.2") return r;
+        return {
+          ...r,
+          version: r.version + by,
+          sealed: told ? { ...r.sealed, version: r.version } : r.sealed,
+        };
+      },
+    },
+  };
+}
+
+/** The VTA, opening a body only where it was sealed — and, asked at a later version, searching back and saying where. */
+function searchingVta(vta, opened) {
+  return {
+    ...vta,
+    sender: {
+      async send(envelope) {
+        if (slug(envelope.type) !== "rooms/keys/open/0.1") return vta.sender.send(envelope);
+        const p = envelope.payload;
+        opened.push(structuredClone(p));
+        assert.equal(p.sealed.version, undefined, "keys/open takes no `version` in `sealed`");
+        const at = Number(p.sealed.nonce.slice(1));
+        if (at > p.version) throw new Error("sealed for a later version");
+        return at === p.version
+          ? { plaintext: p.sealed.ciphertext }
+          : { plaintext: p.sealed.ciphertext, ext: { "org.openvtc.rooms": { sealedAt: at } } };
+      },
+    },
+  };
+}
+
+test("a file record curated since its upload opens where the host says its body was sealed", async () => {
+  const vta = fakeVta();
+  const host = fakeHost();
+  const put = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
+  const opened = [];
+  const { got } = await getAll(context(searchingVta(vta, opened), curated(host, 4, true)), put.key);
+  assert.equal(got.file.name, "a.txt");
+  assert.equal(opened[0].version, put.version, "asked at the sealed-at version, not the record's");
+});
+
+test("a file record curated before hosts kept the sealed-at version is found, and checked where it opened", async () => {
+  const vta = fakeVta();
+  const host = fakeHost();
+  const put = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
+  const opened = [];
+  const { got } = await getAll(context(searchingVta(vta, opened), curated(host, 4, false)), put.key);
+  assert.equal(got.file.name, "a.txt");
+  assert.equal(opened[0].version, put.version + 4, "asked at the record's version, having nothing better");
+});
+
+test("a sealed-at version after the record's own is refused before anything is opened", async () => {
+  const vta = fakeVta();
+  const host = fakeHost();
+  const put = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
+  const lying = { ...host, sender: { sendCompleted: async (env) => {
+    const r = await host.sender.sendCompleted(env);
+    return slug(env.type) === "rooms/records/get/0.2" ? { ...r, sealed: { ...r.sealed, version: r.version + 1 } } : r;
+  } } };
+  const opened = [];
+  await assert.rejects(
+    getRoomFile(context(searchingVta(vta, opened), lying), put.key, () => undefined),
+    /not a version at or before the record's/,
+  );
+  assert.equal(opened.length, 0);
+});
