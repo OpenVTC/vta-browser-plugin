@@ -901,8 +901,8 @@ VTA; drawing a failed listing as an empty one ("this agent holds keys to no
 rooms" is a claim, and an agent that did not answer has made none); or rendering
 one epoch and calling it the answer.
 
-**Files are the one rooms flow the wallet runs against the host itself.** Records
-are read *through the agent* (`rooms/keys/{browse,read}`): the console's bridge
+**Files, and the console's writes, are the rooms flows the wallet runs against
+the host itself.** Records are read *through the agent* (`rooms/keys/{browse,read}`): the console's bridge
 carries only `type` and `payload` to the wallet's own VTA, so the agent makes the
 host call. Files cannot go that way — their bytes must not pass through the VTA
 — so the offscreen document calls the host directly (`RoomHostChannel`: HTTPS to
