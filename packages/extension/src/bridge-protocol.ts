@@ -2991,9 +2991,11 @@ export interface OffscreenRoomsPageRequest {
 export type OffscreenRoomsPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
 
 /**
- * Port name for one file transfer, console → offscreen. The port's lifetime is
- * the transfer's: closing it stops the transfer, and an upload stopped part way
- * releases what the host reserved for it.
+ * Port name for one room write from the console — a file transfer, a note, or a
+ * curation — console → offscreen. The port's lifetime is the operation's:
+ * closing it stops it, and an upload stopped part way releases what the host
+ * reserved for it. Records go to the host from the offscreen document, never
+ * from the console, whose bridge reaches only the wallet's own agent.
  */
 export const ROOM_FILES_PORT = "vta-wallet/room-files" as const;
 
@@ -3020,7 +3022,22 @@ export type RoomFilesOpen =
       tags?: string[];
       padme?: boolean;
     })
-  | (RoomFilesTarget & { kind: "get"; key: string });
+  | (RoomFilesTarget & { kind: "get"; key: string })
+  /**
+   * Write a note, or replace one. With no `key` it is a new record under a
+   * fresh opaque key; with one, `replaces` is the version the member read, and
+   * the host refuses the write if anything has replaced it since.
+   */
+  | (RoomFilesTarget & { kind: "note"; key?: string; replaces?: number; title: string; body?: string })
+  /** Change a record's standing: retract, demote, restore, pin. */
+  | (RoomFilesTarget & {
+      kind: "curate";
+      key: string;
+      status?: "active" | "deprecated" | "retracted";
+      pinned?: boolean;
+      reason?: string;
+      expectedVersion?: number;
+    });
 
 /** console → offscreen, after a `put` open: the file, in order, then `end`. */
 export type RoomFilesUpload = { kind: "data"; data: string /* base64url */ } | { kind: "end" };
@@ -3043,6 +3060,10 @@ export type RoomFilesMessage =
       description?: string;
       tags?: string[];
     }
+  /** A note written or replaced, as the member. */
+  | { kind: "noted"; key: string; version: number; author: string }
+  /** A record's new standing, as the host recorded it. */
+  | { kind: "curated"; key: string; version: number; status: "active" | "deprecated" | "retracted"; pinned?: boolean }
   | { kind: "failed"; error: string; code?: string };
 
 // ── A community's offers of its rooms ───────────────────────────────────────

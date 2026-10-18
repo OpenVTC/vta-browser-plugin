@@ -28,7 +28,15 @@ import {
   type RoomFileContext,
 } from "@openvtc/pnm-core/rooms/files";
 import type { SigningIdentity, TrustTaskSender } from "@openvtc/pnm-core";
-import type { CompletedDocumentSender } from "@openvtc/pnm-core/rooms";
+import {
+  curateRecordAsMember,
+  opaqueRecordKey,
+  putCleartextAsMember,
+  roomInfoAsMember,
+  writeSealedAsMember,
+  type CompletedDocumentSender,
+  type PersonaRoom,
+} from "@openvtc/pnm-core/rooms";
 import { base64url } from "@openvtc/vti-didcomm-js";
 
 import {
@@ -160,9 +168,20 @@ export function serveRoomFilesPort(port: chrome.runtime.Port, deps: RoomFilesDep
     try {
       if (!started) {
         started = true;
-        what = msg.kind === "get" ? `get ${msg.key}` : msg.kind === "put" ? `put of ${msg.size} bytes` : String(msg.kind);
+        what =
+          msg.kind === "get"
+            ? `get ${msg.key}`
+            : msg.kind === "put"
+              ? `put of ${msg.size} bytes`
+              : msg.kind === "note"
+                ? msg.key
+                  ? `note edit of ${msg.key}`
+                  : "new note"
+                : msg.kind === "curate"
+                  ? `curate ${msg.key}`
+                  : String(msg.kind);
         console.info(`[room files] ${what} in ${"roomId" in msg ? msg.roomId : "?"}: started`);
-        if (msg.kind === "get") {
+        if (msg.kind === "get" || msg.kind === "note" || msg.kind === "curate") {
           void run(deps, msg, abort.signal, post).then(finish, fail);
         } else if (msg.kind === "put") {
           // Allocated once, at the size declared, so a console that sends more
@@ -204,11 +223,66 @@ async function run(
   post: (m: RoomFilesMessage) => void,
   bytes?: Uint8Array,
 ): Promise<RoomFilesMessage> {
+  // Notes and curation need no file key and no cipher: the cipher is loaded
+  // only for a transfer, so a record write cannot fail on the module that
+  // seals files.
+  const files = open.kind === "put" || open.kind === "get";
   const [{ sender: vtaSender, signing }, cipher] = await Promise.all([
     deps.agent(open.vtaDid, open.restBaseUrl),
-    loadCipher(),
+    files ? loadCipher() : Promise.resolve(undefined),
   ]);
   const host = await (deps.host ?? hostChannels)(open.hostDid);
+  if (open.kind === "note" || open.kind === "curate") {
+    // The same room handle the portal's writes use: built here, completed by
+    // the VTA as the member, sent to the host unchanged.
+    const room: PersonaRoom = {
+      roomId: open.roomId,
+      holder: { did: signing.did },
+      vta: { did: open.vtaDid, sender: vtaSender },
+      host: { did: open.hostDid, sender: host.completed },
+      ...(open.member !== undefined ? { member: open.member } : {}),
+    };
+    if (open.kind === "curate") {
+      const out = await curateRecordAsMember(room, {
+        key: open.key,
+        ...(open.status !== undefined ? { status: open.status } : {}),
+        ...(open.pinned !== undefined ? { pinned: open.pinned } : {}),
+        ...(open.reason !== undefined ? { reason: open.reason } : {}),
+        ...(open.expectedVersion !== undefined ? { expectedVersion: open.expectedVersion } : {}),
+      });
+      return {
+        kind: "curated",
+        key: out.key,
+        version: out.version,
+        status: out.status,
+        ...(out.pinned !== undefined ? { pinned: out.pinned } : {}),
+      };
+    }
+    // Sealed or in the clear is the room's, read as the member — never assumed.
+    const { principal, info } = await roomInfoAsMember(room);
+    const key = open.key ?? opaqueRecordKey();
+    const version =
+      info.visibility === "open"
+        ? await putCleartextAsMember(room, {
+            key,
+            title: open.title,
+            ...(open.body !== undefined ? { body: open.body } : {}),
+            ...(open.replaces !== undefined ? { replaces: open.replaces } : {}),
+          })
+        : await writeSealedAsMember(
+            room,
+            {
+              roomId: open.roomId,
+              key,
+              author: principal,
+              title: open.title,
+              ...(open.body !== undefined ? { body: open.body } : {}),
+            },
+            undefined,
+            open.replaces !== undefined ? { replaces: open.replaces } : {},
+          );
+    return { kind: "noted", key, version, author: principal };
+  }
   const ctx: RoomFileContext = {
     roomId: open.roomId,
     // The wallet asks its VTA; the VTA acts as the member. The wallet's own DID
@@ -220,7 +294,7 @@ async function run(
     // room is never asked to choose between them.
     ...(open.member !== undefined ? { member: open.member } : {}),
     uploadChannel: host.signedBy,
-    cipher,
+    cipher: cipher!,
     onProgress: (p) => post({ kind: "progress", ...p }),
     signal,
   };

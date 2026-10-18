@@ -271,6 +271,66 @@ export async function getRoomFileIntoConsole(
   }
 }
 
+export type NoteResult = Omit<Extract<RoomFilesMessage, { kind: "noted" }>, "kind">;
+export type CurateResult = Omit<Extract<RoomFilesMessage, { kind: "curated" }>, "kind">;
+
+/** The open message's common half: whom to ask, for which room, as which member. */
+async function targetOf(target: RoomFileTarget, opts: TransferOptions) {
+  const prepared = await (opts.prepare ?? prepareRoomFiles)(target.hostDid);
+  return {
+    vtaDid: prepared.vtaDid,
+    ...(prepared.restBaseUrl ? { restBaseUrl: prepared.restBaseUrl } : {}),
+    roomId: target.roomId,
+    hostDid: target.hostDid,
+    ...(target.member !== undefined ? { member: target.member } : {}),
+  };
+}
+
+/**
+ * Write a note as the member, or replace one (`key` with `replaces`, the
+ * version read). Signed by the member's VTA, sealed on a sealed tier, sent to
+ * the host by the offscreen document — never by this page.
+ */
+export async function writeRoomNote(
+  target: RoomFileTarget,
+  note: { key?: string; replaces?: number; title: string; body?: string },
+  opts: TransferOptions = {},
+): Promise<NoteResult> {
+  const open: RoomFilesOpen = {
+    kind: "note",
+    ...(await targetOf(target, opts)),
+    title: note.title,
+    ...(note.body !== undefined ? { body: note.body } : {}),
+    ...(note.key !== undefined ? { key: note.key } : {}),
+    ...(note.replaces !== undefined ? { replaces: note.replaces } : {}),
+  };
+  return transfer<NoteResult>(open, opts, (m) => {
+    if (m.kind !== "noted") return undefined;
+    const { kind: _kind, ...rest } = m;
+    return rest;
+  });
+}
+
+/** Change a record's standing as the member: retract, demote, restore, pin. */
+export async function curateRoomRecord(
+  target: RoomFileTarget,
+  params: {
+    key: string;
+    status?: "active" | "deprecated" | "retracted";
+    pinned?: boolean;
+    reason?: string;
+    expectedVersion?: number;
+  },
+  opts: TransferOptions = {},
+): Promise<CurateResult> {
+  const open: RoomFilesOpen = { kind: "curate", ...(await targetOf(target, opts)), ...params };
+  return transfer<CurateResult>(open, opts, (m) => {
+    if (m.kind !== "curated") return undefined;
+    const { kind: _kind, ...rest } = m;
+    return rest;
+  });
+}
+
 /**
  * What an opened record body says about the file it carries, if it carries one.
  *

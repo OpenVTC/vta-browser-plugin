@@ -42,6 +42,7 @@ import type { Parties } from "../use-vta.js";
 import type { RoomFilesPrepared } from "../../bridge-protocol.js";
 import { prepareRoomFiles, roomFileClaimOf } from "../room-files.js";
 import { GetRoomFile, PutRoomFile, RoomFilesUnavailable } from "./rooms-files.js";
+import { holds, NoteEditor, RecordActions } from "./rooms-record-actions.js";
 
 const fieldStyle: React.CSSProperties = {
   boxSizing: "border-box",
@@ -295,6 +296,7 @@ function RecordItem({
   prepared,
   autoOpen,
   authorName,
+  onChanged,
 }: {
   parties: Parties;
   room: HeldRoom;
@@ -303,7 +305,10 @@ function RecordItem({
   prepared: RoomFilesPrepared | null;
   autoOpen: boolean;
   authorName: (did: string) => string;
+  /** The record was edited or its standing changed: list again. */
+  onChanged: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
   const [opened, setOpened] = useState<Opened | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -415,7 +420,9 @@ function RecordItem({
         </span>
         <span style={{ display: "flex", gap: 8, alignItems: "center", flex: "0 0 auto", fontSize: t.xs, color: c.faint }}>
           {caught && <Pill tone="danger">check failed</Pill>}
-          {row.status && row.status !== "active" && <Pill tone="warn">{row.status}</Pill>}
+          {row.status && row.status !== "active" && (
+            <Pill tone="warn">{row.status === "deprecated" ? "archived" : row.status}</Pill>
+          )}
           <span>{meta}</span>
         </span>
       </button>
@@ -446,6 +453,36 @@ function RecordItem({
             </details>
           )}
           {opened?.verification && <VerdictLine verification={opened.verification} scope="record" />}
+          {editing && opened ? (
+            <NoteEditor
+              key={`${row.key}@${row.version}`}
+              room={room}
+              host={host}
+              existing={{
+                key: row.key,
+                version: row.version,
+                ...(opened.title !== undefined ? { title: opened.title } : {}),
+                ...(opened.body !== undefined ? { body: opened.body } : {}),
+              }}
+              onDone={() => {
+                setEditing(false);
+                onChanged();
+              }}
+              onCancel={() => setEditing(false)}
+            />
+          ) : (
+            <RecordActions
+              room={room}
+              host={host}
+              recordKey={row.key}
+              version={row.version}
+              status={row.status}
+              // A note this place wrote: replacing someone else's is not an edit.
+              editable={!!opened && !claim && opened.body !== undefined && !!author && author === room.member}
+              onEdit={() => setEditing(true)}
+              onChanged={onChanged}
+            />
+          )}
           <code style={{ fontFamily: font.mono, fontSize: t.xs, color: c.faint, wordBreak: "break-all" }}>{row.key}</code>
         </div>
       )}
@@ -533,6 +570,7 @@ export function RoomRecords({
   }, [parties, room, onListed]);
 
   const [uploading, setUploading] = useState(false);
+  const [writing, setWriting] = useState(false);
   // Newest first: a version is assigned by every write, so it orders them.
   const newestFirst = [...(rows ?? [])].sort((x, y) => y.version - x.version);
   const openFirst = new Set(newestFirst.filter((r) => r.status !== "retracted").slice(0, AUTO_OPEN).map((r) => r.key));
@@ -610,7 +648,8 @@ export function RoomRecords({
             >
               {newestFirst.map((r) => (
                 <RecordItem
-                  key={r.key}
+                  // Keyed by version too: an edited record is a new one to open.
+                  key={`${r.key}@${r.version}`}
                   parties={parties}
                   room={room}
                   host={listedHost}
@@ -618,19 +657,44 @@ export function RoomRecords({
                   prepared={prepared}
                   autoOpen={openFirst.has(r.key)}
                   authorName={authorName}
+                  onChanged={() => void browse(listedHost)}
                 />
               ))}
             </ul>
           )}
           {filesError && <RoomFilesUnavailable error={filesError} />}
-          {prepared &&
-            (uploading ? (
-              <PutRoomFile room={room} host={listedHost} prepared={prepared} onPut={() => void browse(listedHost)} />
-            ) : (
-              <div>
-                <Button onClick={() => setUploading(true)}>Upload a file</Button>
-              </div>
-            ))}
+          {writing && (
+            <NoteEditor
+              key={`new@${room.roomId}|${room.member ?? ""}`}
+              room={room}
+              host={listedHost}
+              onDone={() => {
+                setWriting(false);
+                void browse(listedHost);
+              }}
+              onCancel={() => setWriting(false)}
+            />
+          )}
+          {prepared && uploading && (
+            <PutRoomFile room={room} host={listedHost} prepared={prepared} onPut={() => void browse(listedHost)} />
+          )}
+          {!writing && !uploading && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <Button disabled={holds(room, "write") === false} onClick={() => setWriting(true)}>
+                Write a note
+              </Button>
+              {prepared && (
+                <Button disabled={holds(room, "write") === false} onClick={() => setUploading(true)}>
+                  Upload a file
+                </Button>
+              )}
+              {holds(room, "write") === false && (
+                <span style={{ fontSize: t.xs, color: c.faint }}>
+                  This identity's credentials for the room do not include write.
+                </span>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

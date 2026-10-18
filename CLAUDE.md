@@ -914,6 +914,21 @@ opens in the other. The host's origin needs a just-in-time host permission,
 requested in the console's click (`prepareRoomFiles` → `requestOriginPermission`).
 Key handling is in "Key material never reaches a browser" below.
 
+**Writing and curating records from the console take the same road.** A new
+note, an edit (`replaces`: the version read, so the host refuses an edit over
+someone else's) and a change of standing (`rooms/records/curate/0.1`: archive =
+`deprecated`, restore = `active`, retract = `retracted`) are `note` and
+`curate` opens on the room-files port, run by the offscreen document as the
+member (`writeSealedAsMember` / `putCleartextAsMember` / `curateRecordAsMember`)
+— sealed or in the clear as `rooms/info` says, never assumed. The console
+(`rooms-record-actions.tsx`) says *Retract*, never *Delete*: the body is dropped
+and a tombstone with the member's reason stays, and anyone who read it may still
+have it; a reason is required. Editing needs `write`, archiving and retracting
+`curate`, which `write` does not imply; an action the place's agent says it lacks
+(`HeldRoom.actions`) is shown as such, not offered. Pinning is not offered: the
+listing does not say which records are pinned, so a toggle could not show its
+state.
+
 **The member is the persona, never the wallet** (VTI `data-rooms-files.md`
 §8.5). A room admitted the member's persona — a DID their VTA holds — and the
 wallet holds none of its keys. So every request the host receives is built here

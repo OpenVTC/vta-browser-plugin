@@ -301,3 +301,90 @@ test("the background worker never closes a console's transfer port", async () =>
     .join("\n");
   assert.doesNotMatch(code, /===\s*ROOM_FILES_PORT\b/, "the worker must not single this port out at all");
 });
+
+// ── notes and curation, offscreen ───────────────────────────────────────────
+
+/** Serve a port against a fake agent and host; the host's room is `visibility`. */
+function servedRoom(visibility: "private" | "open") {
+  const pair = portPair();
+  const host: { type: string; payload: Record<string, unknown>; issuer: string }[] = [];
+  const sealed: unknown[] = [];
+  serveRoomFilesPort(pair.offscreen as never, {
+    agent: async () => ({
+      signing: { did: "did:key:zWallet" } as never,
+      sender: {
+        async send(envelope: { type: string; payload: Record<string, unknown> }) {
+          if (envelope.type.includes("rooms/keys/seal/")) {
+            sealed.push(envelope.payload);
+            return { sealed: { ciphertext: "c", nonce: "n", epoch: 1 } };
+          }
+          const doc = structuredClone(envelope.payload.document) as Record<string, unknown> & { payload: Record<string, unknown> };
+          doc.issuer = "did:webvh:QmMe:people.example";
+          doc.payload.presentation = { membership: "vmc" };
+          doc.proof = { type: "DataIntegrityProof" };
+          return { principal: "did:webvh:QmMe:people.example", document: doc };
+        },
+      } as never,
+    }),
+    fromExtensionPage: () => true,
+    host: async () => ({
+      signedBy: () => ({}) as never,
+      completed: {
+        async sendCompleted(doc: { type: string; payload: Record<string, unknown>; issuer: string }) {
+          host.push(doc);
+          if (doc.type.includes("rooms/info/")) return { roomId: TARGET.roomId, visibility, epoch: 1 };
+          if (doc.type.includes("rooms/records/list/")) return { roomId: TARGET.roomId, records: [], headVersion: 4 };
+          if (doc.type.includes("rooms/records/put/")) return { key: doc.payload.key, version: 5 };
+          if (doc.type.includes("rooms/records/curate/")) return { key: doc.payload.key, version: 5, status: doc.payload.status };
+          throw new Error(`unexpected ${doc.type}`);
+        },
+      } as never,
+    }),
+  });
+  return { pair, host, sealed };
+}
+
+async function reply(pair: ReturnType<typeof portPair>, kind: string) {
+  for (let i = 0; i < 200; i++) {
+    const m = (pair.offscreen.posted as Array<{ kind: string }>).find((x) => x.kind === kind || x.kind === "failed");
+    if (m) return m as Record<string, unknown>;
+    await new Promise((r) => setTimeout(r, 1));
+  }
+  throw new Error(`no ${kind}`);
+}
+
+const NOTE_OPEN = { vtaDid: "did:a", roomId: TARGET.roomId, hostDid: TARGET.hostDid, member: "did:webvh:QmMe:people.example" };
+
+test("a note in a sealed room is signed by the member and sealed; the host never sees it", async () => {
+  const { pair, host, sealed } = servedRoom("private");
+  pair.console.postMessage({ kind: "note", ...NOTE_OPEN, title: "Decision", body: "We ship Friday" });
+  const out = await reply(pair, "noted");
+  assert.equal(out.kind, "noted", JSON.stringify(out));
+  assert.equal(out.author, "did:webvh:QmMe:people.example");
+  assert.equal(sealed.length, 1);
+  const put = host.find((d) => d.type.includes("rooms/records/put/"))!;
+  assert.ok(put.payload.sealed);
+  assert.equal("cleartext" in put.payload, false);
+  assert.equal(put.payload.expectedVersion, 0, "a new note is create-only");
+});
+
+test("an edit in an open room goes in the clear, over the version read", async () => {
+  const { pair, host, sealed } = servedRoom("open");
+  pair.console.postMessage({ kind: "note", ...NOTE_OPEN, key: "n1", replaces: 3, title: "Decision", body: "Friday" });
+  assert.equal((await reply(pair, "noted")).kind, "noted");
+  const put = host.find((d) => d.type.includes("rooms/records/put/"))!;
+  assert.deepEqual(put.payload.cleartext, { title: "Decision", body: "Friday" });
+  assert.equal(put.payload.key, "n1");
+  assert.equal(put.payload.expectedVersion, 3);
+  assert.equal(sealed.length, 0);
+});
+
+test("a curation reaches the host as the member, and its standing comes back", async () => {
+  const { pair, host } = servedRoom("private");
+  pair.console.postMessage({ kind: "curate", ...NOTE_OPEN, key: "n1", status: "retracted", reason: "wrong room", expectedVersion: 5 });
+  const out = await reply(pair, "curated");
+  assert.deepEqual({ kind: out.kind, key: out.key, status: out.status }, { kind: "curated", key: "n1", status: "retracted" });
+  const sent = host.find((d) => d.type.includes("rooms/records/curate/"))!;
+  assert.equal(sent.issuer, "did:webvh:QmMe:people.example");
+  assert.equal(sent.payload.reason, "wrong room");
+});
