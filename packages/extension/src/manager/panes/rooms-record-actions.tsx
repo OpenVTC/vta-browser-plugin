@@ -13,11 +13,17 @@
 //   they read. The button says *Retract*, never *Delete*, and the confirmation
 //   says the rest, and asks why: a retraction without a reason is the one
 //   nobody can interpret later (rooms/records/curate/0.1, `reason`).
-// - **Each action is its own grant.** Editing needs `write`; retracting and
-//   archiving need `curate`, which `write` does not imply. Where the agent said
+// - **Each action is its own grant.** Editing needs `write`; retracting needs
+//   `curate`, which `write` does not imply. Where the agent said
 //   what the place holds (`HeldRoom.actions`), an action it lacks is shown as
 //   such rather than offered; where it said nothing, it is offered and the host
 //   decides. The host decides either way.
+// - **No archive or restore, for now.** A curation other than retraction keeps
+//   the body but moves the record to a new version (vti-rooms `curate_record`),
+//   and a sealed body is bound to the version it was sealed at
+//   (`RecordLocation`), so on a sealed room archiving left the record
+//   unreadable to every member — and restoring moved it again. Retraction is
+//   safe: it drops the body. Re-offer both once VTI keeps the sealed-at version.
 // - **An edit never silently undoes someone else's.** It names the version the
 //   member read, and the host refuses it if anything has replaced the record
 //   since.
@@ -153,7 +159,7 @@ export function RecordActions({
   const standing = status ?? "active";
   if (standing === "retracted") return null;
 
-  const run = async (label: string, params: { status: "active" | "deprecated" | "retracted"; reason?: string }) => {
+  const run = async (label: string, params: { status: "retracted"; reason: string }) => {
     setBusy(label);
     setError(null);
     try {
@@ -179,23 +185,6 @@ export function RecordActions({
             Edit
           </Button>
         )}
-        {standing === "deprecated" ? (
-          <Button
-            disabled={curate === false || busy !== null}
-            title={curate === false ? missing("curate") : ""}
-            onClick={() => void run("restore", { status: "active" })}
-          >
-            {busy === "restore" ? "Restoring…" : "Restore"}
-          </Button>
-        ) : (
-          <Button
-            disabled={curate === false || busy !== null}
-            title={curate === false ? missing("curate") : "Kept, and marked as no longer current"}
-            onClick={() => void run("archive", { status: "deprecated" })}
-          >
-            {busy === "archive" ? "Archiving…" : "Archive"}
-          </Button>
-        )}
         <Button
           kind="danger"
           disabled={curate === false || busy !== null}
@@ -205,7 +194,7 @@ export function RecordActions({
           Retract…
         </Button>
         {curate === false && (
-          <span style={{ fontSize: t.xs, color: c.faint }}>Archiving and retracting need the room's curate grant.</span>
+          <span style={{ fontSize: t.xs, color: c.faint }}>Retracting needs the room's curate grant.</span>
         )}
       </div>
 

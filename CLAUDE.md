@@ -916,18 +916,25 @@ Key handling is in "Key material never reaches a browser" below.
 
 **Writing and curating records from the console take the same road.** A new
 note, an edit (`replaces`: the version read, so the host refuses an edit over
-someone else's) and a change of standing (`rooms/records/curate/0.1`: archive =
-`deprecated`, restore = `active`, retract = `retracted`) are `note` and
+someone else's) and a retraction (`rooms/records/curate/0.1`, `retracted`) are
+`note` and
 `curate` opens on the room-files port, run by the offscreen document as the
 member (`writeSealedAsMember` / `putCleartextAsMember` / `curateRecordAsMember`)
 — sealed or in the clear as `rooms/info` says, never assumed. The console
 (`rooms-record-actions.tsx`) says *Retract*, never *Delete*: the body is dropped
 and a tombstone with the member's reason stays, and anyone who read it may still
-have it; a reason is required. Editing needs `write`, archiving and retracting
-`curate`, which `write` does not imply; an action the place's agent says it lacks
-(`HeldRoom.actions`) is shown as such, not offered. Pinning is not offered: the
-listing does not say which records are pinned, so a toggle could not show its
-state.
+have it; a reason is required. Editing needs `write`, retracting `curate`, which
+`write` does not imply; an action the place's agent says it lacks
+(`HeldRoom.actions`) is shown as such, not offered.
+
+**Archive, restore and pin are deliberately not offered.** Every curation moves
+the record to a new version (vti-rooms `curate_record`), and only a retraction
+drops the body — but a sealed body is bound to the version it was sealed at
+(`RecordLocation`), so archiving a record in a sealed room left it unreadable to
+every member, and restoring moved it again. Re-offer them once VTI keeps the
+sealed-at version. An archived record that does not open says so, by its
+`status`, not by the error's text (R3.7). Pinning has a second reason: the
+listing does not say which records are pinned.
 
 **The member is the persona, never the wallet** (VTI `data-rooms-files.md`
 §8.5). A room admitted the member's persona — a DID their VTA holds — and the
