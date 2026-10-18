@@ -131,6 +131,8 @@ import {
   type OobStep2,
   type OobGrantPayload,
   type OobDecision,
+  type OobReply,
+  type OobVersion,
   type SignInServices,
 } from "@openvtc/pnm-core/vtc";
 import type {
@@ -311,6 +313,9 @@ interface Flow {
   entry?: SignInIdentityView;
   step1?: OobStep1;
   step2Doc?: OobDocument<OobStep2>;
+  /** The `prove` / `grant` / `respond` version this exchange runs at: 0.2
+   *  unless the community refused it. */
+  version?: OobVersion;
   unsignedGrant?: OobDocument<OobGrantPayload>;
   grantDigest?: string;
   /** The exchange in progress, for a failure's details. Set before each call
@@ -980,13 +985,30 @@ export class SignInFlows {
       "authentication",
     );
     flow.at = "prove";
-    const reply = await sendOob<OobStep2>(
-      flow.kA,
-      buildProve(flow.kA, flow.vtcDid, signed, flow.link.id),
-      this.sendOpts(flow),
-      "auth/oob/prove",
-    );
+    // 0.2 first: it lets the community offer a signing scope. A community
+    // that predates it refuses the type before reading the identify, and the
+    // same identify proves at 0.1.
+    let version: OobVersion = "0.2";
+    let reply: OobReply<OobStep2>;
+    try {
+      reply = await sendOob<OobStep2>(
+        flow.kA,
+        buildProve(flow.kA, flow.vtcDid, signed, flow.link.id, "0.2"),
+        this.sendOpts(flow),
+        "auth/oob/prove",
+      );
+    } catch (e) {
+      if (!(e instanceof OobRefusedError) || !/unsupportedType$/.test(e.code)) throw e;
+      version = "0.1";
+      reply = await sendOob<OobStep2>(
+        flow.kA,
+        buildProve(flow.kA, flow.vtcDid, signed, flow.link.id, "0.1"),
+        this.sendOpts(flow),
+        "auth/oob/prove",
+      );
+    }
     const step2 = checkStep2(reply.payload, flow.step1, flow.entry.did);
+    flow.version = version;
     flow.step2Doc = reply.doc;
     flow.phase = "identified";
     return {
@@ -999,6 +1021,7 @@ export class SignInFlows {
       identifiedAs: step2.identifiedAs,
       // `checkStep2` held it equal to step 1's.
       audience: sessionAudienceOf(step2)!,
+      ...(step2.signingScope ? { signingScope: step2.signingScope } : {}),
     };
   }
 
@@ -1020,7 +1043,9 @@ export class SignInFlows {
       notAfter: Math.floor(
         (this.deps.now() + this.deps.grantLifetimeMs) / 1000,
       ),
-    });
+      // Step 2's scope, unchanged: the member approved exactly what was shown.
+      ...(step2.signingScope ? { signingScope: step2.signingScope } : {}),
+    }, flow.version ?? "0.1");
   }
 
   /** Build the unsigned approval and hand its digest to the window for the
@@ -1077,7 +1102,7 @@ export class SignInFlows {
     flow.at = "respond";
     const reply = await sendOob<{ status?: unknown }>(
       flow.kA,
-      buildRespond(flow.kA, flow.vtcDid, signed, flow.link.id),
+      buildRespond(flow.kA, flow.vtcDid, signed, flow.link.id, flow.version ?? "0.1"),
       this.sendOpts(flow),
       "auth/oob/respond",
     );

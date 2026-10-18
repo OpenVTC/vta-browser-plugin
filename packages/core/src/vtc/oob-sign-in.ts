@@ -42,7 +42,25 @@ export const OOB_TYPES = {
   respond: `${OOB}/respond/0.1`,
   grant: `${OOB}/grant/0.1`,
   cancel: `${OOB}/cancel/0.1`,
+  // 0.2: step 2 may offer `signingScope`, which the grant copies to let the
+  // website's browser key sign those task families as the member for the
+  // session (auth/oob/grant/0.2). Everything else is 0.1's.
+  prove02: `${OOB}/prove/0.2`,
+  respond02: `${OOB}/respond/0.2`,
+  grant02: `${OOB}/grant/0.2`,
 } as const;
+
+/** Which `prove` / `grant` / `respond` this exchange uses. 0.2 is tried first;
+ *  a community that predates it refuses `prove/0.2` as an unsupported type and
+ *  the wallet proves at 0.1, which delegates nothing. */
+export type OobVersion = "0.1" | "0.2";
+
+/** Families a wallet never delegates signing for, whatever a service offers
+ *  (auth/oob/grant/0.2, wallet item 5): signing in, access control, consent. */
+export const UNDELEGABLE_FAMILIES = ["auth", "acl", "consent", "task-consent", "confirm"] as const;
+
+/** A task-family slug prefix, as `SigningScope` admits one. */
+const FAMILY = /^[a-z][a-z0-9-]*(\/[a-z][a-z0-9-]*)*$/;
 
 const responseType = (type: string) => `${type}#response`;
 
@@ -110,6 +128,9 @@ export interface OobStep2 extends OobStep1 {
   sessionKey: string;
   requester: OobRequester;
   identifiedAs: string;
+  /** 0.2: the task families the service would let the browser key sign as
+   *  the member, for this session. Absent: no signing is delegated. */
+  signingScope?: string[];
 }
 
 export interface OobIdentifyPayload {
@@ -130,6 +151,8 @@ export interface OobGrantPayload {
   contextDigest: string;
   /** Integer epoch seconds (contract C9). */
   notAfter: number;
+  /** 0.2: step 2's `signingScope`, copied unchanged. */
+  signingScope?: string[];
 }
 
 export interface OobRespondResult {
@@ -379,8 +402,10 @@ export function buildProve(
   vtcDid: string,
   identify: OobDocument,
   requestId: string,
+  version: OobVersion = "0.1",
 ): OobDocument<{ identify: OobDocument }> {
-  return { ...envelope(OOB_TYPES.prove, kA.did, vtcDid, { identify }), parentThreadId: requestId };
+  const type = version === "0.2" ? OOB_TYPES.prove02 : OOB_TYPES.prove;
+  return { ...envelope(type, kA.did, vtcDid, { identify }), parentThreadId: requestId };
 }
 
 /** `auth/oob/grant`, unsigned. The VTA signs it (for `assertionMethod`) only
@@ -389,8 +414,12 @@ export function buildGrant(
   memberDid: string,
   vtcDid: string,
   payload: OobGrantPayload,
+  version: OobVersion = "0.1",
 ): OobDocument<OobGrantPayload> {
-  return envelope(OOB_TYPES.grant, memberDid, vtcDid, payload);
+  if (version === "0.1" && payload.signingScope !== undefined) {
+    throw new OobReplyInvalidError("a 0.1 grant cannot delegate signing");
+  }
+  return envelope(version === "0.2" ? OOB_TYPES.grant02 : OOB_TYPES.grant, memberDid, vtcDid, payload);
 }
 
 /** `auth/oob/respond`. Carries the handle as `parentThreadId` as well (C9:
@@ -400,8 +429,10 @@ export function buildRespond(
   vtcDid: string,
   grant: OobDocument,
   requestId: string,
+  version: OobVersion = "0.1",
 ): OobDocument<{ grant: OobDocument }> {
-  return { ...envelope(OOB_TYPES.respond, kA.did, vtcDid, { grant }), parentThreadId: requestId };
+  const type = version === "0.2" ? OOB_TYPES.respond02 : OOB_TYPES.respond;
+  return { ...envelope(type, kA.did, vtcDid, { grant }), parentThreadId: requestId };
 }
 
 export function buildCancel(kA: SigningIdentity, vtcDid: string, requestId: string): OobDocument<{ requestId: string }> {
@@ -646,6 +677,17 @@ export function checkStep2(step2: OobStep2, step1: OobStep1, memberDid: string):
     bad("the session key is not an Ed25519 did:key");
   }
   if (step2.identifiedAs !== memberDid) bad("a different identity");
+  if (step2.signingScope !== undefined) {
+    const scope = step2.signingScope;
+    if (!Array.isArray(scope) || scope.length === 0 || scope.length > 8 || new Set(scope).size !== scope.length) bad("a malformed signing scope");
+    for (const f of scope) {
+      if (typeof f !== "string" || !FAMILY.test(f)) bad("a malformed signing scope");
+      // Wallet item 5: never, whatever the service offers.
+      if (UNDELEGABLE_FAMILIES.some((x) => f === x || f.startsWith(`${x}/`))) {
+        bad(`it asks to let the browser sign ${f} documents as you, which a wallet never delegates`);
+      }
+    }
+  }
   const r = step2.requester;
   if (!r || typeof r.location !== "string" || typeof r.browser !== "string" || typeof r.os !== "string") {
     bad("no requester details");

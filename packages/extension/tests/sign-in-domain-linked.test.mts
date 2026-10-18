@@ -96,7 +96,7 @@ function world(opts: { config?: unknown; configStatus?: number; doc?: Record<str
     }
     assert.equal(url, ENDPOINT);
     const doc = JSON.parse(String(init.body));
-    const type = String(doc.type).replace("https://trusttasks.org/spec/auth/oob/", "").replace("/0.1", "");
+    const type = String(doc.type).replace("https://trusttasks.org/spec/auth/oob/", "").replace(/\/0\.[12]$/, "");
     w.log.push(type);
     const payload =
       type === "claim"

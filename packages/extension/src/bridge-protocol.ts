@@ -2814,6 +2814,9 @@ export type SignInStepResult =
       identifiedAs: string;
       /** As step 1's; step 2 repeats it, and the grant's digest covers it. */
       audience: "member" | "admin";
+      /** The task families approving also lets that browser sign as the
+       *  member, for the session (auth/oob/grant/0.2). Absent: none. */
+      signingScope?: string[];
     }
   /** The WebAuthn challenge for the grant: base64url of the UTF-8 bytes of
    *  the grant digest string D (contract C9). */
