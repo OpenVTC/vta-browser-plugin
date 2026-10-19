@@ -2708,10 +2708,10 @@ export type SignInStep =
   | { step: "claim"; entryId: string }
   | { step: "prove"; enteredNumber: string }
   | { step: "grant-digest" }
-  | { step: "respond"; decision: "approve"; assertion: SignInUvAssertionView }
-  /** Enrol this browser's user-verification passkey with the VTA, after the
-   *  window created it (device/heartbeat ext `org.openvtc.uv-key`). */
-  | { step: "enrol-uv"; enrolment: SignInUvEnrolmentView }
+  /** Approve: the PRF output of the wallet passkey's ceremony, bound to the
+   *  grant digest. It unseals this browser's UV key for the one decision and
+   *  is not kept. */
+  | { step: "respond"; decision: "approve"; prfOutputB64u: string }
   | { step: "respond"; decision: "decline" }
   | { step: "cancel" };
 
@@ -2727,31 +2727,6 @@ export type OffscreenSignInStepRequest = {
   link?: string;
   origin?: string;
 } & SignInStep;
-
-/** A WebAuthn assertion as `task-consent/decision/0.2` evidence carries it
- *  (`AuthenticatorAssertionResponseLogin`), base64url member by member. */
-export interface SignInUvAssertionView {
-  id: string;
-  rawId: string;
-  type: "public-key";
-  response: {
-    clientDataJSON: string;
-    authenticatorData: string;
-    signature: string;
-    userHandle?: string | null;
-  };
-}
-
-/** Mirrors `WebauthnUvKeyEnrolment` in core (`vault/sign-oob.ts`). */
-export interface SignInUvEnrolmentView {
-  kind: "webauthn";
-  credentialId: string;
-  publicKeyMultibase: string;
-  rpId: string;
-  origin: string;
-  hardwareBacked: boolean;
-  biometricGated: boolean;
-}
 
 /** One identity the member can sign in as: a `didSelfIssued` vault entry
  *  that targets the community. */
@@ -2861,18 +2836,15 @@ export type SignInStepResult =
        *  member, for the session (auth/oob/grant/0.2). Absent: none. */
       signingScope?: string[];
     }
-  /** The WebAuthn challenge for the grant: base64url of the UTF-8 bytes of
-   *  the grant digest string D (contract C9). */
+  /** What the passkey ceremony for the grant is bound to: base64url of the
+   *  UTF-8 bytes of the grant digest string D (contract C9). */
   | {
       kind: "uv-challenge";
       challenge: string;
-      /** The UV passkey the VTA holds for this browser's holder, when this
-       *  wallet enrolled one there. Absent, or another credential than the
-       *  window's: the window enrols its passkey before asserting. */
-      uvCredentialId?: string;
+      /** The VTA the flow signs at: the wallet record a first approval
+       *  encrypts at rest, when the wallet has no passkey yet. */
+      vtaDid: string;
     }
-  /** The passkey is enrolled; the window goes on to approve. */
-  | { kind: "uv-enrolled" }
   | { kind: "done"; decision: "approve" | "decline"; status: string }
   /** The community — or the member's own VTA — refused with a stable code
    *  (R3.7). `stage`, `party` and `cause` say where, for the window's

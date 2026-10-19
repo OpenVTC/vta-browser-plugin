@@ -60,15 +60,14 @@ import {
   type SignInIdentityView,
   type SignInStep,
   type SignInStepResult,
-  type SignInUvEnrolmentView,
 } from "./bridge-protocol.js";
-import { PrfUnlockError } from "./webauthn-prf-unlock.js";
 import {
-  assertUvPasskey,
-  createUvPasskey,
-  rememberUvEnrolment,
-  storedUvEnrolment,
-} from "./uv-passkey.js";
+  PrfUnlockError,
+  hasPrfEnrolment,
+  runSignInApprovalCeremony,
+} from "./webauthn-prf-unlock.js";
+import { encryptHolderSecretInPopup } from "./encrypt-holder.js";
+import { base64url } from "@openvtc/vti-didcomm-js";
 import {
   c,
   t,
@@ -82,24 +81,22 @@ import { Mark, Note } from "./ui.js";
 import { collapseDid, type DidPart } from "./did-display.js";
 import { failureDetails } from "./sign-in-failure.js";
 
-/** The UV passkey operations the window needs. Injected for tests. */
+/** The wallet passkey operations the window needs. Injected for tests. */
 export interface UvPasskeyOps {
-  /** This browser's passkey, as enrolled — kept whole so it can be enrolled
-   *  at another agent without creating a second one. */
-  stored: () => Promise<SignInUvEnrolmentView | undefined>;
-  create: typeof createUvPasskey;
-  remember: (enrolment: SignInUvEnrolmentView) => Promise<void>;
-  assert: (
-    credentialId: string,
-    challengeB64u: string,
-  ) => ReturnType<typeof assertUvPasskey>;
+  /** Whether the wallet has its passkey yet. */
+  enrolled: () => Promise<boolean>;
+  /** Create it: encrypt the wallet at rest for `vtaDid` (one passkey prompt).
+   *  The approval key is sealed under the same passkey. */
+  enrol: (vtaDid: string) => Promise<void>;
+  /** The ceremony bound to the grant; its PRF output. */
+  unlock: (challengeB64u: string) => Promise<Uint8Array>;
 }
 
 const browserUv: UvPasskeyOps = {
-  stored: storedUvEnrolment,
-  create: () => createUvPasskey(),
-  remember: rememberUvEnrolment,
-  assert: (id, c) => assertUvPasskey(id, c),
+  enrolled: hasPrfEnrolment,
+  enrol: encryptHolderSecretInPopup,
+  unlock: async (challenge) =>
+    (await runSignInApprovalCeremony(chrome.runtime.id, challenge)).prfOutput,
 };
 
 export interface SignInViewProps {
@@ -728,11 +725,7 @@ export function SignInView({
       }
       if (res.result.kind === "enter-number")
         setDeadline(res.result.decisionDeadline);
-      if (
-        res.result.kind !== "uv-challenge" &&
-        res.result.kind !== "uv-enrolled"
-      )
-        setScreen(res.result);
+      if (res.result.kind !== "uv-challenge") setScreen(res.result);
       return res.result;
     } finally {
       setBusy(false);
@@ -764,41 +757,23 @@ export function SignInView({
           ? "Approval cancelled."
           : String((e as Error).message ?? e),
       );
-    let challenge = await run({ step: "grant-digest" });
+    const challenge = await run({ step: "grant-digest" });
     if (challenge?.kind !== "uv-challenge") return;
-    let enrolment = await passkey.stored();
-    if (!enrolment || challenge.uvCredentialId !== enrolment.credentialId) {
-      // The VTA holds no passkey for this browser (its first approval, a
-      // second agent, or a holder onboarded again): enrol this browser's — a
-      // new ES256 one only if it has none (C9) — and remember it only once the
-      // VTA accepted it. Each device enrols its own; another device's passkey
-      // is never this one's.
-      if (!enrolment) {
-        try {
-          enrolment = await passkey.create();
-        } catch (e) {
-          cancelled(e);
-          return;
-        }
-      }
-      const enrolled = await run({ step: "enrol-uv", enrolment });
-      if (enrolled?.kind !== "uv-enrolled") return;
-      await passkey.remember(enrolment);
-      // A fresh grant: the one above may have aged while the passkey was made.
-      challenge = await run({ step: "grant-digest" });
-      if (challenge?.kind !== "uv-challenge") return;
-    }
-    let assertion;
+    let prfOutput: Uint8Array;
     try {
-      assertion = await passkey.assert(
-        enrolment.credentialId,
-        challenge.challenge,
-      );
+      // A wallet without its passkey makes it now: the approval key is sealed
+      // under it, and it encrypts this agent's wallet record at rest too.
+      if (!(await passkey.enrolled())) await passkey.enrol(challenge.vtaDid);
+      prfOutput = await passkey.unlock(challenge.challenge);
     } catch (e) {
       cancelled(e);
       return;
     }
-    await run({ step: "respond", decision: "approve", assertion });
+    await run({
+      step: "respond",
+      decision: "approve",
+      prfOutputB64u: base64url.encode(prfOutput),
+    });
   };
 
   const who: Who | undefined = communityName
@@ -1557,7 +1532,6 @@ export function SignInView({
       );
 
     case "uv-challenge":
-    case "uv-enrolled":
       return null;
   }
 }

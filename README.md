@@ -424,11 +424,23 @@ does not disturb this one, and disabling one device at your agent leaves the
 others signing in. A browser that has been disabled is told so, rather than
 retried.
 
-The approval passkey is its own ES256 (P-256) credential, separate from the
-wallet's unlock passkey, because the VTA verifies P-256 only. The first approval
-on a browser creates it and enrols it with your VTA (`device/heartbeat`
-`org.openvtc.uv-key`); later approvals reuse it. A second agent, or a holder
-onboarded again, is enrolled with the same passkey at its first approval.
+Approving uses the wallet's one passkey. The VTA signs a grant only on a
+decision made by this browser's user-verification key: an Ed25519 `did:key`
+per agent, held sealed under the passkey's PRF output, which the authenticator
+yields only after a PIN or biometric. Each approval runs the passkey ceremony
+bound to that grant's digest and unseals the key for one signature. The first
+approval mints the key and enrols it with your VTA (`device/heartbeat`
+`org.openvtc.uv-key`, kind `prfSealedKey`, never claimed as hardware-backed).
+A wallet with no passkey yet creates it at that first approval, which also
+encrypts that agent's wallet record at rest. So a browser needs one passkey,
+and one gesture per approval after the first; on Linux, where Chrome has no
+built-in authenticator, that is one security-key or phone prompt.
+
+What it does not give: a PRF output is a secret, not a one-time signature. A
+copy of IndexedDB opens nothing, but code running inside the extension that
+captures one approval's PRF output could keep the unsealed key and approve
+later grants with no gesture, which a per-grant WebAuthn assertion would not
+allow. The VTA records the kind, so its policy can tell the two apart.
 
 #### When a sign-in code isn't accepted
 

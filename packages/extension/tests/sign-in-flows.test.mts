@@ -128,7 +128,8 @@ function world(
     identifyResult?: (unsigned: Record<string, unknown>) => unknown;
     known?: SignInVaultEntry[];
     identifyError?: unknown;
-    uvCredentialId?: string;
+    /** The VTA refuses enrolling the UV key with this error. */
+    enrolError?: Error;
     /** The community's `ext` on step 1, repeated in step 2. */
     ext?: Record<string, unknown>;
     /** The service's DID document; the plain sign-in service by default. */
@@ -233,7 +234,6 @@ function world(
       ensureDevice: async () => {
         vtaCalls.push({ what: "ensure-device" });
       },
-      enrolledUvCredential: async () => opts.uvCredentialId,
       listIdentities: async () => {
         vtaCalls.push({ what: "list" });
         return opts.known ?? entries;
@@ -268,8 +268,9 @@ function world(
         vtaCalls.push({ what: "grant", decision: uv });
         return { ...unsigned, proof: { proofPurpose: "assertionMethod" } };
       },
-      enrolUvKey: async (enrolment) => {
-        vtaCalls.push({ what: "enrol", decision: enrolment });
+      enrolUvKey: async (prfOutput) => {
+        vtaCalls.push({ what: "enrol", decision: prfOutput });
+        if (opts.enrolError) throw opts.enrolError;
       },
     }),
   });
@@ -279,12 +280,9 @@ function world(
 const step = (w: World, s: Record<string, unknown>, flowId = "f1") =>
   w.flows.step({ flowId, vtaDid: "did:webvh:vta", ...s } as Parameters<SignInFlows["step"]>[0]);
 
-const ASSERTION = {
-  id: "AAECAwQFBgc",
-  rawId: "AAECAwQFBgc",
-  type: "public-key" as const,
-  response: { clientDataJSON: "j", authenticatorData: "a", signature: "s" },
-};
+/** The PRF output of the passkey ceremony the window ran for the grant. */
+const PRF = new Uint8Array(32).fill(7);
+const PRF_B64U = bytesToBase64url(PRF);
 
 test("the whole approval, in the contract's order", async () => {
   const w = world();
@@ -320,14 +318,20 @@ test("the whole approval, in the contract's order", async () => {
   const challenge = await step(w, { step: "grant-digest" });
   assert.equal(challenge.kind, "uv-challenge");
   assert.equal(w.vtaCalls.filter((c) => c.what === "grant").length, 0, "no grant is signed before the passkey");
+  assert.equal((challenge as { vtaDid: string }).vtaDid, "did:webvh:vta", "names the VTA a first approval encrypts");
 
-  const done = await step(w, { step: "respond", decision: "approve", assertion: ASSERTION });
+  const done = await step(w, { step: "respond", decision: "approve", prfOutputB64u: PRF_B64U });
   assert.deepEqual(done, { kind: "done", decision: "approve", status: "approved" });
+  // The UV key is enrolled (or confirmed) before the grant, with the same
+  // PRF output that then unseals it for the decision.
+  const whats = w.vtaCalls.map((c) => c.what);
+  assert.ok(whats.indexOf("enrol") < whats.indexOf("grant"), "enrolled before the grant");
+  assert.deepEqual(w.vtaCalls.find((c) => c.what === "enrol")!.decision, PRF);
   const grantCall = w.vtaCalls.find((c) => c.what === "grant")!;
-  const decision = grantCall.decision as { payloadDigest: string; assertion: unknown };
-  assert.deepEqual(decision.assertion, ASSERTION);
-  // The passkey signed exactly the digest the VTA is told about: the UTF-8
-  // bytes of the string D (C9).
+  const decision = grantCall.decision as { payloadDigest: string; prfOutput: Uint8Array };
+  assert.deepEqual(decision.prfOutput, PRF);
+  // The ceremony was bound to exactly the digest the VTA is told about: the
+  // UTF-8 bytes of the string D (C9).
   assert.equal(
     bytesToBase64url(new TextEncoder().encode(decision.payloadDigest)),
     (challenge as { challenge: string }).challenge,
@@ -632,23 +636,27 @@ test("closing before Continue sends nothing", async () => {
   assert.equal(w.sent.length, 0);
 });
 
-test("enrolling the UV passkey goes to the VTA, and only once the member is identified", async () => {
+test("an approval needs the ceremony's PRF output, and only once the member is identified", async () => {
   const w = world();
-  const enrolment = {
-    kind: "webauthn" as const,
-    credentialId: "AAECAwQFBgc",
-    publicKeyMultibase: "zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169",
-    rpId: "ext",
-    origin: "chrome-extension://ext",
-    hardwareBacked: false,
-    biometricGated: false,
-  };
   await step(w, { step: "prepare", link: LINK, origin: PORTAL });
-  assert.equal((await step(w, { step: "enrol-uv", enrolment })).kind, "failed", "not before step 2");
+  assert.equal(
+    (await step(w, { step: "respond", decision: "approve", prfOutputB64u: PRF_B64U })).kind,
+    "failed",
+    "not before step 2",
+  );
+  assert.equal(w.vtaCalls.some((c) => c.what === "enrol"), false);
+});
+
+test("a UV key the VTA will not enrol stops the approval before any grant is signed", async () => {
+  const w = world({ enrolError: new Error("refused") });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
   await step(w, { step: "claim", entryId: "e-alice" });
   await step(w, { step: "prove", enteredNumber: "47" });
-  assert.deepEqual(await step(w, { step: "enrol-uv", enrolment }), { kind: "uv-enrolled" });
-  assert.deepEqual(w.vtaCalls.find((c) => c.what === "enrol")!.decision, enrolment);
+  await step(w, { step: "grant-digest" });
+  const res = await step(w, { step: "respond", decision: "approve", prfOutputB64u: PRF_B64U });
+  assert.equal(res.kind, "failed");
+  assert.equal((res as { stage?: string }).stage, "enrol-uv");
+  assert.equal(w.vtaCalls.some((c) => c.what === "grant"), false);
 });
 
 test("the browser enrols as one of the member's devices before anything is sent", async () => {
@@ -660,20 +668,6 @@ test("the browser enrols as one of the member's devices before anything is sent"
     "registered at the VTA before the identities are read, and before the claim",
   );
   assert.equal(w.sent.length, 0);
-});
-
-test("the challenge says which passkey the VTA holds for this device", async () => {
-  const w = world({ uvCredentialId: "AAECAwQFBgc" });
-  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
-  await step(w, { step: "claim", entryId: "e-alice" });
-  await step(w, { step: "prove", enteredNumber: "47" });
-  const challenge = await step(w, { step: "grant-digest" });
-  assert.equal((challenge as { uvCredentialId?: string }).uvCredentialId, "AAECAwQFBgc");
-  const none = world();
-  await step(none, { step: "prepare", link: LINK, origin: PORTAL });
-  await step(none, { step: "claim", entryId: "e-alice" });
-  await step(none, { step: "prove", enteredNumber: "47" });
-  assert.equal("uvCredentialId" in (await step(none, { step: "grant-digest" })), false);
 });
 
 test("the member's VTA refusing as a disabled device is said plainly, and the claim is cancelled", async () => {
@@ -1139,7 +1133,7 @@ test("0.2: a scope the community offers is shown at review and copied into the g
   assert.deepEqual((review as { signingScope?: string[] }).signingScope, ["vtc/directory"]);
   assert.match(String(w.sent[1]!.doc.type), /\/auth\/oob\/prove\/0\.2$/);
   await step(w, { step: "grant-digest" });
-  await step(w, { step: "respond", decision: "approve", assertion: ASSERTION });
+  await step(w, { step: "respond", decision: "approve", prfOutputB64u: PRF_B64U });
   const respond = w.sent[2]!.doc as { type: string; payload: { grant: { type: string; payload: Record<string, unknown> } } };
   assert.match(respond.type, /\/auth\/oob\/respond\/0\.2$/);
   assert.match(respond.payload.grant.type, /\/auth\/oob\/grant\/0\.2$/);
@@ -1153,7 +1147,7 @@ test("0.2 with no scope offered delegates nothing", async () => {
   const review = await step(w, { step: "prove", enteredNumber: "47" });
   assert.equal("signingScope" in review, false);
   await step(w, { step: "grant-digest" });
-  await step(w, { step: "respond", decision: "approve", assertion: ASSERTION });
+  await step(w, { step: "respond", decision: "approve", prfOutputB64u: PRF_B64U });
   const grant = (w.sent[2]!.doc as { payload: { grant: { payload: Record<string, unknown> } } }).payload.grant.payload;
   assert.equal("signingScope" in grant, false);
 });
@@ -1169,7 +1163,7 @@ test("a community that predates 0.2 is proved at 0.1, which delegates nothing", 
     ["prove/0.2", "prove/0.1"],
   );
   await step(w, { step: "grant-digest" });
-  await step(w, { step: "respond", decision: "approve", assertion: ASSERTION });
+  await step(w, { step: "respond", decision: "approve", prfOutputB64u: PRF_B64U });
   const respond = w.sent[3]!.doc as { type: string; payload: { grant: { type: string; payload: Record<string, unknown> } } };
   assert.match(respond.type, /\/auth\/oob\/respond\/0\.1$/);
   assert.match(respond.payload.grant.type, /\/auth\/oob\/grant\/0\.1$/);

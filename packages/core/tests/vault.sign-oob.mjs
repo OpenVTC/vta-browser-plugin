@@ -13,7 +13,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Validator } from "@cfworker/json-schema";
-import { p256 } from "@noble/curves/nist.js";
 
 import {
   EXT_UV_CONSENT,
@@ -21,13 +20,11 @@ import {
   buildUvConsentDecision,
   vaultSignGrant,
   vaultSignIdentify,
-  enrolUvPasskey,
-  p256Multikey,
-  p256PointFromSpki,
+  enrolUvKey,
+  prfSealedUvKeyEnrolment,
   uvChallengeBytes,
 } from "../dist/vault/index.js";
 import { generateSigningIdentity, verifyTrustTaskProof } from "../dist/index.js";
-import { base58 } from "@scure/base";
 import {
   newApproverKey,
   buildClaim,
@@ -60,13 +57,6 @@ function recorder(reply) {
 const holder = { did: "did:key:z6MkHolder" };
 const service = { did: VTA };
 
-const ASSERTION = {
-  id: "AAECAwQFBgc",
-  rawId: "AAECAwQFBgc",
-  type: "public-key",
-  response: { clientDataJSON: "e30", authenticatorData: "AA", signature: "AA" },
-};
-
 async function sampleGrant() {
   const kA = newApproverKey();
   return buildGrant(MEMBER, VTC, {
@@ -87,25 +77,20 @@ test("the grant envelope carries framework members only — no ext", async () =>
   assert.ok(Math.abs(Date.parse(g.issuedAt) - Date.now()) < 300_000);
 });
 
-test("the UV decision: task-consent/decision/0.2 to the VTA, by the device, challenge = payloadDigest = D", async () => {
-  const device = generateSigningIdentity();
+test("the UV decision: task-consent/decision/0.2 to the VTA, by the UV key, challenge = payloadDigest = D, no evidence", async () => {
+  const uvKey = generateSigningIdentity();
   const D = await grantDigest(await sampleGrant());
-  const decision = await buildUvConsentDecision({ device, vtaDid: VTA, payloadDigest: D, assertion: ASSERTION });
+  const decision = await buildUvConsentDecision({ uvKey, vtaDid: VTA, payloadDigest: D });
   assert.equal(decision.type, "https://trusttasks.org/spec/task-consent/decision/0.2");
-  assert.equal(decision.issuer, device.did);
+  assert.equal(decision.issuer, uvKey.did);
   assert.equal(decision.recipient, VTA);
-  assert.deepEqual(decision.payload, {
-    challenge: D,
-    payloadDigest: D,
-    decision: "approve",
-    evidence: { kind: "webauthn", assertion: ASSERTION },
-  });
+  assert.deepEqual(decision.payload, { challenge: D, payloadDigest: D, decision: "approve" });
   const v = await verifyTrustTaskProof(decision, { expectedProofPurpose: "assertionMethod" });
   assert.equal(v.verified, true);
-  assert.equal(v.signer, device.did);
+  assert.equal(v.signer, uvKey.did);
 });
 
-test("C9: the WebAuthn challenge is the UTF-8 bytes of D, not the hash", async () => {
+test("C9: the passkey ceremony is bound to the UTF-8 bytes of D, not the hash", async () => {
   const D = await grantDigest(await sampleGrant());
   assert.deepEqual(uvChallengeBytes(D), new TextEncoder().encode(D));
   assert.match(D, /^zQm/);
@@ -134,19 +119,20 @@ test("identify goes through vault/sign-trust-task/0.2 as {entryId, unsignedEnvel
   assert.equal(typeof id.payload.enteredNumber, "string");
 });
 
-const ENROLMENT = {
-  kind: "webauthn",
-  credentialId: "AAECAwQFBgc",
-  publicKeyMultibase: "zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169",
-  rpId: "abcdefghijklmnopabcdefghijklmnop",
-  origin: "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
-  hardwareBacked: false,
-  biometricGated: false,
-};
+const ENROLMENT = prfSealedUvKeyEnrolment("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK");
+
+test("the UV-key enrolment is the VTA's prfSealedKey shape, never claiming hardware", () => {
+  assert.deepEqual(ENROLMENT, {
+    kind: "prfSealedKey",
+    did: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+    hardwareBacked: false,
+    biometricGated: false,
+  });
+});
 
 test("UV-key enrolment: device/heartbeat/0.2 with payload.ext[org.openvtc.uv-key]", async () => {
   const ch = recorder(() => ({ serverTime: new Date().toISOString() }));
-  await enrolUvPasskey(ch, { holder, service, enrolment: ENROLMENT, displayName: "Chrome" });
+  await enrolUvKey(ch, { holder, service, enrolment: ENROLMENT, displayName: "Chrome" });
   assert.equal(ch.sent.length, 1);
   assert.equal(ch.sent[0].type, "https://trusttasks.org/spec/device/heartbeat/0.2");
   assert.equal(ch.sent[0].issuer, holder.did);
@@ -162,7 +148,7 @@ test("UV-key enrolment of an unregistered device falls back to device/register/0
     }
     return { binding: {} };
   });
-  await enrolUvPasskey(ch, { holder, service, enrolment: ENROLMENT, displayName: "Chrome" });
+  await enrolUvKey(ch, { holder, service, enrolment: ENROLMENT, displayName: "Chrome" });
   assert.equal(ch.sent[1].type, "https://trusttasks.org/spec/device/register/0.2");
   assert.deepEqual(ch.sent[1].payload, {
     consumerKind: { kind: "companion", formFactor: "browser" },
@@ -173,33 +159,9 @@ test("UV-key enrolment of an unregistered device falls back to device/register/0
   const other = recorder(() => {
     throw Object.assign(new Error("disabled"), { details: { details: { reason: "forbidden" } } });
   });
-  await assert.rejects(enrolUvPasskey(other, { holder, service, enrolment: ENROLMENT, displayName: "Chrome" }));
+  await assert.rejects(enrolUvKey(other, { holder, service, enrolment: ENROLMENT, displayName: "Chrome" }));
   assert.equal(other.sent.length, 1);
 });
-
-test("P-256 Multikey: zDn…, compressed, matching the VTA's test vector", () => {
-  // The VTA's own P-256 did:key vector round-trips through the encoder.
-  const vector = "zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169";
-  const bytes = base58.decode(vector.slice(1));
-  assert.deepEqual([...bytes.slice(0, 2)], [0x80, 0x24]);
-  assert.equal(p256Multikey(bytes.slice(2)), vector);
-  // And an uncompressed point compresses to the same key.
-  const sk = p256.utils.randomSecretKey();
-  const compressed = p256.getPublicKey(sk, true);
-  const uncompressed = p256.getPublicKey(sk, false);
-  assert.equal(p256Multikey(uncompressed), p256Multikey(compressed));
-  assert.match(p256Multikey(compressed), /^zDn/);
-});
-
-test("P-256 point out of a WebCrypto SubjectPublicKeyInfo", async () => {
-  const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign"]);
-  const spki = new Uint8Array(await crypto.subtle.exportKey("spki", kp.publicKey));
-  const raw = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
-  assert.deepEqual(p256PointFromSpki(spki), raw);
-  assert.throws(() => p256PointFromSpki(spki.slice(1)));
-});
-
-// ── Schema validation (feat/auth-oob) ────────────────────────────────────────
 
 const SPECS = process.env.AUTH_OOB_SPECS ?? join(import.meta.dirname, "../../../../../dtgwg-trust-tasks-tf-worktrees/feat-auth-oob/specs");
 const haveSpecs = existsSync(join(SPECS, "auth/oob/claim/0.1/payload.schema.json"));
