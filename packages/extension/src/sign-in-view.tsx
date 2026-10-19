@@ -1015,6 +1015,16 @@ export function SignInView({
                 : "An administrator reviews each request."}
             </span>
           </p>
+          {screen.directory ? (
+            <section data-testid="directory-disclosure" style={{ display: "grid", gap: 6, minWidth: 0 }}>
+              <div style={{ ...microLabel, padding: 0 }}>What the directory will show about you</div>
+              <ul style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 4, color: c.muted, ...wrap }}>
+                {screen.directory.lines.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
           {screen.identities.length === 0 ? (
             <Note tone="warn">
               <div data-testid="no-identities" style={wrap}>

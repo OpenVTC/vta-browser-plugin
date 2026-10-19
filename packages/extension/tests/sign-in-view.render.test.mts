@@ -840,6 +840,38 @@ test("an unknown community: join offer, what it asks, the request, and Request s
   await screen.unmount();
 });
 
+test("what the directory will show is on the join screen, as text, before the request is sent", async () => {
+  const { steps, send } = script({
+    ...VTC_JOIN,
+    "join-manifest": {
+      ...(VTC_JOIN["join-manifest"] as Extract<SignInStepResult, { kind: "join-apply" }>),
+      directory: {
+        lines: ["Your Name will be seen by the community's other members.", "Your <b>card</b> is never published outside the community."],
+        statementDigest: "zQmStatement",
+      },
+    },
+  });
+  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
+  await screen.settle();
+  await screen.click(screen.container.querySelector('[data-testid="join-manifest"]')!);
+  const section = screen.container.querySelector('[data-testid="directory-disclosure"]')!;
+  assert.match(section.textContent!, /What the directory will show about you/);
+  assert.equal(section.querySelectorAll("li").length, 2);
+  assert.equal(section.querySelector("b"), null, "community text is never markup");
+  assert.match(section.textContent!, /Your <b>card<\/b> is never published/);
+  assert.equal(steps.length, 2, "reading it sends nothing");
+  await screen.unmount();
+});
+
+test("a community stating no directory shows no directory section", async () => {
+  const { send } = script(VTC_JOIN);
+  const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
+  await screen.settle();
+  await screen.click(screen.container.querySelector('[data-testid="join-manifest"]')!);
+  assert.equal(screen.container.querySelector('[data-testid="directory-disclosure"]'), null);
+  await screen.unmount();
+});
+
 test("Not now on the community offer cancels and closes", async () => {
   const { steps, send } = script(VTC_JOIN);
   let closed = 0;

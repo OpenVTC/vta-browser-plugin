@@ -142,6 +142,8 @@ function world(
     submit?: Record<string, unknown> | { refuse: string };
     /** The manifest reply goes out unsigned. */
     manifestUnsigned?: boolean;
+    /** The community predates manifest 0.4 and refuses it. */
+    manifest0_3Only?: boolean;
     signTaskError?: unknown;
   } = {},
 ): World {
@@ -162,7 +164,7 @@ function world(
   const fetch = (async (url: string, init: RequestInit) => {
     assert.equal(url, ENDPOINT, "posted to <base>/trust-tasks (binding 0.2 §6)");
     const doc = JSON.parse(String(init.body));
-    const join = /\/vtc\/join-requests\/(manifest|submit)\/0\.3$/.exec(String(doc.type));
+    const join = /\/vtc\/join-requests\/(manifest|submit)\/0\.[34]$/.exec(String(doc.type));
     const type = join
       ? `join-${join[1]}`
       : String(doc.type).replace("https://trusttasks.org/spec/auth/oob/", "").replace(/\/0\.[12]$/, "");
@@ -175,6 +177,12 @@ function world(
       );
     }
     if (type === opts.unreachableOn) throw new TypeError("Failed to fetch");
+    if (join && opts.manifest0_3Only && String(doc.type).endsWith("/manifest/0.4")) {
+      return new Response(
+        JSON.stringify({ type: "https://trusttasks.org/spec/trust-task-error/0.2", payload: { code: "unsupportedType", retryable: false } }),
+        { status: 400 },
+      );
+    }
     if (join) {
       const answer = type === "join-manifest" ? (opts.manifest ?? MANIFEST) : (opts.submit ?? { requestId: "jr-1", verdict: { effect: "refer", with: { queue: "admin-review" } } });
       if ("refuse" in answer) {
@@ -864,6 +872,59 @@ test("the manifest is asked for as a throwaway key, and shows what the community
   assert.equal(manifest.recipient, VTC);
   assert.deepEqual(manifest.payload, {});
   assert.equal(w.binds.length, 0, "nothing recorded yet");
+});
+
+// The specification's example statement (vtc/join-requests/manifest/0.4).
+const STATEMENT = {
+  fields: [
+    { key: "displayName", label: "Name", type: "text", source: "member", ceiling: "members", defaultVisibility: "members", searchable: true },
+    { key: "role", label: "Role", type: "text", source: "derived", ceiling: "members", defaultVisibility: "members", searchable: false },
+  ],
+  newCard: { listing: "listed", search: "byName" },
+  membershipIdentifiers: "admins",
+  adminNotes: false,
+  externalCards: false,
+  statementDigest: "zQmStatement",
+};
+
+test("the manifest is asked for at 0.4, and what the directory would show is on the join screen", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, manifest: { ...MANIFEST, directoryDisclosure: STATEMENT } });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = await step(w, { step: "join-manifest" });
+  assert.equal(r.kind, "join-apply");
+  assert.match(String((w.sent[0]!.doc as { type: string }).type), /\/manifest\/0\.4$/);
+  assert.deepEqual((r as { directory?: unknown }).directory, {
+    lines: [
+      "Your Name and Role will be seen by the community's other members.",
+      "Anything else you add is seen by the administrators only, until you choose otherwise.",
+      "You may choose to show your Name and Role to the community's other members, and no further.",
+      "Members browsing the directory will find you; you can hide yourself.",
+      "The DID you join with is seen by the administrators only.",
+      "The administrators keep no notes about members.",
+      "Your card is never published outside the community.",
+    ],
+    statementDigest: "zQmStatement",
+  });
+});
+
+test("a community that predates manifest 0.4 is asked again at 0.3, and states no directory", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, manifest0_3Only: true });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = await step(w, { step: "join-manifest" });
+  assert.equal(r.kind, "join-apply");
+  assert.deepEqual(
+    w.sent.map((s) => String((s.doc as { type: string }).type).replace(/^.*\/manifest\//, "")),
+    ["0.4", "0.3"],
+  );
+  assert.equal("directory" in r, false);
+});
+
+test("a statement the wallet cannot show stops the join before anything about the person is sent", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, manifest: { ...MANIFEST, directoryDisclosure: { ...STATEMENT, adminNotes: undefined } } });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  assert.equal((await step(w, { step: "join-manifest" })).kind, "failed");
+  assert.deepEqual(w.sent.map((s) => s.type), ["join-manifest"]);
+  assert.equal(w.binds.length, 0);
 });
 
 test("a pending request: the request-sent screen, the entry kept, and no sign-in document", async () => {
