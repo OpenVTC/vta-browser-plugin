@@ -124,6 +124,7 @@ import {
   joinOutcomeOf,
   VTC_REST_SERVICE_TYPE,
   type JoinPlan,
+  type JoinManifestVersion,
   OobRefusedError,
   OOB_REPLY_INVALID,
   type OobDocument,
@@ -690,13 +691,24 @@ export class SignInFlows {
     const key = newApproverKey();
     let plan: JoinPlan;
     try {
-      const reply = await sendOob(
-        key,
-        buildJoinManifestRequest(key.did, flow.vtcDid),
-        this.sendOpts(flow),
-        "vtc/join-requests/manifest",
-        "authentication",
-      );
+      // 0.4 first: it carries what the community's directory would show
+      // about the person. A community that predates it refuses the type, and
+      // the same question is asked at 0.3.
+      const ask = (version: JoinManifestVersion) =>
+        sendOob(
+          key,
+          buildJoinManifestRequest(key.did, flow.vtcDid, version),
+          this.sendOpts(flow),
+          "vtc/join-requests/manifest",
+          "authentication",
+        );
+      let reply;
+      try {
+        reply = await ask("0.4");
+      } catch (e) {
+        if (!(e instanceof OobRefusedError) || !/unsupportedType$/.test(e.code)) throw e;
+        reply = await ask("0.3");
+      }
       plan = planJoin(checkJoinManifest(reply.payload, flow.vtcDid));
     } catch (err) {
       return this.joinFailed(flowId, flow, err, `Your wallet couldn't ask ${host} how to join`);
@@ -718,6 +730,7 @@ export class SignInFlows {
       ...named,
       admission: plan.admission,
       attributes: plan.requestedAttributes,
+      ...(plan.directory ? { directory: plan.directory } : {}),
       identities: flow.personas.map((p) => personaView(p, flow.entries ?? [])),
     };
   }

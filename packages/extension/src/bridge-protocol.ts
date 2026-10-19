@@ -2774,6 +2774,10 @@ export type SignInStepResult =
       /** `automatic`: admitted on the spot. `review`: an administrator decides. */
       admission: "automatic" | "review";
       attributes: SignInJoinAttributeView[];
+      /** What the community's directory would show about the person, and to
+       *  whom, in plain sentences (VTI-DIR-130), and the digest naming that
+       *  statement. Absent when the community states none. */
+      directory?: { lines: string[]; statementDigest: string };
       identities: SignInPersonaView[];
     }
   /** The community asks for evidence this wallet cannot provide (a

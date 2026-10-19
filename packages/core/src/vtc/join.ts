@@ -1,6 +1,12 @@
 // Joining a Verifiable Trust Community from a wallet, as the community serves
-// it today: `vtc/join-requests/manifest/0.3` and `submit/0.3`, posted as
-// signed Trust-Task documents to `<TrustTaskHTTPS base>/trust-tasks`.
+// it today: `vtc/join-requests/manifest/0.4` (0.3 from a community that has
+// not moved) and `submit/0.3`, posted as signed Trust-Task documents to
+// `<TrustTaskHTTPS base>/trust-tasks`.
+//
+// From 0.4 the manifest carries the community's directory disclosure
+// statement: what its member directory would show about the person, and to
+// whom. The plan carries it, in words, so it is shown before the person
+// applies (VTI-DIR-130).
 //
 // The applicant is whoever signs the submission: the community reads the
 // applicant DID from the document's proof, never from the payload, and that
@@ -18,22 +24,29 @@
 // assemble. `planJoin` picks a criterion that asks for none of those, or says
 // what the others ask for so the person can be told plainly.
 
+import { TYPE_URI as JR_MANIFEST_0_3 } from "@openvtc/trust-tasks/vtc/join-requests/manifest/0.3/payload";
 import {
   TYPE_URI as JR_MANIFEST,
   type VTCJoinRequestsManifestResponsePayload,
   type Criterion,
-} from "@openvtc/trust-tasks/vtc/join-requests/manifest/0.3/payload";
+} from "@openvtc/trust-tasks/vtc/join-requests/manifest/0.4/payload";
 import {
   TYPE_URI as JR_SUBMIT,
   type VTCJoinRequestsSubmitPayload,
   type VTCJoinRequestsSubmitResponsePayload,
 } from "@openvtc/trust-tasks/vtc/join-requests/submit/0.3/payload";
 import { OobReplyInvalidError, type OobDocument } from "./oob-sign-in.js";
+import { checkDirectoryDisclosure, describeDirectoryDisclosure } from "./directory-disclosure.js";
 
 /** The service type a VTC publishes for its REST API (`vtc-host` template). */
 export const VTC_REST_SERVICE_TYPE = "VTCRest";
 
 export const JOIN_MANIFEST_TYPE = JR_MANIFEST;
+export const JOIN_MANIFEST_0_3_TYPE = JR_MANIFEST_0_3;
+
+/** The manifest versions a wallet asks for: 0.4 first, 0.3 from a community
+ *  that refuses it. */
+export type JoinManifestVersion = "0.4" | "0.3";
 export const JOIN_SUBMIT_TYPE = JR_SUBMIT;
 
 export type JoinManifest = VTCJoinRequestsManifestResponsePayload;
@@ -51,6 +64,15 @@ export interface JoinRequestedAttribute {
 /** The claim-type grammar `submit/0.3` accepts for an attribute's `type`. */
 const CLAIM_TYPE = /^(x:)?[a-z][A-Za-z0-9]*(\.[a-z][A-Za-z0-9]*)*$/;
 
+/** What the community's member directory would disclose about the person,
+ *  as the manifest stated it. */
+export interface JoinDirectoryDisclosure {
+  /** The statement in plain sentences, addressed to the person joining. */
+  lines: string[];
+  /** Names the exact statement shown, so it can be recorded. */
+  statementDigest: string;
+}
+
 /** What the wallet can do with a manifest. */
 export type JoinPlan =
   | {
@@ -61,6 +83,8 @@ export type JoinPlan =
       requestedAttributes: JoinRequestedAttribute[];
       /** The community's name for itself: self-asserted, unverified. */
       displayName?: string;
+      /** Absent when the community has no directory, or answered 0.3. */
+      directory?: JoinDirectoryDisclosure;
     }
   | {
       ok: false;
@@ -115,7 +139,15 @@ export function planJoin(manifest: JoinManifest): JoinPlan {
       required: a.required === true,
       ...(typeof a.purpose === "string" && a.purpose.trim() !== "" ? { purpose: a.purpose.trim() } : {}),
     }));
-  return { ok: true, criterion: chosen.requirementsDigest, admission: chosen.admission, requestedAttributes, ...named };
+  const directory = manifest.directoryDisclosure
+    ? {
+        directory: {
+          lines: describeDirectoryDisclosure(manifest.directoryDisclosure),
+          statementDigest: manifest.directoryDisclosure.statementDigest,
+        },
+      }
+    : {};
+  return { ok: true, criterion: chosen.requirementsDigest, admission: chosen.admission, requestedAttributes, ...named, ...directory };
 }
 
 function envelope<P>(type: string, issuer: string, recipient: string, payload: P): OobDocument<P> {
@@ -129,9 +161,13 @@ function envelope<P>(type: string, issuer: string, recipient: string, payload: P
   };
 }
 
-/** `vtc/join-requests/manifest/0.3`: the request carries nothing. */
-export function buildJoinManifestRequest(issuer: string, vtcDid: string): OobDocument<Record<string, never>> {
-  return envelope(JR_MANIFEST, issuer, vtcDid, {});
+/** `vtc/join-requests/manifest` at `version`: the request carries nothing. */
+export function buildJoinManifestRequest(
+  issuer: string,
+  vtcDid: string,
+  version: JoinManifestVersion = "0.4",
+): OobDocument<Record<string, never>> {
+  return envelope(version === "0.4" ? JR_MANIFEST : JR_MANIFEST_0_3, issuer, vtcDid, {});
 }
 
 /** A manifest reply must be this community's. */
@@ -140,6 +176,9 @@ export function checkJoinManifest(manifest: unknown, vtcDid: string): JoinManife
   if (!m || typeof m !== "object") throw new OobReplyInvalidError("join manifest: no payload");
   if (m.communityDid !== vtcDid) throw new OobReplyInvalidError("join manifest: a different community");
   if (!Array.isArray(m.criteria)) throw new OobReplyInvalidError("join manifest: no criteria");
+  // A statement the wallet cannot show faithfully stops the join here: the
+  // person must not apply without being told what the directory discloses.
+  if (m.directoryDisclosure !== undefined) checkDirectoryDisclosure(m.directoryDisclosure);
   return m;
 }
 
