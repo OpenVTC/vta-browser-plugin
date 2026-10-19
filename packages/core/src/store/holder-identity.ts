@@ -463,11 +463,10 @@ export interface RewrapHolderV4Options {
  *  the PRF-derived AES-GCM key. The wallet DID stays the same — no
  *  re-grant in any RP ACL, no re-onboarding.
  *
- *  Mirrors the v3 `rewrapHolderSecret` but reads + writes the v4
- *  record (`STORE_KEY_V4`). Future cleanup could consolidate the
- *  two into one schema-version-aware function; kept separate for
- *  now so the v3 path's legacy `edSecretB64u` fallback doesn't
- *  leak into v4's cleaner shape.
+ *  Reads + writes the v4 record (`STORE_KEY_V4`), the only holder
+ *  record onboarding writes. (The v3 re-wrap it once mirrored is gone:
+ *  the settings toggle still called it, and failed on every v4 wallet
+ *  with "no persisted holder identity to re-wrap".)
  *
  *  Throws if no v4 record exists. The popup should only invoke this
  *  AFTER `installVtaMintedHolder` has run. */
@@ -610,74 +609,4 @@ export async function listHolderRecords(store: KVStore): Promise<HolderRecordSum
  *  `clearHolderIdentity` to wipe every wallet on this device. */
 export async function forgetHolderRecord(store: KVStore, vtaDid: string): Promise<void> {
   await store.delete(v4Key(vtaDid));
-}
-
-export interface RewrapOptions {
-  /**
-   * Wrap that decrypts the currently-persisted secret. Pass the
-   * wrap the wallet was using before the migration (or `undefined`
-   * if it was plaintext).
-   */
-  fromWrap?: SecretWrap;
-  /**
-   * Wrap to apply on the re-persisted record. Pass the wrap the
-   * wallet should use going forward (or `undefined` to switch back
-   * to plaintext).
-   */
-  toWrap?: SecretWrap;
-}
-
-/**
- * Re-wrap the persisted holder secret in place, preserving the
- * wallet's DID + verification-method ids + mediator endpoint.
- *
- * Used by the extension's settings UI when the operator flips
- * the `encryptHolderSecret` toggle — the existing wallet keeps
- * its identity (no re-grant in any RP ACL) but the on-disk
- * secret transitions between plaintext and wrap-encrypted.
- *
- * Returns the rebuilt `HolderIdentityResult` so the caller can
- * report the (unchanged) DID back to the operator immediately.
- *
- * Errors if no persisted record exists — caller should check
- * `freshlyMinted` semantics first (a fresh-mint wallet has no
- * pre-existing secret to re-wrap).
- */
-export async function rewrapHolderSecret(
-  store: KVStore,
-  opts: RewrapOptions,
-): Promise<HolderIdentityResult> {
-  const persisted = await store.get<PersistedHolder>(STORE_KEY);
-  if (!persisted) {
-    throw new Error("no persisted holder identity to re-wrap");
-  }
-
-  // 1. Recover the raw secret using the from-wrap.
-  let edSecret: Uint8Array;
-  if (persisted.wrappedSecret) {
-    edSecret = await unwrapSecret(persisted.wrappedSecret, opts.fromWrap);
-  } else if (persisted.edSecretB64u) {
-    edSecret = base64url.decode(persisted.edSecretB64u);
-  } else {
-    throw new Error("persisted record missing both wrappedSecret and edSecretB64u");
-  }
-
-  // 2. Re-wrap with the to-wrap and write back. Drop the legacy
-  //    plaintext slot on the way out so a partially-migrated
-  //    record can't load through the legacy path on the next
-  //    boot.
-  const wrapped = await wrapSecret(edSecret, opts.toWrap);
-  const next: PersistedHolder = {
-    did: persisted.did,
-    signingKid: persisted.signingKid,
-    keyAgreementKid: persisted.keyAgreementKid,
-    wrappedSecret: wrapped,
-    ...(persisted.mediatorDid ? { mediatorDid: persisted.mediatorDid } : {}),
-  };
-  await store.put(STORE_KEY, next);
-
-  return {
-    ...buildHolder(edSecret, persisted.did, persisted.signingKid, persisted.keyAgreementKid),
-    freshlyMinted: false,
-  };
 }

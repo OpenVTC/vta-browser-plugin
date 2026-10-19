@@ -6,14 +6,16 @@ import {
   approverDid,
   clearHolderIdentity,
   IndexedDBKVStore,
+  listHolderRecords,
   mintApproverIdentity,
-  rewrapHolderSecret,
+  rewrapHolderV4Secret,
 } from "@openvtc/pnm-core";
 import { getSettings, setSettings } from "./config.js";
 import { base64url } from "@openvtc/vti-didcomm-js";
 import { readActiveHolderDid, readActiveVtaDid } from "./active-vta.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import { runPrfUnlockCeremony } from "./webauthn-prf-unlock.js";
+import { encryptHolderSecretInPopup } from "./encrypt-holder.js";
 import {
   RUNTIME_APPROVER_STATE,
   RUNTIME_UNLOCK_APPROVER,
@@ -220,13 +222,25 @@ export function AdvancedPane() {
         }
       }
 
-      const wrap = new WebAuthnPrfSecretWrap(chrome.runtime.id);
       const store = new IndexedDBKVStore();
+      // Every wallet on this device is one v4 record per VTA. The v3
+      // single-holder record this toggle used to re-wrap is never written
+      // any more, so reading it failed with "no persisted holder identity
+      // to re-wrap" on every wallet onboarded today.
+      const records = await listHolderRecords(store);
+      if (records.length === 0) {
+        setStatus("Connect to a VTA first: there is no wallet on this device to encrypt yet.");
+        return;
+      }
 
       if (next) {
-        // Flip ON: re-persist the existing plaintext secret behind
-        // the wrap. Triggers a WebAuthn enrollment ceremony.
-        await rewrapHolderSecret(store, { toWrap: wrap });
+        // Flip ON: re-persist each plaintext record behind the wrap, the
+        // same enrol-rewrap-relay the popup's prompt runs. The first one
+        // enrols the authenticator; any further one reuses it.
+        for (const r of records) {
+          if (r.wrapAlgorithm !== "passthrough") continue;
+          await encryptHolderSecretInPopup(r.vtaDid);
+        }
         await setSettings({ encryptHolderSecret: true });
         setEncryptOn(true);
         setStatus(
@@ -238,7 +252,15 @@ export function AdvancedPane() {
         // re-persist plaintext. Clear the enrolled credential after
         // so a future re-enable doesn't trip the "credential already
         // enrolled" guard.
-        await rewrapHolderSecret(store, { fromWrap: wrap });
+        // `unwrap` reads only this page's in-memory key, so unlock here
+        // first; the offscreen document's key is not this page's.
+        const { prfOutput } = await runPrfUnlockCeremony(chrome.runtime.id);
+        await WebAuthnPrfSecretWrap.seedCachedKeyFromPrfOutput(prfOutput);
+        const wrap = new WebAuthnPrfSecretWrap(chrome.runtime.id);
+        for (const r of records) {
+          if (r.wrapAlgorithm === "passthrough") continue;
+          await rewrapHolderV4Secret(store, { vtaDid: r.vtaDid, fromWrap: wrap });
+        }
         await WebAuthnPrfSecretWrap.unenroll();
         await setSettings({ encryptHolderSecret: false });
         setEncryptOn(false);
