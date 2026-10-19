@@ -49,6 +49,11 @@ import {
 } from "./active-vta.js";
 import { checkOriginPin, pinOrigin, readOriginPin, type OriginPinStatus } from "./origin-pin.js";
 import { RoomPageGates, type PortLike } from "./room-page-background.js";
+import {
+  DIRECTORY_CONSENT_PREFIX,
+  DirectoryPageGates,
+  type DirectoryPublishConsentView,
+} from "./directory-page.js";
 import { RoomOffers, RoomOffersRefusal } from "./room-offers-background.js";
 import type { RoomOfferConsentView } from "./room-offers-policy.js";
 import {
@@ -168,6 +173,10 @@ import {
   OFFSCREEN_ROOMS_PAGE,
   type OffscreenRoomsPageResponse,
   type RuntimeRoomsPageRequest,
+  RUNTIME_DIRECTORY_PAGE,
+  OFFSCREEN_DIRECTORY_PAGE,
+  type OffscreenDirectoryPageResponse,
+  type RuntimeDirectoryPageRequest,
   OFFSCREEN_ROOM_HOST_ENDPOINT,
   ROOM_FILES_PORT,
   type RuntimeRoomFilesPrepareRequest,
@@ -934,6 +943,58 @@ const roomPageGates = new RoomPageGates({
     await ensureOffscreenDocument();
     return chrome.runtime.connect({ name: ROOM_FILES_PORT }) as unknown as PortLike;
   },
+  now: () => Date.now(),
+});
+
+// ── A page's `window.vtaWallet.directory` ───────────────────────────────────
+//
+// Publishing the member's directory card from the community's portal. The
+// gates — the page is the portal by the community's DID document, the member is
+// one of the wallet's identities there, and the person approves every value in
+// the wallet's own window — are `directory-page.ts`; this wires them up.
+
+/** Raise the publish prompt and wait. Closed or unopened is a denial. */
+async function requestDirectoryConsent(view: DirectoryPublishConsentView): Promise<{ approved: boolean }> {
+  const consentId = crypto.randomUUID();
+  await chrome.storage.session.set({ [`${DIRECTORY_CONSENT_PREFIX}${consentId}`]: view });
+  const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=directory`;
+  const bounds = await consentWindowBounds(620);
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (approved: boolean) => {
+      if (settled) return;
+      settled = true;
+      pendingConsents.delete(consentId);
+      void chrome.storage.session.remove(`${DIRECTORY_CONSENT_PREFIX}${consentId}`);
+      resolve({ approved });
+    };
+    pendingConsents.set(consentId, (approved) => settle(approved));
+    openConsentWindow({ url, bounds, deny: () => settle(false), tag: "[pnm directory]", what: "directory window" });
+  });
+}
+
+const directoryPageGates = new DirectoryPageGates({
+  async active() {
+    const active = await readActiveConnection();
+    if (!active.ok) return { ok: false, error: active.error };
+    return {
+      ok: true,
+      vta: { vtaDid: active.conn.vtaDid, ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}) },
+    };
+  },
+  async offscreen(vta, params) {
+    await ensureOffscreenDocument();
+    const reply = (await chrome.runtime.sendMessage({
+      target: OFFSCREEN_TARGET,
+      type: OFFSCREEN_DIRECTORY_PAGE,
+      vtaDid: vta.vtaDid,
+      ...(vta.restBaseUrl ? { restBaseUrl: vta.restBaseUrl } : {}),
+      params,
+    })) as OffscreenDirectoryPageResponse | undefined;
+    return reply ?? { ok: false, error: "the offscreen document did not answer" };
+  },
+  canReach: (url) => hasOriginPermission(url),
+  prompt: requestDirectoryConsent,
   now: () => Date.now(),
 });
 
@@ -3616,6 +3677,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
+    return true; // async sendResponse
+  }
+
+  if (msgType === RUNTIME_DIRECTORY_PAGE) {
+    const req = message as RuntimeDirectoryPageRequest;
+    // `origin` was overwritten above with the browser-attested one.
+    directoryPageGates
+      .handle(req.origin, req.params)
+      .then(sendResponse)
+      .catch((e: unknown) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
     return true; // async sendResponse
   }
 

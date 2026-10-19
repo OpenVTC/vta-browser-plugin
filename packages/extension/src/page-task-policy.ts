@@ -112,6 +112,30 @@ const REFUSED: { prefix: string; why: string }[] = [
       "has no use for any of it that the holder should be asked to approve; the " +
       "holder inspects their own relay from the wallet's console.",
   },
+  // A member's directory card (`directory-page.ts`). Publishing it puts what
+  // they show anyone beyond the community, signed by them: a page asks for
+  // that through `window.vtaWallet.directory.publishCard`, which shows every
+  // value first.
+  {
+    prefix: "https://trusttasks.org/spec/vtc/directory/",
+    why:
+      "The directory family reads and publishes the member's own card. Ask for " +
+      "publication with window.vtaWallet.directory.publishCard, which shows the " +
+      "member every value and that anyone will be able to read it before anything " +
+      "is signed.",
+  },
+  // A Data Integrity proof made as one of the holder's DIDs over a document the
+  // caller chose: a credential, a published card. A generic task prompt cannot
+  // show what the holder would be asserting.
+  {
+    prefix: "https://trusttasks.org/spec/keys/sign-document/",
+    why:
+      "keys/sign-document makes a proof, as one of the holder's DIDs, over a " +
+      "document the caller wrote, which every verifier will read as the holder's " +
+      "own assertion. A page cannot ask for one: the wallet signs a document only " +
+      "within a flow that shows the holder what it says, such as " +
+      "window.vtaWallet.directory.publishCard.",
+  },
 ];
 
 /**

@@ -40,7 +40,8 @@ export type BridgeMethod =
   | "approveStepUp"
   | "attestApprover"
   | "approveDecision"
-  | "rooms";
+  | "rooms"
+  | "directory";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2).
  *  @deprecated Legacy sign-in (sign-in contract C7); kept working. New pages
@@ -2592,6 +2593,43 @@ export type RoomFilesPageMessage =
   | { kind: "done" }
   | { kind: "failed"; error: string };
 
+// ─── A member's directory card for a page: `window.vtaWallet.directory` ──────
+//
+// `vtc/directory/card/publish/0.1`. A page never drives a `vtc/directory/*`
+// task or `keys/sign-document` (`page-task-policy.ts` refuses both): it asks to
+// publish the member's card, and the wallet does the rest — reads the card as
+// the member, shows the person every value and that anyone can read it, has the
+// agent sign it as the member's DID, and sends it — or does nothing.
+//
+// The call names `hostDid`, the community whose portal the page claims to be.
+// The background refuses unless the page's browser-attested origin is the
+// origin of that DID document's `SignInPortal` (`directory-page.ts`).
+
+/** page → background, through the content script: one directory operation. */
+export const RUNTIME_DIRECTORY_PAGE = "vta-wallet/directory-page" as const;
+
+/** `member` is the DID the page says is signed in: a hint that picks among the
+ *  identities the wallet holds for this community, never adds one. */
+export type DirectoryPageOp = { op: "publishCard"; hostDid: string; member?: string };
+
+export interface RuntimeDirectoryPageRequest {
+  type: typeof RUNTIME_DIRECTORY_PAGE;
+  /** Overwritten by the background with the browser-attested origin. */
+  origin: string;
+  params: DirectoryPageOp;
+}
+
+/** Where the member's card stands once the wallet published it. */
+export interface PagePublishedCardView {
+  state: "published" | "awaitingSignature";
+  cardDigest?: string;
+  publishedAt?: string;
+}
+
+export type RuntimeDirectoryPageResponse =
+  | { ok: true; result: PagePublishedCardView }
+  | { ok: false; error: string };
+
 export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
@@ -2611,6 +2649,7 @@ export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_ATTEST_APPROVER,
   RUNTIME_APPROVE_DECISION,
   RUNTIME_ROOMS_PAGE,
+  RUNTIME_DIRECTORY_PAGE,
   // Not a provider method: the content script's own click listener sends it
   // (`trigger-link-click.ts`). Listed so the background takes the activation
   // origin from the browser, never from the body (VTI-LNK-056).
@@ -2996,6 +3035,31 @@ export interface OffscreenRoomsPageRequest {
 }
 
 export type OffscreenRoomsPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
+
+/** background → offscreen: the directory work behind a page's call, after the
+ *  background checked the page is the community's portal. */
+export const OFFSCREEN_DIRECTORY_PAGE = "offscreen/directory-page" as const;
+
+export type OffscreenDirectoryPageOp =
+  /** The community's portal origin and Trust-Task endpoint, from its verified DID document. */
+  | { op: "portal"; hostDid: string }
+  /** The identities the member signs in with at this community. */
+  | { op: "members"; hostDid: string }
+  /** Read the member's card and schema as them, and build the card to sign. */
+  | { op: "prepare"; hostDid: string; member: string }
+  /** Have the agent sign `card` as the member and publish it. `card` is the
+   *  one `prepare` built, which the person approved. */
+  | { op: "publish"; hostDid: string; member: string; card: Record<string, unknown>; revision: number };
+
+export interface OffscreenDirectoryPageRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_DIRECTORY_PAGE;
+  vtaDid: string;
+  restBaseUrl?: string;
+  params: OffscreenDirectoryPageOp;
+}
+
+export type OffscreenDirectoryPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
 
 /**
  * Port name for one room write from the console — a file transfer, a note, or a

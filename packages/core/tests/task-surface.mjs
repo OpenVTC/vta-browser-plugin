@@ -45,6 +45,14 @@ const MEDIATOR_SERVED =
 
 const NOT_IN_SDK = [
   {
+    prefix: "https://trusttasks.org/spec/vtc/directory/",
+    why:
+      "A member's own directory card (vtc/directory-card.ts): card/show, fields/list and " +
+      "card/publish go to the community's VTC, signed as the member through " +
+      "vault/sign-trust-task. The VTC, not the VTA, is the counterparty, so vta-sdk carries " +
+      "no constant for them.",
+  },
+  {
     prefix: "https://trusttasks.org/spec/trust-task-error/",
     why:
       "The error envelope the *service* emits (vta-service/src/trust_tasks/wire_v0_2.rs). " +
@@ -526,7 +534,9 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // member's rooms, which every surface reads so each shows the same ones. Its
   // reads and acceptances move to `rooms/keys/act/0.5` and the KeyPackage to
   // `rooms/keys/key-package/0.2` in place — still one family each.
-  const expected = 226;
+  // 226 → 227: `keys/sign-document/0.1`, the member's agent signing their
+  // external directory card as their DID (vtc/directory-card.ts).
+  const expected = 227;
   assert.equal(
     implemented.size,
     expected,

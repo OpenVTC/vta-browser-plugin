@@ -47,6 +47,7 @@ const RUNTIME_APPROVE_DECISION = "vta-wallet/approve-decision";
 const RUNTIME_BROADCAST_EVENT = "vta-wallet/broadcast-event";
 const RUNTIME_TRIGGER_LINK = "vta-wallet/trigger-link";
 const RUNTIME_ROOMS_PAGE = "vta-wallet/rooms-page";
+const RUNTIME_DIRECTORY_PAGE = "vta-wallet/directory-page";
 const ROOM_FILES_PAGE_PORT = "vta-wallet/room-files-page";
 
 // ─── 1. Inject the provider into the page world. ───
@@ -87,6 +88,7 @@ const RUNTIME_TYPE_BY_METHOD: Record<BridgeMethod, string> = {
   attestApprover: RUNTIME_ATTEST_APPROVER,
   approveDecision: RUNTIME_APPROVE_DECISION,
   rooms: RUNTIME_ROOMS_PAGE,
+  directory: RUNTIME_DIRECTORY_PAGE,
 };
 
 // ─── 2. Relay provider → background → provider. ───

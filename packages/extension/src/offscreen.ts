@@ -215,6 +215,7 @@ import {
 } from "./bridge-protocol.js";
 import { installRoomFilesPort, isNoTrustTaskService, resolveRoomHostEndpoint } from "./room-files-offscreen.js";
 import { runRoomsPageOp } from "./room-page-offscreen.js";
+import { runDirectoryPageOp } from "./directory-page-offscreen.js";
 import { OfferOpError, runRoomOffersOp } from "./room-offers-offscreen.js";
 import {
   OFFSCREEN_ROOM_OFFERS,
@@ -225,6 +226,9 @@ import {
   OFFSCREEN_ROOMS_PAGE,
   type OffscreenRoomsPageRequest,
   type OffscreenRoomsPageResponse,
+  OFFSCREEN_DIRECTORY_PAGE,
+  type OffscreenDirectoryPageRequest,
+  type OffscreenDirectoryPageResponse,
 } from "./bridge-protocol.js";
 import {
   OFFSCREEN_SIGN_IN_STEP,
@@ -618,6 +622,39 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_DIRECTORY_PAGE) {
+    // Only the background sends this, after checking the page is the
+    // community's portal (`directory-page.ts`); a content script reaching this
+    // listener directly is refused.
+    if (!isExtensionContextSender(sender)) {
+      sendResponse({
+        ok: false,
+        error: "directory work is asked for by the wallet",
+      } satisfies OffscreenDirectoryPageResponse);
+      return false;
+    }
+    const req = message as OffscreenDirectoryPageRequest;
+    runDirectoryPageOp(
+      {
+        async agent(vtaDid, restBaseUrl) {
+          const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+          return { sender: session, holder, service };
+        },
+        // The sign-in flow's own listing, so the two agree on who the member is.
+        identities: (vtaDid, restBaseUrl) => listSelfIssued(vtaDid, restBaseUrl),
+      },
+      { vtaDid: req.vtaDid, ...(req.restBaseUrl ? { restBaseUrl: req.restBaseUrl } : {}) },
+      req.params,
+    )
+      .then((result) => sendResponse({ ok: true, result } satisfies OffscreenDirectoryPageResponse))
+      .catch((e: unknown) =>
+        sendResponse({
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+        } satisfies OffscreenDirectoryPageResponse),
       );
     return true; // async sendResponse
   }

@@ -10,3 +10,4 @@ export * from "./oob-sign-in.js";
 export * from "./domain-linkage.js";
 export * from "./join.js";
 export * from "./directory-disclosure.js";
+export * from "./directory-card.js";
