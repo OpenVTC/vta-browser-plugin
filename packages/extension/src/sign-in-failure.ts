@@ -37,7 +37,7 @@ export const STAGE_LABEL: Readonly<Record<SignInFailureStage, string>> = {
   identify: "identify (your agent signing who you are)",
   prove: "prove (sending the number to the community)",
   "grant-digest": "preparing the approval",
-  "enrol-uv": "enrolling this browser's passkey at your agent",
+  "enrol-uv": "enrolling this browser's sign-in approval key at your agent",
   grant: "grant (your agent signing the decision)",
   respond: "respond (sending the decision to the community)",
 };

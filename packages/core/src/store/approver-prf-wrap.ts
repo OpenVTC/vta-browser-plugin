@@ -34,10 +34,17 @@ const APPROVER_INFO = "pnm/approver-secret/aes-gcm/v1";
  *  an `ApproverPrfSecretWrap` and can never mix the two key domains. */
 export const APPROVER_WRAP_ALGORITHM = "webauthn-prf-aes-gcm/approver";
 
-/** Derive the non-extractable AES-256-GCM approver KEK from a PRF output via
- *  HKDF-SHA256 under the approver `info`. Non-extractable: even a heap dump only
- *  yields a `CryptoKey` handle, not raw bytes. */
-async function deriveApproverKek(prfOutput: Uint8Array): Promise<CryptoKey> {
+/** HKDF `info` — the sign-in approval key's KEK domain (`sign-in-uv-key.ts`).
+ *  Same credential, same per-call PRF output, a third independent key. */
+const SIGN_IN_UV_INFO = "pnm/sign-in-uv-secret/aes-gcm/v1";
+
+/** Envelope `algorithm` tag on a wrapped sign-in approval key. */
+export const SIGN_IN_UV_WRAP_ALGORITHM = "webauthn-prf-aes-gcm/sign-in-uv";
+
+/** Derive a non-extractable AES-256-GCM KEK from a PRF output via HKDF-SHA256
+ *  under `info`. Non-extractable: even a heap dump only yields a `CryptoKey`
+ *  handle, not raw bytes. */
+async function derivePrfKek(prfOutput: Uint8Array, info: string): Promise<CryptoKey> {
   const hkdfKey = await crypto.subtle.importKey(
     "raw",
     prfOutput as BufferSource,
@@ -50,7 +57,7 @@ async function deriveApproverKek(prfOutput: Uint8Array): Promise<CryptoKey> {
       name: "HKDF",
       hash: "SHA-256",
       salt: new Uint8Array(0),
-      info: new TextEncoder().encode(APPROVER_INFO),
+      info: new TextEncoder().encode(info),
     },
     hkdfKey,
     { name: "AES-GCM", length: 256 },
@@ -59,20 +66,18 @@ async function deriveApproverKek(prfOutput: Uint8Array): Promise<CryptoKey> {
   );
 }
 
-/**
- * A [`SecretWrap`] that seals the approver seed under a KEK derived, per call,
- * from an injected WebAuthn-PRF output. Construct a fresh instance per
- * mint/approval with that decision's PRF output.
- */
-export class ApproverPrfSecretWrap implements SecretWrap {
-  readonly algorithm = APPROVER_WRAP_ALGORITHM;
+/** Seals a seed under a KEK derived, per call, from an injected WebAuthn-PRF
+ *  output, in one key domain. Never caches the KEK. */
+abstract class PrfDomainSecretWrap implements SecretWrap {
+  abstract readonly algorithm: string;
+  protected abstract readonly info: string;
 
   /** @param prfOutput raw bytes from `navigator.credentials.get`'s `prf` result,
    *  produced by the ceremony the popup runs at approval time. */
   constructor(private readonly prfOutput: Uint8Array) {}
 
   async wrap(secret: Uint8Array): Promise<WrappedSecret | null> {
-    const kek = await deriveApproverKek(this.prfOutput);
+    const kek = await derivePrfKek(this.prfOutput, this.info);
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ciphertext = new Uint8Array(
       await crypto.subtle.encrypt(
@@ -90,7 +95,7 @@ export class ApproverPrfSecretWrap implements SecretWrap {
   }
 
   async unwrap(wrapped: WrappedSecret): Promise<Uint8Array | null> {
-    const kek = await deriveApproverKek(this.prfOutput);
+    const kek = await derivePrfKek(this.prfOutput, this.info);
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: base64url.decode(wrapped.ivB64u) as BufferSource },
       kek,
@@ -98,4 +103,24 @@ export class ApproverPrfSecretWrap implements SecretWrap {
     );
     return new Uint8Array(plaintext);
   }
+}
+
+/**
+ * A [`SecretWrap`] that seals the approver seed under a KEK derived, per call,
+ * from an injected WebAuthn-PRF output. Construct a fresh instance per
+ * mint/approval with that decision's PRF output.
+ */
+export class ApproverPrfSecretWrap extends PrfDomainSecretWrap {
+  readonly algorithm = APPROVER_WRAP_ALGORITHM;
+  protected readonly info = APPROVER_INFO;
+}
+
+/**
+ * The same, for the key that approves this browser's wallet sign-ins
+ * (`sign-in-uv-key.ts`): its own KEK domain and `algorithm`, so neither an
+ * approver record nor a holder record opens with it, nor it with theirs.
+ */
+export class SignInUvPrfSecretWrap extends PrfDomainSecretWrap {
+  readonly algorithm = SIGN_IN_UV_WRAP_ALGORITHM;
+  protected readonly info = SIGN_IN_UV_INFO;
 }

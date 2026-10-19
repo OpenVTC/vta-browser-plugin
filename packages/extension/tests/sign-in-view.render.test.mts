@@ -3,9 +3,10 @@
 // Pinned: the confirm screen names the community from the wallet's record and
 // the portal from the verified document; Continue sends only the chosen entry;
 // a different self-given name is flagged on the number screen; the review
-// shows browser, location and the network line; Approve runs the passkey over
-// the challenge it was handed and only then responds; a cancelled passkey
-// leaves the review open.
+// shows browser, location and the network line; Approve runs the passkey
+// ceremony over the challenge it was handed (creating the wallet's passkey
+// first when there is none) and only then responds with its PRF output; a
+// cancelled passkey leaves the review open.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -52,40 +53,36 @@ const RESULTS: Record<string, SignInStepResult> = {
     identifiedAs: "did:web:work.example",
     audience: "member",
   },
-  "grant-digest": { kind: "uv-challenge", challenge: "Q0hBTExFTkdF" },
+  "grant-digest": { kind: "uv-challenge", challenge: "Q0hBTExFTkdF", vtaDid: "did:webvh:vta" },
   "respond:approve": { kind: "done", decision: "approve", status: "approved" },
-  "enrol-uv": { kind: "uv-enrolled" },
 };
 
-const ENROLMENT = {
-  kind: "webauthn" as const,
-  credentialId: "Y3JlZA",
-  publicKeyMultibase: "zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169",
-  rpId: "ext",
-  origin: "chrome-extension://ext",
-  hardwareBacked: false,
-  biometricGated: false,
-};
-const ASSERTION = {
-  id: "Y3JlZA",
-  rawId: "Y3JlZA",
-  type: "public-key" as const,
-  response: { clientDataJSON: "j", authenticatorData: "a", signature: "s" },
-};
+/** The PRF output of the ceremony, and its base64url on the wire. */
+const PRF = new Uint8Array([1, 2, 3, 4]);
+const PRF_B64U = "AQIDBA";
 
-type Enrolment = typeof ENROLMENT;
+/** A wallet that has its passkey already. */
+const ENROLLED_UV = {
+  enrolled: async () => true,
+  enrol: async () => {
+    throw new Error("must not create a second passkey");
+  },
+  unlock: async () => PRF,
+};
 
 test("confirm → number → review → approve with the passkey", async () => {
   const { steps, send } = script(RESULTS);
-  const challenges: string[] = [];
-  const remembered: Enrolment[] = [];
+  const calls: string[] = [];
+  let has = false;
   const uv = {
-    stored: async () => remembered[0],
-    create: async () => ENROLMENT,
-    remember: async (e: Enrolment) => void remembered.push(e),
-    assert: async (id: string, c: string) => {
-      challenges.push(`${id}:${c}`);
-      return ASSERTION;
+    enrolled: async () => has,
+    enrol: async (vtaDid: string) => {
+      calls.push(`enrol:${vtaDid}`);
+      has = true;
+    },
+    unlock: async (c: string) => {
+      calls.push(`unlock:${c}`);
+      return PRF;
     },
   };
   const screen = await render(
@@ -122,27 +119,21 @@ test("confirm → number → review → approve with the passkey", async () => {
     screen.container.querySelector('[data-testid="approve"]')!,
   );
   await screen.settle();
-  // First approval on this browser: the VTA holds no passkey for it, so
-  // create, enrol, remember, then assert over a fresh grant.
+  // First approval in a wallet with no passkey: create it (encrypting this
+  // agent's record), then the ceremony bound to the grant, then respond with
+  // its PRF output. Enrolling the key at the VTA is the offscreen's, inside
+  // the respond.
+  assert.deepEqual(calls, ["enrol:did:webvh:vta", "unlock:Q0hBTExFTkdF"]);
   assert.deepEqual(
     steps.slice(3).map((s) => s.step),
-    ["grant-digest", "enrol-uv", "grant-digest", "respond"],
+    ["grant-digest", "respond"],
   );
-  assert.deepEqual(remembered, [ENROLMENT]);
-  assert.deepEqual(challenges, [`${ENROLMENT.credentialId}:Q0hBTExFTkdF`]);
+  assert.deepEqual(steps[4], { step: "respond", decision: "approve", prfOutputB64u: PRF_B64U });
   assert.match(screen.text(), /Approved/);
   await screen.unmount();
 });
 
-/** The VTA already holds this browser's passkey. */
-const ENROLLED: Record<string, SignInStepResult> = {
-  ...RESULTS,
-  "grant-digest": {
-    kind: "uv-challenge",
-    challenge: "Q0hBTExFTkdF",
-    uvCredentialId: ENROLMENT.credentialId,
-  },
-};
+const ENROLLED = RESULTS;
 
 async function approveOnReview(
   uv: Parameters<typeof SignInView>[0]["uv"],
@@ -168,18 +159,12 @@ async function approveOnReview(
   return { steps, screen };
 }
 
-test("a passkey the VTA already holds is asserted without enrolling again", async () => {
-  let created = 0;
+test("a wallet that has its passkey runs only the ceremony bound to the grant", async () => {
   const challenges: string[] = [];
   const { steps, screen } = await approveOnReview(
     {
-      stored: async () => ENROLMENT,
-      create: async () => (created++, ENROLMENT),
-      remember: async () => {},
-      assert: async (id: string, c: string) => (
-        challenges.push(`${id}:${c}`),
-        ASSERTION
-      ),
+      ...ENROLLED_UV,
+      unlock: async (c: string) => (challenges.push(c), PRF),
     },
     ENROLLED,
   );
@@ -187,41 +172,32 @@ test("a passkey the VTA already holds is asserted without enrolling again", asyn
     steps.slice(3).map((s) => s.step),
     ["grant-digest", "respond"],
   );
-  assert.equal(created, 0);
-  assert.deepEqual(challenges, [`${ENROLMENT.credentialId}:Q0hBTExFTkdF`]);
+  assert.deepEqual(challenges, ["Q0hBTExFTkdF"]);
   assert.match(screen.text(), /Approved/);
   await screen.unmount();
 });
 
-test("this browser's passkey is enrolled at an agent that does not hold it, without making another", async () => {
-  // A second agent, or a holder onboarded again: the window has its passkey,
-  // the VTA does not.
-  let created = 0;
+test("a cancelled passkey creation is not a decision either", async () => {
   const { steps, screen } = await approveOnReview(
     {
-      stored: async () => ENROLMENT,
-      create: async () => (created++, ENROLMENT),
-      remember: async () => {},
-      assert: async () => ASSERTION,
+      enrolled: async () => false,
+      enrol: async () => {
+        throw new PrfUnlockError("cancelled", "cancelled");
+      },
+      unlock: async () => PRF,
     },
-    RESULTS,
+    ENROLLED,
   );
-  assert.equal(created, 0);
-  assert.deepEqual(
-    steps.slice(3).map((s) => s.step),
-    ["grant-digest", "enrol-uv", "grant-digest", "respond"],
-  );
-  assert.deepEqual((steps[4] as { enrolment: unknown }).enrolment, ENROLMENT);
+  assert.equal(steps.some((s) => s.step === "respond"), false);
+  assert.match(screen.text(), /Approval cancelled/);
   await screen.unmount();
 });
 
 test("a cancelled passkey prompt is not a decision", async () => {
   const { steps, send } = script(ENROLLED);
   const uv = {
-    stored: async () => ENROLMENT,
-    create: async () => ENROLMENT,
-    remember: async () => {},
-    assert: async () => {
+    ...ENROLLED_UV,
+    unlock: async (): Promise<Uint8Array> => {
       throw new PrfUnlockError("cancelled", "cancelled");
     },
   };
@@ -934,12 +910,7 @@ test("Approved closes the window by itself; Declined waits for Close", async () 
     h(SignInView, {
       flowId: "f",
       send,
-      uv: {
-        stored: async () => ENROLMENT,
-        create: async () => ENROLMENT,
-        remember: async () => {},
-        assert: async () => ASSERTION,
-      },
+      uv: ENROLLED_UV,
       close: () => void closed++,
       approvedCloseMs: 0,
     }),

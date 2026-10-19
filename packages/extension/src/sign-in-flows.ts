@@ -22,8 +22,11 @@
 //            K_a generated and anything sent to the community (C3 step 7).
 //   prove    the typed number, and `identify` signed by the VTA.
 //   review   step 2: where the request came from.
-//   grant    the grant digest goes to the passkey (C6); the VTA signs the grant
-//            with that decision; `respond` carries it. K_a is then discarded.
+//   grant    the window runs the wallet passkey's ceremony bound to the grant
+//            digest; its PRF output unseals this browser's UV key, which
+//            (enrolled at the VTA first, when it is not yet) signs the
+//            decision (C6); the VTA signs the grant with it; `respond` carries
+//            it. K_a is then discarded.
 //
 // ## A site the wallet does not know
 //
@@ -80,11 +83,10 @@ import {
   triggerLinkMessage,
   contactDomainLabel,
   bytesToBase64url,
+  base64urlToBytes,
   type ParsedTriggerLink,
   type TriggerLinkReason,
   type SigningIdentity,
-  type AuthenticatorAssertionResponseLogin,
-  type WebauthnUvKeyEnrolment,
   uvChallengeBytes,
   vaultOobRefusal,
   OOB_NOT_ENROLLED_DEVICE,
@@ -172,14 +174,15 @@ export interface SignInVta {
   /** `vault/sign-trust-task` for `auth/oob/identify` (no user verification). */
   signIdentify(entryId: string, unsigned: OobDocument): Promise<unknown>;
   /** `vault/sign-trust-task` for `auth/oob/grant`. For an approval, `uv` is
-   *  the grant digest D and the passkey's assertion over it; the caller wraps
-   *  them in the device-signed `task-consent/decision/0.2` the VTA requires. */
+   *  the grant digest D and the PRF output of the passkey ceremony bound to
+   *  it; the caller unseals the UV key with it and has that key sign the
+   *  `task-consent/decision/0.2` the VTA requires. */
   signGrant(
     entryId: string,
     unsigned: OobDocument,
     uv?: {
       payloadDigest: string;
-      assertion: AuthenticatorAssertionResponseLogin;
+      prfOutput: Uint8Array;
     },
   ): Promise<unknown>;
   /** The DIDs the agent hosts, across every context (`vta/webvh/list`): what
@@ -201,8 +204,13 @@ export interface SignInVta {
   signTask(entryId: string, unsigned: OobDocument): Promise<unknown>;
   /** Remove an entry this flow recorded and no longer needs (`vault/delete`). */
   unbindIdentity(entryId: string): Promise<void>;
-  /** `device/heartbeat` ext `org.openvtc.uv-key`, over the device's session. */
-  enrolUvKey(enrolment: WebauthnUvKeyEnrolment): Promise<void>;
+  /**
+   * Make sure the VTA holds this browser's UV key: unseal it with `prfOutput`
+   * (minting it, the first time) and, unless the VTA already holds it for this
+   * holder, enrol it (`device/heartbeat` ext `org.openvtc.uv-key`, over the
+   * device's session).
+   */
+  enrolUvKey(prfOutput: Uint8Array): Promise<void>;
   /**
    * Make sure this browser is registered as one of the member's devices at
    * the VTA (`device/register`, once per holder). The VTA signs sign-in
@@ -211,9 +219,6 @@ export interface SignInVta {
    * `identify` registers and retries once on `oobNotEnrolledDevice`.
    */
   ensureDevice?(): Promise<void>;
-  /** The credential id of the UV passkey the VTA holds for this browser's
-   *  current holder, if this wallet enrolled one there. */
-  enrolledUvCredential?(): Promise<string | undefined>;
 }
 
 export interface SignInFlowDeps {
@@ -289,6 +294,8 @@ function oobCode(code: string): string {
 }
 
 interface Flow {
+  /** The member's VTA this flow signs at. */
+  vtaDid: string;
   phase: Phase;
   link: ParsedTriggerLink;
   vta: SignInVta;
@@ -371,10 +378,10 @@ export const VTA_REFUSAL_MESSAGES: Readonly<Record<string, string>> = {
     "This browser has been disabled as one of your devices at your agent, so it can't sign you in. " +
     "Sign in from another device, or connect this browser to your agent again.",
   [OOB_NO_UV_KEY]:
-    "Your agent doesn't hold this browser's sign-in passkey yet. " +
+    "Your agent doesn't hold this browser's sign-in approval key yet. " +
     "Refresh the code on the website and approve again to set it up.",
   [OOB_UV_INVALID]:
-    "Your agent didn't accept the passkey approval. Refresh the code on the website and try again.",
+    "Your agent didn't accept this browser's approval. Refresh the code on the website and try again.",
 };
 
 const refused = (reason: TriggerLinkReason, detail?: SignInRefusalDetail): SignInStepResult => {
@@ -437,16 +444,11 @@ export class SignInFlows {
           return await this.prove(flow, req.enteredNumber);
         case "grant-digest":
           return await this.grantChallenge(flow);
-        case "enrol-uv":
-          if (flow.phase !== "identified") throw outOfOrder();
-          flow.at = "enrol-uv";
-          await flow.vta.enrolUvKey(req.enrolment);
-          return { kind: "uv-enrolled" };
         case "respond":
           return await this.respond(
             flow,
             req.decision,
-            req.decision === "approve" ? req.assertion : undefined,
+            req.decision === "approve" ? req.prfOutputB64u : undefined,
           );
         case "cancel":
           return await this.cancel(req.flowId, flow);
@@ -553,6 +555,7 @@ export class SignInFlows {
         // A community: offer to join it. Nothing is sent to it yet.
         const host = hostOf(portalOrigin);
         this.flows.set(flowId, {
+          vtaDid,
           phase: "joining",
           link,
           vta,
@@ -579,6 +582,7 @@ export class SignInFlows {
       const personas = await vta.listPersonas();
       const host = hostOf(portalOrigin);
       this.flows.set(flowId, {
+        vtaDid,
         phase: "joining",
         link,
         vta,
@@ -602,6 +606,7 @@ export class SignInFlows {
     // C3 step 5: the name from the wallet's own record.
     const communityName = identities[0]!.label;
     this.flows.set(flowId, {
+      vtaDid,
       phase: "prepared",
       link,
       vta,
@@ -1062,46 +1067,38 @@ export class SignInFlows {
   }
 
   /** Build the unsigned approval and hand its digest to the window for the
-   *  passkey. The grant itself stays here: the window signs a digest, it does
-   *  not get to supply the document. */
+   *  passkey ceremony. The grant itself stays here: the window binds a gesture
+   *  to a digest, it does not get to supply the document. */
   private async grantChallenge(flow: Flow): Promise<SignInStepResult> {
     if (flow.phase !== "identified" || !flow.kA || !flow.step2Doc)
       throw outOfOrder();
     flow.at = "grant-digest";
     flow.unsignedGrant = await this.buildGrantFor(flow, "approve");
     flow.grantDigest = await grantDigest(flow.unsignedGrant);
-    // Which passkey the VTA holds for this device, so the window enrols this
-    // browser's passkey first when it holds none (or another).
-    const uvCredentialId = await flow.vta
-      .enrolledUvCredential?.()
-      .catch(() => undefined);
-    // The passkey signs the UTF-8 bytes of the digest string (contract C9).
+    // The ceremony is bound to the UTF-8 bytes of the digest string (C9).
     return {
       kind: "uv-challenge",
       challenge: bytesToBase64url(uvChallengeBytes(flow.grantDigest)),
-      ...(uvCredentialId ? { uvCredentialId } : {}),
+      vtaDid: flow.vtaDid,
     };
   }
 
   private async respond(
     flow: Flow,
     decision: OobDecision,
-    assertion: AuthenticatorAssertionResponseLogin | undefined,
+    prfOutputB64u: string | undefined,
   ): Promise<SignInStepResult> {
     if (flow.phase !== "identified" || !flow.kA || !flow.entry)
       throw outOfOrder();
     let unsigned: OobDocument<OobGrantPayload>;
-    let uv:
-      | {
-          payloadDigest: string;
-          assertion: AuthenticatorAssertionResponseLogin;
-        }
-      | undefined;
+    let uv: { payloadDigest: string; prfOutput: Uint8Array } | undefined;
     if (decision === "approve") {
-      if (!flow.unsignedGrant || !flow.grantDigest || !assertion)
+      if (!flow.unsignedGrant || !flow.grantDigest || !prfOutputB64u)
         throw outOfOrder();
       unsigned = flow.unsignedGrant;
-      uv = { payloadDigest: flow.grantDigest, assertion };
+      uv = { payloadDigest: flow.grantDigest, prfOutput: base64urlToBytes(prfOutputB64u) };
+      flow.at = "enrol-uv";
+      await flow.vta.enrolUvKey(uv.prfOutput);
     } else {
       // A decline needs no user verification (base design §14 step 12).
       unsigned = await this.buildGrantFor(flow, "decline");
