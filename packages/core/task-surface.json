@@ -638,6 +638,12 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/keys/sign-document/0.1",
+      "consts": [
+        "TASK_KEYS_SIGN_DOCUMENT_0_1"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/keys/sign-jws/0.1",
       "consts": [
         "TASK_KEYS_SIGN_JWS_0_1"
@@ -1136,6 +1142,12 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/rooms/owner/group/add/0.3",
+      "consts": [
+        "TASK_ROOMS_OWNER_GROUP_ADD_0_3"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/rooms/owner/group/create/0.1",
       "consts": [
         "TASK_ROOMS_OWNER_GROUP_CREATE_0_1"
@@ -1163,6 +1175,12 @@
       "uri": "https://trusttasks.org/spec/rooms/owner/group/renew/0.1",
       "consts": [
         "TASK_ROOMS_OWNER_GROUP_RENEW_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/owner/group/renew/0.2",
+      "consts": [
+        "TASK_ROOMS_OWNER_GROUP_RENEW_0_2"
       ]
     },
     {

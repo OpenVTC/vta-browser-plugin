@@ -27,6 +27,7 @@ import { runApproverUnlockCeremony } from "./webauthn-prf-unlock.js";
 import { DisclosureConsent } from "./disclosure-consent.js";
 import { ApproverConsent } from "./approver-consent.js";
 import { RoomConsent } from "./room-consent.js";
+import { DirectoryConsent } from "./directory-consent.js";
 import { consentResultSender } from "./consent-result.js";
 import { DidQrButton } from "./did-qr-view.js";
 import { SessionKeyNotice } from "./session-key-notice.js";
@@ -59,6 +60,9 @@ const isStepUpApproverConsent = params.get("kind") === "approver";
 // `kind=room` selects a data-room prompt: sharing rooms with a portal page, or
 // one write to a room (`room-consent.tsx`).
 const isRoomConsent = params.get("kind") === "room";
+// `kind=directory` selects publishing the member's directory card from a
+// community's portal (`directory-consent.tsx`).
+const isDirectoryConsent = params.get("kind") === "directory";
 /** Wallet sign-in from a trigger link (sign-in-view.tsx). Names a flow id and
  *  nothing else; the link and the origin stay in the background's record. */
 const signInFlowId = params.get("kind") === "sign-in" ? params.get("flow") : null;
@@ -1447,6 +1451,8 @@ if (root) {
     <StrictMode>
       {signInFlowId ? (
         <SignInView flowId={signInFlowId} />
+      ) : isDirectoryConsent ? (
+        <DirectoryConsent consentId={consentId} decide={(ok) => void sendConsentResult({ approved: ok, remember: false })} />
       ) : isRoomConsent ? (
         <RoomConsent
           consentId={consentId}

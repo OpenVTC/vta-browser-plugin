@@ -205,3 +205,13 @@ test("a page cannot have the wallet sign something that is not a document", () =
     assert.notEqual(pageSignRefusal(env, AGENT), null, JSON.stringify(env));
   }
 });
+
+test("a page cannot drive the directory or have a document signed as the holder", () => {
+  for (const t of [
+    "https://trusttasks.org/spec/vtc/directory/card/publish/0.1",
+    "https://trusttasks.org/spec/vtc/directory/card/show/0.1",
+    "https://trusttasks.org/spec/keys/sign-document/0.1",
+  ]) {
+    assert.match(pageTaskRefusal(t) ?? "", /cannot be requested by a page/, t);
+  }
+});

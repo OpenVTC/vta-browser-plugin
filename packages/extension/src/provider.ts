@@ -31,6 +31,8 @@ import type {
   WalletProfileParams,
   WalletProfileResult,
   RoomsPageOp,
+  DirectoryPageOp,
+  PagePublishedCardView,
   PageRoomView,
   PageRoomInfoView,
   PageListingView,
@@ -189,6 +191,20 @@ interface VtaWallet {
    *  confirmed by the member. Nothing here returns a key, a presentation or a
    *  signed document. */
   rooms: VtaWalletRooms;
+  /** The member's directory card, for the community's own portal
+   *  (`vtc/directory/card/publish`). Refused unless this page's origin is the
+   *  `SignInPortal` of `hostDid`'s DID document. The wallet reads the card as the
+   *  member, shows them every value and that anyone can read it, and publishes
+   *  only if they agree; the page gets where the card stands, never the card
+   *  or a signature. */
+  directory: VtaWalletDirectory;
+}
+
+/** `window.vtaWallet.directory`. */
+export interface VtaWalletDirectory {
+  /** Publish the member's card beyond the community. `member` is the DID the
+   *  page says is signed in: a hint among the wallet's identities there. */
+  publishCard(p: { hostDid: string; member?: string }): Promise<PagePublishedCardView>;
 }
 
 /** Progress of a file transfer, for a progress bar. */
@@ -345,6 +361,7 @@ function call<T>(
     | AttestApproverParams
     | ApproveDecisionParams
     | RoomsPageOp
+    | DirectoryPageOp
     | Record<string, never>,
 ): Promise<T> {
   const id = crypto.randomUUID();
@@ -534,6 +551,14 @@ if (!window.vtaWallet) {
         }),
       getFile: getRoomFile,
       putFile: putRoomFile,
+    },
+    directory: {
+      publishCard: (p) =>
+        call<PagePublishedCardView>("directory", {
+          op: "publishCard",
+          hostDid: p.hostDid,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+        }),
     },
   };
 }
