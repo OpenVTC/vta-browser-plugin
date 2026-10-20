@@ -8,6 +8,8 @@
 //   3. Catch a person's click on a trigger link (a sign-in QR code that is also
 //      a link) and hand it to the worker instead of navigating — see
 //      `trigger-link-click.ts`. Nothing about the result reaches the page.
+//      After that click it reads the number the portal shows for the request
+//      and hands it to the worker too (contract C11).
 
 import { parseActiveVtaDid } from "./active-vta.js";
 import { installTriggerLinkClickHandler } from "./trigger-link-click.js";
@@ -46,6 +48,7 @@ const RUNTIME_ATTEST_APPROVER = "vta-wallet/attest-approver";
 const RUNTIME_APPROVE_DECISION = "vta-wallet/approve-decision";
 const RUNTIME_BROADCAST_EVENT = "vta-wallet/broadcast-event";
 const RUNTIME_TRIGGER_LINK = "vta-wallet/trigger-link";
+const RUNTIME_TRIGGER_LINK_NUMBER = "vta-wallet/trigger-link-number";
 const RUNTIME_ROOMS_PAGE = "vta-wallet/rooms-page";
 const RUNTIME_DIRECTORY_PAGE = "vta-wallet/directory-page";
 const ROOM_FILES_PAGE_PORT = "vta-wallet/room-files-page";
@@ -247,6 +250,16 @@ installTriggerLinkClickHandler(window, {
   send: (activation) => {
     void chrome.runtime
       .sendMessage({ type: RUNTIME_TRIGGER_LINK, link: activation.link, origin: activation.origin })
+      .catch(() => undefined);
+  },
+  sendNumber: (n) => {
+    void chrome.runtime
+      .sendMessage({
+        type: RUNTIME_TRIGGER_LINK_NUMBER,
+        requestId: n.requestId,
+        matchNumber: n.matchNumber,
+        origin: n.origin,
+      })
       .catch(() => undefined);
   },
 });

@@ -9,7 +9,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Window } from "happy-dom";
 
-import { installTriggerLinkClickHandler, type TriggerLinkActivation } from "../src/trigger-link-click.ts";
+import {
+  installTriggerLinkClickHandler,
+  type TriggerLinkActivation,
+  type TriggerLinkNumber,
+} from "../src/trigger-link-click.ts";
 
 const EXP = 1791460920;
 const LINK =
@@ -176,4 +180,60 @@ test("a send that throws (extension reloaded) does not throw into the page", () 
     now: () => EXP,
   });
   assert.doesNotThrow(() => click(win, win.document.getElementById("a") as unknown as Element));
+});
+
+// ── C11: the number the portal shows, read after the click ───────────────────
+
+const ID = "Hk2pQ9xV4mT7rW1sZ8yN3A";
+
+function watchedPage(html: string) {
+  const win = new Window({ url: "https://members.example.org/members/login" });
+  win.document.body.innerHTML = html;
+  const numbers: TriggerLinkNumber[] = [];
+  const uninstall = installTriggerLinkClickHandler(win as unknown as globalThis.Window, {
+    send: () => {},
+    sendNumber: (n) => numbers.push(n),
+    now: () => EXP,
+  });
+  // Uninstalling stops the watch and its timer, so the test can end.
+  return { win, numbers, uninstall };
+}
+
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+test("after a click, the number the portal shows for that request is sent once", async (t) => {
+  const { win, numbers, uninstall } = watchedPage(`<a id="qr" href="${LINK}">code</a><p id="status"></p>`);
+  t.after(uninstall);
+  click(win, win.document.getElementById("qr") as unknown as Element);
+  await settle();
+  assert.deepEqual(numbers, [], "nothing before the page shows it");
+  win.document.getElementById("status")!.innerHTML =
+    `Your number is <strong data-oob-request-id="${ID}" data-oob-match-number="47">47</strong>`;
+  await settle();
+  assert.deepEqual(numbers, [{ requestId: ID, matchNumber: "47", origin: "https://members.example.org" }]);
+  // Re-rendered: still once.
+  win.document.querySelector("strong")!.setAttribute("data-oob-match-number", "48");
+  await settle();
+  assert.equal(numbers.length, 1);
+});
+
+test("a number for another request, or not two digits, is not read", async (t) => {
+  const { win, numbers, uninstall } = watchedPage(`<a id="qr" href="${LINK}">code</a><p id="status"></p>`);
+  t.after(uninstall);
+  click(win, win.document.getElementById("qr") as unknown as Element);
+  win.document.getElementById("status")!.innerHTML =
+    `<b data-oob-request-id="someone-else" data-oob-match-number="12">12</b>` +
+    `<b data-oob-request-id="${ID}" data-oob-match-number="1x">1x</b>`;
+  await settle();
+  assert.deepEqual(numbers, []);
+});
+
+test("without a click the page is not watched", async (t) => {
+  const { win, numbers, uninstall } = watchedPage(
+    `<strong data-oob-request-id="${ID}" data-oob-match-number="47">47</strong>`,
+  );
+  await settle();
+  assert.deepEqual(numbers, []);
+  t.after(uninstall);
+  void win;
 });

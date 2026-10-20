@@ -306,8 +306,12 @@ import { parseTriggerLink } from "@openvtc/pnm-core/links";
 import { isTriggerLinkShaped } from "./trigger-link-click.js";
 import {
   RUNTIME_TRIGGER_LINK,
+  RUNTIME_TRIGGER_LINK_NUMBER,
   RUNTIME_SIGN_IN_STEP,
   OFFSCREEN_SIGN_IN_STEP,
+  OFFSCREEN_SIGN_IN_PAGE_NUMBER,
+  type OffscreenSignInPageNumberRequest,
+  type RuntimeTriggerLinkNumberRequest,
   type RuntimeTriggerLinkRequest,
   type RuntimeSignInStepRequest,
   type RuntimeSignInStepResponse,
@@ -3534,6 +3538,34 @@ async function handleTriggerLink(msg: RuntimeTriggerLinkRequest, tabId: number |
   });
 }
 
+/**
+ * The number the portal shows for a request (C11), from the content script on
+ * the page the code was clicked on. It goes to the flow whose link carries
+ * that request id and whose click came from this same attested origin — a
+ * number from any other page, or for a request no flow holds, is dropped. The
+ * flow decides whether it still wants it.
+ */
+async function handleTriggerLinkNumber(msg: RuntimeTriggerLinkNumberRequest): Promise<void> {
+  if (typeof msg.requestId !== "string" || typeof msg.matchNumber !== "string") return;
+  if (!/^[0-9]{2}$/.test(msg.matchNumber)) return;
+  const all = await chrome.storage.session.get(null);
+  for (const [key, value] of Object.entries(all)) {
+    if (!key.startsWith(SIGN_IN_FLOW_PREFIX)) continue;
+    const record = value as SignInFlowRecord;
+    if (record.origin !== msg.origin) continue;
+    // Expiry is the flow's to judge; only the id is read here.
+    const parsed = parseTriggerLink(record.link, { now: 0 });
+    if (!parsed.ok || parsed.link.id !== msg.requestId) continue;
+    await ensureOffscreenDocument();
+    await chrome.runtime.sendMessage({
+      target: OFFSCREEN_TARGET,
+      type: OFFSCREEN_SIGN_IN_PAGE_NUMBER,
+      flowId: key.slice(SIGN_IN_FLOW_PREFIX.length),
+      matchNumber: msg.matchNumber,
+    } satisfies OffscreenSignInPageNumberRequest);
+  }
+}
+
 async function endSignInFlow(flowId: string): Promise<void> {
   const key = `${SIGN_IN_FLOW_PREFIX}${flowId}`;
   const had = (await chrome.storage.session.get(key))[key] !== undefined;
@@ -3657,6 +3689,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
     }
     (message as { origin?: string }).origin = attested;
+  }
+
+  if (msgType === RUNTIME_TRIGGER_LINK_NUMBER) {
+    // `origin` was overwritten above with the browser-attested one. Fire and
+    // forget, like the click: nothing goes back to the page.
+    if (isExtensionPageSender(sender)) return false;
+    void handleTriggerLinkNumber(message as RuntimeTriggerLinkNumberRequest).catch(() => undefined);
+    return false;
   }
 
   if (msgType === RUNTIME_TRIGGER_LINK) {

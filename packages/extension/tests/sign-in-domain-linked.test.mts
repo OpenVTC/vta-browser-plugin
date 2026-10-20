@@ -126,6 +126,7 @@ function world(opts: { config?: unknown; configStatus?: number; doc?: Record<str
   w.flows = new SignInFlows({
     now: () => NOW,
     grantLifetimeMs: 3_600_000,
+    pageNumberWaitMs: 0,
     fetch,
     contactMethods,
     vta: () => ({
@@ -151,6 +152,7 @@ test("a domain-linked contact is unsupported-vid with the shared registry", asyn
   const flows = new SignInFlows({
     now: () => NOW,
     grantLifetimeMs: 1,
+    pageNumberWaitMs: 0,
     fetch: (async () => assert.fail("nothing is fetched")) as unknown as typeof fetch,
     vta: () => ({ listIdentities: async () => entries }) as never,
   });

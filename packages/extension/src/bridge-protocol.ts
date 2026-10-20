@@ -2407,6 +2407,9 @@ export type MonitorMessage =
  *  above the list it is in; the rest of the sign-in protocol is at the end of
  *  this file. */
 export const RUNTIME_TRIGGER_LINK = "vta-wallet/trigger-link" as const;
+/** content script → background: the number the portal shows for a request
+ *  the person clicked the code of (contract C11). */
+export const RUNTIME_TRIGGER_LINK_NUMBER = "vta-wallet/trigger-link-number" as const;
 
 // ─── Data rooms for a page: `window.vtaWallet.rooms` (P7b) ──────────────────
 //
@@ -2654,6 +2657,9 @@ export const PAGE_FACING_RUNTIME_TYPES = [
   // (`trigger-link-click.ts`). Listed so the background takes the activation
   // origin from the browser, never from the body (VTI-LNK-056).
   RUNTIME_TRIGGER_LINK,
+  // Not a provider method either: the same listener, reporting the number the
+  // portal shows after that click (C11). Its origin is the browser's too.
+  RUNTIME_TRIGGER_LINK_NUMBER,
 ] as const;
 
 
@@ -2674,12 +2680,41 @@ export const PAGE_FACING_RUNTIME_TYPES = [
 //       added by the background from its own record, so an extension page
 //       cannot re-point a flow at another origin. The offscreen document runs
 //       the protocol and holds `K_a`, in memory only, for the flow's life.
+//
+//   content script ──RUNTIME_TRIGGER_LINK_NUMBER──▶ background ──OFFSCREEN_SIGN_IN_PAGE_NUMBER──▶ offscreen
+//       After the click, the content script watches the page for the number
+//       the portal shows once the request is claimed: the element carrying
+//       `data-oob-request-id` (the link's `_id`) and `data-oob-match-number`
+//       (contract C11). The background hands it to the flow whose link has
+//       that id and whose click came from the same attested origin; the flow
+//       proves with it, so the person does not type it. The community still
+//       checks the number. Nothing is answered to the page.
 
 export interface RuntimeTriggerLinkRequest {
   type: typeof RUNTIME_TRIGGER_LINK;
   link: string;
   /** Overwritten by the background with the attested `sender.origin`. */
   origin: string;
+}
+
+export interface RuntimeTriggerLinkNumberRequest {
+  type: typeof RUNTIME_TRIGGER_LINK_NUMBER;
+  /** The link's `_id`, as the page's `data-oob-request-id` names it. */
+  requestId: string;
+  /** Two digits, as the page's `data-oob-match-number` shows them. */
+  matchNumber: string;
+  /** Overwritten by the background with the attested `sender.origin`. */
+  origin: string;
+}
+
+/** background → offscreen: the portal's number for a held flow (C11). */
+export const OFFSCREEN_SIGN_IN_PAGE_NUMBER = "offscreen/sign-in-page-number" as const;
+
+export interface OffscreenSignInPageNumberRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_SIGN_IN_PAGE_NUMBER;
+  flowId: string;
+  matchNumber: string;
 }
 
 /** sign-in window → background, and background → offscreen. */
@@ -2832,6 +2867,9 @@ export type SignInStepResult =
       identifiedAs: string;
       /** As step 1's; step 2 repeats it, and the grant's digest covers it. */
       audience: "member" | "admin";
+      /** Epoch ms: step 1's decision deadline, for the countdown when the
+       *  number came from the page and no number screen was shown. */
+      decisionDeadline: number;
       /** The task families approving also lets that browser sign as the
        *  member, for the session (auth/oob/grant/0.2). Absent: none. */
       signingScope?: string[];

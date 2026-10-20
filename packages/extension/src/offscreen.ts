@@ -232,6 +232,8 @@ import {
 } from "./bridge-protocol.js";
 import {
   OFFSCREEN_SIGN_IN_STEP,
+  OFFSCREEN_SIGN_IN_PAGE_NUMBER,
+  type OffscreenSignInPageNumberRequest,
   type OffscreenSignInStepRequest,
   type RuntimeSignInStepResponse,
 } from "./bridge-protocol.js";
@@ -335,6 +337,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
     return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_SIGN_IN_PAGE_NUMBER) {
+    const req = message as OffscreenSignInPageNumberRequest;
+    signInFlows.pageNumber(req.flowId, req.matchNumber);
+    return false;
   }
   if (msg.type === OFFSCREEN_SIGN_IN_STEP) {
     const req = message as OffscreenSignInStepRequest;
