@@ -119,6 +119,8 @@ function world(
     name?: string;
     /** How long a claim waits for the page's number (C11); 0 by default. */
     pageNumberWaitMs?: number;
+    /** The VTA refuses renaming a record with this error. */
+    renameError?: Error;
     claimError?: string;
     proveError?: string;
     /** The community predates auth/oob 0.2 and refuses `prove/0.2`. */
@@ -254,6 +256,10 @@ function world(
       unbindIdentity: async (entryId) => {
         vtaCalls.push({ what: "unbind" });
         unbinds.push(entryId);
+      },
+      renameIdentity: async (entryId, label) => {
+        vtaCalls.push({ what: "rename", decision: { entryId, label } });
+        if (opts.renameError) throw opts.renameError;
       },
       signTask: async (entryId, unsigned) => {
         vtaCalls.push({ what: "sign-task" });
@@ -642,6 +648,52 @@ test("a community name that differs from the wallet's still asks, page number or
   assert.equal(r.kind, "enter-number");
   assert.equal((r as { nameMismatch?: string }).nameMismatch, "Totally Legit Bank");
   assert.equal(w.sent.length, 1, "nothing proved for the person");
+});
+
+test("calling the community by its own name renames the record and goes on with the page's number", async () => {
+  const w = world({ name: "Totally  Legit Bank", pageNumberWaitMs: 60_000 });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  w.flows.pageNumber("f1", "47");
+  assert.equal((await step(w, { step: "claim", entryId: "e-alice" })).kind, "enter-number");
+  const review = await step(w, { step: "adopt-name" });
+  assert.deepEqual(w.vtaCalls.find((c) => c.what === "rename")!.decision, {
+    entryId: "e-alice",
+    label: "Totally Legit Bank",
+  });
+  assert.equal(review.kind, "review");
+  assert.equal(identifyNumber(w), "47");
+});
+
+test("calling the community by its own name, with no page number: the number screen, no longer flagged", async () => {
+  const w = world({ name: "Totally Legit Bank", pageNumberWaitMs: 20 });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "claim", entryId: "e-alice" });
+  const r = await step(w, { step: "adopt-name" });
+  assert.equal(r.kind, "enter-number");
+  assert.equal("nameMismatch" in r, false);
+  assert.equal(w.sent.length, 1, "nothing proved for the person");
+  // And the number they type proves as usual.
+  assert.equal((await step(w, { step: "prove", enteredNumber: "47" })).kind, "review");
+});
+
+test("a rename the VTA refuses keeps the flow, the warning and the reason", async () => {
+  const w = world({ name: "Totally Legit Bank", renameError: new Error("version conflict") });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "claim", entryId: "e-alice" });
+  const r = await step(w, { step: "adopt-name" });
+  assert.equal(r.kind, "enter-number");
+  assert.equal((r as { nameMismatch?: string }).nameMismatch, "Totally Legit Bank");
+  assert.equal((r as { adoptFailed?: string }).adoptFailed, "version conflict");
+  assert.equal(w.sent.some((s) => s.type === "cancel"), false, "the claim is still held");
+  assert.equal((await step(w, { step: "prove", enteredNumber: "47" })).kind, "review");
+});
+
+test("adopting a name before the claim is out of order, and sends nothing", async () => {
+  const w = world({ name: "Totally Legit Bank" });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = await step(w, { step: "adopt-name" });
+  assert.equal(r.kind, "failed");
+  assert.equal(w.vtaCalls.some((c) => c.what === "rename"), false);
 });
 
 test("two entries for one DID are offered once", async () => {

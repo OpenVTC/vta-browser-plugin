@@ -201,6 +201,38 @@ test("one identity, no number from the page: the number screen, without the iden
   await screen.unmount();
 });
 
+test("the name warning offers to call the community by its own name; yes renames and goes on", async () => {
+  const { steps, send } = script({ ...RESULTS, "adopt-name": RESULTS.prove! });
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, uv: ENROLLED_UV, close: () => {} }),
+  );
+  await screen.settle();
+  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
+  const adopt = screen.container.querySelector('[data-testid="adopt-name"]')!;
+  assert.match(adopt.textContent!, /Call it Totally Legit Bank in my wallet/);
+  await screen.click(adopt);
+  assert.deepEqual(steps.at(-1), { step: "adopt-name" });
+  assert.match(screen.text(), /Approve this sign-in\?/);
+  assert.match(screen.text(), /Totally Legit Bank/, "the header now uses the adopted name");
+  await screen.unmount();
+});
+
+test("a rename that failed says why, and the number can still be typed", async () => {
+  const { send } = script({
+    ...RESULTS,
+    "adopt-name": { ...(RESULTS.claim as Extract<SignInStepResult, { kind: "enter-number" }>), adoptFailed: "version conflict" },
+  });
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, uv: ENROLLED_UV, close: () => {} }),
+  );
+  await screen.settle();
+  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
+  await screen.click(screen.container.querySelector('[data-testid="adopt-name"]')!);
+  assert.match(screen.container.querySelector('[data-testid="adopt-failed"]')!.textContent!, /version conflict/);
+  assert.ok(screen.container.querySelector('[data-testid="number"]'));
+  await screen.unmount();
+});
+
 test("a wallet that has its passkey runs only the ceremony bound to the grant", async () => {
   const challenges: string[] = [];
   const { steps, screen } = await approveOnReview(

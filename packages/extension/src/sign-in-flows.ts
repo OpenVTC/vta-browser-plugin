@@ -204,6 +204,9 @@ export interface SignInVta {
   signTask(entryId: string, unsigned: OobDocument): Promise<unknown>;
   /** Remove an entry this flow recorded and no longer needs (`vault/delete`). */
   unbindIdentity(entryId: string): Promise<void>;
+  /** Rename an entry (`vault/upsert` with its id and version), keeping
+   *  everything else it holds. */
+  renameIdentity?(entryId: string, label: string): Promise<void>;
   /**
    * Make sure the VTA holds this browser's UV key: unseal it with `prfOutput`
    * (minting it, the first time) and, unless the VTA already holds it for this
@@ -456,6 +459,8 @@ export class SignInFlows {
           return await this.claim(req.flowId, flow, req.entryId);
         case "prove":
           return await this.prove(flow, req.enteredNumber);
+        case "adopt-name":
+          return await this.adoptName(flow);
         case "grant-digest":
           return await this.grantChallenge(flow);
         case "respond":
@@ -1039,6 +1044,48 @@ export class SignInFlows {
       audience: sessionAudienceOf(flow.step1)!,
       ...(theirs !== undefined ? { nameMismatch: theirs } : {}),
     };
+  }
+
+  // ── adopt the community's name ─────────────────────────────────────────────
+
+  /**
+   * The person chose to call the community by the name its signed step 1
+   * gives (VTI-LNK-104 flagged the difference; this is their answer to it).
+   * The record is renamed at the VTA, so the next sign-in has nothing to
+   * flag, and this one goes on as if there had been no difference: with the
+   * page's number when it has arrived (C11), else the number screen. A
+   * rename the VTA refuses leaves the flow where it was, with the reason.
+   */
+  private async adoptName(flow: Flow): Promise<SignInStepResult> {
+    if (flow.phase !== "claimed" || !flow.entry || !flow.step1) throw outOfOrder();
+    const theirs = communityNameMismatch(
+      flow.step1.service.name,
+      flow.step1.service.did,
+      flow.communityName,
+      flow.services.portalOrigin,
+    );
+    const screen = (extra: { nameMismatch?: string; adoptFailed?: string } = {}): SignInStepResult => ({
+      kind: "enter-number",
+      decisionDeadline: deadlineMs(flow.step1!.decisionDeadline)!,
+      audience: sessionAudienceOf(flow.step1!)!,
+      ...extra,
+    });
+    if (theirs === undefined) return screen();
+    const name = theirs.trim().replace(/\s+/g, " ");
+    try {
+      if (!flow.vta.renameIdentity) throw new Error("this wallet cannot rename its records");
+      await flow.vta.renameIdentity(flow.entry.entryId, name);
+    } catch (err) {
+      return screen({
+        nameMismatch: theirs,
+        adoptFailed: err instanceof Error ? err.message : String(err),
+      });
+    }
+    flow.communityName = name;
+    flow.entry = { ...flow.entry, label: name };
+    const fromPage = await this.waitForPageNumber(flow);
+    if (fromPage !== undefined && flow.phase === "claimed") return await this.prove(flow, fromPage);
+    return screen();
   }
 
   // ── prove ──────────────────────────────────────────────────────────────────

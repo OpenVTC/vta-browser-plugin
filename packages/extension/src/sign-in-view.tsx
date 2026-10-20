@@ -1370,6 +1370,36 @@ export function SignInView({
                 it as <strong style={wrap}>{communityName}</strong>. If you
                 didn't expect that, decline.
               </div>
+              {/* The person's answer to the difference: their record takes
+                  the community's name, and the sign-in goes on. Never for a
+                  name that is a DID: that is shortened, and no one's name. */}
+              {!/^did:/i.test(screen.nameMismatch.trim()) && (
+                <button
+                  type="button"
+                  data-testid="adopt-name"
+                  disabled={busy}
+                  onClick={async () => {
+                    const adopted = screen.nameMismatch!.trim().replace(/\s+/g, " ");
+                    const r = await run({ step: "adopt-name" });
+                    if (r && !(r.kind === "enter-number" && r.adoptFailed))
+                      setCommunityName(adopted);
+                  }}
+                  style={{
+                    ...button("default"),
+                    marginTop: 8,
+                    fontSize: t.sm,
+                    padding: "5px 12px",
+                    ...wrap,
+                  }}
+                >
+                  Call it {screen.nameMismatch.trim()} in my wallet
+                </button>
+              )}
+              {screen.adoptFailed !== undefined && (
+                <div data-testid="adopt-failed" style={{ marginTop: 6, ...wrap }}>
+                  Your wallet couldn't rename it: {screen.adoptFailed}
+                </div>
+              )}
             </Note>
           )}
           <p style={{ margin: 0, ...wrap }}>

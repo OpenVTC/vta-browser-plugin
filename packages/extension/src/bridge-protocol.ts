@@ -2742,6 +2742,10 @@ export type SignInStep =
     }
   | { step: "claim"; entryId: string }
   | { step: "prove"; enteredNumber: string }
+  /** The community's signed name differs from the wallet's record and the
+   *  person chose to call it that in their wallet: the record is renamed and
+   *  the sign-in goes on (with the page's number, when it has it). */
+  | { step: "adopt-name" }
   | { step: "grant-digest" }
   /** Approve: the PRF output of the wallet passkey's ceremony, bound to the
    *  grant digest. It unseals this browser's UV key for the one decision and
@@ -2853,6 +2857,8 @@ export type SignInStepResult =
   | {
       kind: "enter-number";
       nameMismatch?: string;
+      /** The record could not be renamed (`adopt-name`); why, to show. */
+      adoptFailed?: string;
       /** Epoch ms. */ decisionDeadline: number;
       audience: "member" | "admin";
     }
