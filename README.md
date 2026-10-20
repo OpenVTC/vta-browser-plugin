@@ -367,7 +367,10 @@ click is the go-ahead. The two-digit number the portal shows is read from that
 page once the portal shows it — the element carrying `data-oob-request-id` and
 `data-oob-match-number` (sign-in contract C11) — so you do not type it; a
 portal that does not publish it, or a community whose name differs from your
-record, gets the number screen instead. The community still checks the number.
+record, gets the number screen instead; that screen offers "Call it <name> in
+my wallet", which renames your record to the community's name (so the next
+sign-in has nothing to flag) and goes on. The community still checks the
+number.
 Then the window shows where the request came from, and Approve signs the grant
 with your passkey. The page is told nothing; the portal learns the outcome from
 the community.

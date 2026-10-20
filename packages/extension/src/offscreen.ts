@@ -1602,6 +1602,27 @@ const signInFlows = new SignInFlows({
       });
       return signedEnvelope;
     },
+    // Only the label changes: the entry is written back with its own id,
+    // version, context, targets and kind, and no secret, so the VTA keeps the
+    // one it holds.
+    renameIdentity: async (entryId, label) => {
+      const entry = (await listSelfIssued(vtaDid, restBaseUrl)).find((e) => e.id === entryId) as
+        | (SignInVaultEntry & { contextId: string; version: number })
+        | undefined;
+      if (!entry) throw new Error("the record is no longer in your wallet");
+      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+      type Params = Parameters<typeof vaultUpsert>[1];
+      await vaultUpsert(session, {
+        holder,
+        service,
+        id: entry.id,
+        expectedVersion: entry.version,
+        contextId: entry.contextId,
+        targets: entry.targets,
+        label,
+        secretKind: entry.secretKind,
+      } as unknown as Params);
+    },
     unbindIdentity: async (entryId) => {
       const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
       await vaultDelete(session, { holder, service, id: entryId, reason: "join request not taken" });
