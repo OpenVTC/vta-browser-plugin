@@ -34,6 +34,14 @@
 //     its own click was default-prevented — that says a wallet is present, not
 //     what it decided, and the portal already knows it showed a code.)
 //
+// After a click it routed, the listener also reads one thing back from the
+// page: the number the portal shows once the request is claimed (contract
+// C11) — the element with `data-oob-request-id` equal to the link's `_id` and
+// a two-digit `data-oob-match-number`. It watches only for that request, only
+// after that click, and only until the claim could no longer be decided, then
+// hands the number to the worker so the person does not type it. Reading the
+// page tells the page nothing; property 4 holds.
+//
 // The parse here is a *routing* decision, made synchronously because
 // `preventDefault` only works inside the listener. It is not trusted: the
 // background parses the same text again before it acts.
@@ -50,9 +58,21 @@ export interface TriggerLinkActivation {
   origin: string;
 }
 
+/** The number the portal shows for a clicked request (C11). `content.ts`
+ *  wraps it in `RUNTIME_TRIGGER_LINK_NUMBER`. */
+export interface TriggerLinkNumber {
+  requestId: string;
+  matchNumber: string;
+  /** `location.origin` when the number was read. */
+  origin: string;
+}
+
 export interface TriggerLinkClickDeps {
   /** Deliver the activation to the worker. The result is never read. */
   send: (message: TriggerLinkActivation) => void;
+  /** Deliver the number the page shows for the clicked request. Absent: the
+   *  page is not watched, and the person types the number. */
+  sendNumber?: (message: TriggerLinkNumber) => void;
   /** Epoch seconds. */
   now: () => number;
   /** Whether this wallet can act on a sign-in at all (an active VTA
@@ -72,6 +92,10 @@ export const DEFAULT_TRIGGER_LINK_HOSTS: readonly string[] = ["link.trustoverip.
 
 /** The trigger-link path on the link host (C1). */
 export const TRIGGER_LINK_PATH = "/t";
+
+/** How long after a click the page is watched for its number: the claim
+ *  window plus the two minutes a claimed request has to be decided. */
+export const MATCH_NUMBER_WATCH_MS = 5 * 60_000;
 
 const RESERVED_IN_FRAGMENT = /(?:^|&)_(?:from|id|exp|type)=/;
 
@@ -104,12 +128,72 @@ export function isTriggerLinkShaped(href: string, hosts: readonly string[] = DEF
  * calling `stopPropagation` on the anchor.
  */
 export function installTriggerLinkClickHandler(win: Window, deps: TriggerLinkClickDeps): () => void {
-  const listener = (event: Event) => onClick(win, event as MouseEvent, deps);
+  // One watch at a time: a later click is a later request.
+  let stopWatch: (() => void) | undefined;
+  const watch = (requestId: string) => {
+    stopWatch?.();
+    stopWatch = deps.sendNumber ? watchMatchNumber(win, requestId, deps.sendNumber) : undefined;
+  };
+  const listener = (event: Event) => onClick(win, event as MouseEvent, deps, watch);
   win.addEventListener("click", listener, { capture: true });
-  return () => win.removeEventListener("click", listener, { capture: true });
+  return () => {
+    stopWatch?.();
+    win.removeEventListener("click", listener, { capture: true });
+  };
 }
 
-function onClick(win: Window, event: MouseEvent, deps: TriggerLinkClickDeps): void {
+/**
+ * Watch `win`'s document for the number the portal shows for `requestId`
+ * (C11), and send it once. Stops on the first well-formed number, or after
+ * {@link MATCH_NUMBER_WATCH_MS}. Returns the stop function.
+ */
+export function watchMatchNumber(
+  win: Window,
+  requestId: string,
+  send: (message: TriggerLinkNumber) => void,
+  watchMs: number = MATCH_NUMBER_WATCH_MS,
+): () => void {
+  const doc = win.document;
+  let done = false;
+  const check = () => {
+    if (done) return;
+    for (const el of doc.querySelectorAll("[data-oob-match-number]")) {
+      if (el.getAttribute("data-oob-request-id") !== requestId) continue;
+      const matchNumber = el.getAttribute("data-oob-match-number") ?? "";
+      if (!/^[0-9]{2}$/.test(matchNumber)) continue;
+      stop();
+      try {
+        send({ requestId, matchNumber, origin: win.location.origin });
+      } catch {
+        // The extension context is gone; the person types the number.
+      }
+      return;
+    }
+  };
+  // The window's own constructor, so a test's fake window is observed in full.
+  const observer = new (win as Window & typeof globalThis).MutationObserver(check);
+  const timer = win.setTimeout(() => stop(), watchMs);
+  function stop() {
+    done = true;
+    observer.disconnect();
+    win.clearTimeout(timer);
+  }
+  observer.observe(doc.documentElement, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ["data-oob-match-number", "data-oob-request-id"],
+  });
+  check();
+  return stop;
+}
+
+function onClick(
+  win: Window,
+  event: MouseEvent,
+  deps: TriggerLinkClickDeps,
+  watch: (requestId: string) => void,
+): void {
   // 1. A click the person made, with the primary button and no modifier. A
   //    modified click asks the browser for a new tab or window; leaving those
   //    alone keeps "open the link host's page" one gesture away.
@@ -141,7 +225,9 @@ function onClick(win: Window, event: MouseEvent, deps: TriggerLinkClickDeps): vo
   } catch {
     // The extension context may have been invalidated by a reload. The click
     // is already prevented; the person clicks again after the page reloads.
+    return;
   }
+  if (parsed.ok) watch(parsed.link.id);
 }
 
 /** The resolved `href` of the nearest anchor on the event's path, if any.

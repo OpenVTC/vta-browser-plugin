@@ -117,6 +117,8 @@ const vtaRefusal = (code: string) =>
 function world(
   opts: {
     name?: string;
+    /** How long a claim waits for the page's number (C11); 0 by default. */
+    pageNumberWaitMs?: number;
     claimError?: string;
     proveError?: string;
     /** The community predates auth/oob 0.2 and refuses `prove/0.2`. */
@@ -225,6 +227,7 @@ function world(
   const flows = new SignInFlows({
     now: () => NOW,
     grantLifetimeMs: 3_600_000,
+    pageNumberWaitMs: opts.pageNumberWaitMs ?? 0,
     fetch,
     resolveDid: async (did) => {
       assert.equal(did, VTC);
@@ -584,6 +587,70 @@ test("the community's own name, when different, is flagged after the claim", asy
   await step(w, { step: "prepare", link: LINK, origin: PORTAL });
   const r = await step(w, { step: "claim", entryId: "e-alice" });
   assert.equal((r as { nameMismatch?: string }).nameMismatch, "Totally Legit Bank");
+});
+
+// ── C11: the number from the page the code was clicked on ───────────────────
+
+const identifyNumber = (w: World) =>
+  (w.sent[1]!.doc as { payload: { identify: { payload: { enteredNumber: string } } } }).payload.identify.payload
+    .enteredNumber;
+
+test("the page's number, arriving while the claim waits, proves without a number screen", async () => {
+  const w = world({ pageNumberWaitMs: 5_000 });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const claimed = step(w, { step: "claim", entryId: "e-alice" });
+  setTimeout(() => w.flows.pageNumber("f1", "47"), 10);
+  const review = await claimed;
+  assert.equal(review.kind, "review");
+  assert.deepEqual(w.sent.map((s) => s.type), ["claim", "prove"]);
+  assert.equal(identifyNumber(w), "47");
+  assert.equal((review as { decisionDeadline: number }).decisionDeadline > 0, true, "the review carries the countdown");
+});
+
+test("the page's number, already known when the claim lands, is used at once", async () => {
+  const w = world({ pageNumberWaitMs: 60_000 });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  w.flows.pageNumber("f1", "05");
+  const review = await step(w, { step: "claim", entryId: "e-alice" });
+  assert.equal(review.kind, "review");
+  assert.equal(identifyNumber(w), "05");
+});
+
+test("no number from the page: after the wait the person types it", async () => {
+  const w = world({ pageNumberWaitMs: 20 });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const enter = await step(w, { step: "claim", entryId: "e-alice" });
+  assert.equal(enter.kind, "enter-number");
+  assert.equal(w.sent.length, 1, "only the claim");
+  // A number that turns up after the person was asked is dropped.
+  w.flows.pageNumber("f1", "47");
+  assert.equal(w.sent.length, 1);
+});
+
+test("a number that is not two digits is not the page's number", async () => {
+  const w = world({ pageNumberWaitMs: 20 });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  for (const bad of ["7", "123", "4a", ""]) w.flows.pageNumber("f1", bad);
+  assert.equal((await step(w, { step: "claim", entryId: "e-alice" })).kind, "enter-number");
+});
+
+test("a community name that differs from the wallet's still asks, page number or not", async () => {
+  const w = world({ name: "Totally Legit Bank", pageNumberWaitMs: 60_000 });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  w.flows.pageNumber("f1", "47");
+  const r = await step(w, { step: "claim", entryId: "e-alice" });
+  assert.equal(r.kind, "enter-number");
+  assert.equal((r as { nameMismatch?: string }).nameMismatch, "Totally Legit Bank");
+  assert.equal(w.sent.length, 1, "nothing proved for the person");
+});
+
+test("two entries for one DID are offered once", async () => {
+  const twin: SignInVaultEntry = { ...entries[2]!, id: "e-alice-2", label: "members.example.org" };
+  const w = world({ known: [...entries, twin] });
+  const confirm = await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  assert.deepEqual((confirm as { identities: unknown[] }).identities, [
+    { entryId: "e-alice", did: ALICE, label: "Example Community" },
+  ]);
 });
 
 test("steps out of order are refused without sending", async () => {

@@ -52,6 +52,7 @@ const RESULTS: Record<string, SignInStepResult> = {
     network: "different",
     identifiedAs: "did:web:work.example",
     audience: "member",
+    decisionDeadline: Date.now() + 60_000,
   },
   "grant-digest": { kind: "uv-challenge", challenge: "Q0hBTExFTkdF", vtaDid: "did:webvh:vta" },
   "respond:approve": { kind: "done", decision: "approve", status: "approved" },
@@ -158,6 +159,47 @@ async function approveOnReview(
   await screen.settle();
   return { steps, screen };
 }
+
+test("one identity and the page's number: straight from the code to the review", async () => {
+  const { steps, send } = script({
+    ...RESULTS,
+    prepare: {
+      ...(RESULTS.prepare as Extract<SignInStepResult, { kind: "confirm" }>),
+      identities: [{ entryId: "e1", did: "did:web:alice.example", label: "Alice" }],
+    },
+    // The flow proved with the page's number (C11): the claim answers with
+    // the review.
+    claim: RESULTS.prove!,
+  });
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, uv: ENROLLED_UV, close: () => {} }),
+  );
+  await screen.settle();
+  assert.deepEqual(steps, [{ step: "prepare" }, { step: "claim", entryId: "e1" }]);
+  assert.equal(screen.container.querySelector('[data-testid="continue"]'), null, "no identity screen");
+  assert.equal(screen.container.querySelector('[data-testid="number"]'), null, "no number screen");
+  assert.match(screen.text(), /Approve this sign-in\?/);
+  assert.match(screen.text(), /Example Community/, "headed by the community");
+  assert.match(screen.text(), /Time left to decide/, "the review counts down");
+  await screen.unmount();
+});
+
+test("one identity, no number from the page: the number screen, without the identity screen", async () => {
+  const { steps, send } = script({
+    ...RESULTS,
+    prepare: {
+      ...(RESULTS.prepare as Extract<SignInStepResult, { kind: "confirm" }>),
+      identities: [{ entryId: "e1", did: "did:web:alice.example", label: "Alice" }],
+    },
+  });
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, uv: ENROLLED_UV, close: () => {} }),
+  );
+  await screen.settle();
+  assert.deepEqual(steps[1], { step: "claim", entryId: "e1" });
+  assert.ok(screen.container.querySelector('[data-testid="number"]'));
+  await screen.unmount();
+});
 
 test("a wallet that has its passkey runs only the ceremony bound to the grant", async () => {
   const challenges: string[] = [];
@@ -652,8 +694,8 @@ const JOIN: Record<string, SignInStepResult> = {
   cancel: { kind: "done", decision: "decline", status: "cancelled" },
 };
 
-test("an unknown DID hosting service is offered by its verified origin; yes records the choice and goes on to confirm", async () => {
-  const { steps, send } = script(JOIN);
+test("an unknown DID hosting service is offered by its verified origin; yes records the choice and goes on to sign in", async () => {
+  const { steps, send } = script({ ...JOIN, claim: RESULTS.claim! });
   const screen = await render(
     h(SignInView, { flowId: "f", send, close: () => {}, now: () => NOW }),
   );
@@ -673,8 +715,10 @@ test("an unknown DID hosting service is offered by its verified origin; yes reco
   await screen.click(radios[1]!);
   await screen.click(join);
   assert.deepEqual(steps[1], { step: "join", did: WORK });
-  assert.match(screen.text(), /Sign in to dids\.example\.net\?/);
-  assert.ok(screen.container.querySelector('[data-testid="continue"]'));
+  // The one identity just recorded is no choice: the claim follows at once.
+  assert.deepEqual(steps[2], { step: "claim", entryId: "e-new" });
+  assert.equal(screen.container.querySelector('[data-testid="continue"]'), null);
+  assert.ok(screen.container.querySelector('[data-testid="number"]'));
   await screen.unmount();
 });
 
@@ -744,7 +788,7 @@ test("not on the access list: the DID to send the operator, with a Copy button",
     value: { writeText: async (s: string) => void copied.push(s) },
   });
   await screen.settle();
-  await screen.click(screen.container.querySelector('[data-testid="continue"]')!);
+  // One identity: claimed as the window opened, straight to the number.
   await screen.type(screen.container.querySelector('[data-testid="number"]')!, "47");
   await screen.click(screen.container.querySelector('[data-testid="prove"]')!);
   assert.match(screen.text(), /dids\.example\.net hasn't added you yet/);

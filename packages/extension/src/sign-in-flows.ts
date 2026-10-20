@@ -239,7 +239,17 @@ export interface SignInFlowDeps {
    * is a ceiling the member grants, not the session's length.
    */
   grantLifetimeMs: number;
+  /**
+   * How long a claim waits for the number the portal shows before asking the
+   * person to type it (contract C11). A portal that publishes it does so as
+   * soon as its own poll sees the claim; one that does not costs this long.
+   * Defaults to {@link PAGE_NUMBER_WAIT_MS}.
+   */
+  pageNumberWaitMs?: number;
 }
+
+/** See {@link SignInFlowDeps.pageNumberWaitMs}. */
+export const PAGE_NUMBER_WAIT_MS = 6_000;
 
 type Phase = "joining" | "prepared" | "claimed" | "identified" | "ended";
 
@@ -319,6 +329,10 @@ interface Flow {
   joinPlan?: Extract<JoinPlan, { ok: true }>;
   kA?: SigningIdentity;
   entry?: SignInIdentityView;
+  /** The number the portal shows for this request, read from the page the
+   *  person clicked the code on (C11), and whoever is waiting for it. */
+  pageNumber?: string;
+  pageNumberWaiter?: (n: string) => void;
   step1?: OobStep1;
   step2Doc?: OobDocument<OobStep2>;
   /** The `prove` / `grant` / `respond` version this exchange runs at: 0.2
@@ -458,6 +472,38 @@ export class SignInFlows {
     }
   }
 
+  /**
+   * The number the portal shows for `flowId`'s request, as the content script
+   * read it from the page the code was clicked on (C11). The background has
+   * matched the request id and the attested origin; this holds the shape and
+   * the phase. A claim waiting for it proves with it; one that gave up waiting
+   * has already asked the person, and the number is dropped.
+   */
+  pageNumber(flowId: string, matchNumber: string): void {
+    if (!/^[0-9]{2}$/.test(matchNumber)) return;
+    const flow = this.flows.get(flowId);
+    if (!flow || (flow.phase !== "prepared" && flow.phase !== "claimed")) return;
+    flow.pageNumber ??= matchNumber;
+    flow.pageNumberWaiter?.(flow.pageNumber);
+  }
+
+  /** The page's number once it is known, or `undefined` after the wait. */
+  private waitForPageNumber(flow: Flow): Promise<string | undefined> {
+    if (flow.pageNumber !== undefined) return Promise.resolve(flow.pageNumber);
+    const ms = this.deps.pageNumberWaitMs ?? PAGE_NUMBER_WAIT_MS;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        delete flow.pageNumberWaiter;
+        resolve(undefined);
+      }, ms);
+      flow.pageNumberWaiter = (n) => {
+        clearTimeout(timer);
+        delete flow.pageNumberWaiter;
+        resolve(n);
+      };
+    });
+  }
+
   /** The window went away: cancel at the community if a claim is held, and
    *  forget `K_a`. Never throws. */
   async abort(flowId: string): Promise<void> {
@@ -515,7 +561,10 @@ export class SignInFlows {
           typeof e.principalDid === "string" &&
           e.targets.some((t) => t.kind === "did" && t.did === vtcDid),
       )
-      .map((e) => ({ entryId: e.id, did: e.principalDid!, label: e.label }));
+      .map((e) => ({ entryId: e.id, did: e.principalDid!, label: e.label }))
+      // Two entries for one DID sign in identically (the VTA signs as the DID,
+      // whichever entry names it), so the person is offered the DID once.
+      .filter((i, n, all) => all.findIndex((j) => j.did === i.did) === n);
 
     // C3 step 3: resolve and verify, afresh — for a site the wallet does not
     // know too, so that what it is offered is the verified document's account
@@ -974,6 +1023,15 @@ export class SignInFlows {
       flow.communityName,
       flow.services.portalOrigin,
     );
+    // C11: the portal that showed the code publishes the number once its poll
+    // sees this claim, and the content script reads it from that page. Proving
+    // with it is the person's own number — the page they clicked on, held to
+    // the portal origin at the click — and the community checks it as typed.
+    // A name mismatch is a warning the person must read, so it always asks.
+    if (theirs === undefined) {
+      const fromPage = await this.waitForPageNumber(flow);
+      if (fromPage !== undefined && flow.phase === "claimed") return await this.prove(flow, fromPage);
+    }
     return {
       kind: "enter-number",
       decisionDeadline: deadlineMs(flow.step1.decisionDeadline)!,
@@ -1039,6 +1097,7 @@ export class SignInFlows {
       identifiedAs: step2.identifiedAs,
       // `checkStep2` held it equal to step 1's.
       audience: sessionAudienceOf(step2)!,
+      decisionDeadline: deadlineMs(flow.step1.decisionDeadline)!,
       ...(step2.signingScope ? { signingScope: step2.signingScope } : {}),
     };
   }

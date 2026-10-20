@@ -360,11 +360,17 @@ that is also a link (`https://link.trustoverip.org/t#_from=<VTC DID>&_id=…`,
 VTI spec chapter 7a). On the same computer, clicking the code opens this
 wallet's sign-in window instead of navigating: the wallet checks the community
 is one of yours, verifies its DID document, refuses a code clicked on any page
-but the community's own portal, and asks "Sign in to <community> at <portal>?".
-After you choose an identity and press Continue it claims the request, asks for
-the two-digit number the portal shows, shows where the request came from, and
-signs the grant with your passkey (`auth/oob/*`). The page is told nothing; the
-portal learns the outcome from the community.
+but the community's own portal, and claims the request (`auth/oob/*`). With
+more than one identity for the community it first asks "Sign in to <community>
+at <portal>?" and which one; with one (entries for the same DID count once) the
+click is the go-ahead. The two-digit number the portal shows is read from that
+page once the portal shows it — the element carrying `data-oob-request-id` and
+`data-oob-match-number` (sign-in contract C11) — so you do not type it; a
+portal that does not publish it, or a community whose name differs from your
+record, gets the number screen instead. The community still checks the number.
+Then the window shows where the request came from, and Approve signs the grant
+with your passkey. The page is told nothing; the portal learns the outcome from
+the community.
 
 A site the wallet does not know yet gets the same checks first: its DID
 document is resolved and verified, and the code must have been clicked on its
@@ -376,8 +382,8 @@ document says it is:
   <host> to host your DIDs?", with the DIDs your agent hosts to choose from. Yes
   records it in your vault exactly as the older `proxyLogin` first-use prompt
   does — a `did-self-issued` entry for the portal's origin and the service's
-  DID, in the chosen DID's context — and the window goes straight on to "Sign
-  in to <host>?" for the same code. The service admits only DIDs its operator
+  DID, in the chosen DID's context — and the window goes straight on to sign
+  in with it for the same code. The service admits only DIDs its operator
   has added to its access list. If it has not added yours, the window says
   "<host> hasn't added you yet. Send this DID to its operator:" and shows the
   DID with a Copy button; the same screen appears for an identity you have

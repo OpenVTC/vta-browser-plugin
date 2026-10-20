@@ -19,6 +19,15 @@
 //   3. "Request from <browser> on <os> · near <location> · <network>". Approve
 //      runs the passkey over the grant digest (C6); Decline needs none.
 //
+// Screens 1 and 2 are skipped when there is nothing to decide (contract C11):
+// with one identity (after one per DID) the claim goes out as the window
+// opens, and the number comes from the page the code was clicked on, which the
+// content script reads once the portal shows it. Screen 1 stays for a choice
+// of identities; screen 2 for a portal that does not publish its number, or a
+// community name that differs from the wallet's record. In between the window
+// says "Signing in to <community>…". Screen 3 — where the request comes from —
+// is never skipped.
+//
 // A refused link shows only the VTI-LNK-021 message for its outcome. When the
 // cause is the contact's DID document or the page (never a link field), a
 // collapsed "Details" says what is wrong, for the service's operator.
@@ -666,7 +675,9 @@ export function SignInView({
   const closeWindow = close ?? (() => window.close());
   const [clock] = useState(() => now ?? Date.now);
 
-  const [screen, setScreen] = useState<SignInStepResult | { kind: "loading" }>({
+  const [screen, setScreen] = useState<
+    SignInStepResult | { kind: "loading" } | { kind: "connecting" }
+  >({
     kind: "loading",
   });
   const [portalOrigin, setPortalOrigin] = useState("");
@@ -701,6 +712,17 @@ export function SignInView({
         setCommunityName(res.result.communityName);
         setIdentities(res.result.identities);
         setEntryId(res.result.identities[0]?.entryId ?? "");
+        // One identity is no choice: clicking the code on the verified portal
+        // was the person's go-ahead, so the claim goes out without a Continue
+        // (contract C3 step 6, as amended). With more than one, they pick.
+        const only =
+          res.result.identities.length === 1
+            ? res.result.identities[0]!
+            : undefined;
+        if (only) {
+          setScreen({ kind: "connecting" });
+          return await run({ step: "claim", entryId: only.entryId });
+        }
       }
       if (res.result.kind === "join-community")
         setPortalOrigin(res.result.portalOrigin);
@@ -723,7 +745,10 @@ export function SignInView({
             : "",
         );
       }
-      if (res.result.kind === "enter-number")
+      if (
+        res.result.kind === "enter-number" ||
+        res.result.kind === "review"
+      )
         setDeadline(res.result.decisionDeadline);
       if (res.result.kind !== "uv-challenge") setScreen(res.result);
       return res.result;
@@ -802,6 +827,16 @@ export function SignInView({
           <Message muted>
             Your wallet is checking who sent this code. Nothing has been sent to
             anyone yet.
+          </Message>
+        </Screen>
+      );
+
+    case "connecting":
+      return (
+        <Screen who={who} title={`Signing in to ${communityName}…`}>
+          <Message muted>
+            Matching the number the website shows. You'll approve the sign-in
+            next.
           </Message>
         </Screen>
       );
