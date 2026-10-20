@@ -87,6 +87,30 @@ export const PRF_UNSUPPORTED_MESSAGE =
   "extension. Use a security key such as a YubiKey 5 or Nitrokey 3 with a PIN set, " +
   "or choose your phone in the browser's passkey dialog.";
 
+/** Said when the browser itself does not offer PRF, whatever the passkey. */
+export const PRF_BROWSER_MESSAGE =
+  "This browser doesn't offer the passkey PRF extension the wallet needs. Update " +
+  "Chrome or Chromium (116 or later), or use another browser.";
+
+/**
+ * Whether the browser offers PRF (`getClientCapabilities()`, Chrome 133+).
+ * `undefined` when it cannot say: an older browser without the method, which
+ * may still support PRF, is let through to try.
+ */
+export async function browserOffersPrf(): Promise<boolean | undefined> {
+  const pkc = globalThis.PublicKeyCredential as
+    | { getClientCapabilities?: () => Promise<Record<string, boolean | undefined>> }
+    | undefined;
+  if (typeof pkc?.getClientCapabilities !== "function") return undefined;
+  try {
+    const caps = await pkc.getClientCapabilities();
+    const v = caps["extension:prf"];
+    return typeof v === "boolean" ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Said when an assertion carries no PRF output for a credential that had it. */
 export const PRF_NO_OUTPUT_MESSAGE =
   "The passkey answered without the wallet's key. Use the same security key or " +
@@ -350,7 +374,9 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
       return { credentialId: existingCredentialId, prfSalt, prfOutput };
     }
 
-    // First-ever enroll on this device.
+    // First-ever enroll on this device. A browser that says it has no PRF is
+    // told so before a credential is made that could never hold the wrap.
+    if ((await browserOffersPrf()) === false) throw new Error(PRF_BROWSER_MESSAGE);
     const prfSalt = crypto.getRandomValues(new Uint8Array(32));
     const challenge = crypto.getRandomValues(new Uint8Array(32));
     const userId = crypto.getRandomValues(new Uint8Array(16));
@@ -430,7 +456,7 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
         rpId: this.rpId,
         challenge,
         allowCredentials: [
-          { type: "public-key", id: credentialId.buffer as ArrayBuffer },
+          { type: "public-key", id: credentialId as BufferSource },
         ],
         userVerification: "required",
         extensions: {
@@ -466,7 +492,7 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
         rpId: this.rpId,
         challenge,
         allowCredentials: [
-          { type: "public-key", id: credentialId.buffer as ArrayBuffer },
+          { type: "public-key", id: credentialId as BufferSource },
         ],
         userVerification: "required",
         extensions: {
