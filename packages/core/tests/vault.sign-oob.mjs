@@ -100,7 +100,7 @@ test("vault/sign-trust-task/0.2 for a grant: {entryId, unsignedEnvelope, ext[org
   const grant = await sampleGrant();
   const decision = { type: "https://trusttasks.org/spec/task-consent/decision/0.2" };
   const ch = recorder(() => ({ signedEnvelope: { ...grant, proof: {} } }));
-  await vaultSignGrant(ch, { holder, service, entryId: "e1", unsignedGrant: grant, decision });
+  await vaultSignGrant(ch, { holder, service, entryId: "e1", unsignedGrant: grant, consent: { decision } });
   assert.equal(ch.sent[0].type, "https://trusttasks.org/spec/vault/sign-trust-task/0.2");
   assert.deepEqual(ch.sent[0].payload, { entryId: "e1", unsignedEnvelope: grant, ext: { [EXT_UV_CONSENT]: { decision } } });
   assert.equal(EXT_UV_CONSENT, "org.openvtc.uv-consent");

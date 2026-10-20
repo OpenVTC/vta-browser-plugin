@@ -81,6 +81,18 @@ export function registrationPrf(credential: Pick<PublicKeyCredential, "getClient
   return prf?.enabled === true ? { kind: "needs-assertion" } : { kind: "unsupported" };
 }
 
+/**
+ * The browser or the passkey has no PRF, so no passkey made here can hold the
+ * wallet's key. Typed so a caller with another way to verify the person (the
+ * sign-in window's PIN or phone) can offer it without reading the message.
+ */
+export class PrfUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PrfUnavailableError";
+  }
+}
+
 /** Said when a passkey cannot hold the wallet's key at all. */
 export const PRF_UNSUPPORTED_MESSAGE =
   "This passkey can't protect the wallet: it doesn't support the PRF (hmac-secret) " +
@@ -376,7 +388,7 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
 
     // First-ever enroll on this device. A browser that says it has no PRF is
     // told so before a credential is made that could never hold the wrap.
-    if ((await browserOffersPrf()) === false) throw new Error(PRF_BROWSER_MESSAGE);
+    if ((await browserOffersPrf()) === false) throw new PrfUnavailableError(PRF_BROWSER_MESSAGE);
     const prfSalt = crypto.getRandomValues(new Uint8Array(32));
     const challenge = crypto.getRandomValues(new Uint8Array(32));
     const userId = crypto.getRandomValues(new Uint8Array(16));
@@ -426,7 +438,7 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
     if (!credential) return null;
     const credentialId = base64url.encode(new Uint8Array(credential.rawId));
     const prf = registrationPrf(credential);
-    if (prf.kind === "unsupported") throw new Error(PRF_UNSUPPORTED_MESSAGE);
+    if (prf.kind === "unsupported") throw new PrfUnavailableError(PRF_UNSUPPORTED_MESSAGE);
     // A security key evaluates the salt only on an assertion: one more touch
     // (and PIN) for the same credential. Nothing is stored until the output is
     // in hand, so a cancelled second step leaves no half-enrolled wallet.

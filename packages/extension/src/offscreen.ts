@@ -233,11 +233,26 @@ import {
 import {
   OFFSCREEN_SIGN_IN_STEP,
   OFFSCREEN_SIGN_IN_PAGE_NUMBER,
+  OFFSCREEN_UV_SETTINGS,
   type OffscreenSignInPageNumberRequest,
   type OffscreenSignInStepRequest,
+  type OffscreenUvSettingsRequest,
   type RuntimeSignInStepResponse,
+  type RuntimeUvSettingsResponse,
+  type UvSettingsAgent,
 } from "./bridge-protocol.js";
 import { SignInFlows, type SignInVaultEntry } from "./sign-in-flows.js";
+import {
+  approvers as uvApproversAt,
+  enrolPhone,
+  enrolPin,
+  pinConsent,
+  recordPrfEnrolment,
+  uvEnrolledKey,
+  uvEnrolment,
+  type SignInUvDeps,
+  type UvEnrolledRecord,
+} from "./sign-in-uv.js";
 import { bindProfile, profileLabelFor } from "./first-use-profile.js";
 import {
   buildUvConsentDecision,
@@ -246,12 +261,14 @@ import {
   ensureDeviceRegistered,
   prfSealedUvKeyEnrolment,
   signInUvKey,
+  deviceUvRefusal,
   vaultOobRefusal,
   vaultSignIdentify,
   vaultSignGrant,
   OOB_NOT_ENROLLED_DEVICE,
   OOB_NO_UV_KEY,
   type TrustTaskEnvelope,
+  type UvConsent,
 } from "@openvtc/pnm-core";
 import { describeThisDevice } from "./device-name.js";
 import { relayFailure } from "./relay-failure.js";
@@ -344,6 +361,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return false;
   }
   if (msg.type === OFFSCREEN_SIGN_IN_STEP) {
+    // The background relays the sign-in window's steps; a PIN may be in one.
+    // A content script reaching this listener directly is refused.
+    if (!isExtensionContextSender(sender)) {
+      sendResponse({ ok: false, error: "sign-in steps come from the wallet's own window" } satisfies RuntimeSignInStepResponse);
+      return false;
+    }
     const req = message as OffscreenSignInStepRequest;
     signInFlows
       .step(req)
@@ -352,6 +375,17 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_UV_SETTINGS) {
+    // The options page, through the background. A PIN may be in it.
+    if (!isExtensionContextSender(sender)) {
+      sendResponse({ ok: false, error: "sign-in approval settings are the wallet's own" } satisfies RuntimeUvSettingsResponse);
+      return false;
+    }
+    doUvSettings(message as OffscreenUvSettingsRequest)
+      .then(sendResponse)
+      .catch((e: unknown) => sendResponse(uvSettingsFailure(e)));
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_REST_LOGIN) {
@@ -1641,22 +1675,27 @@ const signInFlows = new SignInFlows({
     signGrant: (entryId, unsigned, uv) =>
       asEnrolledDevice(vtaDid, restBaseUrl, async () => {
         const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-        // The decision is the device's UV key's: unsealed with this
-        // approval's PRF output, for this one signature.
+        // What verifies the person, by kind: the device's UV key unsealed
+        // with this approval's PRF output for this one signature; the PIN's
+        // proof beside a decision by this device; or the phone, asked by the
+        // agent.
+        const consentFor = async (): Promise<UvConsent | undefined> => {
+          if (!uv) return undefined;
+          if ("prfOutput" in uv) {
+            const uvKey = (await signInUvKey(new IndexedDBKVStore(), { vtaDid, prfOutput: uv.prfOutput })).signing;
+            return { decision: await buildUvConsentDecision({ uvKey, vtaDid: service.did, payloadDigest: uv.payloadDigest }) };
+          }
+          if ("pin" in uv) return pinConsent(signInUvDeps(), vtaDid, service.did, uv.pin, uv.payloadDigest);
+          return { remote: true };
+        };
         const sign = async () => {
-          const decision = uv
-            ? await buildUvConsentDecision({
-                uvKey: (await signInUvKey(new IndexedDBKVStore(), { vtaDid, prfOutput: uv.prfOutput })).signing,
-                vtaDid: service.did,
-                payloadDigest: uv.payloadDigest,
-              })
-            : undefined;
+          const consent = await consentFor();
           return vaultSignGrant(session, {
             holder,
             service,
             entryId,
             unsignedGrant: unsigned as unknown as TrustTaskEnvelope,
-            ...(decision ? { decision } : {}),
+            ...(consent ? { consent } : {}),
           });
         };
         try {
@@ -1665,13 +1704,20 @@ const signInFlows = new SignInFlows({
           // The VTA holds no UV key for this device after all (an
           // administrator replaced the row, a restore): enrol it again, with
           // the key already in hand, and try once more. The refusal did not
-          // spend the grant.
-          if (!uv || vaultOobRefusal(err) !== OOB_NO_UV_KEY) throw err;
+          // spend the grant. Only the passkey's key is in hand: a PIN or a
+          // phone is set up again by the person.
+          if (!uv || !("prfOutput" in uv) || vaultOobRefusal(err) !== OOB_NO_UV_KEY) throw err;
           await enrolUvKeyAt(vtaDid, restBaseUrl, uv.prfOutput, true);
           return sign();
         }
       }),
     enrolUvKey: (prfOutput) => enrolUvKeyAt(vtaDid, restBaseUrl, prfOutput),
+    uvMethod: async () => (await uvEnrolment(signInUvDeps(), vtaDid))?.kind,
+    enrolUvMethod: async (choice) => {
+      if (choice.kind === "vtaPin") await enrolPin(signInUvDeps(), vtaDid, restBaseUrl, choice.pin);
+      else await enrolPhone(signInUvDeps(), vtaDid, restBaseUrl, choice.approver);
+    },
+    uvApprovers: () => uvApproversAt(signInUvDeps(), vtaDid, restBaseUrl),
   }),
 });
 
@@ -1693,7 +1739,6 @@ const signInFlows = new SignInFlows({
 // call; onboarding again mints a new holder, which enrols afresh.
 
 const DEVICE_ENROLMENT_PREFIX = "pnm/device-enrolment/";
-const UV_ENROLLED_PREFIX = "pnm/uv-key/enrolled/";
 
 interface DeviceEnrolmentRecord {
   /** The holder registered as this device at that agent. */
@@ -1702,17 +1747,29 @@ interface DeviceEnrolmentRecord {
   at: number;
 }
 
-interface UvEnrolledRecord extends DeviceEnrolmentRecord {
-  /** The UV key that agent holds for that holder. */
-  uvDid: string;
-}
-
 function deviceEnrolmentKey(vtaDid: string): string {
   return DEVICE_ENROLMENT_PREFIX + vtaDid;
 }
 
-function uvEnrolledKey(vtaDid: string): string {
-  return UV_ENROLLED_PREFIX + vtaDid;
+/** The UV-method module's view of this document (`sign-in-uv.ts`). */
+function signInUvDeps(): SignInUvDeps {
+  return {
+    store: new IndexedDBKVStore(),
+    holder: async (vtaDid) => {
+      const { identity, signing } = await loadHolder(vtaDid);
+      return { did: identity.did, signing };
+    },
+    session: async (vtaDid, restBaseUrl) => {
+      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+      return { sender: session, holder, service };
+    },
+    displayName: () => describeThisDevice().displayName,
+    // A heartbeat that took, or the register it fell back to: either way the
+    // device is enrolled now.
+    enrolled: async (vtaDid, holderDid, at) => {
+      await new IndexedDBKVStore().put(deviceEnrolmentKey(vtaDid), { holderDid, at } satisfies DeviceEnrolmentRecord);
+    },
+  };
 }
 
 /** In flight per agent, so a sign-in racing an inbox start registers once. */
@@ -1768,7 +1825,7 @@ async function enrolUvKeyAt(
   const { signing } = await signInUvKey(store, { vtaDid, prfOutput });
   const { identity } = await loadHolder(vtaDid);
   const rec = await store.get<UvEnrolledRecord>(uvEnrolledKey(vtaDid));
-  if (!force && rec?.holderDid === identity.did && rec.uvDid === signing.did) return;
+  if (!force && rec?.kind === "prfSealedKey" && rec.holderDid === identity.did && rec.uvDid === signing.did) return;
   const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
   await enrolUvKey(session, {
     holder,
@@ -1776,11 +1833,62 @@ async function enrolUvKeyAt(
     enrolment: prfSealedUvKeyEnrolment(signing.did),
     displayName: describeThisDevice().displayName,
   });
-  const at = Date.now();
-  await store.put(uvEnrolledKey(vtaDid), { holderDid: holder.did, uvDid: signing.did, at } satisfies UvEnrolledRecord);
-  // A heartbeat that took, or the register it fell back to: either way the
-  // device is enrolled now.
-  await store.put(deviceEnrolmentKey(vtaDid), { holderDid: holder.did, at } satisfies DeviceEnrolmentRecord);
+  await recordPrfEnrolment(signInUvDeps(), vtaDid, holder.did, signing.did);
+}
+
+// ─── Sign-in approval settings (options page) ───
+
+function agentView(vtaDid: string, rec: UvEnrolledRecord | undefined): UvSettingsAgent {
+  return {
+    vtaDid,
+    ...(rec ? { method: rec.kind } : {}),
+    ...(rec?.approver ? { approver: rec.approver } : {}),
+  };
+}
+
+async function doUvSettings(req: OffscreenUvSettingsRequest): Promise<RuntimeUvSettingsResponse> {
+  const deps = signInUvDeps();
+  if (req.op === "status") {
+    const agents: UvSettingsAgent[] = [];
+    for (const a of req.agents) {
+      // An agent whose holder cannot be read (a locked wallet) shows as not
+      // set up rather than failing the whole list.
+      const rec = await uvEnrolment(deps, a.vtaDid).catch(() => undefined);
+      agents.push(agentView(a.vtaDid, rec));
+    }
+    return { ok: true, result: { op: "status", agents } };
+  }
+  const agent = req.agents.find((a) => a.vtaDid === req.vtaDid);
+  if (!agent) return { ok: false, error: "This wallet isn't connected to that agent." };
+  switch (req.op) {
+    case "approvers":
+      return { ok: true, result: { op: "approvers", approvers: await uvApproversAt(deps, agent.vtaDid, agent.restBaseUrl) } };
+    case "use-pin": {
+      const rec = await enrolPin(deps, agent.vtaDid, agent.restBaseUrl, req.newPin, req.currentPin);
+      return { ok: true, result: { op: "use-pin", agent: agentView(agent.vtaDid, rec) } };
+    }
+    case "use-phone": {
+      const rec = await enrolPhone(deps, agent.vtaDid, agent.restBaseUrl, req.approver, req.currentPin);
+      return { ok: true, result: { op: "use-phone", agent: agentView(agent.vtaDid, rec) } };
+    }
+  }
+}
+
+/** A refused change, with the agent's code and what it said beside it. */
+function uvSettingsFailure(e: unknown): RuntimeUvSettingsResponse {
+  const refusal = deviceUvRefusal(e);
+  const error = e instanceof Error ? e.message : String(e);
+  if (!refusal) {
+    const code = (e as { code?: unknown })?.code;
+    return { ok: false, error, ...(typeof code === "string" && code.startsWith("sign-in/") ? { code } : {}) };
+  }
+  return {
+    ok: false,
+    error,
+    code: refusal.code,
+    ...(refusal.attemptsRemaining !== undefined ? { attemptsRemaining: refusal.attemptsRemaining } : {}),
+    ...(refusal.lockedUntil !== undefined ? { lockedUntil: refusal.lockedUntil * 1000 } : {}),
+  };
 }
 
 /** Best effort, for the paths where enrolment is a convenience rather than

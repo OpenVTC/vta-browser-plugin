@@ -28,6 +28,18 @@
 //            decision (C6); the VTA signs the grant with it; `respond` carries
 //            it. K_a is then discarded.
 //
+//            A browser with no PRF passkey approves another way, chosen once
+//            per agent and remembered there as the device's UV key kind:
+//              vtaPin          the window asks for the PIN; its proof rides
+//                              beside a decision signed by this device. A
+//                              wrong PIN (or a lock) is `uv-pin`, and the
+//                              flow stays open to try again.
+//              remoteApprover  the agent asks the person's phone. Until it
+//                              answers the grant is refused `oobUvPending`,
+//                              which is `uv-pending` with the phone's code;
+//                              the window sends the same `respond` again to
+//                              poll.
+//
 // ## A site the wallet does not know
 //
 // Nothing is sent to it (VTI-LNK-101) until the person agrees, but its DID
@@ -89,10 +101,16 @@ import {
   type SigningIdentity,
   uvChallengeBytes,
   vaultOobRefusal,
+  vaultOobRefusalDetail,
   OOB_NOT_ENROLLED_DEVICE,
   OOB_DEVICE_DISABLED,
   OOB_NO_UV_KEY,
   OOB_UV_INVALID,
+  OOB_UV_PIN_WRONG,
+  OOB_UV_LOCKED,
+  OOB_UV_PENDING,
+  OOB_UV_DECLINED,
+  OOB_UV_EXPIRED,
   CONTACT_METHODS,
   type ContactMethodRegistry,
   type ContactRoute,
@@ -146,6 +164,8 @@ import type {
   SignInRefusalDetail,
   SignInStep,
   SignInStepResult,
+  SignInUvApproverView,
+  SignInUvMethod,
 } from "./bridge-protocol.js";
 import { safeCode } from "./sign-in-failure.js";
 
@@ -165,6 +185,21 @@ export interface SignInVaultEntry {
   targets: ReadonlyArray<{ kind: string; did?: string }>;
 }
 
+/** What verifies the person for one grant approval, by the device's UV key
+ *  kind. `payloadDigest` is the grant digest D. */
+export type SignInUv =
+  /** `prfSealedKey`: the PRF output of the passkey ceremony bound to D. */
+  | { payloadDigest: string; prfOutput: Uint8Array }
+  /** `vtaPin`: the PIN, for the proof over D. Not kept. */
+  | { payloadDigest: string; pin: string }
+  /** `remoteApprover`: the agent asks the person's phone. */
+  | { payloadDigest: string; remote: true };
+
+/** A way of approving to enrol at the agent, instead of a PRF passkey. */
+export type SignInUvEnrolment =
+  | { kind: "vtaPin"; pin: string }
+  | { kind: "remoteApprover"; approver: string };
+
 /** The member's own agent, for one flow. */
 export interface SignInVta {
   /** Every `didSelfIssued` entry. Listed whole and matched here, so the
@@ -174,17 +209,18 @@ export interface SignInVta {
   /** `vault/sign-trust-task` for `auth/oob/identify` (no user verification). */
   signIdentify(entryId: string, unsigned: OobDocument): Promise<unknown>;
   /** `vault/sign-trust-task` for `auth/oob/grant`. For an approval, `uv` is
-   *  the grant digest D and the PRF output of the passkey ceremony bound to
-   *  it; the caller unseals the UV key with it and has that key sign the
-   *  `task-consent/decision/0.2` the VTA requires. */
-  signGrant(
-    entryId: string,
-    unsigned: OobDocument,
-    uv?: {
-      payloadDigest: string;
-      prfOutput: Uint8Array;
-    },
-  ): Promise<unknown>;
+   *  the grant digest D and what verifies the person for it: the PRF output
+   *  that unseals the UV key to sign the `task-consent/decision/0.2`, the PIN
+   *  for its proof, or `remote` for the phone. */
+  signGrant(entryId: string, unsigned: OobDocument, uv?: SignInUv): Promise<unknown>;
+  /** How this browser approves at this agent, as last enrolled here.
+   *  `undefined`: not set up. */
+  uvMethod(): Promise<SignInUvMethod | undefined>;
+  /** Enrol a PIN or the person's phone as this browser's way of approving
+   *  (`device/heartbeat` ext `org.openvtc.uv-key`). */
+  enrolUvMethod(enrolment: SignInUvEnrolment): Promise<void>;
+  /** The devices this browser may name as its approver. */
+  uvApprovers(): Promise<SignInUvApproverView[]>;
   /** The DIDs the agent hosts, across every context (`vta/webvh/list`): what
    *  the person may choose from when they start using a DID hosting service. */
   listPersonas(): Promise<SignInPersona[]>;
@@ -399,6 +435,9 @@ export const VTA_REFUSAL_MESSAGES: Readonly<Record<string, string>> = {
     "Refresh the code on the website and approve again to set it up.",
   [OOB_UV_INVALID]:
     "Your agent didn't accept this browser's approval. Refresh the code on the website and try again.",
+  [OOB_UV_DECLINED]: "You declined this sign-in on your phone. Nothing was approved.",
+  [OOB_UV_EXPIRED]:
+    "Your phone didn't approve this sign-in in time. Refresh the code on the website and try again.",
 };
 
 const refused = (reason: TriggerLinkReason, detail?: SignInRefusalDetail): SignInStepResult => {
@@ -463,12 +502,10 @@ export class SignInFlows {
           return await this.adoptName(flow);
         case "grant-digest":
           return await this.grantChallenge(flow);
+        case "uv-approvers":
+          return await this.uvApprovers(flow);
         case "respond":
-          return await this.respond(
-            flow,
-            req.decision,
-            req.decision === "approve" ? req.prfOutputB64u : undefined,
-          );
+          return await this.respond(flow, req);
         case "cancel":
           return await this.cancel(req.flowId, flow);
       }
@@ -1131,6 +1168,10 @@ export class SignInFlows {
       );
     }
     const step2 = checkStep2(reply.payload, flow.step1, flow.entry.did);
+    // Read from this wallet's own record; nothing is asked of the agent. A
+    // record that cannot be read is "not set up", which the window offers to
+    // set up — never a reason to stop the sign-in.
+    const uvMethod = await flow.vta.uvMethod().catch(() => undefined);
     flow.version = version;
     flow.step2Doc = reply.doc;
     flow.phase = "identified";
@@ -1146,6 +1187,7 @@ export class SignInFlows {
       audience: sessionAudienceOf(step2)!,
       decisionDeadline: deadlineMs(flow.step1.decisionDeadline)!,
       ...(step2.signingScope ? { signingScope: step2.signingScope } : {}),
+      ...(uvMethod ? { uvMethod } : {}),
     };
   }
 
@@ -1189,32 +1231,68 @@ export class SignInFlows {
     };
   }
 
+  /** The phones this browser may approve on. A listing the agent will not
+   *  give is an empty one with its reason: it does not end the sign-in. */
+  private async uvApprovers(flow: Flow): Promise<SignInStepResult> {
+    if (flow.phase !== "identified") throw outOfOrder();
+    try {
+      return { kind: "uv-approvers", approvers: await flow.vta.uvApprovers() };
+    } catch (err) {
+      return { kind: "uv-approvers", approvers: [], error: (err as Error)?.message ?? String(err) };
+    }
+  }
+
   private async respond(
     flow: Flow,
-    decision: OobDecision,
-    prfOutputB64u: string | undefined,
+    req: Extract<SignInStep, { step: "respond" }>,
   ): Promise<SignInStepResult> {
     if (flow.phase !== "identified" || !flow.kA || !flow.entry)
       throw outOfOrder();
+    const decision = req.decision;
     let unsigned: OobDocument<OobGrantPayload>;
-    let uv: { payloadDigest: string; prfOutput: Uint8Array } | undefined;
-    if (decision === "approve") {
-      if (!flow.unsignedGrant || !flow.grantDigest || !prfOutputB64u)
-        throw outOfOrder();
+    let uv: SignInUv | undefined;
+    if (req.decision === "approve") {
+      if (!flow.unsignedGrant || !flow.grantDigest) throw outOfOrder();
       unsigned = flow.unsignedGrant;
-      uv = { payloadDigest: flow.grantDigest, prfOutput: base64urlToBytes(prfOutputB64u) };
-      flow.at = "enrol-uv";
-      await flow.vta.enrolUvKey(uv.prfOutput);
+      const payloadDigest = flow.grantDigest;
+      if ("prfOutputB64u" in req) {
+        if (!req.prfOutputB64u) throw outOfOrder();
+        const prfOutput = base64urlToBytes(req.prfOutputB64u);
+        uv = { payloadDigest, prfOutput };
+        flow.at = "enrol-uv";
+        await flow.vta.enrolUvKey(prfOutput);
+      } else if ("pin" in req) {
+        if (typeof req.pin !== "string" || req.pin.length === 0) throw outOfOrder();
+        if (req.setPin) {
+          flow.at = "enrol-uv";
+          await flow.vta.enrolUvMethod({ kind: "vtaPin", pin: req.pin });
+        }
+        uv = { payloadDigest, pin: req.pin };
+      } else if (req.remote === true) {
+        if (req.approver) {
+          flow.at = "enrol-uv";
+          await flow.vta.enrolUvMethod({ kind: "remoteApprover", approver: req.approver });
+        }
+        uv = { payloadDigest, remote: true };
+      } else {
+        throw outOfOrder();
+      }
     } else {
       // A decline needs no user verification (base design §14 step 12).
       unsigned = await this.buildGrantFor(flow, "decline");
     }
     flow.at = "grant";
-    const signed = assertSignedAsSent(
-      unsigned,
-      await flow.vta.signGrant(flow.entry.entryId, unsigned, uv),
-      "assertionMethod",
-    );
+    let signedByVta: unknown;
+    try {
+      signedByVta = await flow.vta.signGrant(flow.entry.entryId, unsigned, uv);
+    } catch (err) {
+      // A wrong PIN, a lock, or a phone that has not answered yet: the grant
+      // was not signed and the flow stays open for the person's next move.
+      const again = uv && uvRetry(err);
+      if (again) return again;
+      throw err;
+    }
+    const signed = assertSignedAsSent(unsigned, signedByVta, "assertionMethod");
     flow.at = "respond";
     const reply = await sendOob<{ status?: unknown }>(
       flow.kA,
@@ -1354,6 +1432,27 @@ export class SignInFlows {
       trustTaskEndpoint: flow.services.trustTaskEndpoint,
       ...(this.deps.fetch ? { fetch: this.deps.fetch } : {}),
     };
+  }
+}
+
+/** The refusals that leave a grant approval open: the window asks for the PIN
+ *  again, or waits on the phone. Times are epoch seconds on the wire, epoch ms
+ *  to the window. */
+function uvRetry(err: unknown): SignInStepResult | undefined {
+  const r = vaultOobRefusalDetail(err);
+  switch (r?.code) {
+    case OOB_UV_PIN_WRONG:
+      return { kind: "uv-pin", ...(r.attemptsRemaining !== undefined ? { attemptsRemaining: r.attemptsRemaining } : {}) };
+    case OOB_UV_LOCKED:
+      return { kind: "uv-pin", ...(r.lockedUntil !== undefined ? { lockedUntil: r.lockedUntil * 1000 } : {}) };
+    case OOB_UV_PENDING:
+      return {
+        kind: "uv-pending",
+        ...(r.matchCode !== undefined ? { matchCode: r.matchCode } : {}),
+        ...(r.expiresAt !== undefined ? { expiresAt: r.expiresAt * 1000 } : {}),
+      };
+    default:
+      return undefined;
   }
 }
 

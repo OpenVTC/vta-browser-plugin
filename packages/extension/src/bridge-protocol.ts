@@ -2747,10 +2747,21 @@ export type SignInStep =
    *  the sign-in goes on (with the page's number, when it has it). */
   | { step: "adopt-name" }
   | { step: "grant-digest" }
+  /** The devices the person may approve on instead of this browser (their
+   *  phone): `uv-approvers`. */
+  | { step: "uv-approvers" }
   /** Approve: the PRF output of the wallet passkey's ceremony, bound to the
    *  grant digest. It unseals this browser's UV key for the one decision and
    *  is not kept. */
   | { step: "respond"; decision: "approve"; prfOutputB64u: string }
+  /** Approve with the PIN (`vtaPin`). `setPin`: enrol it first, as this
+   *  browser's way of approving at the agent. The PIN is used to derive the
+   *  proof and is not kept. */
+  | { step: "respond"; decision: "approve"; pin: string; setPin?: true }
+  /** Approve on the person's phone (`remoteApprover`). `approver`: enrol that
+   *  phone first. Sent again, unchanged but without `approver`, to poll while
+   *  the answer is `uv-pending`. */
+  | { step: "respond"; decision: "approve"; remote: true; approver?: string }
   | { step: "respond"; decision: "decline" }
   | { step: "cancel" };
 
@@ -2766,6 +2777,17 @@ export type OffscreenSignInStepRequest = {
   link?: string;
   origin?: string;
 } & SignInStep;
+
+/** How this browser approves sign-ins at an agent: the kind of UV key the
+ *  agent holds for it. */
+export type SignInUvMethod = "prfSealedKey" | "vtaPin" | "remoteApprover";
+
+/** A device that may approve for this browser (the person's phone). */
+export interface SignInUvApproverView {
+  did: string;
+  displayName?: string;
+  formFactor?: string;
+}
 
 /** One identity the member can sign in as: a `didSelfIssued` vault entry
  *  that targets the community. */
@@ -2879,6 +2901,9 @@ export type SignInStepResult =
       /** The task families approving also lets that browser sign as the
        *  member, for the session (auth/oob/grant/0.2). Absent: none. */
       signingScope?: string[];
+      /** How this browser approves at the member's agent. Absent: not set up
+       *  yet — the first approval sets it up. */
+      uvMethod?: SignInUvMethod;
     }
   /** What the passkey ceremony for the grant is bound to: base64url of the
    *  UTF-8 bytes of the grant digest string D (contract C9). */
@@ -2889,6 +2914,17 @@ export type SignInStepResult =
        *  encrypts at rest, when the wallet has no passkey yet. */
       vtaDid: string;
     }
+  /** The phones this browser may approve on (`uv-approvers`). `error`: the
+   *  agent could not be asked; the list is then empty. */
+  | { kind: "uv-approvers"; approvers: SignInUvApproverView[]; error?: string }
+  /** The PIN was not accepted: `attemptsRemaining` wrong PINs are left before
+   *  it locks, or it is locked until `lockedUntil` (epoch ms). The flow is
+   *  still open; the person may try again or decline. */
+  | { kind: "uv-pin"; attemptsRemaining?: number; lockedUntil?: number }
+  /** The person's phone has been asked and has not answered. `matchCode` is
+   *  what the phone shows beside the request; `expiresAt` (epoch ms) is when
+   *  the ask lapses. Poll by sending the same `respond` again. */
+  | { kind: "uv-pending"; matchCode?: string; expiresAt?: number }
   | { kind: "done"; decision: "approve" | "decline"; status: string }
   /** The community — or the member's own VTA — refused with a stable code
    *  (R3.7). `stage`, `party` and `cause` say where, for the window's
@@ -2952,6 +2988,58 @@ export type SignInFailureParty = "community" | "vta" | "wallet";
 export type RuntimeSignInStepResponse =
   | { ok: true; result: SignInStepResult }
   | { ok: false; error: string };
+
+// ── How this browser approves sign-ins (settings) ───────────────────────────
+//
+// The options page's "Sign-in approval" section: per agent, which kind of UV
+// key it holds for this browser, and changing it (a new PIN, a switch to the
+// phone or to a PIN). Options page → background → offscreen, which holds the
+// sessions and derives the PIN's key.
+//
+// NOT page-facing: absent from `PAGE_FACING_RUNTIME_TYPES` and `content.ts`,
+// gated on `sender.url` in the background (`isExtensionPageSender`) and again
+// in the offscreen document. A PIN crosses it.
+
+export const RUNTIME_UV_SETTINGS = "vta-wallet/uv-settings" as const;
+export const OFFSCREEN_UV_SETTINGS = "offscreen/uv-settings" as const;
+
+export type UvSettingsOp =
+  /** Every agent this wallet is onboarded to, and its method. */
+  | { op: "status" }
+  /** The phones that may approve for this browser at `vtaDid`. */
+  | { op: "approvers"; vtaDid: string }
+  /** Set a new PIN. Replacing a PIN needs the current one. */
+  | { op: "use-pin"; vtaDid: string; newPin: string; currentPin?: string }
+  /** Approve on `approver` from now on. Replacing a PIN needs it. */
+  | { op: "use-phone"; vtaDid: string; approver: string; currentPin?: string };
+
+export interface UvSettingsAgent {
+  vtaDid: string;
+  /** Absent: not set up; the first sign-in approval does. */
+  method?: SignInUvMethod;
+  /** `remoteApprover`: the phone. */
+  approver?: string;
+}
+
+export type UvSettingsResult =
+  | { op: "status"; agents: UvSettingsAgent[] }
+  | { op: "approvers"; approvers: SignInUvApproverView[] }
+  | { op: "use-pin" | "use-phone"; agent: UvSettingsAgent };
+
+export type RuntimeUvSettingsRequest = { type: typeof RUNTIME_UV_SETTINGS } & UvSettingsOp;
+
+/** `code`: the agent's refusal (`uvPinWrong` with `attemptsRemaining`,
+ *  `uvKeyLocked` with `lockedUntil` in epoch ms). */
+export type RuntimeUvSettingsResponse =
+  | { ok: true; result: UvSettingsResult }
+  | { ok: false; error: string; code?: string; attemptsRemaining?: number; lockedUntil?: number };
+
+export type OffscreenUvSettingsRequest = {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_UV_SETTINGS;
+  /** The agents this wallet is onboarded to, from the background's record. */
+  agents: Array<{ vtaDid: string; restBaseUrl?: string }>;
+} & UvSettingsOp;
 
 // ── Room files ───────────────────────────────────────────────────────────────
 //
