@@ -24,6 +24,7 @@
 
 import { base64url } from "@openvtc/vti-didcomm-js";
 import { IndexedDBKVStore } from "@openvtc/pnm-core";
+import { browserOffersPrf, PRF_BROWSER_MESSAGE, PRF_NO_OUTPUT_MESSAGE } from "./webauthn-prf-wrap.js";
 
 // Same keys WebAuthnPrfSecretWrap writes when it enrolls. Kept in
 // sync by convention; both files need to agree on the slot.
@@ -149,7 +150,7 @@ async function prfCeremony(
         rpId,
         challenge: challenge as BufferSource,
         allowCredentials: [
-          { type: "public-key", id: credentialId.buffer as ArrayBuffer },
+          { type: "public-key", id: credentialId as BufferSource },
         ],
         userVerification: "required",
         extensions: {
@@ -176,9 +177,11 @@ async function prfCeremony(
   };
   const prfOutput = extOutputs.prf?.results?.first;
   if (!prfOutput) {
+    // The browser's own answer first: the fix for "this browser has no PRF"
+    // is a different browser, not a different key.
     throw new PrfUnlockError(
       "no-prf-output",
-      "Authenticator returned no PRF output. The authenticator may not support the PRF extension, or its keys may have rotated.",
+      (await browserOffersPrf()) === false ? PRF_BROWSER_MESSAGE : PRF_NO_OUTPUT_MESSAGE,
     );
   }
   return { prfOutput: new Uint8Array(prfOutput) };

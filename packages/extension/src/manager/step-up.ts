@@ -112,7 +112,9 @@ export async function requirePresence(rpId: string, purpose: string): Promise<vo
     ? [
         {
           type: "public-key" as const,
-          id: base64url.decode(credentialIdB64u).buffer as ArrayBuffer,
+          // The bytes themselves: `.buffer` would be the whole backing store
+          // of a view, a different id.
+          id: base64url.decode(credentialIdB64u) as BufferSource,
         },
       ]
     : [];
