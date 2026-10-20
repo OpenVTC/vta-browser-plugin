@@ -108,6 +108,7 @@ import {
 import { Mark, Note } from "./ui.js";
 import { collapseDid, type DidPart } from "./did-display.js";
 import { failureDetails } from "./sign-in-failure.js";
+import { UV_APPROVER_HELP } from "./sign-in-uv-messages.js";
 
 /** The wallet passkey operations the window needs. Injected for tests. */
 export interface UvPasskeyOps {
@@ -1899,9 +1900,7 @@ export function SignInView({
           ) : screen.approvers.length === 0 ? (
             <Note tone="warn">
               <div data-testid="no-phones" style={wrap}>
-                Your agent doesn't know a phone of yours yet. Open the OpenVTC
-                app on your phone and connect it to the same agent as this
-                wallet, then come back and choose it here.
+                {UV_APPROVER_HELP}
                 {screen.error && (
                   <div style={{ marginTop: 6, color: c.muted }}>
                     Your agent said: {screen.error}
@@ -1957,7 +1956,7 @@ export function SignInView({
           secondary={{ label: "Back", run: () => backToReview(), disabled: busy, testId: "back" }}
         >
           <Message>Type the PIN you set for approving sign-ins from this browser.</Message>
-          {screen.attemptsRemaining !== undefined && (
+          {screen.attemptsRemaining !== undefined && screen.lockedUntil === undefined && (
             <Note tone="danger">
               <span data-testid="pin-wrong">
                 Wrong PIN.{" "}

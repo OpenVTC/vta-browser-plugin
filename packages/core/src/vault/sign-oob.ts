@@ -73,13 +73,10 @@ export const EXT_UV_KEY = "org.openvtc.uv-key";
 /** `payload.ext` member proving the current PIN when a `vtaPin` UV key is
  *  replaced. */
 export const EXT_UV_KEY_CHANGE = "org.openvtc.uv-key-change";
-
-/**
- * The task listing the devices this one may name as its `remoteApprover`
- * (`[{did, displayName?, formFactor?}]`). It must match the URI the VTA serves;
- * this is the one place the wallet names it.
- */
-export const TASK_DEVICE_UV_APPROVERS = "https://trusttasks.org/openvtc/device/uv-approvers/0.1";
+/** `payload.ext` member of a `device/heartbeat` asking which devices this one
+ *  may name as its `remoteApprover`; the response carries
+ *  `{approvers: [{did, displayName?, formFactor?}]}` under the same name. */
+export const EXT_UV_APPROVERS = "org.openvtc.uv-approvers";
 
 export interface VaultOobSignOptions {
   /** The wallet's holder: issuer of the `vault/sign-trust-task` request. */
@@ -330,19 +327,38 @@ function uvRefusalFields(d: Record<string, unknown>): Omit<VaultOobRefusalDetail
 export const DEVICE_UV_PIN_WRONG = "uvPinWrong";
 /** `device/heartbeat` refused replacing a `vtaPin` UV key: locked. */
 export const DEVICE_UV_KEY_LOCKED = "uvKeyLocked";
+/** Replacing a `vtaPin` UV key without the current PIN's change proof. */
+export const DEVICE_UV_KEY_CHANGE_PROOF_REQUIRED = "uvKeyChangeProofRequired";
+/** A change proof that is not a well-formed HMAC (not counted). */
+export const DEVICE_UV_KEY_CHANGE_PROOF_INVALID = "uvKeyChangeProofInvalid";
+/** The phone named as `remoteApprover` is not one the operator designated
+ *  for this browser. The VTA says so only in the refusal's message. */
+export const DEVICE_UV_APPROVER_NOT_PERMITTED = "uvApproverNotPermitted";
+
+const DEVICE_UV_CODES: ReadonlySet<string> = new Set([
+  DEVICE_UV_PIN_WRONG,
+  DEVICE_UV_KEY_LOCKED,
+  DEVICE_UV_KEY_CHANGE_PROOF_REQUIRED,
+  DEVICE_UV_KEY_CHANGE_PROOF_INVALID,
+]);
 
 /**
- * Why `device/heartbeat` refused a UV key change: `uvPinWrong` (with
- * `attemptsRemaining`) or `uvKeyLocked` (with `lockedUntil`), from the
- * refusal's code (`device:uvPinWrong`, `device/heartbeat:uvKeyLocked`, …).
+ * Why `device/heartbeat` refused a UV key change, from the refusal's
+ * `details.code` (`device:uvPinWrong` with `attemptsRemaining`,
+ * `device:uvKeyLocked` with `lockedUntil`, `device:uvKeyChangeProofRequired`,
+ * `device:uvKeyChangeProofInvalid`), or `uvApproverNotPermitted`, which the
+ * VTA puts only in the message.
  */
 export function deviceUvRefusal(err: unknown): VaultOobRefusalDetail | undefined {
-  const e = err as { details?: { code?: unknown; details?: Record<string, unknown> } } | undefined;
+  const e = err as { message?: unknown; details?: { code?: unknown; details?: Record<string, unknown> } } | undefined;
   const d = e?.details?.details ?? {};
   for (const raw of [d.code, e?.details?.code]) {
     if (typeof raw !== "string") continue;
     const code = raw.slice(raw.lastIndexOf(":") + 1);
-    if (code === DEVICE_UV_PIN_WRONG || code === DEVICE_UV_KEY_LOCKED) return { code, ...uvRefusalFields(d) };
+    if (DEVICE_UV_CODES.has(code)) return { code, ...uvRefusalFields(d) };
+  }
+  if (typeof e?.message === "string" && e.message.includes(DEVICE_UV_APPROVER_NOT_PERMITTED)) {
+    return { code: DEVICE_UV_APPROVER_NOT_PERMITTED };
   }
   return undefined;
 }
@@ -397,7 +413,71 @@ export async function enrolUvKey(
   });
 }
 
-// ── Which devices may approve for this one ─────────────────────────────────
+// ── What the VTA says about this device's UV key, and who may approve ────
+
+/** One `device/heartbeat` over the device's own session, with `ext`;
+ *  the response's `ext`. */
+async function heartbeatExt(
+  sender: TrustTaskSender,
+  params: { holder: TaskParty; service: TaskParty },
+  ext: Record<string, unknown>,
+  label: string,
+): Promise<Record<string, unknown>> {
+  const payload = (Object.keys(ext).length ? { ext } : {}) as DeviceHeartbeatPayload;
+  const res = await sender.send<DeviceHeartbeatResponsePayload>(
+    buildTrustTask(DEVICE_HEARTBEAT, payload, { issuer: params.holder.did, recipient: params.service.did }),
+    { expectedResponseType: DEVICE_HEARTBEAT_RESPONSE, operationLabel: `device/heartbeat/0.2 (${label})` },
+  );
+  const out = (res as { ext?: unknown } | undefined)?.ext;
+  return out && typeof out === "object" ? (out as Record<string, unknown>) : {};
+}
+
+/** The device's UV key as the VTA reports it on every heartbeat response
+ *  (`ext["org.openvtc.uv-key"]`). Never the verifier. */
+export interface UvKeySummary {
+  kind: string;
+  /** `vtaPin`: base64url. */
+  salt?: string;
+  iterations?: number;
+  failedAttempts?: number;
+  /** Unix seconds; absent when not locked. */
+  lockedUntil?: number;
+  /** `remoteApprover`: the phone. */
+  approver?: string;
+  /** `prfSealedKey` / `hardwareKey`: the UV key's DID, if reported. */
+  did?: string;
+}
+
+/** Read a summary out of a heartbeat response's `ext`. */
+export function uvKeySummaryOf(ext: Record<string, unknown>): UvKeySummary | undefined {
+  const raw = ext[EXT_UV_KEY] as Record<string, unknown> | null | undefined;
+  if (!raw || typeof raw !== "object" || typeof raw.kind !== "string") return undefined;
+  const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  const out: UvKeySummary = { kind: raw.kind };
+  const fields: Array<[keyof UvKeySummary, unknown]> = [
+    ["salt", str(raw.salt)],
+    ["iterations", num(raw.iterations)],
+    ["failedAttempts", num(raw.failedAttempts)],
+    ["lockedUntil", num(raw.lockedUntil)],
+    ["approver", str(raw.approver)],
+    ["did", str(raw.did)],
+  ];
+  for (const [k, v] of fields) if (v !== undefined) (out as unknown as Record<string, unknown>)[k] = v;
+  return out;
+}
+
+/**
+ * The device's UV key as the VTA holds it: lets a browser whose local state
+ * was cleared find its PIN's salt and iterations again, or which phone it
+ * named. `undefined`: no UV key.
+ */
+export async function readUvKeySummary(
+  sender: TrustTaskSender,
+  params: { holder: TaskParty; service: TaskParty },
+): Promise<UvKeySummary | undefined> {
+  return uvKeySummaryOf(await heartbeatExt(sender, params, {}, "uv-key summary"));
+}
 
 /** A device this browser may name as its `remoteApprover`. */
 export interface UvApprover {
@@ -407,21 +487,19 @@ export interface UvApprover {
 }
 
 /**
- * The devices this browser may name as its `remoteApprover`
- * ({@link TASK_DEVICE_UV_APPROVERS}), over the device's own session. The VTA
- * decides who qualifies (the person's own phone); this only lists.
+ * The devices this browser may name as its `remoteApprover`: a heartbeat
+ * carrying `ext["org.openvtc.uv-approvers"] = {}`. The VTA decides who
+ * qualifies (a phone the operator designated for this browser); this only
+ * lists.
  */
 export async function listUvApprovers(
   sender: TrustTaskSender,
   params: { holder: TaskParty; service: TaskParty },
 ): Promise<UvApprover[]> {
-  const res = await sender.send<{ approvers?: unknown }>(
-    buildTrustTask(TASK_DEVICE_UV_APPROVERS, {}, { issuer: params.holder.did, recipient: params.service.did }),
-    { expectedResponseType: `${TASK_DEVICE_UV_APPROVERS}#response`, operationLabel: "device/uv-approvers" },
-  );
-  const list = Array.isArray(res?.approvers) ? res.approvers : [];
+  const ext = await heartbeatExt(sender, params, { [EXT_UV_APPROVERS]: {} }, "uv-approvers");
+  const list = (ext[EXT_UV_APPROVERS] as { approvers?: unknown } | undefined)?.approvers;
   const out: UvApprover[] = [];
-  for (const a of list) {
+  for (const a of Array.isArray(list) ? list : []) {
     const r = a as { did?: unknown; displayName?: unknown; formFactor?: unknown } | null;
     if (typeof r?.did !== "string" || !r.did.startsWith("did:")) continue;
     out.push({

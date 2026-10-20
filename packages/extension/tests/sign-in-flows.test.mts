@@ -15,6 +15,7 @@ import {
   SignInFlows,
   ALREADY_CLAIMED_MESSAGE,
   VTA_REFUSAL_MESSAGES,
+  UV_APPROVER_HELP,
   SIGN_IN_JOIN_FAILED,
   SIGN_IN_JOIN_DECLINED,
   notListedMessage,
@@ -295,6 +296,8 @@ function world(
       enrolUvMethod: async (choice) => {
         vtaCalls.push({ what: "enrol-method", decision: choice });
         if (opts.enrolError) throw opts.enrolError;
+        // K, for a PIN: the flow hands it to the grant and wipes it after.
+        if (choice.kind === "vtaPin") return new Uint8Array(32).fill(9);
       },
       uvApprovers: async () => {
         vtaCalls.push({ what: "approvers" });
@@ -1397,6 +1400,44 @@ test("vtaPin, first time: the PIN is enrolled before the grant is signed", async
   const whats = w.vtaCalls.map((c) => c.what);
   assert.ok(whats.indexOf("enrol-method") < whats.indexOf("grant"));
   assert.deepEqual(w.vtaCalls.find((c) => c.what === "enrol-method")!.decision, { kind: "vtaPin", pin: "correct horse" });
+  // K from the enrolment reaches the first proof (derived once), and is wiped
+  // once the grant is signed.
+  const grant = w.vtaCalls.find((c) => c.what === "grant")!.decision as { pin: string; pinKey: Uint8Array };
+  assert.equal(grant.pin, "correct horse");
+  assert.ok(grant.pinKey instanceof Uint8Array);
+  assert.ok(grant.pinKey.every((b) => b === 0), "wiped");
+});
+
+test("vtaPin: the wrong PIN that imposes the lock is shown as the lock", async () => {
+  const w = world({
+    uvMethod: "vtaPin",
+    grantAnswers: [uvRefusal({ code: "oobUvPinWrong", attemptsRemaining: 0, lockedUntil: 1_791_461_800 })],
+  });
+  await toReview(w);
+  await step(w, { step: "grant-digest" });
+  assert.deepEqual(await step(w, { step: "respond", decision: "approve", pin: "000000" }), {
+    kind: "uv-pin",
+    attemptsRemaining: 0,
+    lockedUntil: 1_791_461_800_000,
+  });
+});
+
+test("a phone the agent will not let approve for this browser is said plainly", async () => {
+  const w = world({
+    enrolError: Object.assign(new Error("device/heartbeat refused: uvApproverNotPermitted"), {
+      details: { code: "taskFailed", details: {} },
+    }),
+  });
+  await toReview(w);
+  await step(w, { step: "grant-digest" });
+  const r = await step(w, { step: "respond", decision: "approve", remote: true, approver: "did:key:z6MkPhone" });
+  assert.deepEqual(r, {
+    kind: "failed",
+    code: "uvApproverNotPermitted",
+    message: UV_APPROVER_HELP,
+    stage: "enrol-uv",
+    party: "vta",
+  });
 });
 
 test("a PIN the agent will not enrol stops the approval at enrol-uv, before any grant", async () => {

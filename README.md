@@ -470,12 +470,18 @@ turns out not to support it.
   under the key, beside a decision signed by this browser's own device key. Your
   agent checks it and locks it after 5 wrong tries (15 minutes, doubling after
   each further wrong one). The wallet keeps only the salt; never the PIN or the
-  key. A forgotten PIN: an administrator disables the device at the agent and
-  you connect this browser again.
-- **Your phone** (`remoteApprover`): pick one of your phones your agent lists
-  (the OpenVTC app, connected to the same agent). Each approval asks the phone;
-  the window shows the code the phone shows beside the request and waits until
-  you approve or decline there.
+  key. A browser whose storage was cleared gets the salt back from the agent,
+  which reports it on every `device/heartbeat` response. A forgotten PIN: an
+  administrator disables the device at the agent and you connect this browser
+  again.
+- **Your phone** (`remoteApprover`): pick one of the phones your agent lists
+  (`device/heartbeat` with `ext["org.openvtc.uv-approvers"] = {}`). Each
+  approval asks the phone; the window shows the code the phone shows beside the
+  request and waits until you approve or decline there. The agent lists a
+  phone only when the OpenVTC app on it is connected to the same agent **and**
+  an administrator of the agent has made it this browser's approver (its
+  `stepUpApprover`, or a member of an approver set), and never one this browser
+  created. See the VTA's `docs/02-vta/wallet-sign-in-uv-keys.md`.
 
 Settings → Advanced → **Sign-in approval** shows each agent's method and lets
 you change the PIN or switch between a PIN and your phone. Replacing a PIN needs

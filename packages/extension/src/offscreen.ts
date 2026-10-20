@@ -249,7 +249,7 @@ import {
   pinConsent,
   recordPrfEnrolment,
   uvEnrolledKey,
-  uvEnrolment,
+  uvEnrolmentOrRecovered,
   type SignInUvDeps,
   type UvEnrolledRecord,
 } from "./sign-in-uv.js";
@@ -1685,7 +1685,8 @@ const signInFlows = new SignInFlows({
             const uvKey = (await signInUvKey(new IndexedDBKVStore(), { vtaDid, prfOutput: uv.prfOutput })).signing;
             return { decision: await buildUvConsentDecision({ uvKey, vtaDid: service.did, payloadDigest: uv.payloadDigest }) };
           }
-          if ("pin" in uv) return pinConsent(signInUvDeps(), vtaDid, service.did, uv.pin, uv.payloadDigest);
+          if ("pin" in uv)
+            return pinConsent(signInUvDeps(), vtaDid, restBaseUrl, service.did, uv.pin, uv.payloadDigest, uv.pinKey);
           return { remote: true };
         };
         const sign = async () => {
@@ -1712,10 +1713,12 @@ const signInFlows = new SignInFlows({
         }
       }),
     enrolUvKey: (prfOutput) => enrolUvKeyAt(vtaDid, restBaseUrl, prfOutput),
-    uvMethod: async () => (await uvEnrolment(signInUvDeps(), vtaDid))?.kind,
+    // This browser's record, or — when its storage was cleared — what the
+    // agent says it holds.
+    uvMethod: async () => (await uvEnrolmentOrRecovered(signInUvDeps(), vtaDid, restBaseUrl))?.kind,
     enrolUvMethod: async (choice) => {
-      if (choice.kind === "vtaPin") await enrolPin(signInUvDeps(), vtaDid, restBaseUrl, choice.pin);
-      else await enrolPhone(signInUvDeps(), vtaDid, restBaseUrl, choice.approver);
+      if (choice.kind === "vtaPin") return (await enrolPin(signInUvDeps(), vtaDid, restBaseUrl, choice.pin)).key;
+      await enrolPhone(signInUvDeps(), vtaDid, restBaseUrl, choice.approver);
     },
     uvApprovers: () => uvApproversAt(signInUvDeps(), vtaDid, restBaseUrl),
   }),
@@ -1851,9 +1854,10 @@ async function doUvSettings(req: OffscreenUvSettingsRequest): Promise<RuntimeUvS
   if (req.op === "status") {
     const agents: UvSettingsAgent[] = [];
     for (const a of req.agents) {
-      // An agent whose holder cannot be read (a locked wallet) shows as not
-      // set up rather than failing the whole list.
-      const rec = await uvEnrolment(deps, a.vtaDid).catch(() => undefined);
+      // With no record here, the agent's own account of the device fills
+      // it in. An agent that cannot be asked (a locked wallet, unreachable)
+      // shows as not set up rather than failing the whole list.
+      const rec = await uvEnrolmentOrRecovered(deps, a.vtaDid, a.restBaseUrl).catch(() => undefined);
       agents.push(agentView(a.vtaDid, rec));
     }
     return { ok: true, result: { op: "status", agents } };
@@ -1864,7 +1868,8 @@ async function doUvSettings(req: OffscreenUvSettingsRequest): Promise<RuntimeUvS
     case "approvers":
       return { ok: true, result: { op: "approvers", approvers: await uvApproversAt(deps, agent.vtaDid, agent.restBaseUrl) } };
     case "use-pin": {
-      const rec = await enrolPin(deps, agent.vtaDid, agent.restBaseUrl, req.newPin, req.currentPin);
+      const { record: rec, key } = await enrolPin(deps, agent.vtaDid, agent.restBaseUrl, req.newPin, req.currentPin);
+      key.fill(0);
       return { ok: true, result: { op: "use-pin", agent: agentView(agent.vtaDid, rec) } };
     }
     case "use-phone": {

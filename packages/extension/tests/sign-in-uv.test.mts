@@ -24,7 +24,10 @@ import {
   enrolPin,
   pinConsent,
   recordPrfEnrolment,
+  recoverEnrolment,
   uvEnrolment,
+  uvEnrolmentOrRecovered,
+  PinParamsMissingError,
   uvEnrolledKey,
   PinPolicyError,
   type SignInUvDeps,
@@ -61,7 +64,7 @@ const ext = (e: { payload: Record<string, unknown> }) => e.payload.ext as Record
 
 test("a new PIN: the vtaPin enrolment with K as verifier; only salt and iterations are kept", async () => {
   const { deps, store, sent } = fake();
-  const rec = await enrolPin(deps, VTA, undefined, "246810");
+  const { record: rec, key } = await enrolPin(deps, VTA, undefined, "246810");
   assert.deepEqual(rec, { holderDid: device.did, kind: "vtaPin", at: 1000 });
   const e = ext(sent[0]!)["org.openvtc.uv-key"]!;
   assert.equal(sent[0]!.type, "https://trusttasks.org/spec/device/heartbeat/0.2");
@@ -69,6 +72,7 @@ test("a new PIN: the vtaPin enrolment with K as verifier; only salt and iteratio
   assert.equal(e.iterations, 600_000);
   assert.equal(b64(e.salt as string).length, 16);
   assert.deepEqual(b64(e.verifier as string), pbkdf2Sync("246810", b64(e.salt as string), 600_000, 32, "sha256"));
+  assert.deepEqual(Buffer.from(key), b64(e.verifier as string), "K is handed back for the first proof, derived once");
   assert.equal(e.hardwareBacked, false);
   assert.equal(e.biometricGated, false);
   assert.equal("org.openvtc.uv-key-change" in ext(sent[0]!), false, "nothing to replace");
@@ -87,13 +91,16 @@ test("a PIN approval: a decision by this device over D, and HMAC(K, 'org.openvtc
   const { deps, sent } = fake();
   await enrolPin(deps, VTA, undefined, "246810");
   const K = b64(ext(sent[0]!)["org.openvtc.uv-key"]!.verifier as string);
-  const consent = (await pinConsent(deps, VTA, VTA, "246810", "zQmD")) as { decision: never; pinProof: string };
+  const consent = (await pinConsent(deps, VTA, undefined, VTA, "246810", "zQmD")) as { decision: never; pinProof: string };
   assert.equal(consent.pinProof, createHmac("sha256", K).update("org.openvtc.uv-pin/v1|zQmD").digest("base64url"));
   const decision = consent.decision as { issuer: string; recipient: string; payload: unknown };
   assert.equal(decision.issuer, device.did, "the device's transport key, not a UV key");
   assert.equal(decision.recipient, VTA);
   assert.deepEqual(decision.payload, { challenge: "zQmD", payloadDigest: "zQmD", decision: "approve" });
   assert.equal((await verifyTrustTaskProof(decision as never, { expectedProofPurpose: "assertionMethod" })).verified, true);
+  // With K in hand (just set), the same proof without deriving again.
+  const again = (await pinConsent(deps, VTA, undefined, VTA, "ignored", "zQmD", new Uint8Array(K))) as { pinProof: string };
+  assert.equal(again.pinProof, consent.pinProof);
 });
 
 test("changing the PIN carries the current PIN's change proof over the new enrolment", async () => {
@@ -180,4 +187,42 @@ test("a PIN-bearing message is not page-facing, and both hops check the sender i
   const offscreen = src("offscreen.ts");
   assert.match(branch(offscreen, "if (msg.type === OFFSCREEN_UV_SETTINGS)"), /if \(!isExtensionContextSender\(sender\)\)/);
   assert.match(branch(offscreen, "if (msg.type === OFFSCREEN_SIGN_IN_STEP)"), /if \(!isExtensionContextSender\(sender\)\)/);
+});
+
+// ── A browser whose storage was cleared asks its agent ──────────────────────
+
+/** A heartbeat answer carrying the VTA's summary of this device's UV key. */
+const summary = (uvKey: Record<string, unknown>) => (e: { type: string; payload: Record<string, unknown> }) =>
+  e.type.includes("heartbeat") && !(e.payload.ext as Record<string, unknown> | undefined)?.["org.openvtc.uv-key"]
+    ? { ext: { "org.openvtc.uv-key": uvKey } }
+    : {};
+
+test("a lost PIN salt is fetched from the agent's summary, restored, and the PIN approves", async () => {
+  const salt = Buffer.alloc(16, 5).toString("base64url");
+  const { deps, store, sent } = fake(summary({ kind: "vtaPin", salt, iterations: 600_000, failedAttempts: 0, lockedUntil: null }));
+  assert.equal(await store.get(uvPinParamsKey(VTA)), undefined);
+  const consent = (await pinConsent(deps, VTA, undefined, VTA, "246810", "zQmD")) as { pinProof: string };
+  const K = pbkdf2Sync("246810", Buffer.alloc(16, 5), 600_000, 32, "sha256");
+  assert.equal(consent.pinProof, createHmac("sha256", K).update("org.openvtc.uv-pin/v1|zQmD").digest("base64url"));
+  assert.deepEqual(await store.get(uvPinParamsKey(VTA)), { salt, iterations: 600_000 });
+  assert.equal((await uvEnrolment(deps, VTA))!.kind, "vtaPin", "the record is restored too");
+  assert.deepEqual(sent[0]!.payload, {}, "asked with a plain heartbeat");
+});
+
+test("no PIN at the agent either: said plainly", async () => {
+  const { deps } = fake(summary({ kind: "remoteApprover", approver: "did:key:z6MkPhone", lockedUntil: null }));
+  await assert.rejects(pinConsent(deps, VTA, undefined, VTA, "246810", "zQmD"), PinParamsMissingError);
+});
+
+test("no record here: the agent's summary fills it in, phone included", async () => {
+  const { deps } = fake(summary({ kind: "remoteApprover", approver: "did:key:z6MkPhone", lockedUntil: null }));
+  assert.deepEqual(await uvEnrolmentOrRecovered(deps, VTA), {
+    holderDid: device.did,
+    kind: "remoteApprover",
+    approver: "did:key:z6MkPhone",
+    at: 1000,
+  });
+  // An agent holding nothing (or a kind this wallet does not enrol) leaves it unset.
+  assert.equal(await recoverEnrolment(fake(() => ({})).deps, VTA), undefined);
+  assert.equal(await recoverEnrolment(fake(summary({ kind: "hardwareKey" })).deps, VTA), undefined);
 });
