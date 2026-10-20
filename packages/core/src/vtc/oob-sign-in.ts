@@ -498,6 +498,20 @@ export interface OobSenderOptions {
    *  `selectSignInServices` composes it. */
   trustTaskEndpoint: string;
   fetch?: typeof fetch;
+  /** Waits out a `429` before the retry (tests pass an instant one). */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** How many times a document the community's rate limiter refused is sent
+ *  again, and the longest single wait (ms) its `Retry-After` may ask for. */
+export const RATE_LIMIT_RETRIES = 3;
+export const RATE_LIMIT_MAX_WAIT_MS = 10_000;
+
+/** The wait a `429` asks for: `Retry-After` in seconds, else 2 s, capped. */
+function retryAfterMs(res: Response): number {
+  const secs = Number(res.headers.get("retry-after"));
+  const ms = Number.isFinite(secs) && secs > 0 ? secs * 1000 : 2000;
+  return Math.min(ms, RATE_LIMIT_MAX_WAIT_MS);
 }
 
 export interface OobReply<P> {
@@ -553,18 +567,27 @@ export async function postCommunityTask<P>(
     throw new OobReplyInvalidError(`${label}: the document is not addressed to the community`);
   }
   const fetchFn = withFetchTimeout(opts.fetch);
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   let res: Response;
-  try {
-    res = await fetchFn(opts.trustTaskEndpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(doc),
-      // Never follow a redirect off the endpoint the verified document named.
-      redirect: "error",
-      credentials: "omit",
-    });
-  } catch (err) {
-    throw new OobRefusedError(isFetchTimeout(err) ? "timeout" : "network", `${label}: the community could not be reached`);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      res = await fetchFn(opts.trustTaskEndpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(doc),
+        // Never follow a redirect off the endpoint the verified document named.
+        redirect: "error",
+        credentials: "omit",
+      });
+    } catch (err) {
+      throw new OobRefusedError(isFetchTimeout(err) ? "timeout" : "network", `${label}: the community could not be reached`);
+    }
+    // The community's rate limiter refuses before the document is read, so
+    // the same document goes again once the wait it names is over. The person
+    // and the page share one address with the wallet; a busy minute there is
+    // not a reason to end their sign-in.
+    if (res.status !== 429 || attempt >= RATE_LIMIT_RETRIES) break;
+    await sleep(retryAfterMs(res));
   }
   let reply: OobDocument<P> & { payload: P };
   try {
