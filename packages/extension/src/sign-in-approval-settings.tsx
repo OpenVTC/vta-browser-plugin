@@ -22,6 +22,7 @@ import {
   type UvSettingsOp,
 } from "./bridge-protocol.js";
 import { sendToBackground } from "./send-message.js";
+import { DEVICE_UV_REFUSAL_MESSAGES, UV_APPROVER_HELP } from "./sign-in-uv-messages.js";
 
 const PIN_MIN = 6;
 
@@ -77,7 +78,7 @@ export function refusalText(res: Extract<RuntimeUvSettingsResponse, { ok: false 
       ? `Too many wrong PINs. Locked until ${new Date(res.lockedUntil).toLocaleString()}.`
       : "Too many wrong PINs. Try again later.";
   }
-  return res.error;
+  return (res.code && DEVICE_UV_REFUSAL_MESSAGES[res.code]) ?? res.error;
 }
 
 type Editing =
@@ -262,8 +263,7 @@ export function SignInApprovalSettings({ send = defaultSend }: { send?: UvSettin
                   <small style={{ color: "var(--w-muted)" }}>Asking your agent for your phone…</small>
                 ) : open.approvers.length === 0 ? (
                   <small data-testid="no-phones" style={{ color: "var(--w-warn)", lineHeight: 1.5 }}>
-                    Your agent doesn't know a phone of yours yet. Open the OpenVTC app on your phone
-                    and connect it to this agent, then try again.
+                    {UV_APPROVER_HELP}
                     {open.error ? ` (${open.error})` : ""}
                   </small>
                 ) : (

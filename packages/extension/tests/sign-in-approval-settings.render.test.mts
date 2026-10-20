@@ -103,7 +103,21 @@ test("no phone known: says how to connect one", async () => {
   await screen.settle();
   await screen.click(within(screen, 0, "uv-to-phone")!);
   await screen.settle();
-  assert.match($(screen, "no-phones")!.textContent!, /Open the OpenVTC app on your phone/);
+  assert.match($(screen, "no-phones")!.textContent!, /make that phone this browser's approver/);
   assert.equal(($(screen, "uv-save") as HTMLButtonElement).disabled, true);
+  await screen.unmount();
+});
+
+test("a phone the agent will not let approve, and a change without the PIN, are said plainly", async () => {
+  const { send } = agent([{ vtaDid: A, method: "prfSealedKey" }], (op) =>
+    op.op === "use-phone" ? { ok: false, error: "device/heartbeat refused: uvApproverNotPermitted", code: "uvApproverNotPermitted" } : undefined,
+  );
+  const screen = await render(h(SignInApprovalSettings, { send }));
+  await screen.settle();
+  await screen.click(within(screen, 0, "uv-to-phone")!);
+  await screen.settle();
+  await screen.click($(screen, "uv-save")!);
+  await screen.settle();
+  assert.match($(screen, "uv-status")!.textContent!, /ask an administrator of the agent to make that phone this browser's approver/);
   await screen.unmount();
 });

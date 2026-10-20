@@ -15,7 +15,8 @@ import {
   EXT_UV_CONSENT,
   EXT_UV_KEY,
   EXT_UV_KEY_CHANGE,
-  TASK_DEVICE_UV_APPROVERS,
+  EXT_UV_APPROVERS,
+  readUvKeySummary,
   UV_PIN_ITERATIONS,
   buildUvConsentDecision,
   derivePinKey,
@@ -148,6 +149,12 @@ test("the UV refusals and what the VTA says beside them", () => {
     code: "oobUvPinWrong",
     attemptsRemaining: 3,
   });
+  // The guess that imposes the lock says so.
+  assert.deepEqual(vaultOobRefusalDetail(refusal({ code: OOB_UV_PIN_WRONG, attemptsRemaining: 0, lockedUntil: 1_800_000_900 })), {
+    code: "oobUvPinWrong",
+    attemptsRemaining: 0,
+    lockedUntil: 1_800_000_900,
+  });
   assert.deepEqual(vaultOobRefusalDetail(refusal({ code: OOB_UV_LOCKED, lockedUntil: 1_800_000_000 })), {
     code: "oobUvLocked",
     lockedUntil: 1_800_000_000,
@@ -168,7 +175,14 @@ test("device/heartbeat's UV key change refusals are read by their code's last se
   const e = (code, extra = {}) => Object.assign(new Error(code), { details: { code: "taskFailed", details: { code, ...extra } } });
   assert.deepEqual(deviceUvRefusal(e("device:uvPinWrong", { attemptsRemaining: 2 })), { code: "uvPinWrong", attemptsRemaining: 2 });
   assert.deepEqual(deviceUvRefusal(e("device:uvKeyLocked", { lockedUntil: 5 })), { code: "uvKeyLocked", lockedUntil: 5 });
+  assert.deepEqual(deviceUvRefusal(e("device:uvKeyChangeProofRequired")), { code: "uvKeyChangeProofRequired" });
+  assert.deepEqual(deviceUvRefusal(e("device:uvKeyChangeProofInvalid")), { code: "uvKeyChangeProofInvalid" });
   assert.equal(deviceUvRefusal(e("device:somethingElse")), undefined);
+  // This one is only in the message.
+  const notPermitted = Object.assign(new Error("device/heartbeat refused: uvApproverNotPermitted: not designated"), {
+    details: { code: "taskFailed", details: {} },
+  });
+  assert.deepEqual(deviceUvRefusal(notPermitted), { code: "uvApproverNotPermitted" });
 });
 
 test("enrolling over a vtaPin key carries the change proof; a register never does", async () => {
@@ -188,24 +202,49 @@ test("enrolling over a vtaPin key carries the change proof; a register never doe
   assert.deepEqual(unregistered.sent[1].envelope.payload.ext, { [EXT_UV_KEY]: next });
 });
 
-test("the approver listing: one named task, and only well-formed entries", async () => {
-  assert.equal(TASK_DEVICE_UV_APPROVERS, "https://trusttasks.org/openvtc/device/uv-approvers/0.1");
+test("the approver listing is a heartbeat with ext[org.openvtc.uv-approvers] = {}, read from the response's ext", async () => {
+  assert.equal(EXT_UV_APPROVERS, "org.openvtc.uv-approvers");
   const ch = recorder(() => ({
-    approvers: [
-      { did: "did:key:z6MkPhone", displayName: "Alice's iPhone", formFactor: "mobile" },
-      { did: 7 },
-      { displayName: "no DID" },
-      { did: "did:key:z6MkTablet" },
-    ],
+    serverTime: new Date().toISOString(),
+    ext: {
+      "org.openvtc.uv-approvers": {
+        approvers: [
+          { did: "did:key:z6MkPhone", displayName: "Alice's iPhone", formFactor: "mobile" },
+          { did: 7 },
+          { displayName: "no DID" },
+          { did: "did:key:z6MkTablet" },
+        ],
+      },
+    },
   }));
   const list = await listUvApprovers(ch, { holder, service });
-  assert.equal(ch.sent[0].envelope.type, TASK_DEVICE_UV_APPROVERS);
+  assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/device/heartbeat/0.2");
   assert.equal(ch.sent[0].envelope.issuer, holder.did);
-  assert.equal(ch.sent[0].opts.expectedResponseType, `${TASK_DEVICE_UV_APPROVERS}#response`);
+  assert.deepEqual(ch.sent[0].envelope.payload, { ext: { "org.openvtc.uv-approvers": {} } });
   assert.deepEqual(list, [
     { did: "did:key:z6MkPhone", displayName: "Alice's iPhone", formFactor: "mobile" },
     { did: "did:key:z6MkTablet" },
   ]);
+  // A response with no listing is an empty one.
+  assert.deepEqual(await listUvApprovers(recorder(() => ({})), { holder, service }), []);
+});
+
+test("the UV key summary on a heartbeat response: kind, salt, iterations, lock; null lock is no lock", async () => {
+  const ch = recorder(() => ({
+    ext: {
+      "org.openvtc.uv-key": { kind: "vtaPin", salt: "c2FsdHNhbHRzYWx0c2FsdA", iterations: 600000, failedAttempts: 2, lockedUntil: null },
+    },
+  }));
+  assert.deepEqual(await readUvKeySummary(ch, { holder, service }), {
+    kind: "vtaPin",
+    salt: "c2FsdHNhbHRzYWx0c2FsdA",
+    iterations: 600000,
+    failedAttempts: 2,
+  });
+  assert.deepEqual(ch.sent[0].envelope.payload, {}, "a plain heartbeat");
+  const phone = recorder(() => ({ ext: { "org.openvtc.uv-key": { kind: "remoteApprover", approver: "did:key:z6MkPhone", lockedUntil: null } } }));
+  assert.deepEqual(await readUvKeySummary(phone, { holder, service }), { kind: "remoteApprover", approver: "did:key:z6MkPhone" });
+  assert.equal(await readUvKeySummary(recorder(() => ({})), { holder, service }), undefined);
 });
 
 test("the wallet keeps the salt and iterations per VTA, and nothing else", async () => {

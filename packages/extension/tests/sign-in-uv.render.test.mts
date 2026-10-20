@@ -156,7 +156,8 @@ test("PIN approval: a wrong PIN shows the tries left, a lock says until when and
     {
       "respond:approve": [
         { kind: "uv-pin", attemptsRemaining: 2 },
-        { kind: "uv-pin", lockedUntil },
+        // The guess that imposes the lock.
+        { kind: "uv-pin", attemptsRemaining: 0, lockedUntil },
       ],
     },
   );
@@ -177,6 +178,7 @@ test("PIN approval: a wrong PIN shows the tries left, a lock says until when and
   await screen.click($(screen, "approve-pin")!);
   await screen.settle();
   assert.match($(screen, "pin-locked")!.textContent!, /Locked until/);
+  assert.equal($(screen, "pin-wrong"), null, "a lock, not a count");
   assert.equal(($(screen, "approve-pin") as HTMLButtonElement).disabled, true);
   assert.equal(($(screen, "pin") as HTMLInputElement).disabled, true);
   await screen.unmount();
@@ -258,7 +260,8 @@ test("no phone known: says how to connect one, and nothing can be sent", async (
   await screen.click($(screen, "uv-other")!);
   await screen.click($(screen, "choose-phone")!);
   await screen.settle();
-  assert.match($(screen, "no-phones")!.textContent!, /Open the OpenVTC app on your phone and connect it/);
+  assert.match($(screen, "no-phones")!.textContent!, /Connect the OpenVTC app on your phone to the same agent/);
+  assert.match($(screen, "no-phones")!.textContent!, /administrator of the agent to make that phone this browser's approver/);
   assert.equal(($(screen, "use-phone") as HTMLButtonElement).disabled, true);
   await screen.unmount();
 });

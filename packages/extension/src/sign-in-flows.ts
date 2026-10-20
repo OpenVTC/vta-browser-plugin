@@ -111,6 +111,7 @@ import {
   OOB_UV_PENDING,
   OOB_UV_DECLINED,
   OOB_UV_EXPIRED,
+  deviceUvRefusal,
   CONTACT_METHODS,
   type ContactMethodRegistry,
   type ContactRoute,
@@ -168,6 +169,9 @@ import type {
   SignInUvMethod,
 } from "./bridge-protocol.js";
 import { safeCode } from "./sign-in-failure.js";
+import { DEVICE_UV_REFUSAL_MESSAGES } from "./sign-in-uv-messages.js";
+
+export { DEVICE_UV_REFUSAL_MESSAGES, UV_APPROVER_HELP } from "./sign-in-uv-messages.js";
 
 /** A vault entry, as far as finding a community's identities needs it. */
 /** A DID the member's agent hosts — a candidate when starting to use a DID
@@ -190,8 +194,10 @@ export interface SignInVaultEntry {
 export type SignInUv =
   /** `prfSealedKey`: the PRF output of the passkey ceremony bound to D. */
   | { payloadDigest: string; prfOutput: Uint8Array }
-  /** `vtaPin`: the PIN, for the proof over D. Not kept. */
-  | { payloadDigest: string; pin: string }
+  /** `vtaPin`: the PIN, for the proof over D. Not kept. `pinKey`: K, when
+   *  the PIN was just enrolled and K is still in hand; the flow wipes it once
+   *  the grant is signed. */
+  | { payloadDigest: string; pin: string; pinKey?: Uint8Array }
   /** `remoteApprover`: the agent asks the person's phone. */
   | { payloadDigest: string; remote: true };
 
@@ -217,8 +223,9 @@ export interface SignInVta {
    *  `undefined`: not set up. */
   uvMethod(): Promise<SignInUvMethod | undefined>;
   /** Enrol a PIN or the person's phone as this browser's way of approving
-   *  (`device/heartbeat` ext `org.openvtc.uv-key`). */
-  enrolUvMethod(enrolment: SignInUvEnrolment): Promise<void>;
+   *  (`device/heartbeat` ext `org.openvtc.uv-key`). For a PIN, returns K, so
+   *  the first proof need not derive it again; the caller wipes it. */
+  enrolUvMethod(enrolment: SignInUvEnrolment): Promise<Uint8Array | void>;
   /** The devices this browser may name as its approver. */
   uvApprovers(): Promise<SignInUvApproverView[]>;
   /** The DIDs the agent hosts, across every context (`vta/webvh/list`): what
@@ -1263,11 +1270,12 @@ export class SignInFlows {
         await flow.vta.enrolUvKey(prfOutput);
       } else if ("pin" in req) {
         if (typeof req.pin !== "string" || req.pin.length === 0) throw outOfOrder();
+        let pinKey: Uint8Array | void = undefined;
         if (req.setPin) {
           flow.at = "enrol-uv";
-          await flow.vta.enrolUvMethod({ kind: "vtaPin", pin: req.pin });
+          pinKey = await flow.vta.enrolUvMethod({ kind: "vtaPin", pin: req.pin });
         }
-        uv = { payloadDigest, pin: req.pin };
+        uv = { payloadDigest, pin: req.pin, ...(pinKey ? { pinKey } : {}) };
       } else if (req.remote === true) {
         if (req.approver) {
           flow.at = "enrol-uv";
@@ -1291,6 +1299,8 @@ export class SignInFlows {
       const again = uv && uvRetry(err);
       if (again) return again;
       throw err;
+    } finally {
+      if (uv && "pinKey" in uv) uv.pinKey?.fill(0);
     }
     const signed = assertSignedAsSent(unsigned, signedByVta, "assertionMethod");
     flow.at = "respond";
@@ -1411,6 +1421,11 @@ export class SignInFlows {
     const vtaMessage = vtaCode ? VTA_REFUSAL_MESSAGES[vtaCode] : undefined;
     if (vtaCode && vtaMessage)
       return { kind: "failed", code: vtaCode, message: vtaMessage, ...where };
+    // Setting up a PIN or the phone, refused by the agent.
+    const device = deviceUvRefusal(err);
+    const deviceMessage = device ? DEVICE_UV_REFUSAL_MESSAGES[device.code] : undefined;
+    if (device && deviceMessage)
+      return { kind: "failed", code: device.code, message: deviceMessage, ...where, party: "vta" };
     const code =
       (err as { code?: unknown })?.code === OOB_REPLY_INVALID
         ? OOB_REPLY_INVALID
@@ -1442,7 +1457,13 @@ function uvRetry(err: unknown): SignInStepResult | undefined {
   const r = vaultOobRefusalDetail(err);
   switch (r?.code) {
     case OOB_UV_PIN_WRONG:
-      return { kind: "uv-pin", ...(r.attemptsRemaining !== undefined ? { attemptsRemaining: r.attemptsRemaining } : {}) };
+      // The guess that imposes the lock carries `lockedUntil` beside
+      // `attemptsRemaining: 0`: it is shown as the lock.
+      return {
+        kind: "uv-pin",
+        ...(r.attemptsRemaining !== undefined ? { attemptsRemaining: r.attemptsRemaining } : {}),
+        ...(r.lockedUntil !== undefined ? { lockedUntil: r.lockedUntil * 1000 } : {}),
+      };
     case OOB_UV_LOCKED:
       return { kind: "uv-pin", ...(r.lockedUntil !== undefined ? { lockedUntil: r.lockedUntil * 1000 } : {}) };
     case OOB_UV_PENDING:

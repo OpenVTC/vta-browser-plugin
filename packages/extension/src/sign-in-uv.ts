@@ -10,7 +10,12 @@
 //     took the enrolment.
 //   - `pnm/uv-pin/v1/<vtaDid>`: the PIN's salt and iterations.
 // Never the PIN, and never K (the key derived from it): K is derived for one
-// enrolment or proof and its bytes wiped in a `finally`.
+// enrolment or proof and its bytes wiped once it is used.
+//
+// Both records are recoverable: every heartbeat response carries the device's
+// UV key summary (`kind`, `salt`, `iterations`, `approver`, never the
+// verifier), so a browser whose storage was cleared asks the agent and writes
+// them back (`recoverEnrolment`).
 
 import {
   buildUvConsentDecision,
@@ -23,6 +28,7 @@ import {
   newPinSalt,
   pinChangeProof,
   pinProof,
+  readUvKeySummary,
   readUvPinParams,
   remoteApproverUvKeyEnrolment,
   vtaPinUvKeyEnrolment,
@@ -38,6 +44,8 @@ import {
   type UvKeyEnrolment,
   type UvKeyKind,
 } from "@openvtc/pnm-core";
+
+const KINDS: ReadonlySet<string> = new Set<UvKeyKind>(["prfSealedKey", "vtaPin", "remoteApprover"]);
 
 const UV_ENROLLED_PREFIX = "pnm/uv-key/enrolled/";
 
@@ -84,14 +92,11 @@ export class PinPolicyError extends Error {
   }
 }
 
-/** The PIN's salt is not on this browser (its data was cleared). */
+/** The PIN's salt is neither on this browser nor at the agent. */
 export class PinParamsMissingError extends Error {
   readonly code = "sign-in/pin-unknown";
   constructor() {
-    super(
-      "This browser no longer has its PIN settings for this agent, so it can't use or change the PIN. " +
-        "Ask an administrator to disable this device at your agent, then connect this browser again.",
-    );
+    super("Your agent holds no PIN for this browser. Set one up again.");
     this.name = "PinParamsMissingError";
   }
 }
@@ -117,14 +122,55 @@ export function recordPrfEnrolment(deps: SignInUvDeps, vtaDid: string, holderDid
   return record(deps, vtaDid, { holderDid, kind: "prfSealedKey", uvDid });
 }
 
-/** K from `pin` and this agent's stored salt, for `use`; wiped after. */
+/**
+ * What the agent holds for this device, written back here: the record, and a
+ * PIN's salt and iterations. For a browser whose storage was cleared.
+ * `undefined`: the agent holds no UV key this wallet uses.
+ */
+export async function recoverEnrolment(
+  deps: SignInUvDeps,
+  vtaDid: string,
+  restBaseUrl?: string,
+): Promise<UvEnrolledRecord | undefined> {
+  const { sender, holder, service } = await deps.session(vtaDid, restBaseUrl);
+  const summary = await readUvKeySummary(sender, { holder, service });
+  if (!summary || !KINDS.has(summary.kind)) return undefined;
+  const kind = summary.kind as UvKeyKind;
+  if (kind === "vtaPin") {
+    if (!summary.salt || summary.iterations === undefined) return undefined;
+    await writeUvPinParams(deps.store, vtaDid, { salt: summary.salt, iterations: summary.iterations });
+  }
+  return record(deps, vtaDid, {
+    holderDid: holder.did,
+    kind,
+    ...(kind === "remoteApprover" && summary.approver ? { approver: summary.approver } : {}),
+    ...(kind === "prfSealedKey" && summary.did ? { uvDid: summary.did } : {}),
+  });
+}
+
+/** This agent's record, asking the agent when this browser has none. */
+export async function uvEnrolmentOrRecovered(
+  deps: SignInUvDeps,
+  vtaDid: string,
+  restBaseUrl?: string,
+): Promise<UvEnrolledRecord | undefined> {
+  return (await uvEnrolment(deps, vtaDid)) ?? recoverEnrolment(deps, vtaDid, restBaseUrl);
+}
+
+/** K from `pin` and this agent's salt (recovered from the agent when this
+ *  browser lost it), for `use`; wiped after. */
 async function withStoredPinKey<T>(
   deps: SignInUvDeps,
   vtaDid: string,
+  restBaseUrl: string | undefined,
   pin: string,
   use: (k: Uint8Array) => Promise<T>,
 ): Promise<T> {
-  const params = await readUvPinParams(deps.store, vtaDid);
+  let params = await readUvPinParams(deps.store, vtaDid);
+  if (!params) {
+    await recoverEnrolment(deps, vtaDid, restBaseUrl);
+    params = await readUvPinParams(deps.store, vtaDid);
+  }
   if (!params) throw new PinParamsMissingError();
   const k = await derivePinKey(pin, base64urlToBytes(params.salt), params.iterations);
   try {
@@ -148,7 +194,7 @@ async function enrol(
   const current = await uvEnrolment(deps, vtaDid);
   const changeProof =
     current?.kind === "vtaPin"
-      ? await withStoredPinKey(deps, vtaDid, currentPin ?? "", (k) => pinChangeProof(k, enrolment))
+      ? await withStoredPinKey(deps, vtaDid, restBaseUrl, currentPin ?? "", (k) => pinChangeProof(k, enrolment))
       : undefined;
   const { sender, holder, service } = await deps.session(vtaDid, restBaseUrl);
   await enrolUvKey(sender, {
@@ -164,6 +210,10 @@ async function enrol(
 /**
  * Make `newPin` how this browser approves at `vtaDid`. `currentPin` is needed
  * when the agent holds a PIN already (changing it).
+ *
+ * Returns K too, so a sign-in that sets its PIN makes its first proof without
+ * deriving it twice. The caller owns those bytes and wipes them (`fill(0)`)
+ * once that proof is made; they are wiped here if the enrolment fails.
  */
 export async function enrolPin(
   deps: SignInUvDeps,
@@ -171,26 +221,26 @@ export async function enrolPin(
   restBaseUrl: string | undefined,
   newPin: string,
   currentPin?: string,
-): Promise<UvEnrolledRecord> {
+): Promise<{ record: UvEnrolledRecord; key: Uint8Array }> {
   if (newPin.normalize("NFC").length < UV_PIN_MIN_LENGTH) throw new PinPolicyError();
   const salt = newPinSalt();
   const iterations = UV_PIN_ITERATIONS;
-  const k = await derivePinKey(newPin, salt, iterations);
-  let holderDid: string;
+  const key = await derivePinKey(newPin, salt, iterations);
   try {
-    holderDid = await enrol(
+    const holderDid = await enrol(
       deps,
       vtaDid,
       restBaseUrl,
-      vtaPinUvKeyEnrolment({ salt, iterations, verifier: k }),
+      vtaPinUvKeyEnrolment({ salt, iterations, verifier: key }),
       currentPin,
     );
-  } finally {
-    k.fill(0);
+    // Only once the agent took it: a refused change keeps the old PIN working.
+    await writeUvPinParams(deps.store, vtaDid, { salt: bytesToBase64url(salt), iterations });
+    return { record: await record(deps, vtaDid, { holderDid, kind: "vtaPin" }), key };
+  } catch (err) {
+    key.fill(0);
+    throw err;
   }
-  // Only once the agent took it: a refused change keeps the old PIN working.
-  await writeUvPinParams(deps.store, vtaDid, { salt: bytesToBase64url(salt), iterations });
-  return record(deps, vtaDid, { holderDid, kind: "vtaPin" });
 }
 
 /** Make the phone `approver` how this browser approves at `vtaDid`. */
@@ -208,16 +258,21 @@ export async function enrolPhone(
 
 /**
  * `ext["org.openvtc.uv-consent"]` for a PIN approval of grant digest `D`: a
- * decision signed by this device's transport key, and the PIN's proof.
+ * decision signed by this device's transport key, and the PIN's proof. `key`:
+ * K already in hand (the PIN was just set); it is the caller's to wipe.
  */
 export async function pinConsent(
   deps: SignInUvDeps,
   vtaDid: string,
+  restBaseUrl: string | undefined,
   serviceDid: string,
   pin: string,
   payloadDigest: string,
+  key?: Uint8Array,
 ): Promise<UvConsent> {
-  const proof = await withStoredPinKey(deps, vtaDid, pin, (k) => pinProof(k, payloadDigest));
+  const proof = key
+    ? await pinProof(key, payloadDigest)
+    : await withStoredPinKey(deps, vtaDid, restBaseUrl, pin, (k) => pinProof(k, payloadDigest));
   const { signing } = await deps.holder(vtaDid);
   const decision: TrustTaskEnvelope = await buildUvConsentDecision({
     uvKey: signing,
