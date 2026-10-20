@@ -800,6 +800,24 @@ test("the name rule: the verified portal host is not a different name (VTI-LNK-1
   assert.equal(communityNameMismatch("webvh.storm.ws", did, ours, "not a url"), "webvh.storm.ws", "an unparseable origin");
 });
 
+test("the name rule: a record labelled with the portal host holds no name to differ from", () => {
+  const did = "did:webvh:QmNvAiYMwoZMWGfY62gqNJuedQgH224FMpHenzJTK1wJrG:webvh.storm.ws:test-vtc";
+  const portal = "https://test-vtc.openvtc.net";
+  // The label the wallet made itself when it recorded the community.
+  assert.equal(communityNameMismatch("Verifiable Trust Community", did, "test-vtc.openvtc.net", portal), undefined);
+  assert.equal(communityNameMismatch("Verifiable Trust Community", did, " Test-VTC.openvtc.net", portal), undefined, "any case");
+  // A name the person gave it still differs.
+  assert.equal(
+    communityNameMismatch("Verifiable Trust Community", did, "My Club", portal),
+    "Verifiable Trust Community",
+  );
+  // Another host as the label is a name like any other.
+  assert.equal(
+    communityNameMismatch("Verifiable Trust Community", did, "openvtc.net", portal),
+    "Verifiable Trust Community",
+  );
+});
+
 // ── Failure details: where, who, and the code ────────────────────────────────
 
 test("a community refusing the proof says so: stage prove, party community", async () => {
