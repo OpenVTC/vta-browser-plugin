@@ -194,6 +194,47 @@ test("sendOob: a signed, threaded step 1 is returned; the claim went out signed 
   checkStep1(reply.payload, { requestId: REQ, vtcDid: VTC, portalOrigin: PORTAL, now: Date.now() });
 });
 
+/** A community whose rate limiter refuses the first `n` posts with a 429. */
+function limited(n, retryAfter = "3") {
+  const c = community(() => ({ payload: step1() }));
+  let refused = 0;
+  const waits = [];
+  const fetch = async (url, init) => {
+    if (refused < n) {
+      refused++;
+      c.seen.push({ url, doc: JSON.parse(init.body), limited: true });
+      return new Response(JSON.stringify({ error: "rate limited", retryAfter: Number(retryAfter) }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": retryAfter },
+      });
+    }
+    return c.fetch(url, init);
+  };
+  const sleep = async (ms) => void waits.push(ms);
+  return { fetch, sleep, seen: c.seen, waits };
+}
+
+test("sendOob: a 429 is waited out for as long as Retry-After says, and the same document goes again", async () => {
+  const kA = newApproverKey();
+  const c = limited(2);
+  const reply = await sendOob(kA, buildClaim(kA, VTC, REQ), { ...sendOpts(c.fetch), sleep: c.sleep }, "claim");
+  assert.equal(reply.payload.service.name, "Example Community");
+  assert.deepEqual(c.waits, [3000, 3000]);
+  assert.equal(c.seen.length, 3);
+  assert.equal(c.seen[2].doc.id, c.seen[0].doc.id, "the same signed document");
+});
+
+test("sendOob: a long Retry-After is capped, and a limiter that never relents is a refusal", async () => {
+  const kA = newApproverKey();
+  const c = limited(99, "600");
+  await assert.rejects(
+    sendOob(kA, buildClaim(kA, VTC, REQ), { ...sendOpts(c.fetch), sleep: c.sleep }, "claim"),
+    (e) => e instanceof OobRefusedError && e.code === "http-429",
+  );
+  assert.deepEqual(c.waits, [10_000, 10_000, 10_000], "three retries, each at most 10 s");
+  assert.equal(c.seen.length, 4);
+});
+
 test("sendOob: a refusal carries its stable code", async () => {
   const kA = newApproverKey();
   const c = community(() => ({ error: "alreadyClaimed" }));
