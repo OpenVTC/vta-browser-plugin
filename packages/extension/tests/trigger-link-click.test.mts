@@ -32,7 +32,8 @@ function page(html: string) {
 
 /** A click as the browser would deliver it; `trusted` stands in for a person. */
 function click(win: Window, target: Element, init: MouseEventInit = {}, trusted = true): boolean {
-  const ev = new win.MouseEvent("click", { bubbles: true, cancelable: true, button: 0, ...init });
+  // A browser's click is composed: it leaves a shadow root with its path.
+  const ev = new win.MouseEvent("click", { bubbles: true, cancelable: true, composed: true, button: 0, ...init });
   Object.defineProperty(ev, "isTrusted", { value: trusted, configurable: true });
   target.dispatchEvent(ev as unknown as Event);
   return ev.defaultPrevented;
@@ -215,6 +216,24 @@ test("after a click, the number the portal shows for that request is sent once",
   win.document.querySelector("strong")!.setAttribute("data-oob-match-number", "48");
   await settle();
   assert.equal(numbers.length, 1);
+});
+
+test("a portal that draws its sign-in box in a shadow root has its number read there", async (t) => {
+  // The VTC portals render the code and the number inside an open shadow root
+  // (their protected widgets); neither the document query nor a document
+  // observer sees into it.
+  const { win, numbers, uninstall } = watchedPage(`<div id="host" data-protected></div>`);
+  t.after(uninstall);
+  const root = win.document.getElementById("host")!.attachShadow({ mode: "open" });
+  root.innerHTML = `<section><a id="qr" href="${LINK}"><svg><rect/></svg></a></section>`;
+  click(win, root.querySelector("rect") as unknown as Element);
+  await settle();
+  assert.deepEqual(numbers, []);
+  // The code is replaced by the number, as the portal's re-render does.
+  root.querySelector("section")!.innerHTML =
+    `<p>Your number is <strong data-oob-request-id="${ID}" data-oob-match-number="50">50</strong></p>`;
+  await settle();
+  assert.deepEqual(numbers, [{ requestId: ID, matchNumber: "50", origin: "https://members.example.org" }]);
 });
 
 test("a number for another request, or not two digits, is not read", async (t) => {

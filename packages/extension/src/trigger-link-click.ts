@@ -40,7 +40,11 @@
 // a two-digit `data-oob-match-number`. It watches only for that request, only
 // after that click, and only until the claim could no longer be decided, then
 // hands the number to the worker so the person does not type it. Reading the
-// page tells the page nothing; property 4 holds.
+// page tells the page nothing; property 4 holds. The number is looked for in
+// the document and in every open shadow root the clicked code was inside: a
+// portal that draws its sign-in box in a shadow root (the VTC portals do)
+// shows the number there, where `document.querySelectorAll` and a document
+// MutationObserver never look.
 //
 // The parse here is a *routing* decision, made synchronously because
 // `preventDefault` only works inside the listener. It is not trusted: the
@@ -130,9 +134,11 @@ export function isTriggerLinkShaped(href: string, hosts: readonly string[] = DEF
 export function installTriggerLinkClickHandler(win: Window, deps: TriggerLinkClickDeps): () => void {
   // One watch at a time: a later click is a later request.
   let stopWatch: (() => void) | undefined;
-  const watch = (requestId: string) => {
+  const watch = (requestId: string, roots: readonly ShadowRoot[]) => {
     stopWatch?.();
-    stopWatch = deps.sendNumber ? watchMatchNumber(win, requestId, deps.sendNumber) : undefined;
+    stopWatch = deps.sendNumber
+      ? watchMatchNumber(win, requestId, deps.sendNumber, MATCH_NUMBER_WATCH_MS, roots)
+      : undefined;
   };
   const listener = (event: Event) => onClick(win, event as MouseEvent, deps, watch);
   win.addEventListener("click", listener, { capture: true });
@@ -143,21 +149,24 @@ export function installTriggerLinkClickHandler(win: Window, deps: TriggerLinkCli
 }
 
 /**
- * Watch `win`'s document for the number the portal shows for `requestId`
- * (C11), and send it once. Stops on the first well-formed number, or after
- * {@link MATCH_NUMBER_WATCH_MS}. Returns the stop function.
+ * Watch `win`'s document, and the shadow roots in `roots`, for the number the
+ * portal shows for `requestId` (C11), and send it once. Stops on the first
+ * well-formed number, or after {@link MATCH_NUMBER_WATCH_MS}. Returns the stop
+ * function.
  */
 export function watchMatchNumber(
   win: Window,
   requestId: string,
   send: (message: TriggerLinkNumber) => void,
   watchMs: number = MATCH_NUMBER_WATCH_MS,
+  roots: readonly ShadowRoot[] = [],
 ): () => void {
   const doc = win.document;
+  const scopes: ReadonlyArray<Document | ShadowRoot> = [doc, ...roots];
   let done = false;
   const check = () => {
     if (done) return;
-    for (const el of doc.querySelectorAll("[data-oob-match-number]")) {
+    for (const el of scopes.flatMap((s) => [...s.querySelectorAll("[data-oob-match-number]")])) {
       if (el.getAttribute("data-oob-request-id") !== requestId) continue;
       const matchNumber = el.getAttribute("data-oob-match-number") ?? "";
       if (!/^[0-9]{2}$/.test(matchNumber)) continue;
@@ -178,12 +187,15 @@ export function watchMatchNumber(
     observer.disconnect();
     win.clearTimeout(timer);
   }
-  observer.observe(doc.documentElement, {
-    subtree: true,
-    childList: true,
-    attributes: true,
-    attributeFilter: ["data-oob-match-number", "data-oob-request-id"],
-  });
+  // A document observer does not see into shadow roots; each is observed.
+  for (const scope of scopes) {
+    observer.observe(scope === doc ? doc.documentElement : scope, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-oob-match-number", "data-oob-request-id"],
+    });
+  }
   check();
   return stop;
 }
@@ -192,7 +204,7 @@ function onClick(
   win: Window,
   event: MouseEvent,
   deps: TriggerLinkClickDeps,
-  watch: (requestId: string) => void,
+  watch: (requestId: string, roots: readonly ShadowRoot[]) => void,
 ): void {
   // 1. A click the person made, with the primary button and no modifier. A
   //    modified click asks the browser for a new tab or window; leaving those
@@ -214,8 +226,10 @@ function onClick(
   const parsed = parseTriggerLink(href, { now: deps.now() });
   if (!parsed.ok && parsed.outcome === "pass-on") return;
 
-  // 2. The origin, now.
+  // 2. The origin, now. The shadow roots the code sits in, too: the event's
+  //    path is only readable while it is being dispatched.
   const origin = win.location.origin;
+  const roots = shadowRootsOf(event);
   event.preventDefault();
 
   // 4. Fire and forget. Errors are swallowed: reporting one to the page would
@@ -227,13 +241,24 @@ function onClick(
     // is already prevented; the person clicks again after the page reloads.
     return;
   }
-  if (parsed.ok) watch(parsed.link.id);
+  if (parsed.ok) watch(parsed.link.id, roots);
 }
 
 /** The resolved `href` of the nearest anchor on the event's path, if any.
  *  `composedPath` reaches into open shadow roots, where a portal's QR
  *  component may render its anchor. SVG `<a>` carries its href as an
  *  attribute and is resolved against the document's base URL. */
+/** The open shadow roots on the click's path, innermost first. A closed
+ *  root is not on the path a listener outside it sees. */
+function shadowRootsOf(event: Event): ShadowRoot[] {
+  const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+  // Duck-typed: a content script's `ShadowRoot` is its own world's constructor.
+  return path.filter(
+    (node): node is ShadowRoot =>
+      !!node && (node as Node).nodeType === 11 && !!(node as ShadowRoot).host,
+  );
+}
+
 function anchorHref(event: Event, win: Window): string | undefined {
   const path = typeof event.composedPath === "function" ? event.composedPath() : [];
   for (const node of path) {
