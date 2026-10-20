@@ -88,7 +88,10 @@ export class PinPolicyError extends Error {
 export class PinParamsMissingError extends Error {
   readonly code = "sign-in/pin-unknown";
   constructor() {
-    super("This browser no longer has its PIN settings for this agent. Set a new PIN in the wallet's settings.");
+    super(
+      "This browser no longer has its PIN settings for this agent, so it can't use or change the PIN. " +
+        "Ask an administrator to disable this device at your agent, then connect this browser again.",
+    );
     this.name = "PinParamsMissingError";
   }
 }
