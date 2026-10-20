@@ -24,6 +24,7 @@
 
 import { base64url } from "@openvtc/vti-didcomm-js";
 import { IndexedDBKVStore } from "@openvtc/pnm-core";
+import { PRF_NO_OUTPUT_MESSAGE } from "./webauthn-prf-wrap.js";
 
 // Same keys WebAuthnPrfSecretWrap writes when it enrolls. Kept in
 // sync by convention; both files need to agree on the slot.
@@ -178,7 +179,7 @@ async function prfCeremony(
   if (!prfOutput) {
     throw new PrfUnlockError(
       "no-prf-output",
-      "Authenticator returned no PRF output. The authenticator may not support the PRF extension, or its keys may have rotated.",
+      PRF_NO_OUTPUT_MESSAGE,
     );
   }
   return { prfOutput: new Uint8Array(prfOutput) };

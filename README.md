@@ -444,6 +444,11 @@ A wallet with no passkey yet creates it at that first approval, which also
 encrypts that agent's wallet record at rest. So a browser needs one passkey,
 and one gesture per approval after the first; on Linux, where Chrome has no
 built-in authenticator, that is one security-key or phone prompt.
+A security key (YubiKey 5, Nitrokey 3) needs a FIDO2 PIN set, and is touched
+twice when the passkey is first made: most keys give the PRF output only on an
+assertion, not at registration. Password-manager extensions such as 1Password
+supply passkeys only to web pages; they cannot answer for another extension's
+pages, so the wallet's prompt is always the browser's own.
 
 What it does not give: a PRF output is a secret, not a one-time signature. A
 copy of IndexedDB opens nothing, but code running inside the extension that

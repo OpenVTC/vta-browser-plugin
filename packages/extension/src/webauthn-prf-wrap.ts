@@ -58,6 +58,41 @@ export class WalletLockedError extends Error {
   }
 }
 
+/**
+ * What a registration said about PRF. A platform passkey (iCloud Keychain,
+ * Windows Hello, Google Password Manager) evaluates the salt during `create`
+ * and returns `results`. A security key that implements `hmac-secret` but not
+ * CTAP 2.2's `hmac-secret-mc` (YubiKey 5, Nitrokey 3, most keys in use) can
+ * only evaluate it on an assertion: the browser reports `enabled: true` and no
+ * `results`, and one `get` yields the output. Neither means the authenticator
+ * cannot hold the wrap; only `enabled` absent or false does.
+ */
+export type RegistrationPrf =
+  | { kind: "output"; prfOutput: Uint8Array }
+  | { kind: "needs-assertion" }
+  | { kind: "unsupported" };
+
+export function registrationPrf(credential: Pick<PublicKeyCredential, "getClientExtensionResults">): RegistrationPrf {
+  const prf = (credential.getClientExtensionResults() as {
+    prf?: { enabled?: boolean; results?: { first?: ArrayBuffer } };
+  }).prf;
+  const first = prf?.results?.first;
+  if (first) return { kind: "output", prfOutput: new Uint8Array(first) };
+  return prf?.enabled === true ? { kind: "needs-assertion" } : { kind: "unsupported" };
+}
+
+/** Said when a passkey cannot hold the wallet's key at all. */
+export const PRF_UNSUPPORTED_MESSAGE =
+  "This passkey can't protect the wallet: it doesn't support the PRF (hmac-secret) " +
+  "extension. Use a security key such as a YubiKey 5 or Nitrokey 3 with a PIN set, " +
+  "or choose your phone in the browser's passkey dialog.";
+
+/** Said when an assertion carries no PRF output for a credential that had it. */
+export const PRF_NO_OUTPUT_MESSAGE =
+  "The passkey answered without the wallet's key. Use the same security key or " +
+  "phone the wallet was set up with, with its PIN or biometric; a key that was " +
+  "reset no longer holds the passkey.";
+
 /** Where the enrolled WebAuthn credential id + PRF salt are
  *  persisted. **IndexedDB, not `chrome.storage.local`.** The wrap
  *  is called from the offscreen document during onboarding —
@@ -363,21 +398,20 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
     })) as PublicKeyCredential | null;
 
     if (!credential) return null;
-    const extOutputs = credential.getClientExtensionResults() as {
-      prf?: { results?: { first?: ArrayBuffer } };
-    };
-    const prfOutput = extOutputs.prf?.results?.first;
-    if (!prfOutput) {
-      throw new Error(
-        "webauthn-prf-wrap: authenticator does not support the PRF extension",
-      );
-    }
-
     const credentialId = base64url.encode(new Uint8Array(credential.rawId));
+    const prf = registrationPrf(credential);
+    if (prf.kind === "unsupported") throw new Error(PRF_UNSUPPORTED_MESSAGE);
+    // A security key evaluates the salt only on an assertion: one more touch
+    // (and PIN) for the same credential. Nothing is stored until the output is
+    // in hand, so a cancelled second step leaves no half-enrolled wallet.
+    const prfOutput =
+      prf.kind === "output" ? prf.prfOutput : await this.assertPrfOutput(credentialId, prfSalt);
+    if (!prfOutput) return null;
+
     await store.put(CREDENTIAL_KEY, credentialId);
     await store.put(SALT_KEY, base64url.encode(prfSalt));
 
-    return { credentialId, prfSalt, prfOutput: new Uint8Array(prfOutput) };
+    return { credentialId, prfSalt, prfOutput };
   }
 
   /** Run a WebAuthn `.get` assertion against the existing credential
@@ -410,9 +444,7 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
     };
     const prfOutput = extOutputs.prf?.results?.first;
     if (!prfOutput) {
-      throw new Error(
-        "webauthn-prf-wrap: assertion returned no PRF output (authenticator may have rotated keys)",
-      );
+      throw new Error(PRF_NO_OUTPUT_MESSAGE);
     }
     return new Uint8Array(prfOutput);
   }
@@ -449,9 +481,7 @@ export class WebAuthnPrfSecretWrap implements SecretWrap {
     };
     const prfOutput = extOutputs.prf?.results?.first;
     if (!prfOutput) {
-      throw new Error(
-        "webauthn-prf-wrap: assertion returned no PRF output (authenticator may have rotated keys)",
-      );
+      throw new Error(PRF_NO_OUTPUT_MESSAGE);
     }
     return this.deriveAesKey(new Uint8Array(prfOutput));
   }
