@@ -309,6 +309,11 @@ import {
   RUNTIME_TRIGGER_LINK_NUMBER,
   RUNTIME_SIGN_IN_STEP,
   OFFSCREEN_SIGN_IN_STEP,
+  RUNTIME_UV_SETTINGS,
+  OFFSCREEN_UV_SETTINGS,
+  type RuntimeUvSettingsRequest,
+  type RuntimeUvSettingsResponse,
+  type OffscreenUvSettingsRequest,
   OFFSCREEN_SIGN_IN_PAGE_NUMBER,
   type OffscreenSignInPageNumberRequest,
   type RuntimeTriggerLinkNumberRequest,
@@ -3096,6 +3101,23 @@ async function readActiveConnectionRaw(): Promise<
   };
 }
 
+/** Every agent this wallet is onboarded to, and its REST base. */
+async function readConnectionsRaw(): Promise<Array<{ vtaDid: string; restBaseUrl?: string }>> {
+  const stored = await chrome.storage.local.get("pnm-connection/v3");
+  const raw = stored["pnm-connection/v3"];
+  if (typeof raw !== "string") return [];
+  try {
+    const parsed = JSON.parse(raw) as {
+      state?: { connections?: { vtas?: Record<string, { vtaDid?: string; restBaseUrl?: string }> } };
+    };
+    return Object.values(parsed.state?.connections?.vtas ?? {})
+      .filter((v): v is { vtaDid: string; restBaseUrl?: string } => typeof v?.vtaDid === "string")
+      .map((v) => ({ vtaDid: v.vtaDid, ...(v.restBaseUrl ? { restBaseUrl: v.restBaseUrl } : {}) }));
+  } catch {
+    return [];
+  }
+}
+
 async function handleVaultUpsert(
   req: RuntimeVaultUpsertRequest,
 ): Promise<RuntimeVaultUpsertResponse> {
@@ -3585,6 +3607,22 @@ async function endSignInFlow(flowId: string): Promise<void> {
   }
 }
 
+/** Relay the options page's sign-in approval settings to the offscreen
+ *  document, with every agent this wallet is onboarded to from the worker's
+ *  own record: the page names an agent, never where to reach it. */
+async function handleUvSettings(msg: RuntimeUvSettingsRequest): Promise<RuntimeUvSettingsResponse> {
+  const agents = await readConnectionsRaw();
+  await ensureOffscreenDocument();
+  const { type: _type, ...op } = msg;
+  const res = (await chrome.runtime.sendMessage({
+    ...op,
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_UV_SETTINGS,
+    agents,
+  } as OffscreenUvSettingsRequest)) as RuntimeUvSettingsResponse | undefined;
+  return res ?? { ok: false, error: "The wallet's background document didn't answer." };
+}
+
 async function handleSignInStep(msg: RuntimeSignInStepRequest): Promise<RuntimeSignInStepResponse> {
   const key = `${SIGN_IN_FLOW_PREFIX}${msg.flowId}`;
   const record = (await chrome.storage.session.get(key))[key] as SignInFlowRecord | undefined;
@@ -3716,6 +3754,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+
+  if (msgType === RUNTIME_UV_SETTINGS) {
+    // The options page only: a PIN crosses this, and a content script naming
+    // an agent is not the person at their settings.
+    if (!isExtensionPageSender(sender)) {
+      sendResponse({ ok: false, error: "sign-in approval settings are the wallet's own" } satisfies RuntimeUvSettingsResponse);
+      return false;
+    }
+    handleUvSettings(message as RuntimeUvSettingsRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) } satisfies RuntimeUvSettingsResponse),
       );
     return true; // async sendResponse
   }

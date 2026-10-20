@@ -150,6 +150,13 @@ function world(
     /** The community predates manifest 0.4 and refuses it. */
     manifest0_3Only?: boolean;
     signTaskError?: unknown;
+    /** How this browser approves at the VTA, as recorded. */
+    uvMethod?: "prfSealedKey" | "vtaPin" | "remoteApprover";
+    /** What the VTA answers each grant signature with, in turn: an error to
+     *  throw, or undefined to sign. The last one repeats. */
+    grantAnswers?: Array<Error | undefined>;
+    /** The phones the VTA lists, or an error. */
+    approvers?: Array<{ did: string; displayName?: string }> | Error;
   } = {},
 ): World {
   const sent: World["sent"] = [];
@@ -275,11 +282,24 @@ function world(
       },
       signGrant: async (_entryId, unsigned, uv) => {
         vtaCalls.push({ what: "grant", decision: uv });
+        const answers = opts.grantAnswers ?? [];
+        const answer = answers.length > 1 ? answers.shift() : answers[0];
+        if (answer) throw answer;
         return { ...unsigned, proof: { proofPurpose: "assertionMethod" } };
       },
       enrolUvKey: async (prfOutput) => {
         vtaCalls.push({ what: "enrol", decision: prfOutput });
         if (opts.enrolError) throw opts.enrolError;
+      },
+      uvMethod: async () => opts.uvMethod,
+      enrolUvMethod: async (choice) => {
+        vtaCalls.push({ what: "enrol-method", decision: choice });
+        if (opts.enrolError) throw opts.enrolError;
+      },
+      uvApprovers: async () => {
+        vtaCalls.push({ what: "approvers" });
+        if (opts.approvers instanceof Error) throw opts.approvers;
+        return opts.approvers ?? [];
       },
     }),
   });
@@ -1317,3 +1337,141 @@ test("a scope naming sign-in, access control or consent is refused, whatever the
   }
 });
 
+
+// ── Approving without a PRF passkey: a PIN, or the person's phone ───────────
+
+async function toReview(w: World) {
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "claim", entryId: "e-alice" });
+  return step(w, { step: "prove", enteredNumber: "47" });
+}
+
+const uvRefusal = (details: Record<string, unknown>) =>
+  Object.assign(new Error(`vault/sign-trust-task:${details.code}`), { details: { code: "taskFailed", details } });
+
+test("the review says how this browser approves at the agent, and says nothing when it is not set up", async () => {
+  assert.equal(((await toReview(world({ uvMethod: "vtaPin" }))) as { uvMethod?: string }).uvMethod, "vtaPin");
+  assert.equal("uvMethod" in (await toReview(world())), false);
+});
+
+test("vtaPin: a wrong PIN keeps the flow open with the tries left; a lock says until when; the right PIN signs", async () => {
+  const w = world({
+    uvMethod: "vtaPin",
+    grantAnswers: [
+      uvRefusal({ code: "oobUvPinWrong", attemptsRemaining: 2 }),
+      uvRefusal({ code: "oobUvLocked", lockedUntil: 1_791_461_800 }),
+      undefined,
+    ],
+  });
+  await toReview(w);
+  await step(w, { step: "grant-digest" });
+  const wrong = await step(w, { step: "respond", decision: "approve", pin: "000000" });
+  assert.deepEqual(wrong, { kind: "uv-pin", attemptsRemaining: 2 });
+  assert.equal(w.flows.has("f1"), true);
+  assert.deepEqual(w.sent.map((s) => s.type), ["claim", "prove"], "nothing goes to the community on a wrong PIN");
+
+  await step(w, { step: "grant-digest" });
+  const locked = await step(w, { step: "respond", decision: "approve", pin: "000000" });
+  assert.deepEqual(locked, { kind: "uv-pin", lockedUntil: 1_791_461_800_000 }, "epoch s on the wire, ms to the window");
+
+  const challenge = await step(w, { step: "grant-digest" });
+  const done = await step(w, { step: "respond", decision: "approve", pin: "246810" });
+  assert.deepEqual(done, { kind: "done", decision: "approve", status: "approved" });
+  const grants = w.vtaCalls.filter((c) => c.what === "grant");
+  const last = grants.at(-1)!.decision as { payloadDigest: string; pin: string };
+  assert.equal(last.pin, "246810");
+  assert.equal(
+    bytesToBase64url(new TextEncoder().encode(last.payloadDigest)),
+    (challenge as { challenge: string }).challenge,
+    "the PIN's proof is over the digest of the grant then sent",
+  );
+  assert.equal(w.vtaCalls.some((c) => c.what === "enrol-method"), false, "an existing PIN is not enrolled again");
+});
+
+test("vtaPin, first time: the PIN is enrolled before the grant is signed", async () => {
+  const w = world();
+  await toReview(w);
+  await step(w, { step: "grant-digest" });
+  const done = await step(w, { step: "respond", decision: "approve", pin: "correct horse", setPin: true });
+  assert.equal(done.kind, "done");
+  const whats = w.vtaCalls.map((c) => c.what);
+  assert.ok(whats.indexOf("enrol-method") < whats.indexOf("grant"));
+  assert.deepEqual(w.vtaCalls.find((c) => c.what === "enrol-method")!.decision, { kind: "vtaPin", pin: "correct horse" });
+});
+
+test("a PIN the agent will not enrol stops the approval at enrol-uv, before any grant", async () => {
+  const w = world({ enrolError: new Error("refused") });
+  await toReview(w);
+  await step(w, { step: "grant-digest" });
+  const res = await step(w, { step: "respond", decision: "approve", pin: "123456", setPin: true });
+  assert.equal(res.kind, "failed");
+  assert.equal((res as { stage?: string }).stage, "enrol-uv");
+  assert.equal(w.vtaCalls.some((c) => c.what === "grant"), false);
+});
+
+test("remoteApprover: pending with the phone's code, polled with the same grant, then signed", async () => {
+  const pending = uvRefusal({ code: "oobUvPending", matchCode: "42", expiresAt: 1_791_461_020 });
+  const w = world({ grantAnswers: [pending, pending, undefined] });
+  await toReview(w);
+  await step(w, { step: "grant-digest" });
+  const first = await step(w, { step: "respond", decision: "approve", remote: true, approver: "did:key:z6MkPhone" });
+  assert.deepEqual(first, { kind: "uv-pending", matchCode: "42", expiresAt: 1_791_461_020_000 });
+  assert.deepEqual(w.vtaCalls.find((c) => c.what === "enrol-method")!.decision, {
+    kind: "remoteApprover",
+    approver: "did:key:z6MkPhone",
+  });
+  const again = await step(w, { step: "respond", decision: "approve", remote: true });
+  assert.equal(again.kind, "uv-pending");
+  const done = await step(w, { step: "respond", decision: "approve", remote: true });
+  assert.deepEqual(done, { kind: "done", decision: "approve", status: "approved" });
+
+  const grants = w.vtaCalls.filter((c) => c.what === "grant").map((c) => c.decision as { payloadDigest: string; remote: true });
+  assert.equal(grants.length, 3);
+  assert.ok(grants.every((g) => g.remote === true && g.payloadDigest === grants[0]!.payloadDigest), "the same grant, each time");
+  assert.equal(w.vtaCalls.filter((c) => c.what === "enrol-method").length, 1, "the phone is enrolled once");
+  assert.deepEqual(w.sent.map((s) => s.type), ["claim", "prove", "respond"]);
+});
+
+test("remoteApprover: a decline on the phone ends the sign-in, and the portal stops waiting", async () => {
+  const w = world({ uvMethod: "remoteApprover", grantAnswers: [uvRefusal({ code: "oobUvDeclined" })] });
+  await toReview(w);
+  await step(w, { step: "grant-digest" });
+  const r = await step(w, { step: "respond", decision: "approve", remote: true });
+  assert.deepEqual(r, { kind: "failed", code: "oobUvDeclined", message: VTA_REFUSAL_MESSAGES.oobUvDeclined, stage: "grant", party: "vta" });
+  assert.deepEqual(w.sent.map((s) => s.type), ["claim", "prove", "cancel"]);
+});
+
+test("remoteApprover: a phone that never answered is expired", async () => {
+  const w = world({ uvMethod: "remoteApprover", grantAnswers: [uvRefusal({ code: "oobUvExpired" })] });
+  await toReview(w);
+  await step(w, { step: "grant-digest" });
+  const r = await step(w, { step: "respond", decision: "approve", remote: true });
+  assert.equal((r as { code: string }).code, "oobUvExpired");
+  assert.equal((r as { message: string }).message, VTA_REFUSAL_MESSAGES.oobUvExpired);
+});
+
+test("remoteApprover: cancelling while the phone is asked stops everything; a later poll is refused unsent", async () => {
+  const w = world({ uvMethod: "remoteApprover", grantAnswers: [uvRefusal({ code: "oobUvPending", matchCode: "07" })] });
+  await toReview(w);
+  await step(w, { step: "grant-digest" });
+  assert.equal((await step(w, { step: "respond", decision: "approve", remote: true })).kind, "uv-pending");
+  await step(w, { step: "cancel" });
+  const grants = w.vtaCalls.filter((c) => c.what === "grant").length;
+  const late = await step(w, { step: "respond", decision: "approve", remote: true });
+  assert.equal(late.kind, "failed");
+  assert.equal(w.vtaCalls.filter((c) => c.what === "grant").length, grants, "no grant is signed after the cancel");
+  assert.deepEqual(w.sent.map((s) => s.type), ["claim", "prove", "cancel"]);
+});
+
+test("the phones to approve on come from the agent; a listing it refuses is empty, with why, and the flow goes on", async () => {
+  const w = world({ approvers: [{ did: "did:key:z6MkPhone", displayName: "Alice's iPhone" }] });
+  await toReview(w);
+  assert.deepEqual(await step(w, { step: "uv-approvers" }), {
+    kind: "uv-approvers",
+    approvers: [{ did: "did:key:z6MkPhone", displayName: "Alice's iPhone" }],
+  });
+  const w2 = world({ approvers: new Error("unsupportedType") });
+  await toReview(w2);
+  assert.deepEqual(await step(w2, { step: "uv-approvers" }), { kind: "uv-approvers", approvers: [], error: "unsupportedType" });
+  assert.equal(w2.flows.has("f1"), true);
+});

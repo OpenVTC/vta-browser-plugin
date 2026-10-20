@@ -27,6 +27,7 @@ import { sendToBackground } from "./send-message.js";
 import { VaultPanel } from "./vault-panel.js";
 import { releaseSelectAfterPointerChange } from "./select-wheel.js";
 import { DidQrButton } from "./did-qr-view.js";
+import { SignInApprovalSettings } from "./sign-in-approval-settings.js";
 import "./theme.css";
 
 const inputStyle: React.CSSProperties = {
@@ -574,6 +575,8 @@ export function AdvancedPane() {
           </div>
         )}
       </div>
+
+      <SignInApprovalSettings />
 
       <div
         style={{

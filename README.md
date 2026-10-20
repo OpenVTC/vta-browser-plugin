@@ -456,6 +456,31 @@ captures one approval's PRF output could keep the unsealed key and approve
 later grants with no gesture, which a per-grant WebAuthn assertion would not
 allow. The VTA records the kind, so its policy can tell the two apart.
 
+#### Approving without a passkey: a PIN, or your phone
+
+A browser that can't keep a PRF passkey (Linux Chromium without a security
+key, or a 1Password user) approves sign-ins one of two other ways, chosen once
+per agent. The review screen offers "Use a PIN or my phone instead", and Approve
+goes straight to that choice when the browser says it has no PRF or the passkey
+turns out not to support it.
+
+- **A PIN** (`vtaPin`): six or more characters, digits or a passphrase. The
+  wallet derives a key from it (PBKDF2-HMAC-SHA256, 600 000 iterations) and
+  enrols that with your agent; each approval sends an HMAC of the grant digest
+  under the key, beside a decision signed by this browser's own device key. Your
+  agent checks it and locks it after 5 wrong tries (15 minutes, doubling after
+  each further wrong one). The wallet keeps only the salt; never the PIN or the
+  key. A forgotten PIN: an administrator disables the device at the agent and
+  you connect this browser again.
+- **Your phone** (`remoteApprover`): pick one of your phones your agent lists
+  (the OpenVTC app, connected to the same agent). Each approval asks the phone;
+  the window shows the code the phone shows beside the request and waits until
+  you approve or decline there.
+
+Settings → Advanced → **Sign-in approval** shows each agent's method and lets
+you change the PIN or switch between a PIN and your phone. Replacing a PIN needs
+the current one.
+
 #### When a sign-in code isn't accepted
 
 The window tells the person only the outcome ("Code not accepted", "Community

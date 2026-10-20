@@ -60,8 +60,25 @@
 // The header takes a `subtitle` line under the community name for a sign-in
 // that is more than a member's: "Operator console" once the community's signed
 // step 1 says the link asks for the console's session.
+//
+// ## Approving without a passkey
+//
+// A browser with no PRF passkey (Linux Chromium, 1Password) approves with a
+// PIN the agent checks, or on the person's phone. The review screen says which
+// one this browser uses at this agent (`uvMethod`):
+//
+//   - passkey, or nothing set up yet: Approve runs the passkey as above. With
+//     nothing set up, "Use a PIN or my phone instead" opens the chooser, and
+//     so does Approve itself when the browser has no PRF or the passkey turns
+//     out not to support it. The chooser offers "Set a PIN" (entered twice)
+//     and "Approve on my phone" (from the phones the agent lists).
+//   - PIN: Approve asks for it. A wrong one says how many tries are left; a
+//     locked one says until when.
+//   - phone: "Approve on your phone", with the code the phone shows, asking
+//     again every couple of seconds until the phone answers, the time to
+//     decide runs out, or the person cancels.
 
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import {
   RUNTIME_SIGN_IN_STEP,
@@ -69,12 +86,14 @@ import {
   type SignInIdentityView,
   type SignInStep,
   type SignInStepResult,
+  type SignInUvApproverView,
 } from "./bridge-protocol.js";
 import {
   PrfUnlockError,
   hasPrfEnrolment,
   runSignInApprovalCeremony,
 } from "./webauthn-prf-unlock.js";
+import { PrfUnavailableError, browserOffersPrf } from "./webauthn-prf-wrap.js";
 import { encryptHolderSecretInPopup } from "./encrypt-holder.js";
 import { base64url } from "@openvtc/vti-didcomm-js";
 import {
@@ -99,9 +118,29 @@ export interface UvPasskeyOps {
   enrol: (vtaDid: string) => Promise<void>;
   /** The ceremony bound to the grant; its PRF output. */
   unlock: (challengeB64u: string) => Promise<Uint8Array>;
+  /** Whether the browser offers PRF at all (`undefined`: it cannot say).
+   *  Defaults to `browserOffersPrf`. */
+  offersPrf?: () => Promise<boolean | undefined>;
 }
 
+/** The passkey cannot hold the approval key here: no PRF in the browser or
+ *  the authenticator. Another way to approve is offered instead. */
+function prfUnavailable(e: unknown): boolean {
+  return (
+    e instanceof PrfUnavailableError ||
+    (e instanceof PrfUnlockError && e.reason === "no-prf-output") ||
+    (e as { name?: unknown })?.name === "NotSupportedError"
+  );
+}
+
+/** The shortest PIN or passphrase (`UV_PIN_MIN_LENGTH` in core). */
+const PIN_MIN = 6;
+
+/** How often a phone approval asks again. */
+const POLL_MS = 2000;
+
 const browserUv: UvPasskeyOps = {
+  offersPrf: browserOffersPrf,
   enrolled: hasPrfEnrolment,
   enrol: encryptHolderSecretInPopup,
   unlock: async (challenge) =>
@@ -120,7 +159,21 @@ export interface SignInViewProps {
   /** How long the Approved screen shows before the window closes itself.
    *  Injected so a test need not wait. */
   approvedCloseMs?: number;
+  /** How often a phone approval asks again. Injected for the same reason. */
+  pollMs?: number;
 }
+
+type ReviewResult = Extract<SignInStepResult, { kind: "review" }>;
+
+/** Screens the window shows on its own, before anything is sent. */
+type LocalScreen =
+  | { kind: "loading" }
+  | { kind: "connecting" }
+  /** How should this browser approve? `noPrf`: a passkey can't. */
+  | { kind: "uv-choose"; noPrf?: boolean }
+  | { kind: "uv-set-pin" }
+  /** The phones to approve on; `approvers` absent while they load. */
+  | { kind: "uv-phone"; approvers?: SignInUvApproverView[]; error?: string };
 
 /** Long enough to read "Approved", short enough that the website — which is
  *  already carrying on — is not left behind a window with nothing to do. */
@@ -662,6 +715,7 @@ export function SignInView({
   close,
   now,
   approvedCloseMs = APPROVED_CLOSE_MS,
+  pollMs = POLL_MS,
 }: SignInViewProps) {
   const sendStep =
     send ??
@@ -675,11 +729,16 @@ export function SignInView({
   const closeWindow = close ?? (() => window.close());
   const [clock] = useState(() => now ?? Date.now);
 
-  const [screen, setScreen] = useState<
-    SignInStepResult | { kind: "loading" } | { kind: "connecting" }
-  >({
+  const [screen, setScreen] = useState<SignInStepResult | LocalScreen>({
     kind: "loading",
   });
+  const [review, setReview] = useState<ReviewResult | undefined>();
+  const [pin, setPin] = useState("");
+  const [pinAgain, setPinAgain] = useState("");
+  const [approver, setApprover] = useState("");
+  // Bumped to stop a phone approval's polling: a reply to an ask sent before
+  // the bump is not shown.
+  const pollGen = useRef(0);
   const [portalOrigin, setPortalOrigin] = useState("");
   const [communityName, setCommunityName] = useState("");
   const [entryId, setEntryId] = useState("");
@@ -750,7 +809,9 @@ export function SignInView({
         res.result.kind === "review"
       )
         setDeadline(res.result.decisionDeadline);
-      if (res.result.kind !== "uv-challenge") setScreen(res.result);
+      if (res.result.kind === "review") setReview(res.result);
+      if (res.result.kind !== "uv-challenge" && res.result.kind !== "uv-approvers")
+        setScreen(res.result);
       return res.result;
     } finally {
       setBusy(false);
@@ -773,7 +834,72 @@ export function SignInView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [approved]);
 
+  // A phone approval asks again until the phone answers. Each answer is a new
+  // screen object, so this runs once per ask.
+  useEffect(() => {
+    if (screen.kind !== "uv-pending") return;
+    const gen = pollGen.current;
+    const timer = setTimeout(() => {
+      void (async () => {
+        if (gen !== pollGen.current) return;
+        if (deadline !== undefined && clock() >= deadline) {
+          pollGen.current++;
+          await sendStep({ step: "cancel" }).catch(() => undefined);
+          setScreen({
+            kind: "failed",
+            code: "oobUvExpired",
+            message:
+              "Your phone didn't approve this sign-in in time. Refresh the code on the website and try again.",
+          });
+          return;
+        }
+        const res = await sendStep({ step: "respond", decision: "approve", remote: true }).catch(
+          () => undefined,
+        );
+        if (gen !== pollGen.current) return;
+        if (!res || !res.ok) {
+          setScreen({
+            kind: "failed",
+            code: "sign-in/failed",
+            message: res?.error ?? "The wallet did not answer.",
+          });
+          return;
+        }
+        // A fresh object each time, so a second "still waiting" is a new
+        // screen and asks again.
+        setScreen({ ...res.result });
+      })();
+    }, pollMs);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
+
+  /** Back to the review: the person may approve again, or decline. */
+  const backToReview = (message?: string) => {
+    pollGen.current++;
+    setPin("");
+    setPinAgain("");
+    if (review) setScreen(review);
+    setNote(message);
+  };
+
+  const openChooser = (noPrf: boolean) => {
+    setNote(undefined);
+    setScreen(noPrf ? { kind: "uv-choose", noPrf: true } : { kind: "uv-choose" });
+  };
+
   const approve = async () => {
+    const method = review?.uvMethod;
+    if (method === "vtaPin") {
+      setPin("");
+      setNote(undefined);
+      setScreen({ kind: "uv-pin" });
+      return;
+    }
+    if (method === "remoteApprover") {
+      await approveOnPhone();
+      return;
+    }
     // A cancelled gesture leaves the review open: the person may approve again
     // or decline. It is not a decision.
     const cancelled = (e: unknown) =>
@@ -782,6 +908,16 @@ export function SignInView({
           ? "Approval cancelled."
           : String((e as Error).message ?? e),
       );
+    // Nothing set up, no passkey yet, and a browser that says it has no PRF:
+    // a passkey made here could never hold the key, so don't make one.
+    if (
+      method === undefined &&
+      !(await passkey.enrolled()) &&
+      (await (passkey.offersPrf ?? browserOffersPrf)()) === false
+    ) {
+      openChooser(true);
+      return;
+    }
     const challenge = await run({ step: "grant-digest" });
     if (challenge?.kind !== "uv-challenge") return;
     let prfOutput: Uint8Array;
@@ -791,6 +927,10 @@ export function SignInView({
       if (!(await passkey.enrolled())) await passkey.enrol(challenge.vtaDid);
       prfOutput = await passkey.unlock(challenge.challenge);
     } catch (e) {
+      if (method === undefined && prfUnavailable(e)) {
+        openChooser(true);
+        return;
+      }
       cancelled(e);
       return;
     }
@@ -798,6 +938,60 @@ export function SignInView({
       step: "respond",
       decision: "approve",
       prfOutputB64u: base64url.encode(prfOutput),
+    });
+  };
+
+  /** Approve with the PIN typed; `setNew` enrols it first. The PIN goes to
+   *  the wallet once and is cleared here. */
+  const approveWithPin = async (setNew: boolean) => {
+    const value = pin;
+    setPin("");
+    setPinAgain("");
+    const challenge = await run({ step: "grant-digest" });
+    if (challenge?.kind !== "uv-challenge") return;
+    const r = await run(
+      setNew
+        ? { step: "respond", decision: "approve", pin: value, setPin: true }
+        : { step: "respond", decision: "approve", pin: value },
+    );
+    if (setNew && r?.kind === "uv-pin" && review) setReview({ ...review, uvMethod: "vtaPin" });
+  };
+
+  /** Ask the phone; `chosen` enrols that phone first. */
+  const approveOnPhone = async (chosen?: string) => {
+    pollGen.current++;
+    setNote(undefined);
+    const challenge = await run({ step: "grant-digest" });
+    if (challenge?.kind !== "uv-challenge") return;
+    const r = await run({
+      step: "respond",
+      decision: "approve",
+      remote: true,
+      ...(chosen ? { approver: chosen } : {}),
+    });
+    if (chosen && r?.kind === "uv-pending" && review)
+      setReview({ ...review, uvMethod: "remoteApprover" });
+  };
+
+  const pickPhone = async () => {
+    setNote(undefined);
+    setApprover("");
+    setScreen({ kind: "uv-phone" });
+    const res = await sendStep({ step: "uv-approvers" }).catch(() => undefined);
+    if (!res || !res.ok) {
+      setScreen({ kind: "uv-phone", approvers: [], error: res?.error ?? "The wallet did not answer." });
+      return;
+    }
+    if (res.result.kind !== "uv-approvers") {
+      setScreen(res.result);
+      return;
+    }
+    const list = res.result.approvers;
+    if (list.length === 1) setApprover(list[0]!.did);
+    setScreen({
+      kind: "uv-phone",
+      approvers: list,
+      ...(res.result.error ? { error: res.result.error } : {}),
     });
   };
 
@@ -1523,8 +1717,30 @@ export function SignInView({
             This signs in that browser
             {screen.audience === "admin" ? " to the operator console" : ""} at{" "}
             {portalOrigin} as <ShortDid value={screen.identifiedAs} />, for this
-            session only. Approving asks for your passkey.
+            session only.{" "}
+            {screen.uvMethod === "vtaPin"
+              ? "Approving asks for your PIN."
+              : screen.uvMethod === "remoteApprover"
+                ? "Approving asks your phone."
+                : "Approving asks for your passkey."}
           </p>
+          {screen.uvMethod === undefined && (
+            <button
+              type="button"
+              data-testid="uv-other"
+              disabled={busy}
+              onClick={() => openChooser(false)}
+              style={{
+                ...button("quiet"),
+                justifySelf: "start",
+                padding: "0 2px",
+                fontSize: t.sm,
+                color: c.accent,
+              }}
+            >
+              Use a PIN or my phone instead
+            </button>
+          )}
           {screen.signingScope && screen.signingScope.length > 0 && (
             <Note tone="accent">
               <span data-testid="signing-scope">
@@ -1596,9 +1812,289 @@ export function SignInView({
         </Screen>
       );
 
+    case "uv-choose":
+      return (
+        <Screen
+          who={who}
+          title="How should this browser approve sign-ins?"
+          secondary={{ label: "Back", run: () => backToReview(), testId: "back" }}
+        >
+          {screen.noPrf && (
+            <Note tone="warn">
+              <span data-testid="no-prf">
+                This browser can't keep a passkey for approving. Choose another
+                way.
+              </span>
+            </Note>
+          )}
+          <Choice
+            testId="choose-pin"
+            title="Set a PIN"
+            run={() => {
+              setPin("");
+              setPinAgain("");
+              setScreen({ kind: "uv-set-pin" });
+            }}
+          >
+            You type it each time you approve. Your agent checks it, and locks
+            it for a while after 5 wrong tries.
+          </Choice>
+          <Choice testId="choose-phone" title="Approve on my phone" run={() => void pickPhone()}>
+            The wallet app on your phone asks you to approve each sign-in.
+          </Choice>
+          <p style={{ margin: 0, fontSize: t.sm, color: c.muted }}>
+            Your wallet remembers this for your agent. You can change it in
+            Settings.
+          </p>
+        </Screen>
+      );
+
+    case "uv-set-pin": {
+      const tooShort = pin.normalize("NFC").length < PIN_MIN;
+      const differ = pinAgain.length > 0 && pin !== pinAgain;
+      return (
+        <Screen
+          who={who}
+          title="Set a PIN"
+          primary={{
+            label: "Set PIN and approve",
+            run: () => void approveWithPin(true),
+            disabled: busy || tooShort || pin !== pinAgain,
+            testId: "set-pin",
+          }}
+          secondary={{ label: "Back", run: () => openChooser(false), disabled: busy, testId: "back" }}
+        >
+          <Message>
+            You'll type this PIN each time you approve a sign-in from this
+            browser. Use {PIN_MIN} or more characters: digits or a passphrase.
+          </Message>
+          <PinField testId="pin" label="PIN" value={pin} onChange={setPin} autoFocus />
+          <PinField testId="pin-again" label="PIN again" value={pinAgain} onChange={setPinAgain} />
+          {differ && (
+            <Note tone="danger">
+              <span data-testid="pin-mismatch">The two PINs don't match.</span>
+            </Note>
+          )}
+          {deadline !== undefined && <Countdown deadline={deadline} now={clock} />}
+          {note && <Note tone="danger">{note}</Note>}
+        </Screen>
+      );
+    }
+
+    case "uv-phone":
+      return (
+        <Screen
+          who={who}
+          title="Approve on my phone"
+          primary={{
+            label: "Use this phone",
+            run: () => void approveOnPhone(approver),
+            disabled: busy || !approver,
+            testId: "use-phone",
+          }}
+          secondary={{ label: "Back", run: () => openChooser(false), disabled: busy, testId: "back" }}
+        >
+          {screen.approvers === undefined ? (
+            <Message muted>Asking your agent for your phone…</Message>
+          ) : screen.approvers.length === 0 ? (
+            <Note tone="warn">
+              <div data-testid="no-phones" style={wrap}>
+                Your agent doesn't know a phone of yours yet. Open the OpenVTC
+                app on your phone and connect it to the same agent as this
+                wallet, then come back and choose it here.
+                {screen.error && (
+                  <div style={{ marginTop: 6, color: c.muted }}>
+                    Your agent said: {screen.error}
+                  </div>
+                )}
+              </div>
+            </Note>
+          ) : (
+            <fieldset
+              style={{ border: "none", margin: 0, padding: 0, display: "grid", gap: 8, minWidth: 0 }}
+            >
+              <legend style={{ ...microLabel, marginBottom: 6 }}>Your phones</legend>
+              {screen.approvers.map((a) => (
+                <label
+                  key={a.did}
+                  style={{ display: "flex", gap: 10, alignItems: "center", cursor: "pointer", minWidth: 0 }}
+                >
+                  <input
+                    type="radio"
+                    name="approver"
+                    data-testid="approver"
+                    checked={approver === a.did}
+                    onChange={() => setApprover(a.did)}
+                  />
+                  <span style={{ display: "grid", minWidth: 0 }}>
+                    <strong style={wrap}>{a.displayName ?? "Phone"}</strong>
+                    <ShortDid value={a.did} />
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+          )}
+          <p style={{ margin: 0, fontSize: t.sm, color: c.muted }}>
+            Your phone will ask you to approve this sign-in and each one after
+            it from this browser.
+          </p>
+          {note && <Note tone="danger">{note}</Note>}
+        </Screen>
+      );
+
+    case "uv-pin": {
+      const locked = screen.lockedUntil !== undefined && screen.lockedUntil > clock();
+      return (
+        <Screen
+          who={who}
+          title="Enter your PIN"
+          primary={{
+            label: "Approve",
+            run: () => void approveWithPin(false),
+            disabled: busy || locked || pin.length === 0,
+            testId: "approve-pin",
+          }}
+          secondary={{ label: "Back", run: () => backToReview(), disabled: busy, testId: "back" }}
+        >
+          <Message>Type the PIN you set for approving sign-ins from this browser.</Message>
+          {screen.attemptsRemaining !== undefined && (
+            <Note tone="danger">
+              <span data-testid="pin-wrong">
+                Wrong PIN.{" "}
+                {screen.attemptsRemaining === 1
+                  ? "1 try left before it locks."
+                  : `${screen.attemptsRemaining} tries left before it locks.`}
+              </span>
+            </Note>
+          )}
+          {screen.lockedUntil !== undefined && (
+            <Note tone="warn">
+              <span data-testid="pin-locked">
+                Too many wrong PINs. Locked until{" "}
+                {new Date(screen.lockedUntil).toLocaleTimeString()}.
+              </span>
+            </Note>
+          )}
+          <PinField testId="pin" label="PIN" value={pin} onChange={setPin} autoFocus disabled={locked} />
+          {deadline !== undefined && <Countdown deadline={deadline} now={clock} />}
+        </Screen>
+      );
+    }
+
+    case "uv-pending":
+      return (
+        <Screen
+          who={who}
+          title="Approve on your phone"
+          secondary={{
+            label: "Cancel",
+            run: () => backToReview("Approval cancelled."),
+            testId: "cancel-phone",
+          }}
+        >
+          <Message>
+            Your phone is asking you to approve this sign-in. Check it shows
+            this code, then approve there.
+          </Message>
+          {screen.matchCode && (
+            <div
+              data-testid="match-code"
+              style={{
+                fontFamily: font.mono,
+                fontSize: 36,
+                fontWeight: 600,
+                letterSpacing: "0.2em",
+                textAlign: "center",
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              {screen.matchCode}
+            </div>
+          )}
+          <Message muted>Waiting for your phone…</Message>
+          {deadline !== undefined && <Countdown deadline={deadline} now={clock} />}
+        </Screen>
+      );
+
     case "uv-challenge":
+    case "uv-approvers":
       return null;
   }
+}
+
+/** One way to approve, on the chooser: a large button with a line under it. */
+function Choice({
+  title,
+  testId,
+  run,
+  children,
+}: {
+  title: string;
+  testId: string;
+  run: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      onClick={run}
+      style={{
+        ...button("default"),
+        display: "grid",
+        gap: 4,
+        textAlign: "left",
+        padding: "12px 14px",
+        borderRadius: radius.md,
+        minWidth: 0,
+      }}
+    >
+      <strong style={{ fontSize: t.base }}>{title}</strong>
+      <span style={{ fontSize: t.sm, color: c.muted, fontWeight: 400, ...wrap }}>{children}</span>
+    </button>
+  );
+}
+
+/** A PIN or passphrase, hidden as it is typed. */
+function PinField({
+  label,
+  value,
+  onChange,
+  testId,
+  autoFocus = false,
+  disabled = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  testId: string;
+  autoFocus?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <label style={{ display: "grid", gap: 4, minWidth: 0 }}>
+      <span style={microLabel}>{label}</span>
+      <input
+        type="password"
+        data-testid={testId}
+        autoComplete="off"
+        autoFocus={autoFocus}
+        disabled={disabled}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          fontFamily: font.mono,
+          fontSize: t.md,
+          padding: "8px 10px",
+          background: c.ground,
+          color: c.text,
+          border: `1.5px solid ${c.line}`,
+          borderRadius: radius.md,
+          minWidth: 0,
+        }}
+      />
+    </label>
+  );
 }
 
 /** What a signing-scope family lets the website do, in words. An unknown

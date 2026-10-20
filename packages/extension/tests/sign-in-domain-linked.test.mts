@@ -139,6 +139,9 @@ function world(opts: { config?: unknown; configStatus?: number; doc?: Record<str
       signIdentify: async (_e, unsigned) => ({ ...(unsigned as object), proof: { proofPurpose: "authentication" } }),
       signGrant: async (_e, unsigned) => ({ ...(unsigned as object), proof: { proofPurpose: "assertionMethod" } }),
       enrolUvKey: async () => {},
+      uvMethod: async () => undefined,
+      enrolUvMethod: async () => {},
+      uvApprovers: async () => [],
     }),
   });
   return w;
