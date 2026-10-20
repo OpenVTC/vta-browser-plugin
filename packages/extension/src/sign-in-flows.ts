@@ -1402,6 +1402,12 @@ function portalHost(origin: string): string | undefined {
  * every sign-in — which teaches them to ignore the warning that matters.
  * The host of the verified portal origin is the same: a service that names
  * itself "webvh.storm.ws" has told us nothing the wallet did not verify.
+ *
+ * So is the wallet's side. A record labelled with the portal host is the
+ * label the wallet made itself when it recorded the service
+ * (`profileLabelFor`), not a name the person gave it: there is no name of
+ * theirs for the community's to differ from, and the community's own name is
+ * not a warning.
  */
 export function communityNameMismatch(
   theirs: unknown,
@@ -1415,7 +1421,9 @@ export function communityNameMismatch(
   if (typeof serviceDid === "string" && trimmed === serviceDid.trim())
     return undefined;
   if (/^did:/i.test(trimmed)) return undefined;
-  if (portalOrigin !== undefined && foldName(theirs) === portalHost(portalOrigin))
-    return undefined;
+  if (portalOrigin !== undefined) {
+    const host = portalHost(portalOrigin);
+    if (foldName(theirs) === host || foldName(ours) === host) return undefined;
+  }
   return foldName(theirs) === foldName(ours) ? undefined : theirs;
 }
