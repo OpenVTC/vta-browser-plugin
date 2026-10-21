@@ -48,13 +48,17 @@ export function roomHostCommand(setup: RoomHostSetup): string {
 }
 
 /**
- * The grant for the throwaway DID room-host prints on its first start.
+ * The grant for the throwaway DID room-host prints on its first start — the
+ * same one room-host prints itself (`room-host/src/onboarding.rs`).
  *
- * `application`, on exactly one context: a host holds ciphertext it cannot read,
- * so it needs to act in its context and needs no authority over it.
+ * `admin`, on exactly one context. Admin because the host serves as its
+ * context's DID and fetches that DID's keys at startup, and releasing keys
+ * needs `key-export`, which only an admin derives (VTI-VTA-003): an
+ * `application` grant leaves the host unable to start as its DID. Scoped,
+ * because an admin with no context is a super-admin of the whole agent.
  */
 export function hostGrantCommand(context: string): string {
-  return `pnm acl create --did <the did:key it prints> --role application --contexts ${word(context)}`;
+  return `pnm acl create --did <the did:key it prints> --role admin --contexts ${word(context)}`;
 }
 
 /** The hostname a certificate must name, from the host's URL. */

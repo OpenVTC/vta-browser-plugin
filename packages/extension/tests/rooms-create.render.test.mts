@@ -31,7 +31,7 @@ const DIDS_CREATE = "vta/webvh/dids/create/1.0";
 const UPDATE_DID = "vta/contexts/update-did/1.1";
 // `rooms/owner/register`, not `rooms/create`: the console cannot address a host,
 // so the registration is asked of the agent, which can make the call.
-const REGISTER = "rooms/owner/register/0.1";
+const REGISTER = "rooms/owner/register/0.2";
 
 const HOST_DID = "did:webvh:QmHost:host.example";
 const AGENT_MEDIATOR = "did:web:mediator.example";
@@ -90,7 +90,11 @@ const keyRecord = (keyId: string, keyType = "ed25519") => ({
 /** What the background says when asked for a host's HTTPS endpoint; `undefined` leaves it to the agent fake. */
 let hostEndpoint: unknown = undefined;
 
-const mount = async (answers: Record<string, unknown>, contexts: unknown[] = CONTEXTS) => {
+const mount = async (
+  answers: Record<string, unknown>,
+  contexts: unknown[] = CONTEXTS,
+  onCreated: (created: { roomId: string; host: string; signingKeyId: string }) => void = () => {},
+) => {
   const a = agent({
     [SERVERS]: { servers: [{ id: "webvh-1", did: "did:webvh:QmS:webvh.example", label: "Primary", createdAt: "x", updatedAt: "x" }] },
     [SERVICES]: AGENT_SERVICES,
@@ -104,7 +108,7 @@ const mount = async (answers: Record<string, unknown>, contexts: unknown[] = CON
     return said !== undefined ? Promise.resolve(said) : a.sendMessage(m as never);
   };
   const screen = await render(
-    h(CreateRoom, { parties: PARTIES, contexts, onCreated: () => {} } as never),
+    h(CreateRoom, { parties: PARTIES, contexts, onCreated } as never),
     { chrome: { runtime: { sendMessage } } },
   );
   return { a, screen };
@@ -207,7 +211,9 @@ test("the room is registered with the context's DID as its host, owned by the ca
   assert.equal(register.payload.roomId, MINTED.did);
   assert.equal(register.payload.host, HOST_DID);
   assert.equal(register.payload.ownerDid, PARTIES.holder.did);
-  assert.equal(register.payload.visibility, "private");
+  // Attributed by default: no host serves a private room yet.
+  assert.equal(register.payload.visibility, "attributed");
+  assert.equal(register.payload.retentionPolicy, "chained");
 });
 
 // ── The failure that costs something ────────────────────────────────────────
@@ -354,14 +360,14 @@ test("after minting, the room waits until the operator confirms the host is runn
   assert.equal(mintOf(a, "room").payload.setPrimary, false);
 });
 
-test("the setup names this agent, this context, and a grant of application on it", async () => {
+test("the setup names this agent, this context, and a grant of admin on it", async () => {
   const { screen } = await mount({ [DIDS_CREATE]: HOST_MINTED });
   await mintAHost(screen);
   const text = screen.text();
   assert.match(text, new RegExp(`--vta-did ${PARTIES.service.did}`));
   assert.match(text, /--vta-context empty/);
   assert.match(text, new RegExp(`--mediator-did ${AGENT_MEDIATOR}`));
-  assert.match(text, /--role application --contexts empty/);
+  assert.match(text, /--role admin --contexts empty/);
 });
 
 // The failure that prompted the setup panel: a certificate for *.openvtc.net
@@ -395,14 +401,16 @@ test("a mediator chosen for the host is the one the room is seeded with", async 
   assert.equal(mintOf(a, "room").payload.templateVars.MEDIATOR_DID, "did:web:hosts-mediator.example");
 });
 
-// The honest answer to "does a host need a URL, or can it be TSP only": the
-// agent calls hosts over REST only. The mediator is for members.
-test("the host step says the URL is for the agent and the mediator is for members", async () => {
+// The honest answer to "does a host need a URL, or can it be TSP only": an
+// agent reaches a host over TSP, DIDComm or HTTPS, but members' wallets move
+// room files to it over HTTPS, so the URL is still required.
+test("the host step says the URL is for members' files and the mediator is for agents", async () => {
   const { screen } = await mount({});
   await chooseContext(screen, "empty");
   await screen.settle();
   const text = screen.text();
-  assert.match(text, /your agent calls hosts over REST only/);
+  assert.match(text, /members' wallets move room files to the host over HTTPS/);
+  assert.doesNotMatch(text, /over REST only/);
   assert.match(text, /answers DIDComm and TSP there/);
   assert.doesNotMatch(text, /does not listen there yet/);
 });
@@ -506,6 +514,43 @@ test("a step is not marked ready before the steps above it are", async () => {
   assert.equal(screen.all('[aria-label="Step 4, ready"]').length, 0);
   await fillAll(screen);
   assert.equal(screen.all('[aria-label="Step 4, ready"]').length, 1);
+});
+
+// No host serves a private room yet (its members' proofs need a ZK profile that
+// is not specified), so a room created private could be used by nobody.
+test("private is shown but cannot be chosen, and attributed is the default", async () => {
+  const { screen } = await mount({});
+  await fillAll(screen);
+  assert.equal((radio(screen, "private") as HTMLInputElement).disabled, true);
+  assert.equal((radio(screen, "attributed") as HTMLInputElement).checked, true);
+  assert.match(screen.text(), /not available yet/);
+});
+
+test("a room kept from-join is registered so, through register 0.2", async () => {
+  const { a, screen } = await mount({ [DIDS_CREATE]: MINTED, [REGISTER]: REGISTERED });
+  await fillAll(screen);
+  await screen.click(radio(screen, "fromJoin"));
+  await screen.click(screen.button("Create room"));
+  const register = a.calls.find((c) => c.type.includes("owner/register"))!;
+  assert.ok(register.type.endsWith("rooms/owner/register/0.2"), register.type);
+  assert.equal(register.payload.retentionPolicy, "fromJoin");
+});
+
+// The reply names the host the agent actually reached, which is what to record.
+test("the room is recorded at the host the registration reached", async () => {
+  const REACHED = "did:webvh:QmReached:rooms.example";
+  let created: { host: string } | undefined;
+  const { screen } = await mount(
+    { [DIDS_CREATE]: MINTED, [REGISTER]: { ...REGISTERED, host: REACHED } },
+    CONTEXTS,
+    (c) => {
+      created = c;
+    },
+  );
+  await fillAll(screen);
+  await screen.click(screen.button("Create room"));
+  await screen.settle();
+  assert.equal(created?.host, REACHED);
 });
 
 test("choosing open says the host can read everything", async () => {
@@ -680,7 +725,8 @@ test("a host with no HTTPS endpoint closes the room's steps, before anything is 
     await screen.click(radio(screen, "host-paste"));
     await screen.type(field(screen, "Host DID"), OUTSIDE);
     await screen.settle();
-    assert.match(screen.text(), /This host cannot be registered with yet/);
+    assert.match(screen.text(), /This DID cannot host rooms here/);
+    assert.match(screen.text(), /paste the DID of a community you belong to/);
     assert.match(screen.text(), /publishes no HTTPS endpoint/);
     const create = screen.button("Create room") as HTMLButtonElement;
     assert.equal(create.disabled, true);
