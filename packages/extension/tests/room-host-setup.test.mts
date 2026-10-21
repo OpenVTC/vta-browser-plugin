@@ -44,13 +44,14 @@ test("the command is one pasteable line per flag", () => {
   assert.ok(lines.slice(1, -1).every((l) => l.endsWith(" \\")), "every line but the last continues");
 });
 
-// Omitting `--contexts` grants every context; `admin` grants authority the host
-// has no use for. Either is a silent over-grant.
-test("the grant is application on exactly the host's context", () => {
+// The grant room-host prints itself: admin, because the host fetches its DID's
+// keys at startup and releasing keys needs key-export, which only an admin holds
+// (an `application` grant left it unable to start as its DID). And on exactly
+// the host's context: an admin with no `--contexts` is a super-admin.
+test("the grant is admin on exactly the host's context", () => {
   const grant = hostGrantCommand("vdr-host");
-  assert.match(grant, /--role application/);
-  assert.match(grant, /--contexts vdr-host$/);
-  assert.doesNotMatch(grant, /admin/);
+  assert.match(grant, /--role admin --contexts vdr-host$/);
+  assert.doesNotMatch(grant, /--role application/);
 });
 
 test("a value a shell would split is quoted", () => {

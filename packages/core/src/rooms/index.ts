@@ -915,7 +915,7 @@ import {
   RESPONSE_TYPE_URI as OWNER_REGISTER_RESPONSE,
   type RoomsOwnerRegisterPayload,
   type RoomsOwnerRegisterResponsePayload,
-} from "@openvtc/trust-tasks/rooms/owner/register/0.1/payload";
+} from "@openvtc/trust-tasks/rooms/owner/register/0.2/payload";
 
 /**
  * Ask this agent to register a room with a host.
@@ -941,6 +941,8 @@ export async function roomsOwnerRegister(
     host: string;
     visibility: "open" | "attributed" | "private";
     ownerDid?: string;
+    /** Fixed for the room's life; absent takes the host's default (`chained`). */
+    retentionPolicy?: "chained" | "fromJoin";
     retentionDays?: number;
   },
 ): Promise<RoomsOwnerRegisterResponsePayload> {
@@ -949,6 +951,7 @@ export async function roomsOwnerRegister(
     host: params.host,
     visibility: params.visibility,
     ...(params.ownerDid ? { ownerDid: params.ownerDid } : {}),
+    ...(params.retentionPolicy ? { retentionPolicy: params.retentionPolicy } : {}),
     ...(params.retentionDays !== undefined ? { retentionDays: params.retentionDays } : {}),
   } as RoomsOwnerRegisterPayload;
   return call<RoomsOwnerRegisterResponsePayload>(
@@ -956,7 +959,7 @@ export async function roomsOwnerRegister(
     { holder: params.holder, service: params.service },
     OWNER_REGISTER,
     OWNER_REGISTER_RESPONSE,
-    "rooms/owner/register/0.1",
+    "rooms/owner/register/0.2",
     payload,
   );
 }

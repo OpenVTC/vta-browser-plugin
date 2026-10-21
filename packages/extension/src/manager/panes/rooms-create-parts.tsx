@@ -88,6 +88,7 @@ export function Choice({
   onSelect,
   title,
   children,
+  disabled = false,
 }: {
   name: string;
   value: string;
@@ -95,6 +96,8 @@ export function Choice({
   onSelect: () => void;
   title: ReactNode;
   children?: ReactNode;
+  /** Shown, so the choice is known to exist, but not choosable. */
+  disabled?: boolean;
 }) {
   return (
     <label
@@ -106,7 +109,8 @@ export function Choice({
         border: `1px solid ${checked ? c.accent : c.line}`,
         background: checked ? c.accentSoft : c.ground,
         borderRadius: "var(--w-r-sm)",
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.6 : 1,
         minWidth: 0,
       }}
     >
@@ -115,6 +119,7 @@ export function Choice({
         name={name}
         value={value}
         checked={checked}
+        disabled={disabled}
         onChange={onSelect}
         style={{ margin: "3px 0 0" }}
       />

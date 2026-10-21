@@ -131,21 +131,44 @@ export interface RoomIdentity {
 
 type Visibility = "open" | "attributed" | "private";
 
-const VISIBILITY: { value: Visibility; title: string; detail: string }[] = [
-  {
-    value: "private",
-    title: "Private",
-    detail: "The host cannot see who the members are. The right default unless you have a reason.",
-  },
+const VISIBILITY: { value: Visibility; title: string; detail: string; served: boolean }[] = [
   {
     value: "attributed",
     title: "Attributed",
-    detail: "The host sees which member wrote each record.",
+    detail: "Records are encrypted; the host sees which member wrote each one, never what it says.",
+    served: true,
   },
   {
     value: "open",
     title: "Open",
     detail: "The host stores records in the clear and can read all of them.",
+    served: true,
+  },
+  {
+    // Shown so the choice is known to exist. A host stores a private room but refuses
+    // every request on it until the zero-knowledge profile its members' proofs need is
+    // specified — so creating one makes a room nobody can use.
+    value: "private",
+    title: "Private — not available yet",
+    detail:
+      "The host would not see who the members are. No host serves it yet: the unlinkable proof it needs is still being specified.",
+    served: false,
+  },
+];
+
+type RetentionPolicy = "chained" | "fromJoin";
+
+const RETENTION: { value: RetentionPolicy; title: string; detail: string }[] = [
+  {
+    value: "chained",
+    title: "Members read the whole history",
+    detail: "Someone who joins later can read what was written before they joined. What a shared library wants.",
+  },
+  {
+    value: "fromJoin",
+    title: "Members read from when they joined",
+    detail:
+      "Earlier records stay closed to anyone who joins later, and a member cannot reread them on a new device. Fixed for the room's life.",
   },
 ];
 
@@ -287,7 +310,8 @@ export function CreateRoom({
   const [typeKey, setTypeKey] = useState(false);
 
   // ── Step 4: what the host sees ──
-  const [visibility, setVisibility] = useState<Visibility>("private");
+  const [visibility, setVisibility] = useState<Visibility>("attributed");
+  const [retentionPolicy, setRetentionPolicy] = useState<RetentionPolicy>("chained");
   const [retentionDays, setRetentionDays] = useState("");
 
   const [servers, setServers] = useState<WebvhServerRecord[] | null>(null);
@@ -457,7 +481,7 @@ export function CreateRoom({
   const hostMissing =
     hostStepMissing ??
     (hostHasNoHttps
-      ? "Step 2: this host publishes no HTTPS endpoint, and your agent can register a room with a host only over HTTPS."
+      ? "Step 2: this host publishes no HTTPS endpoint, so members' wallets could not move the room's files to it."
       : null);
 
   const missing =
@@ -482,7 +506,7 @@ export function CreateRoom({
   const hostMintMissing = !hostServer
     ? "Choose a hosting server to publish the host's DID through."
     : !hostUrl.trim()
-      ? "The host needs a URL: your agent reaches hosts over REST only."
+      ? "The host needs a URL: members' wallets move room files to it over HTTPS."
       : !hostMediator.trim()
         ? "Choose a mediator for the host's DID to publish."
         : hostPathProblem;
@@ -588,20 +612,24 @@ export function CreateRoom({
     }
 
     // ── Then tell the host ──
+    let registeredHost: string | undefined;
     const ok = await runMutation(
       async () => {
         // Through the agent, not straight at the host: this console's bridge
         // addresses every task to the wallet's own VTA, and
         // `rooms/owner/register` is the registration asked of the party that
         // can make the call.
-        await roomsOwnerRegister(managerSender, {
+        const reply = await roomsOwnerRegister(managerSender, {
           ...parties,
           roomId: room!.did,
           host: hostDid,
           ownerDid: parties.holder.did,
           visibility,
+          retentionPolicy,
           ...(retention ? { retentionDays: Number(retention) } : {}),
         });
+        // The host the agent actually reached, which is the one to record.
+        registeredHost = reply.host;
       },
       { onConsent: setPending, onError: setError },
     );
@@ -615,11 +643,11 @@ export function CreateRoom({
       // A name is one room's; kept, the next room would ask for a taken path.
       setRoomPath(SERVER_CHOOSES);
       setListsVersion((v) => v + 1);
-      onCreated({ roomId: room!.did, host: hostDid, signingKeyId: room!.signingKeyId });
+      onCreated({ roomId: room!.did, host: registeredHost ?? hostDid, signingKeyId: room!.signingKeyId });
     }
   }, [
     parties, identity, contextId, serverId, roomPath, roomTsp, mediatorDid, hostDid, visibility, retention,
-    onCreated,
+    retentionPolicy, onCreated,
   ]);
 
   const serverName = (id: string) => servers?.find((x) => x.id === id)?.label ?? id;
@@ -640,6 +668,7 @@ export function CreateRoom({
   const hostGroup = useId();
   const identityGroup = useId();
   const visibilityGroup = useId();
+  const retentionGroup = useId();
 
   const roomListed = roomChoices.some((d) => d.did === existing.did);
   const pickingRoom = !pasteRoom && !didsError && (existing.did === "" || roomListed);
@@ -739,7 +768,8 @@ export function CreateRoom({
               onSelect={() => setHostChoice("paste")}
               title="A host run outside this agent"
             >
-              Paste its DID. It must publish a URL — your agent reaches hosts over REST only.
+              Paste its DID — a community you belong to hosts its members&apos; rooms. It must publish
+              an HTTPS URL, which members&apos; wallets move files through.
             </Choice>
           </div>
 
@@ -826,8 +856,9 @@ export function CreateRoom({
               <p style={{ margin: 0, fontSize: t.sm, color: c.muted, lineHeight: 1.55, maxWidth: "82ch" }}>
                 Your agent mints the host&apos;s DID from the <code>room-host</code> template as this
                 context&apos;s own DID — the identity room-host serves as once enrolled. It publishes
-                two ways in. <strong>The URL is what your agent uses, and it is required</strong>: your
-                agent calls hosts over REST only. The mediator is for members — a host started with{" "}
+                two ways in. <strong>The URL is required</strong>: members&apos; wallets move room files to
+                the host over HTTPS, and it becomes the DID&apos;s <code>TrustTaskHTTPS</code> service.
+                The mediator is where agents — members&apos; own and yours — reach it: a host started with{" "}
                 <code>--mediator-did</code> answers DIDComm and TSP there. The DID advertises it for
                 DIDComm, and for TSP too if you tick the box below.
               </p>
@@ -932,13 +963,12 @@ export function CreateRoom({
           )}
           {hostHasNoHttps && (
             <Note tone="danger">
-              <strong>This host cannot be registered with yet.</strong> Its DID document publishes no
-              Trust-Task HTTPS endpoint, and your agent can tell a host about a room only over HTTPS today —
-              it has no outbound TSP or DIDComm to a room host, and those would authenticate it as the agent
-              rather than as the room's owner anyway. Creating the room here would mint its identity and then
-              fail to register it. Choose a host whose DID document carries an HTTPS URL — one minted here
-              with a <strong>Host URL</strong> does — or, for a host someone else runs, ask its operator to
-              publish one.
+              <strong>This DID cannot host rooms here.</strong> Its DID document publishes no Trust-Task
+              HTTPS endpoint, so members&apos; wallets would have nowhere to send the room&apos;s files. If it
+              is your own identity rather than a room host you run, use a host that already serves rooms:
+              choose <strong>A host run outside this agent</strong> and paste the DID of a community you
+              belong to, which hosts its members&apos; rooms. Or run a room host of your own —{" "}
+              <strong>Mint a new host DID</strong> with a <strong>Host URL</strong>.
             </Note>
           )}
         </Step>
@@ -1117,7 +1147,7 @@ export function CreateRoom({
           locked={roomLock}
           last
           why="Visibility is fixed per room and decides what the host learns while serving it.
-            Private is the right answer unless the room's contents are meant to be public to its host."
+            Attributed is the right answer unless the room's contents are meant to be public to its host."
         >
           <div style={choices}>
             {VISIBILITY.map((v) => (
@@ -1128,8 +1158,23 @@ export function CreateRoom({
                 checked={visibility === v.value}
                 onSelect={() => setVisibility(v.value)}
                 title={v.title}
+                disabled={!v.served}
               >
                 {v.detail}
+              </Choice>
+            ))}
+          </div>
+          <div style={choices}>
+            {RETENTION.map((r) => (
+              <Choice
+                key={r.value}
+                name={retentionGroup}
+                value={r.value}
+                checked={retentionPolicy === r.value}
+                onSelect={() => setRetentionPolicy(r.value)}
+                title={r.title}
+              >
+                {r.detail}
               </Choice>
             ))}
           </div>

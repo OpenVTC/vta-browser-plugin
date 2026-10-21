@@ -41,7 +41,7 @@ import { TYPE_URI as WEBVH_AGENT_NAME_ENABLE } from "@openvtc/trust-tasks/vta/we
 import { TYPE_URI as WEBVH_SERVERS_DOMAINS } from "@openvtc/trust-tasks/vta/webvh/servers/domains/0.1/payload";
 import { TYPE_URI as WEBVH_SERVERS_RECONCILE } from "@openvtc/trust-tasks/vta/webvh/servers/reconcile/0.1/payload";
 import { TYPE_URI as WEBVH_SERVERS_RETIRE_ORPHAN } from "@openvtc/trust-tasks/vta/webvh/servers/retire-orphan/0.1/payload";
-import { TYPE_URI as ROOMS_OWNER_REGISTER } from "@openvtc/trust-tasks/rooms/owner/register/0.1/payload";
+import { TYPE_URI as ROOMS_OWNER_REGISTER } from "@openvtc/trust-tasks/rooms/owner/register/0.2/payload";
 import { TYPE_URI as ROOMS_KEYS_BACKFILL } from "@openvtc/trust-tasks/rooms/keys/backfill/0.1/payload";
 import { TYPE_URI as ROOMS_KEYS_READ } from "@openvtc/trust-tasks/rooms/keys/read/0.1/payload";
 import { TYPE_URI as ROOMS_KEYS_BROWSE } from "@openvtc/trust-tasks/rooms/keys/browse/0.1/payload";
