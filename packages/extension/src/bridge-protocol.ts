@@ -41,7 +41,8 @@ export type BridgeMethod =
   | "attestApprover"
   | "approveDecision"
   | "rooms"
-  | "directory";
+  | "directory"
+  | "git";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2).
  *  @deprecated Legacy sign-in (sign-in contract C7); kept working. New pages
@@ -2633,6 +2634,47 @@ export type RuntimeDirectoryPageResponse =
   | { ok: true; result: PagePublishedCardView }
   | { ok: false; error: string };
 
+// ─── A member's forge account for a page: `window.vtaWallet.git` ────────────
+//
+// `git-ns/account/link/0.1` and `git-ns/account/unlink/0.1`. A portal sign-in
+// key may not sign either (`auth/oob/grant/0.2` consumer item 6), so the page
+// asks and the wallet signs as the member, after asking them. As with the
+// directory, the background refuses unless the page's browser-attested origin
+// is the origin of `hostDid`'s `SignInPortal` (`git-page.ts`).
+
+/** page → background, through the content script: one git operation. */
+export const RUNTIME_GIT_PAGE = "vta-wallet/git-page" as const;
+
+/** `member` is the DID the page says is signed in: a hint that picks among the
+ *  identities the wallet holds for this community, never adds one. */
+export type GitPageOp =
+  | { op: "linkAccount"; hostDid: string; forge: string; member?: string }
+  | { op: "unlinkAccount"; hostDid: string; forge: string; accountId?: string; member?: string };
+
+export interface RuntimeGitPageRequest {
+  type: typeof RUNTIME_GIT_PAGE;
+  /** Overwritten by the background with the browser-attested origin. */
+  origin: string;
+  params: GitPageOp;
+}
+
+/** A link the wallet began: what the page follows it by. Where to authorise it,
+ *  and any device code, stay in the wallet's window. */
+export interface PageGitLinkView {
+  linkId: string;
+  expiresAt: string;
+}
+
+/** The account the wallet unlinked. */
+export interface PageGitUnlinkView {
+  unlinked: { forge: string; id: string; login: string };
+  unlinkedAt: string;
+}
+
+export type RuntimeGitPageResponse =
+  | { ok: true; result: PageGitLinkView | PageGitUnlinkView }
+  | { ok: false; error: string };
+
 export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
@@ -2653,6 +2695,7 @@ export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_APPROVE_DECISION,
   RUNTIME_ROOMS_PAGE,
   RUNTIME_DIRECTORY_PAGE,
+  RUNTIME_GIT_PAGE,
   // Not a provider method: the content script's own click listener sends it
   // (`trigger-link-click.ts`). Listed so the background takes the activation
   // origin from the browser, never from the body (VTI-LNK-056).
@@ -3164,6 +3207,31 @@ export interface OffscreenDirectoryPageRequest {
 }
 
 export type OffscreenDirectoryPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
+
+/** background → offscreen: the git work behind a page's call, after the
+ *  background checked the page is the community's portal and the person
+ *  approved. */
+export const OFFSCREEN_GIT_PAGE = "offscreen/git-page" as const;
+
+export type OffscreenGitPageOp =
+  /** The community's portal origin and Trust-Task endpoint, from its verified DID document. */
+  | { op: "portal"; hostDid: string }
+  /** The identities the member signs in with at this community, with its name. */
+  | { op: "members"; hostDid: string }
+  /** Sign `git-ns/account/link` as the member and send it. */
+  | { op: "link"; hostDid: string; member: string; forge: string }
+  /** Sign `git-ns/account/unlink` as the member and send it. */
+  | { op: "unlink"; hostDid: string; member: string; forge: string; accountId?: string };
+
+export interface OffscreenGitPageRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_GIT_PAGE;
+  vtaDid: string;
+  restBaseUrl?: string;
+  params: OffscreenGitPageOp;
+}
+
+export type OffscreenGitPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
 
 /**
  * Port name for one room write from the console — a file transfer, a note, or a

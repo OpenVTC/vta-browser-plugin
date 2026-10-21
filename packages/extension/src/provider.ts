@@ -32,6 +32,9 @@ import type {
   WalletProfileResult,
   RoomsPageOp,
   DirectoryPageOp,
+  GitPageOp,
+  PageGitLinkView,
+  PageGitUnlinkView,
   PagePublishedCardView,
   PageRoomView,
   PageRoomInfoView,
@@ -198,6 +201,22 @@ interface VtaWallet {
    *  only if they agree; the page gets where the card stands, never the card
    *  or a signature. */
   directory: VtaWalletDirectory;
+  /** The member's forge accounts at the community, for its own portal
+   *  (`git-ns/account/{link,unlink}`). Refused unless this page's origin is the
+   *  `SignInPortal` of `hostDid`'s DID document. The wallet asks the member,
+   *  signs as them, and for a link opens the forge's page and shows any code in
+   *  its own window; the page gets the link's id to follow it, never the code. */
+  git: VtaWalletGit;
+}
+
+/** `window.vtaWallet.git`. */
+export interface VtaWalletGit {
+  /** Begin linking the member's account on `forge`. Follow it with
+   *  `git-ns/account/link-status` by the returned `linkId`. */
+  linkAccount(p: { hostDid: string; forge: string; member?: string }): Promise<PageGitLinkView>;
+  /** Unlink the member's account on `forge`; `accountId` is the account as the
+   *  page last read it, so a re-link since is never removed. */
+  unlinkAccount(p: { hostDid: string; forge: string; accountId?: string; member?: string }): Promise<PageGitUnlinkView>;
 }
 
 /** `window.vtaWallet.directory`. */
@@ -362,6 +381,7 @@ function call<T>(
     | ApproveDecisionParams
     | RoomsPageOp
     | DirectoryPageOp
+    | GitPageOp
     | Record<string, never>,
 ): Promise<T> {
   const id = crypto.randomUUID();
@@ -557,6 +577,23 @@ if (!window.vtaWallet) {
         call<PagePublishedCardView>("directory", {
           op: "publishCard",
           hostDid: p.hostDid,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+        }),
+    },
+    git: {
+      linkAccount: (p) =>
+        call<PageGitLinkView>("git", {
+          op: "linkAccount",
+          hostDid: p.hostDid,
+          forge: p.forge,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+        }),
+      unlinkAccount: (p) =>
+        call<PageGitUnlinkView>("git", {
+          op: "unlinkAccount",
+          hostDid: p.hostDid,
+          forge: p.forge,
+          ...(p.accountId !== undefined ? { accountId: p.accountId } : {}),
           ...(p.member !== undefined ? { member: p.member } : {}),
         }),
     },
