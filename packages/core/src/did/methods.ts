@@ -9,16 +9,22 @@
 // it to the parser, to `allowsContact` and to resolution, so all three ask the
 // same table.
 //
-// Only `did:webvh` and `did:web` are registered, both host-named (route A).
-// A domain-linked method (`did:scid`, a ledger DID) is added by registering a
-// policy with `route: "domain-linked"` and a resolver; the flow then confirms
-// the portal's DIF DID Configuration after the person continues
-// (`vtc/domain-linkage.ts`) without any change to it.
+// `did:webvh`, `did:web` and `did:scid` (a `did:scid:vh:1` DID URL with
+// `src`) are registered, all host-named (route A). A domain-linked method (a
+// ledger DID) is added by registering a policy with `route: "domain-linked"`
+// and a resolver; the flow then confirms the portal's DIF DID Configuration
+// after the person continues (`vtc/domain-linkage.ts`) without any change to
+// it.
+//
+// A did:scid contact is a DID URL — `did:scid:vh:1:<scid>?src=…` — but its
+// identity, and its document's `id`, is the bare DID (VTI-KEY-160, 161): the
+// document checks below compare against the identity, not the text.
 
-import { resolve as vtiResolve } from "@openvtc/vti-didcomm-js";
+import { resolve as vtiResolve, stripScidSrc } from "@openvtc/vti-didcomm-js";
 
 import {
   BUILTIN_CONTACT_POLICIES,
+  SCID_CONTACT_POLICY,
   WEBVH_CONTACT_POLICY,
   WEB_CONTACT_POLICY,
   meetsHostRules,
@@ -27,7 +33,7 @@ import {
   type ContactMethodTable,
   type ContactRoute,
 } from "../links/trigger-link.js";
-import { assertResolvableWebvhHost } from "./egress-guard.js";
+import { assertResolvableScidHost, assertResolvableWebvhHost } from "./egress-guard.js";
 import type { ResolveDidOptions } from "./verify.js";
 
 /** A verified DID document, or why there is none. */
@@ -40,7 +46,8 @@ export interface ContactMethod extends ContactMethodPolicy {
   /**
    * Resolve `did` and verify its document (VTI-LNK-052). Called only for a
    * DID of this method, and — for a host-named method — only once the host it
-   * names meets the host rules. Must return a document whose `id` is `did`;
+   * names meets the host rules. Must return a document whose `id` is `did`'s
+   * identity (for a did:scid DID URL, the bare DID);
    * may throw, which counts as `did-document-unverified`. `opts.resolveDid`,
    * when given, is the resolver to use (tests inject one).
    */
@@ -67,7 +74,7 @@ export async function resolveThroughResolver(did: string, opts: ResolveDidOption
   };
   if (res?.didResolutionMetadata?.error) return { ok: false, reason: "did-document-unverified" };
   const doc = res?.didDocument;
-  if (!doc || doc.id !== did) return { ok: false, reason: "did-document-unverified" };
+  if (!doc || doc.id !== didIdentity(did)) return { ok: false, reason: "did-document-unverified" };
   return { ok: true, doc };
 }
 
@@ -80,6 +87,24 @@ export const WEBVH_CONTACT_METHOD: ContactMethod = {
     return resolveThroughResolver(did, opts);
   },
 };
+
+/** `did:scid:vh:1` with `src`, route A. The `src` host is judged like a
+ *  did:webvh host before anything is fetched; the resolver verifies the
+ *  did:webvh log it names and returns the did:scid's own document. */
+export const SCID_CONTACT_METHOD: ContactMethod = {
+  ...SCID_CONTACT_POLICY,
+  resolve: async (did, opts) => {
+    assertResolvableScidHost(did);
+    return resolveThroughResolver(did, opts);
+  },
+};
+
+/** The identity of a DID or DID URL: a did:scid without its `src` locator
+ *  (VTI-KEY-160); any other DID as written. Compare identities with this,
+ *  never the text a contact or proof arrived as. */
+export function didIdentity(did: string): string {
+  return stripScidSrc(did);
+}
 
 /** `did:web`, route A. */
 export const WEB_CONTACT_METHOD: ContactMethod = {
@@ -125,7 +150,10 @@ export class ContactMethodRegistry implements ContactMethodTable {
   /** The route a contact `did` qualifies by, or `undefined`. */
   routeOf(did: string): ContactRoute | undefined {
     const m = this.methodOf(did);
-    return m?.route !== undefined && m.listsServices && m.verified && m.resolve ? m.route : undefined;
+    if (m?.route === undefined || !m.listsServices || !m.verified || !m.resolve) return undefined;
+    // A host-named contact that names no host (a bare did:scid) has no route.
+    if (m.route === "host-named" && m.hostPath && m.hostPath(did) === undefined) return undefined;
+    return m.route;
   }
 
   /** The registered kinds, in registration order. */
@@ -134,13 +162,14 @@ export class ContactMethodRegistry implements ContactMethodTable {
   }
 }
 
-/** A fresh registry holding the built-in methods: `did:webvh` and `did:web`
- *  (route A, with resolvers), and the policies of `did:key` and `did:peer`,
+/** A fresh registry holding the built-in methods: `did:webvh`, `did:web` and
+ *  `did:scid` (route A, with resolvers), and the policies of `did:key` and `did:peer`,
  *  which no route qualifies. */
 export function defaultContactMethods(): ContactMethodRegistry {
   const resolvers: ReadonlyMap<string, ContactMethod> = new Map([
     [WEBVH_CONTACT_METHOD.kind, WEBVH_CONTACT_METHOD],
     [WEB_CONTACT_METHOD.kind, WEB_CONTACT_METHOD],
+    [SCID_CONTACT_METHOD.kind, SCID_CONTACT_METHOD],
   ]);
   return new ContactMethodRegistry(BUILTIN_CONTACT_POLICIES.map((p) => resolvers.get(p.kind) ?? p));
 }
@@ -177,7 +206,7 @@ export async function resolveContactDocument(did: string, opts: ResolveContactOp
   }
   try {
     const res = await method.resolve(did, opts.resolveDid ? { resolveDid: opts.resolveDid } : {});
-    if (!res.ok || res.doc.id !== did) return unverified;
+    if (!res.ok || res.doc.id !== didIdentity(did)) return unverified;
     return { ok: true, doc: res.doc, route };
   } catch {
     return unverified;

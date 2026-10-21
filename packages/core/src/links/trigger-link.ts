@@ -141,7 +141,10 @@ export const FLOW_REGISTRY_BASE = "https://link.trustoverip.org/vti/flow/";
 // `SignInPortal`:
 //
 //   - **host-named** (route A): the DID names the host that serves its
-//     document (`did:webvh`, `did:web`). Nothing more is checked.
+//     document (`did:webvh`, `did:web`, and a `did:scid:vh:1` DID URL whose
+//     `src` names it). Nothing more is checked. A contact of a host-named
+//     method that names no host — a bare `did:scid` — has no route and is
+//     `from-not-allowed`.
 //   - **domain-linked** (route B): any other method. After the person
 //     continues and before the claim, the reader confirms the portal origin is
 //     linked to the DID by the DIF Well-Known DID Configuration
@@ -173,8 +176,12 @@ export interface ContactMethodPolicy {
   verified: boolean;
   /** Method-specific syntax, beyond DID syntax. `false` is `bad-from`. */
   wellFormed?: (did: string) => boolean;
+  /** Whether this reader can use this particular DID of the method (a
+   *  `did:scid` format it resolves). `false` is `unsupported-vid`. */
+  supports?: (did: string) => boolean;
   /** For a host-named method: the host serving the document, then the path,
-   *  each percent-decoded once (VTI-LNK-050). */
+   *  each percent-decoded once (VTI-LNK-050). `undefined` for a contact that
+   *  names no host, which no route can then qualify. */
   hostPath?: (did: string) => string[] | undefined;
 }
 
@@ -216,6 +223,54 @@ export const WEB_CONTACT_POLICY: ContactMethodPolicy = {
   hostPath: (did) => decodeSegments(did.split(":").slice(2)),
 };
 
+/**
+ * The `src` of a `did:scid` DID URL whose only query parameter is `src`
+ * (`did:scid:vh:1:<scid>?src=dids.example.org/farm-auth`), or `undefined`.
+ * Mirrors `scidSrc` in `@openvtc/vti-didcomm-js`, inlined because this module
+ * imports nothing.
+ */
+function scidSrcOf(did: string): string | undefined {
+  if (!did.startsWith("did:scid:")) return undefined;
+  const q = did.indexOf("?");
+  if (q < 0) return undefined;
+  const query = did.slice(q + 1).split("#")[0]!;
+  if (!query.startsWith("src=")) return undefined;
+  const src = query.slice(4);
+  return src && !src.includes("&") ? src : undefined;
+}
+
+/**
+ * The identity a contact names: for a `did:scid` DID URL, the bare
+ * `did:scid:vh:1:<scid>` without its `src` locator (VTI-KEY-160); anything
+ * else as written. The flow records and addresses the contact by this, and
+ * resolves it through {@link TriggerLinkContact.value}.
+ */
+export function contactIdentity(contact: TriggerLinkContact): string {
+  return scidSrcOf(contact.value) === undefined ? contact.value : contact.value.slice(0, contact.value.indexOf("?"));
+}
+
+/**
+ * `did:scid:vh:1:<scid>?src=<host>[/<path>]`. Route A: the `src` names the host
+ * the did:webvh log is fetched from (VTI-LNK-119). A bare `did:scid`, or one
+ * with no `src`, names no host, so no route qualifies it: `from-not-allowed`.
+ * Only the `vh:1` format is supported; another is `unsupported-vid`.
+ */
+export const SCID_CONTACT_POLICY: ContactMethodPolicy = {
+  kind: "did:scid",
+  route: "host-named",
+  listsServices: true,
+  verified: true,
+  wellFormed: (did) => /^did:scid:[a-z0-9]+:[0-9]+:[A-Za-z0-9._-]+(?:\?src=[^?#&]+)?$/.test(did),
+  supports: (did) => did.startsWith("did:scid:vh:1:"),
+  hostPath: (did) => {
+    const src = scidSrcOf(did);
+    if (src === undefined) return undefined;
+    const stripped = src.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    const segments = stripped.split("/");
+    return segments.some((seg) => seg === "") ? undefined : decodeSegments(segments);
+  },
+};
+
 /** Self-certifying, and named after no host: no domain to show, and its
  *  document lists no services. No route. */
 export const KEY_CONTACT_POLICY: ContactMethodPolicy = {
@@ -234,11 +289,12 @@ export const PEER_CONTACT_POLICY: ContactMethodPolicy = {
 };
 
 /** The contact methods this reader classifies before any registry is
- *  consulted: route A for `did:webvh` and `did:web`, and the two methods it
- *  knows can never qualify. */
+ *  consulted: route A for `did:webvh`, `did:web` and `did:scid` (with `src`),
+ *  and the two methods it knows can never qualify. */
 export const BUILTIN_CONTACT_POLICIES: readonly ContactMethodPolicy[] = [
   WEBVH_CONTACT_POLICY,
   WEB_CONTACT_POLICY,
+  SCID_CONTACT_POLICY,
   KEY_CONTACT_POLICY,
   PEER_CONTACT_POLICY,
 ];
@@ -283,7 +339,10 @@ export function contactRoute(
   methods: ContactMethodTable = DEFAULT_CONTACT_METHODS,
 ): ContactRoute | undefined {
   const p = methods.policyFor(contact.kind);
-  return p?.route !== undefined && p.listsServices && p.verified ? p.route : undefined;
+  if (p?.route === undefined || !p.listsServices || !p.verified) return undefined;
+  // A host-named contact that names no host (a bare did:scid) has no route.
+  if (p.route === "host-named" && p.hostPath && p.hostPath(contact.value) === undefined) return undefined;
+  return p.route;
 }
 
 /**
@@ -591,6 +650,16 @@ function parseEpochSeconds(value: string): number | undefined {
 /** DID syntax (DID Core §3.1), DID only — no path, query or fragment. */
 const DID_SYNTAX = /^did:[a-z0-9]+:(?:(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})*:)*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})+$/;
 
+/** A `did:scid` contact may be a DID URL whose only query is `src`
+ *  (VTI-KEY-163): the DID before it must be a DID, and `src` a host and path. */
+const SCID_SRC_SYNTAX = /^[A-Za-z0-9._~:%/-]+$/;
+
+function isContactDidSyntax(value: string): boolean {
+  const src = scidSrcOf(value);
+  if (src === undefined) return DID_SYNTAX.test(value);
+  return DID_SYNTAX.test(value.slice(0, value.indexOf("?"))) && !value.includes("#") && SCID_SRC_SYNTAX.test(src);
+}
+
 /**
  * VTI-LNK-020 step 6, VTI-LNK-030 to 032. Empty is `bad-from`. A value
  * containing `/@` is an agent name, reserved and refused as `unsupported-vid`
@@ -609,13 +678,14 @@ function classifyContact(
   if (value.length === 0) return "bad-from";
   if (value.includes("/@")) return "unsupported-vid";
   if (value.startsWith("did:")) {
-    if (!DID_SYNTAX.test(value)) return "bad-from";
+    if (!isContactDidSyntax(value)) return "bad-from";
     const kind: ContactKind = `did:${value.slice(4, value.indexOf(":", 4))}`;
     const policy = methods.policyFor(kind);
     // A method the reader has no policy for, or one with a route but no
     // resolver, is one it cannot use (VTI-LNK-031).
     if (!policy || (policy.route !== undefined && !policy.verified)) return "unsupported-vid";
     if (policy.wellFormed && !policy.wellFormed(value)) return "bad-from";
+    if (policy.supports && !policy.supports(value)) return "unsupported-vid";
     return { kind, value };
   }
   return "unsupported-vid";

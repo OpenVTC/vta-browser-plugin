@@ -11,7 +11,7 @@
 // resolves to.
 
 import { ed25519 } from "@noble/curves/ed25519.js";
-import { didKey, multibase } from "@openvtc/vti-didcomm-js";
+import { didKey, multibase, sameReference, stripScidSrc } from "@openvtc/vti-didcomm-js";
 import { resolveDidDocument } from "../didcomm/index.js";
 import { base58btcDecode, jcsCanonicalize, sha256 } from "./canonical.js";
 
@@ -79,14 +79,18 @@ export async function verifyTrustTaskProof(
     return { verified: false, reason: "missing/invalid proofValue (expected multibase 'z')" };
   }
 
+  // Resolved through the DID URL the proof names — for a did:scid, with the
+  // `src` a verifier that has not seen it needs — and attributed to its
+  // identity, the DID without that `src` (VTI-KEY-163).
   const controller = vm.slice(0, vm.indexOf("#"));
+  const signer = stripScidSrc(controller);
 
   let publicKey: Uint8Array;
   let didDocument: Record<string, unknown>;
   try {
     ({ key: publicKey, doc: didDocument } = await resolveEd25519Key(vm, controller, opts.resolveDid));
   } catch (e) {
-    return { verified: false, signer: controller, reason: `verificationMethod resolution failed: ${e instanceof Error ? e.message : String(e)}` };
+    return { verified: false, signer, reason: `verificationMethod resolution failed: ${e instanceof Error ? e.message : String(e)}` };
   }
   // The resolver finds a key under any relationship, so the relationship the
   // proof claims is checked here: the VTA, the VTC and the did-hosting RP check
@@ -94,7 +98,7 @@ export async function verifyTrustTaskProof(
   if (opts.expectedProofPurpose && !listsMethodUnder(didDocument, vm, opts.expectedProofPurpose)) {
     return {
       verified: false,
-      signer: controller,
+      signer,
       reason: `${vm} is not listed under ${opts.expectedProofPurpose} in the DID document of ${controller}`,
     };
   }
@@ -114,13 +118,13 @@ export async function verifyTrustTaskProof(
 
   const sig = base58btcDecode(proof.proofValue.slice(1));
   if (sig.length !== 64) {
-    return { verified: false, signer: controller, reason: `unexpected signature length: ${sig.length}` };
+    return { verified: false, signer, reason: `unexpected signature length: ${sig.length}` };
   }
 
   const verified = ed25519.verify(sig, toVerify, publicKey);
   return verified
-    ? { verified: true, signer: controller }
-    : { verified: false, signer: controller, reason: "signature verification failed" };
+    ? { verified: true, signer }
+    : { verified: false, signer, reason: "signature verification failed" };
 }
 
 /**
@@ -135,7 +139,7 @@ export function listsMethodUnder(
   const hash = vm.indexOf("#");
   const fragment = hash >= 0 ? vm.slice(hash) : undefined;
   const names = (id: unknown): boolean =>
-    typeof id === "string" && (id === vm || (fragment !== undefined && id === fragment));
+    typeof id === "string" && (sameReference(id, vm) || (fragment !== undefined && id === fragment));
   const entries = doc[relationship];
   if (!Array.isArray(entries)) return false;
   return entries.some((entry) =>
@@ -157,7 +161,8 @@ async function resolveEd25519Key(
     : await (resolveDid ?? resolveDidDocument)(controller);
 
   const methods = (doc.verificationMethod as { id: string; publicKeyMultibase?: string }[] | undefined) ?? [];
-  const method = methods.find((m) => m.id === vm) ?? methods.find((m) => m.id.endsWith(vm.slice(vm.indexOf("#"))));
+  const method =
+    methods.find((m) => sameReference(m.id, vm)) ?? methods.find((m) => m.id.endsWith(vm.slice(vm.indexOf("#"))));
   if (!method?.publicKeyMultibase) {
     throw new Error(`verificationMethod ${vm} not found or missing publicKeyMultibase`);
   }

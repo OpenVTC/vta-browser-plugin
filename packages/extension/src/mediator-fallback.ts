@@ -99,8 +99,11 @@ export function fallbackNotification(agent: string): { title: string; message: s
 }
 
 /** A short name for an agent a person can recognise: `host/path` for a
- *  `did:webvh` (its SCID means nothing to anyone), the DID otherwise. */
+ *  `did:webvh` (its SCID means nothing to anyone) or a did:scid DID URL (the
+ *  host and path its `src` names), the DID otherwise. */
 export function agentLabel(did: string): string {
+  const src = scidSrcLabel(did);
+  if (src) return src;
   const parts = did.split(":");
   if (parts[0] === "did" && parts[1] === "webvh" && parts.length >= 4) {
     return parts.slice(3).map(decodeURIComponent).join("/");
@@ -137,4 +140,16 @@ export function withExpiredFallbackDropped(
   const out: TransportHealth = { ...health };
   for (const t of sittingOutTransports(health)) delete out[t];
   return out;
+}
+
+/** `host/path` from a did:scid DID URL's `src`, or undefined. */
+export function scidSrcLabel(did: string): string | undefined {
+  const match = /^did:scid:[a-z0-9]+:[0-9]+:[^?#]+\?src=([^?#&]+)$/.exec(did);
+  if (!match) return undefined;
+  const src = match[1]!.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  try {
+    return decodeURIComponent(src) || undefined;
+  } catch {
+    return src || undefined;
+  }
 }
