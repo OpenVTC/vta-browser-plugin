@@ -40,7 +40,7 @@ import { base64url } from "@openvtc/vti-didcomm-js";
 
 import { generateSigningIdentity, type SigningIdentity } from "../siop/self-issued.js";
 import type { TrustTaskSender } from "../vta/channel.js";
-import { roomsKeysOpenAt, sealedAt } from "./index.js";
+import { roomsKeysOpenAt, roomsKeysRead, sealedAt } from "./index.js";
 import {
   actAndSend,
   roomInfoAsMember,
@@ -150,6 +150,54 @@ export interface RoomFileProgress {
   /** Chunks done and in all, while uploading or downloading. */
   done?: number;
   total?: number;
+}
+
+/**
+ * Whether `rooms/keys/{open,file-key}` refused for an epoch the member's agent
+ * can repair from the host: `notDelivered` (it missed a commit) or
+ * `beyondChain` (the record predates the member). Read from the declared code
+ * and `details.reason` (0.2), never the message; `removed` is never repairable.
+ */
+function repairableEpoch(e: unknown): boolean {
+  const payload = (e as { details?: unknown } | null)?.details as
+    | { code?: unknown; details?: { reason?: unknown } }
+    | undefined;
+  const code = payload?.code;
+  const reason = payload?.details?.reason;
+  return (
+    typeof code === "string" &&
+    code.endsWith(":unknownEpoch") &&
+    (reason === "notDelivered" || reason === "beyondChain")
+  );
+}
+
+/**
+ * Run `attempt`; if the agent refused it for an epoch it can repair, have the
+ * agent repair it and try once more.
+ *
+ * `open` and `file-key` carry no host, so the agent cannot fetch what it is
+ * missing for them. `rooms/keys/read` names the host and does exactly that
+ * before it answers (rooms/keys/read/0.1, *Opening, and when it cannot*): it
+ * applies the commits the host relays, or fetches the epoch links. So the repair
+ * is one read of the same record; its answer is not needed, only what it did to
+ * the agent's state. The agent stays the one party that repairs. Once only: what
+ * a repair could not fix, the retry reports.
+ */
+async function withEpochRepair<T>(ctx: RoomFileContext, key: string, attempt: () => Promise<T>): Promise<T> {
+  try {
+    return await attempt();
+  } catch (e) {
+    if (!repairableEpoch(e)) throw e;
+    await roomsKeysRead(ctx.vta.sender, {
+      holder: ctx.holder,
+      service: { did: ctx.vta.did },
+      roomId: ctx.roomId,
+      host: ctx.host.did,
+      key,
+      ...(ctx.member !== undefined ? { member: ctx.member } : {}),
+    }).catch(() => undefined);
+    return attempt();
+  }
 }
 
 /** Why a file could not be put or got, in words that name the party at fault. */
@@ -442,14 +490,16 @@ export async function getRoomFile(
   // a record curated before hosts kept that is found by the VTA, which says
   // where it opened.
   const sealed = record.sealed as typeof record.sealed & { version?: number };
-  const { plaintext, sealedAt: openedAt } = await roomsKeysOpenAt(ctx.vta.sender, {
-    ...vta,
-    roomId: ctx.roomId,
-    key,
-    version: sealedAt(sealed, record.version),
-    sealed,
-    ...(ctx.member !== undefined ? { member: ctx.member } : {}),
-  });
+  const { plaintext, sealedAt: openedAt } = await withEpochRepair(ctx, key, () =>
+    roomsKeysOpenAt(ctx.vta.sender, {
+      ...vta,
+      roomId: ctx.roomId,
+      key,
+      version: sealedAt(sealed, record.version),
+      sealed,
+      ...(ctx.member !== undefined ? { member: ctx.member } : {}),
+    }),
+  );
   const verified = await verifyRecordBody(
     base64url.decode(plaintext),
     { roomId: ctx.roomId, key, version: openedAt },
@@ -477,14 +527,16 @@ export async function getRoomFile(
     throw new RoomFileError("hostMisbehaved", `${ctx.host.did} answered a proxied download with no download handle`);
   }
   const blob = started.manifest;
-  const fileKey = await roomsKeysFileKey(ctx.vta.sender, {
-    ...vta,
-    roomId: ctx.roomId,
-    fileId: file.fileId,
-    purpose: "open",
-    epoch: file.epoch,
-    ...(ctx.member !== undefined ? { member: ctx.member } : {}),
-  });
+  const fileKey = await withEpochRepair(ctx, key, () =>
+    roomsKeysFileKey(ctx.vta.sender, {
+      ...vta,
+      roomId: ctx.roomId,
+      fileId: file.fileId,
+      purpose: "open",
+      epoch: file.epoch,
+      ...(ctx.member !== undefined ? { member: ctx.member } : {}),
+    }),
+  );
   // `withKey` checks the host's blob manifest against the author's file
   // manifest — the blob the author named, and the shape their segment size and
   // length give — before any byte is opened under it.

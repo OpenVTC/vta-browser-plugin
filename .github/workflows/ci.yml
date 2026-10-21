@@ -290,7 +290,9 @@ jobs:
         run: |
           offscreen=$(grep -o 'src="/assets/offscreen-[^"]*\.js"' packages/extension/dist/offscreen.html | sed 's|src="/||; s|"$||')
           test -n "$offscreen" || { echo "::error::offscreen.html loads no assets/offscreen-*.js — this guard names a file that no longer exists"; exit 1; }
-          task='rooms/keys/file-key/0.1'
+          # Every version: the slug, not one URI, so a version bump cannot
+          # quietly turn this guard into one that matches nothing.
+          task='rooms/keys/file-key/'
           leaked=$(grep -rlF "$task" packages/extension/dist/ | grep -v -x "packages/extension/dist/$offscreen" || true)
           if [ -n "$leaked" ]; then
             echo "::error::$leaked contains $task — a room file's key is requested only by the offscreen document, never by the console or any page-reachable surface. Check for an import of @openvtc/pnm-core/rooms/files outside room-files-offscreen.ts, or a shared chunk."

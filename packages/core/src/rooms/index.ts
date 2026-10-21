@@ -55,7 +55,7 @@ import {
   RESPONSE_TYPE_URI as KEYS_OPEN_RESPONSE,
   type RoomsKeysOpenPayload,
   type RoomsKeysOpenResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/open/0.1/payload";
+} from "@openvtc/trust-tasks/rooms/keys/open/0.2/payload";
 import {
   TYPE_URI as KEYS_SEAL,
   RESPONSE_TYPE_URI as KEYS_SEAL_RESPONSE,
@@ -372,7 +372,7 @@ export async function roomsKeysOpenAt(
     { holder, service },
     KEYS_OPEN,
     KEYS_OPEN_RESPONSE,
-    "rooms/keys/open/0.1",
+    "rooms/keys/open/0.2",
     {
       ...rest,
       sealed: { ciphertext: sealed.ciphertext, nonce: sealed.nonce, epoch: sealed.epoch },
