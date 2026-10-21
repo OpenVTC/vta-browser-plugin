@@ -262,6 +262,7 @@ test("a purge commits the plan the person was shown, not a fresh preview", () =>
 test("a DID is named by host AND path, so a relay and an agent on one host read differently", () => {
   assert.equal(didLabel("did:webvh:QmA:webvh.storm.ws:mediator"), "webvh.storm.ws/mediator");
   assert.equal(didLabel("did:webvh:QmB:webvh.storm.ws:agents:keyring"), "webvh.storm.ws/agents/keyring");
+  assert.equal(didLabel("did:scid:vh:1:QmC?src=webvh.storm.ws/agents/keyring"), "webvh.storm.ws/agents/keyring");
   assert.equal(didLabel("did:webvh:QmC:localhost%3A8080"), "localhost:8080");
   assert.notEqual(
     didLabel("did:webvh:QmA:webvh.storm.ws:mediator"),

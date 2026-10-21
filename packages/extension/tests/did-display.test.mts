@@ -110,3 +110,28 @@ test("a trailing segment is a path, never promoted to a name", () => {
   assert.deepEqual(parts.map((p) => p.role), ["method", "opaque", "method", "host", "path"]);
   assert.equal(parts.at(-1)?.text, ":glenn-vta");
 });
+
+const SCID = "did:scid:vh:1:QmXa7Rk2ZpLwT9vNc4HbYe1Jd8sMfU3qGo6PtVnEyKiBhW";
+
+test("a did:scid DID URL lifts the host its src names", () => {
+  const did = `${SCID}?src=dids.example.org/farm-auth`;
+  assert.deepEqual(splitDid(did), [
+    { text: "did:scid:vh:1:", role: "method" },
+    { text: "QmXa7Rk2ZpLwT9vNc4HbYe1Jd8sMfU3qGo6PtVnEyKiBhW", role: "opaque" },
+    { text: "?src=", role: "method" },
+    { text: "dids.example.org", role: "host" },
+    { text: "/farm-auth", role: "path" },
+  ]);
+  assert.equal(rejoin(did), did);
+  assert.equal(didHost(did), "dids.example.org");
+  // Collapsing elides the SCID and keeps the host.
+  assert.ok(collapseDid(did).some((p) => p.role === "host" && p.text === "dids.example.org"));
+});
+
+test("a bare did:scid has no host and is left whole", () => {
+  assert.deepEqual(splitDid(SCID), [{ text: SCID, role: "opaque" }]);
+  assert.equal(didHost(SCID), undefined);
+  for (const did of [`${SCID}?src=a.example&x=1`, `${SCID}?versionId=1`]) {
+    assert.deepEqual(splitDid(did), [{ text: did, role: "opaque" }], did);
+  }
+});

@@ -28,9 +28,9 @@
 // path; this file is a parallel surface focused on extracting the
 // VM id rather than just validating resolution.
 
-import { resolve as vtiResolve } from "@openvtc/vti-didcomm-js";
+import { resolve as vtiResolve, scidSrc } from "@openvtc/vti-didcomm-js";
 
-import { assertResolvableWebvhHost } from "./egress-guard.js";
+import { assertResolvableScidHost, assertResolvableWebvhHost } from "./egress-guard.js";
 import { didMethod, type ResolveDidOptions } from "./verify.js";
 
 export interface DeriveSigningKeyIdResult {
@@ -69,11 +69,12 @@ export async function deriveSigningKeyId(
   if (method === "unknown") {
     return { did, candidates: [], error: "Unrecognised DID method" };
   }
-  // did:peer, did:webvh: full resolution. did:peer is offline; webvh
+  // did:peer, did:webvh, did:scid: full resolution. did:peer is offline; webvh
   // hits the network and verifies the log — at a host the DID's author
   // chose, so the host is judged first.
   try {
     if (method === "webvh") assertResolvableWebvhHost(did);
+    if (method === "scid" && scidSrc(did)) assertResolvableScidHost(did);
     const resolve = opts.resolveDid ?? ((d: string) => vtiResolve(d, {}));
     const resolution = (await resolve(did)) as {
       didDocument?: {
