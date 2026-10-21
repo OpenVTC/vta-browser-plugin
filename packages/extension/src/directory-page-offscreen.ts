@@ -15,7 +15,17 @@
 // community's verified DID document. Nothing the agent returns is sent on
 // unless it is exactly what was asked for, with a proof added.
 
-import { CONTACT_METHODS, vaultSignTrustTask, type TrustTaskSender } from "@openvtc/pnm-core";
+import {
+  CONTACT_METHODS,
+  annotateContact,
+  deleteList,
+  linkContact,
+  listAllAnnotated,
+  listLists,
+  putList,
+  vaultSignTrustTask,
+  type TrustTaskSender,
+} from "@openvtc/pnm-core";
 import {
   OobRefusedError,
   agentSignCard,
@@ -36,7 +46,13 @@ import {
   type OobDocument,
 } from "@openvtc/pnm-core/vtc";
 
-import type { OffscreenDirectoryPageOp, PagePublishedCardView } from "./bridge-protocol.js";
+import type {
+  OffscreenDirectoryPageOp,
+  PageEntryMark,
+  PageMarkList,
+  PageMarksView,
+  PagePublishedCardView,
+} from "./bridge-protocol.js";
 
 /** A `didSelfIssued` vault entry, as much of one as this needs. */
 export interface DirectoryIdentity {
@@ -66,6 +82,9 @@ export interface DirectoryPageDeps {
   /** The member DID's current document, for a DID that is not a `did:key`.
    *  Defaults to resolving and verifying it as a contact DID is. */
   memberDocument?(did: string): Promise<Record<string, unknown> | null>;
+  /** The VTA context the member's identity `did` lives in — where their own
+   *  contacts and marks are kept. */
+  contextOf?(vtaDid: string, restBaseUrl: string | undefined, did: string): Promise<string | null>;
   /** The fetch the community is reached with. */
   fetch?: typeof fetch;
   now?(): number;
@@ -144,6 +163,10 @@ export async function runDirectoryPageOp(
   const entry = entries.find((e) => e.principalDid === op.member);
   if (!entry) throw new Error("The wallet holds no such identity for this community.");
   const name = entry.label?.trim() || "This community";
+  if (op.op === "communityName") return name;
+  if (op.op === "marks" || op.op === "mark" || op.op === "putList" || op.op === "deleteList") {
+    return runMarksOp(deps, vta, op);
+  }
   const verified = await community(op.hostDid);
   const sendOpts = {
     vtcDid: op.hostDid,
@@ -212,5 +235,106 @@ export async function runDirectoryPageOp(
     return view;
   } catch (e) {
     throw refusalWords(e, name);
+  }
+}
+
+// ─── The member's own marks ─────────────────────────────────────────────────
+//
+// Stars, petnames and lists, kept by the member's own agent
+// (`persona/contact/*/1.1`, `persona/contact/lists/*/1.0`). Nothing here talks
+// to the community: every call is to the member's agent, in the context their
+// identity at the community lives in, and only contacts linked to this
+// community's directory are read back.
+
+type MarksOp = Extract<OffscreenDirectoryPageOp, { op: "marks" | "mark" | "putList" | "deleteList" }>;
+
+function listView(l: {
+  listId: string;
+  name: string;
+  colour?: string;
+  order: number;
+  contactCount: number;
+}): PageMarkList {
+  return {
+    listId: l.listId,
+    name: l.name,
+    order: l.order,
+    contactCount: l.contactCount,
+    ...(l.colour ? { colour: l.colour } : {}),
+  };
+}
+
+async function runMarksOp(
+  deps: DirectoryPageDeps,
+  vta: { vtaDid: string; restBaseUrl?: string },
+  op: MarksOp,
+): Promise<PageMarksView | PageEntryMark | PageMarkList | { deleted: boolean }> {
+  const contextId = await (deps.contextOf ?? (async () => null))(vta.vtaDid, vta.restBaseUrl, op.member);
+  if (!contextId) {
+    throw new Error("Your agent doesn't hold the identity you use at this community, so it has nowhere to keep your marks.");
+  }
+  const { sender, holder, service } = await deps.agent(vta.vtaDid, vta.restBaseUrl);
+  const caller = { holder, service, contextId };
+
+  // The contacts linked to this community's directory, by entry. One contact
+  // per entry: the member's own (`knownByPersona` = their identity here) wins
+  // over one another of their personas keeps.
+  const linked = async () => {
+    const all = await listAllAnnotated(sender, { ...caller, directoryVtcDid: op.hostDid });
+    const byEntry = new Map<string, (typeof all)[number]>();
+    for (const c of all) {
+      const entryId = c.directoryRef?.entryId;
+      if (!entryId || c.directoryRef?.vtcDid !== op.hostDid) continue;
+      const held = byEntry.get(entryId);
+      if (!held || (held.knownByPersona !== op.member && c.knownByPersona === op.member)) byEntry.set(entryId, c);
+    }
+    return byEntry;
+  };
+  const markOf = (c: { starred: boolean; petname?: string; lists?: readonly string[] } | undefined): PageEntryMark => ({
+    starred: c?.starred ?? false,
+    ...(c?.petname ? { petname: c.petname } : {}),
+    ...(c?.lists && c.lists.length > 0 ? { lists: [...c.lists] } : {}),
+  });
+
+  switch (op.op) {
+    case "marks": {
+      const [byEntry, lists] = await Promise.all([linked(), listLists(sender, caller)]);
+      const entries: Record<string, PageEntryMark> = {};
+      for (const [entryId, c] of byEntry) entries[entryId] = markOf(c);
+      return { entries, lists: lists.lists.map(listView) };
+    }
+    case "mark": {
+      const change = {
+        ...(op.starred !== undefined ? { starred: op.starred } : {}),
+        ...(op.petname !== undefined ? { petname: op.petname } : {}),
+        ...(op.removePetname ? { removePetname: true as const } : {}),
+        ...(op.lists !== undefined ? { lists: op.lists } : {}),
+      };
+      const held = (await linked()).get(op.entryId);
+      if (held) {
+        await annotateContact(sender, { ...caller, contactId: held.contactId, change });
+      } else {
+        await linkContact(sender, {
+          ...caller,
+          knownByPersona: op.member,
+          directoryRef: { vtcDid: op.hostDid, entryId: op.entryId },
+          change,
+        });
+      }
+      return markOf((await linked()).get(op.entryId));
+    }
+    case "putList": {
+      const res = await putList(sender, {
+        ...caller,
+        ...(op.listId !== undefined ? { listId: op.listId } : {}),
+        ...(op.name !== undefined ? { name: op.name } : {}),
+        ...(op.colour !== undefined ? { colour: op.colour } : {}),
+      });
+      return listView(res.list);
+    }
+    case "deleteList": {
+      const res = await deleteList(sender, { ...caller, listId: op.listId });
+      return { deleted: res.existed };
+    }
   }
 }

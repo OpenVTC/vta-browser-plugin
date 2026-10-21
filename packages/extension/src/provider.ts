@@ -32,6 +32,9 @@ import type {
   WalletProfileResult,
   RoomsPageOp,
   DirectoryPageOp,
+  PageEntryMark,
+  PageMarkList,
+  PageMarksView,
   GitPageOp,
   PageGitLinkView,
   PageGitUnlinkView,
@@ -224,6 +227,28 @@ export interface VtaWalletDirectory {
   /** Publish the member's card beyond the community. `member` is the DID the
    *  page says is signed in: a hint among the wallet's identities there. */
   publishCard(p: { hostDid: string; member?: string }): Promise<PagePublishedCardView>;
+  /** The member's own marks on this community's members — stars, petnames and
+   *  their lists — from their own agent, never from the community. The first
+   *  call from a community asks the member, once, whether its portal may show
+   *  them; a refusal rejects. Read the directory as you would without them and
+   *  apply them on the page. */
+  marks(p: { hostDid: string; member?: string }): Promise<PageMarksView>;
+  /** Change the member's marks on one entry: a star, a petname (or
+   *  `removePetname`), the set of lists it is on. Resolves with the entry's
+   *  marks now. */
+  mark(p: {
+    hostDid: string;
+    member?: string;
+    entryId: string;
+    starred?: boolean;
+    petname?: string;
+    removePetname?: true;
+    lists?: string[];
+  }): Promise<PageEntryMark>;
+  /** Create one of the member's lists (no `listId`), or rename or recolour one. */
+  putList(p: { hostDid: string; member?: string; listId?: string; name?: string; colour?: string }): Promise<PageMarkList>;
+  /** Delete one of the member's lists; contacts on it stay. */
+  deleteList(p: { hostDid: string; member?: string; listId: string }): Promise<{ deleted: boolean }>;
 }
 
 /** Progress of a file transfer, for a progress bar. */
@@ -577,6 +602,41 @@ if (!window.vtaWallet) {
         call<PagePublishedCardView>("directory", {
           op: "publishCard",
           hostDid: p.hostDid,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+        }),
+      marks: (p) =>
+        call<PageMarksView>("directory", {
+          op: "marks",
+          hostDid: p.hostDid,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+        }),
+      // Only the members the channel takes: anything else the page adds is
+      // dropped here, and refused by the background if it got through.
+      mark: (p) =>
+        call<PageEntryMark>("directory", {
+          op: "mark",
+          hostDid: p.hostDid,
+          entryId: p.entryId,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+          ...(p.starred !== undefined ? { starred: p.starred } : {}),
+          ...(p.petname !== undefined ? { petname: p.petname } : {}),
+          ...(p.removePetname ? { removePetname: true as const } : {}),
+          ...(p.lists !== undefined ? { lists: [...p.lists] } : {}),
+        }),
+      putList: (p) =>
+        call<PageMarkList>("directory", {
+          op: "putList",
+          hostDid: p.hostDid,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+          ...(p.listId !== undefined ? { listId: p.listId } : {}),
+          ...(p.name !== undefined ? { name: p.name } : {}),
+          ...(p.colour !== undefined ? { colour: p.colour } : {}),
+        }),
+      deleteList: (p) =>
+        call<{ deleted: boolean }>("directory", {
+          op: "deleteList",
+          hostDid: p.hostDid,
+          listId: p.listId,
           ...(p.member !== undefined ? { member: p.member } : {}),
         }),
     },

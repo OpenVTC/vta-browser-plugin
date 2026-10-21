@@ -743,15 +743,57 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/persona/contact/get/1.1",
+      "consts": [
+        "TASK_PERSONA_CONTACT_GET_1_1"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/persona/contact/list/1.0",
       "consts": [
         "TASK_PERSONA_CONTACT_LIST_1_0"
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/persona/contact/list/1.1",
+      "consts": [
+        "TASK_PERSONA_CONTACT_LIST_1_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/contact/lists/delete/1.0",
+      "consts": [
+        "TASK_PERSONA_CONTACT_LISTS_DELETE_1_0"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/contact/lists/list/1.0",
+      "consts": [
+        "TASK_PERSONA_CONTACT_LISTS_LIST_1_0"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/contact/lists/put/1.0",
+      "consts": [
+        "TASK_PERSONA_CONTACT_LISTS_PUT_1_0"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/contact/lists/show/1.0",
+      "consts": [
+        "TASK_PERSONA_CONTACT_LISTS_SHOW_1_0"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/persona/contact/put/1.0",
       "consts": [
         "TASK_PERSONA_CONTACT_PUT_1_0"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/persona/contact/put/1.1",
+      "consts": [
+        "TASK_PERSONA_CONTACT_PUT_1_1"
       ]
     },
     {
@@ -1001,6 +1043,12 @@
       "uri": "https://trusttasks.org/spec/rooms/keys/act/0.5",
       "consts": [
         "TASK_ROOMS_KEYS_ACT_0_5"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/rooms/keys/act/0.6",
+      "consts": [
+        "TASK_ROOMS_KEYS_ACT_0_6"
       ]
     },
     {
@@ -1831,6 +1879,36 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/deal/0.1",
+      "consts": [
+        "TASK_VTA_PCS_TRUSTEE_DEAL_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/decrypt/0.1",
+      "consts": [
+        "TASK_VTA_PCS_TRUSTEE_DECRYPT_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/enrol/0.1",
+      "consts": [
+        "TASK_VTA_PCS_TRUSTEE_ENROL_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/justify/0.1",
+      "consts": [
+        "TASK_VTA_PCS_TRUSTEE_JUSTIFY_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/keys/0.1",
+      "consts": [
+        "TASK_VTA_PCS_TRUSTEE_KEYS_0_1"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/vta/pcs/verify-attestation/0.1",
       "consts": [
         "TASK_VTA_PCS_VERIFY_ATTESTATION_0_1"
@@ -1840,6 +1918,42 @@
       "uri": "https://trusttasks.org/spec/vta/pcs/vetter/show/0.1",
       "consts": [
         "TASK_VTA_PCS_VETTER_SHOW_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/pcs/vote-encrypted/0.1",
+      "consts": [
+        "TASK_VTA_PCS_VOTE_ENCRYPTED_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/pcs/vote/0.1",
+      "consts": [
+        "TASK_VTA_PCS_VOTE_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/pcs/voter/accept/0.1",
+      "consts": [
+        "TASK_VTA_PCS_VOTER_ACCEPT_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/pcs/voter/read/0.1",
+      "consts": [
+        "TASK_VTA_PCS_VOTER_READ_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/pcs/voter/receipt/0.1",
+      "consts": [
+        "TASK_VTA_PCS_VOTER_RECEIPT_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/pcs/voter/register/0.1",
+      "consts": [
+        "TASK_VTA_PCS_VOTER_REGISTER_0_1"
       ]
     },
     {
@@ -2191,6 +2305,9 @@
     },
     {
       "uri": "https://trusttasks.org/spec/vtc/rooms/offers/list/0.2"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vtc/rooms/offers/list/0.3"
     },
     {
       "uri": "https://trusttasks.org/spec/vtc/vetting/revoke-statement/0.1",

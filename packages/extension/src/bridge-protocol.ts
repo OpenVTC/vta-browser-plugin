@@ -2613,8 +2613,51 @@ export type RoomFilesPageMessage =
 export const RUNTIME_DIRECTORY_PAGE = "vta-wallet/directory-page" as const;
 
 /** `member` is the DID the page says is signed in: a hint that picks among the
- *  identities the wallet holds for this community, never adds one. */
-export type DirectoryPageOp = { op: "publishCard"; hostDid: string; member?: string };
+ *  identities the wallet holds for this community, never adds one.
+ *
+ *  `marks`, `mark`, `putList` and `deleteList` reach the member's own marks on
+ *  other members — stars, petnames, lists (`persona/contact/{put,list}/1.1`) — kept in
+ *  the member's own agent, never at the community. The page is the community's
+ *  code, so the wallet asks the person once, per community, before it hands it
+ *  any (`directory-page.ts`). */
+export type DirectoryPageOp =
+  | { op: "publishCard"; hostDid: string; member?: string }
+  | { op: "marks"; hostDid: string; member?: string }
+  | {
+      op: "mark";
+      hostDid: string;
+      member?: string;
+      entryId: string;
+      starred?: boolean;
+      petname?: string;
+      removePetname?: true;
+      /** Replaces the set; empty takes the entry off every list. */
+      lists?: string[];
+    }
+  | { op: "putList"; hostDid: string; member?: string; listId?: string; name?: string; colour?: string }
+  | { op: "deleteList"; hostDid: string; member?: string; listId: string };
+
+/** The member's marks on one directory entry. */
+export interface PageEntryMark {
+  starred: boolean;
+  petname?: string;
+  lists?: string[];
+}
+
+/** One of the member's lists. */
+export interface PageMarkList {
+  listId: string;
+  name: string;
+  colour?: string;
+  order: number;
+  contactCount: number;
+}
+
+/** The member's marks for one community's directory, by entry. */
+export interface PageMarksView {
+  entries: Record<string, PageEntryMark>;
+  lists: PageMarkList[];
+}
 
 export interface RuntimeDirectoryPageRequest {
   type: typeof RUNTIME_DIRECTORY_PAGE;
@@ -2631,7 +2674,7 @@ export interface PagePublishedCardView {
 }
 
 export type RuntimeDirectoryPageResponse =
-  | { ok: true; result: PagePublishedCardView }
+  | { ok: true; result: PagePublishedCardView | PageMarksView | PageEntryMark | PageMarkList | { deleted: boolean } }
   | { ok: false; error: string };
 
 // ─── A member's forge account for a page: `window.vtaWallet.git` ────────────
@@ -3196,7 +3239,25 @@ export type OffscreenDirectoryPageOp =
   | { op: "prepare"; hostDid: string; member: string }
   /** Have the agent sign `card` as the member and publish it. `card` is the
    *  one `prepare` built, which the person approved. */
-  | { op: "publish"; hostDid: string; member: string; card: Record<string, unknown>; revision: number };
+  | { op: "publish"; hostDid: string; member: string; card: Record<string, unknown>; revision: number }
+  /** The community as the wallet names it (the member's identity's label). */
+  | { op: "communityName"; hostDid: string; member: string }
+  /** The member's marks on this community's entries, and their lists — from
+   *  their own agent. */
+  | { op: "marks"; hostDid: string; member: string }
+  /** Change the member's marks on one entry. */
+  | {
+      op: "mark";
+      hostDid: string;
+      member: string;
+      entryId: string;
+      starred?: boolean;
+      petname?: string;
+      removePetname?: true;
+      lists?: string[];
+    }
+  | { op: "putList"; hostDid: string; member: string; listId?: string; name?: string; colour?: string }
+  | { op: "deleteList"; hostDid: string; member: string; listId: string };
 
 export interface OffscreenDirectoryPageRequest {
   target: typeof OFFSCREEN_TARGET;

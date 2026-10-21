@@ -717,6 +717,13 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         },
         // The sign-in flow's own listing, so the two agree on who the member is.
         identities: (vtaDid, restBaseUrl) => listSelfIssued(vtaDid, restBaseUrl),
+        // Where the member's own marks are kept: the context their identity
+        // here lives in at their agent.
+        async contextOf(vtaDid, restBaseUrl, did) {
+          const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+          const dids = await vtaListDids(session, { holder, service });
+          return dids.find((d) => d.did === did)?.contextId ?? null;
+        },
       },
       { vtaDid: req.vtaDid, ...(req.restBaseUrl ? { restBaseUrl: req.restBaseUrl } : {}) },
       req.params,

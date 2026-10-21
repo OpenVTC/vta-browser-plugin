@@ -84,6 +84,7 @@ import {
   ResolvedProfile,
 } from "./persona-editors.js";
 import { PeoplePanel } from "./persona-people.js";
+import { MarksGrantsPanel } from "./marks-grants.js";
 import { holderGate } from "../holder-gate.js";
 import { Popover } from "../popover.js";
 import { WorldEditor } from "./worlds.js";
@@ -1908,6 +1909,7 @@ function DetailStrip({
           contextLabel={ctx.label}
           personaDid={ctx.personas[0]?.did ?? null}
         />
+        <MarksGrantsPanel />
       </>,
     );
   }
