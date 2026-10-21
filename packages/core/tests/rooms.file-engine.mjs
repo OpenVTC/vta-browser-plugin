@@ -78,7 +78,7 @@ function fakeVta() {
             await signTrustTask({ envelope: doc, signing: PERSONA, proofPurpose: "authentication" });
             return { principal: PERSONA.did, document: doc };
           }
-          case "rooms/keys/file-key/0.1":
+          case "rooms/keys/file-key/0.2":
             return { key: FILE_KEY, epoch: EPOCH };
           // A stand-in for the record AEAD: the version is bound in, so a body
           // sealed for one version does not open at another — the property the
@@ -91,7 +91,7 @@ function fakeVta() {
             await signTrustTask({ envelope: body, signing: PERSONA, proofPurpose: "assertionMethod" });
             return { sealed: { ciphertext: b64u(Buffer.from(JSON.stringify(body))), nonce: `v${p.version}`, epoch: EPOCH } };
           }
-          case "rooms/keys/open/0.1":
+          case "rooms/keys/open/0.2":
             if (p.sealed.nonce !== `v${p.version}`) throw new Error("sealed for another version");
             return { plaintext: p.sealed.ciphertext };
           default:
@@ -321,7 +321,7 @@ test("an open room is refused before a file key is asked for", async () => {
     putRoomFile(context(vta, fakeHost({ visibility: "open" })), { name: "a.txt", bytes: sample(10) }),
     (e) => e instanceof RoomFileError && e.code === "openRoom",
   );
-  assert.ok(!vta.asked.includes("rooms/keys/file-key/0.1"));
+  assert.ok(!vta.asked.includes("rooms/keys/file-key/0.2"));
 });
 
 test("a room that takes no files is refused before a file key is asked for", async () => {
@@ -330,7 +330,7 @@ test("a room that takes no files is refused before a file key is asked for", asy
     putRoomFile(context(vta, fakeHost({ filesEnabled: false })), { name: "a.txt", bytes: sample(10) }),
     (e) => e instanceof RoomFileError && e.code === "filesDisabled",
   );
-  assert.ok(!vta.asked.includes("rooms/keys/file-key/0.1"));
+  assert.ok(!vta.asked.includes("rooms/keys/file-key/0.2"));
 });
 
 test("a file over the in-memory ceiling is refused before anything is asked", async () => {
@@ -539,13 +539,73 @@ function curated(host, by, told) {
   };
 }
 
+/**
+ * The VTA, refusing `task` once with `unknownEpoch` and `reason` — as an agent
+ * that missed a commit, or holds nothing from before its member joined, does —
+ * until a `rooms/keys/read` of the record lets it repair from the host.
+ */
+function behindVta(vta, task, reason, reads) {
+  let repaired = false;
+  return {
+    ...vta,
+    sender: {
+      async send(envelope) {
+        const s = slug(envelope.type);
+        if (s === "rooms/keys/read/0.1") {
+          reads.push(structuredClone(envelope.payload));
+          repaired = true;
+          return {};
+        }
+        if (s === task && !repaired) {
+          const name = task.split("/")[2];
+          throw Object.assign(new Error(`the record is sealed under an epoch this agent does not hold (${reason})`), {
+            details: { code: `rooms/keys/${name}:unknownEpoch`, details: { reason } },
+          });
+        }
+        return vta.sender.send(envelope);
+      },
+    },
+  };
+}
+
+for (const [task, reason] of [
+  ["rooms/keys/open/0.2", "beyondChain"],
+  ["rooms/keys/open/0.2", "notDelivered"],
+  ["rooms/keys/file-key/0.2", "beyondChain"],
+  ["rooms/keys/file-key/0.2", "notDelivered"],
+]) {
+  test(`a file whose ${task.split("/")[2]} is refused ${reason} opens after one read lets the agent repair`, async () => {
+    const vta = fakeVta();
+    const host = fakeHost();
+    const put = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
+    const reads = [];
+    const { got } = await getAll(context(behindVta(vta, task, reason, reads), host), put.key);
+    assert.equal(got.file.name, "a.txt");
+    assert.equal(reads.length, 1, "one read, naming the host, is the repair");
+    assert.equal(reads[0].host, HOST_DID);
+    assert.equal(reads[0].key, put.key);
+  });
+}
+
+test("a member removed from the room is not repaired: the refusal stands", async () => {
+  const vta = fakeVta();
+  const host = fakeHost();
+  const put = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
+  const reads = [];
+  await assert.rejects(
+    getAll(context(behindVta(vta, "rooms/keys/open/0.2", "removed", reads), host), put.key),
+    /removed/,
+  );
+  assert.equal(reads.length, 0, "nothing to repair, so nothing asked");
+});
+
 /** The VTA, opening a body only where it was sealed — and, asked at a later version, searching back and saying where. */
 function searchingVta(vta, opened) {
   return {
     ...vta,
     sender: {
       async send(envelope) {
-        if (slug(envelope.type) !== "rooms/keys/open/0.1") return vta.sender.send(envelope);
+        if (slug(envelope.type) !== "rooms/keys/open/0.2") return vta.sender.send(envelope);
         const p = envelope.payload;
         opened.push(structuredClone(p));
         assert.equal(p.sealed.version, undefined, "keys/open takes no `version` in `sealed`");

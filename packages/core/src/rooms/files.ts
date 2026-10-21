@@ -71,7 +71,7 @@ import {
   RESPONSE_TYPE_URI as KEYS_FILE_KEY_RESPONSE,
   type RoomsKeysFileKeyPayload,
   type RoomsKeysFileKeyResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/file-key/0.1/payload";
+} from "@openvtc/trust-tasks/rooms/keys/file-key/0.2/payload";
 
 export type { FileManifest };
 
@@ -190,7 +190,7 @@ export async function roomsKeysFileKey(
     params,
     KEYS_FILE_KEY,
     KEYS_FILE_KEY_RESPONSE,
-    "rooms/keys/file-key/0.1",
+    "rooms/keys/file-key/0.2",
     payload,
   );
   let bytes: Uint8Array;

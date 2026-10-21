@@ -50,10 +50,12 @@ test("the refusal covers the family, not a list of known members", () => {
 // hands the VTA's reply straight to the page.
 const R = "https://trusttasks.org/spec/rooms/";
 
-test("a page cannot open a sealed record", () => {
-  const why = pageTaskRefusal(`${R}keys/open/0.1`);
-  assert.notEqual(why, null);
-  assert.match(why, /plaintext/);
+test("a page cannot open a sealed record, at any version", () => {
+  for (const v of ["0.1", "0.2"]) {
+    const why = pageTaskRefusal(`${R}keys/open/${v}`);
+    assert.notEqual(why, null, v);
+    assert.match(why, /plaintext/);
+  }
 });
 
 // The worst of the three: these mint credentials in the ROOM's name, so one
