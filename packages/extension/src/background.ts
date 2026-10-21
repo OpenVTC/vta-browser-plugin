@@ -54,6 +54,7 @@ import {
   DirectoryPageGates,
   type DirectoryPublishConsentView,
 } from "./directory-page.js";
+import { GIT_CONSENT_PREFIX, GitPageGates, type GitConsentView } from "./git-page.js";
 import { RoomOffers, RoomOffersRefusal } from "./room-offers-background.js";
 import type { RoomOfferConsentView } from "./room-offers-policy.js";
 import {
@@ -177,6 +178,10 @@ import {
   OFFSCREEN_DIRECTORY_PAGE,
   type OffscreenDirectoryPageResponse,
   type RuntimeDirectoryPageRequest,
+  RUNTIME_GIT_PAGE,
+  OFFSCREEN_GIT_PAGE,
+  type OffscreenGitPageResponse,
+  type RuntimeGitPageRequest,
   OFFSCREEN_ROOM_HOST_ENDPOINT,
   ROOM_FILES_PORT,
   type RuntimeRoomFilesPrepareRequest,
@@ -1004,6 +1009,61 @@ const directoryPageGates = new DirectoryPageGates({
   },
   canReach: (url) => hasOriginPermission(url),
   prompt: requestDirectoryConsent,
+  now: () => Date.now(),
+});
+
+// ── A page's `window.vtaWallet.git` ─────────────────────────────────────────
+//
+// Linking or unlinking the member's forge account from the community's portal.
+// The gates — the page is the portal by the community's DID document, the
+// member is one of the wallet's identities there, and the person approves in
+// the wallet's own window — are `git-page.ts`; this wires them up.
+
+/** Raise a git prompt and wait. Closed or unopened is a denial. */
+async function requestGitConsent(view: GitConsentView): Promise<{ approved: boolean }> {
+  const consentId = crypto.randomUUID();
+  await chrome.storage.session.set({ [`${GIT_CONSENT_PREFIX}${consentId}`]: view });
+  const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=git`;
+  const bounds = await consentWindowBounds(view.kind === "authorise" ? 460 : 520);
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (approved: boolean) => {
+      if (settled) return;
+      settled = true;
+      pendingConsents.delete(consentId);
+      void chrome.storage.session.remove(`${GIT_CONSENT_PREFIX}${consentId}`);
+      resolve({ approved });
+    };
+    pendingConsents.set(consentId, (approved) => settle(approved));
+    openConsentWindow({ url, bounds, deny: () => settle(false), tag: "[pnm git]", what: "git window" });
+  });
+}
+
+const gitPageGates = new GitPageGates({
+  async active() {
+    const active = await readActiveConnection();
+    if (!active.ok) return { ok: false, error: active.error };
+    return {
+      ok: true,
+      vta: { vtaDid: active.conn.vtaDid, ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}) },
+    };
+  },
+  async offscreen(vta, params) {
+    await ensureOffscreenDocument();
+    const reply = (await chrome.runtime.sendMessage({
+      target: OFFSCREEN_TARGET,
+      type: OFFSCREEN_GIT_PAGE,
+      vtaDid: vta.vtaDid,
+      ...(vta.restBaseUrl ? { restBaseUrl: vta.restBaseUrl } : {}),
+      params,
+    })) as OffscreenGitPageResponse | undefined;
+    return reply ?? { ok: false, error: "the offscreen document did not answer" };
+  },
+  canReach: (url) => hasOriginPermission(url),
+  prompt: requestGitConsent,
+  async openForge(url) {
+    await chrome.tabs.create({ url });
+  },
   now: () => Date.now(),
 });
 
@@ -3777,6 +3837,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const req = message as RuntimeDirectoryPageRequest;
     // `origin` was overwritten above with the browser-attested one.
     directoryPageGates
+      .handle(req.origin, req.params)
+      .then(sendResponse)
+      .catch((e: unknown) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    return true; // async sendResponse
+  }
+
+  if (msgType === RUNTIME_GIT_PAGE) {
+    const req = message as RuntimeGitPageRequest;
+    // `origin` was overwritten above with the browser-attested one.
+    gitPageGates
       .handle(req.origin, req.params)
       .then(sendResponse)
       .catch((e: unknown) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));

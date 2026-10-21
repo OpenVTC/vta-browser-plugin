@@ -216,6 +216,7 @@ import {
 import { installRoomFilesPort, isNoTrustTaskService, resolveRoomHostEndpoint } from "./room-files-offscreen.js";
 import { runRoomsPageOp } from "./room-page-offscreen.js";
 import { runDirectoryPageOp } from "./directory-page-offscreen.js";
+import { runGitPageOp } from "./git-page-offscreen.js";
 import { OfferOpError, runRoomOffersOp } from "./room-offers-offscreen.js";
 import {
   OFFSCREEN_ROOM_OFFERS,
@@ -229,6 +230,9 @@ import {
   OFFSCREEN_DIRECTORY_PAGE,
   type OffscreenDirectoryPageRequest,
   type OffscreenDirectoryPageResponse,
+  OFFSCREEN_GIT_PAGE,
+  type OffscreenGitPageRequest,
+  type OffscreenGitPageResponse,
 } from "./bridge-protocol.js";
 import {
   OFFSCREEN_SIGN_IN_STEP,
@@ -665,6 +669,31 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_GIT_PAGE) {
+    // Only the background sends this, after checking the page is the
+    // community's portal and the person approved (`git-page.ts`).
+    if (!isExtensionContextSender(sender)) {
+      sendResponse({ ok: false, error: "git work is asked for by the wallet" } satisfies OffscreenGitPageResponse);
+      return false;
+    }
+    const req = message as OffscreenGitPageRequest;
+    runGitPageOp(
+      {
+        async agent(vtaDid, restBaseUrl) {
+          const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+          return { sender: session, holder, service };
+        },
+        identities: (vtaDid, restBaseUrl) => listSelfIssued(vtaDid, restBaseUrl),
+      },
+      { vtaDid: req.vtaDid, ...(req.restBaseUrl ? { restBaseUrl: req.restBaseUrl } : {}) },
+      req.params,
+    )
+      .then((result) => sendResponse({ ok: true, result } satisfies OffscreenGitPageResponse))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) } satisfies OffscreenGitPageResponse),
       );
     return true; // async sendResponse
   }

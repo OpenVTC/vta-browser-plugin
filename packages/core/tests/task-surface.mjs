@@ -53,6 +53,13 @@ const NOT_IN_SDK = [
       "no constant for them.",
   },
   {
+    prefix: "https://trusttasks.org/spec/git-ns/account/",
+    why:
+      "A member's forge account at a community (vtc/forge-account.ts): link and unlink go " +
+      "to the community's VTC, signed as the member through vault/sign-trust-task. The VTC, " +
+      "not the VTA, is the counterparty, so vta-sdk carries no constant for them.",
+  },
+  {
     prefix: "https://trusttasks.org/spec/trust-task-error/",
     why:
       "The error envelope the *service* emits (vta-service/src/trust_tasks/wire_v0_2.rs). " +
