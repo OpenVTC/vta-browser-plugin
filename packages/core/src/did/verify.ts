@@ -13,12 +13,17 @@
 // — a successful resolve is a real attestation, not just "fetch returned 200".
 // did:peer / did:key are self-certifying (the keys are encoded in the id), so
 // resolution is purely structural validation.
+//
+// did:scid:vh:1 is verified by the same did:webvh log, fetched from the host
+// its `src` names (`did:scid:vh:1:<scid>?src=example.com/alice`). Its identity
+// is the bare DID: the resolved document's `id` is `did:scid:vh:1:<scid>`, and
+// a bare DID resolves only through a source the resolver already verified.
 
-import { resolve as vtiResolve } from "@openvtc/vti-didcomm-js";
+import { resolve as vtiResolve, scidSrc } from "@openvtc/vti-didcomm-js";
 
-import { assertResolvableWebvhHost } from "./egress-guard.js";
+import { assertResolvableScidHost, assertResolvableWebvhHost } from "./egress-guard.js";
 
-export type DidMethod = "webvh" | "peer" | "key" | "unknown";
+export type DidMethod = "webvh" | "scid" | "peer" | "key" | "unknown";
 
 export interface VerifyDidResult {
   /** Canonical DID under verification. */
@@ -31,7 +36,8 @@ export interface VerifyDidResult {
   resolved: boolean;
   /** For did:webvh — the host the DID identifies (extracted from the DID,
    *  not the resolved document, so the operator sees what the wallet asked
-   *  for). The DID is `did:webvh:<scid>:<host>[:<path>...]`. */
+   *  for). The DID is `did:webvh:<scid>:<host>[:<path>...]`. For a did:scid
+   *  DID URL, the host its `src` names; a bare did:scid names none. */
   domain?: string;
   /** Human-readable error if resolution failed. */
   error?: string;
@@ -57,6 +63,7 @@ export interface VerifyDidResult {
  */
 export function didMethod(did: string): DidMethod {
   if (did.startsWith("did:webvh:")) return "webvh";
+  if (did.startsWith("did:scid:")) return "scid";
   if (did.startsWith("did:peer:")) return "peer";
   if (did.startsWith("did:key:")) return "key";
   return "unknown";
@@ -77,6 +84,19 @@ export function didWebvhDomain(did: string): string | undefined {
   const parts = did.split(":");
   // ["did", "webvh", "<scid>", "<host>", ...path]
   return parts[3];
+}
+
+/**
+ * The host a `did:scid` DID URL's `src` names (`example.com` for
+ * `?src=https://example.com/alice/`), as written — a port stays on it, as it
+ * does on a did:webvh host. `undefined` for a bare did:scid or a non-scid DID.
+ */
+export function didScidDomain(did: string): string | undefined {
+  if (!did.startsWith("did:scid:")) return undefined;
+  const src = scidSrc(did);
+  if (!src) return undefined;
+  const host = src.replace(/^https?:\/\//, "").split("/")[0];
+  return host || undefined;
 }
 
 /** Options shared by the functions here that resolve a DID. */
@@ -102,7 +122,7 @@ export async function verifyDid(
   opts: ResolveDidOptions = {},
 ): Promise<VerifyDidResult> {
   const method = didMethod(did);
-  const domain = method === "webvh" ? didWebvhDomain(did) : undefined;
+  const domain = method === "webvh" ? didWebvhDomain(did) : method === "scid" ? didScidDomain(did) : undefined;
   const base: VerifyDidResult = {
     did,
     method,
@@ -114,6 +134,9 @@ export async function verifyDid(
   }
   try {
     if (method === "webvh") assertResolvableWebvhHost(did);
+    // A bare did:scid fetches from a source the resolver vetted when it
+    // learned it; a DID URL names its host here.
+    if (method === "scid" && scidSrc(did)) assertResolvableScidHost(did);
     const resolution = (await (opts.resolveDid ?? defaultResolveDid)(did)) as {
       didDocument?: { id?: string; alsoKnownAs?: unknown };
       didResolutionMetadata?: { error?: string };

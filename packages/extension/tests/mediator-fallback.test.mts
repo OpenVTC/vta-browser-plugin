@@ -139,3 +139,9 @@ test("dropping an ended fallback leaves other down reasons alone", () => {
   const refused = { state: "down" as const, code: TRANSPORT_DIAGNOSIS.originNotAllowed, detail: "y" };
   assert.deepEqual(withExpiredFallbackDropped({ TSP: refused }, false), { TSP: refused });
 });
+
+test("agentLabel: a did:scid reads as the host and path its src names", () => {
+  assert.equal(agentLabel("did:scid:vh:1:QmScid?src=dids.example.org/gt-vta"), "dids.example.org/gt-vta");
+  assert.equal(agentLabel("did:scid:vh:1:QmScid?src=https://dids.example.org/gt-vta/"), "dids.example.org/gt-vta");
+  assert.equal(agentLabel("did:scid:vh:1:QmScid"), "did:scid:vh:1:QmScid");
+});

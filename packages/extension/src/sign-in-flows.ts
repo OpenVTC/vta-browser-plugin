@@ -94,6 +94,8 @@ import {
   outcomeOf,
   triggerLinkMessage,
   contactDomainLabel,
+  contactIdentity,
+  didIdentity,
   bytesToBase64url,
   base64urlToBytes,
   type ParsedTriggerLink,
@@ -593,7 +595,11 @@ export class SignInFlows {
     const link = parsed.link;
     if (!link.flow) return refused("untyped");
     if (link.flow.spec.name !== "sign-in") return refused("unknown-flow");
-    const vtcDid = link.from.value;
+    // The community's identity — for a did:scid contact, the bare DID; the
+    // link's DID URL, with its `src`, is only what it is resolved through
+    // (VTI-KEY-160, 163). Everything from here on is addressed to, recorded
+    // as and checked against the identity.
+    const vtcDid = contactIdentity(link.from);
 
     // C3 step 2 / VTI-LNK-101: one of this wallet's communities, or nothing is
     // sent to it.
@@ -608,7 +614,7 @@ export class SignInFlows {
         (e) =>
           e.secretKind === "didSelfIssued" &&
           typeof e.principalDid === "string" &&
-          e.targets.some((t) => t.kind === "did" && t.did === vtcDid),
+          e.targets.some((t) => t.kind === "did" && typeof t.did === "string" && didIdentity(t.did) === vtcDid),
       )
       .map((e) => ({ entryId: e.id, did: e.principalDid!, label: e.label }))
       // Two entries for one DID sign in identically (the VTA signs as the DID,
@@ -618,7 +624,7 @@ export class SignInFlows {
     // C3 step 3: resolve and verify, afresh — for a site the wallet does not
     // know too, so that what it is offered is the verified document's account
     // of the site and never the link's.
-    const resolved = await resolveCommunityDocument(vtcDid, {
+    const resolved = await resolveCommunityDocument(link.from.value, {
       ...(this.deps.resolveDid ? { resolveDid: this.deps.resolveDid } : {}),
       contactMethods: methods,
     });

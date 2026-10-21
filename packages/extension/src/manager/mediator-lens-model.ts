@@ -155,6 +155,8 @@ export function verificationModeOf(
  * is shortened head-and-tail.
  */
 export function didLabel(did: string): string {
+  const src = scidSrcLabel(did);
+  if (src) return src;
   const seg = did.split(":");
   if (seg[0] === "did" && seg[1] === "webvh" && seg.length >= 4) {
     const host = safeDecode(seg[3]!);
@@ -162,6 +164,15 @@ export function didLabel(did: string): string {
     return path.length ? `${host}/${path.join("/")}` : host;
   }
   return did.length > 28 ? `${did.slice(0, 16)}…${did.slice(-6)}` : did;
+}
+
+// `host/path` from a did:scid DID URL's `src`, or undefined. Mirrors
+// `scidSrcLabel` in `../mediator-fallback.ts`, inlined: this module takes no
+// relative imports.
+function scidSrcLabel(did: string): string | undefined {
+  const match = /^did:scid:[a-z0-9]+:[0-9]+:[^?#]+\?src=([^?#&]+)$/.exec(did);
+  if (!match) return undefined;
+  return safeDecode(match[1]!.replace(/^https?:\/\//, "").replace(/\/+$/, "")) || undefined;
 }
 
 function safeDecode(s: string): string {

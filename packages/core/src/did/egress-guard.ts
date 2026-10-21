@@ -35,6 +35,8 @@
 // `net-guard.js` in `@openvtc/vti-didcomm-js`, so this module can be replaced
 // by that one once it is released.
 
+import { didScid } from "@openvtc/vti-didcomm-js";
+
 import { didWebvhDomain } from "./verify.js";
 
 /** Stable `code` carried by every {@link BlockedEndpointError}. Match on this,
@@ -295,4 +297,22 @@ function parseIpv6(input: string): number[] | null {
   const fill = want - head.length - rest.length;
   if (fill < 1) return null;
   return [...head, ...new Array<number>(fill).fill(0), ...rest, ...tail];
+}
+
+/**
+ * {@link assertResolvableWebvhHost} for a `did:scid:vh:1` DID URL: its log is
+ * fetched from the host its `src` names, so that host is judged the same way.
+ * A did:scid with no usable `src` names nothing to fetch and is refused.
+ *
+ * @throws {BlockedEndpointError}
+ */
+export function assertResolvableScidHost(did: string): void {
+  const webvh = didScid.scidToWebvhDid(did);
+  if (!webvh) {
+    throw new BlockedEndpointError(
+      "the did:scid names no usable source host, so it was not contacted",
+      "invalid_url",
+    );
+  }
+  assertResolvableWebvhHost(webvh);
 }

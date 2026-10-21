@@ -10,6 +10,28 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Added
 
+- **did:scid contacts and DIDs, used natively.** A trigger link's `_from` may
+  be a `did:scid:vh:1:<scid>?src=<host>[/<path>]` DID URL: it is host-named
+  (route A, VTI-LNK-119), shown as its `src` host and path (VTI-LNK-050),
+  resolved through that DID URL with the `src` host guarded like a did:webvh
+  host (`assertResolvableScidHost`), and recorded and addressed as the bare
+  `did:scid:vh:1:<scid>` (`contactIdentity`, `didIdentity`). A bare did:scid
+  `_from` names no host and is `from-not-allowed`; another did:scid format is
+  `unsupported-vid`. `verifyDid` and `deriveSigningKeyId` take did:scid
+  (`DidMethod` gains `"scid"`, `didScidDomain`). Needs `@openvtc/vti-didcomm-js`
+  with did:scid support.
+- `SCID_CONTACT_POLICY`, `SCID_CONTACT_METHOD`; a contact policy may say
+  `supports(did)` (false is `unsupported-vid`), and a host-named contact whose
+  `hostPath` names no host has no route.
+
+### Changed
+
+- `verifyTrustTaskProof` attributes a proof to its verification method's DID
+  without a did:scid `src` (`signer` is the identity) and matches the key and
+  its relationship by DID and fragment, ignoring that `src`. A community's
+  reply signed under `did:scid:…?src=…#key` is checked against the community's
+  identity the same way.
+
 - **`@openvtc/pnm-core/rooms/files`** — room files, for a wallet's offscreen
   document (it names `rooms/keys/file-key`, so a console must not import it).
   The host's blob tasks (`rooms/blobs/*`, `rooms/info`, `rooms/records/{get,put}/0.2`,
