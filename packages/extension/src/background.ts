@@ -52,6 +52,9 @@ import { RoomPageGates, type PortLike } from "./room-page-background.js";
 import {
   DIRECTORY_CONSENT_PREFIX,
   DirectoryPageGates,
+  MARKS_GRANT_PREFIX,
+  type DirectoryMarksConsentView,
+  type MarksGrant,
   type DirectoryPublishConsentView,
 } from "./directory-page.js";
 import { GIT_CONSENT_PREFIX, GitPageGates, type GitConsentView } from "./git-page.js";
@@ -967,8 +970,11 @@ const roomPageGates = new RoomPageGates({
 // one of the wallet's identities there, and the person approves every value in
 // the wallet's own window — are `directory-page.ts`; this wires them up.
 
-/** Raise the publish prompt and wait. Closed or unopened is a denial. */
-async function requestDirectoryConsent(view: DirectoryPublishConsentView): Promise<{ approved: boolean }> {
+/** Raise the publish — or marks-access — prompt and wait. Closed or unopened
+ *  is a denial. */
+async function requestDirectoryConsent(
+  view: DirectoryPublishConsentView | DirectoryMarksConsentView,
+): Promise<{ approved: boolean }> {
   const consentId = crypto.randomUUID();
   await chrome.storage.session.set({ [`${DIRECTORY_CONSENT_PREFIX}${consentId}`]: view });
   const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=directory`;
@@ -1009,6 +1015,16 @@ const directoryPageGates = new DirectoryPageGates({
   },
   canReach: (url) => hasOriginPermission(url),
   prompt: requestDirectoryConsent,
+  // The member's leave for a community's portal to show their marks: asked
+  // once, kept until they withdraw it (manager → People).
+  async marksGrant(hostDid) {
+    const key = `${MARKS_GRANT_PREFIX}${hostDid}`;
+    const got = (await chrome.storage.local.get(key)) as Record<string, unknown>;
+    return (got[key] as MarksGrant | undefined) ?? null;
+  },
+  async saveMarksGrant(grant) {
+    await chrome.storage.local.set({ [`${MARKS_GRANT_PREFIX}${grant.hostDid}`]: grant });
+  },
   now: () => Date.now(),
 });
 

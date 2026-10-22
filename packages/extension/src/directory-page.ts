@@ -18,11 +18,22 @@
 // Only then is the card signed by the member's agent and sent. What goes back
 // is where the card stands; an error is a sentence.
 //
+// `marks`, `mark`, `putList` and `deleteList` reach the member's own marks on
+// other members — stars, petnames, lists — which live in the member's own
+// agent and never at the community (`persona/contact/*/1.1`). Gates 1 – 3 are
+// the same; gate 4 differs. The portal page is the community's own code, so
+// whatever the wallet hands it the community could read: before the first
+// mark reaches a community's portal, the wallet asks the person once whether
+// that portal may show and change them, and remembers the answer for that
+// community and that portal origin until they withdraw it in the wallet. Only
+// contacts linked to that community's directory are ever handed over.
+//
 // Written against injected dependencies, not `chrome.*`, so the gates are
 // tested as they run.
 
 import type {
   DirectoryPageOp,
+  PageMarksView,
   OffscreenDirectoryPageOp,
   OffscreenDirectoryPageResponse,
   PagePublishedCardView,
@@ -31,6 +42,27 @@ import type {
 
 /** `chrome.storage.session` key prefix for a publish prompt's view. */
 export const DIRECTORY_CONSENT_PREFIX = "directory-consent:";
+
+/** `chrome.storage.local` key prefix for a community's leave to show the
+ *  member's marks: `<prefix><hostDid>` → [`MarksGrant`]. */
+export const MARKS_GRANT_PREFIX = "directory-marks-grant:";
+
+/** The member let a community's portal show and change their marks. */
+export interface MarksGrant {
+  hostDid: string;
+  /** The portal origin it was given to; another origin is asked afresh. */
+  portalOrigin: string;
+  communityName: string;
+  grantedAt: number;
+}
+
+/** What the person is shown before a community's portal first sees their marks. */
+export interface DirectoryMarksConsentView {
+  kind: "marksAccess";
+  origin: string;
+  hostDid: string;
+  communityName: string;
+}
 
 /** What the person is shown before their card is published. */
 export interface DirectoryPublishConsentView {
@@ -60,8 +92,11 @@ export interface DirectoryPageDeps {
   offscreen(vta: ActiveVta, op: OffscreenDirectoryPageOp): Promise<OffscreenDirectoryPageResponse>;
   /** Whether the wallet holds a host permission for `url`'s origin. */
   canReach(url: string): Promise<boolean>;
-  /** Raise the publish prompt and wait. A closed window is a denial. */
-  prompt(view: DirectoryPublishConsentView): Promise<{ approved: boolean }>;
+  /** Raise the prompt and wait. A closed window is a denial. */
+  prompt(view: DirectoryPublishConsentView | DirectoryMarksConsentView): Promise<{ approved: boolean }>;
+  /** The member's leave for `hostDid`'s portal to show their marks, if any. */
+  marksGrant(hostDid: string): Promise<MarksGrant | null>;
+  saveMarksGrant(grant: MarksGrant): Promise<void>;
   now(): number;
 }
 
@@ -71,18 +106,67 @@ function isDid(v: unknown): v is string {
   return typeof v === "string" && v.startsWith("did:") && v.length <= MAX_DID;
 }
 
+/** A list or entry id the agent and the directory mint: short, URL-safe. */
+const ID = /^[A-Za-z0-9_-]{1,128}$/;
+/** One line, no control characters, as the spec's `Petname` / `ListName`. */
+const LINE = /^[^\u0000-\u001F\u007F]+$/;
+
+const MEMBERS: Record<DirectoryPageOp["op"], string[]> = {
+  publishCard: ["op", "hostDid", "member"],
+  marks: ["op", "hostDid", "member"],
+  mark: ["op", "hostDid", "member", "entryId", "starred", "petname", "removePetname", "lists"],
+  putList: ["op", "hostDid", "member", "listId", "name", "colour"],
+  deleteList: ["op", "hostDid", "member", "listId"],
+};
+
 /** Why `raw` is not a call this channel serves, or `null`. Members other than
  *  those named are refused, so nothing extra reaches the work. */
 export function directoryPageParamsRefusal(raw: unknown): string | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "the call must be an object";
   const p = raw as Record<string, unknown>;
-  if (p.op !== "publishCard") return "unknown directory operation";
+  const allowed = MEMBERS[p.op as DirectoryPageOp["op"]];
+  if (!allowed || typeof p.op !== "string") return "unknown directory operation";
   for (const k of Object.keys(p)) {
-    if (!["op", "hostDid", "member"].includes(k)) return `publishCard takes no \`${k}\``;
+    if (!allowed.includes(k)) return `${p.op} takes no \`${k}\``;
   }
   if (!isDid(p.hostDid)) return "hostDid must be a DID";
   if (p.member !== undefined && !isDid(p.member)) return "member must be a DID";
-  return null;
+  switch (p.op) {
+    case "mark": {
+      if (typeof p.entryId !== "string" || !ID.test(p.entryId)) return "entryId must be a directory entry id";
+      if (p.starred !== undefined && typeof p.starred !== "boolean") return "starred must be true or false";
+      if (p.petname !== undefined && (typeof p.petname !== "string" || p.petname.length > 128 || !LINE.test(p.petname))) {
+        return "petname must be one line of at most 128 characters";
+      }
+      if (p.removePetname !== undefined && p.removePetname !== true) return "removePetname must be true";
+      if (p.petname !== undefined && p.removePetname) return "give a petname or remove it, not both";
+      if (
+        p.lists !== undefined &&
+        (!Array.isArray(p.lists) || p.lists.length > 64 || !p.lists.every((l) => typeof l === "string" && ID.test(l)))
+      ) {
+        return "lists must be at most 64 list ids";
+      }
+      if (p.starred === undefined && p.petname === undefined && !p.removePetname && p.lists === undefined) {
+        return "mark changes nothing";
+      }
+      return null;
+    }
+    case "putList":
+      if (p.listId !== undefined && (typeof p.listId !== "string" || !ID.test(p.listId))) return "listId must be a list id";
+      if (p.listId === undefined && p.name === undefined) return "a new list has a name";
+      if (p.name !== undefined && (typeof p.name !== "string" || p.name.length > 64 || !LINE.test(p.name))) {
+        return "name must be one line of at most 64 characters";
+      }
+      if (p.colour !== undefined && (typeof p.colour !== "string" || !/^#[0-9a-f]{6}$/.test(p.colour))) {
+        return "colour must be #rrggbb, lowercase";
+      }
+      return null;
+    case "deleteList":
+      if (typeof p.listId !== "string" || !ID.test(p.listId)) return "listId must be a list id";
+      return null;
+    default:
+      return null;
+  }
 }
 
 /** Why the page at `origin` may not speak for `hostDid`, or `null` when it may. */
@@ -124,13 +208,20 @@ export class DirectoryPageGates {
     try {
       const malformed = directoryPageParamsRefusal(raw);
       if (malformed) return { ok: false, error: malformed };
-      return { ok: true, result: await this.publishCard(origin, raw as DirectoryPageOp) };
+      const p = raw as DirectoryPageOp;
+      if (p.op === "publishCard") return { ok: true, result: await this.publishCard(origin, p) };
+      return { ok: true, result: (await this.marks(origin, p)) as PageMarksView };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
 
-  private async publishCard(origin: string, p: DirectoryPageOp): Promise<PagePublishedCardView> {
+  /** Gates 2 and 3: the page is the community's portal, and the member is one
+   *  of the wallet's identities there. */
+  private async admit(
+    origin: string,
+    p: { hostDid: string; member?: string },
+  ): Promise<{ vta: ActiveVta; member: string; portalOrigin: string }> {
     // Gate 2.
     const active = await this.deps.active();
     if (!active.ok) throw new DirectoryPageRefusal(active.error);
@@ -160,9 +251,61 @@ export class DirectoryPageGates {
       throw new DirectoryPageRefusal(
         members.length === 0
           ? "The wallet holds no identity you use at this community."
-          : "You use more than one identity at this community: sign in with the one whose card to publish.",
+          : "You use more than one identity at this community: sign in with the one you are using here.",
       );
     }
+    return { vta, member, portalOrigin };
+  }
+
+  /** The member's own marks (module docs): gates 1 – 3, then the community's
+   *  leave, asked for once. */
+  private async marks(origin: string, p: Exclude<DirectoryPageOp, { op: "publishCard" }>): Promise<unknown> {
+    const { vta, member, portalOrigin } = await this.admit(origin, p);
+    const grant = await this.deps.marksGrant(p.hostDid);
+    if (!grant || grant.portalOrigin !== portalOrigin) {
+      const named = await this.offscreen(vta, { op: "communityName", hostDid: p.hostDid, member });
+      const name = typeof named === "string" && named ? named : "This community";
+      const decided = await this.deps.prompt({ kind: "marksAccess", origin, hostDid: p.hostDid, communityName: name });
+      if (!decided.approved) {
+        throw new DirectoryPageRefusal("You did not let this community's portal show your marks.");
+      }
+      await this.deps.saveMarksGrant({
+        hostDid: p.hostDid,
+        portalOrigin,
+        communityName: name,
+        grantedAt: this.deps.now(),
+      });
+    }
+    switch (p.op) {
+      case "marks":
+        return this.offscreen(vta, { op: "marks", hostDid: p.hostDid, member });
+      case "mark":
+        return this.offscreen(vta, {
+          op: "mark",
+          hostDid: p.hostDid,
+          member,
+          entryId: p.entryId,
+          ...(p.starred !== undefined ? { starred: p.starred } : {}),
+          ...(p.petname !== undefined ? { petname: p.petname } : {}),
+          ...(p.removePetname ? { removePetname: true as const } : {}),
+          ...(p.lists !== undefined ? { lists: [...p.lists] } : {}),
+        });
+      case "putList":
+        return this.offscreen(vta, {
+          op: "putList",
+          hostDid: p.hostDid,
+          member,
+          ...(p.listId !== undefined ? { listId: p.listId } : {}),
+          ...(p.name !== undefined ? { name: p.name } : {}),
+          ...(p.colour !== undefined ? { colour: p.colour } : {}),
+        });
+      case "deleteList":
+        return this.offscreen(vta, { op: "deleteList", hostDid: p.hostDid, member, listId: p.listId });
+    }
+  }
+
+  private async publishCard(origin: string, p: Extract<DirectoryPageOp, { op: "publishCard" }>): Promise<PagePublishedCardView> {
+    const { vta, member } = await this.admit(origin, p);
 
     // Read the card as the member and build what would be signed.
     const prepared = (await this.offscreen(vta, { op: "prepare", hostDid: p.hostDid, member })) as {

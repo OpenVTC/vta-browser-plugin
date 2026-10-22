@@ -543,7 +543,9 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // `rooms/keys/key-package/0.2` in place — still one family each.
   // 226 → 227: `keys/sign-document/0.1`, the member's agent signing their
   // external directory card as their DID (vtc/directory-card.ts).
-  const expected = 227;
+  // 227 → 230: `persona/contact/lists/{put,list,delete}/1.0`, the member's
+  // own lists, behind the portal's marks (`persona/annotations.ts`).
+  const expected = 230;
   assert.equal(
     implemented.size,
     expected,

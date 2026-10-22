@@ -25,6 +25,9 @@
 //     never contents. Contents arrive only through disclosure.
 //   - **contacts** (`./contacts.js`) — what other people have disclosed to the
 //     holder, filed against the persona that knows them.
+//   - **annotations** (`./annotations.js`) — the holder's own star, petname,
+//     lists and directory link on a contact (`persona/contact/*/1.1`), and the
+//     lists (`persona/contact/lists/*`). They never leave the agent.
 //   - **local** (`./local.js`) — profiles and bindings that live INSIDE one
 //     context, built only from inline values. A context-local profile cannot
 //     reference the pool, and the published schema is what makes that true:
@@ -45,4 +48,5 @@ export * from "./consent-view.js";
 export * from "./renderers.js";
 export * from "./bindings.js";
 export * from "./contacts.js";
+export * from "./annotations.js";
 export * from "./local.js";
