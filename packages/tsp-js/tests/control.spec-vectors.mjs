@@ -2,10 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { unpack, packInvite, packAccept, packCancel } from "../dist/index.js";
-import { decodeEnvelope as decodeRev3Envelope } from "../dist/rev3/envelope.js";
-import { deriveSaid } from "../dist/rev3/control.js";
-import { senderFieldBytes } from "../dist/rev3/fields.js";
+import { unpack, packInvite, packAccept, packCancel, referralSignedData } from "../dist/index.js";
+import { decodeEnvelope as decodeV1Envelope } from "../dist/v1/envelope.js";
+import { deriveSaid } from "../dist/v1/control.js";
+import { senderFieldBytes } from "../dist/v1/fields.js";
 import * as wire from "../dist/cesr/wire.js";
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 
@@ -19,7 +19,7 @@ import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 // Nothing weaker would do. Encoder and decoder built from the same wrong
 // reading agree perfectly, and so do two implementations that share it.
 const VECTORS = JSON.parse(
-  readFileSync(new URL("./fixtures/spec-rev3-vectors.json", import.meta.url), "utf8"),
+  readFileSync(new URL("./fixtures/spec-v1-vectors.json", import.meta.url), "utf8"),
 );
 
 const b64u = (s) => new Uint8Array(Buffer.from(s, "base64url"));
@@ -58,13 +58,12 @@ test("the invite's digest is derived exactly as the reference derives it", async
   // "TSP_Digest does not match" from three layers down.
   const v = VECTORS.vectors["control-rfi-direct"];
   const wireBytes = b64u(v.message);
-  const decoded = decodeRev3Envelope(wireBytes);
+  const decoded = decodeV1Envelope(wireBytes);
   const envelopeFields = wireBytes.slice(decoded.aad.begin, decoded.aad.end);
 
-  // The vector carries the NULL VID in its ESSR sender field, which §9.2 permits
-  // under HPKE-Base. We write the real VID; both are conformant, and the
-  // derivation has to accept whichever the message actually carries.
-  const nullSenderField = senderFieldBytes("");
+  // The ESSR sender field is inside the derivation, and 1.0 makes it the
+  // sender's VID (at `YTSP-AAC` this vector carried the NULL VID there).
+  const senderField = senderFieldBytes(id("alice").id);
 
   const nonceOut = [];
   wire.encodeFixedData(wire.TSP_NONCE, new Uint8Array(16).fill(0x11), nonceOut);
@@ -72,7 +71,7 @@ test("the invite's digest is derived exactly as the reference derives it", async
   wire.encodeCount(wire.TSP_HOP_LIST, 0, emptyList);
 
   const after = new Uint8Array([...nonceOut, ...emptyList, ...emptyList]); // nonce, Reply_Path, Referral
-  const said = deriveSaid(envelopeFields, wire.XRFI, nullSenderField, after);
+  const said = deriveSaid(envelopeFields, wire.XRFI, senderField, after);
 
   const out = await openVector("control-rfi-direct");
   assert.deepEqual(said, out.control.digest, "recomputed SAID matches the one on the wire");
@@ -119,6 +118,38 @@ test("control-rfd — a cancel names the message it ends and carries no nonce", 
   // to recompute — `digest` mirrors the reference rather than being derived.
   assert.deepEqual(cancel.control.digest, cancel.control.inReplyTo);
   assert.equal(cancel.control.nonce, undefined);
+});
+
+test("control-rfi-referral — the referral decodes, and Signature_new verifies under the new VID's key", async () => {
+  // An invite over an existing relationship introducing a new VID (§7.2.5).
+  // `unpack` checks the SAID, which covers `VID_new` but not `Signature_new`;
+  // the signature is the caller's to check once it has resolved `VID_new`,
+  // through `referralSignedData`. In 1.0 its input starts with the sender's
+  // VID — a Rev 3 reference sender wrote the NULL VID there instead.
+  const v = VECTORS.vectors["control-rfi-referral"];
+  const out = await openVector("control-rfi-referral");
+  assert.equal(out.control.controlType, "invite");
+  assert.deepEqual(out.threadDigest, out.control.digest);
+
+  const introduced = id(v.newVid);
+  const { referral } = out.control;
+  assert.ok(referral, "the referral field is populated");
+  assert.equal(
+    referral.newVid,
+    introduced.longForm,
+    "a VID introduced for the first time travels in its long form",
+  );
+  assert.deepEqual(referral.signature, b64u(v.signatureNew), "Signature_new as published");
+
+  const signed = referralSignedData(
+    out.sender,
+    out.control.digest,
+    out.control.nonce,
+    out.control.route,
+    referral.newVid,
+  );
+  assert.equal(ed25519.verify(referral.signature, signed, b64u(introduced.pkS)), true);
+  assert.equal(ed25519.verify(referral.signature, signed, b64u(id("alice").pkS)), false);
 });
 
 test("a tampered control digest is refused as verification, not parsed as valid", async () => {

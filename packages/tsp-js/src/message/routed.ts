@@ -6,7 +6,7 @@
 // addressed intermediary reads it. Nested mode is the degenerate wrapper: an
 // inner packed message carried opaquely to a single intermediary.
 //
-// Rev 3 only, like everything on the packing side. Two changes from Rev 2 reach
+// Two changes Rev 3 made, and 1.0 kept, reach
 // callers: the inner message is carried **raw** rather than inside a `B`
 // var-data field, which makes it a caller error to hand one that is not
 // quadlet-aligned; and the `-J` count is the hop group's byte length rather

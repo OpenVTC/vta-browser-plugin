@@ -8,8 +8,47 @@ For history before this file, see `git log` on `packages/tsp-js`.
 
 ## [Unreleased]
 
+## [0.4.0] — TSP 1.0
+
+**Breaking on the wire and in the API.** Moves to the released TSP 1.0
+specification
+([tswg-tsp-specification@ccda6b3](https://github.com/trustoverip/tswg-tsp-specification/commit/ccda6b33159d860f05c328eb436dabe83548b705),
+PR #86), in step with `affinidi-tsp` 0.3.0 and the ToIP reference `tsp_sdk`
+0.16.0. A peer still on Rev 3 or Rev 2 cannot exchange messages with this
+release in either direction; upgrade both ends together.
+
+### Changed
+
+- Packs `YTSP-BAA` (1.0), was `YTSP-AAC` (0.2, Rev 3). `TSP_VERSION` is
+  `{ major: 1, minor: 0 }`; `SUPPORTED_MAJOR` is 1.
+- `unpack`, `decodeEnvelope` and `peekRevision` refuse every MAJOR but 1 with
+  `TspRevisionError` (`E_TSP_REVISION`), naming the version found — including
+  Rev 3 (`AAC`), its pre-merge draft (`ABA`) and Rev 2 (`AAB`), all of which
+  this package used to read.
+- A payload whose ESSR sender field is the NULL VID is refused: 1.0 requires
+  the sender's VID in every confidential payload (§3.2, §3.7 step 7), where
+  Rev 3 allowed `4BAA` under HPKE-Base. Packing is unchanged — this package
+  always wrote the VID.
+- Appendix A vectors replaced with 1.0's (`tests/fixtures/spec-v1-vectors.json`,
+  identical to `affinidi-tsp` 0.3.0's). The new `control-rfi-referral` vector
+  is opened and its `Signature_new` verified through `referralSignedData`.
+- The Rust interop vector is now one `affinidi-tsp` 0.3.0 packed, and a message
+  packed here was opened by that crate with a matching thread digest.
+- `src/rev3/` is `src/v1/`.
+
+### Removed
+
+- The Rev 2 reader (`src/rev2/`), its dispatcher arm, and with them:
+  `UnpackKeys.senderEncryptionKey`, the `revision` field on `UnpackedMessage`
+  and `DecodedEnvelope`, the `Revision` type, `PeekedRevision.revision`,
+  `KNOWN_MINORS` (now `KNOWN_VERSIONS`, keyed `"MAJOR.MINOR"`), and the
+  `cesr` exports `REV2_MINOR`, `LONG_COUNT_REV2`, `LONG_COUNT_REV3`,
+  `TSP_HPKEAUTH_CIPHERTEXT` and `TSP_TMP`. `decodeCount` no longer takes a
+  long-form selector.
+
 ### Added
 
+- `describeVersion(major, minor)`.
 - `resolveAccept(state, answeredDigest, ourInviteDigest)`: whether a received
   accept answers the invite we have outstanding (§7.2.2). `transition` sees
   only the state, so until now every client had to compare the digests itself
@@ -17,22 +56,13 @@ For history before this file, see `git log` on `packages/tsp-js`.
 - `@openvtc/vti-tsp-js/unsafe-testing`, a **test-only** subpath for
   byte-reproducible packing: `__unsafeDeterministicPack`, `…PackInvite`,
   `…PackAccept`, `…PackCancel`, `…PackNested` and `…PackRouted` take an
-  `__unsafeIkmE` (RFC 9180 DeriveKeyPair input) for the HPKE-Base ephemeral and
-  can write the NULL VID in the ESSR sender field. A fixed ephemeral key breaks
-  confidentiality; the subpath exists so the Appendix A vectors can be
-  reproduced and is not part of the documented API. The main entry point's
-  packers are unchanged and never take either knob. With it, all six HPKE-Base
-  vectors (`direct-hpke-base`, `control-rfi-direct`, `control-rfa-direct`,
-  `control-rfd`, `nested-direct`, `routed`) re-pack byte for byte.
-
-### Changed
-
-- The Appendix A test vectors are the merged specification's
-  ([tswg-tsp-specification@f5b8668](https://github.com/trustoverip/tswg-tsp-specification/commit/f5b8668952aabe8e541b535fcbdf589484ffc4f4)),
-  which carry `YTSP-AAC` — the marker this package packs — in place of the
-  pre-merge `YTSP-ABA` set. Every message and the control vectors' digests
-  changed; all still open and verify. A pre-merge `ABA` message stays pinned in
-  the tests: reading it is unchanged. Test-only; no library behaviour changed.
+  `__unsafeIkmE` (RFC 9180 DeriveKeyPair input) for the HPKE-Base ephemeral. A
+  fixed ephemeral key breaks confidentiality; the subpath exists so the
+  Appendix A vectors can be reproduced and is not part of the documented API.
+  The main entry point's packers are unchanged and never take the knob. With
+  it, the six HPKE-Base vectors this package can pack (`direct-hpke-base`,
+  `control-rfi-direct`, `control-rfa-direct`, `control-rfd`, `nested-direct`,
+  `routed`) re-pack byte for byte.
 
 ### Fixed
 

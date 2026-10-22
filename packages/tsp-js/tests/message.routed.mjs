@@ -20,12 +20,10 @@ function party(vid) {
 }
 const packKeys = (sender, receiver) => ({
   senderSigningKey: sender.signSk,
-  senderEncryptionKey: sender.encSk,
   receiverEncryptionKey: receiver.encPk,
 });
 const unpackKeys = (receiver, sender) => ({
   receiverDecryptionKey: receiver.encSk,
-  senderEncryptionKey: sender.encPk,
   senderSigningKey: sender.signPk,
 });
 

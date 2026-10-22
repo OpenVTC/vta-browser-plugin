@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import * as wire from "../dist/cesr/wire.js";
-import { decodePayloadFrame } from "../dist/rev3/payload.js";
+import { decodePayloadFrame } from "../dist/v1/payload.js";
 
 // An XSCS body is exactly one Bytes primitive (tswg-tsp-specification#77):
 // an -H## group, a second primitive, or data after the stream is refused,
@@ -14,7 +14,7 @@ const prim = (s) => {
   return out;
 };
 const frameOf = (stream, trailing = []) => {
-  const body = [...wire.XSCS, ...prim(""), ...prim("")]; // NULL sender, no padding
+  const body = [...wire.XSCS, ...prim("did:example:alice"), ...prim("")]; // sender, no padding
   wire.encodeCount(wire.TSP_GENERIC_STREAM, stream.length / 3, body);
   body.push(...stream, ...trailing);
   const frame = [];

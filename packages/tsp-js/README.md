@@ -18,32 +18,26 @@ it natively; on React Native, import
 [`react-native-get-random-values`](https://github.com/LinusU/react-native-get-random-values)
 once at app startup.
 
-## Revisions: packs Rev 3, reads Rev 3 and Rev 2
+## Version: TSP 1.0
 
-The specification's **Rev 3** changed the crypto mode, the version byte, the
-long count-code prefix, the ciphertext code and layout, the `-E` count's
-meaning, the signature code and every payload layout — at once. Nothing a Rev 2
-peer packs can be unpacked by a Rev 3 one or the reverse, and there is no
-negotiation in the protocol.
+This package speaks the released **TSP 1.0** specification (`YTSP-BAA`) and
+nothing else, in step with [`affinidi-tsp`](https://crates.io/crates/affinidi-tsp)
+0.3 and the ToIP reference `tsp_sdk` 0.16.
 
-So this package is deliberately asymmetric:
+`unpack` and `decodeEnvelope` read the version marker first — it sits at a fixed
+offset and needs no keys — and refuse any MAJOR but 1 with a `TspRevisionError`
+(`code: "E_TSP_REVISION"`) that names the version found. That includes the two
+drafts: Rev 2 (`YTSP-AAB`, 0.1) and Rev 3 (`YTSP-AAC`, 0.2). There is no
+negotiation in the protocol; a peer still on a draft has to upgrade.
 
-- **`unpack` dispatches on the version marker**, which sits at a fixed offset
-  and needs no keys. A Rev 2 message is read by a frozen, decode-only codec in
-  `src/rev2/`, and the result reports `revision: "rev2"`.
-- **`pack` does not dispatch on anything**, because there is nothing to
-  dispatch on. An inbound message says what it is; an outbound one has to be
-  decided before a byte exists, and no field on the wire says what a peer can
-  read. We pack Rev 3. A Rev 2 peer cannot read it, and nothing here retries or
-  falls back.
-
-`unpack`'s `revision` is how a caller learns what a peer actually speaks.
-Remembering that per peer belongs above this package — a codec has no business
-holding state about who it has talked to.
+1.0 is Rev 3's wire with one payload rule changed: the ESSR sender field must
+carry the sender's VID in every confidential payload, where Rev 3 let HPKE-Base
+write the NULL VID `4BAA`. This package always wrote it; on receive, a NULL
+sender is now refused.
 
 ## Relationships
 
-Rev 3 §7.2.2: an endpoint SHOULD **drop** an application message from a VID it
+§7.2.2: an endpoint SHOULD **drop** an application message from a VID it
 holds no relationship with. Dropped, not refused — nothing comes back — so a
 client that skips the handshake sees a timeout, not an error.
 
@@ -89,36 +83,35 @@ package owns the wire layer — CESR encode/decode, the `-E` envelope, HPKE
 seal/open, Ed25519 sign/verify, and `pack`/`unpack` for Direct, Nested, and
 Routed messages.
 
-- **HPKE-Base** (Rev 3) — RFC 9180, `DHKEM(X25519, HKDF-SHA256)` +
-  `HKDF-SHA256` + `ChaCha20Poly1305`. The fixed code `YTSP-` is the HPKE
-  `info`, and `TSP_Version ‖ VID_sndr ‖ VID_rcvr` is real AAD. The sender's
-  key no longer enters the KEM — sender authenticity is the ESSR sender field
-  plus the outer signature. **HPKE-Auth** remains for reading Rev 2, where the
-  envelope frame was the `info` and the AAD was empty.
+- **HPKE-Base** — RFC 9180, `DHKEM(X25519, HKDF-SHA256)` + `HKDF-SHA256` +
+  `ChaCha20Poly1305`. The fixed code `YTSP-` is the HPKE `info`, and
+  `TSP_Version ‖ VID_sndr ‖ VID_rcvr` is real AAD. The sender's key does not
+  enter the KEM — sender authenticity is the ESSR sender field plus the outer
+  signature.
 - **CESR** — binary `qb2` framing (selectors `-E`, `-Z`, `-A`, `-J`, `B`, `F`,
   `I`; markers `YTSP`, `XSCS`/`XHOP`, `XRFI`/`XRFA`/`XRFD`/`XCTL`/`XPAD`).
 - **Message modes** — Direct, Nested (metadata privacy), and Routed (multi-hop
   through a relay/mediator).
 - **Relationships** — `XRFI` / `XRFA` / `XRFD`, the §7.2.1 self-addressing
-  digest, and the §7.2/§7.3 state machine. Rev 3 gates application messages on
+  digest, and the §7.2/§7.3 state machine. TSP gates application messages on
   a relationship, so this is a precondition for sending anything, not an
   optional extra.
 
 Byte-compatibility is proven in three ways, because a round trip proves none of
 it — encoder and decoder agree with each other whatever they both get wrong,
-which is exactly the failure mode Rev 3's one-character changes produce:
+which is exactly the failure mode one-character wire changes produce:
 
-- **The specification's own Appendix A vectors** (`YTSP-AAC`, as merged at
-  [tswg-tsp-specification@f5b8668](https://github.com/trustoverip/tswg-tsp-specification/commit/f5b8668952aabe8e541b535fcbdf589484ffc4f4))
+- **The specification's own Appendix A vectors** (`YTSP-BAA`, TSP 1.0 at
+  [tswg-tsp-specification@ccda6b3](https://github.com/trustoverip/tswg-tsp-specification/commit/ccda6b33159d860f05c328eb436dabe83548b705))
   run as a test suite, fixed and external and produced by the ToIP reference
-  implementation. Every HPKE-Base vector both opens
-  (`tests/interop.spec-vectors.mjs`, `tests/control.spec-vectors.mjs`) and
-  **re-packs byte for byte** from its published `ikmE`
-  (`tests/interop.spec-vectors-repack.mjs`). Every published vector is either
-  exercised or named as uncovered, so the list cannot quietly shrink.
-- **Both directions against `affinidi-tsp`** — its Rev 2 vector unpacks here
-  (`tests/interop.rust-vector.mjs`), and a message packed here unpacks there,
-  thread digest included.
+  implementation. Every HPKE-Base vector opens
+  (`tests/interop.spec-vectors.mjs`, `tests/control.spec-vectors.mjs`), and
+  every one this package can pack **re-packs byte for byte** from its published
+  `ikmE` (`tests/interop.spec-vectors-repack.mjs`). Every published vector is
+  either exercised or named as uncovered, so the list cannot quietly shrink.
+- **Both directions against `affinidi-tsp` 0.3** — a message it packed unpacks
+  here (`tests/interop.rust-vector.mjs`), and a message packed here unpacks
+  there, thread digest included.
 - **Pinned bytes** for the deterministic parts of what we emit, since the sealed
   message itself is not reproducible (HPKE draws a fresh ephemeral key). The
   vector re-pack fixes that key through a test-only subpath,
@@ -151,28 +144,22 @@ const packed = await pack(payloadBytes, senderDid, recipientDid, {
   receiverEncryptionKey,  // X25519 public   — HPKE-Base recipient (seal to)
 });
 // packed.bytes: the qb2 TSP message. First byte 0xF8, or 0xFB past ~12 KB —
-// Rev 3's `-E` count covers the ciphertext, so large messages are long-framed.
+// The `-E` count covers the ciphertext, so large messages are long-framed.
 // `isTsp()` accepts both; a classifier that knows only 0xF8 silently drops them.
 
 const msg = await unpack(packed.bytes, {
   receiverDecryptionKey,  // X25519 private — our key
   senderSigningKey,       // Ed25519 public — outer-signature verification
-  senderEncryptionKey,    // X25519 public  — OPTIONAL, Rev 2 only (see below)
 });
-// msg.sender / msg.receiver (proven VIDs), msg.payload, and msg.revision.
+// msg.sender / msg.receiver (proven VIDs), msg.payload.
 ```
-
-`senderEncryptionKey` is Rev 2's alone: HPKE-Auth puts the sender's static key
-in the KEM, so without it a Rev 2 message cannot be *opened*, let alone
-verified. Omit it and a Rev 2 message is refused by name rather than by a
-decryption failure. Rev 3 has no use for it at all.
 
 ```ts
 import { peekRevision, isRevisionError } from "@openvtc/vti-tsp-js";
 
-// Keyless, from the version marker — for routing, metrics, or deciding whether
-// you hold the extra key a Rev 2 message needs.
-const { revision, minor } = peekRevision(bytes);  // "rev3" | "rev2"
+// Keyless, from the version marker. Throws TspRevisionError for any MAJOR but
+// 1 — e.g. a peer still on a draft — before a key is touched.
+const { major, minor } = peekRevision(bytes);  // 1, 0
 ```
 
 Multi-hop routing (seal end-to-end to the final recipient, wrap a routing layer
@@ -189,9 +176,9 @@ import { packRouted } from "@openvtc/vti-tsp-js";
 | `pack` / `unpack` | Direct message seal+sign / verify+open |
 | `packWithHops` | Lower-level pack with an explicit hop list |
 | `packRouted` / `packNested` / `nextHop` | Routed (multi-hop) + Nested (metadata-privacy) messages |
-| `decodeEnvelope` | The `-E` cleartext envelope, dispatching on revision — keyless, for relays |
-| `peekRevision` / `describeRevision` | Which revision framed a message, from its version marker alone |
-| `TspRevisionError` / `isRevisionError` | A revision that could not be established or is not spoken; `code: "E_TSP_REVISION"` |
+| `decodeEnvelope` | The `-E` cleartext envelope of a 1.0 message — keyless, for relays |
+| `peekRevision` / `describeRevision` / `describeVersion` | The version a message declares, from its marker alone; refuses any MAJOR but 1 |
+| `TspRevisionError` / `isRevisionError` | A version that could not be established or is not spoken; `code: "E_TSP_REVISION"` |
 | `isTsp` | Ingress classifier — accepts both `0xF8` and `0xFB` framings |
 | `sha256` | Thread-digest helper |
 | `cesr` | Binary CESR frame primitives |
@@ -212,7 +199,7 @@ omission:
 | The libsodium sealed box (§8.3) | §8 tells new implementations not to use it. A `C`-coded ciphertext is *recognised* and refused by name, so it never reads as a corrupt `F`. |
 | Composing a referral (§7.2.5) | A referral's `Signature_new` covers the invite's digest, so composing one needs the *introduced* VID's signing key at pack time. A wallet holding another VID's private key is not a shape this package should invite. Referrals are decoded and exposed unverified, with `referralSignedData` for a caller that can resolve `VID_new` and check. |
 | Fillable padding (§7.5) | The field is always written, always empty. Conformant, and leaves the traffic-analysis defence unimplemented rather than half-implemented. |
-| Packing Rev 2 | See *Revisions* above. |
+| Reading or packing the Rev 2 / Rev 3 drafts | See *Version* above. |
 
 ## Test
 

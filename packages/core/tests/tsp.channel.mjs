@@ -45,7 +45,6 @@ function simulatedVtaTransport(vta, holder, dispatch, replySenderVid) {
     async sendAndAwaitReply(packed, options = {}) {
       const req = await unpack(packed, {
         receiverDecryptionKey: vta.encSk,
-        senderEncryptionKey: holder.encPk,
         senderSigningKey: holder.signPk,
       });
       assert.equal(req.sender, holder.vid);
@@ -77,7 +76,6 @@ function simulatedVtaTransport(vta, holder, dispatch, replySenderVid) {
       // what's exercised, not a crypto failure.
       const sealed = await pack(utf8.encode(wrapTspEnvelope(replyDoc)), replySenderVid ?? vta.vid, holder.vid, {
         senderSigningKey: vta.signSk,
-        senderEncryptionKey: vta.encSk,
         receiverEncryptionKey: holder.encPk,
       });
       // Honour the transport contract: the channel decides which frame is its

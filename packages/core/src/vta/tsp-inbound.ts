@@ -117,7 +117,6 @@ export async function unpackInboundTsp(
   try {
     opened = await unpack(bytes, {
       receiverDecryptionKey: opts.holder.encryptionPrivateKey,
-      senderEncryptionKey: sender.encryptionPublicKey,
       senderSigningKey: sender.signingPublicKey,
     });
   } catch (err) {

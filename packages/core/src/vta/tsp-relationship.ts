@@ -1,10 +1,10 @@
-// Forming the TSP relationship a Rev 3 peer requires before it will accept
+// Forming the TSP relationship a TSP peer requires before it will accept
 // anything (7.2.2).
 //
-// Rev 3 turned relationships from bookkeeping into a precondition: "if an
-// endpoint receives an application message destined to one of its legitimate
-// VIDs, but it has not established a relationship from the source VID in the
-// message to its own VID, it SHOULD drop the message." The message is dropped,
+// Rev 3, and 1.0 after it, turned relationships from bookkeeping into a
+// precondition: "if an endpoint receives an application message destined to
+// one of its legitimate VIDs, but it has not established a relationship from
+// the source VID in the message to its own VID, it SHOULD drop the message." The message is dropped,
 // not refused -- nothing comes back -- so a wallet that skips this does not get
 // an error, it gets a 30-second timeout and a transport that looks broken.
 //
@@ -290,7 +290,7 @@ export type InboundControlOutcome =
  * and `resolveCancel` ignores a cancellation naming a relationship we do not
  * hold — answering that would let anyone probe which relationships we hold.
  * An invite is ignored: this wallet initiates its relationships and does not
- * take inbound ones, and a Rev 3 peer may send application messages over an
+ * take inbound ones, and a TSP peer may send application messages over an
  * invite it is still waiting on (§3.6), so ignoring it loses nothing.
  */
 export async function applyInboundControl(

@@ -1,13 +1,15 @@
-// Rev 3 pack and unpack — the revision this package speaks.
+// TSP 1.0 pack and unpack — the only version this package speaks.
 //
 //   -E<count>                     one frame; the count covers everything below
-//     YTSP <version>                `YTSP-AAC`
+//     YTSP <version>                `YTSP-BAA`
 //     <var-data B> sender-VID
 //     <var-data B> receiver-VID     `4BAA` when absent
 //     <var-data F> enc ‖ ct       HPKE-Base ciphertext, AEAD tag inside ct
 //   -C23 -K22 B0 sig(64)          indexed Ed25519 signature over the above
 //
-// ── What moved from Rev 2 ──
+// 1.0 is Rev 3's wire with the sender VID required in every confidential
+// payload. What Rev 3 moved from Rev 2, and so what this codec has never
+// spoken:
 //
 // * **HPKE-Base, not HPKE-Auth.** The sender's KEM key no longer participates,
 //   so packing and unpacking each take one fewer key than they did. Sender
@@ -106,16 +108,7 @@ export interface UnsafeDeterministicPack {
   /** RFC 9180 §7.1.3 `DeriveKeyPair` input for the HPKE-Base ephemeral — the
    *  `ikmE` Appendix A prints. At least 32 bytes. */
   __unsafeIkmE: Uint8Array;
-  /** Write the NULL VID `4BAA` in the ESSR sender field instead of the sender's
-   *  VID. §9.2 permits it under HPKE-Base, and the published vectors use it;
-   *  this package's own stance is to always write the VID (see `payload.ts`),
-   *  so it is offered only here, for reproducing those vectors. */
-  nullPayloadSender?: boolean;
 }
-
-/** The ESSR sender field's content for this pack. */
-const payloadSender = (senderVid: string, unsafe?: UnsafeDeterministicPack): string =>
-  unsafe?.nullPayloadSender === true ? "" : senderVid;
 
 /** Encode the signature attachment: `-C23 -K22 B0 sig(64)`. */
 function encodeSignatureFrame(signature: Uint8Array, out: number[]): void {
@@ -186,7 +179,7 @@ async function sealFrame(
   return new Uint8Array(out);
 }
 
-/** Pack a Rev 3 application message of any kind. */
+/** Pack an application message of any kind. */
 export async function packWithHops(
   body: Uint8Array,
   kind: ApplicationKind,
@@ -197,7 +190,7 @@ export async function packWithHops(
   unsafe?: UnsafeDeterministicPack,
 ): Promise<PackedMessage> {
   const fields = encodeFields(senderVid, receiverVid);
-  const { frame, threadDigest } = encodePayloadFrame(body, kind, hops, payloadSender(senderVid, unsafe));
+  const { frame, threadDigest } = encodePayloadFrame(body, kind, hops, senderVid);
   return { bytes: await sealFrame(fields, frame, keys, unsafe), threadDigest };
 }
 
@@ -218,7 +211,7 @@ export async function packControl(
   unsafe?: UnsafeDeterministicPack,
 ): Promise<PackedMessage> {
   const fields = encodeFields(senderVid, receiverVid);
-  const { frame, threadDigest } = encodeControlFrame(control, payloadSender(senderVid, unsafe), fields);
+  const { frame, threadDigest } = encodeControlFrame(control, senderVid, fields);
   return { bytes: await sealFrame(fields, frame, keys, unsafe), threadDigest };
 }
 
@@ -292,7 +285,7 @@ export function packCancel(
   );
 }
 
-/** Pack a Rev 3 direct message. */
+/** Pack a direct message. */
 export function pack(
   body: Uint8Array,
   senderVid: string,
@@ -303,7 +296,8 @@ export function pack(
   return packWithHops(body, "direct", [], senderVid, receiverVid, keys, unsafe);
 }
 
-/** Unpack a Rev 3 message. */
+/** Unpack a TSP 1.0 message. The caller has already gated the version
+ *  (`../revision.ts`). */
 export async function unpack(
   wireBytes: Uint8Array,
   keys: UnpackKeys,

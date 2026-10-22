@@ -1,4 +1,4 @@
-// The Rev 3 `-E` envelope frame (spec Rev 3 §9.1).
+// The `-E` envelope frame (§9.1).
 //
 // The envelope is the cleartext outer frame: TSP version, sender VID, receiver
 // VID. Two things changed from Rev 2 and both reach right through the packing
@@ -72,7 +72,7 @@ export function finalizeFrame(fields: Uint8Array, body: Uint8Array): Uint8Array 
   return new Uint8Array(out);
 }
 
-/** Decode a Rev 3 envelope and report the offsets needed to open and verify
+/** Decode an envelope and report the offsets needed to open and verify
  *  the message. Throws on a malformed frame. */
 export function decodeEnvelope(data: Uint8Array): DecodedEnvelope {
   const cur: wire.Cursor = { pos: 0 };

@@ -1,11 +1,11 @@
-// Rev 3 payload *field* codecs — the pieces every payload layout is built from.
+// Payload *field* codecs — the pieces every payload layout is built from.
 //
 // These live apart from both `payload.ts` (which dispatches on the type code)
 // and `control.ts` (which composes the relationship-forming layouts) because
 // both need them and neither owns them. Splitting them out is also what keeps
 // the two from importing each other in a cycle.
 //
-// §9.2 gives every Rev 3 layout the same skeleton — type code, ESSR sender VID,
+// §9.2 gives every layout the same skeleton — type code, ESSR sender VID,
 // type-specific fields, padding — so most of what differs between a generic
 // message and an invite is which of these appear and in what order.
 
@@ -33,7 +33,7 @@ export function generateNonce(): Uint8Array {
   return nonce;
 }
 
-/** The ESSR sender-VID field. Always written; the NULL VID is the empty string. */
+/** The ESSR sender-VID field. Always the sender's VID: 1.0 requires it in every confidential payload. */
 export function encodeSenderField(senderVid: string, out: number[]): void {
   wire.encodeVariableData(wire.TSP_VID, utf8.encode(senderVid), out);
 }

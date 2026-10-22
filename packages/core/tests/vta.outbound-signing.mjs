@@ -177,7 +177,6 @@ test("TSP: the sealed document carries a proof, distinct from the outer signatur
     async sendAndAwaitReply(bytes, options = {}) {
       const opened = await unpack(bytes, {
         receiverDecryptionKey: vtaEncSk,
-        senderEncryptionKey: x25519.getPublicKey(holderEncSk),
         senderSigningKey: ed25519.getPublicKey(holderSignSk),
       });
       // Opened through the binding: what the wallet seals is the envelope, and
@@ -200,7 +199,6 @@ test("TSP: the sealed document carries a proof, distinct from the outer signatur
         holderVid,
         {
           senderSigningKey: vtaSignSk,
-          senderEncryptionKey: vtaEncSk,
           receiverEncryptionKey: x25519.getPublicKey(holderEncSk),
         },
       );

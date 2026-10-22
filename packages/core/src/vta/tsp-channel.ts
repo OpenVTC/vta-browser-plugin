@@ -17,12 +17,10 @@
 // packed bytes is an injected `TspTransport` (mediator-backed in production, a
 // simulator in tests).
 //
-// **We send spec Rev 3 and read Rev 3 or Rev 2.** The revision is not
-// negotiated and cannot be: an inbound message carries a version marker that
-// says what it is, an outbound one has nothing to read. So `unpack` here still
-// passes the VTA's X25519 public key — which Rev 3 ignores and Rev 2 needs to
-// open a message at all — and `pack` does not. A VTA still on affinidi-tsp
-// 0.1.x cannot read what we send; that is the cutover, not a bug.
+// **We speak TSP 1.0 (`YTSP-BAA`) and nothing else.** The version is not
+// negotiated: a message from a VTA still on a draft (affinidi-tsp 0.2.x or
+// earlier) is refused by `unpack` as `E_TSP_REVISION`, and that VTA refuses
+// ours. The VTA and this wallet cut over together.
 
 import { pack, unpack } from "@openvtc/vti-tsp-js";
 
@@ -94,7 +92,6 @@ export function openReplyOnce(
     try {
       reply = await unpack(bytes, {
         receiverDecryptionKey: holder.encryptionPrivateKey,
-        senderEncryptionKey: vta.encryptionPublicKey,
         senderSigningKey: vta.signingPublicKey,
       });
     } catch (err) {
@@ -129,15 +126,13 @@ export interface TspHolderIdentity {
   signingPrivateKey: Uint8Array;
   /** X25519 private key — decrypts replies sealed to us.
    *
-   *  Under Rev 3 that is all it does: HPKE-Base does not put the sender's key
-   *  in the KEM, so this is no longer half of our outbound authenticity. */
+   *  That is all it does: HPKE-Base does not put the sender's key in the KEM,
+   *  so it is no part of our outbound authenticity. */
   encryptionPrivateKey: Uint8Array;
   /** X25519 public key.
    *
-   *  A Rev 3 counterparty never needs it — it is kept because it is the key a
-   *  peer resolves from our DID, and because a Rev 2 peer's `unpack` cannot
-   *  open our messages without it. Rev 2 is read-only here, so nothing in this
-   *  package sends under it. */
+   *  The key a peer resolves from our DID and seals its replies to. Nothing
+   *  here uses it to open a message. */
   encryptionPublicKey: Uint8Array;
 }
 

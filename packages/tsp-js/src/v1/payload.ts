@@ -1,6 +1,6 @@
-// The Rev 3 CESR payload frame — the plaintext that gets sealed (§9.2/§9.3).
+// The CESR payload frame — the plaintext that gets sealed (§9.2/§9.3).
 //
-// Every Rev 3 layout has the same shape: type code, ESSR sender VID,
+// Every layout has the same shape: type code, ESSR sender VID,
 // type-specific fields, padding. Rev 2 had none of the first two and none of
 // the last.
 //
@@ -17,13 +17,13 @@
 //
 // ── The ESSR sender field ──
 //
-// Rev 3 moved sender authenticity out of the KEM: HPKE-Base does not
-// authenticate a sender, so the binding is the AAD plus this field plus the
-// outer signature. Under HPKE-Base the field MAY be the NULL VID; when it is
-// not, it MUST equal the envelope sender, and §3.7 step 7 has the receiver
-// check exactly that. We always write it and always check it — the spec's own
-// security considerations note the two bindings are then independent, which is
-// the argument for not resting sender authenticity on one mechanism.
+// HPKE-Base does not authenticate a sender, so the binding is the AAD plus
+// this field plus the outer signature. 1.0 requires the field to carry the
+// sender's VID in every confidential payload, and §3.7 step 7 has the receiver
+// check it against the envelope; Rev 3 let HPKE-Base write the NULL VID
+// instead. Every payload this package reads is confidential, so a NULL sender
+// field is refused outright. The two bindings are independent, which is the
+// argument for not resting sender authenticity on one mechanism.
 //
 // ── Padding ──
 //
@@ -72,7 +72,7 @@ export interface DecodedFrame {
   /** The plaintext body: the upper-layer payload for Direct, the raw inner
    *  message for Nested/Routed, empty for a control or padding frame. */
   body: Uint8Array;
-  /** The ESSR sender VID as carried, or `""` for the NULL VID. */
+  /** The ESSR sender VID as carried. Never the NULL VID: decoding refuses it. */
   senderVid: string;
   /** The thread digest: SHA-256 over the whole `-Z` frame for an application
    *  message, and the carried `TSP_Digest` for a control one. */
@@ -154,9 +154,10 @@ export function encodeControlFrame(
 /**
  * Decode a payload frame.
  *
- * `envelopeSender` is checked against the ESSR sender field: a non-NULL field
- * that disagrees with the envelope is a message claiming two senders, which is
- * a verification failure and not a parse one. `envelopeFields` is needed to
+ * `envelopeSender` is checked against the ESSR sender field, which must name
+ * it: a NULL field is a confidential payload without its sender (§3.7 step 7),
+ * and one that disagrees is a message claiming two senders. Both are
+ * verification failures, not parse ones. `envelopeFields` is needed to
  * recompute a control message's self-addressing digest.
  */
 export function decodePayloadFrame(
@@ -177,7 +178,7 @@ export function decodePayloadFrame(
   const typeCode = frame.slice(cur.pos, cur.pos + 3);
   cur.pos += 3;
 
-  // Every Rev 3 layout carries the ESSR sender field next.
+  // Every layout carries the ESSR sender field next.
   const senderFieldBegin = cur.pos;
   const senderBytes = wire.decodeVariableData(wire.TSP_VID, frame, cur);
   if (senderBytes === undefined) throw new Error("tsp: missing ESSR sender VID field");
@@ -188,7 +189,10 @@ export function decodePayloadFrame(
   } catch {
     throw new Error("tsp: ESSR sender VID is not UTF-8");
   }
-  if (senderVid.length > 0 && senderVid !== envelopeSender) {
+  if (senderVid.length === 0) {
+    throw new Error("tsp: ESSR sender VID is the NULL VID; a confidential payload must name its sender");
+  }
+  if (senderVid !== envelopeSender) {
     throw new Error("tsp: ESSR sender VID does not match the envelope sender");
   }
 
