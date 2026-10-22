@@ -1879,15 +1879,15 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/deal/0.1",
+      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/deal/0.2",
       "consts": [
-        "TASK_VTA_PCS_TRUSTEE_DEAL_0_1"
+        "TASK_VTA_PCS_TRUSTEE_DEAL_0_2"
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/decrypt/0.1",
+      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/decrypt/0.2",
       "consts": [
-        "TASK_VTA_PCS_TRUSTEE_DECRYPT_0_1"
+        "TASK_VTA_PCS_TRUSTEE_DECRYPT_0_2"
       ]
     },
     {
@@ -1897,15 +1897,21 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/justify/0.1",
+      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/justify/0.2",
       "consts": [
-        "TASK_VTA_PCS_TRUSTEE_JUSTIFY_0_1"
+        "TASK_VTA_PCS_TRUSTEE_JUSTIFY_0_2"
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/keys/0.1",
+      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/keys/0.2",
       "consts": [
-        "TASK_VTA_PCS_TRUSTEE_KEYS_0_1"
+        "TASK_VTA_PCS_TRUSTEE_KEYS_0_2"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/pcs/trustee/read/0.1",
+      "consts": [
+        "TASK_VTA_PCS_TRUSTEE_READ_0_1"
       ]
     },
     {
@@ -1921,9 +1927,9 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/pcs/vote-encrypted/0.1",
+      "uri": "https://trusttasks.org/spec/vta/pcs/vote-encrypted/0.2",
       "consts": [
-        "TASK_VTA_PCS_VOTE_ENCRYPTED_0_1"
+        "TASK_VTA_PCS_VOTE_ENCRYPTED_0_2"
       ]
     },
     {
