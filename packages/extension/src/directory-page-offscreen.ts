@@ -258,7 +258,17 @@ export async function runDirectoryPageOp(
     const asked = credentialAskFor(fields, op.fields);
     if (!asked.ok) throw new Error(asked.error);
     const { ask } = asked;
-    const held = await credVaultQuery(sender, { holder, service, type: ask.credentialType, status: "valid" });
+    // Only credentials the agent would present as the member: the community
+    // accepts a presentation only from its member, so one bound to another
+    // key (a separate SD-JWT holder key) would be refused after the member
+    // chose it.
+    const held = await credVaultQuery(sender, {
+      holder,
+      service,
+      type: ask.credentialType,
+      status: "valid",
+      subjectDid: op.member,
+    });
     const candidates = held
       .filter((c) => !c.lifecycle || c.lifecycle === "active")
       .filter((c) => !ask.issuers || (c.issuerDid !== undefined && ask.issuers.includes(c.issuerDid)))
