@@ -8,21 +8,18 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 // Mirrors affinidi-tsp src/message/direct.rs tests (random keys, JS-internal
-// pack→unpack round-trip). Byte-exact cross-impl vectors against the Rust crate
-// are a follow-up (needs fixed-key vectors generated from Rust).
+// pack→unpack round-trip). The cross-implementation checks against the Rust
+// crate are in `interop.rust-vector.mjs`.
 function genKeys() {
   const senderSign = ed25519.utils.randomSecretKey();
-  const senderEnc = x25519.utils.randomSecretKey();
   const receiverEnc = x25519.utils.randomSecretKey();
   return {
     packKeys: {
       senderSigningKey: senderSign,
-      senderEncryptionKey: senderEnc,
       receiverEncryptionKey: x25519.getPublicKey(receiverEnc),
     },
     unpackKeys: {
       receiverDecryptionKey: receiverEnc,
-      senderEncryptionKey: x25519.getPublicKey(senderEnc),
       senderSigningKey: ed25519.getPublicKey(senderSign),
     },
   };

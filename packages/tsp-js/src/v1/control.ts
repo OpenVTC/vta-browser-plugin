@@ -6,7 +6,7 @@
 // wallet that cannot send an invite cannot send anything.
 //
 // On the wire they are not a serialized body inside a generic payload. Each is
-// its own CESR payload-frame variant, and like every Rev 3 layout each begins
+// its own CESR payload-frame variant, and like every layout each begins
 // with the ESSR sender-VID field and ends with the padding field:
 //
 //   Invite  XRFI  sndr  Digest  Nonce  Reply_Path  Referral  pad
@@ -164,7 +164,7 @@ function inviteDigestAfter(nonce: Uint8Array, route: string[], referral?: Referr
 
 /**
  * The bytes `Signature_new` is made over (§9.3):
- * `{XRFI, VID_sndr | 4BAA, Digest, Nonce, Reply_Path, VID_new}`.
+ * `{XRFI, VID_sndr, Digest, Nonce, Reply_Path, VID_new}`.
  *
  * Exported so a caller that has resolved `VID_new` can verify a referral it was
  * sent — see {@link Referral.signature} for why this cannot happen during

@@ -3,10 +3,10 @@
 //
 // Every function here packs exactly what its namesake in the main entry point
 // packs, except that the HPKE-Base ephemeral key is derived from a caller-fixed
-// `ikmE` (RFC 9180 §7.1.3 DeriveKeyPair) instead of drawn at random, and the
-// ESSR sender field may be written as the NULL VID. Ed25519 signatures are
-// already deterministic, so with those two fixed — and the invite nonce, which
-// `packInvite` already takes — the whole message is reproducible byte for byte.
+// `ikmE` (RFC 9180 §7.1.3 DeriveKeyPair) instead of drawn at random. Ed25519
+// signatures are already deterministic, so with that fixed — and the invite
+// nonce, which `packInvite` already takes — the whole message is reproducible
+// byte for byte.
 //
 // ── Why this is unsafe ──
 //
@@ -32,7 +32,7 @@ import {
   type PackKeys,
   type PackedMessage,
   type UnsafeDeterministicPack,
-} from "./rev3/direct.js";
+} from "./v1/direct.js";
 
 export type { PackKeys, PackedMessage, UnsafeDeterministicPack };
 

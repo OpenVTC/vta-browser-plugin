@@ -3,14 +3,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { unpack, peekRevision } from "../dist/index.js";
+import * as wire from "../dist/cesr/wire.js";
 
 // ── The specification's own Appendix A test vectors ──
 //
-// Fixture extracted from Appendix A of the merged specification
-// (trustoverip/tswg-tsp-specification f5b8668), which packs `YTSP-AAC`. It
-// replaced the pre-merge `YTSP-ABA` vectors from spec commit 66a1580: the
-// version is inside the signed envelope, the AAD and every SAID, so every
-// message changed with it.
+// Fixture from Appendix A of the released specification, TSP 1.0
+// (trustoverip/tswg-tsp-specification ccda6b3), which packs `YTSP-BAA`. It
+// replaced the Rev 3 `YTSP-AAC` vectors: the version is inside the signed
+// envelope, the AAD and every SAID, so every message changed with it, and the
+// confidential ones gained the sender VID in their payload.
 //
 // These check something neither a round trip nor a two-implementation interop
 // run can. A round trip passes whenever the encoder and decoder share a
@@ -18,15 +19,15 @@ import { unpack, peekRevision } from "../dist/index.js";
 // unpacks with the other passes whenever *both* share one. These bytes are
 // fixed, external, and were produced by neither of us.
 //
-// Three of the ten are exercised here and the three HPKE-Base control vectors in
-// `control.spec-vectors.mjs`. `direct-sealed-box` and `control-rfi-sealed-box`
+// Three of the eleven are exercised here and the four HPKE-Base control vectors
+// in `control.spec-vectors.mjs`. `direct-sealed-box` and `control-rfi-sealed-box`
 // need the libsodium sealed box (§8.3), which we deliberately do not implement;
 // `direct-signed-only` is an unencrypted `-E` frame we never receive;
 // `direct-hpke-base-pq` needs ML-KEM and ML-DSA. Each is skipped by
 // name below rather than silently absent, so the list says what is missing
 // instead of looking complete.
 const VECTORS = JSON.parse(
-  readFileSync(new URL("./fixtures/spec-rev3-vectors.json", import.meta.url), "utf8"),
+  readFileSync(new URL("./fixtures/spec-v1-vectors.json", import.meta.url), "utf8"),
 );
 
 const b64u = (s) => new Uint8Array(Buffer.from(s, "base64url"));
@@ -43,25 +44,20 @@ const openVector = (name) => {
   });
 };
 
-test("the published vectors declare Rev 3 as we pack it: YTSP-AAC", () => {
-  // The merged Appendix A carries `YTSP-AAC` — MINOR 2 under the MAJOR.MINOR
-  // reading this package and affinidi-tsp both use, the same marker our own
-  // packing emits. Pre-merge drafts carried `ABA` (MINOR 64), which still reads
-  // as Rev 3 (see `revision.dispatch.mjs`); `peekRevision` matches Rev 2 exactly
-  // and treats everything else at MAJOR 0 as current.
+test("the published vectors declare the version we pack: YTSP-BAA", () => {
+  // A stale fixture would fail every open on MAJOR anyway; this is the test
+  // whose failure says so in as many words.
   for (const [name, v] of Object.entries(VECTORS.vectors)) {
     const peeked = peekRevision(b64u(v.message));
-    assert.equal(peeked.revision, "rev3", name);
-    assert.equal(peeked.major, 0, name);
-    assert.equal(peeked.minor, 2, name);
+    assert.equal(peeked.major, 1, name);
+    assert.equal(peeked.minor, 0, name);
     assert.equal(peeked.recognised, true, name);
-    assert.equal(v.message.slice(4, 12), "YTSP-AAC", `${name} carries YTSP-AAC in qb64`);
+    assert.equal(v.message.slice(4, 12), "YTSP-BAA", `${name} carries YTSP-BAA in qb64`);
   }
 });
 
 test("direct-hpke-base — opens, verifies, and carries the published payload", async () => {
   const unpacked = await openVector("direct-hpke-base");
-  assert.equal(unpacked.revision, "rev3");
   assert.equal(unpacked.messageType, "direct");
   assert.equal(unpacked.sender, id("alice").id);
   assert.equal(unpacked.receiver, id("bob").id);
@@ -69,20 +65,16 @@ test("direct-hpke-base — opens, verifies, and carries the published payload", 
   assert.deepEqual(unpacked.hops, []);
 });
 
-test("direct-hpke-base — the ESSR sender field may be the NULL VID", async () => {
-  // This vector's payload frame is `-ZAJ XSCS 4BAA 4BAA -AAF 5BAE <hello world>`:
-  // the sender field is `4BAA`, the NULL VID. §9.2 permits it under HPKE-Base,
-  // and affinidi-tsp writes the real VID instead — so a decoder that required
-  // either spelling would reject half the conformant messages in existence.
-  // qb64 `-ZAJ XSCS 4BAA 4BAA -AAF 5BAE <hello world>`, which in the binary
-  // domain this package works in is the layout below. The third field — the
-  // ESSR sender — is `e01000`, an empty `B` var-data field: the NULL VID.
-  const frame = Buffer.from(VECTORS.vectors["direct-hpke-base"].payload, "base64url");
-  assert.equal(frame.subarray(0, 3).toString("hex"), "f99009", "-Z count, 9 quadlets");
-  assert.equal(frame.subarray(3, 6).toString("hex"), "5d2092", "XSCS type code");
-  assert.equal(frame.subarray(6, 9).toString("hex"), "e01000", "ESSR sender: NULL VID");
-  assert.equal(frame.subarray(9, 12).toString("hex"), "e01000", "padding: empty field");
-  assert.equal(frame.subarray(12, 15).toString("hex"), "f80005", "-A generic stream, 5 quadlets");
+test("direct-hpke-base — the ESSR sender field names the sender", async () => {
+  // 1.0 requires the sender VID in every confidential payload (§3.2), where
+  // Rev 3 let HPKE-Base write the NULL VID `4BAA` — which is what this vector
+  // carried at `YTSP-AAC`. Now: `-ZAc XSCS 4BAT <alice> 4BAA -AAF 5BAE <hello
+  // world>`, and the field after the type code is alice's VID.
+  const frame = b64u(VECTORS.vectors["direct-hpke-base"].payload);
+  assert.equal(Buffer.from(frame.subarray(3, 6)).toString("hex"), "5d2092", "XSCS type code");
+  const cur = { pos: 6 };
+  const sender = new TextDecoder().decode(wire.decodeVariableData(wire.TSP_VID, frame, cur));
+  assert.equal(sender, id("alice").id, "ESSR sender: the sender's VID, not 4BAA");
   await assert.doesNotReject(() => openVector("direct-hpke-base"));
 });
 
@@ -94,7 +86,7 @@ test("nested-direct — the inner message is carried raw, not in a B field", asy
   // carries it raw. Reading the payload as a whole TSP message is what says we
   // stripped nothing and added nothing: it must still lead with a `-E` frame.
   const inner = peekRevision(unpacked.payload);
-  assert.equal(inner.revision, "rev3");
+  assert.deepEqual([inner.major, inner.minor], [1, 0]);
 });
 
 test("routed — the hop list survives the -J byte-length count", async () => {
@@ -138,6 +130,7 @@ test("vectors this implementation does not cover are named, not omitted", () => 
     "control-rfi-direct",
     "control-rfa-direct",
     "control-rfd",
+    "control-rfi-referral",
   ];
   assert.deepEqual(
     new Set([...covered, ...Object.keys(uncovered)]),

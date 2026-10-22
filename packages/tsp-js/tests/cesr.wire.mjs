@@ -21,8 +21,6 @@ test("code identifiers match the reference", () => {
   assert.equal(w.TSP_HPKE_BASE_CIPHERTEXT, 5); // Rev 3 `F`
   assert.equal(w.TSP_SEALED_BOX_CIPHERTEXT, 2); // Rev 3 `C` (§8.3, recognised only)
   assert.equal(w.TSP_GENERIC_STREAM, 0); // Rev 3 `-A`
-  assert.equal(w.TSP_HPKEAUTH_CIPHERTEXT, 6); // Rev 2 `G`, struck from the Rev 3 table
-  assert.equal(w.TSP_TMP, 23); // Rev 2 only
   assert.equal(w.TSP_ETS_WRAPPER, 4);
   assert.equal(w.TSP_PAYLOAD, 25);
   assert.equal(w.TSP_ATTACH_GRP, 2);
@@ -44,20 +42,21 @@ test("encodeCount(-E, 19) = f8 40 13 and round-trips", () => {
   assert.equal(cur.pos, 3);
 });
 
-test("encodeVersion = 61 34 8f f8 00 02 — YTSP-AAC, the Rev 3 marker", () => {
-  // Rev 2 was `f8 00 01` (`YTSP-AAB`). One byte, and it is the byte the whole
-  // dual-revision dispatch turns on, so it is pinned rather than round-tripped.
+test("encodeVersion = 61 34 8f f8 10 00 — YTSP-BAA, TSP 1.0", () => {
+  // Rev 2 was `f8 00 01` (`YTSP-AAB`) and Rev 3 `f8 00 02` (`YTSP-AAC`); 1.0
+  // moves MAJOR, in the middle byte. It is the byte the version gate turns on,
+  // so it is pinned rather than round-tripped.
   const buf = write((out) => w.encodeVersion(out));
-  assert.equal(hex(buf), "61348ff80002");
+  assert.equal(hex(buf), "61348ff81000");
   const cur = { pos: 0 };
-  assert.deepEqual(w.readVersion(buf, cur), { major: 0, minor: 2 });
+  assert.deepEqual(w.readVersion(buf, cur), { major: 1, minor: 0 });
   assert.equal(cur.pos, 6);
 });
 
-test("readVersion reads a Rev 2 marker without judging it", () => {
-  // The discriminator has to parse a revision it does not implement the codec
-  // for — that is the entire job. MINOR comes back unjudged; `peekRevision`
-  // decides, and `readVersion` does not get an opinion.
+test("readVersion reads a draft marker without judging it", () => {
+  // The gate has to parse a version it refuses, so it can say which one it
+  // refused. MAJOR and MINOR come back unjudged; `peekRevision` decides, and
+  // `readVersion` does not get an opinion.
   const rev2 = bytes([0x61, 0x34, 0x8f, 0xf8, 0x00, 0x01]);
   const cur = { pos: 0 };
   assert.deepEqual(w.readVersion(rev2, cur), { major: 0, minor: 1 });
@@ -84,11 +83,14 @@ test("variable data — 21-byte VID (0 lead bytes, D4 selector)", () => {
   assert.deepEqual(w.decodeVariableData(w.TSP_VID, buf, cur), vid);
 });
 
-test("fixed data — 2-byte TMP marker = 5c 00 00", () => {
-  const buf = write((out) => w.encodeFixedData(w.TSP_TMP, bytes([0, 0]), out));
+test("fixed data — 2 bytes under `X` = 5c 00 00 (a one-byte header)", () => {
+  // Rev 2's trailing `X 00 00` marker, kept as a golden vector for the
+  // one-byte fixed-data header now that nothing emits the marker itself.
+  const X = w.cesrInt("X");
+  const buf = write((out) => w.encodeFixedData(X, bytes([0, 0]), out));
   assert.equal(hex(buf), "5c0000");
   const cur = { pos: 0 };
-  assert.deepEqual(w.decodeFixedData(w.TSP_TMP, 2, buf, cur), bytes([0, 0]));
+  assert.deepEqual(w.decodeFixedData(X, 2, buf, cur), bytes([0, 0]));
   assert.equal(cur.pos, 3);
 });
 
@@ -101,10 +103,8 @@ test("fixed data — 64-byte Ed25519 signature header = d0 10", () => {
 });
 
 // Hop lists are no longer here: Rev 3 §9.2 made the `-J` count the group's byte
-// length where Rev 2 counted VIDs, so the same bytes mean two different things
-// and neither codec can share one implementation. Each revision owns its own —
-// `rev3/payload.ts` and `rev2/reader.ts` — and they are exercised through
-// `message.routed.mjs` and the published `routed` vector respectively.
+// length where Rev 2 counted VIDs. The codec owns its own in `v1/fields.ts`,
+// exercised through `message.routed.mjs` and the published `routed` vector.
 
 test("count long-form (≥ 4096) — Rev 3 spells it --X, and the count is exact", () => {
   // Two things changed here and both were invisible to a round trip.
@@ -133,20 +133,14 @@ test("count long-form (≥ 4096) — Rev 3 spells it --X, and the count is exact
   assert.equal(cur0.pos, buf0.length);
 });
 
-test("count long-form — a Rev 2 header decodes only under the Rev 2 form", () => {
-  // `-0Z` + 5000. Hand-built, because nothing in this package emits one any
-  // more: the Rev 2 reader is the only caller that passes LONG_COUNT_REV2, and
-  // the Rev 3 decoder must *not* accept these bytes — a decoder loose enough to
-  // take either spelling would read a Rev 2 frame as Rev 3 and then fail
-  // somewhere that says nothing about why.
+test("count long-form — Rev 2's `-0Z` spelling is refused", () => {
+  // `-0Z` + 5000, hand-built: nothing emits it. A decoder loose enough to take
+  // either spelling would read a Rev 2 frame's counts and then fail somewhere
+  // that says nothing about why.
   const rev2 = bytes([0xfb, 0x46, 0x40, 0x00, 0x13, 0x88]);
-  const asRev2 = { pos: 0 };
-  assert.equal(w.decodeCount(w.TSP_PAYLOAD, rev2, asRev2, w.LONG_COUNT_REV2), 5000);
-  assert.equal(asRev2.pos, 6);
-
-  const asRev3 = { pos: 0 };
-  assert.equal(w.decodeCount(w.TSP_PAYLOAD, rev2, asRev3), undefined);
-  assert.equal(asRev3.pos, 0, "a refused decode advances nothing");
+  const cur = { pos: 0 };
+  assert.equal(w.decodeCount(w.TSP_PAYLOAD, rev2, cur), undefined);
+  assert.equal(cur.pos, 0, "a refused decode advances nothing");
 });
 
 test("isTsp accepts both framings, and nothing else", () => {
@@ -173,5 +167,5 @@ test("variable data round-trips across all lead-byte alignments", () => {
 test("wrong identifier fails to decode", () => {
   const buf = write((out) => w.encodeVariableData(w.TSP_VID, enc.encode("x"), out));
   const cur = { pos: 0 };
-  assert.equal(w.decodeVariableData(w.TSP_HPKEAUTH_CIPHERTEXT, buf, cur), undefined);
+  assert.equal(w.decodeVariableData(w.TSP_HPKE_BASE_CIPHERTEXT, buf, cur), undefined);
 });

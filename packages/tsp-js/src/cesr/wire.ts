@@ -16,18 +16,12 @@
 //   - count code     `encodeCount(id, count)`          — a `-`-framed group header
 //                                                        carrying a quadlet count.
 //
-// ── Two revisions ──
+// ── One version ──
 //
-// The frame *primitives* — fixed data, variable data, the short count code —
-// are identical in spec Rev 2 and Rev 3, so they live here once. Exactly two
-// things in this file are revision-dependent, and both are decode-side only
-// because this package packs Rev 3 and nothing else (see `../revision.ts`):
-//
-//   1. The long count code's second selector: Rev 2 spelled it `-0X#####`,
-//      Rev 3 spells it `--X#####`. `decodeCount` takes the form to expect.
-//   2. The code table. Rev 3 struck HPKE-Auth's `G` ciphertext and the `X`
-//      trailing marker and added `F`, `C`, `-A`, `XCTL` and `XPAD`. Both sets
-//      are named below; the revision modules pick.
+// This package speaks TSP 1.0 and nothing else (see `../revision.ts`). The
+// code table is the one Rev 3 introduced and 1.0 kept: Rev 2's HPKE-Auth `G`
+// ciphertext, its `X` trailing marker and its `-0X#####` long count are gone,
+// and `F`, `C`, `-A`, `XCTL` and `XPAD` are in.
 
 // CESR base64url selector values (index of the char in the base64url alphabet).
 const D0 = 52; // '0'
@@ -44,31 +38,14 @@ const DASH = 62; // '-'
  *  `DATA_LIMIT = 3 * (1 << 24)`, ~48 MiB). Guards against hostile size headers. */
 export const MAX_FIELD_SIZE = 3 * (1 << 24);
 
-/** Which spelling of the *long* count code a decoder should expect.
+/** TSP version `(major, minor)` this package packs and reads — 1.0,
+ *  `YTSP-BAA`, the released specification.
  *
- *  The value is the second selector of the six-byte header. Rev 2 used `0`
- *  (D0), from a superseded draft of the CESR v2 tables; Rev 3 pins the master
- *  table for genus `-_AAACAA`, which carries only the double-dash form. One
- *  character, and encoder and decoder agree with themselves either way — which
- *  is why `cesr.wire.mjs` pins the bytes rather than round-tripping them. */
-export const LONG_COUNT_REV2 = D0;
-/** @see LONG_COUNT_REV2 */
-export const LONG_COUNT_REV3 = DASH;
-
-/** TSP version `(major, minor)` this package **packs** — Rev 3, `YTSP-AAC`.
- *
- *  MAJOR.MINOR, two components rather than three: MINOR occupies the whole
- *  12-bit count. Pre-merge drafts of §9.1 read the three characters as MAJOR,
- *  MINOR, PATCH and gave `YTSP-ABA`; affinidi-tsp deliberately does not follow
- *  that reading, and neither do we — see that crate's `TSP_VERSION` for the
- *  argument. The merged specification's Appendix A vectors carry `YTSP-AAC`,
- *  the marker packed here. Nothing about interoperating depends on the choice: only MAJOR
- *  gates processability, it is the same character either way, and no
- *  implementation refuses a message on MINOR. */
-export const TSP_VERSION = { major: 0, minor: 2 } as const;
-
-/** The MINOR value Rev 2 carried (`YTSP-AAB`). Read, never written. */
-export const REV2_MINOR = 1;
+ *  MAJOR.MINOR, two components: one character of MAJOR, then MINOR across the
+ *  whole 12-bit count (§9.1). The drafts before it were 0.1 (Rev 2, `AAB`) and
+ *  0.2 (Rev 3, `AAC`); none interoperates with the next, and only MAJOR gates
+ *  processability, so a 0.x frame is refused at the version marker. */
+export const TSP_VERSION = { major: 1, minor: 0 } as const;
 
 /** Interpret a base64url string as a big-endian integer of its 6-bit symbols.
  *  Only used on ASCII base64url constants ≤ 4 chars (≤ 24 bits), so a JS number
@@ -117,9 +94,6 @@ function triplet(stream: Uint8Array, i: number): number | undefined {
 export const TSP_PLAINTEXT = cesrInt("B"); // 1
 export const TSP_VID = cesrInt("B"); // 1
 export const ED25519_SIGNATURE = cesrInt("B"); // 1
-/** `G`: var-data HPKE-Auth ciphertext. **Rev 2 only** — Rev 3 strikes the `G`
- *  codes from the table along with HPKE-Auth itself. */
-export const TSP_HPKEAUTH_CIPHERTEXT = cesrInt("G"); // 6
 /** `F`: var-data HPKE-Base ciphertext (Rev 3 §9.4). */
 export const TSP_HPKE_BASE_CIPHERTEXT = cesrInt("F"); // 5
 /** `C`: var-data libsodium sealed-box ciphertext (Rev 3 §8.3).
@@ -129,11 +103,8 @@ export const TSP_HPKE_BASE_CIPHERTEXT = cesrInt("F"); // 5
  *  sealed box: §8 tells new implementations not to use it, and our only TSP
  *  peers are the VTA and the mediator, which do not send one. */
 export const TSP_SEALED_BOX_CIPHERTEXT = cesrInt("C"); // 2
-/** `X`: 2-byte fixed-data marker emitted after the envelope VIDs. **Rev 2
- *  only** — Rev 3 deletes it and always writes the receiver-VID field. */
-export const TSP_TMP = cesrInt("X"); // 23
-/** `A`: fixed-data id for a relationship nonce (32 bytes in Rev 2, 16 in
- *  Rev 3 — the code follows from the payload length). */
+/** `A`: fixed-data id for a relationship nonce (16 bytes — the code follows
+ *  from the payload length). */
 export const TSP_NONCE = cesrInt("A"); // 0
 /** `I`: fixed-data id for a SHA-256 digest (32 bytes). */
 export const TSP_SHA256 = cesrInt("I"); // 8
@@ -236,15 +207,14 @@ export function encodeVariableData(identifier: number, payload: Uint8Array, out:
 
 /** Encode a count-code group header carrying `count` quadlets.
  *
- *  Always the Rev 3 long spelling `--X#####`, because this package packs Rev 3
- *  and nothing else. A Rev 2 message is read, never written. */
+ *  The long spelling is `--X#####`; see {@link decodeCount}. */
 export function encodeCount(identifier: number, count: number, out: number[]): void {
   if (count < 4096) {
     const word = (DASH << 18) | (bits(identifier, 6) << 12) | bits(count, 12);
     for (const b of beBytes(word)) out.push(b);
   } else {
     const word1 =
-      (DASH << 18) | (LONG_COUNT_REV3 << 12) | (bits(identifier, 6) << 6) | bits(count >>> 24, 6);
+      (DASH << 18) | (DASH << 12) | (bits(identifier, 6) << 6) | bits(count >>> 24, 6);
     const word2 = bits(count, 24);
     for (const b of beBytes(word1)) out.push(b);
     for (const b of beBytes(word2)) out.push(b);
@@ -282,13 +252,15 @@ export interface Cursor {
 /** Decode a count-code group header for `identifier`. Advances `cur` and
  *  returns the quadlet count, or undefined on mismatch.
  *
- *  `longForm` is the second selector to accept for the six-byte long header —
- *  {@link LONG_COUNT_REV3} (the default) or {@link LONG_COUNT_REV2}. */
+ *  The six-byte long header is `--X#####` (§9): a second DASH selector. Rev 2
+ *  spelled it `-0X#####`, from a superseded draft of the CESR v2 tables; that
+ *  form is refused. One character, and encoder and decoder agree with
+ *  themselves either way — which is why `cesr.wire.mjs` pins the bytes rather
+ *  than round-tripping them. */
 export function decodeCount(
   identifier: number,
   stream: Uint8Array,
   cur: Cursor,
-  longForm: number = LONG_COUNT_REV3,
 ): number | undefined {
   const word = triplet(stream, cur.pos);
   if (word === undefined) return undefined;
@@ -296,7 +268,7 @@ export function decodeCount(
   const expected =
     ((DASH << 18) | (bits(identifier, 6) << 12) | bits(index, 12)) >>> 0;
   const expectedLong =
-    ((DASH << 18) | (longForm << 12) | (bits(identifier, 6) << 6) | bits(index & 0x3f, 6)) >>> 0;
+    ((DASH << 18) | (DASH << 12) | (bits(identifier, 6) << 6) | bits(index & 0x3f, 6)) >>> 0;
   if (word === expected) {
     cur.pos += 3;
     return index;

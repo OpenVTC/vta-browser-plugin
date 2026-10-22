@@ -61,7 +61,6 @@ async function sealed(payload, { from = executor, senderVid = from.vid } = {}) {
     holder.vid,
     {
       senderSigningKey: from.signSk,
-      senderEncryptionKey: from.encSk,
       receiverEncryptionKey: holder.encPk,
     },
   );

@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { decodeEnvelope, unpack } from "../dist/index.js";
 import * as wire from "../dist/cesr/wire.js";
 import { deriveKeyPair } from "../dist/crypto/hpke-noble.js";
-import { decodeDigest, decodeNonce, decodeVidList } from "../dist/rev3/fields.js";
+import { decodeDigest, decodeNonce, decodeVidList } from "../dist/v1/fields.js";
 import {
   __unsafeDeterministicPack,
   __unsafeDeterministicPackAccept,
@@ -29,16 +29,17 @@ import {
 // `./unsafe-testing` subpath, whose fixed ephemeral must never be used outside a
 // test (see that module).
 //
-// Every input is derived from the vector, never hard-coded: the NULL-vs-present
-// ESSR sender field and the padding from the printed `payload`, the nonce and
-// digests and the inner message of a nesting from that same payload.
+// Every input is derived from the vector, never hard-coded: the padding from
+// the printed `payload`, the nonce and digests and the inner message of a
+// nesting from that same payload. The ESSR sender field is checked rather than
+// derived: 1.0 makes it the sender's VID, and that is all this packer writes.
 //
-// Of the ten vectors, six are HPKE-Base and all six re-pack. The other four
+// Of the eleven vectors, seven are HPKE-Base and six re-pack. The other five
 // cannot, for reasons that are about what this package packs, not about the
 // vectors — named below rather than silently skipped.
 
 const VECTORS = JSON.parse(
-  readFileSync(new URL("./fixtures/spec-rev3-vectors.json", import.meta.url), "utf8"),
+  readFileSync(new URL("./fixtures/spec-v1-vectors.json", import.meta.url), "utf8"),
 );
 
 const b64u = (s) => new Uint8Array(Buffer.from(s, "base64url"));
@@ -48,8 +49,8 @@ const eq = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 /**
  * Read the printed payload frame far enough to recover what a packer has to be
- * told: the type code, whether the ESSR sender field is the NULL VID, the
- * type-specific fields, and the padding. Parsed with the wire primitives rather
+ * told: the type code, the ESSR sender field, the type-specific fields, and
+ * the padding. Parsed with the wire primitives rather
  * than `decodePayloadFrame`, so a mis-reading there cannot hide one here.
  */
 function readPrintedPayload(printed) {
@@ -111,10 +112,10 @@ async function repack(name) {
   // a vector used either differently, re-packing it would be a different claim
   // and this says so instead of producing bytes that merely fail to match.
   assert.equal(p.padding.length, 0, `${name}: the packer writes an empty padding field`);
-  assert.ok(p.sender === "" || p.sender === sender.id, `${name}: ESSR sender is NULL or the sender`);
+  assert.equal(p.sender, sender.id, `${name}: the ESSR sender names the sender (1.0)`);
 
   const keys = { senderSigningKey: b64u(sender.skS), receiverEncryptionKey: b64u(receiver.pkE) };
-  const unsafe = { __unsafeIkmE: b64u(v.ikmE), nullPayloadSender: p.sender === "" };
+  const unsafe = { __unsafeIkmE: b64u(v.ikmE) };
 
   switch (p.type) {
     case "scs":
@@ -236,11 +237,18 @@ test("vectors that cannot be re-packed here are named, with the reason", () => {
     // The hybrid KEM draws its own encapsulation randomness and the vector
     // publishes no ephemeral material; nor does this package pack ML-KEM/ML-DSA.
     "direct-hpke-base-pq": "ML-KEM-768/X25519 + ML-DSA-65: not implemented, and no published ephemeral",
+    // HPKE-Base, with a published ikmE, but its Signature_new is made by the
+    // introduced VID's key and no packer here takes one: referrals are read
+    // (see `control.spec-vectors.mjs`), not written.
+    "control-rfi-referral": "referral invites are decode-only",
   };
   assert.deepEqual(
     new Set([...REPACKED, ...Object.keys(notRepacked)]),
     new Set(Object.keys(VECTORS.vectors)),
     "every published vector is either re-packed or named",
   );
-  for (const name of Object.keys(notRepacked)) assert.equal(VECTORS.vectors[name].ikmE, undefined, name);
+  for (const name of Object.keys(notRepacked)) {
+    if (name === "control-rfi-referral") continue; // has ikmE; see above
+    assert.equal(VECTORS.vectors[name].ikmE, undefined, name);
+  }
 });

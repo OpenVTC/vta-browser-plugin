@@ -36,6 +36,13 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Changed
 
+- **TSP 1.0 (breaking on the wire).** Requires `@openvtc/vti-tsp-js` ^0.4.0,
+  which speaks TSP 1.0 (`YTSP-BAA`) and refuses the Rev 2 and Rev 3 drafts as
+  `E_TSP_REVISION`. The TSP channel and inbound path therefore cannot exchange
+  messages with a VTA on `affinidi-tsp` 0.2.x or earlier; the VTA moves to
+  `affinidi-tsp` 0.3 (`affinidi-messaging-sdk` 0.39) in the same cutover.
+  `unpack` no longer takes the sender's X25519 key, which only Rev 2 used.
+
 - **What the executors push and reply is verified under `authentication`.**
   `verifyTrustTaskProof` with `expectedProofPurpose` now also requires the
   verification method to be listed under that relationship in the signer's DID
