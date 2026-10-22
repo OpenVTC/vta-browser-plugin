@@ -1319,6 +1319,12 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/vault/credentials/present/0.1",
+      "consts": [
+        "TASK_VAULT_CREDENTIALS_PRESENT_0_1"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/vault/credentials/purge/0.1",
       "consts": [
         "TASK_VAULT_CREDENTIALS_PURGE_0_1"

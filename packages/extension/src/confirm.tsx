@@ -1458,7 +1458,16 @@ if (root) {
       ) : isGitConsent ? (
         <GitConsent consentId={consentId} decide={(ok) => void sendConsentResult({ approved: ok, remember: false })} />
       ) : isDirectoryConsent ? (
-        <DirectoryConsent consentId={consentId} decide={(ok) => void sendConsentResult({ approved: ok, remember: false })} />
+        <DirectoryConsent
+          consentId={consentId}
+          decide={(ok, credential) =>
+            void sendConsentResult({
+              approved: ok,
+              remember: false,
+              ...(ok && credential ? { selectedCredential: credential } : {}),
+            })
+          }
+        />
       ) : isRoomConsent ? (
         <RoomConsent
           consentId={consentId}

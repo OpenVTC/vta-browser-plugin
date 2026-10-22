@@ -545,7 +545,10 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // external directory card as their DID (vtc/directory-card.ts).
   // 227 → 230: `persona/contact/lists/{put,list,delete}/1.0`, the member's
   // own lists, behind the portal's marks (`persona/annotations.ts`).
-  const expected = 230;
+  // 230 → 231: `vault/credentials/present/0.1`, the member's agent presenting a
+  // credential to the community to verify directory fields
+  // (vtc/directory-present.ts).
+  const expected = 231;
   assert.equal(
     implemented.size,
     expected,

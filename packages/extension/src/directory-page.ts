@@ -28,12 +28,24 @@
 // community and that portal origin until they withdraw it in the wallet. Only
 // contacts linked to that community's directory are ever handed over.
 //
+// `presentCredential` fills the member's `credential`-sourced fields — a
+// verified employer, a registration — from a credential their agent holds
+// (`vtc/directory/card/present/0.1`). Gates 1 – 3 are the same; then the wallet
+// reads what the fields ask of a credential and finds the member's credentials
+// that answer it, and gate 4 is the person choosing one, seeing the community,
+// the fields and every claim it will disclose. A credential that cannot hide a
+// claim the fields do not read is asked about again, naming those claims,
+// before anything is presented: a presentation discloses to the community
+// whatever it carries, and the agent records every one it makes.
+//
 // Written against injected dependencies, not `chrome.*`, so the gates are
 // tested as they run.
 
 import type {
   DirectoryPageOp,
   PageMarksView,
+  PageVerifiedFieldsView,
+  PreparedPresent,
   OffscreenDirectoryPageOp,
   OffscreenDirectoryPageResponse,
   PagePublishedCardView,
@@ -64,6 +76,41 @@ export interface DirectoryMarksConsentView {
   communityName: string;
 }
 
+/** What the person is shown before a credential is presented to fill fields. */
+export interface DirectoryPresentConsentView {
+  kind: "presentCredential";
+  origin: string;
+  hostDid: string;
+  communityName: string;
+  /** The DID the presentation is made for, and signed as. */
+  member: string;
+  /** The fields it fills, with the community's labels. */
+  fields: Array<{ key: string; label: string }>;
+  /** Every claim it discloses. */
+  claims: string[];
+  /** The credentials the person may choose among; one is chosen. */
+  candidates: Array<{ id: string; issuerDid?: string; types: string[]; validUntil?: string }>;
+}
+
+/** What the person is shown when the chosen credential cannot hide claims the
+ *  fields do not read. */
+export interface DirectoryOverDiscloseConsentView {
+  kind: "presentOverDisclose";
+  origin: string;
+  hostDid: string;
+  communityName: string;
+  /** The claims it would disclose beyond those the fields read. */
+  undisclosed: string[];
+  claims: string[];
+}
+
+/** Every directory prompt. */
+export type DirectoryConsentView =
+  | DirectoryPublishConsentView
+  | DirectoryMarksConsentView
+  | DirectoryPresentConsentView
+  | DirectoryOverDiscloseConsentView;
+
 /** What the person is shown before their card is published. */
 export interface DirectoryPublishConsentView {
   kind: "publishCard";
@@ -92,8 +139,9 @@ export interface DirectoryPageDeps {
   offscreen(vta: ActiveVta, op: OffscreenDirectoryPageOp): Promise<OffscreenDirectoryPageResponse>;
   /** Whether the wallet holds a host permission for `url`'s origin. */
   canReach(url: string): Promise<boolean>;
-  /** Raise the prompt and wait. A closed window is a denial. */
-  prompt(view: DirectoryPublishConsentView | DirectoryMarksConsentView): Promise<{ approved: boolean }>;
+  /** Raise the prompt and wait. A closed window is a denial. A credential
+   *  prompt answers with the credential chosen. */
+  prompt(view: DirectoryConsentView): Promise<{ approved: boolean; selectedCredential?: string }>;
   /** The member's leave for `hostDid`'s portal to show their marks, if any. */
   marksGrant(hostDid: string): Promise<MarksGrant | null>;
   saveMarksGrant(grant: MarksGrant): Promise<void>;
@@ -101,6 +149,9 @@ export interface DirectoryPageDeps {
 }
 
 const MAX_DID = 2048;
+
+/** A field key, as `vtc/directory/_shared`'s `FieldKey`. */
+const FIELD_KEY = /^([a-z][a-z0-9-]*\.)*[a-z][a-zA-Z0-9]{0,63}$/;
 
 function isDid(v: unknown): v is string {
   return typeof v === "string" && v.startsWith("did:") && v.length <= MAX_DID;
@@ -117,6 +168,7 @@ const MEMBERS: Record<DirectoryPageOp["op"], string[]> = {
   mark: ["op", "hostDid", "member", "entryId", "starred", "petname", "removePetname", "lists"],
   putList: ["op", "hostDid", "member", "listId", "name", "colour"],
   deleteList: ["op", "hostDid", "member", "listId"],
+  presentCredential: ["op", "hostDid", "member", "fields"],
 };
 
 /** Why `raw` is not a call this channel serves, or `null`. Members other than
@@ -164,6 +216,17 @@ export function directoryPageParamsRefusal(raw: unknown): string | null {
     case "deleteList":
       if (typeof p.listId !== "string" || !ID.test(p.listId)) return "listId must be a list id";
       return null;
+    case "presentCredential":
+      if (
+        !Array.isArray(p.fields) ||
+        p.fields.length < 1 ||
+        p.fields.length > 16 ||
+        !p.fields.every((f) => typeof f === "string" && f.length <= 128 && FIELD_KEY.test(f)) ||
+        new Set(p.fields).size !== p.fields.length
+      ) {
+        return "fields must be 1 to 16 distinct directory field keys";
+      }
+      return null;
     default:
       return null;
   }
@@ -210,6 +273,7 @@ export class DirectoryPageGates {
       if (malformed) return { ok: false, error: malformed };
       const p = raw as DirectoryPageOp;
       if (p.op === "publishCard") return { ok: true, result: await this.publishCard(origin, p) };
+      if (p.op === "presentCredential") return { ok: true, result: await this.presentCredential(origin, p) };
       return { ok: true, result: (await this.marks(origin, p)) as PageMarksView };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -259,7 +323,10 @@ export class DirectoryPageGates {
 
   /** The member's own marks (module docs): gates 1 – 3, then the community's
    *  leave, asked for once. */
-  private async marks(origin: string, p: Exclude<DirectoryPageOp, { op: "publishCard" }>): Promise<unknown> {
+  private async marks(
+    origin: string,
+    p: Exclude<DirectoryPageOp, { op: "publishCard" | "presentCredential" }>,
+  ): Promise<unknown> {
     const { vta, member, portalOrigin } = await this.admit(origin, p);
     const grant = await this.deps.marksGrant(p.hostDid);
     if (!grant || grant.portalOrigin !== portalOrigin) {
@@ -336,5 +403,63 @@ export class DirectoryPageGates {
       card: prepared.card,
       revision: prepared.revision,
     })) as PagePublishedCardView;
+  }
+  /** Fill credential-sourced fields (module docs): gates 1 – 3, then the
+   *  person's choice of credential, and again for anything it cannot hide. */
+  private async presentCredential(
+    origin: string,
+    p: Extract<DirectoryPageOp, { op: "presentCredential" }>,
+  ): Promise<PageVerifiedFieldsView> {
+    const { vta, member } = await this.admit(origin, p);
+    const prepared = (await this.offscreen(vta, {
+      op: "preparePresent",
+      hostDid: p.hostDid,
+      member,
+      fields: [...p.fields],
+    })) as PreparedPresent;
+
+    // Gate 4: the person picks one of the credentials offered, and sees every
+    // claim it discloses. An answer naming any other is a refusal.
+    const decided = await this.deps.prompt({
+      kind: "presentCredential",
+      origin,
+      hostDid: p.hostDid,
+      communityName: prepared.communityName,
+      member,
+      fields: prepared.fields,
+      claims: prepared.claims,
+      candidates: prepared.candidates,
+    });
+    const chosen = prepared.candidates.find((c) => c.id === decided.selectedCredential);
+    if (!decided.approved || !chosen) throw new DirectoryPageRefusal("You did not present a credential.");
+
+    const present = (claims: string[]) =>
+      this.offscreen(vta, {
+        op: "present",
+        hostDid: p.hostDid,
+        member,
+        fields: [...p.fields],
+        credentialId: chosen.id,
+        claims,
+      }) as Promise<PageVerifiedFieldsView | { undisclosed: string[] }>;
+    let answer = await present(prepared.claims);
+    if ("undisclosed" in answer) {
+      // The credential cannot hide these: presenting it shows them too.
+      const undisclosed = answer.undisclosed;
+      const again = await this.deps.prompt({
+        kind: "presentOverDisclose",
+        origin,
+        hostDid: p.hostDid,
+        communityName: prepared.communityName,
+        undisclosed,
+        claims: prepared.claims,
+      });
+      if (!again.approved) throw new DirectoryPageRefusal("You did not present the credential.");
+      answer = await present([...prepared.claims, ...undisclosed.filter((c) => !prepared.claims.includes(c))]);
+      if ("undisclosed" in answer) {
+        throw new DirectoryPageRefusal("The credential still discloses more than you agreed to. Nothing was presented.");
+      }
+    }
+    return answer;
   }
 }

@@ -53,9 +53,8 @@ import {
   DIRECTORY_CONSENT_PREFIX,
   DirectoryPageGates,
   MARKS_GRANT_PREFIX,
-  type DirectoryMarksConsentView,
+  type DirectoryConsentView,
   type MarksGrant,
-  type DirectoryPublishConsentView,
 } from "./directory-page.js";
 import { GIT_CONSENT_PREFIX, GitPageGates, type GitConsentView } from "./git-page.js";
 import { RoomOffers, RoomOffersRefusal } from "./room-offers-background.js";
@@ -970,25 +969,27 @@ const roomPageGates = new RoomPageGates({
 // one of the wallet's identities there, and the person approves every value in
 // the wallet's own window — are `directory-page.ts`; this wires them up.
 
-/** Raise the publish — or marks-access — prompt and wait. Closed or unopened
- *  is a denial. */
+/** Raise a directory prompt — publish, marks access, a credential to present —
+ *  and wait. Closed or unopened is a denial. */
 async function requestDirectoryConsent(
-  view: DirectoryPublishConsentView | DirectoryMarksConsentView,
-): Promise<{ approved: boolean }> {
+  view: DirectoryConsentView,
+): Promise<{ approved: boolean; selectedCredential?: string }> {
   const consentId = crypto.randomUUID();
   await chrome.storage.session.set({ [`${DIRECTORY_CONSENT_PREFIX}${consentId}`]: view });
   const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=directory`;
   const bounds = await consentWindowBounds(620);
   return new Promise((resolve) => {
     let settled = false;
-    const settle = (approved: boolean) => {
+    const settle = (approved: boolean, selectedCredential?: string) => {
       if (settled) return;
       settled = true;
       pendingConsents.delete(consentId);
       void chrome.storage.session.remove(`${DIRECTORY_CONSENT_PREFIX}${consentId}`);
-      resolve({ approved });
+      resolve(approved ? { approved: true, ...(selectedCredential ? { selectedCredential } : {}) } : { approved: false });
     };
-    pendingConsents.set(consentId, (approved) => settle(approved));
+    pendingConsents.set(consentId, (approved, _remember, _prf, _did, _rooms, selectedCredential) =>
+      settle(approved, selectedCredential),
+    );
     openConsentWindow({ url, bounds, deny: () => settle(false), tag: "[pnm directory]", what: "directory window" });
   });
 }

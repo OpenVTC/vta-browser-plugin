@@ -636,6 +636,9 @@ export interface RuntimeConsentResult {
    *  page's origin (`data-rooms-files.md` §8.5), each `heldRoomKey` — the room
    *  and the member it is shared as. Ignored on a denial. */
   selectedRooms?: string[];
+  /** Directory credential prompt only: the credential the member picked to
+   *  present, one of those the prompt offered. Ignored on a denial. */
+  selectedCredential?: string;
 }
 
 /** confirm popup → background: resolve + verify an RP DID. */
@@ -2635,7 +2638,12 @@ export type DirectoryPageOp =
       lists?: string[];
     }
   | { op: "putList"; hostDid: string; member?: string; listId?: string; name?: string; colour?: string }
-  | { op: "deleteList"; hostDid: string; member?: string; listId: string };
+  | { op: "deleteList"; hostDid: string; member?: string; listId: string }
+  /** Fill `credential`-sourced fields from a credential the member's agent
+   *  holds (`vtc/directory/card/present/0.1`): the wallet finds the
+   *  credentials the fields accept, the person picks one and sees every claim
+   *  it discloses, and the agent presents it. */
+  | { op: "presentCredential"; hostDid: string; member?: string; fields: string[] };
 
 /** The member's marks on one directory entry. */
 export interface PageEntryMark {
@@ -2673,8 +2681,34 @@ export interface PagePublishedCardView {
   publishedAt?: string;
 }
 
+/** One value a presentation put on the member's card. */
+export interface PageVerifiedValue {
+  value: unknown;
+  /** The credential's issuer: the value's badge. */
+  issuer: string;
+  credentialType: string;
+  verifiedAt: string;
+  /** When the community withdraws it: the credential's expiry. */
+  validUntil?: string;
+}
+
+/** The verified values now on the member's card, by field. */
+export interface PageVerifiedFieldsView {
+  verified: Record<string, PageVerifiedValue>;
+  revision: number;
+}
+
 export type RuntimeDirectoryPageResponse =
-  | { ok: true; result: PagePublishedCardView | PageMarksView | PageEntryMark | PageMarkList | { deleted: boolean } }
+  | {
+      ok: true;
+      result:
+        | PagePublishedCardView
+        | PageMarksView
+        | PageEntryMark
+        | PageMarkList
+        | { deleted: boolean }
+        | PageVerifiedFieldsView;
+    }
   | { ok: false; error: string };
 
 // ─── A member's forge account for a page: `window.vtaWallet.git` ────────────
@@ -3257,7 +3291,31 @@ export type OffscreenDirectoryPageOp =
       lists?: string[];
     }
   | { op: "putList"; hostDid: string; member: string; listId?: string; name?: string; colour?: string }
-  | { op: "deleteList"; hostDid: string; member: string; listId: string };
+  | { op: "deleteList"; hostDid: string; member: string; listId: string }
+  /** Read the schema as the member: what the named fields ask of a
+   *  credential, and the member's credentials that answer it. */
+  | { op: "preparePresent"; hostDid: string; member: string; fields: string[] }
+  /** Have the agent present `credentialId` disclosing `claims`, and send it as
+   *  the member. Answers `{ undisclosed }`, presenting nothing, when the
+   *  credential cannot hide a claim `claims` leaves out. */
+  | { op: "present"; hostDid: string; member: string; fields: string[]; credentialId: string; claims: string[] };
+
+/** A credential the member's agent holds that the named fields accept. */
+export interface PresentCandidate {
+  /** The agent's handle for it. */
+  id: string;
+  issuerDid?: string;
+  types: string[];
+  validUntil?: string;
+}
+
+/** What `preparePresent` found. */
+export interface PreparedPresent {
+  communityName: string;
+  fields: Array<{ key: string; label: string }>;
+  claims: string[];
+  candidates: PresentCandidate[];
+}
 
 export interface OffscreenDirectoryPageRequest {
   target: typeof OFFSCREEN_TARGET;

@@ -48,6 +48,12 @@ import {
   type VaultCredentialsGetResponsePayload,
 } from "@openvtc/trust-tasks/vault/credentials/get/0.1/payload";
 import {
+  TYPE_URI as CRED_PRESENT,
+  RESPONSE_TYPE_URI as CRED_PRESENT_RESPONSE,
+  type Payload as VaultCredentialsPresentPayload,
+  type VaultCredentialsPresentResponsePayload,
+} from "@openvtc/trust-tasks/vault/credentials/present/0.1/payload";
+import {
   TYPE_URI as CRED_RECEIVE,
   RESPONSE_TYPE_URI as CRED_RECEIVE_RESPONSE,
   type VaultCredentialsReceiveResponsePayload,
@@ -196,6 +202,57 @@ export async function credVaultGet(
     operationLabel: "vault/credentials/get/0.1",
   });
   return res.credential as Record<string, unknown>;
+}
+
+export interface CredVaultPresentParams extends CredVaultCallerParams {
+  /** Handle from a {@link CredentialDescriptor}. */
+  id: string;
+  /** The verifier the presentation is for — its DID, for a community. */
+  audience: string;
+  /** The verifier's nonce. For a task that carries the presentation in its
+   *  own request, that request document's `id`. Never reused. */
+  nonce: string;
+  /** The subject claims to disclose, by name. */
+  claims: string[];
+  /** Why, in the holder's words; kept with the agent's record of it. */
+  purpose?: string;
+}
+
+/** Error code: every presentation of the credential discloses claims the
+ *  request does not name; `details.undisclosed` lists them. */
+export const CRED_PRESENT_WOULD_OVER_DISCLOSE = "vault/credentials/present:wouldOverDisclose";
+
+/**
+ * Have the agent present one stored credential to a verifier the caller
+ * names, bound to that verifier and its nonce, disclosing only `claims`.
+ *
+ * The agent signs as the credential's subject, so this is a disclosure to a
+ * third party under the subject's signature: the agent records it before it
+ * answers. The caller carries `presentation` to the verifier unchanged.
+ *
+ * A credential that cannot hide a claim `claims` leaves out is refused with
+ * {@link CRED_PRESENT_WOULD_OVER_DISCLOSE} rather than presented, so asking
+ * the person about the rest is the caller's to do.
+ */
+export async function credVaultPresent(
+  sender: TrustTaskSender,
+  params: CredVaultPresentParams,
+): Promise<VaultCredentialsPresentResponsePayload> {
+  const payload = {
+    id: params.id,
+    audience: params.audience,
+    nonce: params.nonce,
+    claims: params.claims,
+    ...(params.purpose ? { purpose: params.purpose } : {}),
+  } as VaultCredentialsPresentPayload;
+  const envelope = buildTrustTask(CRED_PRESENT, payload, {
+    issuer: params.holder.did,
+    recipient: params.service.did,
+  });
+  return sender.send<VaultCredentialsPresentResponsePayload>(envelope, {
+    expectedResponseType: CRED_PRESENT_RESPONSE,
+    operationLabel: "vault/credentials/present/0.1",
+  });
 }
 
 export interface CredVaultReceiveParams extends CredVaultCallerParams {
