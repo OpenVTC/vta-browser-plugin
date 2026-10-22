@@ -5,7 +5,10 @@
 // by its DID document, the member must be one of the wallet's own identities
 // there, and nothing is signed until the person approves every value in the
 // wallet's window. Then the offscreen half: whose card it reads, and that it
-// refuses to sign when the agent holds no key for the member.
+// refuses to sign when the agent holds no key for the member. And
+// `presentCredential`: the person picks the credential from those offered and
+// sees every claim, and is asked again before a credential that cannot hide the
+// rest is presented.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -13,8 +16,9 @@ import assert from "node:assert/strict";
 import {
   DirectoryPageGates,
   directoryPageParamsRefusal,
-  type DirectoryMarksConsentView,
+  type DirectoryConsentView,
   type DirectoryPageDeps,
+  type DirectoryPresentConsentView,
   type DirectoryPublishConsentView,
   type MarksGrant,
 } from "../src/directory-page.ts";
@@ -30,9 +34,29 @@ const VTA = { vtaDid: "did:webvh:QmVta:vta.example" };
 
 const CARD = { "@type": "Card", version: "1.0", uid: "urn:vtc-directory:dir_x", issuer: MEMBER, name: { full: "C" } };
 
-function harness(opts: { members?: string[]; approve?: boolean; reach?: boolean; grant?: MarksGrant } = {}) {
+const FIELD = "org.example.employer";
+const CRED = "cred-7f3a91c2";
+const VERIFIED = {
+  verified: {
+    [FIELD]: { value: "Acme", issuer: "did:example:hr", credentialType: "EmploymentCredential", verifiedAt: "2026-10-22T09:00:00Z" },
+  },
+  revision: 5,
+};
+
+function harness(
+  opts: {
+    members?: string[];
+    approve?: boolean;
+    reach?: boolean;
+    grant?: MarksGrant;
+    /** Per prompt, in order: what the person answers. */
+    answers?: Array<{ approved: boolean; selectedCredential?: string }>;
+    /** Claims the credential cannot hide unless named. */
+    undisclosed?: string[];
+  } = {},
+) {
   const asked: OffscreenDirectoryPageOp[] = [];
-  const prompts: (DirectoryPublishConsentView | DirectoryMarksConsentView)[] = [];
+  const prompts: DirectoryConsentView[] = [];
   const grants = new Map<string, MarksGrant>(opts.grant ? [[opts.grant.hostDid, opts.grant]] : []);
   const deps: DirectoryPageDeps = {
     async active() {
@@ -67,6 +91,20 @@ function harness(opts: { members?: string[]; approve?: boolean; reach?: boolean;
           return { ok: true, result: { listId: "L1", name: op.name ?? "", order: 0, contactCount: 0 } };
         case "deleteList":
           return { ok: true, result: { deleted: true } };
+        case "preparePresent":
+          return {
+            ok: true,
+            result: {
+              communityName: "Acme Guild",
+              fields: [{ key: FIELD, label: "Employer" }],
+              claims: ["employer"],
+              candidates: [{ id: CRED, issuerDid: "did:example:hr", types: ["VerifiableCredential", "EmploymentCredential"] }],
+            },
+          };
+        case "present": {
+          const hidden = (opts.undisclosed ?? []).filter((c) => !op.claims.includes(c));
+          return { ok: true, result: hidden.length > 0 ? { undisclosed: hidden } : VERIFIED };
+        }
       }
     },
     async marksGrant(hostDid) {
@@ -80,7 +118,8 @@ function harness(opts: { members?: string[]; approve?: boolean; reach?: boolean;
     },
     async prompt(view) {
       prompts.push(view);
-      return { approved: opts.approve ?? true };
+      const answer = opts.answers?.[prompts.length - 1];
+      return answer ?? { approved: opts.approve ?? true };
     },
     now: () => 0,
   };
@@ -320,4 +359,125 @@ test("with no context for the member's identity, nothing is asked of the agent",
     /nowhere to keep/,
   );
   assert.equal(a.sent.length, 0);
+});
+
+// ─── Verifying fields with a credential ────────────────────────────────────
+
+test("a presentCredential call names 1 to 16 distinct field keys and nothing else", () => {
+  assert.equal(directoryPageParamsRefusal({ op: "presentCredential", hostDid: HOST, fields: [FIELD] }), null);
+  assert.ok(directoryPageParamsRefusal({ op: "presentCredential", hostDid: HOST, fields: [] }));
+  assert.ok(directoryPageParamsRefusal({ op: "presentCredential", hostDid: HOST }));
+  assert.ok(directoryPageParamsRefusal({ op: "presentCredential", hostDid: HOST, fields: [FIELD, FIELD] }));
+  assert.ok(directoryPageParamsRefusal({ op: "presentCredential", hostDid: HOST, fields: ["Not A Key"] }));
+  assert.ok(directoryPageParamsRefusal({ op: "presentCredential", hostDid: HOST, fields: Array.from({ length: 17 }, (_, i) => `org.x.f${i}`) }));
+  assert.ok(
+    directoryPageParamsRefusal({ op: "presentCredential", hostDid: HOST, fields: [FIELD], claims: ["ssn"] }),
+    "the page never names the claims",
+  );
+  assert.ok(directoryPageParamsRefusal({ op: "presentCredential", hostDid: HOST, fields: [FIELD], credentialId: CRED }));
+});
+
+test("a page that is not the portal finds out nothing about the member's credentials", async () => {
+  const h = harness({ answers: [{ approved: true, selectedCredential: CRED }] });
+  const res = await h.gates.handle("https://evil.example", { op: "presentCredential", hostDid: HOST, fields: [FIELD] });
+  assert.equal(res.ok, false);
+  assert.ok(!h.asked.some((o) => o.op === "preparePresent"));
+  assert.equal(h.prompts.length, 0);
+});
+
+test("the person picks the credential, sees every claim, and only then is it presented", async () => {
+  const h = harness({ answers: [{ approved: true, selectedCredential: CRED }] });
+  const res = await h.gates.handle(PORTAL, { op: "presentCredential", hostDid: HOST, fields: [FIELD] });
+  assert.deepEqual(res, { ok: true, result: VERIFIED });
+  const prompt = h.prompts[0] as DirectoryPresentConsentView;
+  assert.equal(prompt.kind, "presentCredential");
+  assert.equal(prompt.member, MEMBER);
+  assert.deepEqual(prompt.claims, ["employer"]);
+  assert.deepEqual(prompt.candidates.map((c) => c.id), [CRED]);
+  assert.deepEqual(h.asked.find((o) => o.op === "present"), {
+    op: "present",
+    hostDid: HOST,
+    member: MEMBER,
+    fields: [FIELD],
+    credentialId: CRED,
+    claims: ["employer"],
+  });
+});
+
+test("declined, or answered with a credential the prompt did not offer, nothing is presented", async () => {
+  for (const answer of [{ approved: false }, { approved: true }, { approved: true, selectedCredential: "cred-other" }]) {
+    const h = harness({ answers: [answer] });
+    const res = await h.gates.handle(PORTAL, { op: "presentCredential", hostDid: HOST, fields: [FIELD] });
+    assert.equal(res.ok, false);
+    assert.ok(!h.asked.some((o) => o.op === "present"), JSON.stringify(answer));
+  }
+});
+
+test("a credential that cannot hide the rest is asked about again, naming what else it shows", async () => {
+  const h = harness({ answers: [{ approved: true, selectedCredential: CRED }, { approved: true }], undisclosed: ["salary"] });
+  const res = await h.gates.handle(PORTAL, { op: "presentCredential", hostDid: HOST, fields: [FIELD] });
+  assert.deepEqual(res, { ok: true, result: VERIFIED });
+  assert.deepEqual(h.prompts[1], {
+    kind: "presentOverDisclose",
+    origin: PORTAL,
+    hostDid: HOST,
+    communityName: "Acme Guild",
+    undisclosed: ["salary"],
+    claims: ["employer"],
+  });
+  const presents = h.asked.filter((o) => o.op === "present") as Array<{ claims: string[] }>;
+  assert.deepEqual(presents.map((p) => p.claims), [["employer"], ["employer", "salary"]]);
+});
+
+test("declining the second question presents nothing more", async () => {
+  const h = harness({ answers: [{ approved: true, selectedCredential: CRED }, { approved: false }], undisclosed: ["salary"] });
+  const res = await h.gates.handle(PORTAL, { op: "presentCredential", hostDid: HOST, fields: [FIELD] });
+  assert.equal(res.ok, false);
+  assert.equal(h.asked.filter((o) => o.op === "present").length, 1, "only the refused attempt");
+});
+
+test("the offscreen half hands back what the credential cannot hide, matched on the agent's code", async () => {
+  const sent: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  const refusal = (code: string, details?: Record<string, unknown>) =>
+    Object.assign(new Error("refused"), { details: { code, message: "refused", ...(details ? { details } : {}) } });
+  const deps = (err: Error) => ({
+    agent: async () => ({
+      sender: {
+        async send(envelope: { type: string; payload: Record<string, unknown> }) {
+          sent.push(envelope);
+          throw err;
+        },
+      } as never,
+      holder: { did: "did:key:zHolder" } as never,
+      service: { did: VTA.vtaDid } as never,
+    }),
+    identities: async () => [{ id: "e1", label: "Acme Guild", principalDid: MEMBER, targets: [{ kind: "did", did: HOST }] }],
+    community: async () => ({ portalOrigin: PORTAL, endpoint: ENDPOINT, document: {} }),
+  });
+  const op = { op: "present" as const, hostDid: HOST, member: MEMBER, fields: [FIELD], credentialId: CRED, claims: ["employer"] };
+
+  const over = await runDirectoryPageOp(
+    deps(refusal("vault/credentials/present:wouldOverDisclose", { undisclosed: ["salary"] })),
+    VTA,
+    op,
+  );
+  assert.deepEqual(over, { undisclosed: ["salary"] });
+  const p = sent[0]!.payload;
+  assert.equal(sent[0]!.type, "https://trusttasks.org/spec/vault/credentials/present/0.1");
+  assert.equal(p.audience, HOST, "bound to the community");
+  assert.equal(p.id, CRED);
+  assert.deepEqual(p.claims, ["employer"]);
+  assert.equal(typeof p.nonce, "string");
+
+  await assert.rejects(
+    runDirectoryPageOp(deps(refusal("vault/credentials/present:notPresentable")), VTA, op),
+    /expired, been revoked/,
+  );
+  await assert.rejects(
+    runDirectoryPageOp(deps(Object.assign(new Error("wouldOverDisclose"), {})), VTA, op),
+    /wouldOverDisclose/,
+    "a message is never read as the code",
+  );
+  const nonces = sent.map((e) => e.payload.nonce);
+  assert.equal(new Set(nonces).size, nonces.length, "every attempt is a fresh nonce");
 });

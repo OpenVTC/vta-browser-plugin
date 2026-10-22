@@ -11,4 +11,5 @@ export * from "./domain-linkage.js";
 export * from "./join.js";
 export * from "./directory-disclosure.js";
 export * from "./directory-card.js";
+export * from "./directory-present.js";
 export * from "./forge-account.js";

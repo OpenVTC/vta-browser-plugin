@@ -35,6 +35,7 @@ import type {
   PageEntryMark,
   PageMarkList,
   PageMarksView,
+  PageVerifiedFieldsView,
   GitPageOp,
   PageGitLinkView,
   PageGitUnlinkView,
@@ -249,6 +250,12 @@ export interface VtaWalletDirectory {
   putList(p: { hostDid: string; member?: string; listId?: string; name?: string; colour?: string }): Promise<PageMarkList>;
   /** Delete one of the member's lists; contacts on it stay. */
   deleteList(p: { hostDid: string; member?: string; listId: string }): Promise<{ deleted: boolean }>;
+  /** Fill the member's `credential`-sourced fields from a credential their
+   *  agent holds. The wallet finds the credentials the fields accept, and the
+   *  member picks one and sees every claim it discloses to the community; a
+   *  refusal rejects. All the fields must read one credential type. Resolves
+   *  with the verified values now on the card. */
+  presentCredential(p: { hostDid: string; member?: string; fields: string[] }): Promise<PageVerifiedFieldsView>;
 }
 
 /** Progress of a file transfer, for a progress bar. */
@@ -637,6 +644,13 @@ if (!window.vtaWallet) {
           op: "deleteList",
           hostDid: p.hostDid,
           listId: p.listId,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+        }),
+      presentCredential: (p) =>
+        call<PageVerifiedFieldsView>("directory", {
+          op: "presentCredential",
+          hostDid: p.hostDid,
+          fields: Array.isArray(p.fields) ? [...p.fields] : p.fields,
           ...(p.member !== undefined ? { member: p.member } : {}),
         }),
     },

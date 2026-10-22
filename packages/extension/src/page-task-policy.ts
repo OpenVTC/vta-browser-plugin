@@ -124,6 +124,18 @@ const REFUSED: { prefix: string; why: string }[] = [
       "member every value and that anyone will be able to read it before anything " +
       "is signed.",
   },
+  // A presentation of one of the holder's credentials, signed as its subject,
+  // to a verifier the caller names (`directory-page.ts`). A generic task prompt
+  // cannot show what it discloses or to whom.
+  {
+    prefix: "https://trusttasks.org/spec/vault/credentials/present/",
+    why:
+      "vault/credentials/present has the agent sign a presentation of one of the " +
+      "holder's credentials, as its subject, for a verifier the caller names. A page " +
+      "cannot ask for one: to verify directory fields with a credential, use " +
+      "window.vtaWallet.directory.presentCredential, which shows the member the " +
+      "community and every claim it discloses first.",
+  },
   // A Data Integrity proof made as one of the holder's DIDs over a document the
   // caller chose: a credential, a published card. A generic task prompt cannot
   // show what the holder would be asserting.

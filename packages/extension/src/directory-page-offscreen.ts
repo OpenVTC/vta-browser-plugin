@@ -1,7 +1,7 @@
 /// <reference types="chrome" />
 
-// The work behind a page's `window.vtaWallet.directory.publishCard` — the
-// offscreen document's half.
+// The work behind a page's `window.vtaWallet.directory.publishCard` and
+// `presentCredential` — the offscreen document's half.
 //
 // The background has already checked that the page is the community's portal
 // and which of the member's identities it is for (`directory-page.ts`). This
@@ -10,6 +10,12 @@
 // approved it in the wallet's window — has their agent sign it as their DID
 // (`keys/sign-document`) and sends it to the community (`card/publish`).
 //
+// For `presentCredential` it reads what the named fields ask of a credential
+// (`fields/list`, as the member) and the member's credentials that answer it
+// (`vault/credentials/query`), and — once the person chose one — has their agent
+// present it to the community, bound to the `card/present` document that
+// carries it (`vault/credentials/present`), and sends that document.
+//
 // Every document to the community is the member's, signed by their agent as
 // the vault entry they sign in with; every reply is checked against the
 // community's verified DID document. Nothing the agent returns is sent on
@@ -17,7 +23,10 @@
 
 import {
   CONTACT_METHODS,
+  CRED_PRESENT_WOULD_OVER_DISCLOSE,
   annotateContact,
+  credVaultPresent,
+  credVaultQuery,
   deleteList,
   linkContact,
   listAllAnnotated,
@@ -30,16 +39,19 @@ import {
   OobRefusedError,
   agentSignCard,
   assertSignedAsSent,
+  buildCardPresent,
   buildCardPublish,
   buildCardShow,
   buildExternalCard,
   buildFieldsList,
+  credentialAskFor,
   describeExternalCard,
   memberSigningKey,
   postCommunityTask,
   publishedStateOf,
   resolveCommunityDocument,
   selectSignInServices,
+  verifiedValuesOf,
   verifyDomainLinkage,
   type DirectoryCard,
   type FieldDefinition,
@@ -52,6 +64,8 @@ import type {
   PageMarkList,
   PageMarksView,
   PagePublishedCardView,
+  PageVerifiedFieldsView,
+  PreparedPresent,
 } from "./bridge-protocol.js";
 
 /** A `didSelfIssued` vault entry, as much of one as this needs. */
@@ -145,6 +159,47 @@ function refusalWords(e: unknown, community: string): Error {
   return new Error(said[local] ?? `${community} didn't publish your card (${e.code}).`);
 }
 
+/** The trust-task-error code and details an agent or community refusal carries. */
+function refusalCode(e: unknown): { code: string; details?: Record<string, unknown> } | null {
+  if (e instanceof OobRefusedError) return { code: e.code };
+  const payload = (e as { details?: unknown } | null)?.details as
+    | { code?: unknown; details?: Record<string, unknown> }
+    | undefined;
+  return typeof payload?.code === "string"
+    ? { code: payload.code, ...(payload.details ? { details: payload.details } : {}) }
+    : null;
+}
+
+/** What the agent said about a presentation, in the person's words. */
+function presentRefusalWords(e: unknown): Error {
+  const code = refusalCode(e)?.code;
+  const said: Record<string, string> = {
+    "vault/credentials/present:notFound":
+      "Your agent no longer holds that credential, or not the key it is presented with. Nothing was presented.",
+    "vault/credentials/present:notPresentable":
+      "That credential has expired, been revoked or been put away, so it can't be presented.",
+    "vault/credentials/present:claimNotHeld": "That credential doesn't carry what these fields ask for.",
+    "vault/credentials/present:formatUnsupported": "Your agent can't present a credential of that kind here.",
+  };
+  if (code && said[code]) return new Error(said[code]);
+  return e instanceof Error ? e : new Error(String(e));
+}
+
+/** What the community said about a presentation, in the person's words. */
+function cardPresentRefusalWords(e: unknown, community: string): Error {
+  if (!(e instanceof OobRefusedError)) return e instanceof Error ? e : new Error(String(e));
+  const local = e.code.slice(e.code.lastIndexOf(":") + 1);
+  const said: Record<string, string> = {
+    notMember: `${community} doesn't count you as an active member.`,
+    fieldUnknown: `${community}'s directory no longer has one of those fields.`,
+    fieldNotWritable: `${community}'s directory doesn't fill one of those fields from a credential.`,
+    presentationInvalid: `${community} couldn't verify the credential as yours. Nothing was added to your card.`,
+    issuerNotAccepted: `${community} doesn't accept that credential's issuer for one of those fields.`,
+    claimMissing: `The credential doesn't show what one of those fields reads.`,
+  };
+  return new Error(said[local] ?? `${community} didn't add the credential to your card (${e.code}).`);
+}
+
 /** Run one directory operation. Throws with a message fit for the page. */
 export async function runDirectoryPageOp(
   deps: DirectoryPageDeps,
@@ -189,6 +244,78 @@ export async function runDirectoryPageOp(
     const reply = await postCommunityTask<P>(signed, sendOpts, label, "authentication");
     return reply.doc.payload as P;
   };
+
+  if (op.op === "preparePresent") {
+    let fields: FieldDefinition[];
+    try {
+      ({ fields } = await asMember<{ fields: FieldDefinition[] }>(
+        buildFieldsList(op.member, op.hostDid),
+        "vtc/directory/fields/list",
+      ));
+    } catch (e) {
+      throw refusalWords(e, name);
+    }
+    const asked = credentialAskFor(fields, op.fields);
+    if (!asked.ok) throw new Error(asked.error);
+    const { ask } = asked;
+    const held = await credVaultQuery(sender, { holder, service, type: ask.credentialType, status: "valid" });
+    const candidates = held
+      .filter((c) => !c.lifecycle || c.lifecycle === "active")
+      .filter((c) => !ask.issuers || (c.issuerDid !== undefined && ask.issuers.includes(c.issuerDid)))
+      .map((c) => ({
+        id: c.id,
+        ...(c.issuerDid ? { issuerDid: c.issuerDid } : {}),
+        types: [...c.types],
+        ...(c.validUntil ? { validUntil: c.validUntil } : {}),
+      }));
+    if (candidates.length === 0) {
+      throw new Error(
+        ask.issuers
+          ? `Your wallet holds no ${ask.credentialType} from an issuer ${name} accepts for ${ask.fields.map((f) => f.label).join(", ")}.`
+          : `Your wallet holds no ${ask.credentialType} to verify ${ask.fields.map((f) => f.label).join(", ")} with.`,
+      );
+    }
+    const prepared: PreparedPresent = { communityName: name, fields: ask.fields, claims: ask.claims, candidates };
+    return prepared;
+  }
+
+  if (op.op === "present") {
+    // The document's id is the presentation's nonce, so it exists first; a
+    // retry after a refusal is a fresh document and a fresh nonce.
+    const id = globalThis.crypto.randomUUID();
+    let presentation: Record<string, unknown> | string;
+    try {
+      const res = await credVaultPresent(sender, {
+        holder,
+        service,
+        id: op.credentialId,
+        audience: op.hostDid,
+        nonce: id,
+        claims: op.claims,
+        purpose: `Verified fields on my card in ${name}'s member directory`,
+      });
+      presentation = res.presentation as Record<string, unknown> | string;
+    } catch (e) {
+      const refused = refusalCode(e);
+      if (refused?.code === CRED_PRESENT_WOULD_OVER_DISCLOSE) {
+        const undisclosed = refused.details?.undisclosed;
+        if (Array.isArray(undisclosed) && undisclosed.every((c) => typeof c === "string") && undisclosed.length > 0) {
+          return { undisclosed: undisclosed as string[] };
+        }
+      }
+      throw presentRefusalWords(e);
+    }
+    try {
+      const answer = await asMember<unknown>(
+        buildCardPresent(id, op.member, op.hostDid, op.fields, presentation),
+        "vtc/directory/card/present",
+      );
+      const view: PageVerifiedFieldsView = verifiedValuesOf(answer) as PageVerifiedFieldsView;
+      return view;
+    } catch (e) {
+      throw cardPresentRefusalWords(e, name);
+    }
+  }
 
   if (op.op === "prepare") {
     try {
