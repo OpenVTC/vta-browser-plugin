@@ -110,6 +110,10 @@ export interface CredentialFilter {
 }
 
 export interface CredVaultQueryParams extends CredVaultCallerParams, CredentialFilter {
+  /** Only credentials whose subject — the identity the agent presents them as —
+   *  is this DID. Narrows the filter; does not satisfy it on its own, since one
+   *  identity's credentials can be the whole vault. */
+  subjectDid?: string;
   /** Also return archived credentials. A **modifier, not a filter** — it does
    *  not satisfy the at-least-one-filter requirement. */
   includeArchived?: boolean;
@@ -160,6 +164,7 @@ export async function credVaultQuery(
       ...(params.issuerDid ? { issuerDid: params.issuerDid } : {}),
       ...(params.purpose ? { purpose: params.purpose } : {}),
       ...(params.status ? { status: params.status } : {}),
+      ...(params.subjectDid ? { subjectDid: params.subjectDid } : {}),
       ...(params.includeArchived ? { includeArchived: true } : {}),
       ...(params.includeDeleted ? { includeDeleted: true } : {}),
     },

@@ -13,6 +13,7 @@ import {
   generateSigningIdentity,
   VtaSession,
   decodeDigestMultibase,
+  credVaultQuery,
 } from "../dist/index.js";
 
 /** A TrustTaskChannel that records the envelope + opts and returns a canned
@@ -215,4 +216,25 @@ test("an attachment digest that is not a sha2-256 multihash is refused", () => {
   // producer would send, and silently accepting it would make the cutover
   // invisible at the one place it matters.
   assert.throws(() => decodeDigestMultibase("deadbeef"), /unsupported multibase prefix/);
+});
+
+test("credVaultQuery carries subjectDid beside the filter, and it alone is no filter", async () => {
+  const ch = captureChannel({ credentials: [{ id: "c1", types: ["VerifiableCredential"], status: "valid" }] });
+  const res = await credVaultQuery(ch, {
+    holder,
+    service,
+    type: "EmploymentCredential",
+    status: "valid",
+    subjectDid: "did:web:member.example",
+  });
+  assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/vault/credentials/query/0.1");
+  assert.deepEqual(ch.sent[0].envelope.payload, {
+    type: "EmploymentCredential",
+    status: "valid",
+    subjectDid: "did:web:member.example",
+  });
+  assert.deepEqual(res.map((c) => c.id), ["c1"]);
+
+  await assert.rejects(credVaultQuery(ch, { holder, service, subjectDid: "did:web:member.example" }));
+  assert.equal(ch.sent.length, 1, "refused before sending");
 });
