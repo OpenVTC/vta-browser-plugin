@@ -316,6 +316,21 @@ const step = (w: World, s: Record<string, unknown>, flowId = "f1") =>
 const PRF = new Uint8Array(32).fill(7);
 const PRF_B64U = bytesToBase64url(PRF);
 
+test("a page pinned to another community is told so on the confirm screen (M5)", async () => {
+  // The background says what the click's origin is pinned to, from an earlier
+  // sign-in there. The same community is nothing to report; another one is —
+  // the pairing was still verified against the document, so the flow goes on,
+  // but the screen must say which community it was.
+  const same = await step(world(), { step: "prepare", link: LINK, origin: PORTAL, pinnedDid: VTC });
+  assert.equal(same.kind, "confirm");
+  assert.equal("changedFromDid" in same, false);
+
+  const other = "did:webvh:QmOther:members.example.org";
+  const changed = await step(world(), { step: "prepare", link: LINK, origin: PORTAL, pinnedDid: other });
+  assert.equal(changed.kind, "confirm");
+  assert.equal((changed as { changedFromDid?: string }).changedFromDid, other);
+});
+
 test("the whole approval, in the contract's order", async () => {
   const w = world();
   const confirm = await step(w, { step: "prepare", link: LINK, origin: PORTAL });

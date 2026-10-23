@@ -3720,8 +3720,15 @@ async function handleSignInStep(msg: RuntimeSignInStepRequest): Promise<RuntimeS
     flowId,
     vtaDid: active.conn.vtaDid,
     ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}),
-    // From the worker's own record, on the first step only.
-    ...(msg.step === "prepare" ? { link: record.link, origin: record.origin } : {}),
+    // From the worker's own record, on the first step only — with what the
+    // page's origin is pinned to, so the flow can show a changed pairing (M5).
+    ...(msg.step === "prepare"
+      ? {
+          link: record.link,
+          origin: record.origin,
+          ...(await signInPinnedDid(record.origin)),
+        }
+      : {}),
   } as OffscreenSignInStepRequest;
   const res = (await chrome.runtime.sendMessage(forward)) as RuntimeSignInStepResponse;
   // Every refusal reads the same to the member; this is where whoever has to
@@ -3730,6 +3737,9 @@ async function handleSignInStep(msg: RuntimeSignInStepRequest): Promise<RuntimeS
   if (res?.ok && res.result.kind === "failed") {
     console.warn("[pnm sign-in] step failed", failureLogFields(msg.step, res.result));
   }
+  if (res.ok && res.result.kind === "done" && res.result.decision === "approve") {
+    await pinSignInOrigin(record);
+  }
   if (res.ok && (res.result.kind === "done" || res.result.kind === "refused" ||
       res.result.kind === "not-member" ||
       res.result.kind === "join-elsewhere" ||
@@ -3737,6 +3747,36 @@ async function handleSignInStep(msg: RuntimeSignInStepRequest): Promise<RuntimeS
     await chrome.storage.session.remove(key);
   }
   return res;
+}
+
+/** The relying party a sign-in flow's page origin is pinned to, for `prepare`;
+ *  nothing when the click carried no origin or the origin has no pin. */
+async function signInPinnedDid(origin: string | undefined): Promise<{ pinnedDid?: string }> {
+  if (!origin) return {};
+  const pin = await readOriginPin(origin);
+  return pin ? { pinnedDid: pin.rpDid } : {};
+}
+
+/**
+ * An approved trigger-link sign-in pins the page's origin to the community it
+ * signed in to, as the page-bridge logins pin theirs on approval (`origin-pin.ts`,
+ * M5). The pin is what the page's later `signTrustTask` is bound to
+ * (`pageSignBindingRefusal`): without it, a console that signed its operator in
+ * this way could never enrol a signing key, since nothing but a login seeds a
+ * pin (#377).
+ *
+ * The pairing is the one the flow verified: `record.origin` is the browser's
+ * word for where the click came from, the flow refused unless that is the
+ * portal the community's own DID document names (VTI-LNK-105), and the link's
+ * `from` is the community it signed in to. Parsed with `now: 0`, as
+ * `handleTriggerLinkNumber` does — the flow has already judged expiry, and a
+ * link that lapsed while the person approved still names the community.
+ */
+async function pinSignInOrigin(record: SignInFlowRecord): Promise<void> {
+  if (!record.origin) return;
+  const parsed = parseTriggerLink(record.link, { now: 0 });
+  if (!parsed.ok) return;
+  await pinOrigin(record.origin, parsed.link.from.value);
 }
 
 

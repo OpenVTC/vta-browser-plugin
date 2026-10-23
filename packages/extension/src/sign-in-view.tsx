@@ -774,9 +774,11 @@ export function SignInView({
         setEntryId(res.result.identities[0]?.entryId ?? "");
         // One identity is no choice: clicking the code on the verified portal
         // was the person's go-ahead, so the claim goes out without a Continue
-        // (contract C3 step 6, as amended). With more than one, they pick.
+        // (contract C3 step 6, as amended). With more than one, they pick. A
+        // page that signed in to a different community before is shown either
+        // way: the warning is the point of the screen then (M5).
         const only =
-          res.result.identities.length === 1
+          res.result.identities.length === 1 && !res.result.changedFromDid
             ? res.result.identities[0]!
             : undefined;
         if (only) {
@@ -1482,6 +1484,17 @@ export function SignInView({
           <p style={{ margin: 0, color: c.muted }}>
             Nothing is sent to the community until you continue.
           </p>
+          {screen.changedFromDid && (
+            <div role="alert" data-testid="changed-from">
+              <Note tone="danger">
+                <strong>This site signed you in to a different community before.</strong>{" "}
+                Check that <strong style={wrap}>{screen.communityName}</strong> is the one you
+                expect before continuing.
+                <div style={{ ...microLabel, padding: 0, marginTop: 6 }}>Previously</div>
+                <ShortDid value={screen.changedFromDid} />
+              </Note>
+            </div>
+          )}
           <fieldset
             style={{
               border: "none",

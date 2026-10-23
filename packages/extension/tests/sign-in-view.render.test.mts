@@ -184,6 +184,26 @@ test("one identity and the page's number: straight from the code to the review",
   await screen.unmount();
 });
 
+test("one identity, but the page was pinned to another community: the screen is shown, with the warning", async () => {
+  const { steps, send } = script({
+    ...RESULTS,
+    prepare: {
+      ...(RESULTS.prepare as Extract<SignInStepResult, { kind: "confirm" }>),
+      identities: [{ entryId: "e1", did: "did:web:alice.example", label: "Alice" }],
+      changedFromDid: "did:webvh:QmOther:members.example.org",
+    },
+  });
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, uv: ENROLLED_UV, close: () => {} }),
+  );
+  await screen.settle();
+  assert.deepEqual(steps, [{ step: "prepare" }], "no claim goes out on its own");
+  assert.ok(screen.container.querySelector('[data-testid="continue"]'), "the person continues, or not");
+  assert.ok(screen.container.querySelector('[data-testid="changed-from"]'));
+  assert.match(screen.text(), /signed you in to a different community before/);
+  await screen.unmount();
+});
+
 test("one identity, no number from the page: the number screen, without the identity screen", async () => {
   const { steps, send } = script({
     ...RESULTS,
