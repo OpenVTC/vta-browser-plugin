@@ -38,12 +38,17 @@ export interface DidPart {
  * encoded because the host is compared by eye against a domain, which never
  * contains either.
  *
+ * `did:scid:vh:1:<scid>?src=<host>[/<path>…]` lifts the host its `src` names:
+ * that is where its log is fetched from, so it is what the person checks. A
+ * bare did:scid names no host and comes back as one part.
+ *
  * Anything else — `did:peer`, `did:key`, or a malformed string — comes back as
  * a single part rather than a guess. Unknown input renders plainly; it never
  * renders *wrongly*, which would mean emphasising a segment that is not the
  * host and inviting exactly the misread this exists to prevent.
  */
 export function splitDid(did: string): DidPart[] {
+  if (did.startsWith("did:scid:")) return splitScid(did);
   if (!did.startsWith("did:webvh:")) {
     return did ? [{ text: did, role: "opaque" }] : [];
   }
@@ -67,6 +72,22 @@ export function splitDid(did: string): DidPart[] {
   if (rest.length > 0) {
     parts.push({ text: `:${rest.join(":")}`, role: "path" });
   }
+  return parts;
+}
+
+// `did:scid:vh:1:<scid>?src=<host>[/<path>]`. Only a `src` that is the sole
+// query is lifted; anything else renders as one part.
+function splitScid(did: string): DidPart[] {
+  const match = /^(did:scid:[a-z0-9]+:[0-9]+:)([^?#]+)(\?src=)([^/?#&]+)(\/[^?#&]*)?$/.exec(did);
+  if (!match) return [{ text: did, role: "opaque" }];
+  const [, method, scid, query, host, path] = match;
+  const parts: DidPart[] = [
+    { text: method!, role: "method" },
+    { text: scid!, role: "opaque" },
+    { text: query!, role: "method" },
+    { text: host!, role: "host" },
+  ];
+  if (path) parts.push({ text: path, role: "path" });
   return parts;
 }
 

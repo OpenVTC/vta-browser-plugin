@@ -20,6 +20,8 @@
 // local copy of base design §10 plus contract C5, because the
 // `dtgwg-trust-tasks-tf` bindings for `auth/oob/*` are not published yet.
 
+import { sameReference, stripScidSrc } from "@openvtc/vti-didcomm-js";
+
 import { resolveContactDocument, type ContactMethodRegistry } from "../did/methods.js";
 import { generateSigningIdentity, type SigningIdentity } from "../siop/self-issued.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
@@ -625,7 +627,7 @@ export async function assertSignedByCommunity(
   const result = await verifyTrustTaskProof(reply as unknown as Record<string, unknown>, {
     expectedProofPurpose: purpose,
     resolveDid: async (did) => {
-      if (did !== vtcDid) throw new Error(`reply signed by ${did}, not the community`);
+      if (stripScidSrc(did) !== vtcDid) throw new Error(`reply signed by ${did}, not the community`);
       return vtcDocument;
     },
   });
@@ -638,7 +640,7 @@ export async function assertSignedByCommunity(
   const fragment = vm.slice(vm.indexOf("#"));
   const ok = listed.some((m) => {
     const id = typeof m === "string" ? m : (m as { id?: unknown })?.id;
-    return typeof id === "string" && (id === vm || id === fragment);
+    return typeof id === "string" && (sameReference(id, vm) || id === fragment);
   });
   if (!ok) throw new OobReplyInvalidError(`${label}: the signing key is not one of the community's ${purpose} keys`);
 }

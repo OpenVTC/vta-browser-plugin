@@ -449,7 +449,7 @@ function VerificationDetails({ state }: { state: VerificationState }) {
   lines.push(
     <span key="method" style={{ color: colours.textMuted }}>
       Method: <strong style={{ color: colours.text }}>did:{result.method}</strong>
-      {result.method === "webvh" && " — log chain + proofs verified"}
+      {(result.method === "webvh" || result.method === "scid") && " — log chain + proofs verified"}
       {(result.method === "peer" || result.method === "key") && " — self-certifying identifier"}
     </span>,
   );
