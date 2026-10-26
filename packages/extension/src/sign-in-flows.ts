@@ -475,6 +475,7 @@ export class SignInFlows {
       restBaseUrl?: string;
       link?: string;
       origin?: string;
+      pinnedDid?: string;
     } & SignInStep,
   ): Promise<SignInStepResult> {
     if (req.step === "prepare")
@@ -484,6 +485,7 @@ export class SignInFlows {
         req.origin,
         req.vtaDid,
         req.restBaseUrl,
+        req.pinnedDid,
       );
     const flow = this.flows.get(req.flowId);
     if (!flow || flow.phase === "ended") {
@@ -569,6 +571,7 @@ export class SignInFlows {
     origin: string | undefined,
     vtaDid: string,
     restBaseUrl: string | undefined,
+    pinnedDid: string | undefined,
   ): Promise<SignInStepResult> {
     if (this.flows.has(flowId))
       return {
@@ -721,6 +724,11 @@ export class SignInFlows {
       communityName,
       portalOrigin: selected.services.portalOrigin,
       identities,
+      // The page was signed in to another community before (M5). The pairing
+      // was verified above all the same — the document names this origin as
+      // its portal — but the person decides whether that is the community they
+      // meant, on a screen that says which one it was.
+      ...(pinnedDid !== undefined && pinnedDid !== vtcDid ? { changedFromDid: pinnedDid } : {}),
     };
   }
 

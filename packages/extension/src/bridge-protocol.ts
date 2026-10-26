@@ -2896,6 +2896,11 @@ export type OffscreenSignInStepRequest = {
   /** Present on `prepare` only, from the background's own record. */
   link?: string;
   origin?: string;
+  /** Present on `prepare` only, when `origin` is pinned to a relying party
+   *  (`origin-pin.ts`, M5): that DID. The flow names it on the confirm screen
+   *  when the link's community is a different one, so a changed pairing gets
+   *  the loud prompt the page-bridge logins give it. */
+  pinnedDid?: string;
 } & SignInStep;
 
 /** How this browser approves sign-ins at an agent: the kind of UV key the
@@ -2990,8 +2995,17 @@ export type SignInStepResult =
    *  wants more evidence (`requestMore`, `needs`). The flow has ended; no
    *  sign-in document was sent. */
   | { kind: "join-pending"; host: string; portalOrigin: string; needs?: string[] }
-  /** C3 step 5: "Sign in to <name> at <portal origin>?" */
-  | { kind: "confirm"; communityName: string; portalOrigin: string; identities: SignInIdentityView[] }
+  /** C3 step 5: "Sign in to <name> at <portal origin>?" `changedFromDid` is
+   *  the community this origin was pinned to by an earlier sign-in, when the
+   *  link names a different one (M5): the window warns, and does not skip the
+   *  screen for a single identity. */
+  | {
+      kind: "confirm";
+      communityName: string;
+      portalOrigin: string;
+      identities: SignInIdentityView[];
+      changedFromDid?: string;
+    }
   /** After the claim: type the number. `nameMismatch` is the community's own
    *  name for itself when it differs from this wallet's record (VTI-LNK-104).
    *  `audience` is the session the website asked for, from the community's
