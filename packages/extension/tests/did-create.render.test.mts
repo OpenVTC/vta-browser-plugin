@@ -18,11 +18,11 @@ import assert from "node:assert/strict";
 import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { CreateDid } from "../src/manager/panes/did-create.js";
 
-const CREATE = "vta/webvh/dids/create/1.0";
+const CREATE = "vta/webvh/dids/create/1.2";
 const SERVERS = "vta/webvh/servers/list/1.0";
-const TEMPLATES = "vta/did-templates/list/2.0";
-const SERVICES = "vta/services/list/1.0";
-const KEYS = "keys/list/0.1";
+const TEMPLATES = "vta/did-templates/list/3.1";
+const SERVICES = "vta/services/list/1.1";
+const KEYS = "keys/list/0.2";
 
 const key = (over: Record<string, unknown> = {}) => ({
   keyId: "key-1",
@@ -45,6 +45,12 @@ const created = {
   kaKeyId: "key-1",
   preRotationKeyCount: 2,
   createdAt: "2026-09-15T00:00:00Z",
+  // 1.2's required members: the form applied, and both forms of the identity.
+  serverless: false,
+  didMethod: "webvh",
+  scidAlsoKnownAs: true,
+  webvhDid: "did:webvh:QmNew:did.example:billing",
+  scidDidUrl: "did:scid:vh:1:QmNew?src=did.example/billing",
 };
 
 const ROOM_TEMPLATE = {
@@ -55,8 +61,8 @@ const ROOM_TEMPLATE = {
   requiredVars: ["WEBVH_SERVER", "MEDIATOR_DID"],
   document: { id: "{DID}" },
   scope: { type: "global" },
-  createdAt: 0,
-  updatedAt: 0,
+  createdAt: "2026-09-01T00:00:00Z",
+  updatedAt: "2026-09-01T00:00:00Z",
   createdBy: "did:key:zAdmin",
 };
 
@@ -65,7 +71,7 @@ const mount = async (answers: Record<string, unknown> = {}) => {
     [SERVERS]: SERVER_LIST,
     [TEMPLATES]: { templates: [] },
     [SERVICES]: [],
-    [KEYS]: { keys: [], total: 0, offset: 0, limit: 200 },
+    [KEYS]: { keys: [] },
     [CREATE]: created,
     ...answers,
   });
@@ -306,7 +312,7 @@ test("an agent that will not list its servers says so rather than showing none",
 // DID in a context.
 test("a form nobody touched names no key, so both are minted fresh", async () => {
   const { a, screen } = await mount({
-    [KEYS]: { keys: [key(), key({ keyId: "ka-1", keyType: "x25519" })], total: 2, offset: 0, limit: 200 },
+    [KEYS]: { keys: [key(), key({ keyId: "ka-1", keyType: "x25519" })] },
   });
   await screen.click(screen.button("Create DID"));
   await screen.settle();
@@ -318,7 +324,7 @@ test("a form nobody touched names no key, so both are minted fresh", async () =>
 
 test("a chosen key is sent under the member for its role", async () => {
   const { a, screen } = await mount({
-    [KEYS]: { keys: [key(), key({ keyId: "ka-1", keyType: "x25519" })], total: 2, offset: 0, limit: 200 },
+    [KEYS]: { keys: [key(), key({ keyId: "ka-1", keyType: "x25519" })] },
   });
   await screen.select(screen.container.querySelector('select[aria-label="Signing key"]')!, "key-1");
   await screen.select(screen.container.querySelector('select[aria-label="Key-agreement key"]')!, "ka-1");
@@ -334,7 +340,7 @@ test("a chosen key is sent under the member for its role", async () => {
 // update its own log — starting with the first entry, written at mint time.
 test("a key-agreement key is not in the signing picker", async () => {
   const { screen } = await mount({
-    [KEYS]: { keys: [key({ keyId: "ka-1", keyType: "x25519" })], total: 1, offset: 0, limit: 200 },
+    [KEYS]: { keys: [key({ keyId: "ka-1", keyType: "x25519" })] },
   });
   const signing = screen.container.querySelector('select[aria-label="Signing key"]');
   // With nothing usable the picker is replaced by the reason, which is a
@@ -348,7 +354,7 @@ test("a key-agreement key is not in the signing picker", async () => {
 
 test("a revoked key is not offered", async () => {
   const { screen } = await mount({
-    [KEYS]: { keys: [key({ keyId: "gone", status: "revoked" })], total: 1, offset: 0, limit: 200 },
+    [KEYS]: { keys: [key({ keyId: "gone", status: "revoked" })] },
   });
   assert.doesNotMatch(screen.text(), /gone/);
   await screen.unmount();
@@ -357,7 +363,7 @@ test("a revoked key is not offered", async () => {
 // Reuse links two DIDs to one holder, provably and permanently. That is a
 // decision, so it has to be visible at the moment it is taken.
 test("choosing a key says what reusing one discloses", async () => {
-  const { screen } = await mount({ [KEYS]: { keys: [key()], total: 1, offset: 0, limit: 200 } });
+  const { screen } = await mount({ [KEYS]: { keys: [key()] } });
   assert.doesNotMatch(screen.text(), /held by you/);
   await screen.select(screen.container.querySelector('select[aria-label="Signing key"]')!, "key-1");
   assert.match(screen.text(), /held by you/);
@@ -382,7 +388,7 @@ test("an agent that will not list keys says so, and minting still works", async 
 // Leaving it set would build the NEXT DID on the same key without anyone
 // touching the control — the correlation above, arrived at by inaction.
 test("a mint clears the key choice, unlike the hosting server", async () => {
-  const { screen } = await mount({ [KEYS]: { keys: [key()], total: 1, offset: 0, limit: 200 } });
+  const { screen } = await mount({ [KEYS]: { keys: [key()] } });
   await screen.select(screen.container.querySelector('select[aria-label="Signing key"]')!, "key-1");
   await screen.click(screen.button("Create DID"));
   await screen.settle();
@@ -395,7 +401,7 @@ test("a mint clears the key choice, unlike the hosting server", async () => {
 // what makes it usable — a listing filtered client-side would mean asking for
 // every key in the agent to draw one dropdown.
 test("the keys asked for are this context's active ones", async () => {
-  const { a, screen } = await mount({ [KEYS]: { keys: [key()], total: 1, offset: 0, limit: 200 } });
+  const { a, screen } = await mount({ [KEYS]: { keys: [key()] } });
   const [call] = a.of("keys/list");
   assert.ok(call);
   assert.equal((call.payload as Record<string, unknown>)["contextId"], "ops");

@@ -125,7 +125,7 @@ test("a page may not request any messaging/* task", () => {
   for (const t of [
     "https://trusttasks.org/spec/messaging/monitor/subscribe/0.1",
     "https://trusttasks.org/spec/messaging/queue/list/0.1",
-    "https://trusttasks.org/spec/messaging/account/get/0.1",
+    "https://trusttasks.org/spec/messaging/account/get/0.2",
   ]) {
     assert.match(pageTaskRefusal(t) ?? "", /cannot be requested by a page/, t);
   }

@@ -18,7 +18,7 @@ import {
   RESPONSE_TYPE_URI as RENDERERS_LIST_RESPONSE,
   type PersonaRenderersListPayload,
   type PersonaRenderersListResponsePayload,
-} from "@openvtc/trust-tasks/persona/renderers/list/1.0/payload";
+} from "../specs/persona/renderers/list/1.0/payload.js";
 
 import { call } from "./call.js";
 

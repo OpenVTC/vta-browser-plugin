@@ -97,7 +97,7 @@ test("making a face does not loop the renderer", async () => {
   //
   // A loop surfaces here as `act` never settling or React throwing, so simply
   // reaching the assertions is most of the test.
-  const a = agent({ "persona/profile/put/1.0": { profileId: "p1", version: 1, created: true, updatedAt: "x" } });
+  const a = agent({ "persona/profile/put/1.1": { profileId: "p1", version: 1, wasCreated: true, updatedAt: "x" } });
   const ui = await render(
     h(GuidedSetup, {
       registry: REGISTRY,
@@ -738,7 +738,7 @@ test("a value the agent did send is still covered locally, with no second questi
 // REPLACES the attribute, so an editor that never mentions these clears them on
 // every save, and the response says nothing about what was dropped.
 
-const PUT_OK = { "persona/attribute/put/1.0": { attributeId: "a1", version: 2, created: false, updatedAt: "x" } };
+const PUT_OK = { "persona/attribute/put/1.1": { attributeId: "a1", version: 2, wasCreated: false, updatedAt: "x" } };
 
 const editor = (existing?: Record<string, unknown>) =>
   h(AttributeEditor, {
@@ -929,7 +929,7 @@ const editorFor = (existing: Record<string, unknown>) =>
 test("opening a withheld attribute asks the agent for its value first", async () => {
   const a = agent({
     "persona/attribute/list/1.0": { attributes: [{ ...WITHHELD_ATTR, value: "octocat" }] },
-    "persona/attribute/put/1.0": { attributeId: "a9", version: 4, created: false, updatedAt: "x" },
+    "persona/attribute/put/1.1": { attributeId: "a9", version: 4, wasCreated: false, updatedAt: "x" },
   });
   const ui = await render(editorFor(WITHHELD_ATTR), { chrome: { runtime: { sendMessage: a.sendMessage } } });
   await ui.settle();
@@ -946,7 +946,7 @@ test("a refused fetch blocks the save rather than blanking the record", async ()
   // outcomes for a value with no way back.
   const a = agent({
     "persona/attribute/list/1.0": { attributes: [WITHHELD_ATTR] },
-    "persona/attribute/put/1.0": { attributeId: "a9", version: 4, created: false, updatedAt: "x" },
+    "persona/attribute/put/1.1": { attributeId: "a9", version: 4, wasCreated: false, updatedAt: "x" },
   });
   const ui = await render(editorFor(WITHHELD_ATTR), { chrome: { runtime: { sendMessage: a.sendMessage } } });
   await ui.settle();
@@ -959,7 +959,7 @@ test("a refused fetch blocks the save rather than blanking the record", async ()
 test("typing the value yourself is the deliberate overwrite the guard allows", async () => {
   const a = agent({
     "persona/attribute/list/1.0": { attributes: [WITHHELD_ATTR] },
-    "persona/attribute/put/1.0": { attributeId: "a9", version: 4, created: false, updatedAt: "x" },
+    "persona/attribute/put/1.1": { attributeId: "a9", version: 4, wasCreated: false, updatedAt: "x" },
   });
   const ui = await render(editorFor(WITHHELD_ATTR), { chrome: { runtime: { sendMessage: a.sendMessage } } });
   await ui.settle();
@@ -1419,9 +1419,9 @@ function paneWith(faces: number, worlds: number) {
     "persona/profile/list/1.0": {
       profiles: Array.from({ length: faces }, (_, i) => face(`p${i}`, `Face ${i}`, ["a1"])),
     },
-    "persona/facet/list/1.0": {
-      facets: Array.from({ length: worlds }, (_, i) => ({
-        facetId: `w${i}`,
+    "persona/world/list/1.0": {
+      worlds: Array.from({ length: worlds }, (_, i) => ({
+        worldId: `w${i}`,
         name: `World ${i}`,
         colour: "teal",
         faceIds: [],

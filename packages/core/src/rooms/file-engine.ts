@@ -10,7 +10,7 @@
 //        → file-key(seal) → seal locally → upload begin/0.2 (proxied, naming the
 //        upload key) → chunks / commit under the upload key
 //        → the VTA signs the record body as the member and seals it
-//          (rooms/keys/seal/0.2) → records/put/0.2 naming the blob, re-sealing
+//          (rooms/keys/seal/0.2) → records/put/0.3 naming the blob, re-sealing
 //          for the version the host actually assigned.
 //   get  records/get/0.2 → rooms/keys/open → verify the body
 //        → the record names the file's blob → blobs/get/0.2 (proxied)
@@ -65,22 +65,22 @@ import {
   RESPONSE_TYPE_URI as UPLOAD_BEGIN_RESPONSE,
   type RoomsBlobsUploadBeginPayload,
   type RoomsBlobsUploadBeginResponsePayload,
-} from "@openvtc/trust-tasks/rooms/blobs/upload/begin/0.2/payload";
+} from "../specs/rooms/blobs/upload/begin/0.2/payload.js";
 import {
   TYPE_URI as BLOBS_GET,
   RESPONSE_TYPE_URI as BLOBS_GET_RESPONSE,
   type RoomsBlobsGetResponsePayload,
-} from "@openvtc/trust-tasks/rooms/blobs/get/0.2/payload";
+} from "../specs/rooms/blobs/get/0.2/payload.js";
 import {
   TYPE_URI as BLOBS_CHUNK,
   RESPONSE_TYPE_URI as BLOBS_CHUNK_RESPONSE,
   type RoomsBlobsChunkResponsePayload,
-} from "@openvtc/trust-tasks/rooms/blobs/chunk/0.1/payload";
+} from "../specs/rooms/blobs/chunk/0.1/payload.js";
 import {
   TYPE_URI as RECORDS_GET,
   RESPONSE_TYPE_URI as RECORDS_GET_RESPONSE,
   type RoomsRecordsGetResponsePayload,
-} from "@openvtc/trust-tasks/rooms/records/get/0.2/payload";
+} from "../specs/rooms/records/get/0.2/payload.js";
 
 // ── The cipher, as this module needs it ─────────────────────────────────────
 

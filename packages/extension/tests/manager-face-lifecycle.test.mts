@@ -25,14 +25,14 @@ test("a timeline line names types and parties, never a value", () => {
   const name = (id: string) => (id === "ctx" ? "Co-op" : id);
   assert.equal(
     timelineWords(
-      { at: "2026-01-01T00:00:00Z", kind: "disclosed", contextId: "ctx", verifierDid: "did:web:v", claimTypes: ["name.display"] },
+      { occurredAt: "2026-01-01T00:00:00Z", kind: "disclosed", contextId: "ctx", verifierDid: "did:web:v", claimTypes: ["name.display"] },
       name,
     ),
     "Told did:web:v name.display in Co-op",
   );
   assert.equal(
-    timelineWords({ at: "2026-01-01T00:00:00Z", kind: "valueChanged", claimTypes: ["email.work"], version: 7 }, name),
+    timelineWords({ occurredAt: "2026-01-01T00:00:00Z", kind: "valueChanged", claimTypes: ["email.work"], version: 7 }, name),
     "email.work changed (version 7)",
   );
-  assert.equal(timelineWords({ at: "2026-01-01T00:00:00Z", kind: "promoted", contextId: "ctx" }, name), "Made reusable across your faces, from Co-op");
+  assert.equal(timelineWords({ occurredAt: "2026-01-01T00:00:00Z", kind: "promoted", contextId: "ctx" }, name), "Made reusable across your faces, from Co-op");
 });

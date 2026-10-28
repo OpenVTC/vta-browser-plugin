@@ -22,7 +22,7 @@ import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { ConsentRequiredError } from "../carrier.js";
 import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
-import { Loading, LoadError, Table, Truncated, type Column } from "../table.js";
+import { Loading, LoadError, Table, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
 import { formatDate } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
@@ -317,7 +317,6 @@ export function PolicyPane({
               empty="No policy modules. Without one the agent falls back to its configured
                 defaults — which, for consent enforcement, is off."
             />
-            {list.data.truncated && <Truncated what="the policy list" />}
           </>
         )}
         {!creating && (

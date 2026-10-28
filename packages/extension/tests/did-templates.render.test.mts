@@ -19,9 +19,9 @@ import assert from "node:assert/strict";
 import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { DidTemplatesPane } from "../src/manager/panes/did-templates.js";
 
-const LIST = "vta/did-templates/list/2.0";
-const CREATE = "vta/did-templates/create/2.0";
-const UPDATE = "vta/did-templates/update/2.0";
+const LIST = "vta/did-templates/list/3.1";
+const CREATE = "vta/did-templates/create/3.1";
+const UPDATE = "vta/did-templates/update/3.1";
 const RENDER = "vta/did-templates/render/2.0";
 
 const tpl = (over: Record<string, unknown> = {}) => ({
@@ -34,8 +34,8 @@ const tpl = (over: Record<string, unknown> = {}) => ({
   defaults: { portable: true },
   document: { id: "{DID}", service: [] },
   scope: { type: "global" },
-  createdAt: 0,
-  updatedAt: 0,
+  createdAt: "2026-09-01T00:00:00Z",
+  updatedAt: "2026-09-01T00:00:00Z",
   createdBy: "did:key:zAdmin",
   ...over,
 });
@@ -103,6 +103,22 @@ test("a replace carries the members the editor never drew", async () => {
   const sent = (call.payload as { template: Record<string, unknown> }).template;
   assert.deepEqual(sent["optionalVars"], { LABEL: "a mediator" });
   assert.deepEqual(sent["defaults"], { portable: true });
+  await screen.unmount();
+});
+
+// `keys` is a `schemaVersion` 2 member the editor does not draw either. Saving a
+// v2 template back as v1 without it would drop its key slots, or be refused for
+// the slot placeholders left in `document`.
+test("a replace keeps a v2 template's version and keys", async () => {
+  const keys = { signing: { purpose: "signing", algorithms: ["mldsa44", "ed25519"] } };
+  const v2 = tpl({ schemaVersion: 2, keys });
+  const { a, screen } = await mount({ [LIST]: { templates: [v2] }, [UPDATE]: v2 });
+  await screen.click(screen.button("Edit"));
+  await screen.click(screen.button("Replace template"));
+  await screen.settle();
+  const sent = (a.of("did-templates/update")[0]!.payload as { template: Record<string, unknown> }).template;
+  assert.equal(sent["schemaVersion"], 2);
+  assert.deepEqual(sent["keys"], keys);
   await screen.unmount();
 });
 

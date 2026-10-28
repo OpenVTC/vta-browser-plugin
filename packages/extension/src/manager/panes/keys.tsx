@@ -470,11 +470,10 @@ export function KeysPane({
                   : "No keys you can reach. Keys you administer appear here."
               }
             />
-            {list.data.total > list.data.keys.length && (
-              <Truncated
-                what={`your agent's ${list.data.total} keys`}
-                onMore={() => setLimit((n) => n + PAGE)}
-              />
+            {/* `keys/list/0.2` pages by cursor and gives no total, so the
+                count is gone; whether this is all of them is not. */}
+            {list.data.nextCursor && (
+              <Truncated what="your agent's keys" onMore={() => setLimit((n) => n + PAGE)} />
             )}
           </>
         )}

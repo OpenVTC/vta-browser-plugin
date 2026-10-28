@@ -88,6 +88,10 @@
       "types": "./dist/trust-tasks/index.d.ts",
       "import": "./dist/trust-tasks/index.js"
     },
+    "./specs": {
+      "types": "./dist/specs/index.d.ts",
+      "import": "./dist/specs/index.js"
+    },
     "./util": {
       "types": "./dist/util/index.d.ts",
       "import": "./dist/util/index.js"
@@ -136,13 +140,14 @@
     "lint": "tsc -b",
     "test": "tsc -b && node --test tests/*.mjs",
     "tasks:sync": "node scripts/sync-task-surface.mjs",
+    "tasks:generate": "trust-tasks-gen-ts --lock trust-tasks.lock --out src/specs",
     "acl:sync": "node scripts/sync-acl-capabilities.mjs",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
     "@noble/curves": "^2.4.0",
-    "@openvtc/trust-tasks": "^0.27.2",
+    "@openvtc/trust-tasks": "^0.28.1",
     "@openvtc/vti-didcomm-js": "^0.13.0",
     "@openvtc/vti-tsp-js": "^0.4.0",
     "@scure/base": "^2.2.0",
@@ -151,6 +156,7 @@
   "devDependencies": {
     "@hpke/chacha20poly1305": "^1.8.0",
     "@hpke/core": "^1.9.0",
+    "@openvtc/trust-tasks-gen": "^0.1.1",
     "@openvtc/vti-rooms-wasm": "^0.1.0",
     "typescript": "^7.0.2"
   }

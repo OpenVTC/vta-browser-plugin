@@ -11,7 +11,7 @@
 import type {
   Audience,
   DirectoryDisclosure,
-} from "@openvtc/trust-tasks/vtc/join-requests/manifest/0.4/payload";
+} from "../specs/vtc/join-requests/manifest/0.4/payload.js";
 import { OobReplyInvalidError } from "./oob-sign-in.js";
 
 export type { DirectoryDisclosure };

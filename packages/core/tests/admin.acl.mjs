@@ -5,10 +5,9 @@
 // the failure surfaces at an operator's console, mid-grant. The tests capture
 // the envelope a call would send and assert its exact shape.
 //
-// The `allowedKeys` cases are the ones that matter most: absent and `[]` are
-// opposite grants (every key the entry's scopes reach, versus no keys at all),
-// so a helpful-looking "drop the empty array" would turn the narrowest grant
-// into the widest.
+// AclEntry 0.2 states every authority axis explicitly — `act`, `keys` and
+// `capabilities` have no default — so the cases that matter most are the ones
+// where a helpful-looking rebuild would drop or rewrite a stated scope.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -36,18 +35,28 @@ function recorder(reply) {
   };
 }
 
+/** A minimal well-formed 0.2 entry: the three required scopes, stated. */
+const ENTRY = (over = {}) => ({
+  subject: "did:key:zSubject",
+  role: "admin",
+  act: { scope: "contexts", contexts: ["demo"] },
+  keys: { scope: "all" },
+  capabilities: { scope: "ceiling" },
+  ...over,
+});
+
 test("grant sends the entry nested, under the canonical type", async () => {
-  const entry = { subject: "did:key:zSubject", role: "admin", scopes: ["demo"] };
+  const entry = ENTRY();
   const channel = recorder({ entry });
 
   const result = await aclGrant(channel, { holder: HOLDER, service: SERVICE, entry });
 
   const { envelope, opts } = channel.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/acl/grant/0.1");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/acl/grant/0.2");
   assert.equal(envelope.issuer, HOLDER.did);
   assert.equal(envelope.recipient, SERVICE.did);
   assert.deepEqual(envelope.payload, { entry });
-  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/acl/grant/0.1#response");
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/acl/grant/0.2#response");
   assert.deepEqual(result, entry);
 });
 
@@ -55,68 +64,76 @@ test("grant omits reason entirely when there isn't one", async () => {
   // Not `reason: undefined` — `deny_unknown_fields` tolerates an absent key,
   // and a null would be a type error against `Option<String>`.
   const channel = recorder({ entry: {} });
-  await aclGrant(channel, {
-    holder: HOLDER,
-    service: SERVICE,
-    entry: { subject: "did:key:zS", role: "admin" },
-  });
+  await aclGrant(channel, { holder: HOLDER, service: SERVICE, entry: ENTRY() });
   assert.ok(!("reason" in channel.sent[0].envelope.payload));
 });
 
-test("an empty allowedKeys survives as [] — the narrowest grant, not the widest", async () => {
-  const entry = { subject: "did:key:zS", role: "signer", allowedKeys: [] };
+test("a key scope of none survives as stated — the narrowest grant, not the widest", async () => {
+  const entry = ENTRY({ keys: { scope: "none" } });
   const channel = recorder({ entry });
   await aclGrant(channel, { holder: HOLDER, service: SERVICE, entry });
-  assert.deepEqual(channel.sent[0].envelope.payload.entry.allowedKeys, []);
-});
-
-test("an absent allowedKeys stays absent — it means every key in scope", async () => {
-  const entry = { subject: "did:key:zS", role: "signer" };
-  const channel = recorder({ entry });
-  await aclGrant(channel, { holder: HOLDER, service: SERVICE, entry });
-  assert.ok(!("allowedKeys" in channel.sent[0].envelope.payload.entry));
+  assert.deepEqual(channel.sent[0].envelope.payload.entry.keys, { scope: "none" });
 });
 
 test("list sends only the filters that were set, in camelCase", async () => {
-  const channel = recorder({ entries: [], truncated: false });
+  const channel = recorder({ entries: [] });
   await aclList(channel, {
     holder: HOLDER,
     service: SERVICE,
     role: "admin",
     subjectPrefix: "did:key:",
-    pageSize: 50,
+    limit: 50,
   });
+  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/acl/list/0.3");
   assert.deepEqual(channel.sent[0].envelope.payload, {
     role: "admin",
     subjectPrefix: "did:key:",
-    pageSize: 50,
+    limit: 50,
   });
 });
 
-test("list with no filters sends an empty payload, not a bag of undefineds", async () => {
-  const channel = recorder({ entries: [], truncated: false });
-  await aclList(channel, { holder: HOLDER, service: SERVICE });
-  assert.deepEqual(channel.sent[0].envelope.payload, {});
+test("a context filter carries its direction — there is no default", async () => {
+  const channel = recorder({ entries: [] });
+  await aclList(channel, {
+    holder: HOLDER,
+    service: SERVICE,
+    context: "demo",
+    direction: "actingIn",
+  });
+  assert.deepEqual(channel.sent[0].envelope.payload, { context: "demo", direction: "actingIn" });
 });
 
-test("pageSize 0 is a filter, not an absence", async () => {
-  // `if (params.pageSize)` would drop it; the guard is on `!== undefined`.
-  const channel = recorder({ entries: [], truncated: false });
-  await aclList(channel, { holder: HOLDER, service: SERVICE, pageSize: 0 });
-  assert.deepEqual(channel.sent[0].envelope.payload, { pageSize: 0 });
+test("list with no filters sends an empty payload, not a bag of undefineds", async () => {
+  const channel = recorder({ entries: [] });
+  await aclList(channel, { holder: HOLDER, service: SERVICE });
+  assert.deepEqual(channel.sent[0].envelope.payload, {});
 });
 
 test("list defaults the response fields the agent may omit", async () => {
   const channel = recorder({});
   const result = await aclList(channel, { holder: HOLDER, service: SERVICE });
-  assert.deepEqual(result, { entries: [], truncated: false, redactedFields: [] });
+  assert.deepEqual(result, { entries: [], redactedFields: [] });
 });
 
-test("list carries a cursor back when the agent paged", async () => {
-  const channel = recorder({ entries: [{ subject: "a", role: "admin" }], truncated: true, cursor: "c1" });
-  const result = await aclList(channel, { holder: HOLDER, service: SERVICE });
-  assert.equal(result.truncated, true);
-  assert.equal(result.cursor, "c1");
+test("list follows nextCursor to the end, keeping the filters on every page", async () => {
+  // Only an absent `nextCursor` means the last page; a list that stopped at
+  // the first would show an access pane a partial ACL that reads as complete.
+  const pages = [
+    { entries: [ENTRY({ subject: "a" })], nextCursor: "c1", redactedFields: ["label"] },
+    { entries: [ENTRY({ subject: "b" })] },
+  ];
+  const sent = [];
+  const channel = {
+    send(envelope) {
+      sent.push(envelope);
+      return Promise.resolve(pages[sent.length - 1]);
+    },
+  };
+  const result = await aclList(channel, { holder: HOLDER, service: SERVICE, role: "admin" });
+  assert.deepEqual(result.entries.map((e) => e.subject), ["a", "b"]);
+  assert.deepEqual(result.redactedFields, ["label"]);
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[1].payload, { role: "admin", cursor: "c1" });
 });
 
 test("show reports null for a subject that is not in the ACL", async () => {
@@ -130,52 +147,45 @@ test("show reports null for a subject that is not in the ACL", async () => {
 });
 
 test("show reports redacted fields rather than hiding them", async () => {
-  const channel = recorder({ entry: { subject: "did:key:zS", role: "admin" }, redactedFields: ["label"] });
+  const channel = recorder({ entry: ENTRY({ subject: "did:key:zS" }), redactedFields: ["label"] });
   const result = await aclShow(channel, { holder: HOLDER, service: SERVICE, subject: "did:key:zS" });
   assert.deepEqual(result.redactedFields, ["label"]);
   assert.deepEqual(channel.sent[0].envelope.payload, { subject: "did:key:zS" });
 });
 
 test("show defaults redactedFields to empty when the agent withheld nothing", async () => {
-  const channel = recorder({ entry: { subject: "did:key:zS", role: "admin" } });
+  const channel = recorder({ entry: ENTRY({ subject: "did:key:zS" }) });
   const result = await aclShow(channel, { holder: HOLDER, service: SERVICE, subject: "did:key:zS" });
   assert.deepEqual(result.redactedFields, []);
 });
 
-test("revoke without scopes removes the entry; with scopes it narrows", async () => {
-  const whole = recorder({ entry: {} });
-  await aclRevoke(whole, { holder: HOLDER, service: SERVICE, subject: "did:key:zS" });
-  assert.deepEqual(whole.sent[0].envelope.payload, { subject: "did:key:zS" });
+test("revoke states what it takes away — the whole entry, or the act scope", async () => {
+  const whole = recorder({ entry: null });
+  await aclRevoke(whole, {
+    holder: HOLDER,
+    service: SERVICE,
+    subject: "did:key:zS",
+    revocation: { kind: "entry" },
+  });
+  assert.equal(whole.sent[0].envelope.type, "https://trusttasks.org/spec/acl/revoke/0.2");
+  assert.deepEqual(whole.sent[0].envelope.payload, {
+    subject: "did:key:zS",
+    revocation: { kind: "entry" },
+  });
 
   const narrow = recorder({ entry: {} });
   await aclRevoke(narrow, {
     holder: HOLDER,
     service: SERVICE,
     subject: "did:key:zS",
-    scopes: ["demo"],
+    revocation: { kind: "act", act: { scope: "contexts", contexts: ["demo"] } },
     reason: "sweep",
   });
   assert.deepEqual(narrow.sent[0].envelope.payload, {
     subject: "did:key:zS",
-    scopes: ["demo"],
+    revocation: { kind: "act", act: { scope: "contexts", contexts: ["demo"] } },
     reason: "sweep",
   });
-});
-
-test("revoke narrows with the scopes given, and they are sent verbatim", async () => {
-  // An *empty* scopes list is not expressible: the schema says `minItems: 1`,
-  // and the parameter type is a non-empty tuple, so "revoke nothing" cannot be
-  // confused with "revoke everything" (which is what omitting scopes means).
-  // The hand-written version of this module accepted `[]`, and an earlier
-  // version of this test asserted it was sent.
-  const channel = recorder({ entry: {} });
-  await aclRevoke(channel, {
-    holder: HOLDER,
-    service: SERVICE,
-    subject: "did:key:zS",
-    scopes: ["demo", "staging"],
-  });
-  assert.deepEqual(channel.sent[0].envelope.payload.scopes, ["demo", "staging"]);
 });
 
 test("change-role sends both roles, so the agent can compare-and-swap", async () => {
@@ -187,6 +197,7 @@ test("change-role sends both roles, so the agent can compare-and-swap", async ()
     fromRole: "admin",
     toRole: "auditor",
   });
+  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/acl/change-role/0.2");
   assert.deepEqual(channel.sent[0].envelope.payload, {
     subject: "did:key:zS",
     fromRole: "admin",
@@ -201,7 +212,7 @@ test("a channel error propagates — these calls do not swallow refusals", async
     },
   };
   await assert.rejects(
-    () => aclGrant(failing, { holder: HOLDER, service: SERVICE, entry: { subject: "x", role: "admin" } }),
+    () => aclGrant(failing, { holder: HOLDER, service: SERVICE, entry: ENTRY({ subject: "x" }) }),
     /e\.acl\.forbidden/,
   );
 });

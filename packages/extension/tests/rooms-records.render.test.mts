@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { RoomRecords } from "../src/manager/panes/rooms-records.js";
 
-const BROWSE = "rooms/keys/browse/0.1";
+const BROWSE = "rooms/keys/browse/0.3";
 const READ = "rooms/keys/read/0.1";
 const HOST = "did:webvh:QmHost:host.example";
 const ROOM = "did:webvh:QmRoom:rooms.example";

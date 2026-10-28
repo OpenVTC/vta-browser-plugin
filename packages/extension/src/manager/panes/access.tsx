@@ -6,19 +6,25 @@
 //
 // Two things the agent enforces that this pane must not paper over:
 //
-//  - **`aclUpdate` replaces scopes wholesale, and refuses to narrow.** Sending
-//    a shorter set is not "remove these" — the agent rejects a reduction here
-//    on purpose, because a narrowing typed into an edit box looks identical to
-//    a mistake. Taking authority away goes through `aclRevoke`, which says so.
+//  - **`aclUpdate` replaces an act scope wholesale, and refuses to narrow it.**
+//    Sending a shorter set is not "remove these" — the agent rejects a
+//    reduction here on purpose, because a narrowing typed into an edit box
+//    looks identical to a mistake. Taking authority away goes through
+//    `aclRevoke`, which says so.
 //  - **`aclChangeRole` compare-and-swaps against the current role.** The form
 //    carries `fromRole` from the row it was opened on, so a role someone else
 //    changed in between rejects rather than silently overwriting their change.
 //  - **A capability narrowing only ever subtracts.** The effective set is the
-//    role's intersected with the entry's own, so the role stays a true upper
-//    bound and this pane can never be used to hand a reader an admin's
-//    authority. The agent re-reads the entry on every gated call, so a change
+//    role's intersected with the entry's own non-additive grants, so the role
+//    stays a true upper bound and this pane can never be used to hand a reader
+//    an admin's authority. The agent re-reads the entry on every gated call, so a change
 //    here binds the subject's *next* request rather than waiting for their next
 //    token — do not imply a delay that is not there.
+//
+// Every scope on an AclEntry 0.2 is stated — `act`, `keys` and `capabilities`
+// have no implicit form — so this pane reads them as written and never infers
+// one from the role. 0.1's "empty scopes means everywhere on an admin and
+// nowhere on anyone else" is exactly the inference 0.2 removed.
 
 import { useCallback, useState } from "react";
 import {
@@ -27,21 +33,21 @@ import {
   aclRevoke,
   aclGrant,
   aclUpdate,
-  checkNarrowing,
   effectiveCapabilities,
-  entryNarrowing,
   narrowingToSend,
   isAdditiveCapability,
   DERIVED_CAPABILITIES,
   isAclRole,
   type AclEntry,
+  type AuthorityScope,
+  type EffectiveCapabilities,
 } from "@openvtc/pnm-core/admin";
 import { Button, Did, Note, Panel, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { ConsentRequiredError } from "../carrier.js";
 import { ConsentCeremony, Destructive, runMutation } from "../destructive.js";
-import { Loading, LoadError, Redacted, Table, Truncated, type Column } from "../table.js";
+import { Loading, LoadError, Redacted, Table, type Column } from "../table.js";
 import { useAsync } from "../use-async.js";
 import { formatDate, isPast } from "../format.js";
 import { hasRole, type Authority, type Parties } from "../use-vta.js";
@@ -74,18 +80,35 @@ function Expiry({ entry }: { entry: AclEntry }) {
 }
 
 /**
- * The narrowing an entry carries, without letting a malformed one blank the pane.
+ * What an entry holds, without letting a malformed scope blank the pane.
  *
- * `entryNarrowing` throws on an `ext` member it cannot parse, and that strictness
- * is right — absence and "cannot read this" are opposite conclusions about an
- * entry's authority. But a throw inside a table cell takes the whole access list
- * with it, so the read is caught here and rendered as the uncertainty it is.
+ * `effectiveCapabilities` throws on a capability scope it cannot read, and that
+ * strictness is right — every guess about an unreadable scope is a statement
+ * about the entry's authority nobody checked. But a throw inside a table cell
+ * takes the whole access list with it, so the read is caught here and rendered
+ * as the uncertainty it is. `eff` is `undefined` for a role this console does
+ * not know.
  */
-function readNarrowing(entry: AclEntry): { names: string[] | undefined; error?: string } {
+function readCapabilities(entry: AclEntry): { eff: EffectiveCapabilities | undefined; error?: string } {
   try {
-    return { names: entryNarrowing(entry) };
+    return { eff: effectiveCapabilities(entry.role, entry.capabilities) };
   } catch (e) {
-    return { names: undefined, error: e instanceof Error ? e.message : String(e) };
+    return { eff: undefined, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Where an act (or approve) scope reaches, in words. `all` and `none` are
+ *  both stated in 0.2, and neither reads as the other. */
+export function describeScope(scope: AuthorityScope): string {
+  switch (scope.scope) {
+    case "all":
+      return "everywhere";
+    case "none":
+      return "nowhere";
+    case "contexts":
+      return scope.contexts.join(", ");
+    default:
+      return `an unrecognised scope (${String((scope as { scope: unknown }).scope)})`;
   }
 }
 
@@ -99,16 +122,16 @@ function readNarrowing(entry: AclEntry): { names: string[] | undefined; error?: 
  * behind it.
  */
 function Capabilities({ entry }: { entry: AclEntry }) {
-  const stored = readNarrowing(entry);
+  const stored = readCapabilities(entry);
   if (stored.error) {
     return (
       <span style={{ color: c.danger, fontSize: t.xs }}>
-        unreadable narrowing — {stored.error}
+        unreadable capabilities — {stored.error}
       </span>
     );
   }
 
-  const eff = effectiveCapabilities(entry.role, stored.names);
+  const eff = stored.eff;
   if (!eff) {
     // Not "holds nothing". This console is older than the agent, and the honest
     // answer is that it cannot say — which is a different thing from an answer.
@@ -147,11 +170,11 @@ function Capabilities({ entry }: { entry: AclEntry }) {
         </span>
       </div>
       {fromRole.length === 0 ? (
-        // Reachable without anyone asking for it: `acl/change-role` moves the
-        // role and leaves the stored narrowing alone, so an entry narrowed
-        // within its old role can intersect to nothing under its new one.
+        // `capabilities: none`, or a listing naming nothing the role carries.
+        // This agent refuses to write either, but an entry is read as stated,
+        // and one that holds nothing of its role must say so.
         <span style={{ color: c.danger, fontSize: t.xs }}>
-          nothing — the stored narrowing names no capability the {entry.role} role carries
+          nothing — the entry holds no capability the {entry.role} role carries
         </span>
       ) : (
         <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-word" }}>
@@ -185,7 +208,7 @@ function NarrowCapabilities({
   entry: AclEntry;
   onDone: () => void;
 }) {
-  const stored = readNarrowing(entry);
+  const stored = readCapabilities(entry);
   const [open, setOpen] = useState(false);
   const [kept, setKept] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -200,7 +223,7 @@ function NarrowCapabilities({
     // "narrow to nothing" for anyone who clicks the wrong button.
     // Only the role's set is editable here; an additive grant is carried
     // through by `narrowingToSend`, never ticked or unticked.
-    const eff = effectiveCapabilities(entry.role, stored.names);
+    const eff = stored.eff;
     setKept(eff ? eff.effective.filter((cap) => !isAdditiveCapability(cap)) : []);
     setError(null);
     setOpen(true);
@@ -208,7 +231,7 @@ function NarrowCapabilities({
 
   if (!open) {
     return (
-      <Button kind="quiet" disabled={!derived} onClick={start}>
+      <Button kind="quiet" disabled={!derived || Boolean(stored.error)} onClick={start}>
         Capabilities…
       </Button>
     );
@@ -238,21 +261,19 @@ function NarrowCapabilities({
     );
   }
 
-  const heldAdditive = (stored.names ?? []).filter(isAdditiveCapability);
-  const narrowed = (stored.names ?? []).some((n) => !isAdditiveCapability(n));
+  const heldAdditive = stored.eff?.additive ?? [];
+  const narrowed = stored.eff ? !stored.eff.unnarrowed : false;
 
   const submit = (intent: "narrow" | "clear") => {
-    const plan = narrowingToSend(kept, stored.names, intent);
+    // Builds the 0.2 capability scope, carrying any additive grant through
+    // and refusing — before anything is sent — a name outside the role and a
+    // narrowing to nothing.
+    const plan = narrowingToSend(entry.role, kept, entry.capabilities, intent);
     if (!plan.ok) {
       setError(plan.reason);
       return;
     }
     const capabilities = plan.capabilities;
-    const check = checkNarrowing(entry.role, capabilities);
-    if (!check.ok) {
-      setError(check.reason);
-      return;
-    }
     setBusy(true);
     setError(null);
     void runMutation(
@@ -296,19 +317,20 @@ function NarrowCapabilities({
         ))}
       </div>
       {kept.length === 0 && (
-        // Not expressible, and the reason is worth saying: the agent reads a
-        // list naming none of the role's capabilities as the whole role, so
-        // sending one would widen the entry, not empty it.
+        // Not expressible: the agent cannot hold an entry with none of its
+        // role's capabilities, and refuses one rather than store it.
         <Note tone="danger">
-          Nothing ticked. A narrowing cannot keep nothing — the agent would read it as everything
-          the <strong>{entry.role}</strong> role allows. To take that authority away, change the
-          role.
+          Nothing ticked. A narrowing cannot keep nothing — your agent cannot hold an entry with
+          none of what the <strong>{entry.role}</strong> role allows. To take that authority away,
+          change the role.
         </Note>
       )}
       {heldAdditive.length > 0 && (
         <span style={{ fontSize: t.xs, color: c.faint }}>
           Also holds <code>{heldAdditive.join(", ")}</code>, which sits outside the role and is kept
-          whichever button you press.
+          whichever button you press. Clearing therefore lists today&rsquo;s role in full beside
+          it — the only way to say &ldquo;the whole role, and this&rdquo; — so a capability the role
+          gains later will not reach this entry.
         </span>
       )}
       {kept.length === derived.length && (
@@ -333,7 +355,8 @@ function NarrowCapabilities({
           // whatever the role implies. Offered only when there is a narrowing
           // to clear, so the widening button is absent on entries it would
           // silently no-op against.
-          // An entry holding only an additive grant has nothing to clear.
+          // An entry holding its whole role plus an additive grant has nothing
+          // to clear.
           disabled={busy || !narrowed}
           onClick={() => submit("clear")}
         >
@@ -455,7 +478,7 @@ export function aclEditToSend(
 /**
  * Change an entry's label and expiry.
  *
- * Role, scopes and capabilities are deliberately not here: each has its own
+ * Role, act scope and capabilities are deliberately not here: each has its own
  * task with its own name in the audit trail (`acl/change-role`, `acl/revoke`,
  * the narrowing editor), and folding them into one Save would make a reduction
  * in authority look like a tidy-up.
@@ -583,10 +606,21 @@ function GrantAccess({
     setBusy(true);
     setError(null);
     setPending(null);
+    // Every axis stated, because AclEntry 0.2 has no default for any of them.
+    // The act scope is what the panel above says it is — the selected context,
+    // or everywhere — and is never derived from the role: an agent that cannot
+    // hold `all` on this role refuses it (`invalidActScope`) rather than this
+    // form quietly sending `none` and granting a role that can act nowhere.
+    // Keys and capabilities are the role's whole reach; narrowing either is a
+    // decision taken afterwards, on the row, where it is recorded as one.
+    // Approve authority is stated as none, not left absent to mean it.
     const entry: AclEntry = {
       subject: subject.trim(),
       role: role.trim(),
-      ...(contextId ? { scopes: [contextId] } : {}),
+      act: contextId ? { scope: "contexts", contexts: [contextId] } : { scope: "all" },
+      approve: { scope: "none" },
+      keys: { scope: "all" },
+      capabilities: { scope: "ceiling" },
       ...(label.trim() ? { label: label.trim() } : {}),
       // A date input gives a local day; the wire wants an instant.
       ...(expiresAt ? { expiresAt: new Date(`${expiresAt}T23:59:59`).toISOString() } : {}),
@@ -689,11 +723,12 @@ function GrantAccess({
  * Split a context's access list into what was granted in it and what reaches
  * it from outside.
  *
- * `acl/list` filtered by scope answers "who can act here", which rightly
- * includes every agent-wide entry — but shown as one list under a context's
- * name, an admin granted everywhere reads as though it had been granted in this
- * context, and revoking it "here" takes it away everywhere. Membership is read
- * from the entry's own `scopes`, never from the filter that returned it.
+ * `acl/list` filtered by context `actingIn` answers "who can act here", which
+ * rightly includes every agent-wide entry — but shown as one list under a
+ * context's name, an admin granted everywhere reads as though it had been
+ * granted in this context, and revoking it "here" takes it away everywhere.
+ * Membership is read from the entry's own act scope, never from the filter
+ * that returned it.
  */
 export function partitionByContext(
   entries: AclEntry[],
@@ -701,7 +736,10 @@ export function partitionByContext(
 ): { granted: AclEntry[]; inherited: AclEntry[] } {
   const granted: AclEntry[] = [];
   const inherited: AclEntry[] = [];
-  for (const e of entries) (e.scopes?.includes(contextId) ? granted : inherited).push(e);
+  for (const e of entries) {
+    const here = e.act.scope === "contexts" && e.act.contexts.includes(contextId);
+    (here ? granted : inherited).push(e);
+  }
   return { granted, inherited };
 }
 
@@ -778,7 +816,14 @@ export function AccessPane({
   contextHeading?: string | undefined;
 }) {
   const list = useAsync(
-    () => aclList(managerSender, { ...parties, ...(contextId ? { scope: contextId } : {}) }),
+    () =>
+      aclList(managerSender, {
+        ...parties,
+        // `actingIn` is the question this pane asks — who may act here — and
+        // it has to be said: `acl/list/0.3` refuses a context with no
+        // direction rather than guess one.
+        ...(contextId ? { context: contextId, direction: "actingIn" as const } : {}),
+      }),
     [parties.holder.did, parties.service.did, contextId],
   );
 
@@ -802,15 +847,18 @@ export function AccessPane({
     },
     { key: "role", header: "Role", render: (e) => <Pill tone="accent">{e.role}</Pill> },
     {
-      key: "scopes",
+      key: "act",
       header: "Contexts",
       render: (e) =>
-        e.scopes?.length ? (
-          <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{e.scopes.join(", ")}</span>
+        e.act.scope === "contexts" ? (
+          <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{describeScope(e.act)}</span>
         ) : (
-          // An entry with no scopes is not restricted to none — it is
-          // restricted to nothing, i.e. everywhere. Say which.
-          <span style={{ color: c.warn }}>everywhere</span>
+          // `all` and `none` are both stated, and both deserve to be read:
+          // everywhere is the widest grant there is, and nowhere is an entry
+          // that can only ratify (or nothing at all).
+          <span style={{ color: e.act.scope === "all" ? c.warn : c.muted }}>
+            {describeScope(e.act)}
+          </span>
         ),
     },
     {
@@ -843,14 +891,18 @@ export function AccessPane({
                 <strong>Revoking this entry takes away all of its authority.</strong>
                 <span>
                   <MailDid value={p.subject} size={t.xs} /> loses the <strong>{p.role}</strong> role
-                  {p.scopes?.length ? ` in ${p.scopes.join(", ")}` : " everywhere"}. Anything
+                  {p.act.scope === "contexts" ? ` in ${describeScope(p.act)}` : ` ${describeScope(p.act)}`}. Anything
                   running as that subject stops working immediately — including, if it is a
                   device or an agent you rely on, one you may not be watching.
                 </span>
               </>
             )}
             commit={async () => {
-              await aclRevoke(managerSender, { ...parties, subject: e.subject });
+              await aclRevoke(managerSender, {
+                ...parties,
+                subject: e.subject,
+                revocation: { kind: "entry" },
+              });
             }}
             onDone={list.reload}
           />
@@ -907,7 +959,6 @@ export function AccessPane({
                 "No entries you can read. Grants you administer appear here.",
               )
             )}
-            {list.data.truncated && <Truncated what="the access list" />}
           </>
         )}
       </Panel>

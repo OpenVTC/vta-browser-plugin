@@ -175,9 +175,9 @@ export function ServicesPane({
       key: "drain",
       header: "Draining",
       render: (s) =>
-        s.drainsUntil ? (
+        s.drainEndsAt ? (
           <span style={{ color: c.warn, whiteSpace: "nowrap" }}>
-            until {formatInstant(s.drainsUntil)}
+            until {formatInstant(s.drainEndsAt)}
           </span>
         ) : (
           <span style={{ color: c.faint }}>—</span>

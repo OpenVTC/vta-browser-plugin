@@ -254,7 +254,7 @@ function RoomRow({
         })}
       </div>
       {(() => {
-        // What the community says the room is for (vtc/rooms/offers/list 0.2), as text only.
+        // What the community says the room is for (vtc/rooms/offers/list 0.4), as text only.
         const description = row.offers.find((o) => o.description)?.description;
         return description ? (
           <span

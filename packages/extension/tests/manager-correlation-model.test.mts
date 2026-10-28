@@ -1,7 +1,7 @@
 // Which links are worth acting on.
 //
 // The rule that carries the whole feature is the one about absence: an agent
-// that keeps no facets OMITS `crossesFacets`, and a consumer reading that as
+// that keeps no worlds OMITS `crossesWorlds`, and a consumer reading that as
 // `false` tells the holder their linkage was intentional on the authority of a
 // question nobody asked.
 
@@ -15,18 +15,18 @@ import {
 } from "../src/manager/correlation-model.ts";
 
 const world = (id: string, name: string) =>
-  ({ facetId: id, name, colour: "teal", faceIds: [], attributeIds: [], version: 1, updatedAt: "x" }) as never;
+  ({ worldId: id, name, colour: "teal", faceIds: [], attributeIds: [], version: 1, updatedAt: "x" }) as never;
 const WORLDS = [world("w1", "Work"), world("w2", "Home")];
 
 const finding = (extra: Record<string, unknown> = {}) =>
-  ({ severity: "high", why: "the same value is held by 1 other attribute", remedies: [], ...extra }) as never;
+  ({ severity: "high", reason: "the same value is held by 1 other attribute", remedies: [], ...extra }) as never;
 
-test("an absent crossesFacets is unknown, never within", () => {
+test("an absent crossesWorlds is unknown, never within", () => {
   // The trap. `false` asserts the holder keeps these identities in one part of
-  // their life; an agent with no facets has made no such finding.
+  // their life; an agent with no worlds has made no such finding.
   assert.equal(crossingOf(finding()), "unknown");
-  assert.equal(crossingOf(finding({ crossesFacets: false })), "within");
-  assert.equal(crossingOf(finding({ crossesFacets: true })), "crosses");
+  assert.equal(crossingOf(finding({ crossesWorlds: false })), "within");
+  assert.equal(crossingOf(finding({ crossesWorlds: true })), "crosses");
 });
 
 test("crossings come first, and within-a-world is last but present", () => {
@@ -34,9 +34,9 @@ test("crossings come first, and within-a-world is last but present", () => {
   // forgotten they did, and a link they cannot see is one they cannot revisit.
   const ranked = rankFindings(
     [
-      finding({ crossesFacets: false, facetIds: ["w1"], why: "a" }),
-      finding({ why: "b" }),
-      finding({ crossesFacets: true, facetIds: ["w1", "w2"], why: "c" }),
+      finding({ crossesWorlds: false, worldIds: ["w1"], reason: "a" }),
+      finding({ reason: "b" }),
+      finding({ crossesWorlds: true, worldIds: ["w1", "w2"], reason: "c" }),
     ],
     WORLDS,
   );
@@ -48,20 +48,20 @@ test("order inside a group is the agent's own", () => {
   // Two runs over an unchanged pool must read the same way.
   const ranked = rankFindings(
     [
-      finding({ crossesFacets: true, facetIds: ["w1", "w2"], why: "first" }),
-      finding({ crossesFacets: true, facetIds: ["w1", "w2"], why: "second" }),
+      finding({ crossesWorlds: true, worldIds: ["w1", "w2"], reason: "first" }),
+      finding({ crossesWorlds: true, worldIds: ["w1", "w2"], reason: "second" }),
     ],
     WORLDS,
   );
-  assert.deepEqual(ranked.map((r) => r.finding.why), ["first", "second"]);
+  assert.deepEqual(ranked.map((r) => r.finding.reason), ["first", "second"]);
 });
 
 test("every finding is counted once, under exactly one heading", () => {
   const ranked = rankFindings(
     [
-      finding({ crossesFacets: true, facetIds: ["w1", "w2"] }),
-      finding({ crossesFacets: false, facetIds: ["w1"] }),
-      finding({ crossesFacets: false, facetIds: ["w2"] }),
+      finding({ crossesWorlds: true, worldIds: ["w1", "w2"] }),
+      finding({ crossesWorlds: false, worldIds: ["w1"] }),
+      finding({ crossesWorlds: false, worldIds: ["w2"] }),
       finding(),
     ],
     WORLDS,
@@ -72,7 +72,7 @@ test("every finding is counted once, under exactly one heading", () => {
 });
 
 test("a crossing names the worlds, because a name is actionable and a boundary is not", () => {
-  const [row] = rankFindings([finding({ crossesFacets: true, facetIds: ["w1", "w2"] })], WORLDS);
+  const [row] = rankFindings([finding({ crossesWorlds: true, worldIds: ["w1", "w2"] })], WORLDS);
   assert.match(crossingWords(row!)!, /Work and Home share this/);
   assert.match(crossingWords(row!)!, /same person/);
 });
@@ -81,7 +81,7 @@ test("a crossing the console cannot name still says what it is", () => {
   // The agent's answer decides the crossing; our ability to resolve an id does
   // not. A world created on another device and not yet listed here must not
   // silently downgrade a finding.
-  const [row] = rankFindings([finding({ crossesFacets: true, facetIds: ["wX", "wY"] })], WORLDS);
+  const [row] = rankFindings([finding({ crossesWorlds: true, worldIds: ["wX", "wY"] })], WORLDS);
   assert.equal(row!.crossing, "crosses");
   assert.match(crossingWords(row!)!, /two parts of your life/);
 });
@@ -89,7 +89,7 @@ test("a crossing the console cannot name still says what it is", () => {
 test("a within-a-world finding says it is still a link", () => {
   // The severity is untouched and the sentence must not imply otherwise: two
   // verifiers who see both faces link the holder however they filed them.
-  const [row] = rankFindings([finding({ crossesFacets: false, facetIds: ["w1"] })], WORLDS);
+  const [row] = rankFindings([finding({ crossesWorlds: false, worldIds: ["w1"] })], WORLDS);
   assert.match(crossingWords(row!)!, /in Work/);
   assert.match(crossingWords(row!)!, /still a link/);
 });
@@ -105,8 +105,8 @@ test("an unknown crossing says nothing per row", () => {
 test("severity is never touched by any of this", () => {
   const ranked = rankFindings(
     [
-      finding({ crossesFacets: false, facetIds: ["w1"], severity: "high" }),
-      finding({ crossesFacets: true, facetIds: ["w1", "w2"], severity: "low" }),
+      finding({ crossesWorlds: false, worldIds: ["w1"], severity: "high" }),
+      finding({ crossesWorlds: true, worldIds: ["w1", "w2"], severity: "low" }),
     ],
     WORLDS,
   );
@@ -118,9 +118,9 @@ test("severity is never touched by any of this", () => {
 
 test("a finding with no attribute is kept out of the card map and names its faces", async () => {
   const { faceOnly, facesNamed, facesWords } = await import("../src/manager/correlation-model.ts");
-  const onCard = finding({ attributeId: "01A", why: "card" });
+  const onCard = finding({ attributeId: "01A", reason: "card" });
   const faces = finding({
-    why: "faces",
+    reason: "faces",
     sharedWith: [
       { profileId: "01F", contextId: "ctx-a", personaDid: "did:x" },
       { profileId: "01F", contextId: "ctx-c", personaDid: "did:y" },
@@ -128,7 +128,7 @@ test("a finding with no attribute is kept out of the card map and names its face
     ],
   });
   const ranked = rankFindings([onCard, faces], WORLDS);
-  assert.deepEqual(faceOnly(ranked).map((r) => r.finding.why), ["faces"]);
+  assert.deepEqual(faceOnly(ranked).map((r) => r.finding.reason), ["faces"]);
 
   const named = facesNamed(faces, [{ profileId: "01F", name: "Market" }]);
   assert.deepEqual(named, [

@@ -8,11 +8,11 @@
 // it is the holder re-proving control of the session subject over a fresh
 // challenge.
 //
-//   1. `auth/step-up/start/0.1`            → the RP's signed approve-request/0.3
+//   1. `auth/step-up/start/0.2`            → the RP's signed approve-request/0.5
 //   2. verify the reply, then the approve-request inside it
 //   3. the human decides, on the verified reason
-//   4. `auth/step-up/approve-response/0.5` → `elevated`
-//   5. `auth/refresh/0.1`                  → tokens at the new level
+//   4. `auth/step-up/approve-response/0.6` → `elevated`
+//   5. `auth/refresh/0.2`                  → tokens at the new level
 //
 // Every document goes to the RP's Trust Task endpoint (`{base}/trust-tasks`),
 // the HTTPS binding. Each is an ordinary Trust Task, so the same documents can
@@ -42,17 +42,17 @@ import {
   RESPONSE_TYPE_URI as STEP_UP_START_RESPONSE,
   type AuthStepUpStartPayload,
   type AuthStepUpStartResponsePayload,
-} from "@openvtc/trust-tasks/auth/step-up/start/0.1/payload";
+} from "../specs/auth/step-up/start/0.2/payload.js";
 import {
-  RESPONSE_TYPE_URI as APPROVE_RESPONSE_0_5_RESPONSE,
+  RESPONSE_TYPE_URI as APPROVE_RESPONSE_RESPONSE,
   type AuthStepUpApproveResponseRelyingPartyAck,
-} from "@openvtc/trust-tasks/auth/step-up/approve-response/0.5/payload";
+} from "../specs/auth/step-up/approve-response/0.6/payload.js";
 import {
   TYPE_URI as AUTH_REFRESH,
   RESPONSE_TYPE_URI as AUTH_REFRESH_RESPONSE,
   type AuthRefresh,
   type AuthRefreshResponsePayload,
-} from "@openvtc/trust-tasks/auth/refresh/0.1/payload";
+} from "../specs/auth/refresh/0.2/payload.js";
 
 export * from "../vta/step-up.js";
 
@@ -152,7 +152,7 @@ export interface VerifiedStepUpStart {
  *
  * Throws unless all of these hold:
  *  - the reply is the RP's signed `start#response` to this request;
- *  - it carries an approve-request/0.3 whose own proof verifies, signed by an
+ *  - it carries an approve-request/0.5 whose own proof verifies, signed by an
  *    enrolled executor that is the RP itself;
  *  - the approve-request is addressed to the holder, names the holder as its
  *    subject, and is bound to `sessionId` — an approve-request for another
@@ -165,7 +165,7 @@ export async function stepUpVtaStart(args: StepUpVtaStartArgs): Promise<Verified
     args,
     doc,
     STEP_UP_START_RESPONSE,
-    "auth/step-up/start/0.1",
+    "auth/step-up/start/0.2",
   );
 
   const approveRequest = reply.approveRequest as unknown as Record<string, unknown> | undefined;
@@ -207,7 +207,7 @@ export interface StepUpVtaFinishArgs extends RpStepUpParty {
   /** The session's refresh token, spent on `auth/refresh` once the RP has
    *  elevated the session. */
   refreshToken: string;
-  /** The signed approve-response/0.5 from {@link buildStepUpApproval}. */
+  /** The signed approve-response/0.6 from {@link buildStepUpApproval}. */
   approval: TrustTask<StepUpApproveResponsePayload> & { proof?: unknown };
 }
 
@@ -223,8 +223,8 @@ export async function stepUpVtaFinish(args: StepUpVtaFinishArgs): Promise<StepUp
   const ack = await sendToRp<AuthStepUpApproveResponseRelyingPartyAck>(
     args,
     args.approval,
-    APPROVE_RESPONSE_0_5_RESPONSE,
-    "auth/step-up/approve-response/0.5",
+    APPROVE_RESPONSE_RESPONSE,
+    "auth/step-up/approve-response/0.6",
   );
   if (ack.status !== "elevated") {
     throw new VtaClientError(
@@ -239,10 +239,10 @@ export async function stepUpVtaFinish(args: StepUpVtaFinishArgs): Promise<StepUp
     args,
     doc,
     AUTH_REFRESH_RESPONSE,
-    "auth/refresh/0.1",
+    "auth/refresh/0.2",
   );
   if (typeof renewed.tokens?.accessToken !== "string" || renewed.tokens.accessToken === "") {
-    throw new VtaClientError("e.client.parse", "auth/refresh/0.1: the reply carries no access token");
+    throw new VtaClientError("e.client.parse", "auth/refresh/0.2: the reply carries no access token");
   }
   return {
     accessToken: renewed.tokens.accessToken,
@@ -356,7 +356,6 @@ export async function performStepUpVta(
     rpDid: args.rpDid,
     request: start.request,
     approved: true,
-    responseVersion: "0.5",
   });
   mark("sign approval");
 

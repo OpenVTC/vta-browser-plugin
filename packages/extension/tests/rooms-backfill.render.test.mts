@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { FetchHistory } from "../src/manager/panes/rooms-backfill.js";
 
-const BACKFILL = "rooms/keys/backfill/0.1";
+const BACKFILL = "rooms/keys/backfill/0.2";
 const HOST = "did:webvh:QmHost:host.example";
 const ROOM = "did:webvh:QmRoom:rooms.example";
 
@@ -48,7 +48,7 @@ test("the repair is one call, and the host travels as a payload member", async (
   await run(screen);
 
   assert.equal(a.calls.length, 1);
-  assert.match(a.calls[0]!.type, /rooms\/keys\/backfill\/0\.1$/);
+  assert.match(a.calls[0]!.type, /rooms\/keys\/backfill\/0\.2$/);
   assert.equal((a.calls[0]!.payload as { host: string }).host, HOST);
 });
 
@@ -114,6 +114,19 @@ test("an already-delivered chain still reports the reach it achieved", async () 
   const { screen } = await mount({ roomId: ROOM, earliestReadableEpoch: 1, fetched: 4, stored: 0 });
   await run(screen);
   assert.match(screen.text(), /whole history is readable now/);
+});
+
+// 0.2 reports the room's epoch floor. Reach at the floor is the whole
+// remaining history, and the screen says it was pruned — not "severed or not
+// served", which would send a member looking for history nobody keeps.
+test("reach at the epoch floor reads as pruned history, not missing history", async () => {
+  const { screen } = await mount(
+    { roomId: ROOM, earliestReadableEpoch: 3, fetched: 4, stored: 4, epochFloor: 3 },
+    room(7, 7),
+  );
+  await run(screen);
+  assert.match(screen.text(), /pruned by the\s+room/);
+  assert.doesNotMatch(screen.text(), /severed deliberately/);
 });
 
 // ── Failures and refusals ───────────────────────────────────────────────────

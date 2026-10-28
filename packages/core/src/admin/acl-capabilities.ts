@@ -6,13 +6,14 @@
 // Everything else in `admin/acl.ts` comes from `@openvtc/trust-tasks`, and the
 // header there is emphatic about why: a hand-transcribed copy of the agent's
 // shapes drifts. This file is the exception, and it is one because the
-// framework has no vocabulary to generate from. `AclEntry.role` is specified as
-// "an opaque role identifier interpreted by the ACL maintainer" — the schema
-// deliberately does not know what `admin` means, and it knows even less about
-// capabilities. So the narrowing rides `ext` under a reverse-DNS namespace,
-// which is exactly what SPEC.md §4.5.1 reserves that member for.
+// framework has no vocabulary to generate from. AclEntry 0.2 gives the
+// capability scope a shape of its own (`ceiling` / `none` / `listed` grants),
+// but `role` is still "an opaque role identifier interpreted by the ACL
+// maintainer" and a capability is "an opaque identifier in the maintainer's
+// capability registry" — the schema deliberately does not know what `admin`
+// means, or what it carries.
 //
-// The two tables below are therefore a copy of `vti-common::acl`, and a copy is
+// The tables below are therefore a copy of `vti-common::acl`, and a copy is
 // a liability. `task-surface.json` answers the same problem the same way, so
 // this reuses that machinery: `acl-capabilities.json` is a committed snapshot
 // refreshed by `scripts/sync-acl-capabilities.mjs`, and
@@ -21,30 +22,22 @@
 // agent and not here makes the console under-report what an entry can do,
 // which is the exact misreading #1279 was written to end.
 //
-// ## What a narrowing means
+// ## What a capability scope means (acl/_shared/0.2 CONVENTIONS §6)
 //
-// An explicit set only ever **narrows**, never widens: the effective set is the
-// role's derived set intersected with the entry's own. Empty means "whatever
-// the role implies" — the shape of every entry written before the agent gained
-// this feature — so `role` stays a true upper bound, and an operator reading
-// `role: reader` knows the entry holds no more than a reader whatever else its
-// list says.
+// `ceiling` is the role's whole set. `listed` holds (the role's ceiling ∩ the
+// non-additive grants) ∪ the additive grants — so a listing only ever
+// **narrows** the role, except through a grant marked `additive: true`, and
+// `role` stays a true upper bound for everything else. `none` holds nothing.
 //
 // The agent enforces this per gated call by reading the entry, not the token,
 // so a narrowing binds the subject's next request rather than waiting for their
 // next token mint. That matters to a console: the effect of a change here is
 // immediate, and the UI should not imply otherwise.
 
-import type { AclEntry } from "@openvtc/trust-tasks/acl/grant/0.1/payload";
-import type { Ext } from "@openvtc/trust-tasks/_shared/components";
-
-/**
- * The `ext` member a capability narrowing travels in, on `acl/update/0.1`
- * requests and on the `acl/{grant,show,list}` entries that echo it back.
- *
- * Same convention as `org.openvtc.vault-session`.
- */
-export const CAPABILITIES_EXT_MEMBER = "org.openvtc.capabilities";
+import type {
+  CapabilityGrant,
+  CapabilityScope,
+} from "../specs/acl/grant/0.2/payload.js";
 
 /**
  * The capabilities this build knows how to name.
@@ -171,62 +164,15 @@ export function isAclRole(role: string): role is AclRole {
   return (ACL_ROLES as readonly string[]).includes(role);
 }
 
-/**
- * Read a narrowing out of an `ext` object.
- *
- * `undefined` means the member is absent. On a **response** that means the
- * entry is not narrowed — the agent omits the member rather than sending `[]`,
- * because an empty array there would read as "narrowed to nothing". On a
- * **request** it means "leave whatever is stored alone", which is a different
- * thing again; see {@link capabilitiesIntoExt}.
- *
- * A malformed member throws rather than resolving to `undefined`. Absence and
- * "the agent sent something this cannot parse" are opposite conclusions about
- * an entry's authority, and returning the safe-looking one would report an
- * entry as unnarrowed on the strength of a parse failure.
- */
-export function capabilitiesFromExt(ext: Ext | undefined): string[] | undefined {
-  const member = ext?.[CAPABILITIES_EXT_MEMBER];
-  if (member === undefined) return undefined;
-  if (!Array.isArray(member)) {
-    throw new Error(`\`${CAPABILITIES_EXT_MEMBER}\` must be an array of capability names`);
-  }
-  for (const item of member) {
-    if (typeof item !== "string") {
-      throw new Error(
-        `\`${CAPABILITIES_EXT_MEMBER}\` must contain strings, found ${JSON.stringify(item)}`,
-      );
-    }
-  }
-  return [...(member as string[])];
-}
-
-/**
- * Put a narrowing into an `ext` object for a **request**, preserving anything
- * else already there.
- *
- * **An empty array is written, not omitted.** That is the one place this
- * differs from the agent's own `capabilities_into_ext`, which drops an empty
- * set — because that helper serves the *response* path, where absent is the
- * only spelling for "not narrowed". On the request path the three intentions
- * are distinct and the agent acts on all three:
- *
- * - **omitted** — leave the stored narrowing alone;
- * - **`[]`** — clear it, so the entry holds everything its role implies. A
- *   privilege *increase*;
- * - **populated** — narrow to the intersection with the role's set.
- *
- * Collapsing the first two is a silent privilege increase, which is why a
- * caller reaches this function only by passing an array: to leave a narrowing
- * alone, do not call it.
- */
-export function capabilitiesIntoExt(ext: Ext | undefined, capabilities: readonly string[]): Ext {
-  return { ...(ext ?? {}), [CAPABILITIES_EXT_MEMBER]: [...capabilities] };
-}
-
-/** The narrowing an entry carries, or `undefined` if it names none. */
-export function entryNarrowing(entry: AclEntry): string[] | undefined {
-  return capabilitiesFromExt(entry.ext);
+/** The capability names a scope lists, split by whether each is additive. */
+function grantNames(scope: CapabilityScope): { narrowing: string[]; additive: string[] } {
+  if (scope.scope !== "listed") return { narrowing: [], additive: [] };
+  return {
+    // `additive` is read from the grant, not from this build's table: the
+    // agent states it, and a name this build has never heard of may be one.
+    narrowing: scope.grants.filter((g) => g.additive !== true).map((g) => g.capability),
+    additive: scope.grants.filter((g) => g.additive === true).map((g) => g.capability),
+  };
 }
 
 /** What an entry may actually do, and the working shown. */
@@ -234,19 +180,26 @@ export interface EffectiveCapabilities {
   /** The role's ceiling. */
   derived: readonly AclCapability[];
   /**
-   * The ceiling intersected with the entry's own non-additive names, plus any
-   * {@link ADDITIVE_CAPABILITIES} it was granted.
+   * The ceiling intersected with the entry's own non-additive grants, plus the
+   * additive grants it holds.
    */
   effective: readonly AclCapability[];
   /**
-   * True when the entry names nothing that narrows, so `effective` holds the
-   * whole ceiling. An entry granted only additive names is unnarrowed.
+   * True when the entry holds its role's whole ceiling: `ceiling`, or a
+   * `listed` scope whose non-additive grants name every capability the role
+   * carries.
+   *
+   * The second case is not a stretch. This agent stores "the whole role plus
+   * an additive grant" as one shape, and 0.2 has no spelling for that but the
+   * role's ceiling enumerated beside the additive grant — so that is how it
+   * renders an entry granted `persona-holder`. Reading it as "narrowed, 15 of
+   * 15" would describe a decision nobody took.
    */
   unnarrowed: boolean;
-  /** The {@link ADDITIVE_CAPABILITIES} the entry was granted (also in `effective`). */
+  /** The additive grants the entry holds (also in `effective`). */
   additive: readonly AclCapability[];
   /**
-   * Names in the stored narrowing this build does not recognise.
+   * Names in the scope this build does not recognise.
    *
    * They are absent from `effective` because the ceiling is what grants, and
    * this build's ceiling cannot contain a name it has never heard of. Surfaced
@@ -257,7 +210,7 @@ export interface EffectiveCapabilities {
 }
 
 /**
- * What an entry holds: its role's set, narrowed by its own.
+ * What an entry holds: its role's set, as its capability scope narrows it.
  *
  * Returns `undefined` for a role this build does not know — **not** an empty
  * set. The two would render identically as "holds nothing", and one of them is
@@ -266,27 +219,36 @@ export interface EffectiveCapabilities {
  */
 export function effectiveCapabilities(
   role: string,
-  narrowing: readonly string[] | undefined,
+  scope: CapabilityScope,
 ): EffectiveCapabilities | undefined {
   if (!isAclRole(role)) return undefined;
   const derived = DERIVED_CAPABILITIES[role];
-  const named = narrowing ?? [];
-  // The agent's `effective_capabilities`: only the non-additive names narrow.
-  // Without that split an entry granted `persona-holder` and nothing else would
-  // intersect its role with a list naming none of it, and read as holding
-  // nothing — when the agent gives it the whole role and the pool besides.
-  const narrowingNames = named.filter((n) => !isAdditiveCapability(n));
-  const additive = ADDITIVE_CAPABILITIES.filter((c) => named.includes(c));
-  const unnarrowed = narrowingNames.length === 0;
+  if (scope.scope === "ceiling") {
+    return { derived, effective: derived, unnarrowed: true, additive: [], unrecognised: [] };
+  }
+  if (scope.scope === "none") {
+    // Narrowed to nothing — stated, so it reads as a decision. Not the same
+    // answer as an unknown role, which this function never gives as `[]`.
+    return { derived, effective: [], unnarrowed: derived.length === 0, additive: [], unrecognised: [] };
+  }
+  if (scope.scope !== "listed") {
+    // A discriminant this build has never seen. Throwing, not guessing: every
+    // guess is a statement about the entry's authority that nobody checked,
+    // and the safe-looking one ("holds nothing") is a lie about an entry that
+    // may hold everything.
+    throw new Error(
+      `unrecognised capability scope \`${String((scope as { scope: unknown }).scope)}\``,
+    );
+  }
+  const { narrowing, additive: additiveNames } = grantNames(scope);
+  const fromRole = derived.filter((c) => narrowing.includes(c));
+  const additive = additiveNames.filter(isAclCapability);
   return {
     derived,
-    effective: [
-      ...(unnarrowed ? derived : derived.filter((c) => narrowingNames.includes(c))),
-      ...additive,
-    ],
-    unnarrowed,
+    effective: [...fromRole, ...additive],
+    unnarrowed: fromRole.length === derived.length,
     additive,
-    unrecognised: named.filter((n) => !isAclCapability(n)),
+    unrecognised: [...narrowing, ...additiveNames].filter((n) => !isAclCapability(n)),
   };
 }
 
@@ -300,8 +262,8 @@ export function effectiveCapabilities(
  * outside the role would intersect to nothing, so accepting it would take
  * authority away by way of a request that reads like it adds some.
  *
- * Clearing a narrowing (`[]`) is always allowed: it widens back to the role,
- * which the role itself bounds.
+ * An empty list passes: it names nothing to measure. Whether that is a
+ * shape the agent can hold is {@link narrowingToSend}'s question.
  */
 export function checkNarrowing(
   role: string,
@@ -341,37 +303,77 @@ export function checkNarrowing(
 }
 
 /**
- * The list to send when an editor keeps `kept` of a role's derived set, for an
- * entry whose stored list is `stored`.
+ * The capability scope to send when an editor keeps `kept` of a role's derived
+ * set, for an entry whose stored scope is `stored`.
  *
- * The stored list carries two things, and an editor over the role's set can
+ * The stored scope carries two things, and an editor over the role's set can
  * only see one of them. The additive grants are carried through untouched, so
  * narrowing an entry — or clearing its narrowing — never silently revokes its
- * `persona-holder`.
+ * `persona-holder`: `acl/update` **replaces** the capability scope, and a
+ * `ceiling` sent over an entry holding an additive grant would drop it.
  *
- * Refuses the one edit the list cannot express: narrowing to **nothing**. The
- * agent narrows by the non-additive names alone and reads none as "the whole
- * role" — `[]` is the clear instruction, and `["persona-holder"]` is the whole
- * role plus the pool. Either way, a list sent to mean "nothing" would leave the
- * entry holding everything its role allows. Taking all of a role's authority
- * away is a role change, not a narrowing.
+ * That is also why clearing is not always `ceiling`. With an additive grant
+ * held, the only 0.2 spelling of "the whole role plus this" is the role's
+ * ceiling enumerated beside it — which pins the entry to today's ceiling, the
+ * same trade the agent makes when it renders such an entry.
+ *
+ * Refuses the one edit this agent cannot hold: narrowing to **nothing** of the
+ * role. 0.2 reads a listing naming only additive grants as "none of the role",
+ * and `none` as nothing at all; the agent refuses both rather than store them,
+ * because its store has no "nothing". Taking all of a role's authority away is
+ * a role change, not a narrowing.
  */
 export function narrowingToSend(
+  role: string,
   kept: readonly string[],
-  stored: readonly string[] | undefined,
+  stored: CapabilityScope,
   intent: "narrow" | "clear",
-): { ok: true; capabilities: string[] } | { ok: false; reason: string } {
-  const heldAdditive = (stored ?? []).filter(isAdditiveCapability);
-  if (intent === "clear") return { ok: true, capabilities: heldAdditive };
+): { ok: true; capabilities: CapabilityScope } | { ok: false; reason: string } {
+  const heldAdditive = grantNames(stored).additive;
+  const additiveGrants: CapabilityGrant[] = heldAdditive.map((capability) => ({
+    capability,
+    additive: true,
+  }));
+  if (intent === "clear") {
+    if (additiveGrants.length === 0) return { ok: true, capabilities: { scope: "ceiling" } };
+    if (!isAclRole(role)) {
+      return {
+        ok: false,
+        reason:
+          `unknown role \`${role}\`; this console cannot spell its ceiling beside the additive ` +
+          `grants the entry holds, and a \`ceiling\` scope would revoke them`,
+      };
+    }
+    return {
+      ok: true,
+      capabilities: {
+        scope: "listed",
+        grants: [
+          ...DERIVED_CAPABILITIES[role].map((capability) => ({ capability })),
+          ...additiveGrants,
+        ] as [CapabilityGrant, ...CapabilityGrant[]],
+      },
+    };
+  }
   const narrowing = kept.filter((n) => !isAdditiveCapability(n));
   if (narrowing.length === 0) {
     return {
       ok: false,
       reason:
-        "a narrowing cannot keep nothing: the agent reads a list naming none of the role's " +
-        "capabilities as the whole role, so sending one would grant everything instead. " +
-        "To take the role's authority away, change the role",
+        "a narrowing cannot keep nothing: your agent cannot hold an entry with none of its " +
+        "role's capabilities, and refuses one. To take the role's authority away, change the role",
     };
   }
-  return { ok: true, capabilities: [...narrowing, ...heldAdditive] };
+  const check = checkNarrowing(role, narrowing);
+  if (!check.ok) return check;
+  return {
+    ok: true,
+    capabilities: {
+      scope: "listed",
+      grants: [...narrowing.map((capability) => ({ capability })), ...additiveGrants] as [
+        CapabilityGrant,
+        ...CapabilityGrant[],
+      ],
+    },
+  };
 }

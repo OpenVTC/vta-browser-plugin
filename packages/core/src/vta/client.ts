@@ -126,7 +126,7 @@ export function enrollmentSubmitFromResult(
     publicKeyMultibase: result.publicKeyMultikey,
     coseAlgorithm: result.coseAlg,
     attestationObject: result.attestationObjectB64u,
-    clientDataJson: result.clientDataJsonB64u,
+    clientDataJSON: result.clientDataJsonB64u,
     authenticatorData: result.authenticatorDataB64u,
     transports: result.transports,
   };

@@ -44,124 +44,124 @@ import {
   RESPONSE_TYPE_URI as ATTRIBUTE_PUT_RESPONSE,
   type PersonaAttributePutPayload,
   type PersonaAttributePutResponsePayload,
-} from "@openvtc/trust-tasks/persona/attribute/put/1.0/payload";
+} from "../specs/persona/attribute/put/1.1/payload.js";
 import {
   TYPE_URI as ATTRIBUTE_LIST,
   RESPONSE_TYPE_URI as ATTRIBUTE_LIST_RESPONSE,
   type PersonaAttributeListPayload,
   type PersonaAttributeListResponsePayload,
-} from "@openvtc/trust-tasks/persona/attribute/list/1.0/payload";
+} from "../specs/persona/attribute/list/1.0/payload.js";
 import {
   TYPE_URI as ATTRIBUTE_DELETE,
   RESPONSE_TYPE_URI as ATTRIBUTE_DELETE_RESPONSE,
   type PersonaAttributeDeletePayload,
   type PersonaAttributeDeleteResponsePayload,
-} from "@openvtc/trust-tasks/persona/attribute/delete/1.0/payload";
+} from "../specs/persona/attribute/delete/1.0/payload.js";
 import {
   TYPE_URI as ATTRIBUTE_PURGE_VERSION,
   RESPONSE_TYPE_URI as ATTRIBUTE_PURGE_VERSION_RESPONSE,
   type PersonaAttributePurgeVersionPayload,
   type PersonaAttributePurgeVersionResponsePayload,
-} from "@openvtc/trust-tasks/persona/attribute/purge-version/1.0/payload";
+} from "../specs/persona/attribute/purge-version/1.0/payload.js";
 import {
   TYPE_URI as PROFILE_PUT,
   RESPONSE_TYPE_URI as PROFILE_PUT_RESPONSE,
   type PersonaProfilePutPayload,
   type PersonaProfilePutResponsePayload,
-} from "@openvtc/trust-tasks/persona/profile/put/1.0/payload";
+} from "../specs/persona/profile/put/1.1/payload.js";
 import {
   TYPE_URI as PROFILE_GET,
   RESPONSE_TYPE_URI as PROFILE_GET_RESPONSE,
   type PersonaProfileGetPayload,
   type PersonaProfileGetResponsePayload,
-} from "@openvtc/trust-tasks/persona/profile/get/1.0/payload";
+} from "../specs/persona/profile/get/1.0/payload.js";
 import {
   TYPE_URI as PROFILE_LIST,
   RESPONSE_TYPE_URI as PROFILE_LIST_RESPONSE,
   type PersonaProfileListPayload,
   type PersonaProfileListResponsePayload,
-} from "@openvtc/trust-tasks/persona/profile/list/1.0/payload";
+} from "../specs/persona/profile/list/1.0/payload.js";
 import {
   TYPE_URI as PROFILE_DELETE,
   RESPONSE_TYPE_URI as PROFILE_DELETE_RESPONSE,
   type PersonaProfileDeletePayload,
   type PersonaProfileDeleteResponsePayload,
-} from "@openvtc/trust-tasks/persona/profile/delete/1.0/payload";
+} from "../specs/persona/profile/delete/1.0/payload.js";
 import {
   TYPE_URI as BINDING_SET,
   RESPONSE_TYPE_URI as BINDING_SET_RESPONSE,
   type PersonaBindingSetPayload,
   type PersonaBindingSetResponsePayload,
-} from "@openvtc/trust-tasks/persona/binding/set/1.0/payload";
+} from "../specs/persona/binding/set/1.0/payload.js";
 import {
-  TYPE_URI as FACET_PUT,
-  RESPONSE_TYPE_URI as FACET_PUT_RESPONSE,
-  type PersonaFacetPutPayload,
-  type PersonaFacetPutResponsePayload,
-  type FacetColour,
-} from "@openvtc/trust-tasks/persona/facet/put/1.0/payload";
+  TYPE_URI as WORLD_PUT,
+  RESPONSE_TYPE_URI as WORLD_PUT_RESPONSE,
+  type PersonaWorldPutPayload,
+  type PersonaWorldPutResponsePayload,
+  type WorldColour,
+} from "../specs/persona/world/put/1.1/payload.js";
 import {
-  TYPE_URI as FACET_LIST,
-  RESPONSE_TYPE_URI as FACET_LIST_RESPONSE,
-  type PersonaFacetListPayload,
-  type PersonaFacetListResponsePayload,
-} from "@openvtc/trust-tasks/persona/facet/list/1.0/payload";
+  TYPE_URI as WORLD_LIST,
+  RESPONSE_TYPE_URI as WORLD_LIST_RESPONSE,
+  type PersonaWorldListPayload,
+  type PersonaWorldListResponsePayload,
+} from "../specs/persona/world/list/1.0/payload.js";
 import {
-  TYPE_URI as FACET_DELETE,
-  RESPONSE_TYPE_URI as FACET_DELETE_RESPONSE,
-  type PersonaFacetDeletePayload,
-  type PersonaFacetDeleteResponsePayload,
-} from "@openvtc/trust-tasks/persona/facet/delete/1.0/payload";
+  TYPE_URI as WORLD_DELETE,
+  RESPONSE_TYPE_URI as WORLD_DELETE_RESPONSE,
+  type PersonaWorldDeletePayload,
+  type PersonaWorldDeleteResponsePayload,
+} from "../specs/persona/world/delete/1.0/payload.js";
 import {
   TYPE_URI as CORRELATION_ANALYZE,
   RESPONSE_TYPE_URI as CORRELATION_ANALYZE_RESPONSE,
   type PersonaCorrelationAnalyzePayload,
   type PersonaCorrelationAnalyzeResponsePayload,
-} from "@openvtc/trust-tasks/persona/correlation/analyze/1.0/payload";
+} from "../specs/persona/correlation/analyze/1.2/payload.js";
 import {
   TYPE_URI as DISCLOSURE_HISTORY,
   RESPONSE_TYPE_URI as DISCLOSURE_HISTORY_RESPONSE,
   type PersonaDisclosureHistoryPayload,
   type PersonaDisclosureHistoryResponsePayload,
-} from "@openvtc/trust-tasks/persona/disclosure/history/1.0/payload";
+} from "../specs/persona/disclosure/history/1.0/payload.js";
 import {
   TYPE_URI as PROFILE_COMPOSE,
   RESPONSE_TYPE_URI as PROFILE_COMPOSE_RESPONSE,
   type PersonaProfileComposePayload,
   type PersonaProfileComposeResponsePayload,
   type ComposeClaim,
-} from "@openvtc/trust-tasks/persona/profile/compose/1.0/payload";
+} from "../specs/persona/profile/compose/1.1/payload.js";
 import {
   TYPE_URI as ATTRIBUTE_PROMOTE,
   RESPONSE_TYPE_URI as ATTRIBUTE_PROMOTE_RESPONSE,
   type PersonaAttributePromotePayload,
   type PersonaAttributePromoteResponsePayload,
-} from "@openvtc/trust-tasks/persona/attribute/promote/1.0/payload";
+} from "../specs/persona/attribute/promote/1.1/payload.js";
 import {
   TYPE_URI as PROFILE_RETIRE,
   RESPONSE_TYPE_URI as PROFILE_RETIRE_RESPONSE,
   type PersonaProfileRetirePayload,
   type PersonaProfileRetireResponsePayload,
-} from "@openvtc/trust-tasks/persona/profile/retire/1.0/payload";
+} from "../specs/persona/profile/retire/1.0/payload.js";
 import {
   TYPE_URI as PROFILE_REINSTATE,
   RESPONSE_TYPE_URI as PROFILE_REINSTATE_RESPONSE,
   type PersonaProfileReinstatePayload,
   type PersonaProfileReinstateResponsePayload,
-} from "@openvtc/trust-tasks/persona/profile/reinstate/1.0/payload";
+} from "../specs/persona/profile/reinstate/1.0/payload.js";
 import {
   TYPE_URI as PROFILE_USAGE,
   RESPONSE_TYPE_URI as PROFILE_USAGE_RESPONSE,
   type PersonaProfileUsagePayload,
   type PersonaProfileUsageResponsePayload,
-} from "@openvtc/trust-tasks/persona/profile/usage/1.0/payload";
+} from "../specs/persona/profile/usage/1.0/payload.js";
 import {
   TYPE_URI as PROFILE_TIMELINE,
   RESPONSE_TYPE_URI as PROFILE_TIMELINE_RESPONSE,
   type PersonaProfileTimelinePayload,
   type PersonaProfileTimelineResponsePayload,
   type TimelineEvent,
-} from "@openvtc/trust-tasks/persona/profile/timeline/1.0/payload";
+} from "../specs/persona/profile/timeline/1.1/payload.js";
 
 /**
  * The two DIDs an envelope names, and **no `contextId`**.
@@ -198,7 +198,7 @@ export type AttributeSensitivity = NonNullable<PersonaAttributePutPayload["sensi
  *  gave one. Absence means the same as it does for {@link AttributeSensitivity}. */
 export type AttributeRelease = NonNullable<PersonaAttributePutPayload["release"]>;
 /** One named part of the holder's life, and what belongs to it. */
-export type PoolFacet = PersonaFacetListResponsePayload["facets"][number];
+export type PoolWorld = PersonaWorldListResponsePayload["worlds"][number];
 /**
  * The eight colour **names**. Never a literal — each surface resolves one
  * against its own palette, so the same world is legible in a terminal, a light
@@ -208,7 +208,7 @@ export type PoolFacet = PersonaFacetListResponsePayload["facets"][number];
  * copy of an enum drifts the moment a ninth colour is published, and nothing
  * compares the two.
  */
-export type { FacetColour };
+export type { WorldColour };
 
 /** One claim of a face being composed: a value typed now, or an attribute held. */
 export type { ComposeClaim };
@@ -444,7 +444,7 @@ export async function personaAttributePut(
     params,
     ATTRIBUTE_PUT,
     ATTRIBUTE_PUT_RESPONSE,
-    "persona/attribute/put/1.0",
+    "persona/attribute/put/1.1",
     payload,
   );
 }
@@ -628,7 +628,7 @@ export async function personaProfilePut(
     params,
     PROFILE_PUT,
     PROFILE_PUT_RESPONSE,
-    "persona/profile/put/1.0",
+    "persona/profile/put/1.1",
     payload,
   );
 }
@@ -807,7 +807,7 @@ export async function personaCorrelationAnalyze(
     params,
     CORRELATION_ANALYZE,
     CORRELATION_ANALYZE_RESPONSE,
-    "persona/correlation/analyze/1.0",
+    "persona/correlation/analyze/1.2",
     payload,
   );
   return res.findings ?? [];
@@ -855,12 +855,13 @@ export async function personaDisclosureHistory(
   );
 }
 
-// ── Facets: the holder's arrangement of their own identity ──────────────────
+// ── Worlds: the holder's arrangement of their own identity ──────────────────
 //
-// On screen these are **worlds** — see `design-docs/persona-vocabulary.md`. The
-// wire keeps the specification's word, exactly as `profile`/face does.
+// `persona/world/*` superseded `persona/facet/*` on the wire, and the agent
+// refuses the old spelling outright rather than routing it — so the wire word
+// and the on-screen word (`design-docs/persona-vocabulary.md`) now agree.
 //
-// Membership lives on the facet rather than on the records it names, and that
+// Membership lives on the world rather than on the records it names, and that
 // is not a filing decision. `persona/attribute/put` REPLACES the attribute, and
 // this console lists without `includeSensitive` on purpose — so a client that
 // arranged by writing to attributes would either have to fetch every sensitive
@@ -868,43 +869,43 @@ export async function personaDisclosureHistory(
 // values, or send a put without one and destroy them. One record here has
 // neither problem.
 
-export interface FacetPutParams extends PersonaHolderParams {
-  /** Omit to create. Supplying one addresses an existing facet. */
-  facetId?: string;
+export interface WorldPutParams extends PersonaHolderParams {
+  /** Omit to create. Supplying one addresses an existing world. */
+  worldId?: string;
   name: string;
-  colour: FacetColour;
+  colour: WorldColour;
   /** One or two emoji. Decorative, carries no meaning, and a surface that
    *  cannot render it shows the name. */
   icon?: string;
   /**
-   * Profiles belonging to this facet.
+   * Profiles belonging to this world.
    *
    * **Replaced, not merged.** Omitting it means an empty list — a member whose
    * absence meant "keep" would make it impossible to empty one. A caller
-   * editing a facet sends back the membership it loaded, the same discipline
+   * editing a world sends back the membership it loaded, the same discipline
    * `personaProfilePut` needs for its entries.
    */
   faceIds?: string[];
-  /** Attributes belonging to this facet, with the same replace semantics. An
-   *  attribute may belong to several facets; a face may not. */
+  /** Attributes belonging to this world, with the same replace semantics. An
+   *  attribute may belong to several worlds; a face may not. */
   attributeIds?: string[];
   expectedVersion?: number;
 }
 
 /**
- * Create or replace one facet.
+ * Create or replace one world.
  *
- * Refused with `persona/facet/put:faceAlreadyPlaced` when a listed face belongs
- * to another facet — the error's `details.placed` names the facet already
+ * Refused with `persona/world/put:faceAlreadyPlaced` when a listed face belongs
+ * to another world — the error's `details.placed` names the world already
  * holding it, so a caller can offer to move it rather than send the holder
  * looking.
  */
-export async function personaFacetPut(
+export async function personaWorldPut(
   sender: TrustTaskSender,
-  params: FacetPutParams,
-): Promise<PersonaFacetPutResponsePayload> {
-  const payload: PersonaFacetPutPayload = {
-    ...(params.facetId !== undefined ? { facetId: params.facetId } : {}),
+  params: WorldPutParams,
+): Promise<PersonaWorldPutResponsePayload> {
+  const payload: PersonaWorldPutPayload = {
+    ...(params.worldId !== undefined ? { worldId: params.worldId } : {}),
     name: params.name,
     colour: params.colour,
     ...(params.icon !== undefined ? { icon: params.icon } : {}),
@@ -912,75 +913,75 @@ export async function personaFacetPut(
     ...(params.attributeIds !== undefined ? { attributeIds: params.attributeIds } : {}),
     ...(params.expectedVersion !== undefined ? { expectedVersion: params.expectedVersion } : {}),
   };
-  return holderCall<PersonaFacetPutPayload, PersonaFacetPutResponsePayload>(
+  return holderCall<PersonaWorldPutPayload, PersonaWorldPutResponsePayload>(
     sender,
     params,
-    FACET_PUT,
-    FACET_PUT_RESPONSE,
-    "persona/facet/put/1.0",
+    WORLD_PUT,
+    WORLD_PUT_RESPONSE,
+    "persona/world/put/1.1",
     payload,
   );
 }
 
 /**
- * Every facet, following the cursor to the end.
+ * Every world, following the cursor to the end.
  *
  * `limit` is the page size to ask for and never a cap on the result — the same
  * rule the other three listings in this module follow, and for the same reason:
  * a short page is indistinguishable from a complete one, so only an absent
  * `nextCursor` means the end.
  */
-export async function personaFacetList(
+export async function personaWorldList(
   sender: TrustTaskSender,
-  params: PersonaHolderParams & { limit?: PersonaFacetListPayload["limit"]; cursor?: string },
-): Promise<PoolFacet[]> {
-  const payload: PersonaFacetListPayload = {
+  params: PersonaHolderParams & { limit?: PersonaWorldListPayload["limit"]; cursor?: string },
+): Promise<PoolWorld[]> {
+  const payload: PersonaWorldListPayload = {
     ...(params.limit !== undefined ? { limit: params.limit } : {}),
     ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
   };
-  return collectPages("persona/facet/list", async (cursor) => {
-    const res = await holderCall<PersonaFacetListPayload, PersonaFacetListResponsePayload>(
+  return collectPages("persona/world/list", async (cursor) => {
+    const res = await holderCall<PersonaWorldListPayload, PersonaWorldListResponsePayload>(
       sender,
       params,
-      FACET_LIST,
-      FACET_LIST_RESPONSE,
-      "persona/facet/list/1.0",
+      WORLD_LIST,
+      WORLD_LIST_RESPONSE,
+      "persona/world/list/1.0",
       cursor === undefined ? payload : { ...payload, cursor },
     );
-    return { items: res.facets ?? [], nextCursor: res.nextCursor };
+    return { items: res.worlds ?? [], nextCursor: res.nextCursor };
   });
 }
 
-export interface FacetDeleteParams extends PersonaHolderParams {
-  facetId: string;
+export interface WorldDeleteParams extends PersonaHolderParams {
+  worldId: string;
   expectedVersion?: number;
 }
 
 /**
- * Delete one facet.
+ * Delete one world.
  *
- * **Deletes nothing it named.** Every face and attribute survives — a facet is
+ * **Deletes nothing it named.** Every face and attribute survives — a world is
  * an arrangement, not a container, and there is deliberately no cascading form
  * of this call anywhere on the wire. `releasedFaces` says how many faces now
- * belong to no facet, which is what a surface needs to describe the result
+ * belong to no world, which is what a surface needs to describe the result
  * honestly rather than saying only "deleted".
  *
  * `existed: false` is a successful no-op, not a failure.
  */
-export async function personaFacetDelete(
+export async function personaWorldDelete(
   sender: TrustTaskSender,
-  params: FacetDeleteParams,
-): Promise<PersonaFacetDeleteResponsePayload> {
-  const payload: PersonaFacetDeletePayload = {
-    facetId: params.facetId,
+  params: WorldDeleteParams,
+): Promise<PersonaWorldDeleteResponsePayload> {
+  const payload: PersonaWorldDeletePayload = {
+    worldId: params.worldId,
     ...(params.expectedVersion !== undefined ? { expectedVersion: params.expectedVersion } : {}),
   };
-  return holderCall<PersonaFacetDeletePayload, PersonaFacetDeleteResponsePayload>(
+  return holderCall<PersonaWorldDeletePayload, PersonaWorldDeleteResponsePayload>(
     sender,
     params,
-    FACET_DELETE,
-    FACET_DELETE_RESPONSE,
-    "persona/facet/delete/1.0",
+    WORLD_DELETE,
+    WORLD_DELETE_RESPONSE,
+    "persona/world/delete/1.0",
     payload,
   );
 }
@@ -1029,7 +1030,7 @@ export async function personaProfileCompose(
     params,
     PROFILE_COMPOSE,
     PROFILE_COMPOSE_RESPONSE,
-    "persona/profile/compose/1.0",
+    "persona/profile/compose/1.1",
     payload,
   );
 }
@@ -1066,7 +1067,7 @@ export async function personaAttributePromote(
     params,
     ATTRIBUTE_PROMOTE,
     ATTRIBUTE_PROMOTE_RESPONSE,
-    "persona/attribute/promote/1.0",
+    "persona/attribute/promote/1.1",
     payload,
   );
 }
@@ -1159,7 +1160,7 @@ export async function personaProfileTimeline(
       params,
       PROFILE_TIMELINE,
       PROFILE_TIMELINE_RESPONSE,
-      "persona/profile/timeline/1.0",
+      "persona/profile/timeline/1.1",
       cursor === undefined ? payload : { ...payload, cursor },
     );
     return { items: res.events ?? [], nextCursor: res.nextCursor };

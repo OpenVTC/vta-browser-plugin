@@ -38,21 +38,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SRC = fileURLToPath(new URL("../src", import.meta.url));
-// Located from a real subpath, resolved through ESM.
-//
-// Two traps here, both worth naming. The package's `exports` map does not
-// expose its own `package.json`, so the usual `require.resolve(pkg +
-// "/package.json")` fails; and its subpaths are a bare `./*` pattern, which
-// CJS `require.resolve` will not match even though `import` does. So this uses
-// `import.meta.resolve` — the same resolver the source files use.
-const COMPONENTS = join(
-  dirname(fileURLToPath(import.meta.resolve("@openvtc/trust-tasks/vta/contexts/list/1.0/payload"))),
-  "../../../../_shared/components.d.ts",
-);
+// The shared definitions of exactly the tasks this library pins, as
+// `trust-tasks-gen-ts` hoisted them (`npm run tasks:generate`). Their names
+// depend on the lock — a definition with one shape among the pinned tasks is
+// bare — which is the right set to compare with: it is what `src/` can import.
+const SPECS = join(SRC, "specs");
+const COMPONENTS = join(SPECS, "_shared/components.ts");
 
 /**
  * Types this library deliberately restates, each with the reason.
@@ -67,9 +62,17 @@ const NARROWING = {
     "a caller passing these to `navigator.credentials` wants the narrow one.",
 };
 
+// `src/specs/` is the generated tree itself, so it is the one place these
+// declarations are supposed to be.
 const files = (dir) =>
   readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-    e.isDirectory() ? files(join(dir, e.name)) : e.name.endsWith(".ts") ? [join(dir, e.name)] : [],
+    e.isDirectory()
+      ? join(dir, e.name) === SPECS
+        ? []
+        : files(join(dir, e.name))
+      : e.name.endsWith(".ts")
+        ? [join(dir, e.name)]
+        : [],
   );
 
 const generated = new Set(
@@ -82,9 +85,9 @@ test("the generated component list is real, so none of this passes vacuously", (
   assert.ok(
     generated.size > 100,
     `found only ${generated.size} generated component types — the path to ` +
-      `components.d.ts is stale and this test now checks nothing`,
+      `components.ts is stale and this test now checks nothing`,
   );
-  assert.ok(generated.has("ContextRecord"), "components.d.ts does not look like the right file");
+  assert.ok(generated.has("ContextRecord"), "components.ts does not look like the right file");
 });
 
 // `export type X = SomeIdentifier;` is the *fix* pattern, not the defect: it

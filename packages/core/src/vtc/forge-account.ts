@@ -10,10 +10,10 @@
 // that held the code could complete the authorisation with an account of its
 // own choosing.
 
-import { TYPE_URI as ACCOUNT_LINK } from "@openvtc/trust-tasks/git-ns/account/link/0.1/payload";
-import type { Response as AccountLinkResponse } from "@openvtc/trust-tasks/git-ns/account/link/0.1/payload";
-import { TYPE_URI as ACCOUNT_UNLINK } from "@openvtc/trust-tasks/git-ns/account/unlink/0.1/payload";
-import type { Response as AccountUnlinkResponse } from "@openvtc/trust-tasks/git-ns/account/unlink/0.1/payload";
+import { TYPE_URI as ACCOUNT_LINK } from "../specs/git-ns/account/link/0.1/payload.js";
+import type { Response as AccountLinkResponse } from "../specs/git-ns/account/link/0.1/payload.js";
+import { TYPE_URI as ACCOUNT_UNLINK } from "../specs/git-ns/account/unlink/0.1/payload.js";
+import type { Response as AccountUnlinkResponse } from "../specs/git-ns/account/unlink/0.1/payload.js";
 
 import { OobReplyInvalidError, type OobDocument } from "./oob-sign-in.js";
 

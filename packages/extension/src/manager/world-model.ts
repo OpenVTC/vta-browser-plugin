@@ -6,13 +6,13 @@
 // already?*, *what belongs nowhere?* — and getting one wrong is a screen that
 // says something untrue rather than a screen that looks wrong.
 
-import type { FacetColour, PoolFacet, PoolProfile } from "@openvtc/pnm-core/admin";
+import type { WorldColour, PoolWorld, PoolProfile } from "@openvtc/pnm-core/admin";
 import { RelayTaskError } from "./carrier.js";
 
 /** One face the agent refused to place, and the world already holding it. */
 export interface Placement {
   faceId: string;
-  facetId: string;
+  worldId: string;
 }
 
 /**
@@ -24,11 +24,11 @@ export interface Placement {
  * placement check excludes.
  */
 export function worldOfFace(
-  worlds: readonly PoolFacet[],
+  worlds: readonly PoolWorld[],
   faceId: string,
   excluding?: string,
-): PoolFacet | undefined {
-  return worlds.find((w) => w.facetId !== excluding && (w.faceIds ?? []).includes(faceId));
+): PoolWorld | undefined {
+  return worlds.find((w) => w.worldId !== excluding && (w.faceIds ?? []).includes(faceId));
 }
 
 /**
@@ -40,7 +40,7 @@ export function worldOfFace(
  * same defect as a context tally that omits a standing.
  */
 export function unplacedFaces(
-  worlds: readonly PoolFacet[],
+  worlds: readonly PoolWorld[],
   faces: readonly PoolProfile[],
 ): PoolProfile[] {
   const placed = new Set(worlds.flatMap((w) => w.faceIds ?? []));
@@ -68,7 +68,7 @@ export function placedElsewhere(error: unknown): Placement[] | null {
   // `ConsentRequiredError` — the sibling that must reach its own ceremony —
   // has no `code` at all, so neither can be mistaken for this.
   if (!(error instanceof RelayTaskError)) return null;
-  if (error.code !== "persona/facet/put:faceAlreadyPlaced") return null;
+  if (error.code !== "persona/world/put:faceAlreadyPlaced") return null;
   const placed = (error.details as { placed?: unknown } | undefined)?.placed;
   if (!Array.isArray(placed) || placed.length === 0) return null;
   const out: Placement[] = [];
@@ -77,9 +77,9 @@ export function placedElsewhere(error: unknown): Placement[] | null {
       typeof row === "object" &&
       row !== null &&
       typeof (row as Placement).faceId === "string" &&
-      typeof (row as Placement).facetId === "string"
+      typeof (row as Placement).worldId === "string"
     ) {
-      out.push({ faceId: (row as Placement).faceId, facetId: (row as Placement).facetId });
+      out.push({ faceId: (row as Placement).faceId, worldId: (row as Placement).worldId });
     }
   }
   // A mixed array is refused rather than filtered: half an answer about where
@@ -105,9 +105,9 @@ export function placedElsewhere(error: unknown): Placement[] | null {
  * as a change when nothing changed.
  */
 export function worldsOfAttribute(
-  worlds: readonly PoolFacet[],
+  worlds: readonly PoolWorld[],
   attributeId: string,
-): PoolFacet[] {
+): PoolWorld[] {
   return worlds.filter((w) => (w.attributeIds ?? []).includes(attributeId));
 }
 
@@ -126,7 +126,7 @@ export interface SeededMembership {
 /**
  * The membership to open an editor with.
  *
- * **Only what still resolves.** `persona/facet/list` returns dangling
+ * **Only what still resolves.** `persona/world/list` returns dangling
  * membership rather than pruning it — deliberately, so a consumer can offer to
  * tidy — and the specification is explicit that a consumer "renders a dangling
  * id as an arrangement to repair rather than as a record that exists".
@@ -143,7 +143,7 @@ export interface SeededMembership {
  * dangling ids around to make possible.
  */
 export function seedMembership(
-  existing: PoolFacet | undefined,
+  existing: PoolWorld | undefined,
   faces: readonly PoolProfile[],
   attributes: readonly { attributeId: string }[],
 ): SeededMembership {
@@ -161,22 +161,22 @@ export function seedMembership(
   };
 }
 
-/** One `persona/facet/put`, as a mover needs to send it. */
-export interface FacetWrite {
-  facetId: string;
+/** One `persona/world/put`, as a mover needs to send it. */
+export interface WorldWrite {
+  worldId: string;
   name: string;
-  colour: FacetColour;
+  colour: WorldColour;
   icon?: string | undefined;
   faceIds: string[];
   attributeIds: string[];
 }
 
 /**
- * The writes that move one face from wherever it is to `toFacetId`.
+ * The writes that move one face from wherever it is to `toWorldId`.
  *
- * **Order matters and is the whole reason this is a function.** `facet/put`
+ * **Order matters and is the whole reason this is a function.** `world/put`
  * replaces, and the agent refuses a write that would place a face already
- * placed elsewhere (`persona/facet/put:faceAlreadyPlaced` — see
+ * placed elsewhere (`persona/world/put:faceAlreadyPlaced` — see
  * {@link placedElsewhere}). So the source has to be rewritten *without* the
  * face before the destination is rewritten *with* it. Sending them the other
  * way round is refused, and sending only the destination silently leaves the
@@ -193,19 +193,19 @@ export interface FacetWrite {
  * onto its own world costs no round trip and cannot fail.
  */
 export function movePlan(
-  worlds: readonly PoolFacet[],
+  worlds: readonly PoolWorld[],
   faces: readonly PoolProfile[],
   attributes: readonly { attributeId: string }[],
   faceId: string,
-  toFacetId: string | null,
-): FacetWrite[] {
+  toWorldId: string | null,
+): WorldWrite[] {
   const from = worldOfFace(worlds, faceId);
-  if ((from?.facetId ?? null) === toFacetId) return [];
+  if ((from?.worldId ?? null) === toWorldId) return [];
 
-  const writeFor = (w: PoolFacet, faceIds: string[]): FacetWrite => {
+  const writeFor = (w: PoolWorld, faceIds: string[]): WorldWrite => {
     const live = seedMembership(w, faces, attributes);
     return {
-      facetId: w.facetId,
+      worldId: w.worldId,
       name: w.name,
       colour: w.colour,
       ...(w.icon ? { icon: w.icon } : {}),
@@ -214,13 +214,13 @@ export function movePlan(
     };
   };
 
-  const out: FacetWrite[] = [];
+  const out: WorldWrite[] = [];
   if (from) {
     const live = seedMembership(from, faces, attributes);
     out.push(writeFor(from, [...live.faceIds].filter((id) => id !== faceId)));
   }
-  if (toFacetId) {
-    const to = worlds.find((w) => w.facetId === toFacetId);
+  if (toWorldId) {
+    const to = worlds.find((w) => w.worldId === toWorldId);
     // A destination that has vanished between render and drop is dropped
     // silently rather than guessed at: the source write above still runs, so
     // the face ends up unplaced, which is the honest half of the move.

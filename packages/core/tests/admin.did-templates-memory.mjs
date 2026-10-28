@@ -1,4 +1,4 @@
-// `vta/did-templates/*` (2.0) and `vta/memory/*`.
+// `vta/did-templates/*` (3.1; `delete` and `render` 2.0) and `vta/memory/*`.
 //
 // Both families are scoped by context, and the two treat that scoping
 // differently on purpose: a template omitting `contextId` addresses the global
@@ -44,16 +44,17 @@ function recorder(reply) {
 
 // ── did-templates ───────────────────────────────────────────────────────────
 
-test("create targets 2.0 — the version the agent actually declares", async () => {
-  // The bindings also ship 1.0, and a 1.0 import compiles perfectly well; only
-  // the agent would object. The conformance test is the other half of this.
+test("create targets 3.1 — the version the agent actually serves", async () => {
+  // The bindings also ship 1.0, 2.0 and 3.0, and any of those imports compiles
+  // perfectly well; only the agent would object. The conformance test is the
+  // other half of this.
   const channel = recorder({ ...TEMPLATE, scope: { type: "global" } });
   await didTemplateCreate(channel, { holder: HOLDER, service: SERVICE, template: TEMPLATE });
   const { envelope, opts } = channel.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/did-templates/create/2.0");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/did-templates/create/3.1");
   assert.equal(
     opts.expectedResponseType,
-    "https://trusttasks.org/spec/vta/did-templates/create/2.0#response",
+    "https://trusttasks.org/spec/vta/did-templates/create/3.1#response",
   );
 });
 

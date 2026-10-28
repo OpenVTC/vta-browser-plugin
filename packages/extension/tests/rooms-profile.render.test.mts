@@ -15,7 +15,7 @@ import { roomNamesKey } from "../src/room-page-policy.js";
 const LIST = "rooms/keys/list/0.2";
 const PROFILE = "rooms/keys/profile/read/0.1";
 const SERVERS = "vta/webvh/servers/list/1.0";
-const SERVICES = "vta/services/list/1.0";
+const SERVICES = "vta/services/list/1.1";
 const ROOM = "did:webvh:example.com:rooms:board";
 const HOST = "did:webvh:example.com:community";
 const MEMBER = "did:webvh:example.com:people:alice";

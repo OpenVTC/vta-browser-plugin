@@ -42,10 +42,10 @@ test("create addresses the agent and carries the canonical type", async () => {
   await webvhDidCreate(ch, { ...CALL, contextId: "personal", serverId: "prod" });
 
   const { envelope, opts } = ch.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/webvh/dids/create/1.0");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/webvh/dids/create/1.2");
   assert.equal(
     opts.expectedResponseType,
-    "https://trusttasks.org/spec/vta/webvh/dids/create/1.0#response",
+    "https://trusttasks.org/spec/vta/webvh/dids/create/1.2#response",
   );
   // The agent holds the keys, so it is the recipient — not the hosting server.
   assert.equal(envelope.issuer, HOLDER.did);
@@ -95,6 +95,20 @@ test("addTspService is sent when given and absent when not", async () => {
   const ch2 = recorder({ record: {} });
   await webvhDidCreate(ch2, { ...CALL, contextId: "c" });
   assert.ok(!("addTspService" in ch2.sent[0].envelope.payload));
+});
+
+// 1.2's two new members are the agent's configuration when absent, so silence
+// must stay silence — and `scidAlsoKnownAs: false` is a decision, not silence.
+test("didMethod and scidAlsoKnownAs are sent when given and absent when not", async () => {
+  const ch = recorder({ record: {} });
+  await webvhDidCreate(ch, { ...CALL, contextId: "c", didMethod: "webvh", scidAlsoKnownAs: false });
+  assert.equal(ch.sent[0].envelope.payload.didMethod, "webvh");
+  assert.equal(ch.sent[0].envelope.payload.scidAlsoKnownAs, false);
+
+  const ch2 = recorder({ record: {} });
+  await webvhDidCreate(ch2, { ...CALL, contextId: "c" });
+  assert.ok(!("didMethod" in ch2.sent[0].envelope.payload));
+  assert.ok(!("scidAlsoKnownAs" in ch2.sent[0].envelope.payload));
 });
 
 test("get only asks for the log when told to", async () => {

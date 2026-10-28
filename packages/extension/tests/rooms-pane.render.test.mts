@@ -36,7 +36,7 @@ const room = (roomId: string, epoch: number, earliestReadableEpoch: number, memb
 // so the fake agent answers them rather than throwing — these tests are about
 // the listing, and `rooms-create.render` covers the form.
 const SERVERS = "vta/webvh/servers/list/1.0";
-const SERVICES = "vta/services/list/1.0";
+const SERVICES = "vta/services/list/1.1";
 
 const mount = async (rooms: unknown[]) => {
   const a = agent({ [LIST]: { rooms }, [SERVERS]: { servers: [] }, [SERVICES]: { services: [] } });
@@ -195,7 +195,7 @@ test("two members of one room are one card, and the detail acts as one place at 
 // ── Where a room was last found ─────────────────────────────────────────────
 
 const HOST = "did:webvh:QmCommunity:community.example";
-const BROWSE = "rooms/keys/browse/0.1";
+const BROWSE = "rooms/keys/browse/0.3";
 const PROFILE = "rooms/keys/profile/read/0.1";
 
 // The host used to be asked for twice per room on every visit. A room a

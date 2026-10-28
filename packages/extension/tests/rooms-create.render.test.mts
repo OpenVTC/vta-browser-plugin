@@ -24,10 +24,10 @@ const chooseContext = async (screen: { all: (s: string) => Element[]; click: (el
   await screen.click(screen.all(`[data-context-id="${id}"]`)[0]!);
 };
 const SERVERS = "vta/webvh/servers/list/1.0";
-const SERVICES = "vta/services/list/1.0";
+const SERVICES = "vta/services/list/1.1";
 const DIDS_LIST = "vta/webvh/dids/list/1.0";
-const KEYS_LIST = "keys/list/0.1";
-const DIDS_CREATE = "vta/webvh/dids/create/1.0";
+const KEYS_LIST = "keys/list/0.2";
+const DIDS_CREATE = "vta/webvh/dids/create/1.2";
 const UPDATE_DID = "vta/contexts/update-did/1.1";
 // `rooms/owner/register`, not `rooms/create`: the console cannot address a host,
 // so the registration is asked of the agent, which can make the call.
@@ -99,7 +99,7 @@ const mount = async (
     [SERVERS]: { servers: [{ id: "webvh-1", did: "did:webvh:QmS:webvh.example", label: "Primary", createdAt: "x", updatedAt: "x" }] },
     [SERVICES]: AGENT_SERVICES,
     [DIDS_LIST]: { dids: [] },
-    [KEYS_LIST]: { keys: [], total: 0, offset: 0, limit: 0 },
+    [KEYS_LIST]: { keys: [] },
     ...answers,
   });
   const answer = hostEndpoint as ((hostDid: string) => unknown) | undefined;
@@ -426,7 +426,7 @@ const ROOM_KEYS = [
 test("an existing room is picked from the context, and its one signing key filled in", async () => {
   const { a, screen } = await mount({
     [DIDS_LIST]: { dids: [didRecord(HOST_DID), didRecord(MINTED.did)] },
-    [KEYS_LIST]: { keys: ROOM_KEYS, total: 3, offset: 0, limit: 100 },
+    [KEYS_LIST]: { keys: ROOM_KEYS },
     [REGISTER]: REGISTERED,
   });
   await chooseContext(screen, "openvtc");
@@ -448,7 +448,7 @@ test("an existing room is picked from the context, and its one signing key fille
 test("with several signing keys, none is chosen for the operator", async () => {
   const { screen } = await mount({
     [DIDS_LIST]: { dids: [didRecord(MINTED.did)] },
-    [KEYS_LIST]: { keys: [keyRecord(`${MINTED.did}#key-0`), keyRecord(`${MINTED.did}#key-2`)], total: 2, offset: 0, limit: 100 },
+    [KEYS_LIST]: { keys: [keyRecord(`${MINTED.did}#key-0`), keyRecord(`${MINTED.did}#key-2`)] },
   });
   await chooseContext(screen, "openvtc");
   await screen.settle();

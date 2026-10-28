@@ -27,40 +27,40 @@ import { buildTrustTask } from "../vta/trust-task.js";
 import {
   TYPE_URI as CX_OFFER,
   type CredentialExchangeOfferPayload,
-} from "@openvtc/trust-tasks/credential-exchange/offer/0.1/payload";
+} from "../specs/credential-exchange/offer/0.1/payload.js";
 import {
   TYPE_URI as CX_REQUEST,
   type CredentialExchangeRequestPayload,
-} from "@openvtc/trust-tasks/credential-exchange/request/0.1/payload";
+} from "../specs/credential-exchange/request/0.1/payload.js";
 import {
   TYPE_URI as CX_ISSUE,
   type CredentialExchangeIssuePayload,
-} from "@openvtc/trust-tasks/credential-exchange/issue/0.1/payload";
+} from "../specs/credential-exchange/issue/0.1/payload.js";
 import {
   TYPE_URI as CX_QUERY,
   type CredentialExchangeQueryPayload,
-} from "@openvtc/trust-tasks/credential-exchange/query/0.1/payload";
+} from "../specs/credential-exchange/query/0.1/payload.js";
 import {
   TYPE_URI as CX_PRESENT,
   type CredentialExchangePresentPayload,
-} from "@openvtc/trust-tasks/credential-exchange/present/0.1/payload";
+} from "../specs/credential-exchange/present/0.1/payload.js";
 import {
   TYPE_URI as CX_PENDING_LIST,
   RESPONSE_TYPE_URI as CX_PENDING_LIST_RESPONSE,
   type CredentialExchangePendingListResponsePayload,
   type DeferredPresentation,
   type RequestedCredential,
-} from "@openvtc/trust-tasks/credential-exchange/pending/list/0.1/payload";
+} from "../specs/credential-exchange/pending/list/0.1/payload.js";
 import {
   TYPE_URI as CX_PENDING_APPROVE,
   RESPONSE_TYPE_URI as CX_PENDING_APPROVE_RESPONSE,
   type CredentialExchangePendingApproveResponsePayload,
-} from "@openvtc/trust-tasks/credential-exchange/pending/approve/0.1/payload";
+} from "../specs/credential-exchange/pending/approve/0.1/payload.js";
 import {
   TYPE_URI as CX_PENDING_DENY,
   RESPONSE_TYPE_URI as CX_PENDING_DENY_RESPONSE,
   type CredentialExchangePendingDenyResponsePayload,
-} from "@openvtc/trust-tasks/credential-exchange/pending/deny/0.1/payload";
+} from "../specs/credential-exchange/pending/deny/0.1/payload.js";
 
 export type { DeferredPresentation, RequestedCredential };
 

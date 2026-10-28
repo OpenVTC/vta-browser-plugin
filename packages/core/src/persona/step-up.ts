@@ -48,6 +48,8 @@ import {
 import type { SigningIdentity } from "../siop/self-issued.js";
 import type { TrustTask } from "../vta/protocol.js";
 
+import { TYPE_URI as APPROVE_RESPONSE_TYPE } from "../specs/auth/step-up/approve-response/0.6/payload.js";
+
 /**
  * The extended error code `persona/disclosure/present/1.0` rule 6 declares.
  *
@@ -182,7 +184,7 @@ export function disclosureStepUpFrom(
   };
 }
 
-/** Payload of the `approve-response/0.3` that answers a disclosure step-up. */
+/** Payload of the `approve-response/0.6` that answers a disclosure step-up. */
 export interface DisclosureApprovalPayload {
   subject: string;
   sessionId: string;
@@ -218,10 +220,9 @@ export function disclosureApprovalPayload(
   };
 }
 
-/** `auth/step-up/approve-response/0.3` — the version that can be answered
- *  `recorded`, which is what a bound disclosure approval must be. */
-export const DISCLOSURE_APPROVE_RESPONSE_TYPE =
-  "https://trusttasks.org/spec/auth/step-up/approve-response/0.3";
+/** `auth/step-up/approve-response/0.6` — the version the agent serves, which
+ *  can be answered `recorded`: what a bound disclosure approval must be. */
+export const DISCLOSURE_APPROVE_RESPONSE_TYPE = APPROVE_RESPONSE_TYPE;
 
 export interface VerifyDisclosureStepUpOptions {
   /** The executors this wallet is enrolled with — its agent's DID. The
@@ -308,16 +309,16 @@ export async function verifyDisclosureStepUp(
  * for it. `request` must come from {@link verifyDisclosureStepUp}, never from
  * the refusal directly.
  *
- * **Minted as `0.3`, which is the whole point of this call existing.** The
+ * **Minted as `0.6`, which can answer `recorded` — the whole point of this
+ * call existing.** The
  * approval is bound to one `previewId`, so the honest acknowledgement is
  * `recorded` — applied to that disclosure, elevating nothing. An approval sent
  * as 0.2 is answered `elevated`, and the session then satisfies unrelated
  * step-up gates for its window on the strength of a decision the holder made
  * about a card number.
  *
- * The agent has accepted 0.3 since VTI #1316; it had to, before this could
- * send it. Nothing else in this wallet mints 0.3 — `rp-login` answers a
- * different relying party, the did-hosting control plane, in 0.5.
+ * The agent serves 0.6 and nothing older (0.3 introduced `recorded`, VTI
+ * #1316); the did-hosting control plane `rp-login` answers serves 0.6 too.
  */
 export async function approveDisclosureStepUp(args: {
   signing: SigningIdentity;
@@ -332,7 +333,6 @@ export async function approveDisclosureStepUp(args: {
     rpDid: args.agentDid,
     request: args.request,
     approved: args.approved,
-    responseVersion: "0.3",
     ...(args.deniedReason !== undefined ? { deniedReason: args.deniedReason } : {}),
   });
 }

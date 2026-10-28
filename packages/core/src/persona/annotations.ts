@@ -1,7 +1,7 @@
 // The holder's own marks on their contacts — a star, a petname, their lists, a
-// link to a community directory entry (`persona/contact/put/1.1`,
+// link to a community directory entry (`persona/contact/put/1.2`,
 // `persona/contact/list/1.1`) — and the lists themselves
-// (`persona/contact/lists/*/1.0`).
+// (`persona/contact/lists/put/1.1`, `list` and `delete` 1.0).
 //
 // Annotations are the holder's, and stay in the holder's agent: the agent sends
 // them to nobody, and this module only ever talks to the agent. Changing one
@@ -13,7 +13,7 @@
 //     shown — by their entry (`directoryRef`) and the persona that knows them —
 //     which finds, or makes, the contact the agent keeps for that entry;
 //   - a **filing** may carry them too (`putContact` in `./contacts.js` files
-//     1.0 disclosures; this module does not re-file).
+//     disclosures; this module does not re-file).
 
 import type { TrustTaskSender } from "../vta/channel.js";
 
@@ -23,31 +23,31 @@ import {
   type PersonaContactPutPayload,
   type PersonaContactPutResponsePayload,
   type DirectoryRef,
-} from "@openvtc/trust-tasks/persona/contact/put/1.1/payload";
+} from "../specs/persona/contact/put/1.2/payload.js";
 import {
   TYPE_URI as LIST,
   RESPONSE_TYPE_URI as LIST_RESPONSE,
   type PersonaContactListPayload,
   type PersonaContactListResponsePayload,
-} from "@openvtc/trust-tasks/persona/contact/list/1.1/payload";
+} from "../specs/persona/contact/list/1.1/payload.js";
 import {
   TYPE_URI as LISTS_PUT,
   RESPONSE_TYPE_URI as LISTS_PUT_RESPONSE,
   type PersonaContactListsPutPayload,
   type PersonaContactListsPutResponsePayload,
-} from "@openvtc/trust-tasks/persona/contact/lists/put/1.0/payload";
+} from "../specs/persona/contact/lists/put/1.1/payload.js";
 import {
   TYPE_URI as LISTS_LIST,
   RESPONSE_TYPE_URI as LISTS_LIST_RESPONSE,
   type PersonaContactListsListPayload,
   type PersonaContactListsListResponsePayload,
-} from "@openvtc/trust-tasks/persona/contact/lists/list/1.0/payload";
+} from "../specs/persona/contact/lists/list/1.0/payload.js";
 import {
   TYPE_URI as LISTS_DELETE,
   RESPONSE_TYPE_URI as LISTS_DELETE_RESPONSE,
   type PersonaContactListsDeletePayload,
   type PersonaContactListsDeleteResponsePayload,
-} from "@openvtc/trust-tasks/persona/contact/lists/delete/1.0/payload";
+} from "../specs/persona/contact/lists/delete/1.0/payload.js";
 
 import { call, type PersonaCallerParams } from "./call.js";
 

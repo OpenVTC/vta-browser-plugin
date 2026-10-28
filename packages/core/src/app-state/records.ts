@@ -1,5 +1,7 @@
-// `vta/app-state/*` 1.0 — durable, context-scoped key/value state held by the
-// agent rather than by this device.
+// `vta/app-state/*` — durable, context-scoped key/value state held by the
+// agent rather than by this device. `put`, `put-many` and `list` are at 1.1
+// (`wasCreated` for `created`; `limit` / `nextCursor` paging); `get`,
+// `get-many` and `delete` are at 1.0, which is all the agent serves for them.
 //
 // The wallet already has a `KVStore` (`../store`), and this is deliberately not
 // that. `KVStore` is *this browser profile's* state: it dies with the profile,
@@ -23,38 +25,38 @@ import {
   RESPONSE_TYPE_URI as APP_STATE_PUT_RESPONSE,
   type VTAApplicationStatePutPayload,
   type VTAApplicationStatePutResponsePayload,
-} from "@openvtc/trust-tasks/vta/app-state/put/1.0/payload";
+} from "../specs/vta/app-state/put/1.1/payload.js";
 import {
   TYPE_URI as APP_STATE_GET,
   RESPONSE_TYPE_URI as APP_STATE_GET_RESPONSE,
   type VTAApplicationStateGetPayload,
   type VTAApplicationStateGetResponsePayload,
   type AppStateRecord,
-} from "@openvtc/trust-tasks/vta/app-state/get/1.0/payload";
+} from "../specs/vta/app-state/get/1.0/payload.js";
 import {
   TYPE_URI as APP_STATE_GET_MANY,
   RESPONSE_TYPE_URI as APP_STATE_GET_MANY_RESPONSE,
   type VTAApplicationStateGetManyPayload,
   type VTAApplicationStateGetManyResponsePayload,
-} from "@openvtc/trust-tasks/vta/app-state/get-many/1.0/payload";
+} from "../specs/vta/app-state/get-many/1.0/payload.js";
 import {
   TYPE_URI as APP_STATE_PUT_MANY,
   RESPONSE_TYPE_URI as APP_STATE_PUT_MANY_RESPONSE,
   type VTAApplicationStatePutManyPayload,
   type VTAApplicationStatePutManyResponsePayload,
-} from "@openvtc/trust-tasks/vta/app-state/put-many/1.0/payload";
+} from "../specs/vta/app-state/put-many/1.1/payload.js";
 import {
   TYPE_URI as APP_STATE_LIST,
   RESPONSE_TYPE_URI as APP_STATE_LIST_RESPONSE,
   type VTAApplicationStateListPayload,
   type VTAApplicationStateListResponsePayload,
-} from "@openvtc/trust-tasks/vta/app-state/list/1.0/payload";
+} from "../specs/vta/app-state/list/1.1/payload.js";
 import {
   TYPE_URI as APP_STATE_DELETE,
   RESPONSE_TYPE_URI as APP_STATE_DELETE_RESPONSE,
   type VTAApplicationStateDeletePayload,
   type VTAApplicationStateDeleteResponsePayload,
-} from "@openvtc/trust-tasks/vta/app-state/delete/1.0/payload";
+} from "../specs/vta/app-state/delete/1.0/payload.js";
 
 export type { AppStateRecord };
 
@@ -128,7 +130,7 @@ export interface AppStatePutParams extends AppStateCallerParams, AppStateAddress
 /**
  * Write one record.
  *
- * Answers `created`, so a caller can tell an insert from an update without a
+ * Answers `wasCreated`, so a caller can tell an insert from an update without a
  * prior read — which is the read that makes the check racy in the first place.
  */
 export async function appStatePut(
@@ -149,7 +151,7 @@ export async function appStatePut(
       : {}),
   };
   return call(sender, params, APP_STATE_PUT, APP_STATE_PUT_RESPONSE,
-    "vta/app-state/put/1.0", payload);
+    "vta/app-state/put/1.1", payload);
 }
 
 export interface AppStateGetParams extends AppStateCallerParams, AppStateAddress {
@@ -240,7 +242,7 @@ export async function appStatePutMany(
     ...(params.mode !== undefined ? { mode: params.mode } : {}),
   };
   return call(sender, params, APP_STATE_PUT_MANY, APP_STATE_PUT_MANY_RESPONSE,
-    "vta/app-state/put-many/1.0", payload);
+    "vta/app-state/put-many/1.1", payload);
 }
 
 export interface AppStateListParams extends AppStateCallerParams {
@@ -264,11 +266,21 @@ export interface AppStateListParams extends AppStateCallerParams {
    *  `tombstoneRetentionSeconds`: a device away for longer than that cannot
    *  learn of the delete this way and must re-sync from scratch. */
   includeDeleted?: boolean;
-  pageSize?: number;
+  /** The most records to return on this page. The agent applies its own
+   *  ceiling and may return fewer — a short page is not the last one. */
+  limit?: number;
+  /** A previous page's `nextCursor`, passed back unchanged. */
   cursor?: string;
 }
 
-/** List records in a context, optionally scoped and incremental. */
+/**
+ * List one page of records in a context, optionally scoped and incremental.
+ *
+ * **Only an absent `nextCursor` marks the last page.** Pass a present one back
+ * as `cursor` for the next. An incremental consumer adopts `highWatermark` as
+ * its next `sinceVersion` only after that last page — every page of one feed
+ * carries the same value, and adopting it early skips what is still to come.
+ */
 export async function appStateList(
   sender: TrustTaskSender,
   params: AppStateListParams,
@@ -284,11 +296,11 @@ export async function appStateList(
     ...(params.includeDeleted !== undefined
       ? { includeDeleted: params.includeDeleted }
       : {}),
-    ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+    ...(params.limit !== undefined ? { limit: params.limit } : {}),
     ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
   };
   return call(sender, params, APP_STATE_LIST, APP_STATE_LIST_RESPONSE,
-    "vta/app-state/list/1.0", payload);
+    "vta/app-state/list/1.1", payload);
 }
 
 export interface AppStateDeleteParams extends AppStateCallerParams, AppStateAddress {

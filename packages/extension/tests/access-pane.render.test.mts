@@ -7,19 +7,32 @@
 // value in place while the screen says it was cleared.
 //
 // **A context's list says which entries were granted in it.** `acl/list`
-// filtered by scope rightly returns agent-wide entries too, and shown as one
-// list under the context's name those read as granted there.
+// filtered by context `actingIn` rightly returns agent-wide entries too, and
+// shown as one list under the context's name those read as granted there.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { AccessPane, aclEditToSend, partitionByContext } from "../src/manager/panes/access.js";
 
-const LIST = "acl/list/0.1";
-const UPDATE = "acl/update/0.1";
+const LIST = "acl/list/0.3";
+const UPDATE = "acl/update/0.2";
 
-const SCOPED = { subject: "did:key:zScoped", role: "initiator", scopes: ["browser-plugin"] };
-const GLOBAL = { subject: "did:key:zGlobal", role: "admin", label: "Browser Plugin" };
+/** Every 0.2 entry states its act, key and capability scopes. */
+const REACH = { keys: { scope: "all" }, capabilities: { scope: "ceiling" } };
+const SCOPED = {
+  subject: "did:key:zScoped",
+  role: "initiator",
+  act: { scope: "contexts", contexts: ["browser-plugin"] },
+  ...REACH,
+};
+const GLOBAL = {
+  subject: "did:key:zGlobal",
+  role: "admin",
+  label: "Browser Plugin",
+  act: { scope: "all" },
+  ...REACH,
+};
 
 const mount = async (entries: unknown[], contextId: string | null) => {
   const a = agent({
@@ -61,9 +74,13 @@ test("a field that was empty and stays empty is omitted, not nulled", () => {
 
 // ── partitionByContext ─────────────────────────────────────────────────────
 
-test("membership comes from the entry's scopes, not the filter that returned it", () => {
+test("membership comes from the entry's act scope, not the filter that returned it", () => {
   const { granted, inherited } = partitionByContext(
-    [SCOPED, GLOBAL, { subject: "did:key:zOther", role: "reader", scopes: ["parent"] }] as never,
+    [
+      SCOPED,
+      GLOBAL,
+      { subject: "did:key:zOther", role: "reader", act: { scope: "contexts", contexts: ["parent"] }, ...REACH },
+    ] as never,
     "browser-plugin",
   );
   assert.deepEqual(granted.map((e) => e.subject), ["did:key:zScoped"]);
@@ -81,6 +98,19 @@ test("a selected context separates what was granted in it from what reaches it",
   // Scoped entry sits above the heading for the outside group; global below it.
   assert.ok(text.indexOf("zScoped") < text.indexOf("From outside"));
   assert.ok(text.indexOf("zGlobal") > text.indexOf("From outside"));
+});
+
+test("a selected context is asked for actingIn — acl/list/0.3 has no default direction", async () => {
+  const { a } = await mount([SCOPED], "browser-plugin");
+  assert.deepEqual(a.of(LIST)[0]!.payload, { context: "browser-plugin", direction: "actingIn" });
+});
+
+test("act all and act none are both said, and neither reads as the other", async () => {
+  const NOWHERE = { ...SCOPED, subject: "did:key:zNowhere", role: "reader", act: { scope: "none" } };
+  const { screen } = await mount([GLOBAL, NOWHERE], null);
+  const text = screen.text();
+  assert.match(text, /everywhere/);
+  assert.match(text, /nowhere/);
 });
 
 test("a context with only agent-wide entries says nobody was granted in it", async () => {

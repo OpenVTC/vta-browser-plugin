@@ -1,4 +1,5 @@
-// DID templates — `vta/did-templates/*` at 2.0.
+// DID templates — `vta/did-templates/{create,get,list,update}` at 3.1,
+// `delete` and `render` at 2.0.
 //
 // A template is the shape an agent stamps DIDs from: the document skeleton plus
 // the variables a caller must supply. Managing them is operator work, and
@@ -6,10 +7,19 @@
 // before anything is published — the same substitution the agent would perform,
 // with nothing created.
 //
-// **2.0, not 1.0.** Both exist in the bindings; `vta-sdk` declares only the 2.0
-// URIs, so that is what the agent answers. The conformance test would catch the
-// mistake, but it is worth knowing that a 1.0 import here compiles fine and
-// fails at the agent.
+// **The versions are split, and that is the agent's, not ours.** The four tasks
+// that carry a `DidTemplateRecord` moved to 3.1: 3.0 brought `schemaVersion` 2
+// and its `keys` block (explicit key slots and algorithm preferences), 3.1 made
+// the record's `createdAt` / `updatedAt` RFC 3339 strings rather than Unix
+// seconds. `delete` and `render` carry no record and stay at 2.0, which is all
+// the agent serves for them. Every version exists in the bindings, so an import
+// one behind compiles fine and is refused at the agent as an unsupported
+// version.
+//
+// **An editor must carry `schemaVersion` and `keys` through.** `update` is a
+// replace: a v2 template saved back as `schemaVersion: 1` without its `keys`
+// either loses its declared key slots or is refused for the placeholders they
+// left behind in `document`.
 //
 // Scope is part of a record's identity, not decoration: a template is `builtin`,
 // `global`, or bound to one `context`. Passing `contextId` on these calls scopes
@@ -25,35 +35,35 @@ import {
   type VTADIDTemplateCreatePayload,
   type DidTemplate,
   type DidTemplateRecord,
-} from "@openvtc/trust-tasks/vta/did-templates/create/2.0/payload";
+} from "../specs/vta/did-templates/create/3.1/payload.js";
 import {
   TYPE_URI as TPL_GET,
   RESPONSE_TYPE_URI as TPL_GET_RESPONSE,
   type VTADIDTemplateGetPayload,
-} from "@openvtc/trust-tasks/vta/did-templates/get/2.0/payload";
+} from "../specs/vta/did-templates/get/3.1/payload.js";
 import {
   TYPE_URI as TPL_LIST,
   RESPONSE_TYPE_URI as TPL_LIST_RESPONSE,
   type VTADIDTemplateListPayload,
   type VTADIDTemplateListResponsePayload,
-} from "@openvtc/trust-tasks/vta/did-templates/list/2.0/payload";
+} from "../specs/vta/did-templates/list/3.1/payload.js";
 import {
   TYPE_URI as TPL_UPDATE,
   RESPONSE_TYPE_URI as TPL_UPDATE_RESPONSE,
   type VTADIDTemplateUpdatePayload,
-} from "@openvtc/trust-tasks/vta/did-templates/update/2.0/payload";
+} from "../specs/vta/did-templates/update/3.1/payload.js";
 import {
   TYPE_URI as TPL_DELETE,
   RESPONSE_TYPE_URI as TPL_DELETE_RESPONSE,
   type VTADIDTemplateDeletePayload,
   type VTADIDTemplateDeleteResponsePayload,
-} from "@openvtc/trust-tasks/vta/did-templates/delete/2.0/payload";
+} from "../specs/vta/did-templates/delete/2.0/payload.js";
 import {
   TYPE_URI as TPL_RENDER,
   RESPONSE_TYPE_URI as TPL_RENDER_RESPONSE,
   type VTADIDTemplateRenderPayload,
   type VTADIDTemplateRenderResponsePayload,
-} from "@openvtc/trust-tasks/vta/did-templates/render/2.0/payload";
+} from "../specs/vta/did-templates/render/2.0/payload.js";
 
 export type { DidTemplate, DidTemplateRecord };
 
@@ -84,7 +94,7 @@ export async function didTemplateCreate(
   });
   return sender.send<DidTemplateRecord>(envelope, {
     expectedResponseType: TPL_CREATE_RESPONSE,
-    operationLabel: "vta/did-templates/create/2.0",
+    operationLabel: "vta/did-templates/create/3.1",
   });
 }
 
@@ -107,7 +117,7 @@ export async function didTemplateGet(
   });
   return sender.send<DidTemplateRecord>(envelope, {
     expectedResponseType: TPL_GET_RESPONSE,
-    operationLabel: "vta/did-templates/get/2.0",
+    operationLabel: "vta/did-templates/get/3.1",
   });
 }
 
@@ -125,7 +135,7 @@ export async function didTemplateList(
   });
   const res = await sender.send<VTADIDTemplateListResponsePayload>(envelope, {
     expectedResponseType: TPL_LIST_RESPONSE,
-    operationLabel: "vta/did-templates/list/2.0",
+    operationLabel: "vta/did-templates/list/3.1",
   });
   return res.templates ?? [];
 }
@@ -152,7 +162,7 @@ export async function didTemplateUpdate(
   });
   return sender.send<DidTemplateRecord>(envelope, {
     expectedResponseType: TPL_UPDATE_RESPONSE,
-    operationLabel: "vta/did-templates/update/2.0",
+    operationLabel: "vta/did-templates/update/3.1",
   });
 }
 

@@ -12,8 +12,8 @@
 // implemented at OpenVTC/verifiable-trust-infrastructure#1235. `IssuedList`
 // below is what the notice became.
 //
-// Two things it renders that the shape makes easy to lose. `truncated` means
-// the agent stopped early, so a caller must not read the page as a complete
+// Two things it renders that the shape makes easy to lose. `nextCursor` means
+// more records remain, so a caller must not read the page as a complete
 // account of what was issued — it is surfaced above the table rather than
 // below it. And `status` is derived by the agent at read time with `revoked`
 // beating `expired`, so it is never cached and never recomputed here: a copy
@@ -53,6 +53,7 @@ import {
   type CredentialDescriptor,
   type CredentialFilter,
   type CredentialStatus,
+  type StoredCredential,
 } from "@openvtc/pnm-core";
 import { Button, Did, Note, Panel, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
@@ -748,7 +749,7 @@ function CredentialView({
   id: string;
   onClose: () => void;
 }) {
-  const [doc, setDoc] = useState<Record<string, unknown> | null>(null);
+  const [doc, setDoc] = useState<StoredCredential | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -764,7 +765,9 @@ function CredentialView({
     };
   }, [parties, id]);
 
-  const text = doc ? JSON.stringify(doc, null, 2) : "";
+  // A JSON-object format is shown as JSON; any other (an SD-JWT, an mdoc) is
+  // the agent's base64url text exactly as sent, labelled with its format.
+  const text = !doc ? "" : "credential" in doc ? JSON.stringify(doc.credential, null, 2) : doc.credentialBase64;
 
   return (
     <Panel
@@ -791,7 +794,7 @@ function CredentialView({
                   );
                 }}
               >
-                {copied ? "Copied" : "Copy JSON"}
+                {copied ? "Copied" : "credential" in doc ? "Copy JSON" : `Copy ${doc.format}`}
               </Button>
               <Button kind="quiet" onClick={onClose}>
                 Close
@@ -865,7 +868,7 @@ function IssuedList({
     () =>
       listCredentials(managerSender, {
         ...parties,
-        pageSize,
+        limit: pageSize,
         ...(applied.holderDid ? { holderDid: applied.holderDid } : {}),
         ...(applied.status
           ? { status: applied.status as IssuedCredentialSummary["status"] }
@@ -973,7 +976,7 @@ function IssuedList({
         <>
           {/* Above the table. A caution under a long list is one nobody reads,
               and this one changes what the list *means*. */}
-          {list.data.truncated && (
+          {list.data.nextCursor && (
             <Note tone="warn">
               <strong>This is not everything your agent has issued.</strong> It stopped early, so
               anything you conclude from what is below — including that a credential was never

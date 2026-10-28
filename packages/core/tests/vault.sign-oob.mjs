@@ -130,11 +130,11 @@ test("the UV-key enrolment is the VTA's prfSealedKey shape, never claiming hardw
   });
 });
 
-test("UV-key enrolment: device/heartbeat/0.2 with payload.ext[org.openvtc.uv-key]", async () => {
-  const ch = recorder(() => ({ serverTime: new Date().toISOString() }));
+test("UV-key enrolment: device/heartbeat/0.3 with payload.ext[org.openvtc.uv-key]", async () => {
+  const ch = recorder(() => ({ respondedAt: new Date().toISOString() }));
   await enrolUvKey(ch, { holder, service, enrolment: ENROLMENT, displayName: "Chrome" });
   assert.equal(ch.sent.length, 1);
-  assert.equal(ch.sent[0].type, "https://trusttasks.org/spec/device/heartbeat/0.2");
+  assert.equal(ch.sent[0].type, "https://trusttasks.org/spec/device/heartbeat/0.3");
   assert.equal(ch.sent[0].issuer, holder.did);
   assert.deepEqual(ch.sent[0].payload, { ext: { [EXT_UV_KEY]: ENROLMENT } });
 });

@@ -294,9 +294,9 @@ test("an operational document declares authentication; an attestation declares a
   for (const [type, purpose] of [
     [VAULT_DELETE, "authentication"],
     [`${S}auth/challenge/0.1`, "authentication"],
-    [`${S}auth/authenticate/0.2`, "authentication"],
+    [`${S}auth/authenticate/0.3`, "authentication"],
     [`${S}auth/step-up/approve-response/0.6`, "assertionMethod"],
-    [`${S}task-consent/decision/0.1`, "assertionMethod"],
+    [`${S}task-consent/decision/0.2`, "assertionMethod"],
     [`${S}auth/oob/grant/0.1`, "assertionMethod"],
   ]) {
     assert.equal(proofPurposeForDocumentType(type), purpose, type);

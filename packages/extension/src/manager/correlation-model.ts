@@ -10,7 +10,7 @@
 // ## Two axes, and this module must not collapse them
 //
 // `severity` is how strongly a disclosure would link the holder — a fact about
-// provenance and proof rung, true whatever they intended. `crossesFacets` is
+// provenance and proof rung, true whatever they intended. `crossesWorlds` is
 // whether they would mind. Nothing here reads one as the other, and nothing
 // here **softens a severity** because a link stays inside one world: the link
 // is real either way, two verifiers who see both faces link the holder
@@ -22,15 +22,15 @@
 //
 // ## Absent is unknown, and that is the trap
 //
-// `crossesFacets` is **omitted** by an agent that keeps no facets — the
+// `crossesWorlds` is **omitted** by an agent that keeps no worlds — the
 // specification requires that, because `false` would assert the holder keeps
-// these identities in one part of their life and an agent with no facets has
+// these identities in one part of their life and an agent with no worlds has
 // made no such finding. A consumer reading absence as `false` files every
 // finding under "you arranged this", which is the worst available answer: it
 // tells someone their linkage is intentional on the authority of a question
 // nobody asked.
 
-import type { CorrelationFinding, PoolFacet } from "@openvtc/pnm-core/admin";
+import type { CorrelationFinding, PoolWorld } from "@openvtc/pnm-core/admin";
 
 /** Where a finding sits on the second axis. */
 export type Crossing = "crosses" | "within" | "unknown";
@@ -42,7 +42,7 @@ export interface RankedFinding {
    *  Ids the console cannot resolve are dropped from the names but still
    *  counted by `crossing` — the agent's answer decides that, not our ability
    *  to name it. */
-  worlds: PoolFacet[];
+  worlds: PoolWorld[];
 }
 
 /**
@@ -51,7 +51,7 @@ export interface RankedFinding {
  * Absent is {@link Crossing} `unknown`, never `within`. See the module header.
  */
 export function crossingOf(finding: CorrelationFinding): Crossing {
-  const crosses = (finding as { crossesFacets?: unknown }).crossesFacets;
+  const crosses = finding.crossesWorlds;
   if (crosses === undefined) return "unknown";
   return crosses ? "crosses" : "within";
 }
@@ -68,16 +68,16 @@ export function crossingOf(finding: CorrelationFinding): Crossing {
  */
 export function rankFindings(
   findings: readonly CorrelationFinding[],
-  worlds: readonly PoolFacet[],
+  worlds: readonly PoolWorld[],
 ): RankedFinding[] {
   const order: Record<Crossing, number> = { crosses: 0, unknown: 1, within: 2 };
   return findings
     .map((finding) => {
-      const ids = ((finding as { facetIds?: unknown }).facetIds ?? []) as string[];
+      const ids = finding.worldIds ?? [];
       return {
         finding,
         crossing: crossingOf(finding),
-        worlds: ids.flatMap((id) => worlds.filter((w) => w.facetId === id)),
+        worlds: ids.flatMap((id) => worlds.filter((w) => w.worldId === id)),
       };
     })
     .map((row, i) => ({ row, i }))

@@ -21,8 +21,8 @@ import { DidsPane } from "../src/manager/panes/dids.js";
 const LIST = "vta/webvh/dids/list/1.0";
 const GET = "vta/webvh/dids/get/1.0";
 const SERVERS = "vta/webvh/servers/list/1.0";
-const TEMPLATES = "vta/did-templates/list/2.0";
-const SERVICES = "vta/services/list/1.0";
+const TEMPLATES = "vta/did-templates/list/3.1";
+const SERVICES = "vta/services/list/1.1";
 
 const DID = "did:webvh:QmScid:example.com:rooms:northwind";
 

@@ -32,13 +32,13 @@ import {
   type KeysCreatePayload,
   type KeysCreateResponsePayload,
   type KeyType,
-} from "@openvtc/trust-tasks/keys/create/0.1/payload";
+} from "../specs/keys/create/0.1/payload.js";
 import {
   TYPE_URI as KEYS_LIST,
   RESPONSE_TYPE_URI as KEYS_LIST_RESPONSE,
   type KeysListPayload,
   type KeysListResponsePayload,
-} from "@openvtc/trust-tasks/keys/list/0.1/payload";
+} from "../specs/keys/list/0.2/payload.js";
 import {
   TYPE_URI as KEYS_SHOW,
   RESPONSE_TYPE_URI as KEYS_SHOW_RESPONSE,
@@ -46,43 +46,43 @@ import {
   type KeyRecord as SpecKeyRecord,
   type KeyOrigin,
   type KeyStatus,
-} from "@openvtc/trust-tasks/keys/show/0.1/payload";
+} from "../specs/keys/show/0.1/payload.js";
 import {
   TYPE_URI as KEYS_RENAME,
   RESPONSE_TYPE_URI as KEYS_RENAME_RESPONSE,
   type KeysRenameResponsePayload,
-} from "@openvtc/trust-tasks/keys/rename/0.1/payload";
+} from "../specs/keys/rename/0.1/payload.js";
 import {
   TYPE_URI as KEYS_REVOKE,
   RESPONSE_TYPE_URI as KEYS_REVOKE_RESPONSE,
   type KeysRevokePayload,
   type KeysRevokeResponsePayload,
-} from "@openvtc/trust-tasks/keys/revoke/0.1/payload";
+} from "../specs/keys/revoke/0.1/payload.js";
 import {
   TYPE_URI as KEYS_IMPORT,
   RESPONSE_TYPE_URI as KEYS_IMPORT_RESPONSE,
   type KeysImportPayload,
   type KeysImportResponsePayload,
-} from "@openvtc/trust-tasks/keys/import/0.1/payload";
+} from "../specs/keys/import/0.1/payload.js";
 import {
   TYPE_URI as KEYS_DERIVE_SIGN,
   RESPONSE_TYPE_URI as KEYS_DERIVE_SIGN_RESPONSE,
   type KeysDeriveAndSignPayload,
   type KeysDeriveAndSignResponsePayload,
-} from "@openvtc/trust-tasks/keys/derive-and-sign/0.1/payload";
+} from "../specs/keys/derive-and-sign/0.1/payload.js";
 import {
   TYPE_URI as KEYS_DERIVE_SIGN_DOC,
   RESPONSE_TYPE_URI as KEYS_DERIVE_SIGN_DOC_RESPONSE,
   type KeysDeriveAndSignDocumentPayload,
   type KeysDeriveAndSignDocumentResponsePayload,
-} from "@openvtc/trust-tasks/keys/derive-and-sign-document/0.1/payload";
+} from "../specs/keys/derive-and-sign-document/0.1/payload.js";
 import {
   TYPE_URI as KEYS_SIGN,
   RESPONSE_TYPE_URI as KEYS_SIGN_RESPONSE,
   type KeysSignPayload,
   type KeysSignResponsePayload,
   type SignAlgorithm,
-} from "@openvtc/trust-tasks/keys/sign/0.1/payload";
+} from "../specs/keys/sign/0.1/payload.js";
 
 export type { KeyType, KeyStatus, SignAlgorithm };
 
@@ -167,28 +167,37 @@ export async function keysCreate(
 }
 
 export interface KeysListParams extends KeysCallerParams {
-  offset?: number;
+  /** The page size to ask for. The agent may return fewer (its default is 50). */
   limit?: number;
+  /** A previous page's `nextCursor`, sent with the same filters — the agent
+   *  binds a cursor to the filters it was minted under and refuses it under
+   *  any other. */
+  cursor?: string;
   status?: KeyStatus;
   contextId?: string;
 }
 
 export interface KeysListResult {
   keys: KeyRecord[];
-  /** Total matching the filter, not the length of `keys` — page with `offset`. */
-  total: number;
-  offset: number;
-  limit: number;
+  /**
+   * Present when more matching keys remain; absent on the last page.
+   *
+   * `keys/list/0.2` replaced 0.1's `offset` / `total` with keyset paging, so
+   * there is no count of the whole any more — a caller that wants to say "N
+   * keys" has to read to the end. What it can always say is whether this page
+   * is all of them, and that is this member.
+   */
+  nextCursor?: string;
 }
 
-/** List keys, filtered and paged. */
+/** List one page of keys, filtered. */
 export async function keysList(
   sender: TrustTaskSender,
   params: KeysListParams,
 ): Promise<KeysListResult> {
   const payload: KeysListPayload = {
-    ...(params.offset !== undefined ? { offset: params.offset } : {}),
     ...(params.limit !== undefined ? { limit: params.limit } : {}),
+    ...(params.cursor ? { cursor: params.cursor } : {}),
     ...(params.status ? { status: params.status } : {}),
     ...(params.contextId ? { contextId: params.contextId } : {}),
   };
@@ -198,13 +207,11 @@ export async function keysList(
   });
   const res = await sender.send<KeysListResponsePayload>(envelope, {
     expectedResponseType: KEYS_LIST_RESPONSE,
-    operationLabel: "keys/list/0.1",
+    operationLabel: "keys/list/0.2",
   });
   return {
     keys: (res.keys ?? []) as KeyRecord[],
-    total: res.total ?? 0,
-    offset: res.offset ?? 0,
-    limit: res.limit ?? 0,
+    ...(res.nextCursor ? { nextCursor: res.nextCursor } : {}),
   };
 }
 

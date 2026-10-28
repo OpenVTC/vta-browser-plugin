@@ -18,7 +18,7 @@ import {
   relayWorstCaseMs,
 } from "../dist/index.js";
 
-const DIDS_CREATE = "https://trusttasks.org/spec/vta/webvh/dids/create/1.0";
+const DIDS_CREATE = "https://trusttasks.org/spec/vta/webvh/dids/create/1.2";
 const LOCAL_TASK = "https://trusttasks.org/spec/vta/keys/list/0.1";
 
 test("the budget outlasts the VTA's worst case: both TSP windows and the re-form", () => {

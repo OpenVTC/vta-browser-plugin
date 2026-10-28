@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { WORLD_MARKS, MAX_MARK_LENGTH, markFits } from "../src/manager/world-marks.ts";
 
 test("every offered mark fits what the agent will store", () => {
-  // The published `maxLength` on `persona/facet/put`'s `icon`, measured the way
+  // The published `maxLength` on `persona/world/put`'s `icon`, measured the way
   // a JSON Schema validator measures it — UTF-16 code units, not bytes and not
   // grapheme clusters.
   for (const m of WORLD_MARKS) {

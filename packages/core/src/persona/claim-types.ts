@@ -33,7 +33,7 @@ import {
   RESPONSE_TYPE_URI as CLAIM_TYPES_LIST_RESPONSE,
   type PersonaClaimTypesListPayload,
   type PersonaClaimTypesListResponsePayload,
-} from "@openvtc/trust-tasks/persona/claim-types/list/1.0/payload";
+} from "../specs/persona/claim-types/list/1.0/payload.js";
 
 import { call, type PersonaCallerParams } from "./call.js";
 

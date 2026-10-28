@@ -20,13 +20,13 @@ import {
   RESPONSE_TYPE_URI as BINDING_GET_RESPONSE,
   type PersonaBindingGetPayload,
   type PersonaBindingGetResponsePayload,
-} from "@openvtc/trust-tasks/persona/binding/get/1.0/payload";
+} from "../specs/persona/binding/get/1.0/payload.js";
 import {
   TYPE_URI as BINDING_LIST,
   RESPONSE_TYPE_URI as BINDING_LIST_RESPONSE,
   type PersonaBindingListPayload,
   type PersonaBindingListResponsePayload,
-} from "@openvtc/trust-tasks/persona/binding/list/1.0/payload";
+} from "../specs/persona/binding/list/1.0/payload.js";
 
 import { collectPages } from "../util/pages.js";
 

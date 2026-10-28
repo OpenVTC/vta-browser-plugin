@@ -22,7 +22,7 @@ import {
   RESPONSE_TYPE_URI as PUSH_WAKE_RESPONSE,
   type PushWakePayload,
   type PushWakeResponsePayload,
-} from "@openvtc/trust-tasks/push/wake/0.2/payload";
+} from "../specs/push/wake/0.2/payload.js";
 
 export interface PushWakeParams {
   /** Envelope `issuer` — the caller's identity. */

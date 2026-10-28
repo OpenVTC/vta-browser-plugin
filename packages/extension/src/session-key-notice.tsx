@@ -1,6 +1,6 @@
 // The consent prompt's notice that a sign-in binds a session key.
 //
-// A login that carries `sessionKey` (`auth/authenticate/0.2`) gives the site
+// A login that carries `sessionKey` (`auth/authenticate/0.3`) gives the site
 // more than a session. The page holds a key the relying party will then accept
 // as the user, for this session only, with no further prompt from the wallet.
 // That is the point of the feature, and it is also exactly what the user is

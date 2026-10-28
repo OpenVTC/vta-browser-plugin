@@ -228,8 +228,9 @@ signer and the page-facing `signTrustTask` all read the one rule.
 
 **RP sign-in over DIDComm is `loginViaTrustTask` over a
 `DidcommVtaTransport`** (`loginViaDidcomm`). Keep it that way rather than
-growing a second login. The bare `auth/authenticate` it used to send survives
-only for a caller that passes no `signing`, and is deprecated.
+growing a second login. The bare `auth/authenticate/0.1` it used to send for a
+caller with no `signing` is gone, and `signing` is required: no RP serves that
+form (did-hosting-control refuses it by name).
 
 **Each DIDComm and TSP document is sent by its signer.** The VTA, the VTC and
 the RPs act on a document from those transports only when its proof verifies
@@ -516,7 +517,7 @@ biggest privacy answer this product has and it used to be a footer under every
 other view.
 
 `movePlan` (`world-model.ts`) owns a move, and the **order is the reason it is a
-function**: `facet/put` replaces, and the agent refuses to place a face that is
+function**: `persona/world/put` replaces, and the agent refuses to place a face that is
 already placed, so the source is rewritten without it before the destination is
 rewritten with it. Every write carries live membership via `seedMembership` — a
 put echoing a dangling id is refused `unresolvedReference` and leaves the world
@@ -543,7 +544,7 @@ only way out the moment it became persistent.
 **What breaks it:** rendering an editor inline again, or as a mode that replaces
 the list; dropping the anchor from `Editing`; unpinning the strip, or letting it
 grow past its cap; re-adding a Worlds pane; reading
-`.faceIds` off a facet to build a move instead of `movePlan`; drawing a value on
+`.faceIds` off a world to build a move instead of `movePlan`; drawing a value on
 a closed card; or letting the strip render one again.
 
 **Colour on the map carries three things, in three channels that never
@@ -1022,7 +1023,7 @@ answer.
 **A community's own rooms are shown by name.** A room the community owns has
 a label its administrators gave it, and the community's offer to the member
 carries it (`vtc/rooms/memberships/list/0.1`, built unsigned and completed by
-the VTA as the member with `rooms/keys/act/0.5`, sent to the community's
+the VTA as the member with `rooms/keys/act/0.8`, sent to the community's
 `TrustTaskHTTPS` unchanged — `@openvtc/pnm-core/rooms`'s
 `communityRoomMemberships`).
 `list` and `choose` read it for the members the shares (or the share prompt)
@@ -1113,7 +1114,7 @@ there (`vtc/rooms/memberships/list/0.1`, *One record, every surface*).
 
 **Every request is the member's, completed by the VTA.** The lists and the
 acceptance are built unsigned and completed as the member with
-`rooms/keys/act/0.5` (the version that admits the community's types; a VTA
+`rooms/keys/act/0.8` (the version that admits the community's types; a VTA
 without it gets "must be updated"), then sent to the community unchanged over
 HTTPS; `roomsKeysAct` refuses an answer made as anyone else. On a sealed tier
 the **VTA gives the KeyPackage** (`rooms/keys/key-package/0.2`) — act completes
@@ -1257,9 +1258,12 @@ lease is owned by the offscreen document per console **Port**
 when it disconnects — the mediator allows three subscriptions per account, and a
 closed tab must not hold one past a lease.
 
-**One version floor, `MEDIATOR_VERSION_FLOOR` = 0.28.36**, read from `readyz`
-— not the TDK console's gate per member. There is no older mediator anyone here
-runs.
+**One version floor, `MEDIATOR_VERSION_FLOOR` = 0.48.0**, read from `readyz`
+— not the TDK console's gate per member. It is the first release that both
+serves `messaging/account/{get,list,update}/0.2` (RFC 3339 activity times) and
+pushes `messaging/monitor/event/0.2` (`occurredAt`); below it the account tasks
+are refused and a monitor batch fails `monitorBatchOf`'s exact type match and is
+dropped without a word.
 
 **A fourth CI guard, with two permitted files.** The mediator's operations URIs
 are banned from `dist/` except `manager.js` (composes) and the offscreen entry
@@ -1604,6 +1608,24 @@ and `extension/tests/approver-policy.test.mts` pin these.
 
 ## Repo mechanics worth knowing before you start
 
+- **Task modules are generated here, from `packages/core/trust-tasks.lock`.**
+  `@openvtc/trust-tasks` deprecated its prebuilt per-task modules
+  (dtgwg-trust-tasks-tf #954); core now pins the tasks it speaks with the
+  `trust-tasks` CLI (`cargo install trust-tasks-cli`) and generates them with
+  `@openvtc/trust-tasks-gen` into `src/specs/` — commit `trust-tasks.toml`,
+  `trust-tasks.lock`, the vendored `trust-tasks/` bundles and `src/specs/`.
+  Import a task as `../specs/<slug>/<M.N>/payload.js`, never
+  `@openvtc/trust-tasks/<slug>/…`; from the package take only
+  `@openvtc/trust-tasks/runtime` and framework specifications
+  (`trust-task-discovery`, which the generator skips). The lock holds **one
+  version per slug**, which makes the no-folds rule structural: importing a
+  second version means moving the pin (`trust-tasks add <slug>/<M.N>`, then
+  `npm run tasks:generate -w @openvtc/pnm-core`). `tests/specs.generated.mjs`
+  regenerates into a temp directory and fails on any drift or hand edit.
+  `trust-tasks list` shows which pins the registry has superseded; check what
+  the counterparty serves before moving one, since the registry can run ahead
+  of a release. Never import `_shared/components` from either tree — its names
+  depend on the lock; use the name a task module re-exports.
 - **Build `core` before typechecking anything that depends on it.** Each
   workspace typechecks against its dependencies' emitted, gitignored `dist`,
   so a stale `dist` produces phantom "cannot find module" / "no exported

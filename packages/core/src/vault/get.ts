@@ -20,7 +20,7 @@ import {
   type VaultGetPayload,
   type VaultGetResponsePayload,
   type VaultEntry,
-} from "@openvtc/trust-tasks/vault/get/0.3/payload";
+} from "../specs/vault/get/0.3/payload.js";
 
 // `VaultEntry` is deliberately NOT re-exported here.
 //

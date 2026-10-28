@@ -18,23 +18,28 @@ import type {
   CardBlobRef,
   DirectoryCard,
   ExternalCard,
-} from "@openvtc/trust-tasks/vtc/directory/card/show/0.1/payload";
-import { TYPE_URI as CARD_SHOW } from "@openvtc/trust-tasks/vtc/directory/card/show/0.1/payload";
-import type { FieldDefinition } from "@openvtc/trust-tasks/vtc/directory/fields/list/0.1/payload";
-import { TYPE_URI as FIELDS_LIST } from "@openvtc/trust-tasks/vtc/directory/fields/list/0.1/payload";
-import { TYPE_URI as CARD_PUBLISH } from "@openvtc/trust-tasks/vtc/directory/card/publish/0.1/payload";
+} from "../specs/vtc/directory/card/show/0.1/payload.js";
+import { TYPE_URI as CARD_SHOW } from "../specs/vtc/directory/card/show/0.1/payload.js";
+import type { FieldDefinition } from "../specs/vtc/directory/fields/list/0.1/payload.js";
+import { TYPE_URI as FIELDS_LIST } from "../specs/vtc/directory/fields/list/0.1/payload.js";
+import { TYPE_URI as CARD_PUBLISH } from "../specs/vtc/directory/card/publish/0.1/payload.js";
 import {
   TYPE_URI as KEYS_LIST,
   RESPONSE_TYPE_URI as KEYS_LIST_RESPONSE,
-} from "@openvtc/trust-tasks/keys/list/0.1/payload";
-import type { KeyRecord } from "@openvtc/trust-tasks/keys/list/0.1/payload";
+} from "../specs/keys/list/0.2/payload.js";
+import type {
+  KeyRecord,
+  KeysListPayload,
+  KeysListResponsePayload,
+} from "../specs/keys/list/0.2/payload.js";
 import {
   TYPE_URI as KEYS_SIGN_DOCUMENT,
   RESPONSE_TYPE_URI as KEYS_SIGN_DOCUMENT_RESPONSE,
-} from "@openvtc/trust-tasks/keys/sign-document/0.1/payload";
+} from "../specs/keys/sign-document/0.1/payload.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 import { decodeMultibase } from "../trust-tasks/digest.js";
+import { MAX_PAGES } from "../util/pages.js";
 import { OobReplyInvalidError, type OobDocument } from "./oob-sign-in.js";
 
 export type { DirectoryCard, ExternalCard, FieldDefinition };
@@ -352,22 +357,32 @@ export async function memberSigningKey(
 ): Promise<string | null> {
   const wanted = assertionKeys(memberDid, memberDoc);
   if (wanted.size === 0) return null;
-  const limit = 100;
-  for (let offset = 0; ; offset += limit) {
-    const page = await sender.send<{ keys: KeyRecord[]; total: number }>(
-      buildTrustTask(
-        KEYS_LIST,
-        { status: "active", offset, limit },
-        { issuer: parties.holder.did, recipient: parties.service.did },
-      ),
-      { expectedResponseType: KEYS_LIST_RESPONSE, operationLabel: "keys/list/0.1" },
+  // Followed by `nextCursor` (`keys/list/0.2`), stopping at the first match.
+  // Only an absent cursor is the end: a short page is not, and returning
+  // `null` on one would tell the member their agent holds no signing key when
+  // it holds one on the next page. The page bound is `collectPages`'s, for a
+  // far side that will not end — reaching it throws rather than answering.
+  let cursor: string | undefined;
+  for (let n = 0; n < MAX_PAGES; n += 1) {
+    const payload: KeysListPayload = { status: "active", limit: 100, ...(cursor ? { cursor } : {}) };
+    const page = await sender.send<KeysListResponsePayload>(
+      buildTrustTask(KEYS_LIST, payload, {
+        issuer: parties.holder.did,
+        recipient: parties.service.did,
+      }),
+      { expectedResponseType: KEYS_LIST_RESPONSE, operationLabel: "keys/list/0.2" },
     );
-    for (const k of page.keys ?? []) {
+    for (const k of (page.keys ?? []) as KeyRecord[]) {
       const bytes = k.keyType === "ed25519" ? keyBytes(k.publicKey) : null;
       if (bytes && wanted.has(bytes)) return k.keyId;
     }
-    if (!page.keys?.length || offset + page.keys.length >= (page.total ?? 0)) return null;
+    if (page.nextCursor === undefined) return null;
+    if (page.nextCursor === cursor) {
+      throw new Error("keys/list: your agent returned the same page cursor twice, so the listing cannot be finished");
+    }
+    cursor = page.nextCursor;
   }
+  throw new Error(`keys/list: still more after ${MAX_PAGES} pages — refusing to keep asking`);
 }
 
 /**

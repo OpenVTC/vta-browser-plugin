@@ -36,10 +36,10 @@ const slug = (type) => type.replace("https://trusttasks.org/spec/", "");
 
 /** `rooms/keys/act`'s table, as much of it as these flows use. */
 const ACTION = {
-  "rooms/info/0.1": "read",
-  "rooms/records/list/0.1": "read",
+  "rooms/info/0.3": "read",
+  "rooms/records/list/0.5": "read",
   "rooms/records/get/0.2": "read",
-  "rooms/records/put/0.2": "write",
+  "rooms/records/put/0.3": "write",
   "rooms/blobs/upload/begin/0.2": "write",
   "rooms/blobs/get/0.2": "read",
   "rooms/blobs/chunk/0.1": "read",
@@ -64,7 +64,7 @@ function fakeVta() {
         asked.push(slug(envelope.type));
         assert.equal(envelope.issuer, SIGNER.did, "the wallet asks its own VTA");
         switch (slug(envelope.type)) {
-          case "rooms/keys/act/0.1": {
+          case "rooms/keys/act/0.8": {
             const doc = structuredClone(p.document);
             assert.equal(doc.proof, undefined, "act takes an unsigned document");
             assert.equal(doc.payload.presentation, undefined, "and no presentation");
@@ -125,7 +125,7 @@ function fakeHost(opts = {}) {
     assert.equal(envelope.recipient, HOST_DID);
     assert.notEqual(envelope.issuer, SIGNER.did, "the wallet's own DID reaches no host");
     switch (s) {
-      case "rooms/info/0.1":
+      case "rooms/info/0.3":
         presented(p, "read");
         return {
           roomId: ROOM,
@@ -161,10 +161,10 @@ function fakeHost(opts = {}) {
         state.blobs.set(u.ref, u);
         return { blobRef: opts.commitAs ?? u.ref, size: u.manifest.size };
       }
-      case "rooms/records/list/0.1":
+      case "rooms/records/list/0.5":
         presented(p, "read");
         return { records: [], headVersion: state.version };
-      case "rooms/records/put/0.2": {
+      case "rooms/records/put/0.3": {
         presented(p, "write");
         // Another member's write lands between this one's seal and its put.
         if (state.racesLeft > 0) {
@@ -346,7 +346,7 @@ test("an upload that fails part way releases what begin reserved", async () => {
   const host = fakeHost({ failChunk: 1 });
   await assert.rejects(putRoomFile(context(fakeVta(), host), { name: "a.bin", bytes: sample() }), /connection reset/);
   assert.deepEqual(host.aborted, ["u1"]);
-  assert.ok(!host.asked.includes("rooms/records/put/0.2"), "no record names a blob that was never committed");
+  assert.ok(!host.asked.includes("rooms/records/put/0.3"), "no record names a blob that was never committed");
 });
 
 test("a host that commits some other blob is caught before the record is written", async () => {
@@ -355,7 +355,7 @@ test("a host that commits some other blob is caught before the record is written
     putRoomFile(context(fakeVta(), host), { name: "a.txt", bytes: sample(10) }),
     (e) => e instanceof RoomFileError && e.code === "hostMisbehaved",
   );
-  assert.ok(!host.asked.includes("rooms/records/put/0.2"));
+  assert.ok(!host.asked.includes("rooms/records/put/0.3"));
 });
 
 test("a chunk altered by the host is refused, and nothing is released", async () => {
@@ -462,7 +462,7 @@ function hostChannel(fetchImpl) {
 
 const request = () => ({
   id: crypto.randomUUID(),
-  type: "https://trusttasks.org/spec/rooms/info/0.1",
+  type: "https://trusttasks.org/spec/rooms/info/0.3",
   issuer: SIGNER.did,
   recipient: HOST_SIGNER.did,
   issuedAt: new Date().toISOString(),
@@ -471,7 +471,7 @@ const request = () => ({
 
 test("a room request is signed by the caller and carries no bearer", async () => {
   const f = stubFetch((doc) => signedReply(doc));
-  const got = await hostChannel(f.impl).send(request(), { expectedResponseType: "https://trusttasks.org/spec/rooms/info/0.1#response" });
+  const got = await hostChannel(f.impl).send(request(), { expectedResponseType: "https://trusttasks.org/spec/rooms/info/0.3#response" });
   assert.deepEqual(got, { roomId: ROOM });
   const { doc, init } = f.sent[0];
   assert.equal(doc.proof.verificationMethod.split("#")[0], SIGNER.did);
@@ -503,7 +503,7 @@ test("a completed document goes out unchanged, and its reply must be the host's,
   const doc = { ...request(), issuer: PERSONA_KEY.did };
   await signTrustTask({ envelope: doc, signing: PERSONA_KEY, proofPurpose: "authentication" });
   const before = JSON.stringify(doc);
-  await channel.sendCompleted(doc, { expectedResponseType: "https://trusttasks.org/spec/rooms/info/0.1#response" });
+  await channel.sendCompleted(doc, { expectedResponseType: "https://trusttasks.org/spec/rooms/info/0.3#response" });
   assert.equal(JSON.stringify(f.sent[0].doc), before, "sent exactly as the VTA completed it");
   await assert.rejects(channel.send(request()), /signs nothing/, "a channel with no key signs nothing");
 });

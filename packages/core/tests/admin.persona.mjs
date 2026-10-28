@@ -28,9 +28,9 @@ import {
   personaProfilePut,
   personaProfileDelete,
   personaBindingSet,
-  personaFacetPut,
-  personaFacetList,
-  personaFacetDelete,
+  personaWorldPut,
+  personaWorldList,
+  personaWorldDelete,
   personaCorrelationAnalyze,
   personaDisclosureHistory,
   personasBlockingDelete,
@@ -57,17 +57,17 @@ const SPEC = "https://trusttasks.org/spec";
 
 // ── Versions ────────────────────────────────────────────────────────────────
 //
-// The whole family is 1.0 and every one of these compiles fine against the
+// Every one of these compiles fine against the
 // wrong version — only the agent would object, and it would object by refusing.
 
-test("every task names its 1.0 URI, request and response", async () => {
+test("every task names the URI the agent serves, request and response", async () => {
   const cases = [
     [personaAttributeList, { ...PARTIES }, "persona/attribute/list/1.0", { attributes: [] }],
     [
       personaAttributePut,
       { ...PARTIES, type: "email", valueType: "string", value: "a@b.c", provenance: { kind: "selfAsserted" } },
-      "persona/attribute/put/1.0",
-      { attributeId: "01J", version: 1, created: true, updatedAt: "2026-09-07T00:00:00Z" },
+      "persona/attribute/put/1.1",
+      { attributeId: "01J", version: 1, wasCreated: true, updatedAt: "2026-09-07T00:00:00Z" },
     ],
     [
       personaAttributeDelete,
@@ -84,8 +84,8 @@ test("every task names its 1.0 URI, request and response", async () => {
     [
       personaAttributePromote,
       { ...PARTIES, contextId: "ctx", profileId: "01P", entries: [1], expectedVersion: 4 },
-      "persona/attribute/promote/1.0",
-      { profileId: "01P", version: 5, promoted: [{ entry: 1, attributeId: "01J", created: true }] },
+      "persona/attribute/promote/1.1",
+      { profileId: "01P", version: 5, promoted: [{ entry: 1, attributeId: "01J", wasCreated: true }] },
     ],
     [
       personaProfileCompose,
@@ -95,7 +95,7 @@ test("every task names its 1.0 URI, request and response", async () => {
         name: "Co-op",
         claims: [{ type: "name.display", valueType: "string", value: "Ada" }],
       },
-      "persona/profile/compose/1.0",
+      "persona/profile/compose/1.1",
       { profileId: "01P", scope: "local", version: 3 },
     ],
     [
@@ -119,7 +119,7 @@ test("every task names its 1.0 URI, request and response", async () => {
     [
       personaProfileTimeline,
       { ...PARTIES, profileId: "01P" },
-      "persona/profile/timeline/1.0",
+      "persona/profile/timeline/1.1",
       { profileId: "01P", events: [] },
     ],
     [personaProfileList, { ...PARTIES }, "persona/profile/list/1.0", { profiles: [] }],
@@ -132,8 +132,8 @@ test("every task names its 1.0 URI, request and response", async () => {
     [
       personaProfilePut,
       { ...PARTIES, name: "work", entries: [] },
-      "persona/profile/put/1.0",
-      { profileId: "01P", version: 1, created: true, updatedAt: "x" },
+      "persona/profile/put/1.1",
+      { profileId: "01P", version: 1, wasCreated: true, updatedAt: "x" },
     ],
     [
       personaProfileDelete,
@@ -148,19 +148,19 @@ test("every task names its 1.0 URI, request and response", async () => {
       { contextId: "demo", personaDid: "did:key:zP", version: 1, boundAt: "x" },
     ],
     [
-      personaFacetPut,
+      personaWorldPut,
       { ...PARTIES, name: "Work", colour: "teal" },
-      "persona/facet/put/1.0",
-      { facetId: "01F", version: 1, created: true, updatedAt: "x" },
+      "persona/world/put/1.1",
+      { worldId: "01F", version: 1, wasCreated: true, updatedAt: "x" },
     ],
-    [personaFacetList, { ...PARTIES }, "persona/facet/list/1.0", { facets: [] }],
+    [personaWorldList, { ...PARTIES }, "persona/world/list/1.0", { worlds: [] }],
     [
-      personaFacetDelete,
-      { ...PARTIES, facetId: "01F" },
-      "persona/facet/delete/1.0",
+      personaWorldDelete,
+      { ...PARTIES, worldId: "01F" },
+      "persona/world/delete/1.0",
       { existed: true, releasedFaces: 0 },
     ],
-    [personaCorrelationAnalyze, { ...PARTIES }, "persona/correlation/analyze/1.0", { findings: [] }],
+    [personaCorrelationAnalyze, { ...PARTIES }, "persona/correlation/analyze/1.2", { findings: [] }],
     [
       personaDisclosureHistory,
       { ...PARTIES },
@@ -240,7 +240,7 @@ test("a string value is sent as a string, not wrapped in an object", async () =>
   // what keeps this library from making callers invent an object. If someone
   // "fixes" the cast by wrapping, every string attribute this console writes
   // starts disagreeing with its own `valueType` and the agent refuses it.
-  const channel = recorder({ attributeId: "01J", version: 1, created: true, updatedAt: "x" });
+  const channel = recorder({ attributeId: "01J", version: 1, wasCreated: true, updatedAt: "x" });
   await personaAttributePut(channel, {
     ...PARTIES,
     type: "email",
@@ -387,7 +387,7 @@ test("a resolved profile entry is typed as a projection, not as a pool record", 
   // and a downgrade of the dependency fails rather than silently restoring a
   // branch nothing can reach.
   const { RESPONSE_PAYLOAD_SCHEMA } = await import(
-    "@openvtc/trust-tasks/persona/profile/get/1.0/payload"
+    "../dist/specs/persona/profile/get/1.0/payload.js"
   );
 
   const response = RESPONSE_PAYLOAD_SCHEMA.$defs.Response;
@@ -466,7 +466,7 @@ test("an empty list is a real answer and is not null", () => {
 // spread conditionally rather than always named.
 
 test("a decision the holder made is carried on the put", async () => {
-  const r = recorder({ attributeId: "01J", version: 2, created: false, updatedAt: "x" });
+  const r = recorder({ attributeId: "01J", version: 2, wasCreated: false, updatedAt: "x" });
   await personaAttributePut(r, {
     ...PARTIES,
     type: "profile.github",
@@ -482,7 +482,7 @@ test("a decision the holder made is carried on the put", async () => {
 });
 
 test("a decision the holder did not make is absent, not resolved", async () => {
-  const r = recorder({ attributeId: "01J", version: 1, created: true, updatedAt: "x" });
+  const r = recorder({ attributeId: "01J", version: 1, wasCreated: true, updatedAt: "x" });
   await personaAttributePut(r, {
     ...PARTIES,
     type: "phone.mobile",
@@ -587,21 +587,21 @@ test("every persona in a context is read to the end, and no cursor comes back", 
   assert.equal(r.sent[1].envelope.payload.contextId, "openvtc", "the context survives the second request");
 });
 
-// ── Facets ──────────────────────────────────────────────────────────────────
+// ── Worlds ──────────────────────────────────────────────────────────────────
 
-test("a facet carries no contextId — it arranges records that have no compartment", async () => {
-  const channel = recorder({ facetId: "01F", version: 1, created: true, updatedAt: "x" });
-  await personaFacetPut(channel, { ...PARTIES, name: "Work", colour: "teal" });
+test("a world carries no contextId — it arranges records that have no compartment", async () => {
+  const channel = recorder({ worldId: "01F", version: 1, wasCreated: true, updatedAt: "x" });
+  await personaWorldPut(channel, { ...PARTIES, name: "Work", colour: "teal" });
   assert.equal(channel.sent[0].envelope.body?.contextId, undefined);
   assert.equal(channel.sent[0].envelope.payload?.contextId, undefined);
 });
 
 test("membership is sent only when the caller supplied it", async () => {
   // Both lists are REPLACED by a put. Sending `[]` for a caller that passed
-  // nothing would empty a facet's membership on an edit that meant to rename
+  // nothing would empty a world's membership on an edit that meant to rename
   // it — the same replace hazard the attribute editor guards one record down.
-  const channel = recorder({ facetId: "01F", version: 1, created: true, updatedAt: "x" });
-  await personaFacetPut(channel, { ...PARTIES, name: "Work", colour: "teal" });
+  const channel = recorder({ worldId: "01F", version: 1, wasCreated: true, updatedAt: "x" });
+  await personaWorldPut(channel, { ...PARTIES, name: "Work", colour: "teal" });
   const payload = channel.sent[0].envelope.payload ?? channel.sent[0].envelope.body;
   assert.equal(payload.faceIds, undefined, "an unsupplied membership was sent as empty");
   assert.equal(payload.attributeIds, undefined);
@@ -611,10 +611,10 @@ test("membership is sent only when the caller supplied it", async () => {
 test("membership that WAS supplied is carried, including an explicit empty", async () => {
   // The paired assertion: a suite that only checks omissions would pass for a
   // client that never sent membership at all.
-  const channel = recorder({ facetId: "01F", version: 2, created: false, updatedAt: "x" });
-  await personaFacetPut(channel, {
+  const channel = recorder({ worldId: "01F", version: 2, wasCreated: false, updatedAt: "x" });
+  await personaWorldPut(channel, {
     ...PARTIES,
-    facetId: "01F",
+    worldId: "01F",
     name: "Work",
     colour: "plum",
     icon: "\u{1F4BC}",
@@ -629,34 +629,34 @@ test("membership that WAS supplied is carried, including an explicit empty", asy
   assert.equal(payload.expectedVersion, 1);
 });
 
-test("a facet listing follows the cursor to the end", async () => {
+test("a world listing follows the cursor to the end", async () => {
   // `limit` is the page size to ask for, never a cap. A client that stopped at
-  // the first page would draw a picture missing every facet past it, and a
+  // the first page would draw a picture missing every world past it, and a
   // short array is indistinguishable from a complete one.
   const pages = [
-    { facets: [{ facetId: "a" }], nextCursor: "c1" },
-    { facets: [{ facetId: "b" }], nextCursor: "c2" },
-    { facets: [{ facetId: "c" }] },
+    { worlds: [{ worldId: "a" }], nextCursor: "c1" },
+    { worlds: [{ worldId: "b" }], nextCursor: "c2" },
+    { worlds: [{ worldId: "c" }] },
   ];
   let n = 0;
   const channel = { send: () => Promise.resolve(pages[n++]) };
-  const all = await personaFacetList(channel, { ...PARTIES, limit: 1 });
-  assert.deepEqual(all.map((f) => f.facetId), ["a", "b", "c"]);
+  const all = await personaWorldList(channel, { ...PARTIES, limit: 1 });
+  assert.deepEqual(all.map((f) => f.worldId), ["a", "b", "c"]);
 });
 
-test("a facet listing returns [] rather than undefined", async () => {
+test("a world listing returns [] rather than undefined", async () => {
   const channel = recorder({});
-  assert.deepEqual(await personaFacetList(channel, { ...PARTIES }), []);
+  assert.deepEqual(await personaWorldList(channel, { ...PARTIES }), []);
 });
 
-test("deleting a facet sends only the facet — there is no cascade to send", async () => {
-  // A facet is an arrangement, not a container. There is no cascading form of
+test("deleting a world sends only the world — there is no cascade to send", async () => {
+  // A world is an arrangement, not a container. There is no cascading form of
   // this call anywhere on the wire, and a client inventing one would be asking
   // for a member the agent would refuse.
   const channel = recorder({ existed: true, releasedFaces: 2 });
-  const res = await personaFacetDelete(channel, { ...PARTIES, facetId: "01F" });
+  const res = await personaWorldDelete(channel, { ...PARTIES, worldId: "01F" });
   const payload = channel.sent[0].envelope.payload ?? channel.sent[0].envelope.body;
-  assert.deepEqual(Object.keys(payload).sort(), ["facetId"]);
+  assert.deepEqual(Object.keys(payload).sort(), ["worldId"]);
   assert.equal(res.releasedFaces, 2, "the released-face count is what a screen reads");
 });
 
@@ -671,7 +671,7 @@ test("purging every kept version sends no versions member at all", async () => {
 test("a put that omits reach sends no reach — the agent keeps the face's", async () => {
   // Omission is the one that must NOT reset here: a reach is a restriction the
   // holder set, and an editor that dropped it would widen the face to anywhere.
-  const r = recorder({ profileId: "01P", version: 2, created: false, updatedAt: "2026-01-01T00:00:00Z" });
+  const r = recorder({ profileId: "01P", version: 2, wasCreated: false, updatedAt: "2026-01-01T00:00:00Z" });
   await personaProfilePut(r, { ...PARTIES, profileId: "01P", name: "Work", entries: [] });
   assert.equal("reach" in r.sent[0].envelope.payload, false);
   await personaProfilePut(r, {
@@ -703,7 +703,7 @@ test("a binding carries until, and a listing asks for retired faces only when to
 });
 
 test("an attribute put sends endorsements only when there are some", async () => {
-  const r = recorder({ attributeId: "01J", version: 1, created: true, updatedAt: "2026-01-01T00:00:00Z" });
+  const r = recorder({ attributeId: "01J", version: 1, wasCreated: true, updatedAt: "2026-01-01T00:00:00Z" });
   const base = {
     ...PARTIES,
     type: "skill.language",

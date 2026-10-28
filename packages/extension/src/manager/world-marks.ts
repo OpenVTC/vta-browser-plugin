@@ -18,7 +18,7 @@
 // `world-marks.test.mts` asserts every offered mark against the published bound
 // rather than trusting the eye that picked them.
 
-/** The published `maxLength` on `persona/facet/put`'s `icon`. */
+/** The published `maxLength` on `persona/world/put`'s `icon`. */
 export const MAX_MARK_LENGTH = 8;
 
 /**

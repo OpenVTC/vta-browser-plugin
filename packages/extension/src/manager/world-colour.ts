@@ -1,6 +1,6 @@
 // The eight colours a world may wear, and the one rule about them.
 //
-// A world (`persona/facet` on the wire — see
+// A world (`persona/world` on the wire — see
 // `design-docs/persona-vocabulary.md`) carries a colour **name**, never a
 // literal. This module is where the name becomes something to draw with, and
 // it is deliberately the only such place: a second mapping is a second answer
@@ -25,17 +25,17 @@
 // against its own palette. A stored `#8B0000` is a colour that is wrong
 // somewhere and the holder has no way to know where.
 
-import type { FacetColour } from "@openvtc/pnm-core/admin";
+import type { WorldColour } from "@openvtc/pnm-core/admin";
 
 /**
  * Every colour a world may wear, in the order a picker offers them.
  *
- * Typed against the generated `FacetColour` rather than restated as strings:
+ * Typed against the generated `WorldColour` rather than restated as strings:
  * a ninth colour published in the specification is then a compile error here —
  * a picker missing an option the agent will happily store — instead of a name
  * this console silently cannot draw.
  */
-export const WORLD_COLOURS: readonly FacetColour[] = [
+export const WORLD_COLOURS: readonly WorldColour[] = [
   "slate",
   "indigo",
   "teal",
@@ -54,7 +54,7 @@ export const WORLD_COLOURS: readonly FacetColour[] = [
  * lightness, and a component that reached for a hex would be correct in exactly
  * one of them.
  */
-export function worldHue(colour: FacetColour): string {
+export function worldHue(colour: WorldColour): string {
   return `var(--m-world-${colour})`;
 }
 
@@ -67,7 +67,7 @@ export function worldHue(colour: FacetColour): string {
  * connotations — no "danger red", no "success green" — which is the same rule
  * that keeps the eight away from the semantic three in the first place.
  */
-export function worldColourName(colour: FacetColour): string {
+export function worldColourName(colour: WorldColour): string {
   switch (colour) {
     case "slate":
       return "Slate";

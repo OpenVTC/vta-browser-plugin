@@ -38,30 +38,25 @@ import {
   type RoomsKeysListPayload,
   type RoomsKeysListResponsePayload,
   type PersonalLabel,
-} from "@openvtc/trust-tasks/rooms/keys/list/0.2/payload";
-import {
-  TYPE_URI as KEYS_LIST_V01,
-  RESPONSE_TYPE_URI as KEYS_LIST_V01_RESPONSE,
-  type RoomsKeysListResponsePayload as RoomsKeysListV01ResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/list/0.1/payload";
+} from "../specs/rooms/keys/list/0.2/payload.js";
 import {
   TYPE_URI as KEYS_LABEL,
   RESPONSE_TYPE_URI as KEYS_LABEL_RESPONSE,
   type RoomsKeysLabelPayload,
   type RoomsKeysLabelResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/label/0.1/payload";
+} from "../specs/rooms/keys/label/0.1/payload.js";
 import {
   TYPE_URI as KEYS_OPEN,
   RESPONSE_TYPE_URI as KEYS_OPEN_RESPONSE,
   type RoomsKeysOpenPayload,
   type RoomsKeysOpenResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/open/0.2/payload";
+} from "../specs/rooms/keys/open/0.2/payload.js";
 import {
   TYPE_URI as KEYS_SEAL,
   RESPONSE_TYPE_URI as KEYS_SEAL_RESPONSE,
   type RoomsKeysSealPayload,
   type RoomsKeysSealResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/seal/0.1/payload";
+} from "../specs/rooms/keys/seal/0.2/payload.js";
 
 /** Who is calling, and which service is being asked. */
 export interface RoomsCaller {
@@ -161,59 +156,20 @@ export async function roomsKeysList(
   options: RoomsListOptions = {},
 ): Promise<HeldRoom[]> {
   const payload: RoomsKeysListPayload = options.includePersonal === true ? { includePersonal: true } : {};
-  let res: RoomsKeysListResponsePayload;
-  try {
-    res = await call<RoomsKeysListResponsePayload>(
-      sender,
-      parties,
-      KEYS_LIST,
-      KEYS_LIST_RESPONSE,
-      "rooms/keys/list/0.2",
-      payload,
-    );
-  } catch (e) {
-    if (!servesOnlyAnOlderList(e)) throw e;
-    return roomsKeysListV01(sender, parties);
-  }
+  const res = await call<RoomsKeysListResponsePayload>(
+    sender,
+    parties,
+    KEYS_LIST,
+    KEYS_LIST_RESPONSE,
+    "rooms/keys/list/0.2",
+    payload,
+  );
   return (res.rooms ?? []).map((r, i) => {
     const { member: _fromExt, ...held } = heldBy(res.ext, i);
     const room: HeldRoom = { ...r, ...held };
     // Never carry a label the caller did not ask for, whatever came back.
     if (options.includePersonal !== true) delete room.personal;
     return room;
-  });
-}
-
-/**
- * Whether the member's VTA refused `rooms/keys/list/0.2` for its version, which a
- * VTA one release behind does: it serves 0.1. Members update their VTAs on their
- * own schedule, so the wallet does not stop listing rooms until they do.
- */
-function servesOnlyAnOlderList(e: unknown): boolean {
-  const details = (e as { details?: unknown } | null)?.details;
-  const code = details && typeof details === "object" ? (details as { code?: unknown }).code : undefined;
-  if (typeof code !== "string") return false;
-  const local = code.slice(code.lastIndexOf(":") + 1);
-  return local === "unsupportedVersion" || local === "unsupportedType";
-}
-
-/**
- * `rooms/keys/list/0.1`, for a VTA that does not serve 0.2. It names each
- * entry's member in `ext["org.openvtc.rooms"].held` rather than on the entry, and
- * has no personal labels, so none are returned whatever was asked.
- */
-async function roomsKeysListV01(sender: TrustTaskSender, parties: RoomsCaller): Promise<HeldRoom[]> {
-  const res = await call<RoomsKeysListV01ResponsePayload>(
-    sender,
-    parties,
-    KEYS_LIST_V01,
-    KEYS_LIST_V01_RESPONSE,
-    "rooms/keys/list/0.1",
-    {},
-  );
-  return (res.rooms ?? []).map((r, i) => {
-    const held = heldBy(res.ext, i);
-    return { ...r, ...held } as HeldRoom;
   });
 }
 
@@ -415,7 +371,7 @@ export async function roomsKeysSeal(
     { holder, service },
     KEYS_SEAL,
     KEYS_SEAL_RESPONSE,
-    "rooms/keys/seal/0.1",
+    "rooms/keys/seal/0.2",
     { ...rest, ...memberExt(member) } as unknown as RoomsKeysSealPayload,
   );
   return res.sealed;
@@ -426,13 +382,13 @@ import {
   RESPONSE_TYPE_URI as KEYS_PRESENT_RESPONSE,
   type RoomsKeysPresentPayload,
   type RoomsKeysPresentResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/present/0.2/payload";
+} from "../specs/rooms/keys/present/0.2/payload.js";
 import {
   TYPE_URI as KEYS_CHAIN,
   RESPONSE_TYPE_URI as KEYS_CHAIN_RESPONSE,
   type RoomsKeysChainPayload,
   type RoomsKeysChainResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/chain/0.1/payload";
+} from "../specs/rooms/keys/chain/0.2/payload.js";
 
 export interface RoomsPresentParams extends RoomsCaller {
   roomId: string;
@@ -532,7 +488,7 @@ import {
   RESPONSE_TYPE_URI as KEYS_BACKFILL_RESPONSE,
   type RoomsKeysBackfillPayload,
   type RoomsKeysBackfillResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/backfill/0.1/payload";
+} from "../specs/rooms/keys/backfill/0.2/payload.js";
 
 /**
  * Ask this agent to fetch the room's history from its host, and keep it.
@@ -571,7 +527,7 @@ export async function roomsKeysBackfill(
     { holder: params.holder, service: params.service },
     KEYS_BACKFILL,
     KEYS_BACKFILL_RESPONSE,
-    "rooms/keys/backfill/0.1",
+    "rooms/keys/backfill/0.2",
     payload,
   );
 }
@@ -581,13 +537,13 @@ import {
   RESPONSE_TYPE_URI as KEYS_READ_RESPONSE,
   type RoomsKeysReadPayload,
   type RoomsKeysReadResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/read/0.1/payload";
+} from "../specs/rooms/keys/read/0.1/payload.js";
 import {
   TYPE_URI as KEYS_BROWSE,
   RESPONSE_TYPE_URI as KEYS_BROWSE_RESPONSE,
   type RoomsKeysBrowsePayload,
   type RoomsKeysBrowseResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/browse/0.1/payload";
+} from "../specs/rooms/keys/browse/0.3/payload.js";
 
 /**
  * Ask this agent to read one record from a room's host — and to check what the
@@ -677,29 +633,43 @@ export async function roomsKeysBrowse(
     { holder: params.holder, service: params.service },
     KEYS_BROWSE,
     KEYS_BROWSE_RESPONSE,
-    "rooms/keys/browse/0.1",
+    "rooms/keys/browse/0.3",
     payload,
   );
 }
 
+/**
+ * Hand rungs — and the room's epoch floor, when the host served one — to the
+ * member's own VTA (`rooms/keys/chain/0.2`).
+ *
+ * `epochFloor` is relayed **exactly as the host served it**; a member relaying
+ * rungs MUST pass it on when there was one, and MAY send it alone to pass on a
+ * floor just learnt. The VTA keeps only rungs above the higher of the floor it
+ * holds and this one.
+ */
 export async function roomsKeysChain(
   sender: TrustTaskSender,
-  params: RoomsCaller & { roomId: string; links: EpochLink[]; member?: string },
+  params: RoomsCaller & { roomId: string; links?: EpochLink[]; epochFloor?: number; member?: string },
 ): Promise<RoomsKeysChainResponsePayload> {
+  const links = params.links ?? [];
+  // `links` is `[EpochLink, ...EpochLink[]]` — the schema's `minItems: 1` — and
+  // may be absent only when a floor is relayed alone. A caller with neither has
+  // nothing to deliver, so it is refused here rather than left to the agent.
+  if (links.length === 0 && params.epochFloor === undefined) {
+    throw new Error("rooms/keys/chain: nothing to deliver — no rungs and no epoch floor");
+  }
   const payload: RoomsKeysChainPayload = {
     ...memberExt(params.member),
     roomId: params.roomId,
-    // `links` is `[EpochLink, ...EpochLink[]]` — the schema's `minItems: 1`. A
-    // caller with nothing to deliver must not send an empty delivery, so the
-    // narrowing is here rather than left to the agent to reject.
-    links: params.links as RoomsKeysChainPayload["links"],
+    ...(links.length > 0 ? { links: links as NonNullable<RoomsKeysChainPayload["links"]> } : {}),
+    ...(params.epochFloor !== undefined ? { epochFloor: params.epochFloor } : {}),
   };
   return call<RoomsKeysChainResponsePayload>(
     sender,
     { holder: params.holder, service: params.service },
     KEYS_CHAIN,
     KEYS_CHAIN_RESPONSE,
-    "rooms/keys/chain/0.1",
+    "rooms/keys/chain/0.2",
     payload,
   );
 }
@@ -730,38 +700,38 @@ import {
   RESPONSE_TYPE_URI as ROOMS_CREATE_RESPONSE,
   type RoomsCreatePayload,
   type RoomsCreateResponsePayload,
-} from "@openvtc/trust-tasks/rooms/create/0.1/payload";
+} from "../specs/rooms/create/0.2/payload.js";
 import {
   TYPE_URI as RECORDS_LIST,
   RESPONSE_TYPE_URI as RECORDS_LIST_RESPONSE,
   type RoomsRecordsListPayload,
   type RoomsRecordsListResponsePayload,
-} from "@openvtc/trust-tasks/rooms/records/list/0.1/payload";
+} from "../specs/rooms/records/list/0.5/payload.js";
 import {
   TYPE_URI as RECORDS_GET,
   RESPONSE_TYPE_URI as RECORDS_GET_RESPONSE,
   type RoomsRecordsGetPayload,
   type RoomsRecordsGetResponsePayload,
-} from "@openvtc/trust-tasks/rooms/records/get/0.1/payload";
+} from "../specs/rooms/records/get/0.2/payload.js";
 import {
   TYPE_URI as RECORDS_PUT,
   RESPONSE_TYPE_URI as RECORDS_PUT_RESPONSE,
   type RoomsRecordsPutPayload,
   type RoomsRecordsPutResponsePayload,
-} from "@openvtc/trust-tasks/rooms/records/put/0.1/payload";
+} from "../specs/rooms/records/put/0.3/payload.js";
 import {
   TYPE_URI as EPOCH_MINT,
   RESPONSE_TYPE_URI as EPOCH_MINT_RESPONSE,
   type RoomsEpochMintPayload,
   type RoomsEpochMintResponsePayload,
-} from "@openvtc/trust-tasks/rooms/epoch/mint/0.1/payload";
+} from "../specs/rooms/epoch/mint/0.1/payload.js";
 import {
   TYPE_URI as EPOCH_CHAIN,
   RESPONSE_TYPE_URI as EPOCH_CHAIN_RESPONSE,
   type RoomsEpochChainPayload,
   type RoomsEpochChainResponsePayload,
   type EpochLink,
-} from "@openvtc/trust-tasks/rooms/epoch/chain/0.1/payload";
+} from "../specs/rooms/epoch/chain/0.2/payload.js";
 
 /** One rung of the epoch key chain: an epoch's storage key sealed under the next. */
 export type { EpochLink };
@@ -790,7 +760,7 @@ export async function roomsCreate(
     { holder, service },
     ROOMS_CREATE,
     ROOMS_CREATE_RESPONSE,
-    "rooms/create/0.1",
+    "rooms/create/0.2",
     rest as unknown as RoomsCreatePayload,
   );
 }
@@ -806,7 +776,7 @@ export async function roomsRecordsList(
     { holder, service },
     RECORDS_LIST,
     RECORDS_LIST_RESPONSE,
-    "rooms/records/list/0.1",
+    "rooms/records/list/0.5",
     rest as unknown as RoomsRecordsListPayload,
   );
   return res.records ?? [];
@@ -823,7 +793,7 @@ export async function roomsRecordsGet(
     { holder, service },
     RECORDS_GET,
     RECORDS_GET_RESPONSE,
-    "rooms/records/get/0.1",
+    "rooms/records/get/0.2",
     rest as unknown as RoomsRecordsGetPayload,
   );
 }
@@ -844,7 +814,7 @@ export async function roomsRecordsPut(
     { holder, service },
     RECORDS_PUT,
     RECORDS_PUT_RESPONSE,
-    "rooms/records/put/0.1",
+    "rooms/records/put/0.3",
     rest as unknown as RoomsRecordsPutPayload,
   );
 }
@@ -865,21 +835,25 @@ export async function roomsRecordsPut(
  * storage key sealed under the next, and no host holds either. Serving them to a
  * party with no epoch key discloses only how many epochs there have been, which
  * the room's epoch number already said.
+ *
+ * Returns the rungs and, once the room has been pruned, its `epochFloor` —
+ * which {@link roomsKeysChain} must relay exactly as served, so it is returned
+ * rather than dropped here.
  */
 export async function roomsEpochChain(
   sender: TrustTaskSender,
   params: RoomsHostCall & { fromEpoch?: number; limit?: number },
-): Promise<EpochLink[]> {
+): Promise<{ links: EpochLink[]; epochFloor?: number }> {
   const { holder, service, ...rest } = params;
   const res = await call<RoomsEpochChainResponsePayload>(
     sender,
     { holder, service },
     EPOCH_CHAIN,
     EPOCH_CHAIN_RESPONSE,
-    "rooms/epoch/chain/0.1",
+    "rooms/epoch/chain/0.2",
     rest as unknown as RoomsEpochChainPayload,
   );
-  return res.links ?? [];
+  return { links: res.links ?? [], ...(res.epochFloor !== undefined ? { epochFloor: res.epochFloor } : {}) };
 }
 
 /**
@@ -915,7 +889,7 @@ import {
   RESPONSE_TYPE_URI as OWNER_REGISTER_RESPONSE,
   type RoomsOwnerRegisterPayload,
   type RoomsOwnerRegisterResponsePayload,
-} from "@openvtc/trust-tasks/rooms/owner/register/0.2/payload";
+} from "../specs/rooms/owner/register/0.2/payload.js";
 
 /**
  * Ask this agent to register a room with a host.
@@ -980,19 +954,19 @@ import {
   RESPONSE_TYPE_URI as OWNER_INVITE_RESPONSE,
   type RoomsOwnerInvitePayload,
   type RoomsOwnerInviteResponsePayload,
-} from "@openvtc/trust-tasks/rooms/owner/invite/0.1/payload";
+} from "../specs/rooms/owner/invite/0.1/payload.js";
 import {
   TYPE_URI as OWNER_MEMBERSHIP,
   RESPONSE_TYPE_URI as OWNER_MEMBERSHIP_RESPONSE,
   type RoomsOwnerIssueMembershipPayload,
   type RoomsOwnerIssueMembershipResponsePayload,
-} from "@openvtc/trust-tasks/rooms/owner/issue-membership/0.1/payload";
+} from "../specs/rooms/owner/issue-membership/0.1/payload.js";
 import {
   TYPE_URI as OWNER_AUTHORITY,
   RESPONSE_TYPE_URI as OWNER_AUTHORITY_RESPONSE,
   type RoomsOwnerIssueAuthorityPayload,
   type RoomsOwnerIssueAuthorityResponsePayload,
-} from "@openvtc/trust-tasks/rooms/owner/issue-authority/0.2/payload";
+} from "../specs/rooms/owner/issue-authority/0.2/payload.js";
 
 /** What every issuance names: the room, and the key that signs as it. */
 export interface RoomsIssueCall extends RoomsCaller {

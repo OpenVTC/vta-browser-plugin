@@ -17,7 +17,7 @@ import {
 import { ConsentRequiredError, RelayTaskError } from "../src/manager/carrier.ts";
 
 const world = (id: string, name: string, faceIds: string[], attributeIds: string[] = []) =>
-  ({ facetId: id, name, colour: "teal", faceIds, attributeIds, version: 1, updatedAt: "x" }) as never;
+  ({ worldId: id, name, colour: "teal", faceIds, attributeIds, version: 1, updatedAt: "x" }) as never;
 const face = (id: string, name: string) =>
   ({ profileId: id, name, entries: [], version: 1, updatedAt: "x" }) as never;
 
@@ -53,25 +53,25 @@ test("the refusal is matched on the code, never on a message", () => {
   // the failure is silent: the flow falls through to a generic error and the
   // holder is told to go and find the face themselves.
   const refusal = new RelayTaskError(
-    "persona/facet/put/1.0",
-    "one or more faces already belong to another facet",
-    { code: "persona/facet/put:faceAlreadyPlaced", details: { placed: [{ faceId: "f1", facetId: "w2" }] } },
+    "persona/world/put/1.1",
+    "one or more faces already belong to another world",
+    { code: "persona/world/put:faceAlreadyPlaced", details: { placed: [{ faceId: "f1", worldId: "w2" }] } },
   );
-  assert.deepEqual(placedElsewhere(refusal), [{ faceId: "f1", facetId: "w2" }]);
+  assert.deepEqual(placedElsewhere(refusal), [{ faceId: "f1", worldId: "w2" }]);
 
   // The same words, carried by an error with no code at all.
   const sameWordsNoCode = new RelayTaskError(
-    "persona/facet/put/1.0",
-    "one or more faces already belong to another facet",
+    "persona/world/put/1.1",
+    "one or more faces already belong to another world",
     {},
   );
   assert.equal(placedElsewhere(sameWordsNoCode), null, "a message was read as a refusal");
 });
 
 test("a different extended code is not this refusal", () => {
-  const other = new RelayTaskError("persona/facet/put/1.0", "nope", {
-    code: "persona/facet/put:versionConflict",
-    details: { placed: [{ faceId: "f1", facetId: "w2" }] },
+  const other = new RelayTaskError("persona/world/put/1.1", "nope", {
+    code: "persona/world/put:versionConflict",
+    details: { placed: [{ faceId: "f1", worldId: "w2" }] },
   });
   assert.equal(placedElsewhere(other), null);
 });
@@ -79,7 +79,7 @@ test("a different extended code is not this refusal", () => {
 test("a consent ceremony is never swallowed as a placement refusal", () => {
   // It has its own surface and must reach it. Catching it here would discard
   // the ceremony at the moment the human was meant to act.
-  const consent = new ConsentRequiredError("persona/facet/put/1.0", {
+  const consent = new ConsentRequiredError("persona/world/put/1.1", {
     payloadDigest: "z".repeat(64),
     challenge: "c",
     approverSet: "a",
@@ -93,8 +93,8 @@ test("a refusal with no usable details falls through rather than claiming zero",
   // An empty list renders as "0 faces already belong elsewhere", which is a
   // claim. The honest answer is to show the generic error.
   for (const details of [undefined, {}, { placed: [] }, { placed: "nope" }]) {
-    const refusal = new RelayTaskError("persona/facet/put/1.0", "x", {
-      code: "persona/facet/put:faceAlreadyPlaced",
+    const refusal = new RelayTaskError("persona/world/put/1.1", "x", {
+      code: "persona/world/put:faceAlreadyPlaced",
       ...(details !== undefined ? { details } : {}),
     });
     assert.equal(placedElsewhere(refusal), null, `details ${JSON.stringify(details)} was accepted`);
@@ -104,9 +104,9 @@ test("a refusal with no usable details falls through rather than claiming zero",
 test("a mixed array is refused rather than filtered", () => {
   // Half an answer about where the holder's faces are is worse than none,
   // because the missing half is invisible.
-  const refusal = new RelayTaskError("persona/facet/put/1.0", "x", {
-    code: "persona/facet/put:faceAlreadyPlaced",
-    details: { placed: [{ faceId: "f1", facetId: "w2" }, { faceId: 7 }] },
+  const refusal = new RelayTaskError("persona/world/put/1.1", "x", {
+    code: "persona/world/put:faceAlreadyPlaced",
+    details: { placed: [{ faceId: "f1", worldId: "w2" }, { faceId: 7 }] },
   });
   assert.equal(placedElsewhere(refusal), null);
 });
@@ -131,21 +131,21 @@ test("an attribute's worlds come back in listing order, not membership order", (
   // a row whose marks reshuffle between renders reads as a change when nothing
   // changed.
   const worlds = [world("w1", "Work", [], ["a1"]), world("w2", "Home", [], ["a1"])];
-  assert.deepEqual(worldsOfAttribute(worlds, "a1").map((w) => w.facetId), ["w1", "w2"]);
+  assert.deepEqual(worldsOfAttribute(worlds, "a1").map((w) => w.worldId), ["w1", "w2"]);
   const reversed = [worlds[1]!, worlds[0]!];
-  assert.deepEqual(worldsOfAttribute(reversed, "a1").map((w) => w.facetId), ["w2", "w1"]);
+  assert.deepEqual(worldsOfAttribute(reversed, "a1").map((w) => w.worldId), ["w2", "w1"]);
 });
 
 // ── Dangling membership is repaired, not carried ────────────────────────────
 
 test("an editor opens with only the membership that still exists", () => {
-  // The live bug this closes. `facet/list` returns dangling ids on purpose so a
+  // The live bug this closes. `world/list` returns dangling ids on purpose so a
   // consumer can offer to tidy; seeding them raw sends them back into a `put`
   // the agent refuses, naming ULIDs the holder cannot untick — there is no row
   // to untick, because the record is gone. The world becomes permanently
   // uneditable by the only screen that edits it.
   const existing = {
-    facetId: "w1",
+    worldId: "w1",
     name: "Work",
     colour: "teal",
     faceIds: ["f1", "GONE-FACE"],
@@ -162,7 +162,7 @@ test("an editor opens with only the membership that still exists", () => {
 
 test("a world with nothing stale drops nothing and says nothing", () => {
   const existing = {
-    facetId: "w1", name: "Work", colour: "teal",
+    worldId: "w1", name: "Work", colour: "teal",
     faceIds: ["f1"], attributeIds: ["a1"], version: 1, updatedAt: "x",
   } as never;
   const seeded = seedMembership(existing, [face("f1", "Acme")], [{ attributeId: "a1" }]);

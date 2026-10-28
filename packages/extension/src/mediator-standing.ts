@@ -86,12 +86,12 @@ export const LENS_TASK_TYPES: readonly string[] = [
   "https://trusttasks.org/spec/messaging/queue/list/0.1",
   "https://trusttasks.org/spec/messaging/queue/status/0.1",
   "https://trusttasks.org/spec/messaging/queue/purge/0.1",
-  "https://trusttasks.org/spec/messaging/account/get/0.1",
-  "https://trusttasks.org/spec/messaging/account/list/0.1",
-  "https://trusttasks.org/spec/messaging/account/update/0.1",
+  "https://trusttasks.org/spec/messaging/account/get/0.2",
+  "https://trusttasks.org/spec/messaging/account/list/0.2",
+  "https://trusttasks.org/spec/messaging/account/update/0.2",
   "https://trusttasks.org/spec/messaging/message/list/0.1",
   "https://trusttasks.org/spec/messaging/message/delete/0.1",
-  "https://trusttasks.org/spec/audit/list/0.1",
+  "https://trusttasks.org/spec/audit/list/0.2",
   "https://trusttasks.org/spec/config/show/0.1",
 ];
 

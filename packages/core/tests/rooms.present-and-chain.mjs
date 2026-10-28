@@ -121,8 +121,8 @@ test("the rungs are delivered to the agent under the canonical type", async () =
   });
 
   const { envelope, opts } = channel.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/rooms/keys/chain/0.1");
-  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/rooms/keys/chain/0.1#response");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/rooms/keys/chain/0.2");
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/rooms/keys/chain/0.2#response");
   assert.equal(envelope.recipient, AGENT.did);
   assert.deepEqual(envelope.payload.links, links);
   assert.equal(res.earliestReadableEpoch, 1);
@@ -136,4 +136,22 @@ test("zero stored is reported, not swallowed", async () => {
   });
   assert.equal(res.stored, 0);
   assert.equal(res.earliestReadableEpoch, 3);
+});
+
+// 0.2: the host's epoch floor is relayed as served, with the rungs or alone,
+// and a call carrying neither is refused before it is sent.
+test("an epoch floor is relayed, with or without rungs", async () => {
+  const withRungs = recorder({ roomId: ROOM, earliestReadableEpoch: 3, stored: 1, epochFloor: 3 });
+  await roomsKeysChain(withRungs, {
+    holder: HOLDER, service: AGENT, roomId: ROOM, links: [{ epoch: 4, wrapped: "w", nonce: "n" }], epochFloor: 3,
+  });
+  assert.equal(withRungs.sent[0].envelope.payload.epochFloor, 3);
+
+  const alone = recorder({ roomId: ROOM, earliestReadableEpoch: 3, stored: 0, epochFloor: 3 });
+  await roomsKeysChain(alone, { holder: HOLDER, service: AGENT, roomId: ROOM, epochFloor: 3 });
+  assert.equal("links" in alone.sent[0].envelope.payload, false, "an empty links array was sent");
+
+  const none = recorder({});
+  await assert.rejects(roomsKeysChain(none, { holder: HOLDER, service: AGENT, roomId: ROOM, links: [] }));
+  assert.equal(none.sent.length, 0);
 });

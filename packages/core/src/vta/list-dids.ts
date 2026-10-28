@@ -24,7 +24,7 @@ import { buildTrustTask } from "./trust-task.js";
 import {
   TYPE_URI as TASK_WEBVH_DIDS_LIST_1_0,
   type WebvhDidRecord,
-} from "@openvtc/trust-tasks/vta/webvh/dids/list/1.0/payload";
+} from "../specs/vta/webvh/dids/list/1.0/payload.js";
 const TASK_WEBVH_DIDS_LIST_1_0_RESPONSE = `${TASK_WEBVH_DIDS_LIST_1_0}#response`;
 
 /** A hosted DID as the registry declares it.

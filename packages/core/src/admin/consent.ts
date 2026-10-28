@@ -25,38 +25,38 @@ import {
   type ConsentListResponsePayload,
   type ConsentGrant,
   type ConsentSubject,
-} from "@openvtc/trust-tasks/consent/list/1.0/payload";
+} from "../specs/consent/list/1.1/payload.js";
 import {
   TYPE_URI as CONSENT_DECISION,
   RESPONSE_TYPE_URI as CONSENT_DECISION_RESPONSE,
   type ConsentDecisionPayload,
   type ConsentDecisionResponsePayload,
-} from "@openvtc/trust-tasks/consent/decision/1.0/payload";
+} from "../specs/consent/decision/1.0/payload.js";
 import {
   TYPE_URI as CONSENT_REVOKE,
   RESPONSE_TYPE_URI as CONSENT_REVOKE_RESPONSE,
   type ConsentRevokePayload,
   type ConsentRevokeResponsePayload,
-} from "@openvtc/trust-tasks/consent/revoke/1.0/payload";
+} from "../specs/consent/revoke/1.0/payload.js";
 import {
   TYPE_URI as CONSENT_REQUEST,
   RESPONSE_TYPE_URI as CONSENT_REQUEST_RESPONSE,
   type ConsentRequestPayload,
   type ConsentRequestResponsePayload,
-} from "@openvtc/trust-tasks/consent/request/1.0/payload";
+} from "../specs/consent/request/1.0/payload.js";
 import {
   TYPE_URI as APPROVER_LIST,
   RESPONSE_TYPE_URI as APPROVER_LIST_RESPONSE,
   type ConsentListApproversPayload,
   type ConsentListApproversResponsePayload,
   type ApproverBinding,
-} from "@openvtc/trust-tasks/consent/approver-list/1.0/payload";
+} from "../specs/consent/approver-list/1.0/payload.js";
 import {
   TYPE_URI as APPROVER_SET,
   RESPONSE_TYPE_URI as APPROVER_SET_RESPONSE,
   type ConsentSetApproverPayload,
   type ConsentSetApproverResponsePayload,
-} from "@openvtc/trust-tasks/consent/approver-set/1.0/payload";
+} from "../specs/consent/approver-set/1.0/payload.js";
 
 export type { ConsentGrant, ConsentSubject, ApproverBinding };
 
@@ -70,13 +70,23 @@ export interface ConsentListParams extends ConsentCallerParams {
   platform?: string;
   /** Narrow to one conversation. All four members identify it together. */
   subject?: ConsentSubject;
-  /** RFC 3339 — grants recorded since. */
-  since?: string;
+  /**
+   * Incremental sync: a previous result's `nextSyncToken`, to receive only the
+   * grants changed after it. Opaque — not a timestamp, whatever it looks
+   * like — and the agent refuses one it did not issue.
+   */
+  syncToken?: string;
 }
 
 export interface ConsentListResult {
   grants: ConsentGrant[];
-  cursor?: string;
+  /**
+   * The token to send back as `syncToken` on the next incremental fetch.
+   * Not a page cursor: `consent/list/1.1` renamed 1.0's `since` / `cursor`
+   * pair because "cursor" read as "there is another page", and a caller that
+   * followed it would have been asking for deltas, not the rest of the list.
+   */
+  nextSyncToken?: string;
 }
 
 /** List consent grants. A grant carries `effect: "allow" | "deny"` — a deny is
@@ -90,7 +100,7 @@ export async function consentList(
     ...(params.agent ? { agent: params.agent } : {}),
     ...(params.platform ? { platform: params.platform } : {}),
     ...(params.subject ? { subject: params.subject } : {}),
-    ...(params.since ? { since: params.since } : {}),
+    ...(params.syncToken ? { syncToken: params.syncToken } : {}),
   };
   const envelope = buildTrustTask(CONSENT_LIST, payload, {
     issuer: params.holder.did,
@@ -98,9 +108,12 @@ export async function consentList(
   });
   const res = await sender.send<ConsentListResponsePayload>(envelope, {
     expectedResponseType: CONSENT_LIST_RESPONSE,
-    operationLabel: "consent/list/1.0",
+    operationLabel: "consent/list/1.1",
   });
-  return { grants: res.grants ?? [], ...(res.cursor ? { cursor: res.cursor } : {}) };
+  return {
+    grants: res.grants ?? [],
+    ...(res.nextSyncToken ? { nextSyncToken: res.nextSyncToken } : {}),
+  };
 }
 
 export interface ConsentDecisionParams extends ConsentCallerParams {

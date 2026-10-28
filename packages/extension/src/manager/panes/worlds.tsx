@@ -23,8 +23,8 @@
 //
 // ## A face belongs to one world, and the refusal is actionable
 //
-// The agent refuses `persona/facet/put` when a face already belongs elsewhere,
-// with `persona/facet/put:faceAlreadyPlaced` — and the details name the world
+// The agent refuses `persona/world/put` when a face already belongs elsewhere,
+// with `persona/world/put:faceAlreadyPlaced` — and the details name the world
 // already holding it. That is the whole reason the code exists: told only that
 // the write failed, this pane could do nothing but send the holder off to find
 // where the face is. Told which world, it offers to move it.
@@ -32,17 +32,17 @@
 // ## Words
 //
 // **World**, and a face **belongs to** one. Never "facet", never "group", never
-// "tag" or "assign" — see `design-docs/persona-vocabulary.md`. The wire keeps
-// the specification's word; this screen does not.
+// "tag" or "assign" — see `design-docs/persona-vocabulary.md`. The wire now
+// says `world` too (`persona/world/*` superseded `persona/facet/*`).
 
 import { useCallback, useMemo, useState } from "react";
 import {
-  personaFacetPut,
-  personaFacetDelete,
-  type PoolFacet,
+  personaWorldPut,
+  personaWorldDelete,
+  type PoolWorld,
   type PoolProfile,
   type PoolAttribute,
-  type FacetColour,
+  type WorldColour,
 } from "@openvtc/pnm-core/admin";
 import { Button, Note, Panel } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
@@ -67,7 +67,7 @@ function Swatch({
   selected,
   onPick,
 }: {
-  colour: FacetColour;
+  colour: WorldColour;
   selected: boolean;
   onPick: () => void;
 }) {
@@ -95,7 +95,7 @@ function Swatch({
 }
 
 /** The mark beside a world's name, wherever one is drawn. */
-export function WorldChip({ facet }: { facet: PoolFacet }) {
+export function WorldChip({ world }: { world: PoolWorld }) {
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 7, minWidth: 0 }}>
       <span
@@ -104,13 +104,13 @@ export function WorldChip({ facet }: { facet: PoolFacet }) {
           width: 10,
           height: 10,
           borderRadius: 999,
-          background: worldHue(facet.colour as FacetColour),
+          background: worldHue(world.colour as WorldColour),
           flex: "0 0 auto",
         }}
       />
-      {facet.icon && <span aria-hidden="true">{facet.icon}</span>}
+      {world.icon && <span aria-hidden="true">{world.icon}</span>}
       <span style={{ fontSize: t.sm, fontWeight: 600, color: c.text, overflow: "hidden", textOverflow: "ellipsis" }}>
-        {facet.name}
+        {world.name}
       </span>
     </span>
   );
@@ -129,16 +129,16 @@ export function WorldEditor({
 }: {
   parties: Parties;
   authority: Authority | null;
-  existing?: PoolFacet;
+  existing?: PoolWorld;
   faces: readonly PoolProfile[];
   attributes: readonly PoolAttribute[];
   registry: ClaimTypeRegistry | null;
-  worlds: readonly PoolFacet[];
+  worlds: readonly PoolWorld[];
   onDone: () => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState(existing?.name ?? "");
-  const [colour, setColour] = useState<FacetColour>((existing?.colour as FacetColour) ?? "slate");
+  const [colour, setColour] = useState<WorldColour>((existing?.colour as WorldColour) ?? "slate");
   const [icon, setIcon] = useState(existing?.icon ?? "");
   // Seeded from what was loaded, minus what no longer exists. A put REPLACES
   // both lists, so an editor opening empty would silently empty the world on an
@@ -161,9 +161,9 @@ export function WorldEditor({
     setError(null);
     setConflict(null);
     try {
-      await personaFacetPut(managerSender, {
+      await personaWorldPut(managerSender, {
         ...parties,
-        ...(existing ? { facetId: existing.facetId, expectedVersion: existing.version } : {}),
+        ...(existing ? { worldId: existing.worldId, expectedVersion: existing.version } : {}),
         name: name.trim(),
         colour,
         ...(icon.trim() ? { icon: icon.trim() } : {}),
@@ -311,7 +311,7 @@ export function WorldEditor({
             </span>
           ) : (
             faces.map((f) => {
-              const elsewhere = worldOfFace(worlds, f.profileId, existing?.facetId);
+              const elsewhere = worldOfFace(worlds, f.profileId, existing?.worldId);
               return (
                 <label
                   key={f.profileId}

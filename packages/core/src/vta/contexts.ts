@@ -23,23 +23,23 @@ import {
   TYPE_URI as TASK_CONTEXTS_LIST,
   RESPONSE_TYPE_URI as TASK_CONTEXTS_LIST_RESPONSE,
   type ContextRecord,
-} from "@openvtc/trust-tasks/vta/contexts/list/1.0/payload";
+} from "../specs/vta/contexts/list/1.0/payload.js";
 import {
   TYPE_URI as TASK_CONTEXTS_CREATE,
   RESPONSE_TYPE_URI as TASK_CONTEXTS_CREATE_RESPONSE,
-} from "@openvtc/trust-tasks/vta/contexts/create/1.0/payload";
+} from "../specs/vta/contexts/create/1.0/payload.js";
 import {
   TYPE_URI as TASK_CONTEXTS_GET,
   RESPONSE_TYPE_URI as TASK_CONTEXTS_GET_RESPONSE,
-} from "@openvtc/trust-tasks/vta/contexts/get/1.0/payload";
+} from "../specs/vta/contexts/get/1.0/payload.js";
 import {
   TYPE_URI as TASK_CONTEXTS_UPDATE,
   RESPONSE_TYPE_URI as TASK_CONTEXTS_UPDATE_RESPONSE,
-} from "@openvtc/trust-tasks/vta/contexts/update/1.0/payload";
+} from "../specs/vta/contexts/update/1.0/payload.js";
 import {
   TYPE_URI as TASK_CONTEXTS_UPDATE_DID,
   RESPONSE_TYPE_URI as TASK_CONTEXTS_UPDATE_DID_RESPONSE,
-} from "@openvtc/trust-tasks/vta/contexts/update-did/1.1/payload";
+} from "../specs/vta/contexts/update-did/1.1/payload.js";
 
 /** One context record, as the registry declares it. Re-exported so callers
  *  need not know which task's binding it happens to live under. */

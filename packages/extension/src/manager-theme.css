@@ -61,7 +61,7 @@
 
   /* World colours — the holder's own choice, and the THIRD categorical set.
    *
-   * A world (`persona/facet` on the wire) is a part of a person's life, and
+   * A world (`persona/world` on the wire) is a part of a person's life, and
    * these eight are the only colours one may wear. The wire carries a *name*
    * — `teal`, `plum` — and never a literal, so a world stays legible in this
    * console, in a terminal and on a phone, each resolving the name against its

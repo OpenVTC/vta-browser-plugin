@@ -183,7 +183,12 @@ function templateFrom(draft: Draft): DidTemplate {
   const methods = list(draft.methods);
   const requiredVars = list(draft.requiredVars);
   return {
-    schemaVersion: 1,
+    // An existing record keeps its version and its `keys` block: `keys` is a
+    // `schemaVersion` 2 member, and a v2 template saved back as v1 without it
+    // loses its key slots — or is refused for the slot placeholders still in
+    // `document`. A new template is v1: the editor does not draw `keys`.
+    schemaVersion: draft.original?.schemaVersion ?? 1,
+    ...(draft.original?.keys ? { keys: draft.original.keys } : {}),
     name: draft.name.trim(),
     kind: draft.kind.trim(),
     ...(draft.description.trim() ? { description: draft.description.trim() } : {}),

@@ -36,7 +36,7 @@
 // on purpose is its own decision.
 
 import { useCallback, useMemo, useState } from "react";
-import { personaAttributeDelete, personaProfilePut, type PoolFacet } from "@openvtc/pnm-core/admin";
+import { personaAttributeDelete, personaProfilePut, type PoolWorld } from "@openvtc/pnm-core/admin";
 import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
 import { Button, Note, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
@@ -62,7 +62,7 @@ import {
 import { AttributeValue } from "./persona-editors.js";
 import { worldsOfAttribute } from "../world-model.js";
 import { worldHue } from "../world-colour.js";
-import type { FacetColour } from "@openvtc/pnm-core/admin";
+import type { WorldColour } from "@openvtc/pnm-core/admin";
 import type { RevealTarget } from "../reveal-value.js";
 
 /**
@@ -106,7 +106,7 @@ function TriCheck({
  * this is a reminder that the attribute is arranged, not the place a person
  * reads the arrangement.
  */
-function WorldDots({ worlds }: { worlds: readonly PoolFacet[] }) {
+function WorldDots({ worlds }: { worlds: readonly PoolWorld[] }) {
   if (worlds.length === 0) return null;
   return (
     <span
@@ -116,13 +116,13 @@ function WorldDots({ worlds }: { worlds: readonly PoolFacet[] }) {
     >
       {worlds.map((w) => (
         <span
-          key={w.facetId}
+          key={w.worldId}
           aria-hidden="true"
           style={{
             width: 7,
             height: 7,
             borderRadius: 999,
-            background: worldHue(w.colour as FacetColour),
+            background: worldHue(w.colour as WorldColour),
           }}
         />
       ))}
@@ -141,7 +141,7 @@ function Row({
 }: {
   attribute: AttributeNode;
   selected: boolean;
-  worlds: readonly PoolFacet[];
+  worlds: readonly PoolWorld[];
   registry: ClaimTypeRegistry | null;
   reveal: (target: RevealTarget) => Promise<unknown>;
   onToggle: (id: string, shift: boolean) => void;
@@ -216,7 +216,7 @@ function Group({
   group: ListGroup;
   selection: ReadonlySet<string>;
   registry: ClaimTypeRegistry | null;
-  worlds: readonly PoolFacet[];
+  worlds: readonly PoolWorld[];
   reveal: (target: RevealTarget) => Promise<unknown>;
   onToggleRow: (id: string, shift: boolean) => void;
   onToggleGroup: (group: ListGroup) => void;
@@ -360,7 +360,7 @@ export function AttributeList({
   faces: readonly FaceNode[];
   /** The holder's worlds, so a row can say it is arranged. Empty is the honest
    *  answer before anyone has made one, and draws nothing. */
-  worlds: readonly PoolFacet[];
+  worlds: readonly PoolWorld[];
   registry: ClaimTypeRegistry | null;
   parties: Parties;
   reveal: (target: RevealTarget) => Promise<unknown>;

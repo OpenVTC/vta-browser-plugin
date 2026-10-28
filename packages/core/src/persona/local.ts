@@ -1,4 +1,5 @@
-// `persona/local/*` 1.0 — profiles and bindings that live INSIDE one context.
+// `persona/local/*` (profile/put 1.1, the rest 1.0) — profiles and bindings
+// that live INSIDE one context.
 //
 // For an identity the holder keeps only here, with no pool attribute behind
 // it: a handle for one game, a display name for one workspace. Because nothing
@@ -40,31 +41,31 @@ import {
   RESPONSE_TYPE_URI as LOCAL_PROFILE_PUT_RESPONSE,
   type PersonaLocalProfilePutPayload,
   type PersonaLocalProfilePutResponsePayload,
-} from "@openvtc/trust-tasks/persona/local/profile/put/1.0/payload";
+} from "../specs/persona/local/profile/put/1.1/payload.js";
 import {
   TYPE_URI as LOCAL_PROFILE_GET,
   RESPONSE_TYPE_URI as LOCAL_PROFILE_GET_RESPONSE,
   type PersonaLocalProfileGetPayload,
   type PersonaLocalProfileGetResponsePayload,
-} from "@openvtc/trust-tasks/persona/local/profile/get/1.0/payload";
+} from "../specs/persona/local/profile/get/1.0/payload.js";
 import {
   TYPE_URI as LOCAL_PROFILE_LIST,
   RESPONSE_TYPE_URI as LOCAL_PROFILE_LIST_RESPONSE,
   type PersonaLocalProfileListPayload,
   type PersonaLocalProfileListResponsePayload,
-} from "@openvtc/trust-tasks/persona/local/profile/list/1.0/payload";
+} from "../specs/persona/local/profile/list/1.0/payload.js";
 import {
   TYPE_URI as LOCAL_PROFILE_DELETE,
   RESPONSE_TYPE_URI as LOCAL_PROFILE_DELETE_RESPONSE,
   type PersonaLocalProfileDeletePayload,
   type PersonaLocalProfileDeleteResponsePayload,
-} from "@openvtc/trust-tasks/persona/local/profile/delete/1.0/payload";
+} from "../specs/persona/local/profile/delete/1.0/payload.js";
 import {
   TYPE_URI as LOCAL_BINDING_SET,
   RESPONSE_TYPE_URI as LOCAL_BINDING_SET_RESPONSE,
   type PersonaLocalBindingSetPayload,
   type PersonaLocalBindingSetResponsePayload,
-} from "@openvtc/trust-tasks/persona/local/binding/set/1.0/payload";
+} from "../specs/persona/local/binding/set/1.0/payload.js";
 
 import { call, type PersonaCallerParams } from "./call.js";
 

@@ -24,7 +24,7 @@ import {
   TYPE_URI as TASK_PUSH_REGISTER,
   RESPONSE_TYPE_URI as TASK_PUSH_REGISTER_RESPONSE,
   type WebPush,
-} from "@openvtc/trust-tasks/push/register/0.2/payload";
+} from "../specs/push/register/0.2/payload.js";
 
 /** A device's platform push channel — tagged union over `platform`. Only the
  *  Web Push variant is wired today (self-hostable, no Apple/Google account). */

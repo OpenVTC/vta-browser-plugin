@@ -94,22 +94,32 @@ test("create omits the optional fields that were not given", async () => {
   });
 });
 
-test("list sends only the filters given, and offset 0 is a filter", async () => {
-  const channel = recorder({ keys: [RECORD], total: 1, offset: 0, limit: 50 });
+test("list sends only the filters given, under the 0.2 type", async () => {
+  const channel = recorder({ keys: [RECORD], nextCursor: "c1" });
   const result = await keysList(channel, {
     holder: HOLDER,
     service: SERVICE,
-    offset: 0,
+    limit: 50,
     status: "active",
   });
-  assert.deepEqual(channel.sent[0].envelope.payload, { offset: 0, status: "active" });
-  assert.deepEqual(result, { keys: [RECORD], total: 1, offset: 0, limit: 50 });
+  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/keys/list/0.2");
+  assert.deepEqual(channel.sent[0].envelope.payload, { limit: 50, status: "active" });
+  // The cursor comes back — 0.2 has no `total`, so it is the only way a caller
+  // can tell this page is not all of them.
+  assert.deepEqual(result, { keys: [RECORD], nextCursor: "c1" });
 });
 
-test("list survives an agent that omits the paging fields", async () => {
+test("a cursor is sent back verbatim, and the last page carries none", async () => {
+  const channel = recorder({ keys: [RECORD] });
+  const result = await keysList(channel, { holder: HOLDER, service: SERVICE, cursor: "c1" });
+  assert.deepEqual(channel.sent[0].envelope.payload, { cursor: "c1" });
+  assert.deepEqual(result, { keys: [RECORD] });
+});
+
+test("list survives an agent that omits the optional fields", async () => {
   const channel = recorder({});
   const result = await keysList(channel, { holder: HOLDER, service: SERVICE });
-  assert.deepEqual(result, { keys: [], total: 0, offset: 0, limit: 0 });
+  assert.deepEqual(result, { keys: [] });
 });
 
 test("show returns null for a key the agent does not hold", async () => {

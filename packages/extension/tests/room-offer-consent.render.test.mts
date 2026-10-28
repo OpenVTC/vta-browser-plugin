@@ -1,6 +1,6 @@
 // The wallet's own window for accepting a community's offer, rendered: it shows
 // what the room is for (the community's description, from
-// `vtc/rooms/offers/list/0.2`) as text — never as markup — bounded like a
+// `vtc/rooms/offers/list/0.4`) as text — never as markup — bounded like a
 // label, and says nothing of it when the community said nothing.
 
 import { test } from "node:test";

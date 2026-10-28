@@ -49,7 +49,7 @@
 // State is persisted (KVStore → IndexedDB) so it survives worker respawns,
 // which is exactly when the replays arrive. Bounded to the most recent N ids.
 
-import { documentDigest } from "@openvtc/trust-tasks/_runtime/replay";
+import { documentDigest } from "@openvtc/trust-tasks/runtime";
 
 import type { KVStore } from "../store/kv-store.js";
 

@@ -3,13 +3,10 @@
 // `loginViaDidcomm` used to authcrypt a bare `auth/authenticate` message with
 // an empty body, and the RP issued a session to whoever the authcrypt layer
 // said had sent it. affinidi-webvh-service #213 removes that route: the RP acts
-// only on a proof inside the document. With `signing` supplied, sign-in is the
-// challenge → signed-authenticate pair, and these tests pin what the RP now
-// checks, by unpacking each request as the RP would and running the real
+// only on a proof inside the document, so sign-in is the challenge →
+// signed-authenticate pair and `signing` is required. These tests pin what the
+// RP checks, by unpacking each request as the RP would and running the real
 // verifier over the document it receives.
-//
-// The bare form a caller without `signing` still gets is pinned, unchanged, by
-// `rp-login.didcomm.mjs`.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -27,7 +24,7 @@ import {
 } from "../dist/index.js";
 
 const CHALLENGE = "https://trusttasks.org/spec/auth/challenge/0.1";
-const AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.2";
+const AUTHENTICATE = "https://trusttasks.org/spec/auth/authenticate/0.3";
 const ERROR = "https://trusttasks.org/spec/trust-task-error/0.1";
 
 function endpointOf(identity) {
@@ -136,10 +133,8 @@ test("sign-in is a challenge, then an authenticate spending it", async () => {
   assert.equal(session.expiresIn, 900);
 });
 
-test("the result keeps the shape loginViaDidcomm has always returned", async () => {
-  // `DidcommLoginResult` is exported and callers read its members. The
-  // challenge flow fills every one of them, so a caller that only started
-  // passing `signing` reads the same fields as before.
+test("the result fills every member of DidcommLoginResult", async () => {
+  // `DidcommLoginResult` is exported and callers read its members.
   const w = world();
   const before = Math.floor(Date.now() / 1000);
   const session = await loginViaDidcomm(opts(w, { scope: ["dids:read"] }));
@@ -149,8 +144,7 @@ test("the result keeps the shape loginViaDidcomm has always returned", async () 
   assert.equal(typeof session.refreshToken, "string");
   assert.equal(typeof session.sessionId, "string");
   assert.ok(session.accessExpiresAt >= before + 900 && session.accessExpiresAt <= after + 900);
-  // `auth/authenticate` does not report the refresh expiry; `0` is what the
-  // bare form returned when the RP did not say either.
+  // `auth/authenticate` does not report the refresh expiry, so it is `0`.
   assert.equal(session.refreshExpiresAt, 0);
   assert.deepEqual(w.received[1].doc.payload.scope, ["dids:read"]);
 });

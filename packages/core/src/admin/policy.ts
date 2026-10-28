@@ -15,6 +15,7 @@
 
 import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
+import { collectPages } from "../util/pages.js";
 
 import {
   TYPE_URI as POLICY_LIST,
@@ -22,24 +23,24 @@ import {
   type PolicyListPayload,
   type PolicyListResponsePayload,
   type PolicyModule,
-} from "@openvtc/trust-tasks/policy/list/0.2/payload";
+} from "../specs/policy/list/0.3/payload.js";
 import {
   TYPE_URI as POLICY_GET,
   RESPONSE_TYPE_URI as POLICY_GET_RESPONSE,
   type PolicyGetResponsePayload,
-} from "@openvtc/trust-tasks/policy/get/0.1/payload";
+} from "../specs/policy/get/0.1/payload.js";
 import {
   TYPE_URI as POLICY_UPSERT,
   RESPONSE_TYPE_URI as POLICY_UPSERT_RESPONSE,
   type PolicyUpsertPayload,
   type PolicyUpsertResponsePayload,
-} from "@openvtc/trust-tasks/policy/upsert/0.2/payload";
+} from "../specs/policy/upsert/0.3/payload.js";
 import {
   TYPE_URI as POLICY_DELETE,
   RESPONSE_TYPE_URI as POLICY_DELETE_RESPONSE,
   type PolicyDeletePayload,
   type PolicyDeleteResponsePayload,
-} from "@openvtc/trust-tasks/policy/delete/0.1/payload";
+} from "../specs/policy/delete/0.1/payload.js";
 
 export type { PolicyModule };
 
@@ -52,43 +53,49 @@ export interface PolicyListParams extends PolicyCallerParams {
   contextId?: string;
   /** Only rows currently in force. */
   enabledOnly?: boolean;
-  cursor?: string;
-  pageSize?: number;
+  /** The page size to ask for — never a cap on the result. */
+  limit?: number;
 }
 
 export interface PolicyListResult {
+  /** Every matching row: the listing is read to the end. */
   policies: PolicyModule[];
-  /** The agent stopped early — fetch the rest with `cursor`. */
-  truncated: boolean;
-  cursor?: string;
 }
 
-/** List policy rows. */
+/**
+ * List policy rows, **read to the end**.
+ *
+ * `policy/list/0.3` moved to the registry-wide paging convention — `limit`
+ * and `cursor` in, `nextCursor` out, absent on the last page — and dropped
+ * 0.2's `truncated`. Only an absent `nextCursor` means exhaustion, so the
+ * cursor is followed through `collectPages` rather than handing a pane the
+ * first page: a policy engine's rule set shown in part is a rule nobody
+ * reviews.
+ */
 export async function policyList(
   sender: TrustTaskSender,
   params: PolicyListParams,
 ): Promise<PolicyListResult> {
-  const payload: PolicyListPayload = {
-    ...(params.contextId ? { contextId: params.contextId } : {}),
-    // `!== undefined`: `enabledOnly: false` is "include disabled rows", which
-    // is not the same request as omitting the filter.
-    ...(params.enabledOnly !== undefined ? { enabledOnly: params.enabledOnly } : {}),
-    ...(params.cursor ? { cursor: params.cursor } : {}),
-    ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
-  };
-  const envelope = buildTrustTask(POLICY_LIST, payload, {
-    issuer: params.holder.did,
-    recipient: params.service.did,
+  const policies = await collectPages("policy/list", async (cursor) => {
+    const payload: PolicyListPayload = {
+      ...(params.contextId ? { contextId: params.contextId } : {}),
+      // `!== undefined`: `enabledOnly: false` is "include disabled rows", which
+      // is not the same request as omitting the filter.
+      ...(params.enabledOnly !== undefined ? { enabledOnly: params.enabledOnly } : {}),
+      ...(params.limit !== undefined ? { limit: params.limit } : {}),
+      ...(cursor ? { cursor } : {}),
+    };
+    const envelope = buildTrustTask(POLICY_LIST, payload, {
+      issuer: params.holder.did,
+      recipient: params.service.did,
+    });
+    const res = await sender.send<PolicyListResponsePayload>(envelope, {
+      expectedResponseType: POLICY_LIST_RESPONSE,
+      operationLabel: "policy/list/0.3",
+    });
+    return { items: res.policies ?? [], nextCursor: res.nextCursor };
   });
-  const res = await sender.send<PolicyListResponsePayload>(envelope, {
-    expectedResponseType: POLICY_LIST_RESPONSE,
-    operationLabel: "policy/list/0.2",
-  });
-  return {
-    policies: res.policies ?? [],
-    truncated: res.truncated ?? false,
-    ...(res.cursor ? { cursor: res.cursor } : {}),
-  };
+  return { policies };
 }
 
 export interface PolicyGetParams extends PolicyCallerParams {
@@ -107,7 +114,7 @@ export async function policyGet(
   );
   // Single-member envelope: the row *is* the answer, so unwrap it — the same
   // shape `aclShow` and `keysShow` return. Multi-member responses (upsert's
-  // `{policy, created}`) are handed back whole, because there both members say
+  // `{policy, wasCreated}`) are handed back whole, because there both members say
   // something the caller needs.
   const res = await sender.send<PolicyGetResponsePayload>(envelope, {
     expectedResponseType: POLICY_GET_RESPONSE,
@@ -139,7 +146,14 @@ export interface PolicyUpsertParams extends PolicyCallerParams {
   ext?: PolicyUpsertPayload["ext"];
 }
 
-/** Create or update a policy row. */
+/**
+ * Create or update a policy row.
+ *
+ * The response's `wasCreated` (0.2's `created`, renamed in 0.3 to follow the
+ * registry's boolean naming) says which of the two happened — passed through,
+ * never defaulted, because defaulting it would paper over a non-conformant
+ * agent.
+ */
 export async function policyUpsert(
   sender: TrustTaskSender,
   params: PolicyUpsertParams,
@@ -165,7 +179,7 @@ export async function policyUpsert(
   });
   return sender.send<PolicyUpsertResponsePayload>(envelope, {
     expectedResponseType: POLICY_UPSERT_RESPONSE,
-    operationLabel: "policy/upsert/0.2",
+    operationLabel: "policy/upsert/0.3",
   });
 }
 

@@ -50,7 +50,7 @@ import {
   RESPONSE_TYPE_URI as BACKUP_ABORT_RESPONSE,
   type VTABackupAbortPayload,
   type VTABackupAbortResponsePayload,
-} from "@openvtc/trust-tasks/vta/backup/abort/1.0/payload";
+} from "../specs/vta/backup/abort/1.0/payload.js";
 
 /** Issued by an operator identity, to the agent holding the bundle. */
 export interface BackupCallerParams {

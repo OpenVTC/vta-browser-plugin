@@ -47,6 +47,9 @@ interface Outcome {
   earliestReadableEpoch: number;
   fetched: number;
   stored: number;
+  /** The room's epoch floor the agent now holds (`rooms/keys/backfill/0.2`);
+   *  absent when it holds none. */
+  epochFloor?: number;
 }
 
 /**
@@ -58,6 +61,19 @@ interface Outcome {
  * its history.
  */
 function Result({ outcome, room }: { outcome: Outcome; room: HeldRoom }) {
+  // Reach at the room's epoch floor is its whole remaining history: what lies
+  // below was pruned by a decision, not withheld — the one case the floor lets
+  // this pane tell apart from "severed or not served".
+  if (outcome.epochFloor !== undefined && outcome.earliestReadableEpoch === outcome.epochFloor) {
+    return (
+      <Note tone="accent">
+        Everything this room still keeps is readable — back to epoch{" "}
+        {outcome.earliestReadableEpoch}. The history before it was pruned by the
+        room, not withheld from you.
+      </Note>
+    );
+  }
+
   // Nothing served: the host holds no rungs below what this agent already
   // reads. Either the room's history begins there or it was severed before this
   // member joined — indistinguishable from here, and neither is a failure.
@@ -146,6 +162,7 @@ export function FetchHistory({
           earliestReadableEpoch: res.earliestReadableEpoch,
           fetched: res.fetched ?? 0,
           stored: res.stored ?? 0,
+          ...(res.epochFloor !== undefined ? { epochFloor: res.epochFloor } : {}),
         });
       },
       { onConsent: setPending, onError: setError },

@@ -1,5 +1,5 @@
 // VTA→approver task-execution consent, per the published
-// `task-consent/{request,decision}/0.1` Trust-Task specs.
+// `task-consent/request/0.1` and `task-consent/decision/0.2` Trust-Task specs.
 //
 // The user's own VTA asks this device to authorize one privileged task before it
 // runs. The device renders what the VTA says the task will do, the human decides,
@@ -59,12 +59,12 @@ import {
   TYPE_URI as TASK_CONSENT_REQUEST_TYPE_URI,
   type Exposure,
   type StatePin,
-} from "@openvtc/trust-tasks/task-consent/request/0.1/payload";
+} from "../specs/task-consent/request/0.1/payload.js";
 import {
   RESPONSE_PAYLOAD_SCHEMA as DECISION_RESPONSE_SCHEMA,
   TYPE_URI as TASK_CONSENT_DECISION_TYPE_URI,
-} from "@openvtc/trust-tasks/task-consent/decision/0.1/payload";
-import { TYPE_URI as TASK_CONSENT_GRANTED_TYPE_URI } from "@openvtc/trust-tasks/task-consent/granted/0.1/payload";
+} from "../specs/task-consent/decision/0.2/payload.js";
+import { TYPE_URI as TASK_CONSENT_GRANTED_TYPE_URI } from "../specs/task-consent/granted/0.1/payload.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 
 export const TASK_CONSENT_REQUEST_TYPE = TASK_CONSENT_REQUEST_TYPE_URI;
@@ -115,7 +115,7 @@ export type TaskConsentOutcome =
  * ## Why this exists
  *
  * The executor answers a decision on the same DIDComm thread, as a Trust-Task
- * envelope: a `decision/0.1#response` document on success, a
+ * envelope: a `decision/0.2#response` document on success, a
  * `trust-task-error/0.x` on refusal. Nothing here recognised either, so
  * both fell through the inbound handler's final "anything else is ignored"
  * branch — no log, no surface, nothing.

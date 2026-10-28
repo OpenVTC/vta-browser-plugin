@@ -16,7 +16,7 @@
 // and hands the decoded reply document to the latter; the channel itself only
 // deals with transport concerns.
 
-import { isStandardCode, normalizeCode } from "@openvtc/trust-tasks/_runtime/codes";
+import { isStandardCode, normalizeCode } from "@openvtc/trust-tasks/runtime";
 
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { proofPurposeForDocumentType, type ProofPurpose } from "../trust-tasks/purpose.js";

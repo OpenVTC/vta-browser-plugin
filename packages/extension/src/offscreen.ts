@@ -1621,7 +1621,7 @@ async function listSelfIssued(vtaDid: string, restBaseUrl?: string): Promise<Sig
     });
     return {
       items: page.entries as unknown as SignInVaultEntry[],
-      ...(page.cursor ? { nextCursor: page.cursor } : {}),
+      ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
     };
   });
 }
@@ -1970,7 +1970,7 @@ async function getVtaSession(
   );
 }
 
-// Vault — list. Runs vault/list/0.2 over the VTA's preferred transport
+// Vault — list. Runs vault/list/0.4 over the VTA's preferred transport
 // (DIDComm > REST). The holder's X25519 is the authcrypt sender / envelope
 // issuer.
 /**
@@ -2310,9 +2310,10 @@ async function doVaultList(req: OffscreenVaultListRequest) {
     service,
     ...(req.filter ? { filter: req.filter as NonNullable<ListParams["filter"]> } : {}),
   });
+  // One page; 0.4 says "more" only by carrying a `nextCursor`.
   return {
     entries: response.entries,
-    truncated: response.truncated,
+    truncated: response.nextCursor !== undefined,
   };
 }
 
@@ -4525,7 +4526,7 @@ async function doRestLogin(
     ? await personaTaskSigner(req.vtaDid, req.restBaseUrl, req.entryId)
     : undefined;
 
-  // `auth/challenge` then `auth/authenticate/0.2`, as Trust Tasks, to the RP
+  // `auth/challenge` then `auth/authenticate/0.3`, as Trust Tasks, to the RP
   // this origin is pinned to. `rpHttpsSender` refuses a document addressed to
   // anyone else and any reply the RP did not sign.
   const sender = rpHttpsSender({

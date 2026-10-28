@@ -13,7 +13,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { validateAgainstSchema, describeViolations } from "../dist/trust-tasks/validate.js";
-import { PAYLOAD_SCHEMA } from "@openvtc/trust-tasks/task-consent/request/0.1/payload";
+import { PAYLOAD_SCHEMA } from "../dist/specs/task-consent/request/0.1/payload.js";
 
 /** A payload the published schema accepts. Overrides are applied on top. */
 function payload(over = {}) {
@@ -125,10 +125,9 @@ test("no shipped schema requires a member it does not define", async () => {
   const { join, resolve, dirname } = await import("node:path");
   const { fileURLToPath } = await import("node:url");
 
-  const root = resolve(
-    dirname(fileURLToPath(import.meta.url)),
-    "../../../node_modules/@openvtc/trust-tasks/dist",
-  );
+  // The schemas this package executes are the ones generated from its own
+  // `trust-tasks.lock`, so those are the ones scanned.
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../dist/specs");
 
   const problems = [];
   const scan = (s, file, key, path = "#") => {
@@ -152,7 +151,7 @@ test("no shipped schema requires a member it does not define", async () => {
     }
   })(root);
 
-  assert.ok(files.length > 300, `only ${files.length} schemas found — did the layout move?`);
+  assert.ok(files.length > 200, `only ${files.length} schemas found — did the layout move?`);
   for (const f of files) {
     const m = await import(f);
     for (const key of ["PAYLOAD_SCHEMA", "RESPONSE_PAYLOAD_SCHEMA"]) {
@@ -179,7 +178,7 @@ test("a decision response with a status outside the enum is reported malformed",
   const reply = async (payload) => {
     const body = {
       id: "urn:uuid:ok-schema",
-      type: "https://trusttasks.org/spec/task-consent/decision/0.1#response",
+      type: "https://trusttasks.org/spec/task-consent/decision/0.2#response",
       issuer: vta.did,
       payload,
     };

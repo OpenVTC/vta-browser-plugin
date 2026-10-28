@@ -20,33 +20,33 @@
 //
 // The numbers mirror the Rust module exactly. The list is the Rust list less
 // the tasks this wallet never sends (`vault/proxy-login/0.1`, superseded;
-// `vta/services/update/1.1`; `rooms/owner/anchor/0.1`) — a budget only matters
-// for a task that leaves here, and `task-surface` holds this file to the tasks
-// the wallet speaks. `vta/services/enable` and `update` are relayed too, but
-// they are console-only admin tasks, and this file ships in every wallet
-// surface: `admin/services.ts` gives them `minRelayBudgetMs()` itself. If
-// either side changes, change the other.
+// `rooms/owner/anchor/0.1`) — a budget only matters for a task that leaves
+// here, and `task-surface` holds this file to the tasks the wallet speaks.
+// `vta/services/enable` and `update` are relayed too, but they are
+// console-only admin tasks, and this file ships in every wallet surface:
+// `admin/services.ts` gives them `minRelayBudgetMs()` itself. If either side
+// changes, change the other.
 
-import { TYPE_URI as WEBVH_DIDS_CREATE } from "@openvtc/trust-tasks/vta/webvh/dids/create/1.0/payload";
-import { TYPE_URI as WEBVH_DIDS_DELETE } from "@openvtc/trust-tasks/vta/webvh/dids/delete/1.0/payload";
-import { TYPE_URI as WEBVH_DIDS_UPDATE } from "@openvtc/trust-tasks/vta/webvh/dids/update/1.0/payload";
-import { TYPE_URI as WEBVH_DIDS_ROTATE_KEYS } from "@openvtc/trust-tasks/vta/webvh/dids/rotate-keys/1.0/payload";
-import { TYPE_URI as WEBVH_DIDS_REGISTER_WITH_SERVER } from "@openvtc/trust-tasks/vta/webvh/dids/register-with-server/1.0/payload";
-import { TYPE_URI as WEBVH_AGENT_NAME_LIST } from "@openvtc/trust-tasks/vta/webvh/agent-name/list/1.0/payload";
-import { TYPE_URI as WEBVH_AGENT_NAME_CHECK } from "@openvtc/trust-tasks/vta/webvh/agent-name/check/1.0/payload";
-import { TYPE_URI as WEBVH_AGENT_NAME_SET } from "@openvtc/trust-tasks/vta/webvh/agent-name/set/1.0/payload";
-import { TYPE_URI as WEBVH_AGENT_NAME_REMOVE } from "@openvtc/trust-tasks/vta/webvh/agent-name/remove/1.0/payload";
-import { TYPE_URI as WEBVH_AGENT_NAME_DISABLE } from "@openvtc/trust-tasks/vta/webvh/agent-name/disable/1.0/payload";
-import { TYPE_URI as WEBVH_AGENT_NAME_ENABLE } from "@openvtc/trust-tasks/vta/webvh/agent-name/enable/1.0/payload";
-import { TYPE_URI as WEBVH_SERVERS_DOMAINS } from "@openvtc/trust-tasks/vta/webvh/servers/domains/0.1/payload";
-import { TYPE_URI as WEBVH_SERVERS_RECONCILE } from "@openvtc/trust-tasks/vta/webvh/servers/reconcile/0.1/payload";
-import { TYPE_URI as WEBVH_SERVERS_RETIRE_ORPHAN } from "@openvtc/trust-tasks/vta/webvh/servers/retire-orphan/0.1/payload";
-import { TYPE_URI as ROOMS_OWNER_REGISTER } from "@openvtc/trust-tasks/rooms/owner/register/0.2/payload";
-import { TYPE_URI as ROOMS_KEYS_BACKFILL } from "@openvtc/trust-tasks/rooms/keys/backfill/0.1/payload";
-import { TYPE_URI as ROOMS_KEYS_READ } from "@openvtc/trust-tasks/rooms/keys/read/0.1/payload";
-import { TYPE_URI as ROOMS_KEYS_BROWSE } from "@openvtc/trust-tasks/rooms/keys/browse/0.1/payload";
-import { TYPE_URI as VAULT_PROXY_LOGIN } from "@openvtc/trust-tasks/vault/proxy-login/0.2/payload";
-import { TYPE_URI as PROVISION_INTEGRATION } from "@openvtc/trust-tasks/provision/integration/0.3/payload";
+import { TYPE_URI as WEBVH_DIDS_CREATE } from "../specs/vta/webvh/dids/create/1.2/payload.js";
+import { TYPE_URI as WEBVH_DIDS_DELETE } from "../specs/vta/webvh/dids/delete/1.0/payload.js";
+import { TYPE_URI as WEBVH_DIDS_UPDATE } from "../specs/vta/webvh/dids/update/1.0/payload.js";
+import { TYPE_URI as WEBVH_DIDS_ROTATE_KEYS } from "../specs/vta/webvh/dids/rotate-keys/1.0/payload.js";
+import { TYPE_URI as WEBVH_DIDS_REGISTER_WITH_SERVER } from "../specs/vta/webvh/dids/register-with-server/1.0/payload.js";
+import { TYPE_URI as WEBVH_AGENT_NAME_LIST } from "../specs/vta/webvh/agent-name/list/1.1/payload.js";
+import { TYPE_URI as WEBVH_AGENT_NAME_CHECK } from "../specs/vta/webvh/agent-name/check/1.0/payload.js";
+import { TYPE_URI as WEBVH_AGENT_NAME_SET } from "../specs/vta/webvh/agent-name/set/1.0/payload.js";
+import { TYPE_URI as WEBVH_AGENT_NAME_REMOVE } from "../specs/vta/webvh/agent-name/remove/1.0/payload.js";
+import { TYPE_URI as WEBVH_AGENT_NAME_DISABLE } from "../specs/vta/webvh/agent-name/disable/1.0/payload.js";
+import { TYPE_URI as WEBVH_AGENT_NAME_ENABLE } from "../specs/vta/webvh/agent-name/enable/1.0/payload.js";
+import { TYPE_URI as WEBVH_SERVERS_DOMAINS } from "../specs/vta/webvh/servers/domains/0.1/payload.js";
+import { TYPE_URI as WEBVH_SERVERS_RECONCILE } from "../specs/vta/webvh/servers/reconcile/0.1/payload.js";
+import { TYPE_URI as WEBVH_SERVERS_RETIRE_ORPHAN } from "../specs/vta/webvh/servers/retire-orphan/0.1/payload.js";
+import { TYPE_URI as ROOMS_OWNER_REGISTER } from "../specs/rooms/owner/register/0.2/payload.js";
+import { TYPE_URI as ROOMS_KEYS_BACKFILL } from "../specs/rooms/keys/backfill/0.2/payload.js";
+import { TYPE_URI as ROOMS_KEYS_READ } from "../specs/rooms/keys/read/0.1/payload.js";
+import { TYPE_URI as ROOMS_KEYS_BROWSE } from "../specs/rooms/keys/browse/0.3/payload.js";
+import { TYPE_URI as VAULT_PROXY_LOGIN } from "../specs/vault/proxy-login/0.2/payload.js";
+import { TYPE_URI as PROVISION_INTEGRATION } from "../specs/provision/integration/0.3/payload.js";
 
 /** How long the VTA waits for a peer's reply on one TSP hop
  *  (`vta_sdk::budget::TSP_REPLY_TIMEOUT_SECS`). */

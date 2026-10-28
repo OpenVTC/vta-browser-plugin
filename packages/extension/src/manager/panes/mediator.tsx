@@ -521,21 +521,17 @@ function MailOf({
     );
   }
   if (!acct.data) return <Loading what="the account" />;
-  const a = acct.data as Account & {
-    lastReceivedAt?: number;
-    lastAuthenticatedAt?: number;
-    stats?: { messagesReceived?: number; messagesSent?: number };
-  };
+  const a = acct.data;
   return (
     <Panel title="Its mail" description="What the mediator is holding for this account, and what this account sent that has not been collected.">
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", fontSize: t.sm }}>
         <Pill tone="off">{a.accountType}</Pill>
         {a.acl.blocked && <Pill tone="danger">blocked</Pill>}
         {a.lastAuthenticatedAt !== undefined && (
-          <span style={{ color: c.muted }}>last signed in {formatInstant(a.lastAuthenticatedAt * 1000)}</span>
+          <span style={{ color: c.muted }}>last signed in {formatInstant(a.lastAuthenticatedAt)}</span>
         )}
         {a.lastReceivedAt !== undefined && (
-          <span style={{ color: c.muted }}>· last message in {formatInstant(a.lastReceivedAt * 1000)}</span>
+          <span style={{ color: c.muted }}>· last message in {formatInstant(a.lastReceivedAt)}</span>
         )}
         {a.stats && (
           <span style={{ color: c.muted }}>
@@ -619,8 +615,8 @@ function RelayView({ mediatorDid, vtaDid, parties }: { mediatorDid: string; vtaD
       {tooOld && (
         <Note tone="warn">
           This mediator runs {p.version}; the lens needs affinidi-messaging-mediator{" "}
-          {MEDIATOR_VERSION_FLOOR.join(".")} or later, which serves the operations tasks and
-          threads a refusal back to the request that caused it. Nothing below would answer.
+          {MEDIATOR_VERSION_FLOOR.join(".")} or later, which serves the operations tasks at the
+          versions the lens speaks and pushes the traffic monitor it reads. Nothing below would answer.
         </Note>
       )}
       {!tooOld && (
@@ -752,8 +748,7 @@ function OwnAccount({
     onChanged();
   }, [status, onChanged]);
   const standing = standingOf(account);
-  const activity = account as Account & { lastReceivedAt?: number; lastAuthenticatedAt?: number };
-  const stats = (account as Account & { stats?: { messagesReceived?: number; messagesSent?: number } }).stats;
+  const stats = account.stats;
 
   return (
     <Panel
@@ -765,11 +760,11 @@ function OwnAccount({
         <Pill tone={standing.mediatorWide ? "accent" : "off"}>{account.accountType}</Pill>
         {account.acl.blocked && <Pill tone="danger">blocked</Pill>}
         {!standing.local && <Pill tone="warn">not held here for pickup</Pill>}
-        {activity.lastAuthenticatedAt !== undefined && (
-          <span style={{ color: c.muted }}>last signed in {formatInstant(activity.lastAuthenticatedAt * 1000)}</span>
+        {account.lastAuthenticatedAt !== undefined && (
+          <span style={{ color: c.muted }}>last signed in {formatInstant(account.lastAuthenticatedAt)}</span>
         )}
-        {activity.lastReceivedAt !== undefined && (
-          <span style={{ color: c.muted }}>· last message in {formatInstant(activity.lastReceivedAt * 1000)}</span>
+        {account.lastReceivedAt !== undefined && (
+          <span style={{ color: c.muted }}>· last message in {formatInstant(account.lastReceivedAt)}</span>
         )}
         {stats && (
           <span style={{ color: c.muted }}>
@@ -1010,7 +1005,7 @@ function QueuePressure({ sender, caller, names }: { sender: MediatorTaskSender; 
 
 function Accounts({ sender, caller, names }: { sender: MediatorTaskSender; caller: MediatorCaller; names: Names }) {
   const list = useAsync(() => mediatorAccountList(sender, caller, { limit: 50, includeActivity: true }), [sender]);
-  type Row = Account & { lastAuthenticatedAt?: number; lastReceivedAt?: number };
+  type Row = Account;
   return (
     <Panel title="Accounts" description="The first page of accounts at this mediator, with when each last signed in.">
       {list.error && <LoadError what="the account list" error={list.error} />}
@@ -1023,11 +1018,11 @@ function Accounts({ sender, caller, names }: { sender: MediatorTaskSender; calle
             {
               key: "login",
               header: "Last signed in",
-              render: (r) => (r.lastAuthenticatedAt ? formatInstant(r.lastAuthenticatedAt * 1000) : <span style={{ color: c.faint }}>—</span>),
+              render: (r) => (r.lastAuthenticatedAt ? formatInstant(r.lastAuthenticatedAt) : <span style={{ color: c.faint }}>—</span>),
             },
             { key: "flags", header: "", render: (r) => (r.acl.blocked ? <Pill tone="danger">blocked</Pill> : null) },
           ]}
-          rows={list.data.accounts as Row[]}
+          rows={list.data.accounts}
           rowKey={(r) => r.did}
           empty="No accounts."
         />
@@ -1040,7 +1035,7 @@ function Accounts({ sender, caller, names }: { sender: MediatorTaskSender; calle
 }
 
 function MediatorAudit({ sender, caller, names }: { sender: MediatorTaskSender; caller: MediatorCaller; names: Names }) {
-  const log = useAsync(() => auditList(sender, { holder: caller.holder, service: caller.mediator, pageSize: 25 }), [sender]);
+  const log = useAsync(() => auditList(sender, { holder: caller.holder, service: caller.mediator, limit: 25 }), [sender]);
   return (
     <Panel title="Audit" description="What administrators did at this mediator — including every traffic-monitor subscription, yours among them.">
       {log.error && <LoadError what="the audit log" error={log.error} />}
@@ -1064,7 +1059,7 @@ function MediatorAudit({ sender, caller, names }: { sender: MediatorTaskSender; 
             rowKey={(e) => e.eventId}
             empty="Nothing recorded yet."
           />
-          {log.data.truncated && <Note tone="warn">This page is truncated — it is not a complete account of what happened.</Note>}
+          {log.data.nextCursor && <Note tone="warn">This page is truncated — it is not a complete account of what happened.</Note>}
         </>
       )}
     </Panel>
@@ -1267,7 +1262,7 @@ function TapeRow({ line, names }: { line: TapeLine; names: Names }) {
   }
   const e = line.event;
   const trouble = isTrouble(e);
-  const time = e.at.length >= 19 ? e.at.slice(11, 19) : e.at;
+  const time = e.occurredAt.length >= 19 ? e.occurredAt.slice(11, 19) : e.occurredAt;
   return (
     <div
       style={{

@@ -53,37 +53,65 @@ test("both wire forms of an entry normalize to one shape", async () => {
   // responders whose tasks fail unless the producer acts on them.
   const channel = recorder({
     supportedTypes: [
-      "https://trusttasks.org/spec/vault/list/0.2",
+      "https://trusttasks.org/spec/vault/list/0.4",
       {
-        type: "https://trusttasks.org/spec/vault/upsert/0.2",
+        type: "https://trusttasks.org/spec/vault/upsert/0.4",
         requiredExt: ["org.example.tenancy"],
       },
     ],
-    frameworkVersion: "0.5",
+    frameworkVersion: "0.6.0",
   });
   const res = await discoverSupportedTypes(channel, { holder: HOLDER, service: SERVICE });
   assert.deepEqual(res.supportedTypes, [
-    { type: "https://trusttasks.org/spec/vault/list/0.2", requiredExt: [] },
+    { type: "https://trusttasks.org/spec/vault/list/0.4", requiredExt: [] },
     {
-      type: "https://trusttasks.org/spec/vault/upsert/0.2",
+      type: "https://trusttasks.org/spec/vault/upsert/0.4",
       requiredExt: ["org.example.tenancy"],
     },
   ]);
-  assert.equal(res.frameworkVersion, "0.5");
+  assert.equal(res.frameworkVersion, "0.6.0");
 });
 
 test("supportsType compares the bare URI, so either variant answers", async () => {
   const channel = recorder({
-    supportedTypes: ["https://trusttasks.org/spec/vault/list/0.2"],
+    supportedTypes: ["https://trusttasks.org/spec/vault/list/0.4"],
   });
   const res = await discoverSupportedTypes(channel, { holder: HOLDER, service: SERVICE });
-  assert.equal(supportsType(res, "https://trusttasks.org/spec/vault/list/0.2"), true);
+  assert.equal(supportsType(res, "https://trusttasks.org/spec/vault/list/0.4"), true);
   assert.equal(
-    supportsType(res, "https://trusttasks.org/spec/vault/list/0.2#response"),
+    supportsType(res, "https://trusttasks.org/spec/vault/list/0.4#response"),
     true,
     "a responder listing a bare URI supports both variants",
   );
-  assert.equal(supportsType(res, "https://trusttasks.org/spec/vault/get/0.2"), false);
+  assert.equal(supportsType(res, "https://trusttasks.org/spec/vault/get/0.3"), false);
+});
+
+test("an entry's acceptance window wins over the response's, and absence stays absence", async () => {
+  // trust-task-discovery/0.3: a response-level window applies to every entry
+  // that carries none of its own. With neither, nothing was learnt — the entry
+  // must not come back with a window this wallet made up.
+  const own = { maxAgeSeconds: 60, clockSkewSeconds: 5 };
+  const all = { maxAgeSeconds: 300, clockSkewSeconds: 30 };
+  const withDefault = await discoverSupportedTypes(
+    recorder({
+      supportedTypes: [
+        "https://trusttasks.org/spec/vault/list/0.4",
+        { type: "https://trusttasks.org/spec/vault/upsert/0.4", acceptanceWindow: own },
+      ],
+      acceptanceWindow: all,
+    }),
+    { holder: HOLDER, service: SERVICE },
+  );
+  assert.deepEqual(withDefault.supportedTypes, [
+    { type: "https://trusttasks.org/spec/vault/list/0.4", requiredExt: [], acceptanceWindow: all },
+    { type: "https://trusttasks.org/spec/vault/upsert/0.4", requiredExt: [], acceptanceWindow: own },
+  ]);
+
+  const silent = await discoverSupportedTypes(
+    recorder({ supportedTypes: ["https://trusttasks.org/spec/vault/list/0.4"] }),
+    { holder: HOLDER, service: SERVICE },
+  );
+  assert.equal("acceptanceWindow" in silent.supportedTypes[0], false);
 });
 
 test("the §10.2 pattern bound is refused here, not at the responder", async () => {
@@ -108,7 +136,7 @@ test("a null value is written, and expectedVersion 0 survives as create-only", a
   // real stored value, unlike an omitted `value`) and turns create-only into a
   // last-writer-wins upsert — which silently overwrites the record it was
   // supposed to refuse to touch.
-  const channel = recorder({ contextId: "c", namespace: "n", key: "k", version: 1, created: true, updatedAt: "t" });
+  const channel = recorder({ contextId: "c", namespace: "n", key: "k", version: 1, wasCreated: true, updatedAt: "t" });
   await appStatePut(channel, {
     holder: HOLDER, service: SERVICE, contextId: "c",
     namespace: "n", key: "k", value: null, expectedVersion: 0,
@@ -119,7 +147,7 @@ test("a null value is written, and expectedVersion 0 survives as create-only", a
 });
 
 test("an omitted value is absent, not null — the two are different writes", async () => {
-  const channel = recorder({ contextId: "c", namespace: "n", key: "k", version: 2, created: false, updatedAt: "t" });
+  const channel = recorder({ contextId: "c", namespace: "n", key: "k", version: 2, wasCreated: false, updatedAt: "t" });
   await appStatePut(channel, {
     holder: HOLDER, service: SERVICE, contextId: "c",
     namespace: "n", key: "k", mergePatch: { a: 1 },
@@ -130,13 +158,25 @@ test("an omitted value is absent, not null — the two are different writes", as
 });
 
 test("list sends only the filters it was given", async () => {
-  const channel = recorder({ records: [], truncated: false });
+  const channel = recorder({ records: [] });
   await appStateList(channel, {
     holder: HOLDER, service: SERVICE, contextId: "c", sinceVersion: 0,
   });
   // `sinceVersion: 0` is a real floor, not an absence — it is the first call of
   // an incremental sync.
   assert.deepEqual(channel.sent[0].envelope.payload, { contextId: "c", sinceVersion: 0 });
+});
+
+// 1.1 pages by the registry convention: `limit`, not 1.0's `pageSize`.
+test("list carries limit and cursor at 1.1", async () => {
+  const channel = recorder({ records: [], nextCursor: "c2" });
+  await appStateList(channel, {
+    holder: HOLDER, service: SERVICE, contextId: "c", limit: 50, cursor: "c1",
+  });
+  const { envelope, opts } = channel.sent[0];
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/app-state/list/1.1");
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vta/app-state/list/1.1#response");
+  assert.deepEqual(envelope.payload, { contextId: "c", limit: 50, cursor: "c1" });
 });
 
 test("delete addresses the record and carries the task version", async () => {
@@ -152,40 +192,41 @@ test("delete addresses the record and carries the task version", async () => {
 
 // ── services ────────────────────────────────────────────────────────────────
 
-test("drainTtlSecs 0 is sent — it means drop in-flight work, not 'unspecified'", async () => {
+test("drainTtlSeconds 0 is sent — it means drop in-flight work, not 'unspecified'", async () => {
   const channel = recorder({ result: {} });
   await serviceDisable(channel, {
-    holder: HOLDER, service: SERVICE, kind: "didcomm", drainTtlSecs: 0,
+    holder: HOLDER, service: SERVICE, kind: "didcomm", drainTtlSeconds: 0,
   });
-  assert.equal(channel.sent[0].envelope.payload.drainTtlSecs, 0);
+  assert.equal(channel.sent[0].envelope.payload.drainTtlSeconds, 0);
 });
 
-test("omitting drainTtlSecs leaves the agent's default, which is not zero", async () => {
+test("omitting drainTtlSeconds leaves the agent's default, which is not zero", async () => {
   const channel = recorder({ result: {} });
   await serviceDisable(channel, { holder: HOLDER, service: SERVICE, kind: "rest" });
-  assert.equal("drainTtlSecs" in channel.sent[0].envelope.payload, false);
+  assert.equal("drainTtlSeconds" in channel.sent[0].envelope.payload, false);
 });
 
 // ── acl/update ──────────────────────────────────────────────────────────────
 
-test("acl/update distinguishes omitted, null, and empty on allowedKeys", async () => {
-  // Three different grants: leave alone, remove the filter (WIDENS to every key
-  // in scope), and no keys at all (the narrowest grant there is). Collapsing
-  // any two of them changes somebody's authority.
+test("acl/update sends a key scope only when one is stated", async () => {
+  // 0.2 replaced 0.1's absent / null / [] `allowedKeys` with an explicit
+  // `keys` scope. What survives is the partial-update rule: an omitted member
+  // is left alone, and must not be sent as anything — least of all `all`.
   const entry = { subject: "did:key:zSub", role: "reader" };
-  for (const [allowedKeys, expected] of [
+  for (const [keys, expected] of [
     [undefined, undefined],
-    [null, null],
-    [[], []],
+    [{ scope: "all" }, { scope: "all" }],
+    [{ scope: "none" }, { scope: "none" }],
   ]) {
     const channel = recorder({ entry });
     await aclUpdate(channel, {
       holder: HOLDER, service: SERVICE, subject: "did:key:zSub",
-      ...(allowedKeys !== undefined ? { allowedKeys } : {}),
+      ...(keys !== undefined ? { keys } : {}),
     });
-    const payload = channel.sent[0].envelope.payload;
-    if (expected === undefined) assert.equal("allowedKeys" in payload, false);
-    else assert.deepEqual(payload.allowedKeys, expected);
+    const { type, payload } = channel.sent[0].envelope;
+    assert.equal(type, "https://trusttasks.org/spec/acl/update/0.2");
+    if (expected === undefined) assert.equal("keys" in payload, false);
+    else assert.deepEqual(payload.keys, expected);
   }
 });
 

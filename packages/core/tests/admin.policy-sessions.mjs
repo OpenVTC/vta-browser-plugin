@@ -47,7 +47,7 @@ test("upsert always sends enabled, including when it is false", async () => {
   // `enabled` is required and non-optional on the Rust side. Omitting it on a
   // falsy value would leave the agent to default — turning "disable this rule"
   // into "leave it running", which is the wrong direction for a policy engine.
-  const channel = recorder({ policy: POLICY, created: false });
+  const channel = recorder({ policy: POLICY, wasCreated: false });
   await policyUpsert(channel, {
     holder: HOLDER,
     service: SERVICE,
@@ -60,7 +60,7 @@ test("upsert always sends enabled, including when it is false", async () => {
 });
 
 test("upsert carries expectedVersion so a racing edit loses instead of wins", async () => {
-  const channel = recorder({ policy: POLICY, created: false });
+  const channel = recorder({ policy: POLICY, wasCreated: false });
   await policyUpsert(channel, {
     holder: HOLDER,
     service: SERVICE,
@@ -74,7 +74,7 @@ test("upsert carries expectedVersion so a racing edit loses instead of wins", as
 });
 
 test("expectedVersion 0 is a version, not an absence", async () => {
-  const channel = recorder({ policy: POLICY, created: true });
+  const channel = recorder({ policy: POLICY, wasCreated: true });
   await policyUpsert(channel, {
     holder: HOLDER,
     service: SERVICE,
@@ -87,7 +87,7 @@ test("expectedVersion 0 is a version, not an absence", async () => {
 });
 
 test("upsert without an id lets the agent allocate one", async () => {
-  const channel = recorder({ policy: POLICY, created: true });
+  const channel = recorder({ policy: POLICY, wasCreated: true });
   const result = await policyUpsert(channel, {
     holder: HOLDER,
     service: SERVICE,
@@ -96,15 +96,16 @@ test("upsert without an id lets the agent allocate one", async () => {
     enabled: true,
   });
   assert.ok(!("id" in channel.sent[0].envelope.payload));
-  assert.equal(result.created, true);
+  assert.equal(result.wasCreated, true);
+  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/policy/upsert/0.3");
 });
 
 test("upsert hands back both members of the response", async () => {
-  // `{policy, created}` are both required by the schema, and both matter to a
-  // caller — so the response is returned whole rather than unwrapped, and
-  // `created` is passed through rather than defaulted. Defaulting it would
+  // `{policy, wasCreated}` are both required by the schema, and both matter to
+  // a caller — so the response is returned whole rather than unwrapped, and
+  // `wasCreated` is passed through rather than defaulted. Defaulting it would
   // paper over a non-conformant agent.
-  const channel = recorder({ policy: POLICY, created: false });
+  const channel = recorder({ policy: POLICY, wasCreated: false });
   const result = await policyUpsert(channel, {
     holder: HOLDER,
     service: SERVICE,
@@ -112,12 +113,12 @@ test("upsert hands back both members of the response", async () => {
     module: "package p\n",
     enabled: true,
   });
-  assert.deepEqual(result, { policy: POLICY, created: false });
+  assert.deepEqual(result, { policy: POLICY, wasCreated: false });
 });
 
 test("ext is forwarded whole — the agent cross-checks it against the module", async () => {
   const ext = { rules: [{ when: "always", require: "approval" }] };
-  const channel = recorder({ policy: POLICY, created: false });
+  const channel = recorder({ policy: POLICY, wasCreated: false });
   await policyUpsert(channel, {
     holder: HOLDER,
     service: SERVICE,
@@ -130,15 +131,31 @@ test("ext is forwarded whole — the agent cross-checks it against the module", 
 });
 
 test("enabledOnly:false is sent rather than dropped", async () => {
-  const channel = recorder({ policies: [POLICY], truncated: false });
+  const channel = recorder({ policies: [POLICY] });
   await policyList(channel, { holder: HOLDER, service: SERVICE, enabledOnly: false });
+  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/policy/list/0.3");
   assert.deepEqual(channel.sent[0].envelope.payload, { enabledOnly: false });
 });
 
 test("list defaults what the agent may omit", async () => {
   const channel = recorder({});
   const result = await policyList(channel, { holder: HOLDER, service: SERVICE });
-  assert.deepEqual(result, { policies: [], truncated: false });
+  assert.deepEqual(result, { policies: [] });
+});
+
+test("list follows nextCursor to the end, keeping the filters on every page", async () => {
+  // 0.3 dropped `truncated`: only an absent `nextCursor` means the last page.
+  const pages = [{ policies: [POLICY], nextCursor: "c1" }, { policies: [{ ...POLICY, id: "p2" }] }];
+  const sent = [];
+  const channel = {
+    send(envelope) {
+      sent.push(envelope);
+      return Promise.resolve(pages[sent.length - 1]);
+    },
+  };
+  const result = await policyList(channel, { holder: HOLDER, service: SERVICE, contextId: "demo" });
+  assert.deepEqual(result.policies.map((p) => p.id), ["approvals-default", "p2"]);
+  assert.deepEqual(sent[1].payload, { contextId: "demo", cursor: "c1" });
 });
 
 test("get unwraps the row and names the canonical type", async () => {

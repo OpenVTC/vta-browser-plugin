@@ -8,12 +8,12 @@
 //
 // ## Why the check is on rendered text and not on the source
 //
-// Grepping `.tsx` cannot work, and the reason is not effort. `facet` is the
-// **wire** word and is supposed to be everywhere in the code: task URIs,
-// `facetId`, `attributeIds`, imports, the `PoolFacet` type. Only the words a
-// person *reads* are banned. A source scan has to guess which string literals
-// reach a screen, and every guess is either a false positive on a task URI or a
-// hole big enough to walk a pane through.
+// Grepping `.tsx` cannot work, and the reason is not effort. The table's
+// retired words are **wire** and code words that are supposed to appear in the
+// source: task URIs, type names, identifiers (`correlation`, `disclosure`,
+// `profile`). Only the words a person *reads* are banned. A source scan has to
+// guess which string literals reach a screen, and every guess is either a false
+// positive on a task URI or a hole big enough to walk a pane through.
 //
 // Mounting the pane removes the guess. `screen.text()` is the rendered text
 // content — precisely the thing the table governs — so a hit is a hit and there
@@ -25,8 +25,9 @@
 // **type tokens** shown deliberately in mono: an attribute of type
 // `profile.github` prints that token on the card, and it must. So this file
 // bans the words that cannot be a token in these panes and are the live risk —
-// `facet` above all, because the wire uses it on every call these screens make
-// and it is one careless label away from the screen.
+// `facet` among them: the wire said it on every call these screens made until
+// `persona/world/*` superseded `persona/facet/*`, and the old word is one
+// careless label away from coming back.
 //
 // A word that needs the prose/token distinction belongs in a check that can
 // make it, not in a looser version of this one.
@@ -47,7 +48,7 @@ import { buildGraph } from "../src/manager/identity-graph.js";
  * does not govern — the ban is on `group` standing in for a **world**.
  */
 const BANNED: readonly [RegExp, string][] = [
-  [/\bfacets?\b/i, "facet — the wire word. On screen it is a world."],
+  [/\bfacets?\b/i, "facet — the retired wire word. On screen it is a world."],
   [/\bmaterialis[e|ed|ing]/i, "materialise — on screen a context gets a copy."],
   [/\bprojection\b/i, "projection — on screen a context gets a copy."],
   [/\bcorrelations?\b/i, "correlation — on screen it is a link."],
@@ -79,7 +80,7 @@ function assertSpeaksTheTable(text: string, where: string) {
 }
 
 const world = (id: string, name: string, faceIds: string[] = []) =>
-  ({ facetId: id, name, colour: "teal", faceIds, attributeIds: [], version: 1, updatedAt: "x" }) as never;
+  ({ worldId: id, name, colour: "teal", faceIds, attributeIds: [], version: 1, updatedAt: "x" }) as never;
 const face = (id: string, name: string) =>
   ({ profileId: id, name, entries: [], version: 1, updatedAt: "x" }) as never;
 const attribute = (id: string, type: string, value: string) => ({

@@ -1,13 +1,13 @@
-// `vta/services/*` 1.0 — which transports an agent runs, and how it stops
+// `vta/services/*` — which transports an agent runs, and how it stops
 // running one without dropping what is in flight.
 //
 // Operator surface: enabling or disabling a transport changes how every client
 // of that agent reaches it, so this is admin, not wallet. Reachable only as
 // `@openvtc/pnm-core/admin`.
 //
-// **Disabling is a drain, not a switch.** `disable` takes a `drainTtlSecs` and
+// **Disabling is a drain, not a switch.** `disable` takes a `drainTtlSeconds` and
 // the agent keeps serving what is already in flight until it lapses; a mediator
-// under drain shows up in `drain/list` with a `drainsUntil`, and `drain/cancel`
+// under drain shows up in `drain/list` with a `drainEndsAt`, and `drain/cancel`
 // calls it off. A caller that treats `disable` as instantaneous will report an
 // agent as off while it is still answering.
 
@@ -20,54 +20,54 @@ import {
   type VTAServicesListResponsePayload,
   type ServiceState,
   type ServiceKind,
-} from "@openvtc/trust-tasks/vta/services/list/1.0/payload";
+} from "../specs/vta/services/list/1.1/payload.js";
 import {
   TYPE_URI as SERVICES_GET,
   RESPONSE_TYPE_URI as SERVICES_GET_RESPONSE,
   type VTAServicesGetPayload,
   type VTAServicesGetResponsePayload,
-} from "@openvtc/trust-tasks/vta/services/get/1.0/payload";
+} from "../specs/vta/services/get/1.1/payload.js";
 import {
   TYPE_URI as SERVICES_ENABLE,
   RESPONSE_TYPE_URI as SERVICES_ENABLE_RESPONSE,
   type VTAServicesEnablePayload,
   type VTAServicesEnableResponsePayload,
-} from "@openvtc/trust-tasks/vta/services/enable/1.0/payload";
+} from "../specs/vta/services/enable/1.1/payload.js";
 import {
   TYPE_URI as SERVICES_DISABLE,
   RESPONSE_TYPE_URI as SERVICES_DISABLE_RESPONSE,
   type VTAServicesDisablePayload,
   type VTAServicesDisableResponsePayload,
-} from "@openvtc/trust-tasks/vta/services/disable/1.0/payload";
+} from "../specs/vta/services/disable/1.1/payload.js";
 import {
   TYPE_URI as SERVICES_UPDATE,
   RESPONSE_TYPE_URI as SERVICES_UPDATE_RESPONSE,
   type VTAServicesUpdatePayload,
   type VTAServicesUpdateResponsePayload,
-} from "@openvtc/trust-tasks/vta/services/update/1.0/payload";
+} from "../specs/vta/services/update/1.2/payload.js";
 import {
   TYPE_URI as SERVICES_ROLLBACK,
   RESPONSE_TYPE_URI as SERVICES_ROLLBACK_RESPONSE,
   type VTAServicesRollbackPayload,
   type VTAServicesRollbackResponsePayload,
-} from "@openvtc/trust-tasks/vta/services/rollback/1.0/payload";
+} from "../specs/vta/services/rollback/1.2/payload.js";
 import {
   TYPE_URI as SERVICES_DRAIN_LIST,
   RESPONSE_TYPE_URI as SERVICES_DRAIN_LIST_RESPONSE,
   type VTAServicesDrainListResponsePayload,
-} from "@openvtc/trust-tasks/vta/services/drain/list/1.0/payload";
+} from "../specs/vta/services/drain/list/1.1/payload.js";
 import {
   TYPE_URI as SERVICES_DRAIN_CANCEL,
   RESPONSE_TYPE_URI as SERVICES_DRAIN_CANCEL_RESPONSE,
   type VTAServicesDrainCancelPayload,
   type VTAServicesDrainCancelResponsePayload,
-} from "@openvtc/trust-tasks/vta/services/drain/cancel/1.0/payload";
+} from "../specs/vta/services/drain/cancel/1.0/payload.js";
 import {
   TYPE_URI as MANAGEMENT_RELOAD,
   RESPONSE_TYPE_URI as MANAGEMENT_RELOAD_RESPONSE,
   type VTAManagementReloadServicesPayload,
   type VTAManagementReloadServicesResponsePayload,
-} from "@openvtc/trust-tasks/vta/management/reload-services/1.0/payload";
+} from "../specs/vta/management/reload-services/1.0/payload.js";
 import { minRelayBudgetMs } from "../vta/budget.js";
 
 export type { ServiceState, ServiceKind };
@@ -119,7 +119,7 @@ export async function servicesList(
 ): Promise<ServiceState[]> {
   const res = await call<Record<string, never>, VTAServicesListResponsePayload>(
     sender, params, SERVICES_LIST, SERVICES_LIST_RESPONSE,
-    "vta/services/list/1.0", {});
+    "vta/services/list/1.1", {});
   return res.services ?? [];
 }
 
@@ -130,7 +130,7 @@ export interface ServiceGetParams extends ServicesCallerParams {
 /**
  * One transport's state.
  *
- * **Read `drainsUntil`, not just `enabled`.** A transport being drained is
+ * **Read `drainEndsAt`, not just `enabled`.** A transport being drained is
  * still serving: `enabled` has already gone false while in-flight work
  * finishes, so the two together are the state, and `enabled` alone reads as
  * "stopped" during the window where it has not.
@@ -142,7 +142,7 @@ export async function serviceGet(
   const payload: VTAServicesGetPayload = { service: params.kind };
   const res = await call<VTAServicesGetPayload, VTAServicesGetResponsePayload>(
     sender, params, SERVICES_GET, SERVICES_GET_RESPONSE,
-    "vta/services/get/1.0", payload);
+    "vta/services/get/1.1", payload);
   return res.state;
 }
 
@@ -169,7 +169,7 @@ export async function serviceEnable(
   };
   const res = await call<VTAServicesEnablePayload, VTAServicesEnableResponsePayload>(
     sender, params, SERVICES_ENABLE, SERVICES_ENABLE_RESPONSE,
-    "vta/services/enable/1.0", payload, RELAYED);
+    "vta/services/enable/1.1", payload, RELAYED);
   return res.result;
 }
 
@@ -181,13 +181,13 @@ export interface ServiceDisableParams extends ServicesCallerParams {
    *
    * Omitted takes the agent's default, which is **not** zero. This is the
    * member that makes `disable` a drain rather than a switch: until it lapses
-   * the transport still answers, and `drainsUntil` on the service state says
+   * the transport still answers, and `drainEndsAt` on the service state says
    * when it will not. Pass `0` only if dropping in-flight work is the intent.
    */
-  drainTtlSecs?: number;
+  drainTtlSeconds?: number;
 }
 
-/** Begin draining a transport. See {@link ServiceDisableParams.drainTtlSecs}. */
+/** Begin draining a transport. See {@link ServiceDisableParams.drainTtlSeconds}. */
 export async function serviceDisable(
   sender: TrustTaskSender,
   params: ServiceDisableParams,
@@ -195,13 +195,13 @@ export async function serviceDisable(
   const payload: VTAServicesDisablePayload = {
     service: params.kind,
     // `!== undefined`: `0` is "drop in-flight work now", not "unspecified".
-    ...(params.drainTtlSecs !== undefined
-      ? { drainTtlSecs: params.drainTtlSecs }
+    ...(params.drainTtlSeconds !== undefined
+      ? { drainTtlSeconds: params.drainTtlSeconds }
       : {}),
   };
   const res = await call<VTAServicesDisablePayload, VTAServicesDisableResponsePayload>(
     sender, params, SERVICES_DISABLE, SERVICES_DISABLE_RESPONSE,
-    "vta/services/disable/1.0", payload);
+    "vta/services/disable/1.1", payload);
   return res.result;
 }
 
@@ -209,6 +209,12 @@ export interface ServiceUpdateParams extends ServicesCallerParams {
   kind: ServiceKind;
   /** Replacement configuration, applied wholesale rather than merged. */
   config: ServiceConfig;
+  /**
+   * Mediated transports only (`didcomm`, `tsp`): how long the replaced
+   * mediator keeps accepting delivery. Absent takes the agent's default; the
+   * agent may raise it to its floor, so read `drainEndsAt` in the result.
+   */
+  drainTtlSeconds?: number;
 }
 
 /**
@@ -225,15 +231,23 @@ export async function serviceUpdate(
   const payload: VTAServicesUpdatePayload = {
     service: params.kind,
     config: params.config,
+    ...(params.drainTtlSeconds !== undefined
+      ? { drainTtlSeconds: params.drainTtlSeconds }
+      : {}),
   };
   const res = await call<VTAServicesUpdatePayload, VTAServicesUpdateResponsePayload>(
     sender, params, SERVICES_UPDATE, SERVICES_UPDATE_RESPONSE,
-    "vta/services/update/1.0", payload, RELAYED);
+    "vta/services/update/1.2", payload, RELAYED);
   return res.result;
 }
 
 export interface ServiceRollbackParams extends ServicesCallerParams {
   kind: ServiceKind;
+  /**
+   * Mediated transports only: the drain window for the mediator the rollback
+   * moves off, if any. Same semantics as {@link ServiceUpdateParams.drainTtlSeconds}.
+   */
+  drainTtlSeconds?: number;
 }
 
 /** Restore the configuration in force before the last {@link serviceUpdate}. */
@@ -241,10 +255,15 @@ export async function serviceRollback(
   sender: TrustTaskSender,
   params: ServiceRollbackParams,
 ): Promise<VTAServicesRollbackResponsePayload["result"]> {
-  const payload: VTAServicesRollbackPayload = { service: params.kind };
+  const payload: VTAServicesRollbackPayload = {
+    service: params.kind,
+    ...(params.drainTtlSeconds !== undefined
+      ? { drainTtlSeconds: params.drainTtlSeconds }
+      : {}),
+  };
   const res = await call<VTAServicesRollbackPayload, VTAServicesRollbackResponsePayload>(
     sender, params, SERVICES_ROLLBACK, SERVICES_ROLLBACK_RESPONSE,
-    "vta/services/rollback/1.0", payload);
+    "vta/services/rollback/1.2", payload);
   return res.result;
 }
 
@@ -261,7 +280,7 @@ export async function serviceDrainList(
 ): Promise<VTAServicesDrainListResponsePayload["entries"]> {
   const res = await call<Record<string, never>, VTAServicesDrainListResponsePayload>(
     sender, params, SERVICES_DRAIN_LIST, SERVICES_DRAIN_LIST_RESPONSE,
-    "vta/services/drain/list/1.0", {});
+    "vta/services/drain/list/1.1", {});
   return res.entries ?? [];
 }
 
