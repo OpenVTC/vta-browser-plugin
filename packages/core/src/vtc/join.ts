@@ -1,6 +1,6 @@
 // Joining a Verifiable Trust Community from a wallet, as the community serves
-// it today: `vtc/join-requests/manifest/0.4` (0.3 from a community that has
-// not moved) and `submit/0.3`, posted as signed Trust-Task documents to
+// it today: `vtc/join-requests/manifest/0.4` and `submit/0.3`, posted as
+// signed Trust-Task documents to
 // `<TrustTaskHTTPS base>/trust-tasks`.
 //
 // From 0.4 the manifest carries the community's directory disclosure
@@ -24,17 +24,16 @@
 // assemble. `planJoin` picks a criterion that asks for none of those, or says
 // what the others ask for so the person can be told plainly.
 
-import { TYPE_URI as JR_MANIFEST_0_3 } from "@openvtc/trust-tasks/vtc/join-requests/manifest/0.3/payload";
 import {
   TYPE_URI as JR_MANIFEST,
   type VTCJoinRequestsManifestResponsePayload,
   type Criterion,
-} from "@openvtc/trust-tasks/vtc/join-requests/manifest/0.4/payload";
+} from "../specs/vtc/join-requests/manifest/0.4/payload.js";
 import {
   TYPE_URI as JR_SUBMIT,
   type VTCJoinRequestsSubmitPayload,
   type VTCJoinRequestsSubmitResponsePayload,
-} from "@openvtc/trust-tasks/vtc/join-requests/submit/0.3/payload";
+} from "../specs/vtc/join-requests/submit/0.3/payload.js";
 import { OobReplyInvalidError, type OobDocument } from "./oob-sign-in.js";
 import { checkDirectoryDisclosure, describeDirectoryDisclosure } from "./directory-disclosure.js";
 
@@ -42,11 +41,6 @@ import { checkDirectoryDisclosure, describeDirectoryDisclosure } from "./directo
 export const VTC_REST_SERVICE_TYPE = "VTCRest";
 
 export const JOIN_MANIFEST_TYPE = JR_MANIFEST;
-export const JOIN_MANIFEST_0_3_TYPE = JR_MANIFEST_0_3;
-
-/** The manifest versions a wallet asks for: 0.4 first, 0.3 from a community
- *  that refuses it. */
-export type JoinManifestVersion = "0.4" | "0.3";
 export const JOIN_SUBMIT_TYPE = JR_SUBMIT;
 
 export type JoinManifest = VTCJoinRequestsManifestResponsePayload;
@@ -83,7 +77,7 @@ export type JoinPlan =
       requestedAttributes: JoinRequestedAttribute[];
       /** The community's name for itself: self-asserted, unverified. */
       displayName?: string;
-      /** Absent when the community has no directory, or answered 0.3. */
+      /** Absent when the community has no directory. */
       directory?: JoinDirectoryDisclosure;
     }
   | {
@@ -161,13 +155,12 @@ function envelope<P>(type: string, issuer: string, recipient: string, payload: P
   };
 }
 
-/** `vtc/join-requests/manifest` at `version`: the request carries nothing. */
+/** `vtc/join-requests/manifest/0.4`: the request carries nothing. */
 export function buildJoinManifestRequest(
   issuer: string,
   vtcDid: string,
-  version: JoinManifestVersion = "0.4",
 ): OobDocument<Record<string, never>> {
-  return envelope(version === "0.4" ? JR_MANIFEST : JR_MANIFEST_0_3, issuer, vtcDid, {});
+  return envelope(JR_MANIFEST, issuer, vtcDid, {});
 }
 
 /** A manifest reply must be this community's. */

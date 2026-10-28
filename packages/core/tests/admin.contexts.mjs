@@ -30,11 +30,11 @@ test("delete sends force explicitly, defaulting to false", async () => {
   const result = await contextDelete(channel, { holder: HOLDER, service: SERVICE, id: "demo" });
 
   const { envelope, opts } = channel.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/contexts/delete/1.0");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/contexts/delete/1.1");
   assert.deepEqual(envelope.payload, { id: "demo", force: false });
   assert.equal(
     opts.expectedResponseType,
-    "https://trusttasks.org/spec/vta/contexts/delete/1.0#response",
+    "https://trusttasks.org/spec/vta/contexts/delete/1.1#response",
   );
   assert.deepEqual(result, { id: "demo", deleted: true, daemonCleanupErrors: [] });
 });
@@ -43,6 +43,19 @@ test("force is passed through when the caller means it", async () => {
   const channel = recorder({ id: "demo", deleted: true });
   await contextDelete(channel, { holder: HOLDER, service: SERVICE, id: "demo", force: true });
   assert.equal(channel.sent[0].envelope.payload.force, true);
+});
+
+test("host copies are abandoned only when the caller says so", async () => {
+  // 1.1 refuses (`hostCleanupFailed`) a deletion whose DIDs' host copies it
+  // could not confirm removed, unless asked to abandon them. The member is
+  // never sent on the caller's behalf.
+  const quiet = recorder({ id: "demo", deleted: true });
+  await contextDelete(quiet, { holder: HOLDER, service: SERVICE, id: "demo" });
+  assert.equal("abandonHostCopies" in quiet.sent[0].envelope.payload, false);
+
+  const meant = recorder({ id: "demo", deleted: true });
+  await contextDelete(meant, { holder: HOLDER, service: SERVICE, id: "demo", abandonHostCopies: true });
+  assert.equal(meant.sent[0].envelope.payload.abandonHostCopies, true);
 });
 
 test("a delete the agent refused reports deleted:false rather than throwing", async () => {
@@ -115,19 +128,14 @@ test("a delete that left host copies behind says so, rather than reporting done"
     deleted: true,
     daemonCleanupErrors: ["did:webvh:QmX:h: daemon `h` rejected delete: 503"],
   });
-  const result = await contextDelete(channel, { holder: HOLDER, service: SERVICE, id: "demo" });
+  const result = await contextDelete(channel, {
+    holder: HOLDER,
+    service: SERVICE,
+    id: "demo",
+    abandonHostCopies: true,
+  });
   assert.equal(result.deleted, true);
   assert.deepEqual(result.daemonCleanupErrors, [
     "did:webvh:QmX:h: daemon `h` rejected delete: 503",
   ]);
-});
-
-test("the snake_case spelling of the cleanup report is read too", async () => {
-  const channel = recorder({
-    id: "demo",
-    deleted: true,
-    daemon_cleanup_errors: ["did:webvh:QmY:h: orphaned"],
-  });
-  const result = await contextDelete(channel, { holder: HOLDER, service: SERVICE, id: "demo" });
-  assert.deepEqual(result.daemonCleanupErrors, ["did:webvh:QmY:h: orphaned"]);
 });

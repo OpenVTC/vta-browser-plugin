@@ -1,6 +1,6 @@
 // Vault — upsert (M2A.5).
 //
-// Posts a `https://trusttasks.org/spec/vault/upsert/0.3` envelope to the
+// Posts a `https://trusttasks.org/spec/vault/upsert/0.4` envelope to the
 // VTA's trust-task dispatcher. The cleartext secret is wrapped in a
 // DIDComm authcrypt envelope (the `didcomm-authcrypt` variant of the
 // canonical SealedEnvelope schema), so the long-term credential rides
@@ -16,7 +16,8 @@
 //     /trust-tasks).
 //  4. POST the upsert envelope with `sealedSecret: { envelope:
 //     "didcommAuthcrypt", jwe }`.
-//  5. Return the maintainer's response (metadata view + `created` flag).
+//  5. Return the maintainer's response (metadata view + `wasCreated` flag —
+//     spelled `created` through 0.3).
 
 import { packAuthcrypt, type Identity } from "../didcomm/index.js";
 import type { TrustTaskSender } from "../vta/channel.js";
@@ -29,7 +30,7 @@ import type { SecretKind, SiteTarget, VaultEntry } from "./list.js";
 import {
   TYPE_URI as TASK_VAULT_UPSERT,
   RESPONSE_TYPE_URI as TASK_VAULT_UPSERT_RESPONSE,
-} from "@openvtc/trust-tasks/vault/upsert/0.3/payload";
+} from "../specs/vault/upsert/0.4/payload.js";
 
 const INNER_MSG_TYPE = "https://openvtc.org/vault/upsert/secret-envelope/1.0";
 
@@ -138,7 +139,8 @@ export interface VaultUpsertRestOptions extends VaultUpsertParams, RestChannelOp
 
 export interface VaultUpsertResponse {
   entry: VaultEntry;
-  created: boolean;
+  /** True when this call created the entry rather than updating it. */
+  wasCreated?: boolean;
 }
 
 /**
@@ -189,7 +191,7 @@ export async function vaultUpsert(
   });
   return channel.send<VaultUpsertResponse>(envelope, {
     expectedResponseType: TASK_VAULT_UPSERT_RESPONSE,
-    operationLabel: "vault/upsert/0.3",
+    operationLabel: "vault/upsert/0.4",
   });
 }
 

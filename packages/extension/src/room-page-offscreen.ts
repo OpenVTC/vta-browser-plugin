@@ -118,7 +118,7 @@ export async function runRoomsPageOp(
   if (op.op === "roomNames") {
     // The community's own record, member by member: each read is signed as that
     // member, and one that fails (an identity with no rooms, a VTA without
-    // act 0.5) costs only its own names. The record lists a room for as long as
+    // act 0.8) costs only its own names. The record lists a room for as long as
     // the community keeps it — an accepted one too, long after its offer closed.
     const { endpoint } = await (deps.portal ?? ((d) => resolvePortal(d, now)))(op.hostDid);
     const community = {

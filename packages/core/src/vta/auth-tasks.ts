@@ -19,32 +19,32 @@ import {
   RESPONSE_TYPE_URI as AUTH_CHALLENGE_RESPONSE,
   type AuthChallenge,
   type AuthChallengeResponsePayload,
-} from "@openvtc/trust-tasks/auth/challenge/0.1/payload";
+} from "../specs/auth/challenge/0.1/payload.js";
 import {
   TYPE_URI as AUTH_AUTHENTICATE,
   RESPONSE_TYPE_URI as AUTH_AUTHENTICATE_RESPONSE,
   type AuthAuthenticate,
   type AuthAuthenticateResponsePayload,
-} from "@openvtc/trust-tasks/auth/authenticate/0.2/payload";
+} from "../specs/auth/authenticate/0.3/payload.js";
 import {
   TYPE_URI as AUTH_REFRESH,
   RESPONSE_TYPE_URI as AUTH_REFRESH_RESPONSE,
   type AuthRefresh,
   type AuthRefreshResponsePayload,
   type TokenBundle,
-} from "@openvtc/trust-tasks/auth/refresh/0.2/payload";
+} from "../specs/auth/refresh/0.2/payload.js";
 import {
   TYPE_URI as AUTH_PASSKEY_LOGIN_START,
   RESPONSE_TYPE_URI as AUTH_PASSKEY_LOGIN_START_RESPONSE,
   type AuthPasskeyLoginStart,
   type AuthPasskeyLoginStartResponsePayload,
-} from "@openvtc/trust-tasks/auth/passkey/login/start/0.2/payload";
+} from "../specs/auth/passkey/login/start/0.2/payload.js";
 import {
   TYPE_URI as AUTH_PASSKEY_LOGIN_FINISH,
   RESPONSE_TYPE_URI as AUTH_PASSKEY_LOGIN_FINISH_RESPONSE,
   type AuthPasskeyLoginFinish,
   type AuthPasskeyLoginFinishResponsePayload,
-} from "@openvtc/trust-tasks/auth/passkey/login/finish/0.2/payload";
+} from "../specs/auth/passkey/login/finish/0.2/payload.js";
 
 export type { TokenBundle };
 
@@ -101,7 +101,7 @@ export interface AuthAuthenticateParams extends AuthTaskCallerParams {
   scope?: string[];
   /**
    * A `did:key` to bind to the session this login creates
-   * (`auth/authenticate/0.2`). It sits inside the payload, so the subject's
+   * (`auth/authenticate/0.3`). It sits inside the payload, so the subject's
    * own proof over this document is what authorises the binding.
    *
    * The consumer then accepts that key's `authentication` proofs as the
@@ -117,7 +117,7 @@ export interface AuthAuthenticateParams extends AuthTaskCallerParams {
 const DID_KEY_PATTERN = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
 const DID_KEY_MAX_LENGTH = 512;
 
-/** Whether `value` is a `did:key` VID that `auth/authenticate/0.2` accepts as
+/** Whether `value` is a `did:key` VID that `auth/authenticate/0.3` accepts as
  *  `payload.sessionKey`. It must be a bare DID, with no fragment, path or
  *  query, and the multibase must be base58btc. */
 export function isDidKey(value: unknown): value is string {
@@ -159,7 +159,7 @@ export async function authenticateSession(
   });
   return sender.send<AuthAuthenticateResponsePayload>(envelope, {
     expectedResponseType: AUTH_AUTHENTICATE_RESPONSE,
-    operationLabel: "auth/authenticate/0.2",
+    operationLabel: "auth/authenticate/0.3",
   });
 }
 

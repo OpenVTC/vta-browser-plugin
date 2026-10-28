@@ -14,26 +14,26 @@ import {
   type AuditListPayload,
   type AuditListResponsePayload,
   type AuditEnvelope,
-} from "@openvtc/trust-tasks/audit/list/0.1/payload";
+} from "../specs/audit/list/0.2/payload.js";
 import {
   TYPE_URI as CONFIG_SHOW,
   RESPONSE_TYPE_URI as CONFIG_SHOW_RESPONSE,
   type ConfigShowPayload,
   type ConfigShowResponsePayload,
   type ConfigField,
-} from "@openvtc/trust-tasks/config/show/0.1/payload";
+} from "../specs/config/show/0.1/payload.js";
 import {
   TYPE_URI as MESSAGING_PING,
   RESPONSE_TYPE_URI as MESSAGING_PING_RESPONSE,
   type MessagingPingPayload,
   type MessagingPingResponsePayload,
-} from "@openvtc/trust-tasks/messaging/ping/0.1/payload";
+} from "../specs/messaging/ping/0.2/payload.js";
 import {
   TYPE_URI as CONFIG_PATCH,
   RESPONSE_TYPE_URI as CONFIG_PATCH_RESPONSE,
   type ConfigPatchPayload,
   type ConfigPatchResponsePayload,
-} from "@openvtc/trust-tasks/config/patch/0.1/payload";
+} from "../specs/config/patch/0.1/payload.js";
 
 export type { AuditEnvelope, ConfigField };
 
@@ -53,21 +53,34 @@ export interface AuditListParams extends ObservabilityCallerParams {
   actor?: string;
   outcome?: string;
   contextId?: string;
-  pageSize?: number;
+  /** The page size to ask for. The agent may return fewer. */
+  limit?: number;
+  /** A previous page's `nextCursor`, with the same filters. */
   cursor?: string;
 }
 
 export interface AuditListResult {
   entries: AuditEnvelope[];
-  /** The agent stopped early. **Check this before drawing conclusions** — a
-   *  truncated audit page is not a complete account of what happened, and an
-   *  operator reading "nothing else occurred" from a partial list is exactly
-   *  the failure an audit trail exists to prevent. */
-  truncated: boolean;
-  cursor?: string;
+  /**
+   * Present when more matching entries remain. **Check this before drawing
+   * conclusions** — a page with a `nextCursor` is not a complete account of
+   * what happened, and an operator reading "nothing else occurred" from a
+   * partial list is exactly the failure an audit trail exists to prevent.
+   *
+   * `audit/list/0.2` dropped 0.1's `truncated`: this is now the only signal,
+   * and a short page without one is the end, a full page with one is not.
+   */
+  nextCursor?: string;
 }
 
-/** Read the agent's audit trail, filtered and paged. */
+/**
+ * Read one page of the agent's audit trail, filtered.
+ *
+ * Deliberately a page rather than the whole trail, unlike the `…/list` calls
+ * that read to the end: an audit trail grows without bound and a console asks
+ * for the recent part of it. What that obliges is that the cursor is handed
+ * back, never dropped, so a caller can say the page is partial.
+ */
 export async function auditList(
   sender: TrustTaskSender,
   params: AuditListParams,
@@ -79,7 +92,7 @@ export async function auditList(
     ...(params.actor ? { actor: params.actor } : {}),
     ...(params.outcome ? { outcome: params.outcome } : {}),
     ...(params.contextId ? { contextId: params.contextId } : {}),
-    ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+    ...(params.limit !== undefined ? { limit: params.limit } : {}),
     ...(params.cursor ? { cursor: params.cursor } : {}),
   };
   const envelope = buildTrustTask(AUDIT_LIST, payload, {
@@ -88,12 +101,11 @@ export async function auditList(
   });
   const res = await sender.send<AuditListResponsePayload>(envelope, {
     expectedResponseType: AUDIT_LIST_RESPONSE,
-    operationLabel: "audit/list/0.1",
+    operationLabel: "audit/list/0.2",
   });
   return {
     entries: res.entries ?? [],
-    truncated: res.truncated ?? false,
-    ...(res.cursor ? { cursor: res.cursor } : {}),
+    ...(res.nextCursor ? { nextCursor: res.nextCursor } : {}),
   };
 }
 
@@ -167,6 +179,8 @@ export interface AgentPingParams extends ObservabilityCallerParams {
  * necessarily an agent that is working, and a console showing a green light on
  * any response would hide exactly the state worth seeing. `protocols` is what
  * it will speak, which is the honest basis for deciding what to render.
+ * `respondedAt` (0.1's `serverTime`, renamed in 0.2) is the agent's clock as
+ * it answered.
  */
 export async function agentPing(
   sender: TrustTaskSender,
@@ -181,6 +195,6 @@ export async function agentPing(
   });
   return sender.send<MessagingPingResponsePayload>(envelope, {
     expectedResponseType: MESSAGING_PING_RESPONSE,
-    operationLabel: "messaging/ping/0.1",
+    operationLabel: "messaging/ping/0.2",
   });
 }

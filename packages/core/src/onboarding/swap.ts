@@ -29,7 +29,7 @@ import {
   RESPONSE_TYPE_URI as ACL_SWAP_KEY_RESPONSE,
   type ACLSwapKeyResponsePayload,
   type AclEntry,
-} from "@openvtc/trust-tasks/acl/swap-key/0.1/payload";
+} from "../specs/acl/swap-key/0.1/payload.js";
 
 /** The swap-key response, as the registry declares it: the realized ACL entry
  *  plus the DID that was swapped out.

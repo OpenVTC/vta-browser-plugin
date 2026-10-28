@@ -14,7 +14,7 @@ import { buildTrustTask } from "../vta/trust-task.js";
 import {
   TYPE_URI as TASK_VAULT_DELETE,
   RESPONSE_TYPE_URI as TASK_VAULT_DELETE_RESPONSE,
-} from "@openvtc/trust-tasks/vault/delete/0.1/payload";
+} from "../specs/vault/delete/0.1/payload.js";
 
 export interface VaultDeleteOptions {
   /** Issuer of the request (envelope `issuer`). */

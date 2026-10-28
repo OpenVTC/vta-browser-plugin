@@ -33,25 +33,40 @@ function recorder(reply) {
 
 // ── devices ─────────────────────────────────────────────────────────────────
 
-test("list sends only the filters given, under the 0.2 type", async () => {
-  const channel = recorder({ devices: [], truncated: false });
+test("list sends only the filters given, under the 0.3 type", async () => {
+  const channel = recorder({ devices: [] });
   await deviceList(channel, {
     holder: HOLDER,
     service: SERVICE,
     consumerKindFilter: "companion",
-    pageSize: 25,
+    limit: 25,
   });
   const { envelope, opts } = channel.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/device/list/0.2");
-  assert.deepEqual(envelope.payload, { consumerKindFilter: "companion", pageSize: 25 });
-  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/device/list/0.2#response");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/device/list/0.3");
+  assert.deepEqual(envelope.payload, { consumerKindFilter: "companion", limit: 25 });
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/device/list/0.3#response");
+});
+
+test("device list follows nextCursor to the end", async () => {
+  // 0.3 dropped `truncated`: only an absent `nextCursor` means the last page.
+  const pages = [{ devices: [{ deviceId: "d1" }], nextCursor: "c1" }, { devices: [{ deviceId: "d2" }] }];
+  const sent = [];
+  const channel = {
+    send(envelope) {
+      sent.push(envelope);
+      return Promise.resolve(pages[sent.length - 1]);
+    },
+  };
+  const result = await deviceList(channel, { holder: HOLDER, service: SERVICE, includeWiped: true });
+  assert.deepEqual(result.devices.map((d) => d.deviceId), ["d1", "d2"]);
+  assert.deepEqual(sent[1].payload, { includeWiped: true, cursor: "c1" });
 });
 
 test("includeDisabled:false is sent — it is a narrower request, not an absent one", async () => {
   // The default already omits disabled devices, so `false` reads as the same
   // thing — but it is the caller stating it, and a device that was taken away
   // still existing is exactly what this filter decides the visibility of.
-  const channel = recorder({ devices: [], truncated: false });
+  const channel = recorder({ devices: [] });
   await deviceList(channel, { holder: HOLDER, service: SERVICE, includeDisabled: false });
   assert.deepEqual(channel.sent[0].envelope.payload, { includeDisabled: false });
 });
@@ -60,7 +75,6 @@ test("list defaults the response fields the agent may omit", async () => {
   const channel = recorder({});
   assert.deepEqual(await deviceList(channel, { holder: HOLDER, service: SERVICE }), {
     devices: [],
-    truncated: false,
   });
 });
 
@@ -97,28 +111,34 @@ test("wipe carries scope and reason, both required by the schema", async () => {
 // ── audit ───────────────────────────────────────────────────────────────────
 
 test("audit list forwards the window and the filters", async () => {
-  const channel = recorder({ entries: [], truncated: false });
+  const channel = recorder({ entries: [] });
   await auditList(channel, {
     holder: HOLDER,
     service: SERVICE,
     from: "2026-08-01T00:00:00Z",
     action: "acl.grant",
     actor: HOLDER.did,
+    limit: 25,
   });
+  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/audit/list/0.2");
   assert.deepEqual(channel.sent[0].envelope.payload, {
+    limit: 25,
     from: "2026-08-01T00:00:00Z",
     action: "acl.grant",
     actor: HOLDER.did,
   });
 });
 
-test("audit list reports truncation rather than hiding it", async () => {
+test("audit list hands the cursor back rather than hiding that the page is partial", async () => {
   // A partial audit page read as a complete account is the failure an audit
-  // trail exists to prevent, so `truncated` is surfaced, never smoothed away.
-  const channel = recorder({ entries: [{ id: "a1" }], truncated: true, cursor: "c1" });
+  // trail exists to prevent. 0.2 dropped `truncated`, so `nextCursor` is the
+  // only signal left — it is surfaced, never smoothed away.
+  const channel = recorder({ entries: [{ id: "a1" }], nextCursor: "c1" });
   const result = await auditList(channel, { holder: HOLDER, service: SERVICE });
-  assert.equal(result.truncated, true);
-  assert.equal(result.cursor, "c1");
+  assert.equal(result.nextCursor, "c1");
+
+  const last = recorder({ entries: [{ id: "a1" }] });
+  assert.equal("nextCursor" in (await auditList(last, { holder: HOLDER, service: SERVICE })), false);
 });
 
 // ── config ──────────────────────────────────────────────────────────────────

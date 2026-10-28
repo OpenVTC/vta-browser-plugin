@@ -45,7 +45,7 @@ import {
   type ProvisionIntegrationPayload,
   type ProvisionIntegrationResponsePayload,
   type ProvisionSummary,
-} from "@openvtc/trust-tasks/provision/integration/0.3/payload";
+} from "../specs/provision/integration/0.3/payload.js";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 

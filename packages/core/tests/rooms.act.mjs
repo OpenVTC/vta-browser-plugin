@@ -23,7 +23,7 @@ const VTA = { did: "did:webvh:QmAgent:agent.example" };
 const HOST = "did:webvh:QmHost:host.example";
 const PERSONA = "did:webvh:QmAlice:people.example";
 const ROOM = "did:webvh:QmRoom:rooms.example";
-const INFO = "https://trusttasks.org/spec/rooms/info/0.1";
+const INFO = "https://trusttasks.org/spec/rooms/info/0.3";
 
 /** A VTA that completes the document, then lets `tamper` change what it returns. */
 function vta(tamper = (d) => d) {
@@ -58,7 +58,7 @@ test("a completed document is accepted only when it is the request that was aske
 
   const cases = [
     [(d) => ({ ...d, recipient: "did:key:zElsewhere" }), /not the one it was asked/],
-    [(d) => ({ ...d, type: "https://trusttasks.org/spec/rooms/records/put/0.1" }), /not the one it was asked/],
+    [(d) => ({ ...d, type: "https://trusttasks.org/spec/rooms/records/put/0.3" }), /not the one it was asked/],
     [(d) => ({ ...d, payload: { ...d.payload, roomId: "did:key:zOther" } }), /changed the payload's roomId/],
     [(d) => ({ ...d, payload: { ...d.payload, extra: 1 } }), /added extra/],
     [(d) => ({ ...d, issuer: "did:key:zSomeoneElse" }), /issued by did:key:zSomeoneElse/],

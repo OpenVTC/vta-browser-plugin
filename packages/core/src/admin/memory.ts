@@ -17,19 +17,19 @@ import {
   RESPONSE_TYPE_URI as MEMORY_PUT_RESPONSE,
   type VTAMemoryPutPayload,
   type VTAMemoryPutResponsePayload,
-} from "@openvtc/trust-tasks/vta/memory/put/0.1/payload";
+} from "../specs/vta/memory/put/0.1/payload.js";
 import {
   TYPE_URI as MEMORY_LIST,
   RESPONSE_TYPE_URI as MEMORY_LIST_RESPONSE,
   type VTAMemoryListPayload,
   type VTAMemoryListResponsePayload,
-} from "@openvtc/trust-tasks/vta/memory/list/0.1/payload";
+} from "../specs/vta/memory/list/0.1/payload.js";
 import {
   TYPE_URI as MEMORY_DELETE,
   RESPONSE_TYPE_URI as MEMORY_DELETE_RESPONSE,
   type VTAMemoryDeletePayload,
   type VTAMemoryDeleteResponsePayload,
-} from "@openvtc/trust-tasks/vta/memory/delete/0.1/payload";
+} from "../specs/vta/memory/delete/0.1/payload.js";
 
 export interface MemoryCallerParams {
   holder: TaskParty;

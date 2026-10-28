@@ -34,27 +34,30 @@ function captureChannel(payload) {
 const holder = { did: "did:example:holder" };
 const service = { did: "did:example:vta", keyAgreementKid: "did:example:vta#ka", keyAgreementPublicJwk: {} };
 
-test("vaultList builds vault/list/0.3 with issuer+recipient and maps the reply", async () => {
-  const ch = captureChannel({ entries: [{ id: "e1" }], truncated: true, cursor: "c2" });
-  const res = await vaultList(ch, { holder, service, filter: { contextId: "work" } });
+test("vaultList builds vault/list/0.4 with issuer+recipient and maps the reply", async () => {
+  const ch = captureChannel({ entries: [{ id: "e1" }], nextCursor: "c2" });
+  const res = await vaultList(ch, { holder, service, filter: { contextId: "work", limit: 50, cursor: "c1" } });
 
   const { envelope, opts } = ch.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/vault/list/0.3");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vault/list/0.4");
   assert.equal(envelope.issuer, "did:example:holder");
   assert.equal(envelope.recipient, "did:example:vta");
-  assert.deepEqual(envelope.payload, { contextId: "work" });
-  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vault/list/0.3#response");
+  // 0.4 spells the page size `limit` (it was `pageSize`).
+  assert.deepEqual(envelope.payload, { contextId: "work", limit: 50, cursor: "c1" });
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vault/list/0.4#response");
   assert.ok(typeof envelope.id === "string" && envelope.id.length > 0);
   assert.ok(typeof envelope.issuedAt === "string");
 
-  assert.deepEqual(res, { entries: [{ id: "e1" }], truncated: true, cursor: "c2" });
+  assert.deepEqual(res, { entries: [{ id: "e1" }], nextCursor: "c2" });
 });
 
-test("vaultList defaults filter to {} and truncated to false", async () => {
+test("vaultList defaults filter to {}; an absent nextCursor is the last page", async () => {
+  // 0.4 has no `truncated`: absence of `nextCursor` is the only end signal,
+  // so a last page carries none and nothing is invented in its place.
   const ch = captureChannel({ entries: [] });
   const res = await vaultList(ch, { holder, service });
   assert.deepEqual(ch.sent[0].envelope.payload, {});
-  assert.deepEqual(res, { entries: [], truncated: false });
+  assert.deepEqual(res, { entries: [] });
 });
 
 test("vaultDelete carries id + optimistic-concurrency token", async () => {
@@ -156,7 +159,7 @@ test("ops accept a VtaSession (not just a raw channel) and route through it", as
   const didcomm = captureChannel({ entries: [{ id: "via-session" }] });
   const session = new VtaSession([didcomm]);
   const res = await vaultList(session, { holder, service });
-  assert.equal(didcomm.sent[0].envelope.type, "https://trusttasks.org/spec/vault/list/0.3");
+  assert.equal(didcomm.sent[0].envelope.type, "https://trusttasks.org/spec/vault/list/0.4");
   assert.deepEqual(res.entries, [{ id: "via-session" }]);
 });
 
@@ -202,7 +205,7 @@ test("an attachment's integrity is a digestMultibase, and it decodes", async () 
     updatedAt: "2026-08-28T00:00:00Z",
     version: 1,
   };
-  const ch = captureChannel({ entries: [entry], truncated: false });
+  const ch = captureChannel({ entries: [entry] });
   const res = await vaultList(ch, { holder, service });
 
   const ref = res.entries[0].attachments[0];

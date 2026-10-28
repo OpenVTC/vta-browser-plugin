@@ -22,7 +22,7 @@ const DEV_POLICY = { allowInsecure: true, allowPrivate: true };
 
 const TT = "https://trusttasks.org/spec/";
 const CHALLENGE = `${TT}auth/challenge/0.1`;
-const AUTHENTICATE = `${TT}auth/authenticate/0.2`;
+const AUTHENTICATE = `${TT}auth/authenticate/0.3`;
 
 /** The VTA: its replies are signed with this key, as the real one signs them. */
 const VTA = generateSigningIdentity();

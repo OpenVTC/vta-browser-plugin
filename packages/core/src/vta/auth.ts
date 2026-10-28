@@ -3,7 +3,7 @@
 // decode; this module owns getting the token it posts with:
 //
 //   - `getVtaBearer` — posts an `auth/challenge/0.1` document and then a
-//     signed `auth/authenticate/0.2` to /trust-tasks for a bearer token, with
+//     signed `auth/authenticate/0.3` to /trust-tasks for a bearer token, with
 //     caching.
 //   - `makeReauth` / `invalidateVtaBearer` — drop a stale cached token so a
 //     401 self-heals with one retry.
@@ -132,7 +132,7 @@ export function vtaRestEndpointPolicy(netPolicy?: NetPolicy): {
  *
  * Two Trust Tasks, both POSTed to `/trust-tasks` with no bearer: an
  * `auth/challenge/0.1` naming the holder as its subject, then an
- * `auth/authenticate/0.2` carrying the challenge, whose proof is the
+ * `auth/authenticate/0.3` carrying the challenge, whose proof is the
  * authentication. The VTA recognises this family by the document's `type` and
  * dispatches it ahead of the session check (vti #1858).
  *

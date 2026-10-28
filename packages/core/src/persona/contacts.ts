@@ -1,4 +1,5 @@
-// `persona/contact/*` 1.0 — what other people have disclosed to the holder.
+// `persona/contact/*` (put 1.2, get and list 1.1, delete 1.0) — what other
+// people have disclosed to the holder.
 //
 // The mirror image of the disclosure path: those tasks send the holder's
 // identity out, these record what came back the other way. A contact is stored
@@ -25,25 +26,25 @@ import {
   type PersonaContactPutPayload,
   type PersonaContactPutResponsePayload,
   type ContactDocument,
-} from "@openvtc/trust-tasks/persona/contact/put/1.0/payload";
+} from "../specs/persona/contact/put/1.2/payload.js";
 import {
   TYPE_URI as CONTACT_GET,
   RESPONSE_TYPE_URI as CONTACT_GET_RESPONSE,
   type PersonaContactGetPayload,
   type PersonaContactGetResponsePayload,
-} from "@openvtc/trust-tasks/persona/contact/get/1.0/payload";
+} from "../specs/persona/contact/get/1.1/payload.js";
 import {
   TYPE_URI as CONTACT_LIST,
   RESPONSE_TYPE_URI as CONTACT_LIST_RESPONSE,
   type PersonaContactListPayload,
   type PersonaContactListResponsePayload,
-} from "@openvtc/trust-tasks/persona/contact/list/1.0/payload";
+} from "../specs/persona/contact/list/1.1/payload.js";
 import {
   TYPE_URI as CONTACT_DELETE,
   RESPONSE_TYPE_URI as CONTACT_DELETE_RESPONSE,
   type PersonaContactDeletePayload,
   type PersonaContactDeleteResponsePayload,
-} from "@openvtc/trust-tasks/persona/contact/delete/1.0/payload";
+} from "../specs/persona/contact/delete/1.0/payload.js";
 
 import { call, type PersonaCallerParams } from "./call.js";
 

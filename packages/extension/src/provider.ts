@@ -70,7 +70,7 @@ interface VtaWallet {
    * not an error to swallow.
    */
   requestTask(params: RequestTaskParams): Promise<Record<string, unknown>>;
-  /** Sign in to the RP with `auth/challenge/0.1` then `auth/authenticate/0.2`,
+  /** Sign in to the RP with `auth/challenge/0.1` then `auth/authenticate/0.3`,
    *  sent to `{baseUrl}/trust-tasks` and addressed to `rpDid`. Pass
    *  `sessionKey` (a `did:key` the page holds) to have the RP bind it to the
    *  session, so later calls can be signed without the wallet. Resolves with
@@ -160,7 +160,7 @@ interface VtaWallet {
    *  never seen it and may refuse the sign-in until it is on its access list. */
   walletProfile(params: WalletProfileParams): Promise<WalletProfileResult>;
   /** Enumerate vault entries (metadata only, no secret material) via
-   *  vault/list/0.1. Each returned entry's `principalDid` is the DID the entry
+   *  vault/list/0.4. Each returned entry's `principalDid` is the DID the entry
    *  would act AS when used in a proxy-login call.
    *
    *  Not needed to *drive* a proxy login — `proxyLogin({})` resolves the entry

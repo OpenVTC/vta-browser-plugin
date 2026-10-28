@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { KeysPane } from "../src/manager/panes/keys.js";
 
-const LIST = "keys/list/0.1";
+const LIST = "keys/list/0.2";
 const RENAME = "keys/rename/0.1";
 
 const DID = "did:webvh:QmRqxWCVUE6Y474EPdNZmR9m3giTRyDgmXSdidvEy7iSwq:webvh.storm.ws:vdr-host";
@@ -35,7 +35,7 @@ const key = (keyId: string, keyType = "ed25519") => ({
 
 const mount = async (keys: unknown[]) => {
   const a = agent({
-    [LIST]: { keys, total: keys.length, offset: 0, limit: 50 },
+    [LIST]: { keys },
     [RENAME]: { keyId: "renamed", updatedAt: "2026-09-14T00:00:00Z" },
   });
   const screen = await render(

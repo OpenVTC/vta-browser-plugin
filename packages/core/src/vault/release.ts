@@ -20,7 +20,7 @@ import type { VaultSecret } from "./upsert.js";
 import {
   TYPE_URI as TASK_VAULT_RELEASE,
   RESPONSE_TYPE_URI as TASK_VAULT_RELEASE_RESPONSE,
-} from "@openvtc/trust-tasks/vault/release/0.2/payload";
+} from "../specs/vault/release/0.2/payload.js";
 
 export interface VaultReleaseParams {
   /** Envelope `issuer` + the keyAgreement recipient the maintainer seals to. */

@@ -16,7 +16,7 @@
 //     with payload `{challenge: D, payloadDigest: D, decision: "approve"}`
 //     and no evidence, where D is the grant digest (`grantDigest` in
 //     `vtc/oob-sign-in.ts`).
-//   - The UV key is enrolled with `device/heartbeat/0.2` (or
+//   - The UV key is enrolled with `device/heartbeat/0.3` (or
 //     `device/register/0.2`) `payload.ext["org.openvtc.uv-key"]` as
 //     `{kind: "prfSealedKey", did, hardwareBacked: false, …}`, sent over the
 //     device's own transport-key session.
@@ -48,23 +48,23 @@ import { bytesToBase64url } from "../util/base64url.js";
 import {
   TYPE_URI as TASK_VAULT_SIGN_TRUST_TASK,
   RESPONSE_TYPE_URI as TASK_VAULT_SIGN_TRUST_TASK_RESPONSE,
-} from "@openvtc/trust-tasks/vault/sign-trust-task/0.2/payload";
+} from "../specs/vault/sign-trust-task/0.2/payload.js";
 import {
   TYPE_URI as TASK_CONSENT_DECISION,
   type TaskConsentDecisionPayload,
-} from "@openvtc/trust-tasks/task-consent/decision/0.2/payload";
+} from "../specs/task-consent/decision/0.2/payload.js";
 import {
   TYPE_URI as DEVICE_HEARTBEAT,
   RESPONSE_TYPE_URI as DEVICE_HEARTBEAT_RESPONSE,
   type DeviceHeartbeatPayload,
   type DeviceHeartbeatResponsePayload,
-} from "@openvtc/trust-tasks/device/heartbeat/0.2/payload";
+} from "../specs/device/heartbeat/0.3/payload.js";
 import {
   TYPE_URI as DEVICE_REGISTER,
   RESPONSE_TYPE_URI as DEVICE_REGISTER_RESPONSE,
   type DeviceRegisterPayload,
   type DeviceRegisterResponsePayload,
-} from "@openvtc/trust-tasks/device/register/0.2/payload";
+} from "../specs/device/register/0.2/payload.js";
 
 /** `payload.ext` member carrying the UV approval of a grant. */
 export const EXT_UV_CONSENT = "org.openvtc.uv-consent";
@@ -367,7 +367,7 @@ export function deviceUvRefusal(err: unknown): VaultOobRefusalDetail | undefined
  * Enrol (or replace) the device's UV key, over the device's own session —
  * the VTA accepts a replacement only from the device's transport key.
  *
- * `device/heartbeat/0.2` with `payload.ext["org.openvtc.uv-key"]` for a device
+ * `device/heartbeat/0.3` with `payload.ext["org.openvtc.uv-key"]` for a device
  * the VTA already has a binding for. A device that never registered (the
  * heartbeat answers `not_found`) is registered with `device/register/0.2`,
  * carrying the same extension; re-registering a bound device is a conflict,
@@ -395,7 +395,7 @@ export async function enrolUvKey(
     const payload: DeviceHeartbeatPayload = { ext };
     await sender.send<DeviceHeartbeatResponsePayload>(buildTrustTask(DEVICE_HEARTBEAT, payload, parties), {
       expectedResponseType: DEVICE_HEARTBEAT_RESPONSE,
-      operationLabel: "device/heartbeat/0.2 (uv-key)",
+      operationLabel: "device/heartbeat/0.3 (uv-key)",
     });
     return;
   } catch (err) {
@@ -426,7 +426,7 @@ async function heartbeatExt(
   const payload = (Object.keys(ext).length ? { ext } : {}) as DeviceHeartbeatPayload;
   const res = await sender.send<DeviceHeartbeatResponsePayload>(
     buildTrustTask(DEVICE_HEARTBEAT, payload, { issuer: params.holder.did, recipient: params.service.did }),
-    { expectedResponseType: DEVICE_HEARTBEAT_RESPONSE, operationLabel: `device/heartbeat/0.2 (${label})` },
+    { expectedResponseType: DEVICE_HEARTBEAT_RESPONSE, operationLabel: `device/heartbeat/0.3 (${label})` },
   );
   const out = (res as { ext?: unknown } | undefined)?.ext;
   return out && typeof out === "object" ? (out as Record<string, unknown>) : {};

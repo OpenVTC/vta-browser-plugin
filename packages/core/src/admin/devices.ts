@@ -12,6 +12,7 @@
 
 import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
+import { collectPages } from "../util/pages.js";
 
 import {
   TYPE_URI as DEVICE_LIST,
@@ -19,19 +20,19 @@ import {
   type DeviceListPayload,
   type DeviceListResponsePayload,
   type DeviceBinding,
-} from "@openvtc/trust-tasks/device/list/0.2/payload";
+} from "../specs/device/list/0.3/payload.js";
 import {
   TYPE_URI as DEVICE_DISABLE,
   RESPONSE_TYPE_URI as DEVICE_DISABLE_RESPONSE,
   type DeviceDisablePayload,
   type DeviceDisableResponsePayload,
-} from "@openvtc/trust-tasks/device/disable/0.1/payload";
+} from "../specs/device/disable/0.1/payload.js";
 import {
   TYPE_URI as DEVICE_WIPE,
   RESPONSE_TYPE_URI as DEVICE_WIPE_RESPONSE,
   type DeviceWipePayload,
   type DeviceWipeResponsePayload,
-} from "@openvtc/trust-tasks/device/wipe/0.2/payload";
+} from "../specs/device/wipe/0.2/payload.js";
 
 export type { DeviceBinding };
 
@@ -54,15 +55,13 @@ export interface DeviceListParams extends DeviceCallerParams {
   includeWiped?: boolean;
   /** RFC 3339 — only devices seen since. */
   lastSeenSince?: string;
-  pageSize?: number;
-  cursor?: string;
+  /** The page size to ask for — never a cap on the result. */
+  limit?: number;
 }
 
 export interface DeviceListResult {
+  /** Every matching device: the listing is read to the end. */
   devices: DeviceBinding[];
-  /** The agent stopped early — fetch the rest with `cursor`. */
-  truncated: boolean;
-  cursor?: string;
 }
 
 /**
@@ -72,39 +71,43 @@ export interface DeviceListResult {
  * "your devices" should say which of the two lists it is showing, because the
  * difference is the whole point of `includeDisabled`: a device that was taken
  * away still exists, and hiding it hides the fact that it was.
+ *
+ * `device/list/0.3` moved to the registry-wide paging convention (`limit` /
+ * `cursor` in, `nextCursor` out) and dropped 0.2's `truncated`, so only an
+ * absent `nextCursor` means the end. The cursor is followed through
+ * `collectPages`: a device list shown in part is an enrolment nobody sees.
  */
 export async function deviceList(
   sender: TrustTaskSender,
   params: DeviceListParams,
 ): Promise<DeviceListResult> {
-  const payload: DeviceListPayload = {
-    ...(params.consumerKindFilter ? { consumerKindFilter: params.consumerKindFilter } : {}),
-    ...(params.formFactorFilter ? { formFactorFilter: params.formFactorFilter } : {}),
-    ...(params.serviceKindFilter ? { serviceKindFilter: params.serviceKindFilter } : {}),
-    ...(params.capabilityFilter ? { capabilityFilter: params.capabilityFilter } : {}),
-    // `!== undefined` throughout: `includeDisabled: false` is an explicit
-    // "current devices only", not an absent filter.
-    ...(params.includeDisabled !== undefined
-      ? { includeDisabled: params.includeDisabled }
-      : {}),
-    ...(params.includeWiped !== undefined ? { includeWiped: params.includeWiped } : {}),
-    ...(params.lastSeenSince ? { lastSeenSince: params.lastSeenSince } : {}),
-    ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
-    ...(params.cursor ? { cursor: params.cursor } : {}),
-  };
-  const envelope = buildTrustTask(DEVICE_LIST, payload, {
-    issuer: params.holder.did,
-    recipient: params.service.did,
+  const devices = await collectPages("device/list", async (cursor) => {
+    const payload: DeviceListPayload = {
+      ...(params.consumerKindFilter ? { consumerKindFilter: params.consumerKindFilter } : {}),
+      ...(params.formFactorFilter ? { formFactorFilter: params.formFactorFilter } : {}),
+      ...(params.serviceKindFilter ? { serviceKindFilter: params.serviceKindFilter } : {}),
+      ...(params.capabilityFilter ? { capabilityFilter: params.capabilityFilter } : {}),
+      // `!== undefined` throughout: `includeDisabled: false` is an explicit
+      // "current devices only", not an absent filter.
+      ...(params.includeDisabled !== undefined
+        ? { includeDisabled: params.includeDisabled }
+        : {}),
+      ...(params.includeWiped !== undefined ? { includeWiped: params.includeWiped } : {}),
+      ...(params.lastSeenSince ? { lastSeenSince: params.lastSeenSince } : {}),
+      ...(params.limit !== undefined ? { limit: params.limit } : {}),
+      ...(cursor ? { cursor } : {}),
+    };
+    const envelope = buildTrustTask(DEVICE_LIST, payload, {
+      issuer: params.holder.did,
+      recipient: params.service.did,
+    });
+    const res = await sender.send<DeviceListResponsePayload>(envelope, {
+      expectedResponseType: DEVICE_LIST_RESPONSE,
+      operationLabel: "device/list/0.3",
+    });
+    return { items: res.devices ?? [], nextCursor: res.nextCursor };
   });
-  const res = await sender.send<DeviceListResponsePayload>(envelope, {
-    expectedResponseType: DEVICE_LIST_RESPONSE,
-    operationLabel: "device/list/0.2",
-  });
-  return {
-    devices: res.devices ?? [],
-    truncated: res.truncated ?? false,
-    ...(res.cursor ? { cursor: res.cursor } : {}),
-  };
+  return { devices };
 }
 
 export interface DeviceDisableParams extends DeviceCallerParams {

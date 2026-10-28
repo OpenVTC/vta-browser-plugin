@@ -85,7 +85,7 @@ const compiled = new WeakMap<object, Validator>();
  * Validate `payload` against a binding's `PAYLOAD_SCHEMA`.
  *
  * ```ts
- * import { PAYLOAD_SCHEMA } from "@openvtc/trust-tasks/task-consent/request/0.1/payload";
+ * import { PAYLOAD_SCHEMA } from "../specs/task-consent/request/0.1/payload.js";
  * const result = validateAgainstSchema(PAYLOAD_SCHEMA, doc.payload);
  * ```
  *

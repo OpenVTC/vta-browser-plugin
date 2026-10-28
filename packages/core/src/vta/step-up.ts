@@ -21,19 +21,32 @@ import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import type { TrustTask } from "./protocol.js";
 
-import { TYPE_URI as MSG_APPROVE_RESPONSE_0_3 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.3/payload";
-import { TYPE_URI as MSG_APPROVE_RESPONSE_0_5 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.5/payload";
-import { TYPE_URI as APPROVE_REQUEST_0_3 } from "@openvtc/trust-tasks/auth/step-up/approve-request/0.3/payload";
-import { TYPE_URI as APPROVE_REQUEST_0_2 } from "@openvtc/trust-tasks/auth/step-up/approve-request/0.2/payload";
-import { TYPE_URI as APPROVE_REQUEST_0_1 } from "@openvtc/trust-tasks/auth/step-up/approve-request/0.1/payload";
+import { TYPE_URI as MSG_APPROVE_RESPONSE } from "../specs/auth/step-up/approve-response/0.6/payload.js";
+import { RESPONSE_PAYLOAD_SCHEMA as STEP_UP_START_RESPONSE_SCHEMA } from "../specs/auth/step-up/start/0.2/payload.js";
 
-/** The approve-request versions the agent mints: 0.2 in a disclosure
- *  step-up refusal, 0.1 when it pushes one. Gated identically. */
-export const AGENT_APPROVE_REQUEST_TYPES = [APPROVE_REQUEST_0_2, APPROVE_REQUEST_0_1] as const;
+/**
+ * The approve-request version the agent mints — in a disclosure step-up
+ * refusal and in the one it pushes alike (vta-service `step_up.rs`,
+ * `STEP_UP_APPROVE_REQUEST_TYPE`).
+ *
+ * **A literal, and the one approve-request URI here that is not read from a
+ * pinned specification.** Three counterparties speak three versions of this
+ * slug today — the agent mints 0.2, a VTC's inline refusal carries 0.4
+ * (`trust-tasks/approver-attest.ts`, the version pinned), the did-hosting
+ * control plane mints 0.5 — so no single pin can name all three. It goes once
+ * the agent mints the version the others do; until then it is one version,
+ * matched with `===`, not an accept-list.
+ */
+export const AGENT_APPROVE_REQUEST_TYPES = [
+  "https://trusttasks.org/spec/auth/step-up/approve-request/0.2",
+] as const;
 
 /** The approve-request version the did-hosting control plane answers
- *  `auth/step-up/start/0.1` with. */
-export const RP_APPROVE_REQUEST_TYPES = [APPROVE_REQUEST_0_3] as const;
+ *  `auth/step-up/start/0.2` with: the one that specification embeds, read out
+ *  of its schema so the two cannot drift. */
+export const RP_APPROVE_REQUEST_TYPES = [
+  STEP_UP_START_RESPONSE_SCHEMA.$defs.Response.properties.approveRequest.properties.type.const,
+] as const;
 
 /** The approve-request payload, verified out of the signed Trust-Task
  *  document by {@link verifyStepUpApproveRequest}. */
@@ -162,7 +175,7 @@ export async function verifyStepUpApproveRequest(
   };
 }
 
-/** Payload of the `approve-response` the wallet signs (0.3 and 0.5 alike). */
+/** Payload of the `approve-response/0.6` the wallet signs. */
 export interface StepUpApproveResponsePayload {
   subject: string;
   sessionId: string;
@@ -170,18 +183,6 @@ export interface StepUpApproveResponsePayload {
   decision: "approved" | "denied";
   deniedReason?: string;
 }
-
-/**
- * Which approve-response version the relying party takes.
- *
- * **Not a preference — a property of the party being answered.** The agent
- * takes `0.3` (whose `recorded` acknowledgement is the honest answer for an
- * approval bound to one operation); the did-hosting control plane takes `0.5`.
- * Sending a version a party does not serve is refused as an unsupported type,
- * which takes out step-up for that party entirely — so this is per-RP and never
- * a global default.
- */
-export type ApproveResponseVersion = "0.3" | "0.5";
 
 export interface BuildStepUpApprovalArgs {
   /** The wallet's Ed25519 signing identity — its `did` is the response
@@ -197,30 +198,13 @@ export interface BuildStepUpApprovalArgs {
   approved: boolean;
   /** Human-readable rationale, attached when the user denies. */
   deniedReason?: string;
-  /**
-   * The version this relying party can answer in. **Required, deliberately.**
-   *
-   * This wallet speaks to two relying parties that serve different versions —
-   * the agent (`0.3`) and the did-hosting control plane (`0.5`) — and there is
-   * no default that is right for both. An optional field would
-   * make the next relying party added inherit whichever answer happened to be
-   * the default, and every step-up against a party that does not serve it
-   * would be refused.
-   *
-   * The same reasoning as `SigningIdentity` being a required channel input:
-   * a call that could omit it is a call that gets it wrong by not thinking.
-   */
-  responseVersion: ApproveResponseVersion;
 }
 
 /**
- * Build and sign an `auth/step-up/approve-response` Trust-Task document, in the
- * version `responseVersion` names. The DI proof (`eddsa-jcs-2022`,
- * `proofPurpose: assertionMethod`) over the subject key is what the RP verifies.
- *
- * The payload members the wallet sets are identical across `0.3` and `0.5`;
- * what differs is which party serves which, which is why the version rides on
- * the request.
+ * Build and sign an `auth/step-up/approve-response/0.6` Trust-Task document —
+ * the version the agent and the did-hosting control plane both serve. The DI
+ * proof (`eddsa-jcs-2022`, `proofPurpose: assertionMethod`) over the subject key
+ * is what the RP verifies.
  */
 export async function buildStepUpApproval(
   args: BuildStepUpApprovalArgs,
@@ -236,7 +220,7 @@ export async function buildStepUpApproval(
 
   const document: TrustTask<StepUpApproveResponsePayload> & { proof?: unknown } = {
     id: globalThis.crypto.randomUUID(),
-    type: args.responseVersion === "0.5" ? MSG_APPROVE_RESPONSE_0_5 : MSG_APPROVE_RESPONSE_0_3,
+    type: MSG_APPROVE_RESPONSE,
     issuer: args.signing.did,
     recipient: args.rpDid,
     issuedAt: new Date().toISOString(),

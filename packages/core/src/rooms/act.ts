@@ -1,4 +1,4 @@
-// Acting in a room **as the member** — `rooms/keys/act/0.1` and
+// Acting in a room **as the member** — `rooms/keys/act/0.8` and
 // `rooms/keys/seal/0.2` with `signAsPrincipal`.
 //
 // ## The member is the persona, never this wallet
@@ -42,42 +42,33 @@ import {
   type RoomsKeysActPayload,
   type RoomsKeysActResponsePayload,
   type UnsignedRoomRequest,
-} from "@openvtc/trust-tasks/rooms/keys/act/0.1/payload";
-import {
-  TYPE_URI as KEYS_ACT_V5,
-  RESPONSE_TYPE_URI as KEYS_ACT_V5_RESPONSE,
-} from "@openvtc/trust-tasks/rooms/keys/act/0.5/payload";
+} from "../specs/rooms/keys/act/0.8/payload.js";
 import {
   TYPE_URI as KEYS_SEAL_V2,
   RESPONSE_TYPE_URI as KEYS_SEAL_V2_RESPONSE,
   type RoomsKeysSealPayload as RoomsKeysSealV2Payload,
   type RoomsKeysSealResponsePayload as RoomsKeysSealV2ResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/seal/0.2/payload";
+} from "../specs/rooms/keys/seal/0.2/payload.js";
 import {
   TYPE_URI as INFO,
   RESPONSE_TYPE_URI as INFO_RESPONSE,
   type RoomsInfoResponsePayload,
-} from "@openvtc/trust-tasks/rooms/info/0.1/payload";
+} from "../specs/rooms/info/0.3/payload.js";
 import {
   TYPE_URI as RECORDS_LIST,
   RESPONSE_TYPE_URI as RECORDS_LIST_RESPONSE,
   type RoomsRecordsListResponsePayload,
-} from "@openvtc/trust-tasks/rooms/records/list/0.1/payload";
+} from "../specs/rooms/records/list/0.5/payload.js";
 import {
-  TYPE_URI as RECORDS_PUT_V1,
-  RESPONSE_TYPE_URI as RECORDS_PUT_V1_RESPONSE,
-  type RoomsRecordsPutResponsePayload as RoomsRecordsPutV1ResponsePayload,
-} from "@openvtc/trust-tasks/rooms/records/put/0.1/payload";
+  TYPE_URI as RECORDS_PUT,
+  RESPONSE_TYPE_URI as RECORDS_PUT_RESPONSE,
+  type RoomsRecordsPutResponsePayload,
+} from "../specs/rooms/records/put/0.3/payload.js";
 import {
   TYPE_URI as RECORDS_CURATE,
   RESPONSE_TYPE_URI as RECORDS_CURATE_RESPONSE,
   type RoomsRecordsCurateResponsePayload,
-} from "@openvtc/trust-tasks/rooms/records/curate/0.1/payload";
-import {
-  TYPE_URI as RECORDS_PUT_V2,
-  RESPONSE_TYPE_URI as RECORDS_PUT_V2_RESPONSE,
-  type RoomsRecordsPutResponsePayload as RoomsRecordsPutV2ResponsePayload,
-} from "@openvtc/trust-tasks/rooms/records/put/0.2/payload";
+} from "../specs/rooms/records/curate/0.1/payload.js";
 
 export type { RoomsInfoResponsePayload as RoomInfo, UnsignedRoomRequest };
 
@@ -146,22 +137,18 @@ export async function roomsKeysAct(
   sender: TrustTaskSender,
   parties: RoomsCaller,
   document: UnsignedRoomRequest,
-  /**
-   * `0.5` for a member's requests to a community about the rooms it offers them
-   * (`vtc/rooms/offers/*`, `vtc/rooms/memberships/list`), which only it completes;
-   * `0.1` — what every VTA serving rooms speaks — for the rest.
-   */
-  version: "0.1" | "0.5" = "0.1",
 ): Promise<{ principal: string; document: Record<string, unknown> }> {
+  // 0.8 completes every request this wallet makes as a member: the host-bound
+  // room requests and a member's requests to a community about the rooms it
+  // offers them (`vtc/rooms/offers/*`, `vtc/rooms/memberships/list`) alike.
   const payload: RoomsKeysActPayload = { document };
-  const envelope = buildTrustTask(version === "0.5" ? KEYS_ACT_V5 : KEYS_ACT, payload, {
+  const envelope = buildTrustTask(KEYS_ACT, payload, {
     issuer: parties.holder.did,
     recipient: parties.service.did,
   });
-  // 0.5's request and response members are 0.1's; only the table grew.
   const res = await sender.send<RoomsKeysActResponsePayload>(envelope, {
-    expectedResponseType: version === "0.5" ? KEYS_ACT_V5_RESPONSE : KEYS_ACT_RESPONSE,
-    operationLabel: `rooms/keys/act/${version}`,
+    expectedResponseType: KEYS_ACT_RESPONSE,
+    operationLabel: "rooms/keys/act/0.8",
   });
   const completed = res.document as Record<string, unknown>;
   const principal = res.principal;
@@ -383,12 +370,8 @@ export async function writeSealedAsMember(
       expectedVersion: expected,
       ...(blobRef !== undefined ? { blobs: [blobRef] } : {}),
     };
-    const put =
-      blobRef !== undefined
-        ? (await actAndSend<RoomsRecordsPutV2ResponsePayload>(room, RECORDS_PUT_V2, RECORDS_PUT_V2_RESPONSE, payload))
-            .reply
-        : (await actAndSend<RoomsRecordsPutV1ResponsePayload>(room, RECORDS_PUT_V1, RECORDS_PUT_V1_RESPONSE, payload))
-            .reply;
+    const put = (await actAndSend<RoomsRecordsPutResponsePayload>(room, RECORDS_PUT, RECORDS_PUT_RESPONSE, payload))
+      .reply;
     landed = put.version;
     if (landed === intended) return landed;
     expected = landed;
@@ -408,7 +391,7 @@ export async function putCleartextAsMember(
   const cleartext: Record<string, unknown> = {};
   if (params.title !== undefined) cleartext.title = params.title;
   if (params.body !== undefined) cleartext.body = params.body;
-  const { reply } = await actAndSend<RoomsRecordsPutV1ResponsePayload>(room, RECORDS_PUT_V1, RECORDS_PUT_V1_RESPONSE, {
+  const { reply } = await actAndSend<RoomsRecordsPutResponsePayload>(room, RECORDS_PUT, RECORDS_PUT_RESPONSE, {
     roomId: room.roomId,
     key: params.key,
     cleartext,

@@ -18,76 +18,76 @@ import {
   type DomainCreatePayload,
   type DomainCreateResponsePayload,
   type DomainEntry,
-} from "@openvtc/trust-tasks/did-management/domain/create/0.1/payload";
+} from "../specs/did-management/domain/create/0.1/payload.js";
 import {
   TYPE_URI as DOMAIN_UPDATE,
   RESPONSE_TYPE_URI as DOMAIN_UPDATE_RESPONSE,
   type DomainUpdatePayload,
   type DomainUpdateResponsePayload,
-} from "@openvtc/trust-tasks/did-management/domain/update/0.1/payload";
+} from "../specs/did-management/domain/update/0.1/payload.js";
 import {
-  TYPE_URI as DOMAIN_DISABLE,
-  RESPONSE_TYPE_URI as DOMAIN_DISABLE_RESPONSE,
-  type DomainDisablePayload,
-  type DomainDisableResponsePayload,
-} from "@openvtc/trust-tasks/did-management/domain/disable/0.1/payload";
+  TYPE_URI as DOMAIN_SET_STATE,
+  RESPONSE_TYPE_URI as DOMAIN_SET_STATE_RESPONSE,
+  type DomainSetStatePayload,
+  type DomainSetStateResponsePayload,
+} from "../specs/did-management/domain/set-state/0.1/payload.js";
 import {
   TYPE_URI as DOMAIN_SET_DEFAULT,
   RESPONSE_TYPE_URI as DOMAIN_SET_DEFAULT_RESPONSE,
   type DomainSetDefaultPayload,
   type DomainSetDefaultResponsePayload,
-} from "@openvtc/trust-tasks/did-management/domain/set-default/0.1/payload";
+} from "../specs/did-management/domain/set-default/0.1/payload.js";
 import {
   TYPE_URI as DOMAIN_PURGE,
   RESPONSE_TYPE_URI as DOMAIN_PURGE_RESPONSE,
   type DomainPurgePayload,
   type DomainPurgeResponsePayload,
-} from "@openvtc/trust-tasks/did-management/domain/purge/0.1/payload";
+} from "../specs/did-management/domain/purge/0.1/payload.js";
 import {
   TYPE_URI as DOMAIN_ASSIGN,
   RESPONSE_TYPE_URI as DOMAIN_ASSIGN_RESPONSE,
   type DomainAssignPayload,
   type DomainAssignResponsePayload,
-} from "@openvtc/trust-tasks/did-management/domain/assign/0.1/payload";
+} from "../specs/did-management/domain/assign/0.1/payload.js";
 import {
   TYPE_URI as DOMAIN_UNASSIGN,
   RESPONSE_TYPE_URI as DOMAIN_UNASSIGN_RESPONSE,
   type DomainUnassignPayload,
   type DomainUnassignResponsePayload,
-} from "@openvtc/trust-tasks/did-management/domain/unassign/0.1/payload";
+} from "../specs/did-management/domain/unassign/0.1/payload.js";
 import {
   TYPE_URI as REGISTRY_ADMIN_REGISTER,
   RESPONSE_TYPE_URI as REGISTRY_ADMIN_REGISTER_RESPONSE,
   type RegistryAdminRegisterPayload,
   type RegistryAdminRegisterResponsePayload,
-  type ServiceInstance,
-} from "@openvtc/trust-tasks/did-management/registry/admin-register/0.1/payload";
+  type RegisteredInstance,
+} from "../specs/did-management/registry/admin-register/0.2/payload.js";
 import {
   TYPE_URI as REGISTRY_DEREGISTER,
   RESPONSE_TYPE_URI as REGISTRY_DEREGISTER_RESPONSE,
   type RegistryDeregisterPayload,
   type RegistryDeregisterResponsePayload,
-} from "@openvtc/trust-tasks/did-management/registry/deregister/0.1/payload";
+} from "../specs/did-management/registry/deregister/0.1/payload.js";
 import {
   TYPE_URI as SERVER_REGISTER,
   RESPONSE_TYPE_URI as SERVER_REGISTER_RESPONSE,
   type ServerRegisterPayload,
   type ServerRegisterResponsePayload,
-} from "@openvtc/trust-tasks/did-management/server/register/0.1/payload";
+} from "../specs/did-management/server/register/0.2/payload.js";
 import {
   TYPE_URI as SERVER_HEALTH,
   RESPONSE_TYPE_URI as SERVER_HEALTH_RESPONSE,
   type ServerHealthPayload,
   type ServerHealthResponsePayload,
-} from "@openvtc/trust-tasks/did-management/server/health/0.1/payload";
+} from "../specs/did-management/server/health/0.1/payload.js";
 import {
   TYPE_URI as SERVER_STATS_SYNC,
   RESPONSE_TYPE_URI as SERVER_STATS_SYNC_RESPONSE,
   type ServerStatsSyncPayload,
   type ServerStatsSyncResponsePayload,
-} from "@openvtc/trust-tasks/did-management/server/stats-sync/0.1/payload";
+} from "../specs/did-management/server/stats-sync/0.1/payload.js";
 
-export type { DomainEntry, ServiceInstance };
+export type { DomainEntry, RegisteredInstance };
 
 export interface DomainCallerParams {
   holder: Identity;
@@ -154,25 +154,32 @@ export async function updateDomain(
 }
 
 /**
- * Disable a domain.
+ * The two states a hosting domain can be set to (`domain/set-state/0.1`).
  *
- * Every DID served under it stops resolving. The entry carries a `purgeAt`
- * afterwards — a disabled domain is on a clock, not parked indefinitely, so
- * show that date to whoever disabled it.
+ * `disabled` stops new DIDs being hosted under it; the ones already there stay
+ * readable for the host's grace period, and the entry then carries a `purgeAt`
+ * — a disabled domain is on a clock, not parked indefinitely, so show that date
+ * to whoever disabled it. `active` returns it to service and cancels the
+ * pending purge. Declarative: the state it is already in is a no-op. This
+ * replaced `domain/disable`, which the hosting service no longer serves. The
+ * default domain cannot be disabled (`isDefault`).
  */
-export async function disableDomain(
+export type DomainState = DomainSetStatePayload["state"];
+
+/** Set a domain's state. See {@link DomainState}. */
+export async function setDomainState(
   sender: TrustTaskSender,
-  params: DomainNameParams,
+  params: DomainNameParams & { state: DomainState },
 ): Promise<DomainEntry> {
-  const payload: DomainDisablePayload = { name: params.name };
-  const res = await sender.send<DomainDisableResponsePayload>(
-    buildTrustTask(DOMAIN_DISABLE, payload, {
+  const payload: DomainSetStatePayload = { name: params.name, state: params.state };
+  const res = await sender.send<DomainSetStateResponsePayload>(
+    buildTrustTask(DOMAIN_SET_STATE, payload, {
       issuer: params.holder.did,
       recipient: params.service.did,
     }),
     {
-      expectedResponseType: DOMAIN_DISABLE_RESPONSE,
-      operationLabel: "did-management/domain/disable/0.1",
+      expectedResponseType: DOMAIN_SET_STATE_RESPONSE,
+      operationLabel: "did-management/domain/set-state/0.1",
     },
   );
   return res.entry;
@@ -290,7 +297,7 @@ export interface RegistryRegisterParams extends DomainCallerParams {
 export async function adminRegisterInstance(
   sender: TrustTaskSender,
   params: RegistryRegisterParams,
-): Promise<ServiceInstance> {
+): Promise<RegisteredInstance> {
   const payload: RegistryAdminRegisterPayload = {
     instanceId: params.instanceId,
     did: params.did,
@@ -305,7 +312,7 @@ export async function adminRegisterInstance(
     }),
     {
       expectedResponseType: REGISTRY_ADMIN_REGISTER_RESPONSE,
-      operationLabel: "did-management/registry/admin-register/0.1",
+      operationLabel: "did-management/registry/admin-register/0.2",
     },
   );
   return res.entry;
@@ -367,7 +374,7 @@ export async function registerServerInstance(
     }),
     {
       expectedResponseType: SERVER_REGISTER_RESPONSE,
-      operationLabel: "did-management/server/register/0.1",
+      operationLabel: "did-management/server/register/0.2",
     },
   );
 }

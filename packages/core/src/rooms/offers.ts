@@ -1,4 +1,4 @@
-// A community's offers of its own rooms — `vtc/rooms/offers/list/0.2` — and its
+// A community's offers of its own rooms — `vtc/rooms/offers/list/0.4` — and its
 // record of where each admission stands — `vtc/rooms/memberships/list/0.1` — read
 // as the member.
 //
@@ -7,7 +7,7 @@
 // `label`, `visibility` and `description` as the community's administrators set them. The
 // member reads their offers with a document signed as the DID the offers are
 // addressed to — a persona their VTA holds — so the wallet builds the request
-// unsigned and has the VTA complete it as that DID (`rooms/keys/act/0.5`, which
+// unsigned and has the VTA complete it as that DID (`rooms/keys/act/0.8`, which
 // inserts no presentation for the community's types), then sends it to the
 // community unchanged. That is the CLI's `pnm rooms offers list`, step for step.
 //
@@ -35,7 +35,7 @@ import {
   type VTCRoomsOffersListPayload,
   type VTCRoomsOffersListResponsePayload,
   type OfferV2,
-} from "@openvtc/trust-tasks/vtc/rooms/offers/list/0.2/payload";
+} from "../specs/vtc/rooms/offers/list/0.4/payload.js";
 
 import {
   TYPE_URI as MEMBERSHIPS_LIST,
@@ -43,9 +43,9 @@ import {
   type VTCRoomsMembershipsListPayload,
   type VTCRoomsMembershipsListResponsePayload,
   type RoomMembership,
-} from "@openvtc/trust-tasks/vtc/rooms/memberships/list/0.1/payload";
+} from "../specs/vtc/rooms/memberships/list/0.1/payload.js";
 
-/** One offer: list 0.2's `OfferV2` — the room's label, tier and, when it has one, its `description`. */
+/** One offer: list 0.4's `OfferV2` — the room's label, tier and, when it has one, its `description`. */
 export type { OfferV2 as CommunityRoomOffer };
 export type { RoomMembership as CommunityRoomMembership };
 
@@ -96,7 +96,7 @@ export async function communityRoomOffers(reader: OfferReader): Promise<OfferV2[
     reader,
     OFFERS_LIST,
     OFFERS_LIST_RESPONSE,
-    "vtc/rooms/offers/list/0.2",
+    "vtc/rooms/offers/list/0.4",
   );
 }
 
@@ -132,7 +132,6 @@ async function readPages<P extends { cursor?: string }, R extends { items: T[]; 
         reader.vta.sender,
         { holder: reader.holder, service: { did: reader.vta.did } },
         unsignedRoomRequest(type, reader.community.did, payload as Record<string, unknown>, reader.member),
-        "0.5",
       ));
     } catch (e) {
       throw new OfferReadError("act", e);

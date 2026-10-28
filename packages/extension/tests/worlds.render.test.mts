@@ -15,7 +15,7 @@ import { IdentityMap } from "../src/manager/panes/persona-map.js";
 import { buildGraph } from "../src/manager/identity-graph.js";
 
 const world = (id: string, name: string, faceIds: string[], colour = "teal", attributeIds: string[] = []) =>
-  ({ facetId: id, name, colour, faceIds, attributeIds, version: 1, updatedAt: "x" }) as never;
+  ({ worldId: id, name, colour, faceIds, attributeIds, version: 1, updatedAt: "x" }) as never;
 const face = (id: string, name: string) =>
   ({ profileId: id, name, entries: [], version: 1, updatedAt: "x" }) as never;
 
@@ -51,7 +51,7 @@ const REGISTRY = {
 } as never;
 
 const putOk = () =>
-  agent({ "persona/facet/put/1.0": { facetId: "w9", version: 1, created: true, updatedAt: "x" } });
+  agent({ "persona/world/put/1.1": { worldId: "w9", version: 1, wasCreated: true, updatedAt: "x" } });
 
 /** The editor on its own, as the popover mounts it. */
 function editor(fake: ReturnType<typeof agent>, worlds: unknown[], existing?: unknown) {
@@ -206,7 +206,7 @@ test("an edit opens with the membership it will replace", async () => {
 
   await screen.click(screen.button("Save"));
   await screen.settle();
-  const sent = fake.of("facet/put")[0]!;
+  const sent = fake.of("world/put")[0]!;
   assert.deepEqual(sent.payload.faceIds.sort(), ["f1", "f2"]);
   assert.equal(sent.payload.expectedVersion, 1, "an edit did not carry the version it read");
   await screen.unmount();
@@ -220,7 +220,7 @@ test("creating sends the colour that was picked", async () => {
   await screen.click(screen.container.querySelector('[aria-label="Plum"]')!);
   await screen.click(screen.button("Create"));
   await screen.settle();
-  const sent = fake.of("facet/put")[0]!;
+  const sent = fake.of("world/put")[0]!;
   assert.equal(sent.payload.name, "Play");
   assert.equal(sent.payload.colour, "plum");
   await screen.unmount();
@@ -228,13 +228,13 @@ test("creating sends the colour that was picked", async () => {
 
 test("a placement refusal offers a way out instead of a raw error", async () => {
   const fake = agent({
-    "persona/facet/put/1.0": () => {
-      const e = new Error("one or more faces already belong to another facet") as Error & {
+    "persona/world/put/1.1": () => {
+      const e = new Error("one or more faces already belong to another world") as Error & {
         trustTaskError?: unknown;
       };
       e.trustTaskError = {
-        code: "persona/facet/put:faceAlreadyPlaced",
-        details: { placed: [{ faceId: "f1", facetId: "w2" }] },
+        code: "persona/world/put:faceAlreadyPlaced",
+        details: { placed: [{ faceId: "f1", worldId: "w2" }] },
       };
       throw e;
     },
@@ -282,7 +282,7 @@ test("an edit opens with the attribute membership it will replace, and sends it"
   await screen.check(screen.all('input[aria-label="phone.mobile"]')[0]!);
   await screen.click(screen.button("Save"));
   await screen.settle();
-  const sent = fake.of("facet/put")[0]!;
+  const sent = fake.of("world/put")[0]!;
   assert.deepEqual(sent.payload.attributeIds.sort(), ["a1", "a2"]);
   assert.deepEqual(sent.payload.faceIds, ["f1"], "face membership was lost by an attribute edit");
   await screen.unmount();

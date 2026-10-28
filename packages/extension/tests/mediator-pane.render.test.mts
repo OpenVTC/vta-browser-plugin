@@ -22,7 +22,7 @@ const ACCOUNT = (accountType: string) => ({
     did: hash(HOLDER),
     accountType,
     acl: { local: true },
-    lastAuthenticatedAt: 1_790_000_000,
+    lastAuthenticatedAt: "2026-09-21T14:13:20Z",
   },
 });
 
@@ -47,7 +47,7 @@ type Answers = Record<string, unknown>;
 
 /** A fake lens bridge: relays, probe, and tasks answered by slug. Anything the
  *  test did not name is a failure, as in `agent()`. */
-function lens({ version = "0.29.1" as string | undefined, versionError = undefined as string | undefined, locateTo = {} as Record<string, string>, answers = {} as Answers, relays = [{ mediatorDid: RELAY, vtaDid: AGENT, isInbox: true, state: "live" }] } = {}) {
+function lens({ version = "0.48.0" as string | undefined, versionError = undefined as string | undefined, locateTo = {} as Record<string, string>, answers = {} as Answers, relays = [{ mediatorDid: RELAY, vtaDid: AGENT, isInbox: true, state: "live" }] } = {}) {
   const tasks: string[] = [];
   const calls: { slug: string; payload: Record<string, unknown> }[] = [];
   const sendMessage = async (message: { type?: string; op?: { kind: string; params?: { type: string } } }) => {
@@ -114,7 +114,7 @@ const mount = async (l: ReturnType<typeof lens>, hash = "") => {
 test("a standard account sees its own queues and is told how to see more — and nothing mediator-wide is asked", async () => {
   const l = lens({
     answers: {
-      "messaging/account/get/0.1": ACCOUNT("standard"),
+      "messaging/account/get/0.2": ACCOUNT("standard"),
       "messaging/queue/status/0.1": QUEUES,
     },
   });
@@ -135,7 +135,7 @@ test("a standard account sees its own queues and is told how to see more — and
 test("mail the agent has not collected is named as the agent's, not left as a hash", async () => {
   const l = lens({
     answers: {
-      "messaging/account/get/0.1": ACCOUNT("standard"),
+      "messaging/account/get/0.2": ACCOUNT("standard"),
       "messaging/queue/status/0.1": QUEUES,
     },
   });
@@ -148,15 +148,15 @@ test("mail the agent has not collected is named as the agent's, not left as a ha
 test("an administrator sees the mediator, its queues, its accounts, its audit and its config", async () => {
   const l = lens({
     answers: {
-      "messaging/account/get/0.1": ACCOUNT("admin"),
+      "messaging/account/get/0.2": ACCOUNT("admin"),
       "messaging/queue/status/0.1": QUEUES,
       "messaging/stats/show/0.1": STATS,
       "messaging/queue/list/0.1": {
         queues: [{ did: hash(AGENT), accountType: "standard", receive: { count: 142, bytes: 1, limit: 200, oldestAgeSeconds: 8040 }, send: { count: 0, bytes: 0 } }],
         snapshotAt: "2026-09-23T12:00:00Z",
       },
-      "messaging/account/list/0.1": { accounts: [ACCOUNT("admin").account] },
-      "audit/list/0.1": { entries: [], truncated: false },
+      "messaging/account/list/0.2": { accounts: [ACCOUNT("admin").account] },
+      "audit/list/0.2": { entries: [] },
       "config/show/0.1": { fields: [{ key: "security.trust_task_verification", value: "warn", source: "mediator", requiresRestart: false }] },
     },
   });
@@ -175,7 +175,7 @@ test("an administrator sees the mediator, its queues, its accounts, its audit an
 test("a mediator below the floor is named, and not asked anything it cannot answer", async () => {
   const l = lens({ version: "0.27.4" });
   const screen = await mount(l);
-  assert.match(screen.text(), /runs 0\.27\.4; the lens needs affinidi-messaging-mediator 0\.28\.36/);
+  assert.match(screen.text(), /runs 0\.27\.4; the lens needs affinidi-messaging-mediator 0\.48\.0/);
   assert.deepEqual(l.tasks, [], "a too-old mediator was sent a task it would not answer");
 });
 
@@ -191,7 +191,7 @@ test("a release the mediator will not show a browser is noted quietly, not raise
     version: "",
     versionError: "the mediator's /readyz does not answer a browser (it sends no CORS headers)",
     answers: {
-      "messaging/account/get/0.1": ACCOUNT("standard"),
+      "messaging/account/get/0.2": ACCOUNT("standard"),
       "messaging/queue/status/0.1": QUEUES,
     },
   });
@@ -203,7 +203,7 @@ test("a release the mediator will not show a browser is noted quietly, not raise
 
 test("the relay and the agent are named apart even when one service hosts both", async () => {
   const l = lens({
-    answers: { "messaging/account/get/0.1": ACCOUNT("standard"), "messaging/queue/status/0.1": QUEUES },
+    answers: { "messaging/account/get/0.2": ACCOUNT("standard"), "messaging/queue/status/0.1": QUEUES },
   });
   const screen = await mount(l);
   // RELAY is did:webvh:QmRelay:relay.example and AGENT (PARTIES) is
@@ -229,9 +229,9 @@ test("clicking a DID shows that DID's mail — not the whole relay", async () =>
   const l = lens({
     locateTo: { [ALICE]: RELAY },
     answers: {
-      "messaging/account/get/0.1": (p: { did: string }) =>
+      "messaging/account/get/0.2": (p: { did: string }) =>
         p.did === hash(ALICE)
-          ? { account: { did: hash(ALICE), accountType: "standard", acl: {}, lastAuthenticatedAt: 1_790_000_000 } }
+          ? { account: { did: hash(ALICE), accountType: "standard", acl: {}, lastAuthenticatedAt: "2026-09-21T14:13:20Z" } }
           : ACCOUNT("admin"),
       "messaging/queue/status/0.1": aliceMail,
     },
@@ -250,7 +250,7 @@ test("clicking a DID shows that DID's mail — not the whole relay", async () =>
 test("a standard account asked for someone else's mail is told what it would take — and asks nothing", async () => {
   const l = lens({
     locateTo: { [ALICE]: RELAY },
-    answers: { "messaging/account/get/0.1": ACCOUNT("standard") },
+    answers: { "messaging/account/get/0.2": ACCOUNT("standard") },
   });
   const screen = await mount(l, `#mediator?did=${encodeURIComponent(ALICE)}`);
   assert.match(screen.text(), /a standard account sees only its own mail/);
@@ -271,7 +271,7 @@ test("a DID whose mail goes somewhere this wallet is not signed in is named, not
 test("an account in the relay's tables links to that account's mail", async () => {
   const l = lens({
     answers: {
-      "messaging/account/get/0.1": ACCOUNT("standard"),
+      "messaging/account/get/0.2": ACCOUNT("standard"),
       "messaging/queue/status/0.1": QUEUES,
     },
   });

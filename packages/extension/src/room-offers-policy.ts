@@ -4,7 +4,7 @@
 // A community that owns a room offers its members admission
 // (`vtc/rooms/community/members/add`), and the member takes it up with
 // `vtc/rooms/offers/{list,accept}/0.1`, signed as the DID the offer is addressed
-// to by their own VTA (`rooms/keys/act/0.5`). The CLI does it with
+// to by their own VTA (`rooms/keys/act/0.8`). The CLI does it with
 // `pnm rooms offers list|accept`; the wallet does the same, from its console's
 // Data rooms page and from the community's own member portal.
 //

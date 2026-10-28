@@ -23,8 +23,8 @@ import {
   personaAttributeList,
   personaAttributePurgeVersion,
   personaCorrelationAnalyze,
-  personaFacetPut,
-  personaFacetDelete,
+  personaWorldPut,
+  personaWorldDelete,
   personaProfileList,
   type CorrelationFinding,
   type DisclosureRecord,
@@ -55,7 +55,7 @@ import {
   type Selection,
 } from "../identity-graph.js";
 import type { ClaimTypeRegistry } from "@openvtc/pnm-core/persona";
-import type { PoolFacet } from "@openvtc/pnm-core/admin";
+import type { PoolWorld } from "@openvtc/pnm-core/admin";
 import { familyOf, familyStyle, FAMILY_ORDER, type Family } from "../attribute-family.js";
 import { worldHue } from "../world-colour.js";
 import { worldsOfAttribute, worldOfFace, movePlan } from "../world-model.js";
@@ -377,7 +377,7 @@ function WorldBubble({
   parties,
   onChanged,
 }: {
-  world: PoolFacet | null;
+  world: PoolWorld | null;
   faces: IdentityGraph["faces"];
   graph: IdentityGraph;
   reach: ReturnType<typeof reachOf>;
@@ -389,9 +389,9 @@ function WorldBubble({
   showLinks: boolean;
   onDragStart: (faceId: string) => void;
   onDragEnd: () => void;
-  onDrop: (faceId: string, toFacetId: string | null) => void;
+  onDrop: (faceId: string, toWorldId: string | null) => void;
   onSelect: (faceId: string) => void;
-  onEditWorld: (world: PoolFacet, anchor: HTMLElement) => void;
+  onEditWorld: (world: PoolWorld, anchor: HTMLElement) => void;
   parties: Parties;
   onChanged: () => void;
 }) {
@@ -415,7 +415,7 @@ function WorldBubble({
         e.preventDefault();
         setOver(false);
         const faceId = e.dataTransfer.getData("text/plain");
-        if (faceId) onDrop(faceId, world?.facetId ?? null);
+        if (faceId) onDrop(faceId, world?.worldId ?? null);
       }}
       style={{
         flex: "1 1 300px",
@@ -459,7 +459,7 @@ function WorldBubble({
                   containing cards looks exactly like a folder, and a holder who
                   reads Delete as "and everything in it" will never press it —
                   while one who presses it believing that, and is right, has
-                  lost faces they cannot get back. A facet is an arrangement:
+                  lost faces they cannot get back. A world is an arrangement:
                   there is no `cascade` anywhere on the wire, deliberately. */}
               <Destructive<{ released: number; names: string[] }>
                 label="Delete"
@@ -484,9 +484,9 @@ function WorldBubble({
                   </div>
                 )}
                 commit={async () => {
-                  await personaFacetDelete(managerSender, {
+                  await personaWorldDelete(managerSender, {
                     ...parties,
-                    facetId: world.facetId,
+                    worldId: world.worldId,
                     expectedVersion: world.version,
                   });
                 }}
@@ -689,7 +689,7 @@ export function IdentityMap({
   /** The holder's worlds, for the second axis on a correlation finding. Empty
    *  is the honest answer before anyone has made one, and every finding then
    *  reads as `unknown` rather than as `within`. */
-  worlds: readonly PoolFacet[];
+  worlds: readonly PoolWorld[];
   /** The agent's claim-type table, or `null` while it loads. A caller must not
    *  substitute a compiled-in one — that is the copy this replaced. */
   registry: ClaimTypeRegistry | null;
@@ -715,7 +715,7 @@ export function IdentityMap({
   const [showEmpty, setShowEmpty] = useState(false);
   /** Which world's editor is open, and the control it points at. `existing`
    *  absent means a new one. */
-  const [worldEditing, setWorldEditing] = useState<{ existing?: PoolFacet; anchor: HTMLElement | null } | null>(null);
+  const [worldEditing, setWorldEditing] = useState<{ existing?: PoolWorld; anchor: HTMLElement | null } | null>(null);
   /** The face being dragged, so a bubble can light up as a target without
    *  reading `dataTransfer` — which is write-only during `dragover`. */
   const [dragging, setDragging] = useState<string | null>(null);
@@ -723,7 +723,7 @@ export function IdentityMap({
   const denied = holderGate(authority);
 
   /**
-   * Move a face into `toFacetId`, or out of every world when it is null.
+   * Move a face into `toWorldId`, or out of every world when it is null.
    *
    * The writes and their ORDER come from `movePlan`, which is tested: the
    * agent refuses to place a face that is already placed, so the world losing
@@ -731,13 +731,13 @@ export function IdentityMap({
    * same reason — the second write is only legal once the first has landed.
    */
   const moveFace = useCallback(
-    async (faceId: string, toFacetId: string | null) => {
+    async (faceId: string, toWorldId: string | null) => {
       setMoveError(null);
-      const plan = movePlan(worlds, profiles, attributes, faceId, toFacetId);
+      const plan = movePlan(worlds, profiles, attributes, faceId, toWorldId);
       if (plan.length === 0) return;
       try {
         for (const { icon, ...w } of plan) {
-          await personaFacetPut(managerSender, { ...parties, ...w, ...(icon ? { icon } : {}) });
+          await personaWorldPut(managerSender, { ...parties, ...w, ...(icon ? { icon } : {}) });
         }
         onChanged();
       } catch (e) {
@@ -809,7 +809,7 @@ export function IdentityMap({
     onDragEnd: () => setDragging(null),
     onDrop: moveFace,
     onSelect: (id: string) => select({ kind: "face", id }),
-    onEditWorld: (existing: PoolFacet, anchor: HTMLElement) => setWorldEditing({ existing, anchor }),
+    onEditWorld: (existing: PoolWorld, anchor: HTMLElement) => setWorldEditing({ existing, anchor }),
     parties,
     onChanged,
   } as const;
@@ -1168,9 +1168,9 @@ export function IdentityMap({
           <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "flex-start" }}>
             {worlds.map((world) => (
               <WorldBubble
-                key={world.facetId}
+                key={world.worldId}
                 world={world}
-                faces={graph.faces.filter((f) => worldOfFace(worlds, f.id)?.facetId === world.facetId)}
+                faces={graph.faces.filter((f) => worldOfFace(worlds, f.id)?.worldId === world.worldId)}
                 {...bubbleShared}
               />
             ))}
@@ -1457,7 +1457,7 @@ export function IdentityMap({
           width={470}
         >
           <WorldEditor
-            key={worldEditing.existing?.facetId ?? "new"}
+            key={worldEditing.existing?.worldId ?? "new"}
             parties={parties}
             authority={authority}
             {...(worldEditing.existing ? { existing: worldEditing.existing } : {})}
@@ -1702,7 +1702,7 @@ function DetailStrip({
               )}
               {finding && (
                 <>
-                  <span style={{ color: c.danger }}>{finding.finding.why}</span>
+                  <span style={{ color: c.danger }}>{finding.finding.reason}</span>
                   {/* The second axis, where the agent answered it. Silent on
                       `unknown`: the summary says that once rather than putting
                       a claim on every row. */}

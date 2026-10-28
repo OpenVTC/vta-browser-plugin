@@ -33,8 +33,8 @@ const tpl = (over: Partial<DidTemplateRecord> = {}): DidTemplateRecord =>
     kind: "app",
     document: { id: "{DID}" },
     scope: { type: "global" },
-    createdAt: 0,
-    updatedAt: 0,
+    createdAt: "2026-09-01T00:00:00Z",
+    updatedAt: "2026-09-01T00:00:00Z",
     createdBy: "did:key:zAdmin",
     ...over,
   }) as DidTemplateRecord;

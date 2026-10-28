@@ -101,13 +101,14 @@ test("standing is read from the mediator's record: standard is self, admin and r
 
 // ── version floor ───────────────────────────────────────────────────────────
 
-test("one version floor: 0.28.36, pre-release suffix ignored, unreadable fails closed", () => {
-  assert.deepEqual(parseMediatorVersion("0.28.36-rc.1"), [0, 28, 36]);
-  assert.equal(meetsMediatorFloor("0.28.36"), true);
-  assert.equal(meetsMediatorFloor("0.29.1"), true);
+test("one version floor: 0.48.0, pre-release suffix ignored, unreadable fails closed", () => {
+  assert.deepEqual(parseMediatorVersion("0.48.0-rc.1"), [0, 48, 0]);
+  assert.equal(meetsMediatorFloor("0.48.0"), true);
+  assert.equal(meetsMediatorFloor("0.48.3"), true);
   assert.equal(meetsMediatorFloor("1.0.0"), true);
-  assert.equal(meetsMediatorFloor("0.28.35"), false);
-  assert.equal(meetsMediatorFloor("0.27.99"), false);
+  // 0.47 serves the 0.2 account tasks but still pushes monitor/event at 0.1.
+  assert.equal(meetsMediatorFloor("0.47.9"), false);
+  assert.equal(meetsMediatorFloor("0.28.36"), false);
   assert.equal(meetsMediatorFloor("nonsense"), false);
   assert.equal(meetsMediatorFloor(undefined), false);
 });
@@ -141,7 +142,7 @@ const batch = (seq, events = 0, dropped = 0) => ({
   subscriptionId: "urn:uuid:s",
   seq,
   events: Array.from({ length: events }, () => ({
-    at: "2026-09-23T00:00:00Z", direction: "inbound", stage: "received", channel: "websocket", protocol: "didcomm",
+    occurredAt: "2026-09-23T00:00:00Z", direction: "inbound", stage: "received", channel: "websocket", protocol: "didcomm",
   })),
   dropped,
   expiresAt: "2026-09-23T01:00:00Z",
@@ -184,6 +185,19 @@ test("an unlimited queue has no saturation — not zero", () => {
 test("the task list the bundle guard reads is the mediator's operations surface", () => {
   assert.ok(MEDIATOR_TASK_TYPES.every((t) => t.startsWith("https://trusttasks.org/spec/messaging/")));
   assert.ok(MEDIATOR_TASK_TYPES.includes("https://trusttasks.org/spec/messaging/queue/purge/0.1"));
+  // The account tasks are spoken at the version the mediator serves today.
+  for (const slug of ["account/get", "account/list", "account/update"]) {
+    assert.ok(MEDIATOR_TASK_TYPES.includes(`https://trusttasks.org/spec/messaging/${slug}/0.2`), slug);
+    assert.ok(!MEDIATOR_TASK_TYPES.includes(`https://trusttasks.org/spec/messaging/${slug}/0.1`), slug);
+  }
+});
+
+test("a monitor batch is recognised at 0.2 only — the version the mediator pushes", () => {
+  assert.equal(MONITOR_EVENT_TYPE, "https://trusttasks.org/spec/messaging/monitor/event/0.2");
+  assert.equal(
+    monitorBatchOf({ type: "https://trusttasks.org/spec/messaging/monitor/event/0.1", payload: batch(1) }),
+    undefined,
+  );
 });
 
 // ── refusals ────────────────────────────────────────────────────────────────

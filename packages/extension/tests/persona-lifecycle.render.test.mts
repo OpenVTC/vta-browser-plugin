@@ -81,11 +81,11 @@ test("a face's history names where and what, never a value", async () => {
       reach: { kind: "only", contextIds: ["conf"] },
       usage: [{ contextId: "conf", personaDid: "did:key:zP", boundAt: "2026-09-07T10:00:00Z" }],
     },
-    "persona/profile/timeline/1.0": {
+    "persona/profile/timeline/1.1": {
       profileId: "p1",
       events: [
-        { at: "2026-09-07T10:00:00Z", kind: "composed" },
-        { at: "2026-09-07T10:01:00Z", kind: "disclosed", contextId: "conf", verifierDid: "did:web:v", claimTypes: ["name.display"] },
+        { occurredAt: "2026-09-07T10:00:00Z", kind: "composed" },
+        { occurredAt: "2026-09-07T10:01:00Z", kind: "disclosed", contextId: "conf", verifierDid: "did:web:v", claimTypes: ["name.display"] },
       ],
     },
   });
@@ -104,8 +104,8 @@ test("a face's history names where and what, never a value", async () => {
 
 test("a typed value stays in the face unless the holder shares it", async () => {
   const a = agent({
-    "persona/correlation/analyze/1.0": { findings: [] },
-    "persona/profile/compose/1.0": { profileId: "p9", scope: "local", version: 1 },
+    "persona/correlation/analyze/1.2": { findings: [] },
+    "persona/profile/compose/1.1": { profileId: "p9", scope: "local", version: 1 },
   });
   let outcome = "";
   const ui = await render(
@@ -126,7 +126,7 @@ test("a typed value stays in the face unless the holder shares it", async () => 
   await ui.type(value!, "Ada");
   await ui.click(ui.button("Make this face"));
   await ui.settle();
-  const [payload] = sent(a, "persona/profile/compose/1.0");
+  const [payload] = sent(a, "persona/profile/compose/1.1");
   assert.deepEqual(payload?.claims, [{ type: "name.display", valueType: "string", value: "Ada" }]);
   assert.match(outcome, /Made here/);
   await ui.unmount();

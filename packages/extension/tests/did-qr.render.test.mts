@@ -65,7 +65,7 @@ test("a DID drawn outside `Did` carries the button too — a persona in a face's
       reach: { kind: "only", contextIds: ["conf"] },
       usage: [{ contextId: "conf", personaDid: "did:key:zP", boundAt: "2026-09-07T10:00:00Z" }],
     },
-    "persona/profile/timeline/1.0": { profileId: "p1", events: [] },
+    "persona/profile/timeline/1.1": { profileId: "p1", events: [] },
   });
   const screen = await render(
     h(FaceHistory, { parties: PARTIES, profileId: "p1", contextName: (id: string) => id }),

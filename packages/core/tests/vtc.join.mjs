@@ -1,4 +1,4 @@
-// Joining a community from a wallet (`vtc/join-requests/*`: manifest 0.4 and 0.3, submit 0.3): which
+// Joining a community from a wallet (`vtc/join-requests/*`: manifest 0.4, submit 0.3): which
 // criterion a wallet can apply under, the submission it builds, and how it
 // reads the community's verdict.
 //
@@ -18,7 +18,6 @@ import {
   checkJoinManifest,
   joinOutcomeOf,
   JOIN_MANIFEST_TYPE,
-  JOIN_MANIFEST_0_3_TYPE,
   JOIN_SUBMIT_TYPE,
   describeDirectoryDisclosure,
   durationWords,
@@ -136,11 +135,10 @@ const statement = {
   statementDigest: "zQmcPXnjL36U7nmj7oDPBuCSzdUd15C5aquDWkT4YGMDHge",
 };
 
-test("the manifest is asked for at 0.4, and at 0.3 when a community refuses it", () => {
+test("the manifest is asked for at 0.4, the one version a community serves", () => {
   assert.equal(JOIN_MANIFEST_TYPE, "https://trusttasks.org/spec/vtc/join-requests/manifest/0.4");
   assert.equal(buildJoinManifestRequest(ALICE, VTC).type, JOIN_MANIFEST_TYPE);
-  assert.equal(buildJoinManifestRequest(ALICE, VTC, "0.3").type, JOIN_MANIFEST_0_3_TYPE);
-  assert.deepEqual(buildJoinManifestRequest(ALICE, VTC, "0.3").payload, {});
+  assert.deepEqual(buildJoinManifestRequest(ALICE, VTC).payload, {});
 });
 
 test("the plan carries the statement, in words addressed to the person joining", () => {
@@ -158,7 +156,7 @@ test("the plan carries the statement, in words addressed to the person joining",
   ]);
 });
 
-test("a community without a directory, or answering 0.3, states none", () => {
+test("a community without a directory states none", () => {
   const plan = planJoin({ communityDid: VTC, criteria: [open] });
   assert.ok(plan.ok);
   assert.equal("directory" in plan, false);

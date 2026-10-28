@@ -23,7 +23,7 @@ import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { ContextsPane } from "../src/manager/panes/contexts.js";
 
 const PREVIEW = "vta/contexts/preview-delete/1.0";
-const DELETE = "vta/contexts/delete/1.0";
+const DELETE = "vta/contexts/delete/1.1";
 const LIST_DIDS = "vta/webvh/dids/list/1.0";
 
 const ctx = (id: string) => ({

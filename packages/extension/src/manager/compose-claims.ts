@@ -47,14 +47,14 @@ export function composeClaimsFrom(
 /** What a compose did, in the words the form closes with. */
 export function composedWords(res: {
   scope: string;
-  pooled?: readonly { created: boolean }[];
+  pooled?: readonly { wasCreated: boolean }[];
   binding?: { personaDid: string };
 }): string {
   const where =
     res.scope === "local"
       ? "Made here. Nothing you typed is reusable elsewhere — make a value reusable later if you want it in other faces."
       : "Made in your pool, so it can be worn in other contexts too.";
-  const reused = (res.pooled ?? []).filter((p) => !p.created).length;
+  const reused = (res.pooled ?? []).filter((p) => !p.wasCreated).length;
   const shared =
     reused > 0
       ? ` ${reused} value${reused === 1 ? " was" : "s were"} already kept, so this face now draws on the same fact as whatever else shows it — an edit changes both.`

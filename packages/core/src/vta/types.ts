@@ -36,7 +36,7 @@ export interface EnrollmentSubmitRequest {
   coseAlgorithm: number;
   /** Raw WebAuthn fields the VTA needs for its own verification. */
   attestationObject: string;
-  clientDataJson: string;
+  clientDataJSON: string;
   authenticatorData: string;
   transports: AuthenticatorTransport[];
   /** Optional human-friendly label. */

@@ -3,7 +3,7 @@
 // Split out of `dids.tsx` because the two answer different questions: that file
 // is about the identifiers a context has published, this one is about what a new
 // one would be. The form had grown to a server id and a Portable tick, which is
-// a fraction of what `vta/webvh/dids/create/1.0` accepts — so an operator who
+// a fraction of what `vta/webvh/dids/create/1.2` accepts — so an operator who
 // wanted a named path, a mediator entry or a template had to mint through the
 // CLI and the console was a viewer wearing a form.
 //

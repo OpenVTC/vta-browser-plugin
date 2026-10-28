@@ -205,7 +205,7 @@ test("enrolling over a vtaPin key carries the change proof; a register never doe
 test("the approver listing is a heartbeat with ext[org.openvtc.uv-approvers] = {}, read from the response's ext", async () => {
   assert.equal(EXT_UV_APPROVERS, "org.openvtc.uv-approvers");
   const ch = recorder(() => ({
-    serverTime: new Date().toISOString(),
+    respondedAt: new Date().toISOString(),
     ext: {
       "org.openvtc.uv-approvers": {
         approvers: [
@@ -218,7 +218,7 @@ test("the approver listing is a heartbeat with ext[org.openvtc.uv-approvers] = {
     },
   }));
   const list = await listUvApprovers(ch, { holder, service });
-  assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/device/heartbeat/0.2");
+  assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/device/heartbeat/0.3");
   assert.equal(ch.sent[0].envelope.issuer, holder.did);
   assert.deepEqual(ch.sent[0].envelope.payload, { ext: { "org.openvtc.uv-approvers": {} } });
   assert.deepEqual(list, [

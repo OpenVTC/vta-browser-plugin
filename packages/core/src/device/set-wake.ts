@@ -24,7 +24,7 @@ import {
   type WakeHandle,
   type WakeTriggerPolicy,
   type DeviceSetWakeResponsePayload,
-} from "@openvtc/trust-tasks/device/set-wake/0.2/payload";
+} from "../specs/device/set-wake/0.2/payload.js";
 
 /** Re-exported from the binding rather than restated here: both were declared
  *  by hand and were byte-identical to the schema's, which is the state just

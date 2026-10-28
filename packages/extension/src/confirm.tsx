@@ -116,7 +116,7 @@ const changedFromBaseUrl = params.get("changedFromBase");
 // pairing so the human can see which relying party the page is bound to.
 const isPinned = params.get("pinned") === "1";
 const pinnedBaseUrl = params.get("pinnedBase");
-// Set when this sign-in binds a session key (`auth/authenticate/0.2`). The
+// Set when this sign-in binds a session key (`auth/authenticate/0.3`). The
 // background validated it as a `did:key` before opening this window.
 const sessionKey = params.get("sessionKey");
 

@@ -30,7 +30,7 @@ export type VtaErrorCode =
   // relying party would reject.
   | "e.client.invalid_session_key"
   // The relying party answered a login that asked for a session key with a
-  // session that does not carry it. `auth/authenticate/0.2` says it must bind
+  // session that does not carry it. `auth/authenticate/0.3` says it must bind
   // the key or refuse, so this is a non-conforming reply, not a partial
   // success.
   | "e.client.session_key_not_bound"

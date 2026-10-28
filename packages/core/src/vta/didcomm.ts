@@ -156,7 +156,7 @@ export class DidcommVtaTransport implements VtaTransport, TrustTaskChannel {
       publicKeyMultibase: req.publicKeyMultibase,
       coseAlgorithm: req.coseAlgorithm,
       attestationObject: req.attestationObject,
-      clientDataJson: req.clientDataJson,
+      clientDataJSON: req.clientDataJSON,
       authenticatorData: req.authenticatorData,
       transports: req.transports,
       ...(req.label !== undefined ? { label: req.label } : {}),

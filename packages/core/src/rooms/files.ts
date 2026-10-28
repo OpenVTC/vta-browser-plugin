@@ -1,4 +1,4 @@
-// Room files — `rooms/blobs/*`, `rooms/info`, `rooms/records/{get,put}/0.2`,
+// Room files — `rooms/blobs/*`, `rooms/info`, `rooms/records/get/0.2`, `rooms/records/put/0.3`,
 // `rooms/keys/file-key`, and the signed record body a file's manifest lives in.
 //
 // A file in a room is a record plus a blob. The record is an ordinary sealed
@@ -36,6 +36,10 @@
 // way to a `VerifiedRecordBody`, so code that trusts a body's `file` cannot
 // have skipped the signature.
 
+// The one shape taken from the package rather than `../specs/`: FileManifest is
+// a definition in `rooms/_shared/0.1/blobs.schema.json` that no task schema
+// references (it travels inside a sealed record body), so no generated task
+// module re-exports it. Type-only, so nothing of the prebuilt modules loads.
 import type { FileManifest } from "@openvtc/trust-tasks/_shared/components";
 import { base64url, multibase } from "@openvtc/vti-didcomm-js";
 
@@ -52,26 +56,26 @@ import {
   RESPONSE_TYPE_URI as UPLOAD_CHUNK_RESPONSE,
   type RoomsBlobsUploadChunkPayload,
   type RoomsBlobsUploadChunkResponsePayload,
-} from "@openvtc/trust-tasks/rooms/blobs/upload/chunk/0.2/payload";
+} from "../specs/rooms/blobs/upload/chunk/0.2/payload.js";
 import {
   TYPE_URI as UPLOAD_COMMIT,
   RESPONSE_TYPE_URI as UPLOAD_COMMIT_RESPONSE,
   type RoomsBlobsUploadCommitPayload,
   type RoomsBlobsUploadCommitResponsePayload,
-} from "@openvtc/trust-tasks/rooms/blobs/upload/commit/0.2/payload";
+} from "../specs/rooms/blobs/upload/commit/0.2/payload.js";
 import {
   TYPE_URI as UPLOAD_ABORT,
   RESPONSE_TYPE_URI as UPLOAD_ABORT_RESPONSE,
   type RoomsBlobsUploadAbortPayload,
   type RoomsBlobsUploadAbortResponsePayload,
-} from "@openvtc/trust-tasks/rooms/blobs/upload/abort/0.2/payload";
-import type { RoomsBlobsChunkResponsePayload } from "@openvtc/trust-tasks/rooms/blobs/chunk/0.1/payload";
+} from "../specs/rooms/blobs/upload/abort/0.2/payload.js";
+import type { RoomsBlobsChunkResponsePayload } from "../specs/rooms/blobs/chunk/0.1/payload.js";
 import {
   TYPE_URI as KEYS_FILE_KEY,
   RESPONSE_TYPE_URI as KEYS_FILE_KEY_RESPONSE,
   type RoomsKeysFileKeyPayload,
   type RoomsKeysFileKeyResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/file-key/0.2/payload";
+} from "../specs/rooms/keys/file-key/0.2/payload.js";
 
 export type { FileManifest };
 

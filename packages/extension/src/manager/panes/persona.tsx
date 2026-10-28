@@ -47,7 +47,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   personaAttributeList,
   personaDisclosureHistory,
-  personaFacetList,
+  personaWorldList,
   personaProfileList,
 } from "@openvtc/pnm-core/admin";
 import { getBinding, listBindings } from "@openvtc/pnm-core/persona";
@@ -231,7 +231,7 @@ export function PersonaPane({
   // an absence of arrangement, and drawing one as the other is the same error
   // as an unreadable context reported as an empty one.
   const worlds = useAsync(
-    async () => personaFacetList(managerSender, parties),
+    async () => personaWorldList(managerSender, parties),
     [parties.holder.did, parties.service.did],
   );
   const contexts = useAsync(

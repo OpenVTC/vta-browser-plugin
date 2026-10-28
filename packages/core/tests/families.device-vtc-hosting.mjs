@@ -15,9 +15,11 @@ import { joinRequestStatus, selfRemoveFromCommunity } from "../dist/vtc/index.js
 import {
   registerHostedDid,
   listHostedDids,
+  setHostedDidState,
   rollbackHostedDid,
   reportHostedDidProblem,
   purgeDomain,
+  setDomainState,
 } from "../dist/did-hosting/index.js";
 
 const HOLDER = { did: "did:key:zHolder" };
@@ -58,7 +60,7 @@ test("a heartbeat carries queued work — including a pending wipe", async () =>
   // heartbeat as a liveness ping and drops the array is a client that cannot be
   // wiped.
   const channel = recorder({
-    serverTime: "2026-08-18T00:00:00Z",
+    respondedAt: "2026-08-18T00:00:00Z",
     queuedOperations: [{ kind: "wipe", task: { scope: "full" } }],
     syncHint: "syncDue",
   });
@@ -69,9 +71,11 @@ test("a heartbeat carries queued work — including a pending wipe", async () =>
 });
 
 test("a heartbeat with nothing queued still yields an array", async () => {
-  const channel = recorder({ serverTime: "2026-08-18T00:00:00Z" });
+  const channel = recorder({ respondedAt: "2026-08-18T00:00:00Z" });
   const result = await deviceHeartbeat(channel, { holder: HOLDER, service: SERVICE });
   assert.deepEqual(result.queuedOperations, []);
+  assert.equal(result.respondedAt, "2026-08-18T00:00:00Z");
+  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/device/heartbeat/0.3");
 });
 
 test("push wake reports a dead handle distinctly from a failure", async () => {
@@ -158,11 +162,44 @@ test("registering a hosted DID does not force by default", async () => {
   assert.deepEqual(channel.sent[0].envelope.payload, { path: "alice", method: "webvh", didData: {} });
 });
 
-test("list reports the total, not just the page", async () => {
-  const channel = recorder({ records: [], total: 42 });
-  const result = await listHostedDids(channel, { holder: HOLDER, service: SERVICE, limit: 10 });
-  assert.equal(result.total, 42);
-  assert.deepEqual(result.records, []);
+// 0.2 carries no `total`, so a single page would be indistinguishable from the
+// whole listing. Only an absent `nextCursor` ends it.
+test("list follows the cursor to the end, with limit as the page size", async () => {
+  const pages = [
+    { records: [{ mnemonic: "a" }], nextCursor: "c1" },
+    { records: [{ mnemonic: "b" }] },
+  ];
+  const sent = [];
+  const channel = {
+    send(envelope, opts) {
+      sent.push({ envelope, opts });
+      return Promise.resolve(pages[sent.length - 1]);
+    },
+  };
+  const result = await listHostedDids(channel, { holder: HOLDER, service: SERVICE, limit: 1 });
+  assert.deepEqual(result.records.map((r) => r.mnemonic), ["a", "b"]);
+  assert.equal(sent[0].envelope.type, "https://trusttasks.org/spec/did-management/did/list/0.2");
+  assert.deepEqual(sent[0].envelope.payload, { limit: 1 });
+  assert.deepEqual(sent[1].envelope.payload, { limit: 1, cursor: "c1" });
+});
+
+// `did/disable` and `did/enable` are gone from the hosting service; one
+// declarative task sets the state either way.
+test("a hosted DID's state is set declaratively, not toggled", async () => {
+  const channel = recorder({ record: { mnemonic: "m1" } });
+  await setHostedDidState(channel, { holder: HOLDER, service: SERVICE, mnemonic: "m1", state: "suspended" });
+  const { envelope, opts } = channel.sent[0];
+  assert.equal(envelope.type, "https://trusttasks.org/spec/did-management/did/set-state/0.1");
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/did-management/did/set-state/0.1#response");
+  assert.deepEqual(envelope.payload, { mnemonic: "m1", state: "suspended" });
+});
+
+test("a domain's state is set by domain/set-state, which replaced domain/disable", async () => {
+  const channel = recorder({ entry: { name: "example.com" } });
+  await setDomainState(channel, { holder: HOLDER, service: SERVICE, name: "example.com", state: "disabled" });
+  const { envelope } = channel.sent[0];
+  assert.equal(envelope.type, "https://trusttasks.org/spec/did-management/domain/set-state/0.1");
+  assert.deepEqual(envelope.payload, { name: "example.com", state: "disabled" });
 });
 
 test("a rollback says how many versions it destroyed", async () => {

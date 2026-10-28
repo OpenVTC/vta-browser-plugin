@@ -28,7 +28,7 @@ import type { TrustTaskEnvelope } from "../trust-tasks/sign.js";
 import {
   TYPE_URI as TASK_VAULT_SIGN_TRUST_TASK,
   RESPONSE_TYPE_URI as TASK_VAULT_SIGN_TRUST_TASK_RESPONSE,
-} from "@openvtc/trust-tasks/vault/sign-trust-task/0.2/payload";
+} from "../specs/vault/sign-trust-task/0.2/payload.js";
 
 export interface VaultSignTrustTaskOptions {
   /** Issuer of the request (envelope `issuer`). */

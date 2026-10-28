@@ -8,8 +8,9 @@
 //     import. They are checked against `acl-capabilities.json`, the committed
 //     snapshot `scripts/sync-acl-capabilities.mjs` writes. A failure here means
 //     the agent moved and this library did not.
-//   * **The behaviour** — intersection, the three write intentions, the two
-//     refusals — is this library's own, and is tested against fixtures.
+//   * **The behaviour** — reading a 0.2 capability scope, building one to
+//     send, the two refusals — is this library's own, and is tested against
+//     fixtures.
 //
 // Written with VTI#1268's lesson in view: a suite that only asserts refusals
 // proves nothing, since a module that refuses everything passes it. Every
@@ -24,13 +25,9 @@ import {
   ACL_ROLES,
   DERIVED_CAPABILITIES,
   ADDITIVE_CAPABILITIES,
-  CAPABILITIES_EXT_MEMBER,
-  capabilitiesFromExt,
-  capabilitiesIntoExt,
   effectiveCapabilities,
   checkNarrowing,
   narrowingToSend,
-  entryNarrowing,
   aclUpdate,
 } from "../dist/admin/index.js";
 
@@ -96,13 +93,6 @@ test("key-export is admin's alone", () => {
   }
 });
 
-test("the ext member is spelled the way the agent spells it", () => {
-  // The one string that has to match byte for byte across two languages: a
-  // narrowing under a misspelled namespace is silently ignored by the agent,
-  // which reads to the operator as a narrowing that did not take.
-  assert.equal(CAPABILITIES_EXT_MEMBER, SNAPSHOT.extMember);
-});
-
 test("monitor derives nothing, and that is load-bearing", () => {
   // Asserted rather than assumed: it is the agent's `Default`, so a claim that
   // leaks past its expected reach lands here. A future edit that gave it a
@@ -113,48 +103,78 @@ test("monitor derives nothing, and that is load-bearing", () => {
 
 // ── Intersection ────────────────────────────────────────────────────────────
 
-test("an additive grant alone keeps the whole role, and adds itself", () => {
-  // The agent's rule: only non-additive names narrow. The earlier console read
-  // this entry as narrowed to nothing.
-  const e = effectiveCapabilities("admin", ["persona-holder"]);
+const CEILING = { scope: "ceiling" };
+/** A `listed` scope: plain names narrow, `+name` is an additive grant. */
+const listed = (...names) => ({
+  scope: "listed",
+  grants: names.map((n) =>
+    n.startsWith("+") ? { capability: n.slice(1), additive: true } : { capability: n },
+  ),
+});
+
+test("the role's ceiling enumerated beside an additive grant reads as the whole role", () => {
+  // How the agent renders "the whole role plus persona-holder" — 0.2 has no
+  // other spelling for it. Reading it as "narrowed, 15 of 15" describes a
+  // decision nobody took.
+  const e = effectiveCapabilities(
+    "admin",
+    listed(...DERIVED_CAPABILITIES.admin, "+persona-holder"),
+  );
   assert.equal(e.unnarrowed, true);
   assert.deepEqual(sorted(e.effective), sorted([...DERIVED_CAPABILITIES.admin, "persona-holder"]));
+  assert.deepEqual(e.additive, ["persona-holder"]);
   assert.deepEqual(e.unrecognised, []);
 });
 
 test("an additive grant beside a narrowing: narrowed, then added", () => {
-  const e = effectiveCapabilities("initiator", ["sign", "persona-holder"]);
+  const e = effectiveCapabilities("initiator", listed("sign", "+persona-holder"));
   assert.equal(e.unnarrowed, false);
   assert.deepEqual(sorted(e.effective), ["persona-holder", "sign"]);
 });
 
-test("editing a narrowing carries an additive grant through", () => {
-  const stored = ["sign", "persona-holder"];
-  assert.deepEqual(narrowingToSend(["vault-read"], stored, "narrow"), {
-    ok: true,
-    capabilities: ["vault-read", "persona-holder"],
-  });
-  // Clearing widens back to the role and does NOT revoke the pool grant.
-  assert.deepEqual(narrowingToSend([], stored, "clear"), {
-    ok: true,
-    capabilities: ["persona-holder"],
-  });
-  // Without an additive grant, clearing is the empty list it always was.
-  assert.deepEqual(narrowingToSend([], ["sign"], "clear"), { ok: true, capabilities: [] });
+test("additive is read from the grant, not from this build's table", () => {
+  // `persona-holder` listed WITHOUT the flag is a narrowing name the role does
+  // not carry, so it intersects away — exactly what the agent computes.
+  const e = effectiveCapabilities("admin", listed("sign", "persona-holder"));
+  assert.deepEqual(e.effective, ["sign"]);
+  assert.deepEqual(e.additive, []);
 });
 
-test("narrowing to nothing is refused, because the agent would read it as everything", () => {
-  // `[]` is the agent's clear instruction and `["persona-holder"]` is the whole
-  // role plus the pool: neither means "nothing", and sending either to mean it
-  // would widen the entry instead. The earlier pane did exactly that.
-  assert.equal(narrowingToSend([], ["sign"], "narrow").ok, false);
-  assert.equal(narrowingToSend([], ["persona-holder"], "narrow").ok, false);
-  assert.equal(narrowingToSend(["persona-holder"], undefined, "narrow").ok, false);
-  // Keeping one is expressible, and is sent as asked.
-  assert.deepEqual(narrowingToSend(["sign"], undefined, "narrow"), {
+test("editing a narrowing carries an additive grant through", () => {
+  const stored = listed("sign", "+persona-holder");
+  assert.deepEqual(narrowingToSend("initiator", ["vault-read"], stored, "narrow"), {
     ok: true,
-    capabilities: ["sign"],
+    capabilities: listed("vault-read", "+persona-holder"),
   });
+  // Clearing widens back to the role and does NOT revoke the pool grant: the
+  // update replaces the scope, so `ceiling` here would drop it.
+  assert.deepEqual(narrowingToSend("initiator", [], stored, "clear"), {
+    ok: true,
+    capabilities: listed(...DERIVED_CAPABILITIES.initiator, "+persona-holder"),
+  });
+  // Without an additive grant, clearing is the role's ceiling.
+  assert.deepEqual(narrowingToSend("initiator", [], listed("sign"), "clear"), {
+    ok: true,
+    capabilities: CEILING,
+  });
+});
+
+test("narrowing to nothing is refused, because the agent cannot hold it", () => {
+  assert.equal(narrowingToSend("admin", [], listed("sign"), "narrow").ok, false);
+  assert.equal(narrowingToSend("admin", [], listed("+persona-holder"), "narrow").ok, false);
+  assert.equal(narrowingToSend("admin", ["persona-holder"], CEILING, "narrow").ok, false);
+  // Keeping one is expressible, and is sent as asked.
+  assert.deepEqual(narrowingToSend("admin", ["sign"], CEILING, "narrow"), {
+    ok: true,
+    capabilities: listed("sign"),
+  });
+});
+
+test("a narrowing outside the role is refused before it is sent", () => {
+  // Paired with the acceptance above: same call, a name the role lacks.
+  const res = narrowingToSend("reader", ["key-export"], CEILING, "narrow");
+  assert.equal(res.ok, false);
+  assert.match(res.reason, /key-export/);
 });
 
 test("an additive name is not refused for want of a role that carries it", () => {
@@ -165,24 +185,26 @@ test("an additive name is not refused for want of a role that carries it", () =>
   assert.equal(checkNarrowing("reader", ["key-export"]).ok, false);
 });
 
-test("an entry with no narrowing holds its whole role", () => {
-  const e = effectiveCapabilities("reader", undefined);
+test("a ceiling scope holds its whole role", () => {
+  const e = effectiveCapabilities("reader", CEILING);
   assert.deepEqual(sorted(e.effective), sorted(DERIVED_CAPABILITIES.reader));
   assert.equal(e.unnarrowed, true);
+});
 
-  // Empty means the same thing on the READ path, which is the shape every
-  // entry written before the agent gained this feature has.
-  assert.equal(effectiveCapabilities("reader", []).unnarrowed, true);
+test("a none scope holds nothing, and says it is narrowed", () => {
+  const e = effectiveCapabilities("reader", { scope: "none" });
+  assert.deepEqual(e.effective, []);
+  assert.equal(e.unnarrowed, false);
 });
 
 test("a narrowing subtracts, and cannot add", () => {
-  const narrowed = effectiveCapabilities("reader", ["vault-read"]);
+  const narrowed = effectiveCapabilities("reader", listed("vault-read"));
   assert.deepEqual(narrowed.effective, ["vault-read"]);
   assert.equal(narrowed.unnarrowed, false);
 
   // The half that matters: naming a capability the role lacks does not grant
   // it. A reader narrowed to `sign` holds nothing, not signing authority.
-  const beyond = effectiveCapabilities("reader", ["sign"]);
+  const beyond = effectiveCapabilities("reader", listed("sign"));
   assert.deepEqual(beyond.effective, []);
   assert.ok(
     !beyond.effective.includes("sign"),
@@ -193,56 +215,18 @@ test("a narrowing subtracts, and cannot add", () => {
 test("an unknown role is undefined, never an empty set", () => {
   // The two would render identically as "holds nothing", and one of them is a
   // lie about an entry that may hold everything.
-  assert.equal(effectiveCapabilities("superuser", ["sign"]), undefined);
-  assert.notEqual(effectiveCapabilities("admin", ["sign"]), undefined);
+  assert.equal(effectiveCapabilities("superuser", listed("sign")), undefined);
+  assert.notEqual(effectiveCapabilities("admin", listed("sign")), undefined);
 });
 
 test("a name this build does not know is reported, not dropped", () => {
-  const e = effectiveCapabilities("admin", ["sign", "quantum-entangle"]);
+  const e = effectiveCapabilities("admin", listed("sign", "quantum-entangle"));
   assert.deepEqual(e.effective, ["sign"]);
   assert.deepEqual(e.unrecognised, ["quantum-entangle"]);
 });
 
-// ── The ext codec ───────────────────────────────────────────────────────────
-
-test("an absent member reads as no narrowing, a malformed one as an error", () => {
-  assert.equal(capabilitiesFromExt(undefined), undefined);
-  assert.equal(capabilitiesFromExt({}), undefined);
-  assert.deepEqual(capabilitiesFromExt({ [CAPABILITIES_EXT_MEMBER]: ["sign"] }), ["sign"]);
-
-  // Not `undefined`: absence and "cannot parse this" are opposite conclusions
-  // about an entry's authority, and the safe-looking one is the wrong one.
-  assert.throws(() => capabilitiesFromExt({ [CAPABILITIES_EXT_MEMBER]: "sign" }), /must be an array/);
-  assert.throws(() => capabilitiesFromExt({ [CAPABILITIES_EXT_MEMBER]: [1] }), /must contain strings/);
-});
-
-test("writing a narrowing keeps the rest of ext", () => {
-  const ext = capabilitiesIntoExt({ "org.openvtc.vault-session": "s-1" }, ["sign"]);
-  assert.equal(ext["org.openvtc.vault-session"], "s-1");
-  assert.deepEqual(ext[CAPABILITIES_EXT_MEMBER], ["sign"]);
-});
-
-test("an empty narrowing is WRITTEN on the request path, not omitted", () => {
-  // The one place this deliberately differs from the agent's own helper, which
-  // drops an empty set because it serves the response path. Here `[]` is the
-  // instruction to clear, and omitting it would leave the entry narrowed while
-  // reporting success — a silent privilege DECREASE surviving a request to
-  // remove it.
-  const ext = capabilitiesIntoExt(undefined, []);
-  assert.deepEqual(ext[CAPABILITIES_EXT_MEMBER], []);
-  assert.ok(CAPABILITIES_EXT_MEMBER in ext);
-});
-
-test("entryNarrowing reads the entry the agent echoes back", () => {
-  assert.deepEqual(entryNarrowing({ subject: "did:key:z", role: "admin" }), undefined);
-  assert.deepEqual(
-    entryNarrowing({
-      subject: "did:key:z",
-      role: "admin",
-      ext: { [CAPABILITIES_EXT_MEMBER]: ["memory-read"] },
-    }),
-    ["memory-read"],
-  );
+test("a scope shape this build does not know throws rather than guessing", () => {
+  assert.throws(() => effectiveCapabilities("admin", { scope: "everything" }), /unrecognised/);
 });
 
 // ── The two refusals ────────────────────────────────────────────────────────
@@ -273,31 +257,27 @@ test("a capability the role does not carry is refused", () => {
 
 // ── The wire ────────────────────────────────────────────────────────────────
 
-test("aclUpdate keeps the three intentions apart on the wire", async () => {
+test("aclUpdate sends a capability scope only when one is stated", async () => {
   const entry = { subject: "did:key:zSub", role: "admin" };
 
   const leave = recorder({ entry });
   await aclUpdate(leave, { ...PARTIES, subject: "did:key:zSub", label: "ops" });
-  assert.equal(
-    leave.sent[0].envelope.payload.ext,
-    undefined,
-    "an omitted narrowing must not send an ext member — that would clear it",
-  );
+  const left = leave.sent[0].envelope.payload;
+  assert.equal("capabilities" in left, false, "an omitted scope must not be sent — it would replace");
+  assert.equal(left.ext, undefined, "0.2 carries no capability narrowing in ext");
 
   const clear = recorder({ entry });
-  await aclUpdate(clear, { ...PARTIES, subject: "did:key:zSub", capabilities: [] });
-  assert.deepEqual(clear.sent[0].envelope.payload.ext, { [CAPABILITIES_EXT_MEMBER]: [] });
+  await aclUpdate(clear, { ...PARTIES, subject: "did:key:zSub", capabilities: CEILING });
+  assert.deepEqual(clear.sent[0].envelope.payload.capabilities, CEILING);
 
   const narrow = recorder({ entry });
   await aclUpdate(narrow, {
     ...PARTIES,
     subject: "did:key:zSub",
-    capabilities: ["memory-read"],
+    capabilities: listed("memory-read"),
   });
-  assert.deepEqual(narrow.sent[0].envelope.payload.ext, {
-    [CAPABILITIES_EXT_MEMBER]: ["memory-read"],
-  });
-  // The rest of the call still works — a wrapper that sent only `ext` would
-  // pass every assertion above.
+  assert.deepEqual(narrow.sent[0].envelope.payload.capabilities, listed("memory-read"));
+  // The rest of the call still works — a wrapper that sent only the scope
+  // would pass every assertion above.
   assert.equal(narrow.sent[0].envelope.payload.subject, "did:key:zSub");
 });

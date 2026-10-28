@@ -13,7 +13,7 @@
 import {
   TYPE_URI as AUTH_WHOAMI,
   RESPONSE_TYPE_URI as AUTH_WHOAMI_RESPONSE,
-} from "@openvtc/trust-tasks/auth/whoami/0.1/payload";
+} from "../specs/auth/whoami/0.1/payload.js";
 
 import type { TaskParty, TrustTaskSender } from "./channel.js";
 import { VtaClientError } from "./errors.js";

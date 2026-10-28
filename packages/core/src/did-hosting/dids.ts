@@ -17,6 +17,7 @@ import type { Identity } from "../didcomm/index.js";
 import type { TrustTaskNotifier, TrustTaskSender } from "../vta/channel.js";
 import type { RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import { buildTrustTask } from "../vta/trust-task.js";
+import { collectPages } from "../util/pages.js";
 
 import {
   TYPE_URI as DID_REGISTER,
@@ -24,65 +25,53 @@ import {
   type DIDManagementRegisterPayload,
   type DIDManagementRegisterResponsePayload,
   type DidRecord,
-} from "@openvtc/trust-tasks/did-management/did/register/0.1/payload";
-import {
-  TYPE_URI as DID_PUBLISH,
-  RESPONSE_TYPE_URI as DID_PUBLISH_RESPONSE,
-  type DIDManagementPublishPayload,
-  type DIDManagementPublishResponsePayload,
-} from "@openvtc/trust-tasks/did-management/did/publish/0.1/payload";
+} from "../specs/did-management/did/register/0.1/payload.js";
 import {
   TYPE_URI as DID_INFO,
   RESPONSE_TYPE_URI as DID_INFO_RESPONSE,
   type DIDManagementInfoPayload,
   type DIDManagementInfoResponsePayload,
-} from "@openvtc/trust-tasks/did-management/did/info/0.1/payload";
+} from "../specs/did-management/did/info/0.1/payload.js";
 import {
   TYPE_URI as DID_LIST,
   RESPONSE_TYPE_URI as DID_LIST_RESPONSE,
   type DIDManagementListPayload,
   type DIDManagementListResponsePayload,
-} from "@openvtc/trust-tasks/did-management/did/list/0.1/payload";
+} from "../specs/did-management/did/list/0.2/payload.js";
 import {
   TYPE_URI as DID_CHECK_NAME,
   RESPONSE_TYPE_URI as DID_CHECK_NAME_RESPONSE,
   type DIDManagementCheckNamePayload,
   type DIDManagementCheckNameResponsePayload,
-} from "@openvtc/trust-tasks/did-management/did/check-name/0.1/payload";
+} from "../specs/did-management/did/check-name/0.1/payload.js";
 import {
-  TYPE_URI as DID_ENABLE,
-  RESPONSE_TYPE_URI as DID_ENABLE_RESPONSE,
-  type DIDManagementEnablePayload,
-  type DIDManagementEnableResponsePayload,
-} from "@openvtc/trust-tasks/did-management/did/enable/0.1/payload";
-import {
-  TYPE_URI as DID_DISABLE,
-  RESPONSE_TYPE_URI as DID_DISABLE_RESPONSE,
-  type DIDManagementDisablePayload,
-  type DIDManagementDisableResponsePayload,
-} from "@openvtc/trust-tasks/did-management/did/disable/0.1/payload";
+  TYPE_URI as DID_SET_STATE,
+  RESPONSE_TYPE_URI as DID_SET_STATE_RESPONSE,
+  type DIDManagementSetStatePayload,
+  type DIDManagementSetStateResponsePayload,
+} from "../specs/did-management/did/set-state/0.1/payload.js";
 import {
   TYPE_URI as DID_DELETE,
   RESPONSE_TYPE_URI as DID_DELETE_RESPONSE,
   type DIDManagementDeletePayload,
   type DIDManagementDeleteResponsePayload,
-} from "@openvtc/trust-tasks/did-management/did/delete/0.1/payload";
+} from "../specs/did-management/did/delete/0.1/payload.js";
 import {
   TYPE_URI as DID_ROLLBACK,
   RESPONSE_TYPE_URI as DID_ROLLBACK_RESPONSE,
   type DIDManagementRollbackPayload,
   type DIDManagementRollbackResponsePayload,
-} from "@openvtc/trust-tasks/did-management/did/rollback/0.1/payload";
+} from "../specs/did-management/did/rollback/0.1/payload.js";
 import {
   TYPE_URI as DID_CHANGE_OWNER,
   RESPONSE_TYPE_URI as DID_CHANGE_OWNER_RESPONSE,
   type DIDManagementChangeOwnerPayload,
   type DIDManagementChangeOwnerResponsePayload,
-} from "@openvtc/trust-tasks/did-management/did/change-owner/0.1/payload";
+} from "../specs/did-management/did/change-owner/0.1/payload.js";
 import {
   TYPE_URI as DID_PROBLEM_REPORT,
   type DIDManagementProblemReportPayload,
-} from "@openvtc/trust-tasks/did-management/did/problem-report/0.1/payload";
+} from "../specs/did-management/did/problem-report/0.1/payload.js";
 
 export type { DidRecord };
 
@@ -135,32 +124,6 @@ export async function registerHostedDid(
   return res.record;
 }
 
-export interface DidPublishParams extends DidRecordParams {
-  method: string;
-  didData: DIDManagementPublishPayload["didData"];
-}
-
-/** Publish a new version of an existing DID. */
-export async function publishHostedDid(
-  sender: TrustTaskSender,
-  params: DidPublishParams,
-): Promise<DidRecord> {
-  const payload: DIDManagementPublishPayload = {
-    mnemonic: params.mnemonic,
-    method: params.method,
-    didData: params.didData,
-    ...(params.domain ? { domain: params.domain } : {}),
-  };
-  const res = await sender.send<DIDManagementPublishResponsePayload>(
-    buildTrustTask(DID_PUBLISH, payload, {
-      issuer: params.holder.did,
-      recipient: params.service.did,
-    }),
-    { expectedResponseType: DID_PUBLISH_RESPONSE, operationLabel: "did-management/did/publish/0.1" },
-  );
-  return res.record;
-}
-
 /** A record plus its log summary. */
 export async function hostedDidInfo(
   sender: TrustTaskSender,
@@ -182,35 +145,43 @@ export async function hostedDidInfo(
 export interface DidListParams extends DidHostingCallerParams {
   /** Only DIDs owned by this DID. */
   owner?: string;
+  /** The page size to ask for — never a cap on the result. */
   limit?: number;
-  offset?: number;
 }
 
 export interface DidListResult {
+  /** Every matching record: the listing is read to the end. */
   records: DidRecord[];
-  /** Total matching the filter, not the page length. */
-  total: number;
 }
 
-/** List hosted DIDs. */
+/**
+ * List hosted DIDs.
+ *
+ * 0.2 pages by cursor and carries no `total`, so the only honest count is the
+ * length of the whole listing — which is why this follows `nextCursor` to its
+ * absence rather than returning a page a caller could mistake for everything.
+ */
 export async function listHostedDids(
   sender: TrustTaskSender,
   params: DidListParams,
 ): Promise<DidListResult> {
-  const payload: DIDManagementListPayload = {
-    ...(params.owner ? { owner: params.owner } : {}),
-    ...(params.domain ? { domain: params.domain } : {}),
-    ...(params.limit !== undefined ? { limit: params.limit } : {}),
-    ...(params.offset !== undefined ? { offset: params.offset } : {}),
-  };
-  const res = await sender.send<DIDManagementListResponsePayload>(
-    buildTrustTask(DID_LIST, payload, {
-      issuer: params.holder.did,
-      recipient: params.service.did,
-    }),
-    { expectedResponseType: DID_LIST_RESPONSE, operationLabel: "did-management/did/list/0.1" },
-  );
-  return { records: res.records ?? [], total: res.total ?? 0 };
+  const records = await collectPages("did-management/did/list", async (cursor) => {
+    const payload: DIDManagementListPayload = {
+      ...(params.owner ? { owner: params.owner } : {}),
+      ...(params.domain ? { domain: params.domain } : {}),
+      ...(params.limit !== undefined ? { limit: params.limit } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
+    };
+    const res = await sender.send<DIDManagementListResponsePayload>(
+      buildTrustTask(DID_LIST, payload, {
+        issuer: params.holder.did,
+        recipient: params.service.did,
+      }),
+      { expectedResponseType: DID_LIST_RESPONSE, operationLabel: "did-management/did/list/0.2" },
+    );
+    return { items: res.records ?? [], nextCursor: res.nextCursor };
+  });
+  return { records };
 }
 
 export interface CheckNameParams extends DidHostingCallerParams {
@@ -246,40 +217,36 @@ export async function checkHostedDidName(
   );
 }
 
-/** Stop serving a DID without deleting it. Resolution fails; the log survives. */
-export async function disableHostedDid(
-  sender: TrustTaskSender,
-  params: DidRecordParams,
-): Promise<DidRecord> {
-  const payload: DIDManagementDisablePayload = {
-    mnemonic: params.mnemonic,
-    ...(params.domain ? { domain: params.domain } : {}),
-  };
-  const res = await sender.send<DIDManagementDisableResponsePayload>(
-    buildTrustTask(DID_DISABLE, payload, {
-      issuer: params.holder.did,
-      recipient: params.service.did,
-    }),
-    { expectedResponseType: DID_DISABLE_RESPONSE, operationLabel: "did-management/did/disable/0.1" },
-  );
-  return res.record;
-}
+/**
+ * The two hosting states a DID slot can be set to (`did/set-state/0.1`).
+ *
+ * `suspended` stops the DID resolving — a resolver gets a deactivation marker —
+ * while the log and witness content are kept, so `active` brings it back
+ * exactly as it was. Declarative: setting the state a slot is already in is a
+ * no-op, not an error. This replaced the separate `did/disable` and
+ * `did/enable` tasks, which the hosting service no longer serves.
+ */
+export type HostedDidState = DIDManagementSetStatePayload["state"];
 
-/** Serve a disabled DID again. */
-export async function enableHostedDid(
+/** Set a hosted DID's state. See {@link HostedDidState}. */
+export async function setHostedDidState(
   sender: TrustTaskSender,
-  params: DidRecordParams,
+  params: DidRecordParams & { state: HostedDidState },
 ): Promise<DidRecord> {
-  const payload: DIDManagementEnablePayload = {
+  const payload: DIDManagementSetStatePayload = {
     mnemonic: params.mnemonic,
+    state: params.state,
     ...(params.domain ? { domain: params.domain } : {}),
   };
-  const res = await sender.send<DIDManagementEnableResponsePayload>(
-    buildTrustTask(DID_ENABLE, payload, {
+  const res = await sender.send<DIDManagementSetStateResponsePayload>(
+    buildTrustTask(DID_SET_STATE, payload, {
       issuer: params.holder.did,
       recipient: params.service.did,
     }),
-    { expectedResponseType: DID_ENABLE_RESPONSE, operationLabel: "did-management/did/enable/0.1" },
+    {
+      expectedResponseType: DID_SET_STATE_RESPONSE,
+      operationLabel: "did-management/did/set-state/0.1",
+    },
   );
   return res.record;
 }
@@ -289,8 +256,8 @@ export async function enableHostedDid(
  *
  * The DID stops resolving for everyone who ever trusted it, and its log goes
  * with it. Anything that recorded this DID as an issuer or a subject is left
- * pointing at nothing — prefer {@link disableHostedDid} unless erasure is the
- * actual requirement.
+ * pointing at nothing — prefer suspending it ({@link setHostedDidState}) unless
+ * erasure is the actual requirement.
  */
 export async function deleteHostedDid(
   sender: TrustTaskSender,

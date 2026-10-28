@@ -22,14 +22,14 @@ import {
   type ConsumerKind,
   type DeviceAttestation,
   type KeyCustody,
-} from "@openvtc/trust-tasks/device/register/0.2/payload";
+} from "../specs/device/register/0.2/payload.js";
 import {
   TYPE_URI as DEVICE_HEARTBEAT,
   RESPONSE_TYPE_URI as DEVICE_HEARTBEAT_RESPONSE,
   type DeviceHeartbeatPayload,
   type DeviceHeartbeatResponsePayload,
   type QueuedOperation,
-} from "@openvtc/trust-tasks/device/heartbeat/0.2/payload";
+} from "../specs/device/heartbeat/0.3/payload.js";
 
 export type { DeviceBinding, ConsumerKind, DeviceAttestation, KeyCustody, QueuedOperation };
 
@@ -96,8 +96,9 @@ export interface DeviceHeartbeatParams extends DeviceEnrolmentParams {
 }
 
 export interface DeviceHeartbeatResult {
-  /** RFC 3339, the agent's clock. */
-  serverTime: string;
+  /** RFC 3339, the agent's clock at the moment it answered. `0.3` renamed
+   *  0.2's `serverTime` to this, following the registry's `<event>At` rule. */
+  respondedAt: string;
   /**
    * Work the agent wants this device to do — **including `wipe`**.
    *
@@ -128,10 +129,10 @@ export async function deviceHeartbeat(
   });
   const res = await sender.send<DeviceHeartbeatResponsePayload>(envelope, {
     expectedResponseType: DEVICE_HEARTBEAT_RESPONSE,
-    operationLabel: "device/heartbeat/0.2",
+    operationLabel: "device/heartbeat/0.3",
   });
   return {
-    serverTime: res.serverTime,
+    respondedAt: res.respondedAt,
     queuedOperations: res.queuedOperations ?? [],
     ...(res.syncHint ? { syncHint: res.syncHint } : {}),
   };

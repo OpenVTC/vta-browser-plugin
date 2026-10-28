@@ -1,12 +1,12 @@
 // Vault — list (M1).
 //
-// Posts a `https://trusttasks.org/spec/vault/list/0.3` envelope to the VTA's
+// Posts a `https://trusttasks.org/spec/vault/list/0.4` envelope to the VTA's
 // trust-task dispatcher (`POST /trust-tasks`) and returns the metadata
 // view of stored credentials. Read-only — secret material never crosses the
 // wire (it's only released by `vault/release/0.1`, which lands in M2).
 //
 // Authentication: over REST the channel gets a short-lived bearer from
-// `getVtaBearer` (`vta/auth.ts`), a signed `auth/authenticate/0.2` posted to
+// `getVtaBearer` (`vta/auth.ts`), a signed `auth/authenticate/0.3` posted to
 // `/trust-tasks`, and attaches it to the trust-tasks POST.
 //
 // Holder authentication: the wallet's holder did:peer must be in the VTA's
@@ -26,7 +26,7 @@ import {
   RESPONSE_TYPE_URI as VAULT_LIST_RESPONSE,
   type SecretKind,
   type VaultEntry,
-} from "@openvtc/trust-tasks/vault/list/0.3/payload";
+} from "../specs/vault/list/0.4/payload.js";
 
 /**
  * The wire types come from the generated bindings, which are compiled from the
@@ -44,7 +44,7 @@ export type {
   SiteTarget,
   AttachmentRef,
   VaultEntry,
-} from "@openvtc/trust-tasks/vault/list/0.3/payload";
+} from "../specs/vault/list/0.4/payload.js";
 
 // ── Attachment integrity is a `digestMultibase`, not a hex string ───────────
 //
@@ -60,7 +60,7 @@ export type {
 // is the comparison, and it refuses anything that is not a well-formed
 // sha2-256 multihash rather than guessing.
 
-/** Filters accepted by vault/list/0.3. All AND-combined. */
+/** Filters accepted by vault/list/0.4. All AND-combined. */
 export interface VaultListFilter {
   contextId?: string;
   targetOriginPrefix?: string;
@@ -73,14 +73,21 @@ export interface VaultListFilter {
   neverUsed?: boolean;
   expiresBefore?: string;
   breached?: boolean;
-  pageSize?: number;
+  /** The most entries to return in this page; the maintainer chooses a
+   *  default and MAY return fewer. A page size, never a cap on the listing. */
+  limit?: number;
+  /** A previous page's `nextCursor`, sent back verbatim. */
   cursor?: string;
 }
 
+/**
+ * One page of entries. 0.4 dropped `truncated`: an absent `nextCursor` is the
+ * only exhaustion signal, and a short page is not one — so a caller that needs
+ * every entry follows the cursor (`collectPages`, `util/pages.ts`).
+ */
 export interface VaultListResponse {
   entries: VaultEntry[];
-  truncated: boolean;
-  cursor?: string;
+  nextCursor?: string;
   redactedFields?: string[];
 }
 
@@ -98,9 +105,9 @@ export interface VaultListParams {
 export interface VaultListRestOptions extends VaultListParams, RestChannelOptions {}
 
 /**
- * Post the canonical vault/list/0.3 Trust Task over the given channel and
- * return the parsed metadata entries. Read-only — no secret material crosses
- * the wire.
+ * Post the canonical vault/list/0.4 Trust Task over the given channel and
+ * return one page of parsed metadata entries. Read-only — no secret material
+ * crosses the wire.
  */
 export async function vaultList(
   channel: TrustTaskSender,
@@ -112,18 +119,16 @@ export async function vaultList(
   });
   const payload = await channel.send<{
     entries?: VaultEntry[];
-    truncated?: boolean;
-    cursor?: string;
+    nextCursor?: string;
     redactedFields?: string[];
   }>(envelope, {
     expectedResponseType: VAULT_LIST_RESPONSE,
-    operationLabel: "vault/list/0.3",
+    operationLabel: "vault/list/0.4",
   });
 
   return {
     entries: payload.entries ?? [],
-    truncated: payload.truncated ?? false,
-    ...(payload.cursor ? { cursor: payload.cursor } : {}),
+    ...(payload.nextCursor !== undefined ? { nextCursor: payload.nextCursor } : {}),
     ...(payload.redactedFields ? { redactedFields: payload.redactedFields } : {}),
   };
 }

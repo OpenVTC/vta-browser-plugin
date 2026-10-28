@@ -67,7 +67,7 @@ test("a new PIN: the vtaPin enrolment with K as verifier; only salt and iteratio
   const { record: rec, key } = await enrolPin(deps, VTA, undefined, "246810");
   assert.deepEqual(rec, { holderDid: device.did, kind: "vtaPin", at: 1000 });
   const e = ext(sent[0]!)["org.openvtc.uv-key"]!;
-  assert.equal(sent[0]!.type, "https://trusttasks.org/spec/device/heartbeat/0.2");
+  assert.equal(sent[0]!.type, "https://trusttasks.org/spec/device/heartbeat/0.3");
   assert.equal(e.kind, "vtaPin");
   assert.equal(e.iterations, 600_000);
   assert.equal(b64(e.salt as string).length, 16);

@@ -1,4 +1,4 @@
-// `trust-task-discovery/0.1` — asking an agent what it actually supports.
+// `trust-task-discovery/0.3` — asking an agent what it actually supports.
 //
 // Framework-reserved, so this is not a VTA feature but a Trust Tasks one: any
 // conformant responder answers it, which is what makes it worth having in a
@@ -26,7 +26,10 @@ import {
   RESPONSE_TYPE_URI as DISCOVERY_RESPONSE,
   type TrustTaskDiscoveryPayload,
   type TrustTaskDiscoveryResponsePayload,
-} from "@openvtc/trust-tasks/trust-task-discovery/0.1/payload";
+  type AcceptanceWindow,
+} from "@openvtc/trust-tasks/trust-task-discovery/0.3/payload";
+
+export type { AcceptanceWindow };
 
 /**
  * The specification's own ceiling on `patterns` — 16, declared as parser
@@ -70,15 +73,22 @@ export interface DiscoveredType {
    * `malformedRequest`, and nothing else on the wire would have told it why.
    */
   requiredExt: readonly string[];
+  /**
+   * The `issuedAt` freshness bounds the responder applies to documents of this
+   * type (SPEC §7.2 item 13): the entry's own window, else the response-level
+   * one. **Absent means the responder did not say**, never "no window" — the
+   * specification forbids reading it as the latter.
+   */
+  acceptanceWindow?: AcceptanceWindow;
 }
 
 export interface DiscoveryResult {
   supportedTypes: DiscoveredType[];
   /**
-   * The MAJOR.MINOR framework version the responder targets, when it said.
+   * The MAJOR.MINOR.PATCH framework version the responder targets, when it
+   * said (two-part only in 0.1, which could not express a PATCH).
    *
-   * Optional in 0.1 and RECOMMENDED later, so absence means "did not say",
-   * never "old". Use it for the §5.2 forward-minor reasoning it is there for;
+   * RECOMMENDED, not required, so absence means "did not say", never "old". Use it for the §5.2 forward-minor reasoning it is there for;
    * do not gate a flow on it, or every responder that stays silent is locked
    * out of features it supports.
    */
@@ -124,11 +134,11 @@ export async function discoverSupportedTypes(
   });
   const res = await sender.send<TrustTaskDiscoveryResponsePayload>(envelope, {
     expectedResponseType: DISCOVERY_RESPONSE,
-    operationLabel: "trust-task-discovery/0.1",
+    operationLabel: "trust-task-discovery/0.3",
   });
 
   return {
-    supportedTypes: (res.supportedTypes ?? []).map(normalizeEntry),
+    supportedTypes: (res.supportedTypes ?? []).map((e) => normalizeEntry(e, res.acceptanceWindow)),
     ...(typeof res.frameworkVersion === "string"
       ? { frameworkVersion: res.frameworkVersion }
       : {}),
@@ -158,7 +168,14 @@ export function supportsType(result: DiscoveryResult, type: string): boolean {
  */
 function normalizeEntry(
   entry: TrustTaskDiscoveryResponsePayload["supportedTypes"][number],
+  responseWindow: AcceptanceWindow | undefined,
 ): DiscoveredType {
-  if (typeof entry === "string") return { type: entry, requiredExt: [] };
-  return { type: entry.type, requiredExt: entry.requiredExt ?? [] };
+  // An entry's own window takes precedence over the response-level one.
+  const own = typeof entry === "string" ? undefined : entry.acceptanceWindow;
+  const window = own ?? responseWindow;
+  const base =
+    typeof entry === "string"
+      ? { type: entry, requiredExt: [] as string[] }
+      : { type: entry.type, requiredExt: entry.requiredExt ?? [] };
+  return window ? { ...base, acceptanceWindow: window } : base;
 }

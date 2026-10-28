@@ -39,19 +39,26 @@ function recorder(reply) {
   };
 }
 
-test("list sends only the filters given, under the 1.0 type", async () => {
+test("list sends only the filters given, under the 1.1 type", async () => {
   const channel = recorder({ grants: [] });
   await consentList(channel, { holder: HOLDER, service: SERVICE, platform: "matrix" });
   const { envelope, opts } = channel.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/consent/list/1.0");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/consent/list/1.1");
   assert.deepEqual(envelope.payload, { platform: "matrix" });
-  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/consent/list/1.0#response");
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/consent/list/1.1#response");
 });
 
 test("a subject filter travels whole — all four members identify it", async () => {
   const channel = recorder({ grants: [] });
   await consentList(channel, { holder: HOLDER, service: SERVICE, subject: SUBJECT });
   assert.deepEqual(channel.sent[0].envelope.payload.subject, SUBJECT);
+});
+
+test("the sync token travels under its 1.1 names, both ways", async () => {
+  const channel = recorder({ grants: [], nextSyncToken: "t-2" });
+  const result = await consentList(channel, { holder: HOLDER, service: SERVICE, syncToken: "t-1" });
+  assert.deepEqual(channel.sent[0].envelope.payload, { syncToken: "t-1" });
+  assert.equal(result.nextSyncToken, "t-2");
 });
 
 test("list surfaces deny grants rather than treating them as absences", async () => {
@@ -164,8 +171,9 @@ test("approver list returns [] rather than undefined when none are bound", async
 
 test("ping reports degraded rather than flattening it into a yes", async () => {
   // An agent that answers is not necessarily an agent that is working.
-  const channel = recorder({ serverTime: "2026-08-18T00:00:00Z", status: "degraded" });
+  const channel = recorder({ respondedAt: "2026-08-18T00:00:00Z", status: "degraded" });
   const result = await agentPing(channel, { holder: HOLDER, service: SERVICE, nonce: "n1" });
+  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/messaging/ping/0.2");
   assert.deepEqual(channel.sent[0].envelope.payload, { nonce: "n1" });
   assert.equal(result.status, "degraded");
 });

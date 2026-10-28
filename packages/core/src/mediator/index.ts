@@ -38,85 +38,84 @@ import {
   TYPE_URI as STATS_SHOW,
   RESPONSE_TYPE_URI as STATS_SHOW_RESPONSE,
   type MessagingShowMediatorStatisticsResponsePayload,
-} from "@openvtc/trust-tasks/messaging/stats/show/0.1/payload";
+} from "../specs/messaging/stats/show/0.1/payload.js";
 import {
   TYPE_URI as QUEUE_LIST,
   RESPONSE_TYPE_URI as QUEUE_LIST_RESPONSE,
   type MessagingListQueuesPayload,
   type MessagingListQueuesResponsePayload,
-} from "@openvtc/trust-tasks/messaging/queue/list/0.1/payload";
+} from "../specs/messaging/queue/list/0.1/payload.js";
 import {
   TYPE_URI as QUEUE_STATUS,
   RESPONSE_TYPE_URI as QUEUE_STATUS_RESPONSE,
   type MessagingShowQueueStatusPayload,
   type MessagingShowQueueStatusResponsePayload,
-} from "@openvtc/trust-tasks/messaging/queue/status/0.1/payload";
+} from "../specs/messaging/queue/status/0.1/payload.js";
 import {
   TYPE_URI as QUEUE_PURGE,
   RESPONSE_TYPE_URI as QUEUE_PURGE_RESPONSE,
   type MessagingPurgeQueuePayload,
   type MessagingPurgeQueueResponsePayload,
-} from "@openvtc/trust-tasks/messaging/queue/purge/0.1/payload";
+} from "../specs/messaging/queue/purge/0.1/payload.js";
 import {
   TYPE_URI as ACCOUNT_GET,
   RESPONSE_TYPE_URI as ACCOUNT_GET_RESPONSE,
   type MessagingGetAccountPayload,
   type MessagingGetAccountResponsePayload,
-} from "@openvtc/trust-tasks/messaging/account/get/0.1/payload";
+} from "../specs/messaging/account/get/0.2/payload.js";
 import {
   TYPE_URI as ACCOUNT_LIST,
   RESPONSE_TYPE_URI as ACCOUNT_LIST_RESPONSE,
   type MessagingListAccountsPayload,
   type MessagingListAccountsResponsePayload,
-} from "@openvtc/trust-tasks/messaging/account/list/0.1/payload";
+} from "../specs/messaging/account/list/0.2/payload.js";
 import {
   TYPE_URI as ACCOUNT_UPDATE,
   RESPONSE_TYPE_URI as ACCOUNT_UPDATE_RESPONSE,
   type MessagingUpdateAccountPayload,
   type MessagingUpdateAccountResponsePayload,
-} from "@openvtc/trust-tasks/messaging/account/update/0.1/payload";
+} from "../specs/messaging/account/update/0.2/payload.js";
 import {
   TYPE_URI as MESSAGE_LIST,
   RESPONSE_TYPE_URI as MESSAGE_LIST_RESPONSE,
   type MessagingListMessagesPayload,
   type MessagingListMessagesResponsePayload,
-} from "@openvtc/trust-tasks/messaging/message/list/0.1/payload";
+} from "../specs/messaging/message/list/0.1/payload.js";
 import {
   TYPE_URI as MESSAGE_DELETE,
   RESPONSE_TYPE_URI as MESSAGE_DELETE_RESPONSE,
   type MessagingDeleteMessagesPayload,
   type MessagingDeleteMessagesResponsePayload,
-} from "@openvtc/trust-tasks/messaging/message/delete/0.1/payload";
+} from "../specs/messaging/message/delete/0.1/payload.js";
 import {
   TYPE_URI as MONITOR_SUBSCRIBE,
   RESPONSE_TYPE_URI as MONITOR_SUBSCRIBE_RESPONSE,
   type MessagingSubscribeToTrafficMonitorPayload,
   type MessagingSubscribeToTrafficMonitorResponsePayload,
-} from "@openvtc/trust-tasks/messaging/monitor/subscribe/0.1/payload";
+} from "../specs/messaging/monitor/subscribe/0.1/payload.js";
 import {
   TYPE_URI as MONITOR_UNSUBSCRIBE,
   RESPONSE_TYPE_URI as MONITOR_UNSUBSCRIBE_RESPONSE,
   type MessagingUnsubscribeFromTrafficMonitorResponsePayload,
-} from "@openvtc/trust-tasks/messaging/monitor/unsubscribe/0.1/payload";
+} from "../specs/messaging/monitor/unsubscribe/0.1/payload.js";
 import {
   TYPE_URI as MONITOR_EVENT,
   type MessagingTrafficMonitorEventPayload,
-} from "@openvtc/trust-tasks/messaging/monitor/event/0.1/payload";
+} from "../specs/messaging/monitor/event/0.2/payload.js";
+// Shared shapes come from the task modules that re-export them, never from
+// `_shared/components`, whose names are version-qualified.
 import type {
   Account,
   AccountStats,
   AccountType,
   MediatorAcl,
-  MessageMeta,
-  MonitorEvent,
-  MonitorFilter,
-  PeerDepth,
-  Queue,
-  QueueDepth,
   QueueLimits,
-  QueueSummary,
-  TrafficStage,
-} from "@openvtc/trust-tasks/_shared/components";
+} from "../specs/messaging/account/get/0.2/payload.js";
+import type { MessageMeta } from "../specs/messaging/message/list/0.1/payload.js";
+import type { MonitorEvent, TrafficStage } from "../specs/messaging/monitor/event/0.2/payload.js";
+import type { MonitorFilter } from "../specs/messaging/monitor/subscribe/0.1/payload.js";
+import type { PeerDepth, QueueSummary } from "../specs/messaging/queue/status/0.1/payload.js";
+import type { Queue, QueueDepth } from "../specs/messaging/queue/list/0.1/payload.js";
 
 export type {
   Account,
@@ -253,15 +252,15 @@ export function standingOf(account: Pick<Account, "accountType" | "acl">): Media
 /**
  * The oldest mediator this client drives.
  *
- * 0.28.36 is the first release carrying everything the surface here uses at
- * once: the operations tasks (0.28.20), refusals threaded to their request so a
- * `permissionDenied` arrives as one rather than as a timeout (0.28.26), and the
- * activity and lifetime counters on `account/get` (0.28.33 / 0.28.36) — request
- * members an older mediator refuses the whole call over rather than ignoring.
- * One floor rather than a gate per member: there is no older mediator anyone
- * here runs.
+ * 0.48.0 is the first release serving every version this module speaks:
+ * `account/{get,list,update}` at 0.2 (0.47.0 — activity instants as RFC 3339
+ * rather than Unix seconds) and `monitor/event` pushed at 0.2 (0.48.0 — each
+ * event's `at` became `occurredAt`). An older mediator answers the 0.2 account
+ * tasks as unknown and pushes monitor batches this client does not recognise,
+ * which reads as a dead tap rather than a refusal. One floor rather than a gate
+ * per task: there is no older mediator anyone here runs.
  */
-export const MEDIATOR_VERSION_FLOOR = [0, 28, 36] as const;
+export const MEDIATOR_VERSION_FLOOR = [0, 48, 0] as const;
 
 /** `major.minor.patch`, ignoring a pre-release or build suffix. */
 export function parseMediatorVersion(v: string): [number, number, number] | undefined {

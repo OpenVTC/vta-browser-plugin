@@ -19,55 +19,56 @@ import {
   type Payload as DidsCreatePayload,
   type Response as DidsCreateResponse,
   type WebvhPathMode,
-} from "@openvtc/trust-tasks/vta/webvh/dids/create/1.0/payload";
+  type DidMethod as WebvhDidMethod,
+} from "../specs/vta/webvh/dids/create/1.2/payload.js";
 import {
   TYPE_URI as DIDS_GET,
   RESPONSE_TYPE_URI as DIDS_GET_RESPONSE,
   type Payload as DidsGetPayload,
   type Response as DidsGetResponse,
   type WebvhDidRecord,
-} from "@openvtc/trust-tasks/vta/webvh/dids/get/1.0/payload";
+} from "../specs/vta/webvh/dids/get/1.0/payload.js";
 import {
   TYPE_URI as DIDS_LIST,
   RESPONSE_TYPE_URI as DIDS_LIST_RESPONSE,
   type Payload as DidsListPayload,
   type Response as DidsListResponse,
-} from "@openvtc/trust-tasks/vta/webvh/dids/list/1.0/payload";
+} from "../specs/vta/webvh/dids/list/1.0/payload.js";
 import {
   TYPE_URI as DIDS_REALIGN_KEYS,
   RESPONSE_TYPE_URI as DIDS_REALIGN_KEYS_RESPONSE,
   type Payload as DidsRealignKeysPayload,
   type Response as DidsRealignKeysResponse,
-} from "@openvtc/trust-tasks/vta/webvh/dids/realign-keys/1.0/payload";
+} from "../specs/vta/webvh/dids/realign-keys/1.0/payload.js";
 import {
   TYPE_URI as DIDS_UPDATE,
   RESPONSE_TYPE_URI as DIDS_UPDATE_RESPONSE,
   type Payload as DidsUpdatePayload,
   type Response as DidsUpdateResponse,
-} from "@openvtc/trust-tasks/vta/webvh/dids/update/1.0/payload";
+} from "../specs/vta/webvh/dids/update/1.0/payload.js";
 import {
   TYPE_URI as DIDS_DELETE,
   RESPONSE_TYPE_URI as DIDS_DELETE_RESPONSE,
   type Payload as DidsDeletePayload,
   type Response as DidsDeleteResponse,
-} from "@openvtc/trust-tasks/vta/webvh/dids/delete/1.0/payload";
+} from "../specs/vta/webvh/dids/delete/1.0/payload.js";
 import {
   TYPE_URI as DIDS_ROTATE_KEYS,
   RESPONSE_TYPE_URI as DIDS_ROTATE_KEYS_RESPONSE,
   type Payload as DidsRotateKeysPayload,
   type Response as DidsRotateKeysResponse,
-} from "@openvtc/trust-tasks/vta/webvh/dids/rotate-keys/1.0/payload";
+} from "../specs/vta/webvh/dids/rotate-keys/1.0/payload.js";
 import {
   TYPE_URI as DIDS_REGISTER_WITH_SERVER,
   RESPONSE_TYPE_URI as DIDS_REGISTER_WITH_SERVER_RESPONSE,
   type Payload as DidsRegisterWithServerPayload,
   type Response as DidsRegisterWithServerResponse,
-} from "@openvtc/trust-tasks/vta/webvh/dids/register-with-server/1.0/payload";
+} from "../specs/vta/webvh/dids/register-with-server/1.0/payload.js";
 
 import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 
-export type { WebvhDidRecord, WebvhPathMode };
+export type { WebvhDidRecord, WebvhPathMode, WebvhDidMethod };
 
 /** Who is asking, and which agent is being asked. */
 export interface WebvhCall {
@@ -198,6 +199,20 @@ export interface WebvhDidCreateParams extends WebvhCall {
    * only satisfies the check.
    */
   templateVars?: Record<string, string>;
+  /**
+   * The form the new identity is presented in: `webvh`
+   * (`did:webvh:<scid>:<host>…`) or `scid` (`did:scid:vh:1:<scid>`, verified by
+   * the same log). Absent means the agent's configuration decides, and the
+   * response's `did` is in **whichever form it applied** — read `didMethod`
+   * there, or take `webvhDid` / `scidDidUrl` when a specific form is needed.
+   */
+  didMethod?: WebvhDidMethod;
+  /**
+   * Whether the first log entry lists the `did:scid:vh:1` DID URL in
+   * `alsoKnownAs`. Absent takes the agent's configuration (default `true`);
+   * `false` with `didMethod: "scid"` is refused.
+   */
+  scidAlsoKnownAs?: boolean;
 }
 
 /**
@@ -208,6 +223,11 @@ export interface WebvhDidCreateParams extends WebvhCall {
  * decides once and for all whether the DID may ever move: a non-portable DID's
  * identity is derived from where it is served, so relocating it would make it a
  * different DID.
+ *
+ * At 1.2 the response's `did` is in the form the agent applied (`didMethod`),
+ * which may be `did:scid:vh:1:…` rather than `did:webvh:…`; `webvhDid` and
+ * `scidDidUrl` give both forms, and `serverless` states outright that nobody
+ * serves the log yet rather than leaving it to an absent `serverId`.
  */
 export async function webvhDidCreate(
   sender: TrustTaskSender,
@@ -240,9 +260,12 @@ export async function webvhDidCreate(
     ...(rest.template ? { template: rest.template } : {}),
     ...(rest.templateContext ? { templateContext: rest.templateContext } : {}),
     ...(rest.templateVars ? { templateVars: rest.templateVars } : {}),
+    ...(rest.didMethod ? { didMethod: rest.didMethod } : {}),
+    // `!== undefined`: `false` is the caller declining the alias, not silence.
+    ...(rest.scidAlsoKnownAs !== undefined ? { scidAlsoKnownAs: rest.scidAlsoKnownAs } : {}),
   };
   return send(sender, { holder, service }, DIDS_CREATE, DIDS_CREATE_RESPONSE,
-    "vta/webvh/dids/create/1.0", payload);
+    "vta/webvh/dids/create/1.2", payload);
 }
 
 export interface WebvhDidGetParams extends WebvhCall {

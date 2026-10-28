@@ -1,6 +1,6 @@
 // Logging in to a relying party as an ordinary pair of Trust Tasks.
 //
-// `auth/challenge/0.1` then `auth/authenticate/0.2`, over any
+// `auth/challenge/0.1` then `auth/authenticate/0.3`, over any
 // `TrustTaskSender` — so a login runs on whichever transport the RP advertises,
 // priority TSP > DIDComm > REST, exactly as every VTA operation has since #79.
 //
@@ -68,7 +68,7 @@ export interface TrustTaskLoginOptions {
   /** Capability tags to request. The RP decides what it grants. */
   scope?: string[];
   /**
-   * A `did:key` for the RP to bind to the new session (`auth/authenticate/0.2`).
+   * A `did:key` for the RP to bind to the new session (`auth/authenticate/0.3`).
    * The subject's proof on the authenticate document covers it. After login,
    * the holder of that key can sign the session's ordinary requests without
    * the subject's key. It never counts where an `assertionMethod` attestation

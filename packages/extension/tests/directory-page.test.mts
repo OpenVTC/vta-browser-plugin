@@ -220,7 +220,6 @@ test("the offscreen half refuses to sign when the agent holds no key the member'
             createdAt: "2026-01-01T00:00:00Z",
           },
         ],
-        total: 1,
       };
     },
   };
@@ -236,7 +235,7 @@ test("the offscreen half refuses to sign when the agent holds no key the member'
     ),
     /doesn't hold the key/,
   );
-  assert.deepEqual(sent, ["https://trusttasks.org/spec/keys/list/0.1"], "nothing was signed");
+  assert.deepEqual(sent, ["https://trusttasks.org/spec/keys/list/0.2"], "nothing was signed");
 });
 
 // ─── The member's own marks ────────────────────────────────────────────────
@@ -307,7 +306,7 @@ function agentStore() {
         return { contacts: contacts.filter((c) => (c.directoryRef as { vtcDid: string }).vtcDid === p.directoryVtcDid) };
       }
       if (envelope.type.endsWith("persona/contact/lists/list/1.0")) return { lists: [] };
-      if (envelope.type.endsWith("persona/contact/put/1.1")) {
+      if (envelope.type.endsWith("persona/contact/put/1.2")) {
         let c = contacts.find((x) => x.contactId === p.contactId);
         if (!c) {
           c = { contactId: `c${contacts.length + 1}`, knownByPersona: p.knownByPersona, directoryRef: p.directoryRef, starred: false, rev: 1 };
@@ -315,7 +314,7 @@ function agentStore() {
         }
         if (p.starred !== undefined) c.starred = p.starred;
         if (p.petname !== undefined) c.petname = p.petname;
-        return { contactId: c.contactId, rev: 1, created: false, annotationsChanged: true };
+        return { contactId: c.contactId, rev: 1, wasCreated: false, annotationsChanged: true };
       }
       throw new Error(`unexpected ${envelope.type}`);
     },
@@ -332,7 +331,7 @@ test("the offscreen half links an entry the first time, then annotates the conta
   const a = agentStore();
   const first = await runDirectoryPageOp(a.deps, VTA, { op: "mark", hostDid: HOST, member: MEMBER, entryId: "dir_a", starred: true });
   assert.deepEqual(first, { starred: true });
-  const link = a.sent.find((e) => e.type.endsWith("contact/put/1.1"))!;
+  const link = a.sent.find((e) => e.type.endsWith("contact/put/1.2"))!;
   assert.deepEqual(link.payload, {
     contextId: "ctx-member",
     knownByPersona: MEMBER,
@@ -341,7 +340,7 @@ test("the offscreen half links an entry the first time, then annotates the conta
   });
 
   await runDirectoryPageOp(a.deps, VTA, { op: "mark", hostDid: HOST, member: MEMBER, entryId: "dir_a", petname: "Sam" });
-  const annotate = a.sent.filter((e) => e.type.endsWith("contact/put/1.1"))[1]!;
+  const annotate = a.sent.filter((e) => e.type.endsWith("contact/put/1.2"))[1]!;
   assert.deepEqual(annotate.payload, { contextId: "ctx-member", contactId: "c1", petname: "Sam" });
   assert.equal(a.contacts.length, 1, "the same entry is the same contact");
 

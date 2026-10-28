@@ -14,7 +14,7 @@
 //    minted for that member and room (its recipient item 10), because a leaf
 //    minted anywhere else would have keys somebody else holds.
 // 5. The acceptance is built unsigned, completed by the VTA as the member
-//    (`rooms/keys/act/0.5`), and sent to the community unchanged.
+//    (`rooms/keys/act/0.8`), and sent to the community unchanged.
 // 6. The community answers with the Welcome, which goes to the member's own VTA
 //    (`rooms/keys/welcome`) and nowhere else.
 //
@@ -41,24 +41,24 @@ import {
   RESPONSE_TYPE_URI as OFFERS_ACCEPT_RESPONSE,
   type VTCRoomsOffersAcceptPayload,
   type VTCRoomsOffersAcceptResponsePayload,
-} from "@openvtc/trust-tasks/vtc/rooms/offers/accept/0.1/payload";
+} from "../specs/vtc/rooms/offers/accept/0.1/payload.js";
 import {
   TYPE_URI as KEYS_KEY_PACKAGE,
   RESPONSE_TYPE_URI as KEYS_KEY_PACKAGE_RESPONSE,
   type RoomsKeysKeyPackagePayload,
   type RoomsKeysKeyPackageResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/key-package/0.2/payload";
+} from "../specs/rooms/keys/key-package/0.2/payload.js";
 import {
   TYPE_URI as KEYS_WELCOME,
   RESPONSE_TYPE_URI as KEYS_WELCOME_RESPONSE,
   type RoomsKeysWelcomePayload,
   type RoomsKeysWelcomeResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/welcome/0.1/payload";
+} from "../specs/rooms/keys/welcome/0.1/payload.js";
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
 export type RoomOfferErrorCode =
-  /** The VTA does not serve `rooms/keys/act/0.5` or `rooms/keys/key-package/0.2`. */
+  /** The VTA does not serve `rooms/keys/act/0.8` or `rooms/keys/key-package/0.2`. */
   | "actUnsupported"
   /**
    * The party makes no room offers: it does not serve `vtc/rooms/offers/list`
@@ -130,7 +130,7 @@ function actRefusal(e: unknown, reader: OfferReader): RoomOfferError {
   if (local === "unsupportedType" || local === "unsupportedVersion") {
     return new RoomOfferError(
       "actUnsupported",
-      "Your agent does not serve rooms/keys/act 0.5, the version that signs your requests to a community about " +
+      "Your agent does not serve rooms/keys/act 0.8, the version that signs your requests to a community about " +
         "its rooms as you. It must be updated before offers can be read or accepted from the wallet.",
     );
   }
@@ -340,7 +340,6 @@ export async function acceptCommunityRoomOffer(
       reader.vta.sender,
       vtaParties,
       unsignedRoomRequest(OFFERS_ACCEPT, reader.community.did, payload as unknown as Record<string, unknown>, reader.member),
-      "0.5",
     ));
   } catch (e) {
     throw actRefusal(e, reader);
@@ -397,7 +396,7 @@ export async function acceptCommunityRoomOffer(
 /**
  * Reading the offers failed: the VTA's refusal, or the community's — each
  * mapped by the party that produced it. `unsupportedType` from the VTA is an
- * agent without act 0.5; from the community it is a party that makes no room
+ * agent without act 0.8; from the community it is a party that makes no room
  * offers, which is not the member's agent's fault and not a failure at all.
  */
 function listRefusal(e: unknown, reader: OfferReader): RoomOfferError {

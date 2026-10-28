@@ -15,19 +15,19 @@
 import {
   TYPE_URI as ENROLL_CHALLENGE_TYPE,
   type VTAPasskeyVMEnrollChallengePayload,
-} from "@openvtc/trust-tasks/vta/passkey-vms/enroll-challenge/0.1/payload";
+} from "../specs/vta/passkey-vms/enroll-challenge/0.1/payload.js";
 import {
   TYPE_URI as ENROLL_SUBMIT_TYPE,
   type VTAPasskeyVMEnrollSubmitPayload,
-} from "@openvtc/trust-tasks/vta/passkey-vms/enroll-submit/0.1/payload";
+} from "../specs/vta/passkey-vms/enroll-submit/0.2/payload.js";
 import {
   TYPE_URI as LIST_TYPE,
   type VTAPasskeyVMListPayload,
-} from "@openvtc/trust-tasks/vta/passkey-vms/list/0.1/payload";
+} from "../specs/vta/passkey-vms/list/0.1/payload.js";
 import {
   TYPE_URI as REVOKE_TYPE,
   type VTAPasskeyVMRevokePayload,
-} from "@openvtc/trust-tasks/vta/passkey-vms/revoke/0.1/payload";
+} from "../specs/vta/passkey-vms/revoke/0.1/payload.js";
 
 /** DIDComm message `type` for every Trust-Task envelope. The body is a
  *  {@link TrustTask} document. Conformant peers reject any other type. */
@@ -96,7 +96,7 @@ export const TRUST_TASK_ERROR_TYPE_0_3 =
  * for a caller that needs to name the version (a test fixture, a document this
  * library produces), not for recognising one.
  */
-export { TRUST_TASK_ERROR_TYPE_URI } from "@openvtc/trust-tasks/_runtime/document";
+export { TRUST_TASK_ERROR_TYPE_URI } from "@openvtc/trust-tasks/runtime";
 
 /**
  * True for a framework error-document `type` of any minor version.

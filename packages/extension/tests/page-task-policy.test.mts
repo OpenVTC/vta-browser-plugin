@@ -99,8 +99,8 @@ test("the rooms refusal covers the family, not a list of known members", () => {
 // are the reason `requestTask` exists.
 test("tasks outside the family are still a page's to request", () => {
   for (const uri of [
-    "https://trusttasks.org/spec/vault/list/0.3",
-    "https://trusttasks.org/spec/auth/authenticate/0.1",
+    "https://trusttasks.org/spec/vault/list/0.4",
+    "https://trusttasks.org/spec/auth/authenticate/0.3",
     "https://trusttasks.org/spec/vta/app-state/get/1.0",
   ]) {
     assert.equal(pageTaskRefusal(uri), null, `${uri} should be permitted`);
@@ -174,9 +174,9 @@ test("a page cannot have the wallet sign a document to the holder's own agent", 
 
 test("a page cannot have the wallet sign a step-up approval", () => {
   for (const t of [
-    "https://trusttasks.org/spec/auth/step-up/approve-response/0.5",
-    "https://trusttasks.org/spec/auth/step-up/approve-response/0.3",
-    "https://trusttasks.org/spec/auth/step-up/approve-request/0.3",
+    "https://trusttasks.org/spec/auth/step-up/approve-response/0.6",
+    "https://trusttasks.org/spec/auth/step-up/approve-request/0.5",
+    "https://trusttasks.org/spec/auth/step-up/approve-request/0.2",
   ]) {
     const why = pageSignRefusal({ type: t, recipient: RP }, AGENT);
     assert.notEqual(why, null, t);
@@ -186,8 +186,7 @@ test("a page cannot have the wallet sign a step-up approval", () => {
 
 test("a page cannot have the wallet sign a sign-in", () => {
   for (const t of [
-    "https://trusttasks.org/spec/auth/authenticate/0.2",
-    "https://trusttasks.org/spec/auth/authenticate/0.1",
+    "https://trusttasks.org/spec/auth/authenticate/0.3",
   ]) {
     const why = pageSignRefusal({ type: t, recipient: RP }, AGENT);
     assert.notEqual(why, null, t);

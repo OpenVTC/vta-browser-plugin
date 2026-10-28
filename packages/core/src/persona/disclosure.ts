@@ -30,13 +30,13 @@ import {
   RESPONSE_TYPE_URI as DISCLOSURE_PREVIEW_RESPONSE,
   type PersonaDisclosurePreviewPayload,
   type PersonaDisclosurePreviewResponsePayload,
-} from "@openvtc/trust-tasks/persona/disclosure/preview/1.0/payload";
+} from "../specs/persona/disclosure/preview/1.0/payload.js";
 import {
   TYPE_URI as DISCLOSURE_PRESENT,
   RESPONSE_TYPE_URI as DISCLOSURE_PRESENT_RESPONSE,
   type PersonaDisclosurePresentPayload,
   type PersonaDisclosurePresentResponsePayload,
-} from "@openvtc/trust-tasks/persona/disclosure/present/1.0/payload";
+} from "../specs/persona/disclosure/present/1.0/payload.js";
 
 import { call, type PersonaCallerParams } from "./call.js";
 import {

@@ -26,29 +26,16 @@
 //   reply to be threaded to the request and sent by the RP, and verifies the
 //   reply document's proof against the RP's DID.
 //
-// **The bare-authenticate form is kept, deprecated, for one case only:** a
-// caller that passes no `signing`. Without a signing key there is nothing to
-// put a proof on, so those options can only ever have meant the old message.
-// It still works against an RP that serves the bare route, and an RP running
-// affinidi-webvh-service #213 or later refuses it, exactly as it would refuse
-// that caller today.
+// **The bare-authenticate form is gone.** A caller without `signing` used to
+// get the old message; no RP serves it — did-hosting-control refuses
+// `auth/authenticate/0.1` by name as a retired bare-message form — so
+// `signing` is required and there is one login.
 
-import { packAuthcrypt, packAuthcryptJson, wrapForward, type Identity } from "../didcomm/index.js";
+import type { Identity } from "../didcomm/index.js";
 import { DidcommVtaTransport, type RemoteDidcommEndpoint } from "../vta/didcomm.js";
 import type { DidcommMessageBridge } from "../vta/transport.js";
 import { asTaskSigner, type ChannelSigner } from "../vta/trust-task.js";
 import { loginViaTrustTask } from "./trust-task.js";
-
-// The canonical Trust-Task auth URIs of the deprecated bare form, matching
-// `did-hosting-common`'s `MSG_AUTHENTICATE` / `MSG_AUTH_RESPONSE` verbatim.
-// Matched with `===`; no both-spellings fold, per this repo's rule on
-// compatibility arms.
-import {
-  TYPE_URI as MSG_AUTHENTICATE,
-  RESPONSE_TYPE_URI as MSG_AUTH_RESPONSE,
-} from "@openvtc/trust-tasks/auth/authenticate/0.1/payload";
-
-const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** The session an RP issues on a DIDComm sign-in. */
 export interface DidcommLoginResult {
@@ -56,16 +43,14 @@ export interface DidcommLoginResult {
   /** Empty when the RP did not rotate a refresh token on login. */
   refreshToken: string;
   sessionId: string;
-  /** When the access token expires, in Unix seconds. On the challenge flow it
-   *  is computed from `expiresIn` when the reply arrives. */
+  /** When the access token expires, in Unix seconds, computed from
+   *  `expiresIn` when the reply arrives. */
   accessExpiresAt: number;
   /** When the refresh token expires, in Unix seconds, or `0` when the RP did
-   *  not say. `auth/authenticate` does not report it, so the challenge flow
-   *  always returns `0`. */
+   *  not say. `auth/authenticate` does not report it, so this is always `0`. */
   refreshExpiresAt: number;
-  /** Seconds until the access token expires, as the RP reported it. Absent
-   *  only on the deprecated bare form. */
-  expiresIn?: number;
+  /** Seconds until the access token expires, as the RP reported it. */
+  expiresIn: number;
   /** What the RP actually granted, which MAY be narrower than what was asked. */
   scope?: string[];
 }
@@ -86,36 +71,28 @@ export interface DidcommLoginOptions {
   /** Per-message reply timeout (default 30s). */
   timeoutMs?: number;
   /**
-   * Signs both auth documents, and should always be supplied.
+   * Signs both auth documents. Required: the RP acts only on a proof inside
+   * the document, so there is nothing to sign in with without it.
    *
    * Its DID is who signs in: it is the `issuer` of the challenge request and of
    * the authenticate document, and the challenge is requested for it. It must
    * be `holder`'s DID: the RP acts on a DIDComm document only when its signer
    * is its sender, and the channel refuses the mismatch before sending. A
    * persona, whose keys stay at the VTA, signs in over REST instead.
-   *
-   * Optional only so that callers written before it existed still compile.
-   * Omitting it is deprecated: it sends the bare `auth/authenticate`, which
-   * RPs running affinidi-webvh-service #213 or later refuse.
    */
-  signing?: ChannelSigner;
-  /** Capability tags to request. The RP decides what it grants. Ignored by the
-   *  deprecated bare form. */
+  signing: ChannelSigner;
+  /** Capability tags to request. The RP decides what it grants. */
   scope?: string[];
 }
 
 /**
  * Sign in to an RP over DIDComm and return the session it issues.
  *
- * With `signing`, this is `auth/challenge` then a signed `auth/authenticate`
- * over a DIDComm channel addressed to the RP, and it throws a `VtaClientError`
- * from whichever step failed (see `loginViaTrustTask` for why the two surface
- * separately). Without it, it sends the deprecated bare authenticate (see the
- * module header).
+ * This is `auth/challenge` then a signed `auth/authenticate` over a DIDComm
+ * channel addressed to the RP, and it throws a `VtaClientError` from whichever
+ * step failed (see `loginViaTrustTask` for why the two surface separately).
  */
 export async function loginViaDidcomm(opts: DidcommLoginOptions): Promise<DidcommLoginResult> {
-  if (opts.signing === undefined) return loginViaBareAuthenticate(opts);
-
   const signer = asTaskSigner(opts.signing);
   const channel = new DidcommVtaTransport({
     bridge: opts.bridge,
@@ -140,87 +117,5 @@ export async function loginViaDidcomm(opts: DidcommLoginOptions): Promise<Didcom
     refreshExpiresAt: 0,
     expiresIn: session.expiresIn,
     ...(session.scope ? { scope: session.scope } : {}),
-  };
-}
-
-/**
- * The deprecated bare form: authcrypt an `auth/authenticate` with an empty
- * body and take the session the RP issues to the authcrypt sender.
- *
- * Server contract (did-hosting-control `handle_authenticate`, before
- * affinidi-webvh-service #213):
- *   request  type = MSG_AUTHENTICATE, authcrypted, body ignored
- *   reply    type = MSG_AUTH_RESPONSE, thid = request id,
- *            body = { session_id, access_token, access_expires_at,
- *                     refresh_token, refresh_expires_at }
- *   on ACL/other failure the reply is a problem-report (different type).
- */
-async function loginViaBareAuthenticate(opts: DidcommLoginOptions): Promise<DidcommLoginResult> {
-  const { bridge, holder, service, mediator } = opts;
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-
-  const requestId = globalThis.crypto.randomUUID();
-  const message = {
-    id: requestId,
-    type: MSG_AUTHENTICATE,
-    from: holder.did,
-    to: [service.did],
-    // Empty, because the RP's DIDComm handler authenticates on the **authcrypt
-    // sender** and reads nothing from the body (`run_authenticate(&state,
-    // sender)`).
-    //
-    // That is the conformance gap the challenge flow above closes: the
-    // canonical schema declares `challenge` and `sessionId` REQUIRED.
-    body: {},
-  };
-
-  const inner = await packAuthcrypt(message, holder, [
-    { kid: service.keyAgreementKid, jwk: service.keyAgreementPublicJwk },
-  ]);
-
-  let outer = inner;
-  if (mediator) {
-    const forwardJson = wrapForward(service.did, holder.did, mediator.did, inner);
-    outer = await packAuthcryptJson(forwardJson, holder, [
-      { kid: mediator.keyAgreementKid, jwk: mediator.keyAgreementPublicJwk },
-    ]);
-  }
-
-  // Only the RP answers a login: a reply on this thread from anyone else is
-  // never handed back.
-  const reply = await bridge.sendAndAwaitReply(outer, requestId, {
-    timeoutMs,
-    from: service.did,
-  });
-
-  if (reply.thid !== requestId) {
-    throw new Error(`didcomm login: reply thid ${reply.thid ?? "(none)"} != request ${requestId}`);
-  }
-  if (reply.from !== service.did) {
-    throw new Error(`didcomm login: reply from ${reply.from ?? "(none)"} != RP ${service.did}`);
-  }
-  if (reply.type !== MSG_AUTH_RESPONSE) {
-    // Most commonly a problem-report (e.g. holder DID not in the RP's ACL).
-    throw new Error(
-      `didcomm login: ${reply.type ?? "(no type)"} — ${JSON.stringify(reply.body ?? {})}`,
-    );
-  }
-
-  const body = (reply.body ?? {}) as {
-    session_id?: string;
-    access_token?: string;
-    refresh_token?: string;
-    access_expires_at?: number;
-    refresh_expires_at?: number;
-  };
-  if (!body.access_token || !body.session_id || !body.refresh_token) {
-    throw new Error(`didcomm login: malformed authenticate-response body: ${JSON.stringify(body)}`);
-  }
-  return {
-    accessToken: body.access_token,
-    refreshToken: body.refresh_token,
-    sessionId: body.session_id,
-    accessExpiresAt: body.access_expires_at ?? 0,
-    refreshExpiresAt: body.refresh_expires_at ?? 0,
   };
 }

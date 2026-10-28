@@ -148,8 +148,6 @@ function world(
     submit?: Record<string, unknown> | { refuse: string };
     /** The manifest reply goes out unsigned. */
     manifestUnsigned?: boolean;
-    /** The community predates manifest 0.4 and refuses it. */
-    manifest0_3Only?: boolean;
     signTaskError?: unknown;
     /** How this browser approves at the VTA, as recorded. */
     uvMethod?: "prfSealedKey" | "vtaPin" | "remoteApprover";
@@ -177,9 +175,9 @@ function world(
   const fetch = (async (url: string, init: RequestInit) => {
     assert.equal(url, ENDPOINT, "posted to <base>/trust-tasks (binding 0.2 §6)");
     const doc = JSON.parse(String(init.body));
-    const join = /\/vtc\/join-requests\/(manifest|submit)\/0\.[34]$/.exec(String(doc.type));
+    const join = /\/vtc\/join-requests\/(?:(manifest)\/0\.4|(submit)\/0\.3)$/.exec(String(doc.type));
     const type = join
-      ? `join-${join[1]}`
+      ? `join-${join[1] ?? join[2]}`
       : String(doc.type).replace("https://trusttasks.org/spec/auth/oob/", "").replace(/\/0\.[12]$/, "");
     const v0_2 = String(doc.type).endsWith("/0.2");
     sent.push({ type, doc });
@@ -190,12 +188,6 @@ function world(
       );
     }
     if (type === opts.unreachableOn) throw new TypeError("Failed to fetch");
-    if (join && opts.manifest0_3Only && String(doc.type).endsWith("/manifest/0.4")) {
-      return new Response(
-        JSON.stringify({ type: "https://trusttasks.org/spec/trust-task-error/0.2", payload: { code: "unsupportedType", retryable: false } }),
-        { status: 400 },
-      );
-    }
     if (join) {
       const answer = type === "join-manifest" ? (opts.manifest ?? MANIFEST) : (opts.submit ?? { requestId: "jr-1", verdict: { effect: "refer", with: { queue: "admin-review" } } });
       if ("refuse" in answer) {
@@ -1074,18 +1066,6 @@ test("the manifest is asked for at 0.4, and what the directory would show is on 
     ],
     statementDigest: "zQmStatement",
   });
-});
-
-test("a community that predates manifest 0.4 is asked again at 0.3, and states no directory", async () => {
-  const w = world({ known: UNKNOWN, doc: communityDoc, manifest0_3Only: true });
-  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
-  const r = await step(w, { step: "join-manifest" });
-  assert.equal(r.kind, "join-apply");
-  assert.deepEqual(
-    w.sent.map((s) => String((s.doc as { type: string }).type).replace(/^.*\/manifest\//, "")),
-    ["0.4", "0.3"],
-  );
-  assert.equal("directory" in r, false);
 });
 
 test("a statement the wallet cannot show stops the join before anything about the person is sent", async () => {

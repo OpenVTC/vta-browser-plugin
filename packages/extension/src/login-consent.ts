@@ -5,7 +5,7 @@
 //
 // - **A changed relying party or base URL.** That is the redirect-to-attacker
 //   case the loud warning exists for, so trust must not silence it.
-// - **A session key.** With one bound (`auth/authenticate/0.2`), the page can
+// - **A session key.** With one bound (`auth/authenticate/0.3`), the page can
 //   sign the session's requests as the user with no further prompt. That is
 //   more than a sign-in, so it is always asked, and there is nothing to
 //   remember.

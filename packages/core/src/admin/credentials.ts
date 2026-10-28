@@ -20,20 +20,20 @@ import {
   type VTACredentialsListResponsePayload,
   type IssuedCredentialSummary,
   type IssuedCredentialStatus,
-} from "@openvtc/trust-tasks/vta/credentials/list/0.1/payload";
+} from "../specs/vta/credentials/list/0.2/payload.js";
 
 import {
   TYPE_URI as CREDENTIALS_ISSUE,
   RESPONSE_TYPE_URI as CREDENTIALS_ISSUE_RESPONSE,
   type VTACredentialsIssuePayload,
   type VTACredentialsIssueResponsePayload,
-} from "@openvtc/trust-tasks/vta/credentials/issue/0.2/payload";
+} from "../specs/vta/credentials/issue/0.2/payload.js";
 import {
   TYPE_URI as CREDENTIALS_REVOKE,
   RESPONSE_TYPE_URI as CREDENTIALS_REVOKE_RESPONSE,
   type VTACredentialsRevokePayload,
   type VTACredentialsRevokeResponsePayload,
-} from "@openvtc/trust-tasks/vta/credentials/revoke/0.1/payload";
+} from "../specs/vta/credentials/revoke/0.1/payload.js";
 
 /** Both calls are issued by an operator identity, to an agent. */
 export interface CredentialIssuerCallerParams {
@@ -151,22 +151,25 @@ export interface ListCredentialsParams extends CredentialIssuerCallerParams {
   credentialType?: string;
   /** Only credentials in this state. */
   status?: IssuedCredentialStatus;
-  /** Maximum records to return. The agent caps this. */
-  pageSize?: number;
-  /** Continue a previous page. Opaque — never construct or parse one. */
+  /** The page size to ask for. The agent caps this and may return fewer. */
+  limit?: number;
+  /** A previous page's `nextCursor`, with the same filters. Opaque — never
+   *  construct or parse one. */
   cursor?: string;
 }
 
 export interface ListCredentialsResult {
   credentials: IssuedCredentialSummary[];
-  /** The agent stopped early. **Check this before drawing conclusions** — a
-   *  truncated page is not a complete account of what was issued, and reading
-   *  "nothing else was issued" off one is the mistake the member exists to
-   *  prevent. */
-  truncated: boolean;
-  /** Pass as `cursor` to continue. Absent on the last page, so a caller stops
-   *  on its absence rather than needing an empty page to learn it is done. */
-  cursor?: string;
+  /**
+   * Present when more matching records remain; absent on the last page.
+   * **Check this before drawing conclusions** — a page with one is not a
+   * complete account of what was issued, and reading "nothing else was
+   * issued" off it is the mistake this member exists to prevent.
+   *
+   * `vta/credentials/list/0.2` dropped 0.1's `truncated` and renamed `cursor`
+   * to this, so it is now the only signal and cannot disagree with another.
+   */
+  nextCursor?: string;
 }
 
 /**
@@ -198,18 +201,17 @@ export async function listCredentials(
       ...(params.holderDid ? { holder: params.holderDid } : {}),
       ...(params.credentialType ? { credentialType: params.credentialType } : {}),
       ...(params.status ? { status: params.status } : {}),
-      ...(params.pageSize !== undefined ? { pageSize: params.pageSize } : {}),
+      ...(params.limit !== undefined ? { limit: params.limit } : {}),
       ...(params.cursor ? { cursor: params.cursor } : {}),
     },
     { issuer: params.holder.did, recipient: params.service.did },
   );
   const res = await sender.send<VTACredentialsListResponsePayload>(envelope, {
     expectedResponseType: CREDENTIALS_LIST_RESPONSE,
-    operationLabel: "vta/credentials/list/0.1",
+    operationLabel: "vta/credentials/list/0.2",
   });
   return {
     credentials: res.credentials ?? [],
-    truncated: res.truncated ?? false,
-    ...(res.cursor ? { cursor: res.cursor } : {}),
+    ...(res.nextCursor ? { nextCursor: res.nextCursor } : {}),
   };
 }

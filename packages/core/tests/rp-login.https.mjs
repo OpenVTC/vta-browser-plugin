@@ -1,5 +1,5 @@
 // `login()` as Trust Tasks over the relying party's HTTPS binding:
-// `auth/challenge/0.1` then `auth/authenticate/0.2`, both POSTed to
+// `auth/challenge/0.1` then `auth/authenticate/0.3`, both POSTed to
 // `{base}/trust-tasks`, with an optional `sessionKey` bound to the session.
 //
 // The RP here is a fake that answers the way the control plane does. Every
@@ -20,7 +20,7 @@ import {
 
 const TT = "https://trusttasks.org/spec/";
 const CHALLENGE = `${TT}auth/challenge/0.1`;
-const AUTHENTICATE = `${TT}auth/authenticate/0.2`;
+const AUTHENTICATE = `${TT}auth/authenticate/0.3`;
 
 const RP = generateSigningIdentity();
 const STRANGER = generateSigningIdentity();

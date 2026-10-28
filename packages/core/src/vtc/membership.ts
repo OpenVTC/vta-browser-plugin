@@ -31,42 +31,42 @@ import {
   RESPONSE_TYPE_URI as JR_STATUS_RESPONSE,
   type VTCJoinRequestsStatusPayload,
   type VTCJoinRequestsStatusResponsePayload,
-} from "@openvtc/trust-tasks/vtc/join-requests/status/0.1/payload";
+} from "../specs/vtc/join-requests/status/0.1/payload.js";
 import {
   TYPE_URI as JR_SUBMIT_RECEIPT,
   RESPONSE_TYPE_URI as JR_SUBMIT_RECEIPT_RESPONSE,
   type VTCJoinRequestsSubmitReceiptPayload,
   type VTCJoinRequestsSubmitReceiptResponsePayload,
-} from "@openvtc/trust-tasks/vtc/join-requests/submit-receipt/0.1/payload";
+} from "../specs/vtc/join-requests/submit-receipt/0.1/payload.js";
 import {
   TYPE_URI as MEMBERS_REQUEST_VMC,
   RESPONSE_TYPE_URI as MEMBERS_REQUEST_VMC_RESPONSE,
   type VTCMembersRequestVMCPayload,
   type VTCMembersRequestVMCResponsePayload,
-} from "@openvtc/trust-tasks/vtc/members/request-vmc/0.1/payload";
+} from "../specs/vtc/members/request-vmc/0.1/payload.js";
 import {
   TYPE_URI as MEMBERS_VMC,
   RESPONSE_TYPE_URI as MEMBERS_VMC_RESPONSE,
   type VTCMembersDeliverVMCPayload,
   type VTCMembersDeliverVMCReceiptPayload,
-} from "@openvtc/trust-tasks/vtc/members/vmc/0.1/payload";
+} from "../specs/vtc/members/vmc/0.1/payload.js";
 import {
   TYPE_URI as MEMBERS_SELF_REMOVE,
   RESPONSE_TYPE_URI as MEMBERS_SELF_REMOVE_RESPONSE,
   type VTCMembersSelfRemovePayload,
   type VTCMembersSelfRemoveResponsePayload,
-} from "@openvtc/trust-tasks/vtc/members/self-remove/0.1/payload";
+} from "../specs/vtc/members/self-remove/0.1/payload.js";
 import {
   TYPE_URI as MEMBERS_SELF_REMOVE_RECEIPT,
   RESPONSE_TYPE_URI as MEMBERS_SELF_REMOVE_RECEIPT_RESPONSE,
   type VTCMembersSelfRemoveReceiptPayload,
   type VTCMembersSelfRemoveReceiptResponsePayload,
-} from "@openvtc/trust-tasks/vtc/members/self-remove-receipt/0.1/payload";
+} from "../specs/vtc/members/self-remove-receipt/0.1/payload.js";
 import {
   TYPE_URI as MEMBERS_REMOVAL_NOTICE,
   PAYLOAD_SCHEMA as REMOVAL_NOTICE_SCHEMA,
   type VTCMembersRemovalNoticePayload,
-} from "@openvtc/trust-tasks/vtc/members/removal-notice/0.1/payload";
+} from "../specs/vtc/members/removal-notice/0.1/payload.js";
 import { validateAgainstSchema } from "../trust-tasks/validate.js";
 
 export interface CommunityCallerParams {

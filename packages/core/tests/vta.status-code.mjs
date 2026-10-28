@@ -17,7 +17,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { STANDARD_CODES } from "@openvtc/trust-tasks/_runtime/codes";
+import { STANDARD_CODES } from "@openvtc/trust-tasks/runtime";
 import { coerceTrustTaskCode } from "../dist/vta/trust-task.js";
 
 test("idConflict is a conflict, not a generic bad request", () => {

@@ -40,8 +40,8 @@ function recorder(reply) {
 
 test("a context-local entry carries its value and claims no provenance", async () => {
   const sender = recorder({
-    type: "https://trusttasks.org/spec/persona/local/profile/put/1.0#response",
-    payload: { profileId: "01L", version: 1, created: true },
+    type: "https://trusttasks.org/spec/persona/local/profile/put/1.1#response",
+    payload: { profileId: "01L", version: 1, wasCreated: true },
   });
 
   await putLocalProfile(sender, {
@@ -52,7 +52,7 @@ test("a context-local entry carries its value and claims no provenance", async (
   });
 
   const { payload, type } = sender.sent[0].envelope;
-  assert.equal(type, "https://trusttasks.org/spec/persona/local/profile/put/1.0");
+  assert.equal(type, "https://trusttasks.org/spec/persona/local/profile/put/1.1");
 
   // What it is for.
   assert.equal(payload.contextId, CTX);

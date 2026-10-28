@@ -33,10 +33,10 @@
 // request as untrusted input (a page hands it over), so they test each member
 // rather than trust the type.
 
-import type { Payload as ApproverAttestPayload } from "@openvtc/trust-tasks/auth/step-up/approver/attest/0.1/payload";
-import { TYPE_URI as ATTEST_0_1 } from "@openvtc/trust-tasks/auth/step-up/approver/attest/0.1/payload";
-import type { Payload as StepUpApproverRequest } from "@openvtc/trust-tasks/auth/step-up/approve-request/0.4/payload";
-import { TYPE_URI as APPROVE_RESPONSE_0_6 } from "@openvtc/trust-tasks/auth/step-up/approve-response/0.6/payload";
+import type { Payload as ApproverAttestPayload } from "../specs/auth/step-up/approver/attest/0.1/payload.js";
+import { TYPE_URI as ATTEST_0_1 } from "../specs/auth/step-up/approver/attest/0.1/payload.js";
+import type { Payload as StepUpApproverRequest } from "../specs/auth/step-up/approve-request/0.4/payload.js";
+import { TYPE_URI as APPROVE_RESPONSE_0_6 } from "../specs/auth/step-up/approve-response/0.6/payload.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { taskConsentWireDigest, vtcStepUpBoundTo } from "./domain-digest.js";
 import { signTrustTask, type TrustTaskEnvelope } from "./sign.js";

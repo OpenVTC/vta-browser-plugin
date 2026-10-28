@@ -21,7 +21,7 @@ import {
   RESPONSE_TYPE_URI as PROFILE_READ_RESPONSE,
   type RoomsKeysProfileReadPayload,
   type RoomsKeysProfileReadResponsePayload,
-} from "@openvtc/trust-tasks/rooms/keys/profile/read/0.1/payload";
+} from "../specs/rooms/keys/profile/read/0.1/payload.js";
 
 export type { RoomsKeysProfileReadResponsePayload as RoomProfileReadResponse };
 

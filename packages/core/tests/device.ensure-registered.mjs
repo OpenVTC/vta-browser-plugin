@@ -37,10 +37,10 @@ function recorder(reply) {
 }
 
 test("a registered device is left as it is: one heartbeat, no register", async () => {
-  const ch = recorder(() => ({ serverTime: new Date().toISOString(), queuedOperations: [] }));
+  const ch = recorder(() => ({ respondedAt: new Date().toISOString(), queuedOperations: [] }));
   assert.equal(await ensureDeviceRegistered(ch, PARAMS), "present");
   assert.equal(ch.sent.length, 1);
-  assert.equal(ch.sent[0].type, "https://trusttasks.org/spec/device/heartbeat/0.2");
+  assert.equal(ch.sent[0].type, "https://trusttasks.org/spec/device/heartbeat/0.3");
   assert.equal(ch.sent[0].issuer, holder.did);
   assert.deepEqual(ch.sent[0].payload, { platform: "macOS" });
 });

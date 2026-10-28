@@ -1,8 +1,9 @@
 // Audit — the agent's account of what happened, and the whole of each entry.
 //
-// **Truncation is rendered, never swallowed.** `AuditListResult.truncated` says
-// the agent stopped early, and its own documentation is explicit about why that
-// matters: an operator reading "nothing else occurred" off a partial page is
+// **Truncation is rendered, never swallowed.** `AuditListResult.nextCursor`
+// says more entries remain — since `audit/list/0.2` it is the only signal, with
+// no `truncated` beside it — and its own documentation is explicit about why
+// that matters: an operator reading "nothing else occurred" off a partial page is
 // exactly the failure an audit trail exists to prevent.
 //
 // ## Why a row opens
@@ -300,7 +301,7 @@ export function AuditPane({
     () =>
       auditList(managerSender, {
         ...parties,
-        pageSize,
+        limit: pageSize,
         ...(contextId ? { contextId } : {}),
         ...(applied.action ? { action: applied.action } : {}),
         ...(applied.actor ? { actor: applied.actor } : {}),
@@ -357,7 +358,7 @@ export function AuditPane({
           <>
             {/* Before the table, not after. A warning under a long list is a
                 warning nobody reads. */}
-            {list.data.truncated && (
+            {list.data.nextCursor && (
               <Note tone="warn">
                 <strong>This is not the whole record.</strong> Your agent stopped early, so
                 anything you conclude from what is below — including that something did

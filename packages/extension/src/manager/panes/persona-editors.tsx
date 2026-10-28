@@ -2167,7 +2167,7 @@ export function FaceHistory({
         ) : (
           (timeline.data ?? []).map((e, i) => (
             <span key={i}>
-              <span style={{ color: c.faint }}>{formatInstant(e.at)}</span> — {timelineWords(e, contextName)}
+              <span style={{ color: c.faint }}>{formatInstant(e.occurredAt)}</span> — {timelineWords(e, contextName)}
             </span>
           ))
         )}
@@ -2340,7 +2340,7 @@ export function ComposeFace({
         setLinked((prev) => {
           const next = { ...prev };
           const hit = findings[0];
-          if (hit) next[i] = hit.why;
+          if (hit) next[i] = hit.reason;
           else delete next[i];
           return next;
         });

@@ -311,7 +311,7 @@ export function AppStatePane({
             contextId,
             includeValues: true,
             includeDeleted,
-            pageSize: PAGE,
+            limit: PAGE,
             ...(applied ? { namespace: applied } : {}),
           })
         : null,
@@ -497,7 +497,7 @@ export function AppStatePane({
                   : `No application has written anything into ${contextId}.`
               }
             />
-            {list.data.cursor && <Truncated what="this context's records" />}
+            {list.data.nextCursor && <Truncated what="this context's records" />}
             {records.length > 0 && (
               // The half of the disclosure the column heading cannot carry.
               // "Write counter" stops the number reading as a revision; only

@@ -58,7 +58,7 @@ export interface LoginParams {
   baseUrl: string;
   /**
    * Optional `did:key` for the RP to bind to this login's session
-   * (`auth/authenticate/0.2` `sessionKey`). The page generates it and keeps
+   * (`auth/authenticate/0.3` `sessionKey`). The page generates it and keeps
    * the private half, ideally as a non-extractable WebCrypto key. The wallet
    * puts it inside the document it signs, so the RP accepts that key's proofs
    * as the user for this session only, and never for a step-up approval.
@@ -86,10 +86,10 @@ export interface DidcommLoginParams {
 }
 
 /** Parameters for `window.vtaWallet.stepUpVta(...)`: raise an existing RP
- *  session to `aal2`. The wallet sends `auth/step-up/start/0.1`, verifies the
+ *  session to `aal2`. The wallet sends `auth/step-up/start/0.2`, verifies the
  *  RP's signed reply and the approve-request inside it, asks the human, sends
- *  a signed `approve-response/0.5`, and renews the session with
- *  `auth/refresh/0.1` — all to `{baseUrl}/trust-tasks`. The holder that signs
+ *  a signed `approve-response/0.6`, and renews the session with
+ *  `auth/refresh/0.2` — all to `{baseUrl}/trust-tasks`. The holder that signs
  *  is the active connection's; the page does not choose it. */
 export interface StepUpVtaParams {
   /** The RP's Trust Task base (the same one used for the base login). */
@@ -1182,7 +1182,7 @@ export type RuntimeHolderStateResponse =
 // M1 read-only surface: enumerate the connected VTA's vault entries (metadata
 // only — no secret material). Authenticates via the same /auth/challenge +
 // authcrypt /auth/ flow the onboarding swap uses, then POSTs the canonical
-// vault/list/0.1 Trust Task envelope to the VTA dispatcher.
+// vault/list/0.4 Trust Task envelope to the VTA dispatcher.
 
 export const RUNTIME_VAULT_LIST = "vta-wallet/vault-list" as const;
 
@@ -1234,7 +1234,8 @@ export interface VaultListFilter {
   neverUsed?: boolean;
   expiresBefore?: string;
   breached?: boolean;
-  pageSize?: number;
+  /** vault/list/0.4's page size (`pageSize` through 0.3). */
+  limit?: number;
 }
 
 export interface VaultListResultView {
@@ -1371,7 +1372,7 @@ export const RUNTIME_VAULT_PROXY_LOGIN = "vta-wallet/vault-proxy-login" as const
 export const RUNTIME_VAULT_PROXY_LOGIN_PAGE =
   "vta-wallet/vault-proxy-login-page" as const;
 /** content-script (relayed from page world) → background: enumerate
- *  vault entries via `vault/list/0.1`. Same op as the popup's
+ *  vault entries via `vault/list/0.4`. Same op as the popup's
  *  `RUNTIME_VAULT_LIST`, but the request arrives wrapped in
  *  `{ params }` per the page-bridge convention. M2B.4 surfaces this
  *  to RP pages so they can discover did-self-issued entries pinned to
@@ -1439,7 +1440,8 @@ export interface RuntimeVaultUpsertRequest {
 
 export interface VaultUpsertResultView {
   entry: VaultEntryView;
-  created: boolean;
+  /** vault/upsert/0.4's `wasCreated`: true when the call created the entry. */
+  wasCreated?: boolean;
 }
 
 export type RuntimeVaultUpsertResponse =
@@ -1802,7 +1804,7 @@ export const OFFSCREEN_VERIFY_DID = "offscreen/verify-did" as const;
 /** background → offscreen: enumerate the connected VTA's vault entries.
  *  Loads the holder identity in offscreen (has DOM for WebAuthn-PRF unwrap),
  *  authenticates over REST + DIDComm-authcrypt, posts the canonical
- *  vault/list/0.1 envelope. Reply is a `RuntimeVaultListResponse`'s payload
+ *  vault/list/0.4 envelope. Reply is a `RuntimeVaultListResponse`'s payload
  *  via sendResponse. */
 export const OFFSCREEN_VAULT_LIST = "offscreen/vault-list" as const;
 export const OFFSCREEN_REQUEST_TASK = "offscreen/request-task" as const;
@@ -1815,7 +1817,7 @@ export interface OffscreenVaultListRequest {
   filter?: VaultListFilter;
 }
 
-/** background → offscreen: vault/upsert/0.1. Holder X25519 lives in
+/** background → offscreen: vault/upsert/0.4. Holder X25519 lives in
  *  offscreen, so the authcrypt sealing of the secret happens there. */
 export const OFFSCREEN_VAULT_UPSERT = "offscreen/vault-upsert" as const;
 
@@ -1984,7 +1986,7 @@ export interface OffscreenDidcommLoginRequest {
 }
 
 /** background → offscreen: run the page's `login()`, `auth/challenge/0.1` then
- *  `auth/authenticate/0.2`, over the RP's HTTPS Trust Task binding
+ *  `auth/authenticate/0.3`, over the RP's HTTPS Trust Task binding
  *  (`{baseUrl}/trust-tasks`). The signing must happen here in offscreen,
  *  because that is where the unwrapped holder secret lives (the PRF AES cache
  *  is module-scoped). Background has no access to the cache, so signing from

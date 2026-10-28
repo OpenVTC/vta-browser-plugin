@@ -26,7 +26,7 @@ test("blank rows are dropped and a half-filled one is refused", () => {
 
 test("the outcome says where the face lives and when it now shares a fact", () => {
   assert.match(composedWords({ scope: "local" }), /Made here/);
-  const w = composedWords({ scope: "pool", pooled: [{ created: false }], binding: { personaDid: "did:x" } });
+  const w = composedWords({ scope: "pool", pooled: [{ wasCreated: false }], binding: { personaDid: "did:x" } });
   assert.match(w, /already kept/);
   assert.match(w, /worn here now/);
 });

@@ -17,37 +17,37 @@ import {
   type Payload as ServersListPayload,
   type Response as ServersListResponse,
   type WebvhServerRecord,
-} from "@openvtc/trust-tasks/vta/webvh/servers/list/1.0/payload";
+} from "../specs/vta/webvh/servers/list/1.0/payload.js";
 import {
   TYPE_URI as SERVERS_REGISTER,
   RESPONSE_TYPE_URI as SERVERS_REGISTER_RESPONSE,
   type Payload as ServersRegisterPayload,
   type Response as ServersRegisterResponse,
-} from "@openvtc/trust-tasks/vta/webvh/servers/register/1.0/payload";
+} from "../specs/vta/webvh/servers/register/1.0/payload.js";
 import {
   TYPE_URI as SERVERS_REMOVE,
   RESPONSE_TYPE_URI as SERVERS_REMOVE_RESPONSE,
   type Payload as ServersRemovePayload,
   type Response as ServersRemoveResponse,
-} from "@openvtc/trust-tasks/vta/webvh/servers/remove/1.0/payload";
+} from "../specs/vta/webvh/servers/remove/1.0/payload.js";
 import {
   TYPE_URI as SERVERS_DOMAINS,
   RESPONSE_TYPE_URI as SERVERS_DOMAINS_RESPONSE,
   type Payload as ServersDomainsPayload,
   type Response as ServersDomainsResponse,
-} from "@openvtc/trust-tasks/vta/webvh/servers/domains/0.1/payload";
+} from "../specs/vta/webvh/servers/domains/0.1/payload.js";
 import {
   TYPE_URI as SERVERS_RECONCILE,
   RESPONSE_TYPE_URI as SERVERS_RECONCILE_RESPONSE,
   type Payload as ServersReconcilePayload,
   type Response as ServersReconcileResponse,
-} from "@openvtc/trust-tasks/vta/webvh/servers/reconcile/0.1/payload";
+} from "../specs/vta/webvh/servers/reconcile/0.1/payload.js";
 import {
   TYPE_URI as SERVERS_RETIRE_ORPHAN,
   RESPONSE_TYPE_URI as SERVERS_RETIRE_ORPHAN_RESPONSE,
   type VTAWebVHServersRetireOrphanPayload as ServersRetireOrphanPayload,
   type VTAWebVHServersRetireOrphanResponsePayload as ServersRetireOrphanResponse,
-} from "@openvtc/trust-tasks/vta/webvh/servers/retire-orphan/0.1/payload";
+} from "../specs/vta/webvh/servers/retire-orphan/0.1/payload.js";
 
 import type { TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";

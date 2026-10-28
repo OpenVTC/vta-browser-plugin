@@ -38,7 +38,7 @@ function mount(fake: ReturnType<typeof agent>, extra: Record<string, unknown> = 
   };
 }
 
-const put = () => agent({ "persona/attribute/put/1.0": { attributeId: "a1", version: 1, created: true, updatedAt: "2026-09-09T00:00:00Z" } });
+const put = () => agent({ "persona/attribute/put/1.1": { attributeId: "a1", version: 1, wasCreated: true, updatedAt: "2026-09-09T00:00:00Z" } });
 
 test("the ordinary things are on screen and the rest are folded away", async () => {
   const fake = put();
@@ -118,10 +118,10 @@ test("a partial failure says which half happened", async () => {
   // and a retry would then duplicate the one that did.
   let n = 0;
   const fake = agent({
-    "persona/attribute/put/1.0": () => {
+    "persona/attribute/put/1.1": () => {
       n += 1;
       if (n === 2) throw new Error("agent said no");
-      return { attributeId: `a${n}`, version: 1, created: true, updatedAt: "2026-09-09T00:00:00Z" };
+      return { attributeId: `a${n}`, version: 1, wasCreated: true, updatedAt: "2026-09-09T00:00:00Z" };
     },
   });
   const m = mount(fake);

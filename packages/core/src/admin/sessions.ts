@@ -23,17 +23,17 @@ import {
   RESPONSE_TYPE_URI as AUTH_WHOAMI_RESPONSE,
   type AuthWhoamiResponsePayload,
   type Session,
-} from "@openvtc/trust-tasks/auth/whoami/0.1/payload";
+} from "../specs/auth/whoami/0.1/payload.js";
 import {
   TYPE_URI as AUTH_SESSIONS_LIST,
   RESPONSE_TYPE_URI as AUTH_SESSIONS_LIST_RESPONSE,
   type AuthSessionsListResponsePayload,
-} from "@openvtc/trust-tasks/auth/sessions/list/0.1/payload";
+} from "../specs/auth/sessions/list/0.1/payload.js";
 import {
   TYPE_URI as AUTH_REVOKE_SESSION,
   RESPONSE_TYPE_URI as AUTH_REVOKE_SESSION_RESPONSE,
   type AuthRevokeSessionResponsePayload,
-} from "@openvtc/trust-tasks/auth/revoke-session/0.2/payload";
+} from "../specs/auth/revoke-session/0.2/payload.js";
 
 export type { Session };
 

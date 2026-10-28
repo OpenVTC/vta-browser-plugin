@@ -12,12 +12,12 @@
 // `id` exists before the presentation does — it is the presentation's nonce —
 // and {@link buildCardPresent} takes it rather than minting one.
 
-import type { ClaimSelector, FieldDefinition } from "@openvtc/trust-tasks/vtc/directory/fields/list/0.1/payload";
+import type { ClaimSelector, FieldDefinition } from "../specs/vtc/directory/fields/list/0.1/payload.js";
 import {
   TYPE_URI as CARD_PRESENT,
   type Payload as CardPresentPayload,
   type VerifiedValue,
-} from "@openvtc/trust-tasks/vtc/directory/card/present/0.1/payload";
+} from "../specs/vtc/directory/card/present/0.1/payload.js";
 import { OobReplyInvalidError, type OobDocument } from "./oob-sign-in.js";
 
 export type { ClaimSelector, VerifiedValue };

@@ -15,38 +15,38 @@ import {
   RESPONSE_TYPE_URI as NAME_SET_RESPONSE,
   type Payload as NameSetPayload,
   type Response as NameSetResponse,
-} from "@openvtc/trust-tasks/vta/webvh/agent-name/set/1.0/payload";
+} from "../specs/vta/webvh/agent-name/set/1.0/payload.js";
 import {
   TYPE_URI as NAME_REMOVE,
   RESPONSE_TYPE_URI as NAME_REMOVE_RESPONSE,
   type Payload as NameRemovePayload,
   type Response as NameRemoveResponse,
-} from "@openvtc/trust-tasks/vta/webvh/agent-name/remove/1.0/payload";
+} from "../specs/vta/webvh/agent-name/remove/1.0/payload.js";
 import {
   TYPE_URI as NAME_LIST,
   RESPONSE_TYPE_URI as NAME_LIST_RESPONSE,
   type Payload as NameListPayload,
   type Response as NameListResponse,
   type AgentNameEntry,
-} from "@openvtc/trust-tasks/vta/webvh/agent-name/list/1.0/payload";
+} from "../specs/vta/webvh/agent-name/list/1.1/payload.js";
 import {
   TYPE_URI as NAME_CHECK,
   RESPONSE_TYPE_URI as NAME_CHECK_RESPONSE,
   type Payload as NameCheckPayload,
   type Response as NameCheckResponse,
-} from "@openvtc/trust-tasks/vta/webvh/agent-name/check/1.0/payload";
+} from "../specs/vta/webvh/agent-name/check/1.0/payload.js";
 import {
   TYPE_URI as NAME_ENABLE,
   RESPONSE_TYPE_URI as NAME_ENABLE_RESPONSE,
   type Payload as NameEnablePayload,
   type Response as NameEnableResponse,
-} from "@openvtc/trust-tasks/vta/webvh/agent-name/enable/1.0/payload";
+} from "../specs/vta/webvh/agent-name/enable/1.0/payload.js";
 import {
   TYPE_URI as NAME_DISABLE,
   RESPONSE_TYPE_URI as NAME_DISABLE_RESPONSE,
   type Payload as NameDisablePayload,
   type Response as NameDisableResponse,
-} from "@openvtc/trust-tasks/vta/webvh/agent-name/disable/1.0/payload";
+} from "../specs/vta/webvh/agent-name/disable/1.0/payload.js";
 
 import type { TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
@@ -96,14 +96,19 @@ export async function agentNameRemove(
     "vta/webvh/agent-name/remove/1.0", payload);
 }
 
-/** List this agent's name bindings. */
+/**
+ * List this agent's name bindings.
+ *
+ * At 1.1 an entry's `createdAt` is an RFC 3339 string, not Unix seconds; the
+ * other verbs are still 1.0, which is what the agent serves for them.
+ */
 export async function agentNameList(
   sender: TrustTaskSender,
   params: WebvhCall & NameListPayload,
 ): Promise<NameListResponse> {
   const { holder, service, ...payload } = params;
   return send(sender, { holder, service }, NAME_LIST, NAME_LIST_RESPONSE,
-    "vta/webvh/agent-name/list/1.0", payload);
+    "vta/webvh/agent-name/list/1.1", payload);
 }
 
 /**
