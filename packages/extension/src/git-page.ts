@@ -4,7 +4,7 @@
 // their account on a forge to their DID at a community, or removes it, so the
 // community's bridge gives that account the forge roles the member's git
 // rights call for — or withdraws them. A portal sign-in key may never sign
-// either (`auth/oob/grant/0.2` consumer item 6): a link binds the account the
+// either (`auth/oob/grant/0.3` consumer item 6): a link binds the account the
 // forge then treats as the member's. So a page asks, and everything it asks
 // passes these, in this order, before anything is signed:
 //

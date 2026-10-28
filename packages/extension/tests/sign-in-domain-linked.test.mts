@@ -84,7 +84,7 @@ function world(opts: { config?: unknown; configStatus?: number; doc?: Record<str
     service: { did: VTC, name: "Example Community" },
     origin: PORTAL,
     purpose: "login",
-    decisionDeadline: Math.floor(NOW / 1000) + 120,
+    decisionClosesAt: new Date(NOW + 120_000).toISOString(),
   };
   const fetch = (async (url: string, init: RequestInit) => {
     if (url === CONFIG_URL) {
@@ -96,7 +96,7 @@ function world(opts: { config?: unknown; configStatus?: number; doc?: Record<str
     }
     assert.equal(url, ENDPOINT);
     const doc = JSON.parse(String(init.body));
-    const type = String(doc.type).replace("https://trusttasks.org/spec/auth/oob/", "").replace(/\/0\.[12]$/, "");
+    const type = String(doc.type).replace("https://trusttasks.org/spec/auth/oob/", "").replace(/\/\d+\.\d+$/, "");
     w.log.push(type);
     const payload =
       type === "claim"

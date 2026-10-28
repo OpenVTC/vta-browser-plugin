@@ -3,7 +3,7 @@
  * Source: https://trusttasks.org/spec/device/register/0.2 (registry bundle)
  */
 
-import type { AppleAppAttest, Capability_DeviceV0_2 as Capability, Companion, ConsumerKind, DeviceAttestation, DeviceBinding, Ext, KeyCustody, NitroEnclave, NoAttestation, PlayIntegrity, Service, Tpm, WebAuthnAttestation } from "../../../_shared/components.js";
+import type { AppleAppAttest, Capability_DeviceV0_2 as Capability, Companion_DeviceV0_2 as Companion, ConsumerKind, DeviceAttestation, DeviceBinding, Ext, KeyCustody, NitroEnclave, NoAttestation, PlayIntegrity, Service_DeviceV0_2 as Service, Tpm, WebAuthnAttestation } from "../../../_shared/components.js";
 
 
 /**

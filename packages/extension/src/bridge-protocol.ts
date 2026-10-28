@@ -2716,7 +2716,7 @@ export type RuntimeDirectoryPageResponse =
 // ─── A member's forge account for a page: `window.vtaWallet.git` ────────────
 //
 // `git-ns/account/link/0.1` and `git-ns/account/unlink/0.1`. A portal sign-in
-// key may not sign either (`auth/oob/grant/0.2` consumer item 6), so the page
+// key may not sign either (`auth/oob/grant/0.3` consumer item 6), so the page
 // asks and the wallet signs as the member, after asking them. As with the
 // directory, the background refuses unless the page's browser-attested origin
 // is the origin of `hostDid`'s `SignInPortal` (`git-page.ts`).
@@ -3035,7 +3035,7 @@ export type SignInStepResult =
        *  number came from the page and no number screen was shown. */
       decisionDeadline: number;
       /** The task families approving also lets that browser sign as the
-       *  member, for the session (auth/oob/grant/0.2). Absent: none. */
+       *  member, for the session (auth/oob/grant/0.3). Absent: none. */
       signingScope?: string[];
       /** How this browser approves at the member's agent. Absent: not set up
        *  yet — the first approval sets it up. */

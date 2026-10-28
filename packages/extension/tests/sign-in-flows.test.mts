@@ -124,9 +124,7 @@ function world(
     renameError?: Error;
     claimError?: string;
     proveError?: string;
-    /** The community predates auth/oob 0.2 and refuses `prove/0.2`. */
-    v0_1Only?: boolean;
-    /** What a 0.2 step 2 offers as `signingScope`. */
+    /** What step 2 offers as `signingScope`. */
     signingScope?: string[];
     /** The community cannot be reached at all on this step. */
     unreachableOn?: string;
@@ -169,7 +167,7 @@ function world(
     service: { did: VTC, name: opts.name ?? "Example Community" },
     origin: PORTAL,
     purpose: "login",
-    decisionDeadline: Math.floor(NOW / 1000) + 120,
+    decisionClosesAt: new Date(NOW + 120_000).toISOString(),
     ...(opts.ext ? { ext: opts.ext } : {}),
   };
   const fetch = (async (url: string, init: RequestInit) => {
@@ -178,15 +176,8 @@ function world(
     const join = /\/vtc\/join-requests\/(?:(manifest)\/0\.4|(submit)\/0\.3)$/.exec(String(doc.type));
     const type = join
       ? `join-${join[1] ?? join[2]}`
-      : String(doc.type).replace("https://trusttasks.org/spec/auth/oob/", "").replace(/\/0\.[12]$/, "");
-    const v0_2 = String(doc.type).endsWith("/0.2");
+      : String(doc.type).replace("https://trusttasks.org/spec/auth/oob/", "").replace(/\/\d+\.\d+$/, "");
     sent.push({ type, doc });
-    if (v0_2 && opts.v0_1Only) {
-      return new Response(
-        JSON.stringify({ type: "https://trusttasks.org/spec/trust-task-error/0.2", payload: { code: "unsupportedType", retryable: false } }),
-        { status: 400 },
-      );
-    }
     if (type === opts.unreachableOn) throw new TypeError("Failed to fetch");
     if (join) {
       const answer = type === "join-manifest" ? (opts.manifest ?? MANIFEST) : (opts.submit ?? { requestId: "jr-1", verdict: { effect: "refer", with: { queue: "admin-review" } } });
@@ -218,7 +209,7 @@ function world(
               sessionKey,
               requester: { location: "Sydney, Australia", browser: "Chrome", os: "macOS", createdAt: new Date(NOW).toISOString(), sameNetwork: true },
               identifiedAs: doc.payload.identify.issuer,
-              ...(v0_2 && opts.signingScope ? { signingScope: opts.signingScope } : {}),
+              ...(opts.signingScope ? { signingScope: opts.signingScope } : {}),
             }
           : { status: type === "cancel" ? "cancelled" : "approved" };
     const res = { id: crypto.randomUUID(), type: `${doc.type}#response`, issuer: VTC, recipient: doc.issuer, threadId: doc.id, issuedAt: new Date().toISOString(), payload };
@@ -381,7 +372,8 @@ test("the whole approval, in the contract's order", async () => {
   assert.equal(grant.decision, "approve");
   assert.equal(grant.approverKey, kA);
   assert.equal(grant.origin, PORTAL);
-  assert.equal(grant.notAfter, Math.floor((NOW + 3_600_000) / 1000), "epoch seconds (C9)");
+  assert.equal(grant.sessionEndsAt, new Date(NOW + 3_600_000).toISOString().replace(".000Z", "Z"), "an RFC 3339 date-time (grant 0.3)");
+  assert.equal("notAfter" in grant, false);
   assert.match(String(grant.contextDigest), /^zQm/);
 
   // Spent: nothing more goes out for this flow.
@@ -1280,22 +1272,25 @@ test("a manifest the community would not share is said plainly", async () => {
 
 // ── auth/oob 0.2: delegated signing ─────────────────────────────────────────
 
-test("0.2: a scope the community offers is shown at review and copied into the grant", async () => {
+test("a scope the community offers is shown at review and copied into the grant", async () => {
   const w = world({ signingScope: ["vtc/directory"] });
   await step(w, { step: "prepare", link: LINK, origin: PORTAL });
   await step(w, { step: "claim", entryId: "e-alice" });
   const review = await step(w, { step: "prove", enteredNumber: "47" });
   assert.deepEqual((review as { signingScope?: string[] }).signingScope, ["vtc/directory"]);
-  assert.match(String(w.sent[1]!.doc.type), /\/auth\/oob\/prove\/0\.2$/);
+  // One version per step, what the community serves (claim 0.2, prove 0.3,
+  // respond 0.3 carrying grant 0.3): nothing is tried first or fallen back to.
+  assert.match(String(w.sent[0]!.doc.type), /\/auth\/oob\/claim\/0\.2$/);
+  assert.match(String(w.sent[1]!.doc.type), /\/auth\/oob\/prove\/0\.3$/);
   await step(w, { step: "grant-digest" });
   await step(w, { step: "respond", decision: "approve", prfOutputB64u: PRF_B64U });
   const respond = w.sent[2]!.doc as { type: string; payload: { grant: { type: string; payload: Record<string, unknown> } } };
-  assert.match(respond.type, /\/auth\/oob\/respond\/0\.2$/);
-  assert.match(respond.payload.grant.type, /\/auth\/oob\/grant\/0\.2$/);
+  assert.match(respond.type, /\/auth\/oob\/respond\/0\.3$/);
+  assert.match(respond.payload.grant.type, /\/auth\/oob\/grant\/0\.3$/);
   assert.deepEqual(respond.payload.grant.payload.signingScope, ["vtc/directory"]);
 });
 
-test("0.2 with no scope offered delegates nothing", async () => {
+test("with no scope offered, nothing is delegated", async () => {
   const w = world();
   await step(w, { step: "prepare", link: LINK, origin: PORTAL });
   await step(w, { step: "claim", entryId: "e-alice" });
@@ -1305,24 +1300,6 @@ test("0.2 with no scope offered delegates nothing", async () => {
   await step(w, { step: "respond", decision: "approve", prfOutputB64u: PRF_B64U });
   const grant = (w.sent[2]!.doc as { payload: { grant: { payload: Record<string, unknown> } } }).payload.grant.payload;
   assert.equal("signingScope" in grant, false);
-});
-
-test("a community that predates 0.2 is proved at 0.1, which delegates nothing", async () => {
-  const w = world({ v0_1Only: true, signingScope: ["vtc/directory"] });
-  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
-  await step(w, { step: "claim", entryId: "e-alice" });
-  const review = await step(w, { step: "prove", enteredNumber: "47" });
-  assert.equal(review.kind, "review");
-  assert.deepEqual(
-    w.sent.slice(1).map((s) => String(s.doc.type).split("/auth/oob/")[1]),
-    ["prove/0.2", "prove/0.1"],
-  );
-  await step(w, { step: "grant-digest" });
-  await step(w, { step: "respond", decision: "approve", prfOutputB64u: PRF_B64U });
-  const respond = w.sent[3]!.doc as { type: string; payload: { grant: { type: string; payload: Record<string, unknown> } } };
-  assert.match(respond.type, /\/auth\/oob\/respond\/0\.1$/);
-  assert.match(respond.payload.grant.type, /\/auth\/oob\/grant\/0\.1$/);
-  assert.equal("signingScope" in respond.payload.grant.payload, false);
 });
 
 test("a scope naming sign-in, access control or consent is refused, whatever the community offers", async () => {

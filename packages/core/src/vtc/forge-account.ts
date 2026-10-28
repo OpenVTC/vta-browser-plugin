@@ -4,7 +4,7 @@
 // for.
 //
 // A link binds an account the forge then treats as the member's, so it is the
-// member's own signature, never a portal sign-in key's (`auth/oob/grant/0.2`
+// member's own signature, never a portal sign-in key's (`auth/oob/grant/0.3`
 // consumer item 6). The wallet signs it as the member after asking them, and
 // keeps where to authorise it — and any device code — in its own window: a page
 // that held the code could complete the authorisation with an account of its

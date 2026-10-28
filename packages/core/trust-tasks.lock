@@ -63,6 +63,42 @@ type_uri = "https://trusttasks.org/spec/auth/challenge/0.1"
 digest = "sha256:ff8c391590c7707af8ea160c33c8ef23eba0d54537b5f65429844a72ae5c29f6"
 
 [[task]]
+slug = "auth/oob/cancel"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/auth/oob/cancel/0.1"
+digest = "sha256:7a3339a2f5d5ca8e09d1235eeebe9309b0796f6ddd9b18cf018a2c753065fa71"
+
+[[task]]
+slug = "auth/oob/claim"
+version = "0.2"
+type_uri = "https://trusttasks.org/spec/auth/oob/claim/0.2"
+digest = "sha256:ae471bc35e6bf74a2d20a1dab1d1c9147c6d4b26ea42256e8c65761bf1933769"
+
+[[task]]
+slug = "auth/oob/grant"
+version = "0.3"
+type_uri = "https://trusttasks.org/spec/auth/oob/grant/0.3"
+digest = "sha256:2b42976a728fee0f84824d749ee15ae65854777ced09dfad858059181f4a9e6e"
+
+[[task]]
+slug = "auth/oob/identify"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/auth/oob/identify/0.1"
+digest = "sha256:07bd98d0bd9129ee2b09a429e2adf1042093a245b8b1de2f5f24ff74c25c7e39"
+
+[[task]]
+slug = "auth/oob/prove"
+version = "0.3"
+type_uri = "https://trusttasks.org/spec/auth/oob/prove/0.3"
+digest = "sha256:e32c7daf9e712a13ba49d0bdaee7125167c2d6412bad244aaceef1998278e934"
+
+[[task]]
+slug = "auth/oob/respond"
+version = "0.3"
+type_uri = "https://trusttasks.org/spec/auth/oob/respond/0.3"
+digest = "sha256:c42014166dc5cf15f7889262b0460643847d907786b34230fa10aa865f7c247a"
+
+[[task]]
 slug = "auth/passkey/login/finish"
 version = "0.2"
 type_uri = "https://trusttasks.org/spec/auth/passkey/login/finish/0.2"

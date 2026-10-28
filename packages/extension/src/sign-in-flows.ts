@@ -154,8 +154,6 @@ import {
   type OobStep2,
   type OobGrantPayload,
   type OobDecision,
-  type OobReply,
-  type OobVersion,
   type SignInServices,
 } from "@openvtc/pnm-core/vtc";
 import type {
@@ -278,7 +276,7 @@ export interface SignInFlowDeps {
    *  (`did:webvh` and `did:web`, both host-named). */
   contactMethods?: ContactMethodRegistry;
   /**
-   * How long the grant lets the browser act as the member (`notAfter`).
+   * How long the grant lets the browser act as the member (`sessionEndsAt`).
    *
    * Base design §14 step 12 says "the member session limit", which is the
    * community's and is not published anywhere the wallet can read. The VTC
@@ -382,9 +380,6 @@ interface Flow {
   pageNumberWaiter?: (n: string) => void;
   step1?: OobStep1;
   step2Doc?: OobDocument<OobStep2>;
-  /** The `prove` / `grant` / `respond` version this exchange runs at: 0.2
-   *  unless the community refused it. */
-  version?: OobVersion;
   unsignedGrant?: OobDocument<OobGrantPayload>;
   grantDigest?: string;
   /** The exchange in progress, for a failure's details. Set before each call
@@ -1087,7 +1082,7 @@ export class SignInFlows {
     }
     return {
       kind: "enter-number",
-      decisionDeadline: deadlineMs(flow.step1.decisionDeadline)!,
+      decisionDeadline: deadlineMs(flow.step1.decisionClosesAt)!,
       // `checkStep1` refused an audience this wallet does not know.
       audience: sessionAudienceOf(flow.step1)!,
       ...(theirs !== undefined ? { nameMismatch: theirs } : {}),
@@ -1114,7 +1109,7 @@ export class SignInFlows {
     );
     const screen = (extra: { nameMismatch?: string; adoptFailed?: string } = {}): SignInStepResult => ({
       kind: "enter-number",
-      decisionDeadline: deadlineMs(flow.step1!.decisionDeadline)!,
+      decisionDeadline: deadlineMs(flow.step1!.decisionClosesAt)!,
       audience: sessionAudienceOf(flow.step1!)!,
       ...extra,
     });
@@ -1156,34 +1151,17 @@ export class SignInFlows {
       "authentication",
     );
     flow.at = "prove";
-    // 0.2 first: it lets the community offer a signing scope. A community
-    // that predates it refuses the type before reading the identify, and the
-    // same identify proves at 0.1.
-    let version: OobVersion = "0.2";
-    let reply: OobReply<OobStep2>;
-    try {
-      reply = await sendOob<OobStep2>(
-        flow.kA,
-        buildProve(flow.kA, flow.vtcDid, signed, flow.link.id, "0.2"),
-        this.sendOpts(flow),
-        "auth/oob/prove",
-      );
-    } catch (e) {
-      if (!(e instanceof OobRefusedError) || !/unsupportedType$/.test(e.code)) throw e;
-      version = "0.1";
-      reply = await sendOob<OobStep2>(
-        flow.kA,
-        buildProve(flow.kA, flow.vtcDid, signed, flow.link.id, "0.1"),
-        this.sendOpts(flow),
-        "auth/oob/prove",
-      );
-    }
+    const reply = await sendOob<OobStep2>(
+      flow.kA,
+      buildProve(flow.kA, flow.vtcDid, signed, flow.link.id),
+      this.sendOpts(flow),
+      "auth/oob/prove",
+    );
     const step2 = checkStep2(reply.payload, flow.step1, flow.entry.did);
     // Read from this wallet's own record; nothing is asked of the agent. A
     // record that cannot be read is "not set up", which the window offers to
     // set up — never a reason to stop the sign-in.
     const uvMethod = await flow.vta.uvMethod().catch(() => undefined);
-    flow.version = version;
     flow.step2Doc = reply.doc;
     flow.phase = "identified";
     return {
@@ -1196,7 +1174,7 @@ export class SignInFlows {
       identifiedAs: step2.identifiedAs,
       // `checkStep2` held it equal to step 1's.
       audience: sessionAudienceOf(step2)!,
-      decisionDeadline: deadlineMs(flow.step1.decisionDeadline)!,
+      decisionDeadline: deadlineMs(flow.step1.decisionClosesAt)!,
       ...(step2.signingScope ? { signingScope: step2.signingScope } : {}),
       ...(uvMethod ? { uvMethod } : {}),
     };
@@ -1216,13 +1194,13 @@ export class SignInFlows {
       approverKey: flow.kA!.did,
       origin: step2.origin,
       contextDigest: await contextDigest(flow.step2Doc!),
-      // Integer epoch seconds (contract C9).
-      notAfter: Math.floor(
-        (this.deps.now() + this.deps.grantLifetimeMs) / 1000,
-      ),
+      // An RFC 3339 date-time (grant 0.3), to the second.
+      sessionEndsAt: new Date(
+        Math.floor((this.deps.now() + this.deps.grantLifetimeMs) / 1000) * 1000,
+      ).toISOString().replace(".000Z", "Z"),
       // Step 2's scope, unchanged: the member approved exactly what was shown.
       ...(step2.signingScope ? { signingScope: step2.signingScope } : {}),
-    }, flow.version ?? "0.1");
+    });
   }
 
   /** Build the unsigned approval and hand its digest to the window for the
@@ -1310,7 +1288,7 @@ export class SignInFlows {
     flow.at = "respond";
     const reply = await sendOob<{ status?: unknown }>(
       flow.kA,
-      buildRespond(flow.kA, flow.vtcDid, signed, flow.link.id, flow.version ?? "0.1"),
+      buildRespond(flow.kA, flow.vtcDid, signed, flow.link.id),
       this.sendOpts(flow),
       "auth/oob/respond",
     );

@@ -9,10 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
-import { Validator } from "@cfworker/json-schema";
+import { validateAgainstSchema, describeViolations } from "../dist/trust-tasks/validate.js";
 
 import {
   EXT_UV_CONSENT,
@@ -66,7 +63,7 @@ async function sampleGrant() {
     approverKey: kA.did,
     origin: "https://members.example.org",
     contextDigest: await contextDigest({ x: 1 }),
-    notAfter: Math.floor(Date.now() / 1000) + 3600,
+    sessionEndsAt: new Date(Date.now() + 3_600_000).toISOString(),
   });
 }
 
@@ -163,45 +160,40 @@ test("UV-key enrolment of an unregistered device falls back to device/register/0
   assert.equal(other.sent.length, 1);
 });
 
-const SPECS = process.env.AUTH_OOB_SPECS ?? join(import.meta.dirname, "../../../../../dtgwg-trust-tasks-tf-worktrees/feat-auth-oob/specs");
-const haveSpecs = existsSync(join(SPECS, "auth/oob/claim/0.1/payload.schema.json"));
+// The schemas are the ones this package pins and generates (`src/specs/`), so
+// these run everywhere rather than skipping when a sibling checkout is absent.
+const OOB_VERSIONS = { claim: "0.2", identify: "0.1", prove: "0.3", grant: "0.3", respond: "0.3", cancel: "0.1" };
 
-/** A validator for one payload schema, with its `$ref`s resolved against the
- *  files they name. */
-function validatorFor(task) {
-  const load = (rel) => {
-    const path = join(SPECS, rel);
-    return { ...JSON.parse(readFileSync(path, "utf8")), $id: pathToFileURL(path).href };
-  };
-  const v = new Validator(load(`auth/oob/${task}/0.1/payload.schema.json`), "2020-12", false);
-  v.addSchema(load("auth/oob/_shared/0.1/oob.schema.json"));
-  v.addSchema(load("_framework/0.4/framework.schema.json"));
-  return v;
+async function schemaFor(task) {
+  return (await import(`../dist/specs/auth/oob/${task}/${OOB_VERSIONS[task]}/payload.js`)).PAYLOAD_SCHEMA;
 }
 
-function assertValid(task, payload) {
-  const r = validatorFor(task).validate(payload);
-  assert.equal(r.valid, true, `${task}: ${JSON.stringify(r.errors.slice(0, 3))}`);
+async function assertValid(task, payload) {
+  const r = validateAgainstSchema(await schemaFor(task), payload);
+  assert.equal(r.valid, true, r.valid ? "" : `${task}: ${describeViolations(r.violations)}`);
 }
 
-test("every auth/oob payload the wallet emits validates against feat/auth-oob", { skip: !haveSpecs && "schemas not checked out" }, async () => {
+test("every auth/oob payload the wallet emits validates against the pinned schema", async () => {
   const kA = newApproverKey();
-  assertValid("claim", buildClaim(kA, VTC, REQ).payload);
+  await assertValid("claim", buildClaim(kA, VTC, REQ).payload);
   const identify = buildIdentify(MEMBER, VTC, { requestId: REQ, approverKey: kA.did, enteredNumber: "47" });
-  assertValid("identify", identify.payload);
-  assertValid("prove", buildProve(kA, VTC, { ...identify, proof: {} }, REQ).payload);
+  await assertValid("identify", identify.payload);
+  await assertValid("prove", buildProve(kA, VTC, { ...identify, proof: {} }, REQ).payload);
   const grant = await sampleGrant();
-  assertValid("grant", grant.payload);
-  assertValid("grant", { ...grant.payload, decision: "decline" });
-  assertValid("respond", buildRespond(kA, VTC, { ...grant, proof: {} }, REQ).payload);
-  assertValid("cancel", buildCancel(kA, VTC, REQ).payload);
+  await assertValid("grant", grant.payload);
+  await assertValid("grant", { ...grant.payload, decision: "decline" });
+  await assertValid("respond", buildRespond(kA, VTC, { ...grant, proof: {} }, REQ).payload);
+  await assertValid("cancel", buildCancel(kA, VTC, REQ).payload);
 });
 
-test("the schemas refuse what C9 rules out", { skip: !haveSpecs && "schemas not checked out" }, async () => {
+test("the schemas refuse what grant 0.3 rules out", async () => {
   const grant = await sampleGrant();
-  const bad = (p) => assert.equal(validatorFor("grant").validate(p).valid, false);
-  bad({ ...grant.payload, notAfter: new Date().toISOString() });
+  const schema = await schemaFor("grant");
+  const bad = (p) => assert.equal(validateAgainstSchema(schema, p).valid, false, JSON.stringify(p));
+  // The 0.2 bound: epoch seconds under `notAfter`.
+  const { sessionEndsAt: _, ...rest } = grant.payload;
+  bad({ ...rest, notAfter: Math.floor(Date.now() / 1000) + 3600 });
   bad({ ...grant.payload, contextDigest: "a".repeat(64) });
   const id = buildIdentify(MEMBER, VTC, { requestId: REQ, approverKey: newApproverKey().did, enteredNumber: "47" });
-  assert.equal(validatorFor("identify").validate({ ...id.payload, enteredNumber: 47 }).valid, false);
+  assert.equal(validateAgainstSchema(await schemaFor("identify"), { ...id.payload, enteredNumber: 47 }).valid, false);
 });
