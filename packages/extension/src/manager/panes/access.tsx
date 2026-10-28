@@ -579,6 +579,56 @@ function EditEntry({
   );
 }
 
+/**
+ * What a new grant may do where it reaches: make changes itself (`act`), or
+ * only ratify changes someone else makes (`approve`).
+ */
+export type GrantReach = "act" | "approve";
+
+/**
+ * The entry a grant sends. Every axis is stated, because AclEntry 0.2 has no
+ * default for any of them, and none is derived from the role.
+ *
+ * - **`act`**: the act scope is the selected context, or everywhere. An agent
+ *   that cannot hold `all` on the role refuses it (`invalidActScope`) rather
+ *   than this form quietly sending `none` and granting a role that can act
+ *   nowhere. Keys and capabilities are the role's whole reach; narrowing either
+ *   is a decision taken afterwards, on the row, where it is recorded as one.
+ *   Approve authority is stated as none, not left absent to mean it.
+ * - **`approve`**: the least-privilege approver the spec names — act `none`,
+ *   and the approve scope where the act scope would have been. It holds no
+ *   capabilities and no keys, and may approve the role's whole approve ceiling
+ *   (`approveCapabilities` absent would mean none, so it is stated).
+ */
+export function grantEntry(p: {
+  subject: string;
+  role: string;
+  contextId: ContextSelection;
+  reach: GrantReach;
+}): AclEntry {
+  const where: AclEntry["act"] = p.contextId
+    ? { scope: "contexts", contexts: [p.contextId] }
+    : { scope: "all" };
+  return p.reach === "approve"
+    ? {
+        subject: p.subject,
+        role: p.role,
+        act: { scope: "none" },
+        approve: where,
+        approveCapabilities: { scope: "ceiling" },
+        keys: { scope: "none" },
+        capabilities: { scope: "none" },
+      }
+    : {
+        subject: p.subject,
+        role: p.role,
+        act: where,
+        approve: { scope: "none" },
+        keys: { scope: "all" },
+        capabilities: { scope: "ceiling" },
+      };
+}
+
 function GrantAccess({
   parties,
   contextId,
@@ -594,6 +644,7 @@ function GrantAccess({
   const [role, setRole] = useState("");
   const [label, setLabel] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
+  const [reach, setReach] = useState<GrantReach>("act");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<ConsentRequiredError | null>(null);
@@ -606,21 +657,8 @@ function GrantAccess({
     setBusy(true);
     setError(null);
     setPending(null);
-    // Every axis stated, because AclEntry 0.2 has no default for any of them.
-    // The act scope is what the panel above says it is — the selected context,
-    // or everywhere — and is never derived from the role: an agent that cannot
-    // hold `all` on this role refuses it (`invalidActScope`) rather than this
-    // form quietly sending `none` and granting a role that can act nowhere.
-    // Keys and capabilities are the role's whole reach; narrowing either is a
-    // decision taken afterwards, on the row, where it is recorded as one.
-    // Approve authority is stated as none, not left absent to mean it.
     const entry: AclEntry = {
-      subject: subject.trim(),
-      role: role.trim(),
-      act: contextId ? { scope: "contexts", contexts: [contextId] } : { scope: "all" },
-      approve: { scope: "none" },
-      keys: { scope: "all" },
-      capabilities: { scope: "ceiling" },
+      ...grantEntry({ subject: subject.trim(), role: role.trim(), contextId, reach }),
       ...(label.trim() ? { label: label.trim() } : {}),
       // A date input gives a local day; the wire wants an instant.
       ...(expiresAt ? { expiresAt: new Date(`${expiresAt}T23:59:59`).toISOString() } : {}),
@@ -637,9 +675,10 @@ function GrantAccess({
       setRole("");
       setLabel("");
       setExpiresAt("");
+      setReach("act");
       onGranted();
     }
-  }, [parties, subject, role, label, expiresAt, contextId, onGranted]);
+  }, [parties, subject, role, label, expiresAt, contextId, reach, onGranted]);
 
   return (
     <Panel
@@ -648,7 +687,8 @@ function GrantAccess({
         contextId ? (
           <>
             Scoped to <code style={{ fontFamily: font.mono }}>{contextId}</code>. The subject will
-            be able to act at this agent within that context, as the role allows.
+            be able to {reach === "approve" ? "approve changes" : "act"} at this agent within that
+            context, as the role allows.
           </>
         ) : (
           <>
@@ -687,6 +727,27 @@ function GrantAccess({
             />
           </label>
         </div>
+
+        <fieldset style={{ border: 0, padding: 0, margin: 0, display: "grid", gap: 4 }}>
+          <legend style={{ fontSize: t.xs, color: c.muted, padding: 0, marginBottom: 4 }}>
+            WHAT IT MAY DO {contextId ? "THERE" : "EVERYWHERE"}
+          </legend>
+          <label style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+            <input type="radio" checked={reach === "act"} onChange={() => setReach("act")} />
+            <span>Act — make changes itself, as the role allows</span>
+          </label>
+          <label style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+            <input
+              type="radio"
+              checked={reach === "approve"}
+              onChange={() => setReach("approve")}
+            />
+            <span>
+              Approve only — ratify changes someone else makes, and act nowhere. It holds no
+              capabilities and no keys.
+            </span>
+          </label>
+        </fieldset>
 
         {!expiresAt && (
           <Note tone="warn">

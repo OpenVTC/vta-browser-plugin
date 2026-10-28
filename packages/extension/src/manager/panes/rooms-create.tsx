@@ -31,6 +31,14 @@
 // domain that verifies as nothing but an opaque-signing payload — not as a proof
 // on a room's credential.
 //
+// ## Both are `did:webvh`, said rather than left to the agent
+//
+// At `dids/create` 1.2 an agent configured for `did:scid` answers a mint that
+// names no method with a `did:scid:vh:…`. A room is addressed as
+// `did:webvh:<scid>:…` (VTI `data-rooms.md` §3.2) and a host is reached from
+// its DID document's services, so both mints send `didMethod: "webvh"`: what a
+// room is called should not depend on how the agent happens to be configured.
+//
 // ## A new host is a step you finish
 //
 // Minting a host's DID is not having a host. room-host has to be started,
@@ -529,6 +537,7 @@ export function CreateRoom({
           contextId,
           serverId: hostServer,
           setPrimary: true,
+          didMethod: "webvh",
           ...pathMode(hostPath),
           ...(hostTsp ? { addTspService: true } : {}),
           template: "room-host",
@@ -585,6 +594,7 @@ export function CreateRoom({
             serverId,
             // Beside the host's DID, never in place of it. See the header.
             setPrimary: false,
+            didMethod: "webvh",
             ...pathMode(roomPath),
             ...(roomTsp ? { addTspService: true } : {}),
             template: "room",

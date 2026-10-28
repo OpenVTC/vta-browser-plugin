@@ -5,10 +5,9 @@
 // not belong in a wallet at all, so it lives here with the rest of the
 // administration surface.
 //
-// Unlike the `acl/*` family these bodies are **not** camelCase — `vta_sdk`'s
-// `context_management::delete` declares no `rename_all`, so the wire is
-// snake_case. Both fields happen to be single words, which is exactly the kind
-// of coincidence that hides a casing bug until someone adds `dry_run`.
+// The bodies are the registry's camelCase, as generated into `../specs/`, and
+// only that spelling is read: a snake_case fallback here was a compatibility
+// fold for an agent that no longer exists.
 
 import type { TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
@@ -18,7 +17,11 @@ import {
   RESPONSE_TYPE_URI as TASK_CONTEXTS_DELETE_RESPONSE,
   type VTAContextsDeleteResponsePayload,
 } from "../specs/vta/contexts/delete/1.1/payload.js";
-import { TYPE_URI as TASK_CONTEXTS_PREVIEW_DELETE } from "../specs/vta/contexts/preview-delete/1.0/payload.js";
+import {
+  TYPE_URI as TASK_CONTEXTS_PREVIEW_DELETE,
+  RESPONSE_TYPE_URI as TASK_CONTEXTS_PREVIEW_DELETE_RESPONSE,
+  type VTAContextsPreviewDeleteResponsePayload,
+} from "../specs/vta/contexts/preview-delete/1.0/payload.js";
 
 export interface ContextDeleteParams {
   holder: TaskParty;
@@ -90,33 +93,18 @@ export async function contextPreviewDelete(
     { id: params.id },
     { issuer: params.holder.did, recipient: params.service.did },
   );
-  const payload = await sender.send<{
-    id: string;
-    keys?: string[];
-    webvhDids?: string[];
-    subContexts?: string[];
-    aclEntriesRemoved?: string[];
-    aclEntriesUpdated?: string[];
-    didTemplates?: string[];
-    /** Pre-fold spellings, still sent by an agent that has not taken the
-     *  camelCase change. Accepted on read; never emitted. */
-    webvh_dids?: string[];
-    sub_contexts?: string[];
-    acl_entries_removed?: string[];
-    acl_entries_updated?: string[];
-    did_templates?: string[];
-  }>(envelope, {
-    expectedResponseType: `${TASK_CONTEXTS_PREVIEW_DELETE}#response`,
+  const payload = await sender.send<VTAContextsPreviewDeleteResponsePayload>(envelope, {
+    expectedResponseType: TASK_CONTEXTS_PREVIEW_DELETE_RESPONSE,
     operationLabel: "vta/contexts/preview-delete/1.0",
   });
   return {
     id: payload.id,
-    subContexts: payload.subContexts ?? payload.sub_contexts ?? [],
+    subContexts: payload.subContexts ?? [],
     keys: payload.keys ?? [],
-    webvhDids: payload.webvhDids ?? payload.webvh_dids ?? [],
-    aclEntriesRemoved: payload.aclEntriesRemoved ?? payload.acl_entries_removed ?? [],
-    aclEntriesUpdated: payload.aclEntriesUpdated ?? payload.acl_entries_updated ?? [],
-    didTemplates: payload.didTemplates ?? payload.did_templates ?? [],
+    webvhDids: payload.webvhDids ?? [],
+    aclEntriesRemoved: payload.aclEntriesRemoved ?? [],
+    aclEntriesUpdated: payload.aclEntriesUpdated ?? [],
+    didTemplates: payload.didTemplates ?? [],
   };
 }
 

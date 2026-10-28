@@ -1,10 +1,8 @@
-// Context deletion — the snake_case corner of the admin surface.
+// Context deletion — the destructive corner of the admin surface.
 //
-// `vta_sdk::protocols::context_management::delete` declares no `rename_all`, so
-// unlike `acl/*` these bodies are snake_case. Both request fields are single
-// words, which hides the difference; the response is not (`webvh_dids`), and
-// that is where a casing assumption shows up as an empty list rather than an
-// error. Hence a test for the one field that can silently disagree.
+// The preview's lists are what an operator reads before destroying a subtree,
+// so a spelling the client does not read shows up as an empty list rather than
+// an error. Hence tests that pin the one spelling the specification declares.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -64,17 +62,21 @@ test("a delete the agent refused reports deleted:false rather than throwing", as
   assert.equal(result.deleted, false);
 });
 
-test("preview translates every snake_case list across the casing boundary", async () => {
+test("preview reads every list under the spelling the spec declares", async () => {
   const channel = recorder({
     id: "demo",
     keys: ["key-1"],
-    webvh_dids: ["did:webvh:QmX:h"],
-    sub_contexts: ["demo/sub"],
-    acl_entries_removed: ["did:key:zGone"],
-    acl_entries_updated: ["did:key:zNarrowed"],
-    did_templates: ["persona"],
+    webvhDids: ["did:webvh:QmX:h"],
+    subContexts: ["demo/sub"],
+    aclEntriesRemoved: ["did:key:zGone"],
+    aclEntriesUpdated: ["did:key:zNarrowed"],
+    didTemplates: ["persona"],
   });
   const result = await contextPreviewDelete(channel, { holder: HOLDER, service: SERVICE, id: "demo" });
+  assert.equal(
+    channel.sent[0].opts.expectedResponseType,
+    "https://trusttasks.org/spec/vta/contexts/preview-delete/1.0#response",
+  );
   assert.deepEqual(result, {
     id: "demo",
     subContexts: ["demo/sub"],
@@ -86,23 +88,10 @@ test("preview translates every snake_case list across the casing boundary", asyn
   });
 });
 
-test("preview reads the camelCase spellings the spec actually declares", async () => {
-  // The snake_case arms above are the compatibility path, for an agent that
-  // has not taken the camelCase change. These are what a conforming agent
-  // sends, and reading them was what the client was missing: three of the six
-  // lists were dropped on the floor, so no consumer could show them.
-  const channel = recorder({
-    id: "demo",
-    keys: [],
-    webvhDids: [],
-    aclEntriesRemoved: ["did:key:zGone"],
-    aclEntriesUpdated: ["did:key:zNarrowed"],
-    didTemplates: ["persona"],
-  });
+test("a snake_case list is not read: the spec declares none", async () => {
+  const channel = recorder({ id: "demo", keys: [], webvhDids: [], webvh_dids: ["did:webvh:QmX:h"] });
   const result = await contextPreviewDelete(channel, { holder: HOLDER, service: SERVICE, id: "demo" });
-  assert.deepEqual(result.aclEntriesRemoved, ["did:key:zGone"]);
-  assert.deepEqual(result.aclEntriesUpdated, ["did:key:zNarrowed"]);
-  assert.deepEqual(result.didTemplates, ["persona"]);
+  assert.deepEqual(result.webvhDids, []);
 });
 
 test("preview defaults every list when the context holds nothing", async () => {
