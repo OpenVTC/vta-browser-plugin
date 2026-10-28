@@ -33,7 +33,7 @@ const CONTEXT_TYPE = "https://openvtc.org/persona/authorization-context/0.1";
 async function approveRequest({ as = AGENT, previewId = PREVIEW, ctx = {} } = {}) {
   const document = {
     id: "step-up-req-1",
-    type: "https://trusttasks.org/spec/auth/step-up/approve-request/0.2",
+    type: "https://trusttasks.org/spec/auth/step-up/approve-request/0.5",
     issuer: as.did,
     recipient: "did:key:zHolder",
     issuedAt: new Date().toISOString(),
@@ -42,6 +42,7 @@ async function approveRequest({ as = AGENT, previewId = PREVIEW, ctx = {} } = {}
       sessionId: "sess-42",
       challenge: "a".repeat(32),
       reason: "Approve disclosing 1 attribute to did:key:zVerifier",
+      accepts: ["didSigned"],
       ext: {
         [AUTHZ_EXT]: {
           type: CONTEXT_TYPE,

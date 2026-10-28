@@ -28,14 +28,14 @@
 //
 // ## The types are generated
 //
-// The attest/0.1 payload and the approve-request/0.4 request come from
+// The attest/0.1 payload and the approve-request/0.5 request come from
 // `@openvtc/trust-tasks`, never restated here. The checks below still read the
 // request as untrusted input (a page hands it over), so they test each member
 // rather than trust the type.
 
 import type { Payload as ApproverAttestPayload } from "../specs/auth/step-up/approver/attest/0.1/payload.js";
 import { TYPE_URI as ATTEST_0_1 } from "../specs/auth/step-up/approver/attest/0.1/payload.js";
-import type { Payload as StepUpApproverRequest } from "../specs/auth/step-up/approve-request/0.4/payload.js";
+import type { Payload as StepUpApproverRequest } from "../specs/auth/step-up/approve-request/0.5/payload.js";
 import { TYPE_URI as APPROVE_RESPONSE_0_6 } from "../specs/auth/step-up/approve-response/0.6/payload.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { taskConsentWireDigest, vtcStepUpBoundTo } from "./domain-digest.js";
@@ -51,7 +51,7 @@ export const APPROVE_RESPONSE_0_6_TYPE = APPROVE_RESPONSE_0_6;
 /** attest/0.1's payload, from the generated bindings. */
 export type { ApproverAttestPayload };
 
-/** The inline `auth/step-up/approve-request/0.4` payload a VTC refuses a gated
+/** The inline `auth/step-up/approve-request/0.5` payload a VTC refuses a gated
  *  operation with, from the generated bindings. */
 export type { StepUpApproverRequest };
 
@@ -118,7 +118,7 @@ export function checkAttestPayload(p: ApproverAttestPayload): ApproverAttestPayl
  * and again immediately before signing. Returns the attest payload it would
  * sign; throws {@link ApproverRefusalError} otherwise.
  *
- * - the request is a well-formed approve-request 0.4 bound to one operation
+ * - the request is a well-formed approve-request 0.5 bound to one operation
  *   (`boundTo` present) that `accepts` `approverSigned`;
  * - `approverDid` — the wallet's approver for `audience`, never one the caller
  *   names — is among the request's `approvers`;

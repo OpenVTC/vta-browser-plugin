@@ -40,7 +40,6 @@
 
 import { VtaClientError } from "../vta/errors.js";
 import {
-  AGENT_APPROVE_REQUEST_TYPES,
   buildStepUpApproval,
   verifyStepUpApproveRequest,
   type StepUpApproveRequest,
@@ -246,10 +245,7 @@ export async function verifyDisclosureStepUp(
   refusal: DisclosureStepUpRequired,
   opts: VerifyDisclosureStepUpOptions,
 ): Promise<VerifyDisclosureStepUpResult> {
-  const verified = await verifyStepUpApproveRequest(refusal.unverifiedApproveRequest, {
-    ...opts,
-    acceptTypes: AGENT_APPROVE_REQUEST_TYPES,
-  });
+  const verified = await verifyStepUpApproveRequest(refusal.unverifiedApproveRequest, opts);
   if (!verified.ok) return verified;
 
   const payload = (refusal.unverifiedApproveRequest.payload ?? {}) as {

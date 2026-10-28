@@ -205,7 +205,7 @@ export interface ApproverIdentityResult {
 
 /** Parameters for `window.vtaWallet.approveStepUp(...)`. */
 export interface ApproveStepUpParams {
-  /** The inline `auth/step-up/approve-request/0.4` payload, as received. */
+  /** The inline `auth/step-up/approve-request/0.5` payload, as received. */
   request: Record<string, unknown>;
   /** The refused document's type and payload. The wallet recomputes
    *  `request.boundTo` from it and refuses on a mismatch. */

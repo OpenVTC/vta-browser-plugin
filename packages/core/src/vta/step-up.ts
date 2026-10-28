@@ -22,31 +22,17 @@ import type { SigningIdentity } from "../siop/self-issued.js";
 import type { TrustTask } from "./protocol.js";
 
 import { TYPE_URI as MSG_APPROVE_RESPONSE } from "../specs/auth/step-up/approve-response/0.6/payload.js";
-import { RESPONSE_PAYLOAD_SCHEMA as STEP_UP_START_RESPONSE_SCHEMA } from "../specs/auth/step-up/start/0.2/payload.js";
+import { TYPE_URI as APPROVE_REQUEST } from "../specs/auth/step-up/approve-request/0.5/payload.js";
 
 /**
- * The approve-request version the agent mints — in a disclosure step-up
- * refusal and in the one it pushes alike (vta-service `step_up.rs`,
- * `STEP_UP_APPROVE_REQUEST_TYPE`).
- *
- * **A literal, and the one approve-request URI here that is not read from a
- * pinned specification.** Three counterparties speak three versions of this
- * slug today — the agent mints 0.2, a VTC's inline refusal carries 0.4
- * (`trust-tasks/approver-attest.ts`, the version pinned), the did-hosting
- * control plane mints 0.5 — so no single pin can name all three. It goes once
- * the agent mints the version the others do; until then it is one version,
- * matched with `===`, not an accept-list.
+ * The approve-request version every party this wallet answers mints — the
+ * agent (in a disclosure step-up refusal and in the one it pushes alike,
+ * vta-service `step_up.rs`), the did-hosting control plane (embedded in its
+ * `auth/step-up/start/0.2` reply) and a VTC's inline refusal
+ * (`trust-tasks/approver-attest.ts`). One pinned version, matched with `===`:
+ * a request of any other version is refused, whoever signed it.
  */
-export const AGENT_APPROVE_REQUEST_TYPES = [
-  "https://trusttasks.org/spec/auth/step-up/approve-request/0.2",
-] as const;
-
-/** The approve-request version the did-hosting control plane answers
- *  `auth/step-up/start/0.2` with: the one that specification embeds, read out
- *  of its schema so the two cannot drift. */
-export const RP_APPROVE_REQUEST_TYPES = [
-  STEP_UP_START_RESPONSE_SCHEMA.$defs.Response.properties.approveRequest.properties.type.const,
-] as const;
+export const STEP_UP_APPROVE_REQUEST_TYPE = APPROVE_REQUEST;
 
 /** The approve-request payload, verified out of the signed Trust-Task
  *  document by {@link verifyStepUpApproveRequest}. */
@@ -77,13 +63,6 @@ export interface VerifyStepUpApproveRequestOptions {
    *  operator-enrolled executor DIDs, e.g. the webvh control plane). The
    *  approve-request's proven signer must be in this set. */
   enrolledExecutorDids: readonly string[];
-  /**
-   * The approve-request versions this caller's relying party mints —
-   * {@link RP_APPROVE_REQUEST_TYPES} or {@link AGENT_APPROVE_REQUEST_TYPES}.
-   * Required: which versions are acceptable is a property of the party that
-   * asked, and a document of another party's version is refused.
-   */
-  acceptTypes: readonly string[];
   /** Defaults to now. Injected for tests. */
   now?: Date;
 }
@@ -95,12 +74,13 @@ export interface VerifyStepUpApproveRequestOptions {
  * Spec rule: the `reason` is the basis of the user's consent decision, so
  * "consumers MUST verify the proof BEFORE surfacing the reason". Accordingly:
  *
- *  - the document is REQUIRED, and must be one of `acceptTypes`;
+ *  - the document is REQUIRED, and must be {@link STEP_UP_APPROVE_REQUEST_TYPE};
  *  - its Data-Integrity proof must verify (`eddsa-jcs-2022`,
  *    `proofPurpose: authentication` — a request is its issuer's operational
  *    message; `assertionMethod` is for the approver's attestation, the
  *    approve-response), the in-band `issuer` must equal the proven signer, and
  *    that signer must be an executor this wallet is enrolled with;
+ *  - its `accepts` must list `didSigned`, the only evidence this wallet gives;
  *  - it must not have lapsed (`expiresAt` on the document or in the payload);
  *  - the returned request is built ONLY from the verified document.
  */
@@ -114,8 +94,8 @@ export async function verifyStepUpApproveRequest(
     return refuse("no signed approve-request document");
   }
   const type = doc.type;
-  if (typeof type !== "string" || !opts.acceptTypes.includes(type)) {
-    return refuse(`document type ${String(type)} is not a step-up approve-request this party mints`);
+  if (type !== STEP_UP_APPROVE_REQUEST_TYPE) {
+    return refuse(`document type ${String(type)} is not ${STEP_UP_APPROVE_REQUEST_TYPE}`);
   }
 
   const verification = await verifyTrustTaskProof(doc, {
@@ -139,6 +119,7 @@ export async function verifyStepUpApproveRequest(
     challenge?: unknown;
     reason?: unknown;
     expiresAt?: unknown;
+    accepts?: unknown;
   };
   if (
     typeof payload.subject !== "string" ||
@@ -146,6 +127,13 @@ export async function verifyStepUpApproveRequest(
     typeof payload.challenge !== "string"
   ) {
     return refuse("verified document is missing subject/sessionId/challenge");
+  }
+  // This wallet answers with `didSigned` evidence and nothing else. A request
+  // that does not list it (the agent drops it once the subject holds a
+  // passkey) would be refused `noGate` after the human approved — so say so
+  // before they are asked.
+  if (!Array.isArray(payload.accepts) || !payload.accepts.includes("didSigned")) {
+    return refuse("the request does not accept a DID-signed approval, which is the one this wallet gives");
   }
 
   const now = opts.now ?? new Date();

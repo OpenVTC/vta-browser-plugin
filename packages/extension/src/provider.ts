@@ -172,7 +172,7 @@ interface VtaWallet {
    *  party, so communities cannot correlate the user by it. Signs nothing.
    *  `audience` must be the relying party this origin signed in to. */
   approverIdentity(params: ApproverIdentityParams): Promise<ApproverIdentityResult>;
-  /** Answer an operation-bound step-up (`auth/step-up/approve-request/0.4`)
+  /** Answer an operation-bound step-up (`auth/step-up/approve-request/0.5`)
    *  with the approver for `audience`. The wallet refuses unless its approver
    *  is among `request.approvers` and `request.boundTo` is the digest of
    *  `operation`; it shows the reason, the operation and the community, takes
