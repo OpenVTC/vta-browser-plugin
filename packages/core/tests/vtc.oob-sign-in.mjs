@@ -63,7 +63,7 @@ const step1 = (over = {}) => ({
   service: { did: VTC, name: "Example Community" },
   origin: PORTAL,
   purpose: "login",
-  decisionDeadline: Math.floor(Date.now() / 1000) + 120,
+  decisionClosesAt: new Date(Date.now() + 120_000).toISOString(),
   ...over,
 });
 
@@ -275,10 +275,14 @@ test("the published endpoint is a base: the POST URL is <base>/trust-tasks, a tr
   assert.equal(selectSignInServices(svc("https://h.example")).services.trustTaskEndpoint, "https://h.example/trust-tasks");
 });
 
-test("C9: a deadline is integer epoch seconds only", () => {
+test("claim 0.2: the deadline is decisionClosesAt, an RFC 3339 date-time", () => {
   const want = { requestId: REQ, vtcDid: VTC, portalOrigin: PORTAL, now: Date.now() };
   checkStep1(step1(), want);
-  assert.throws(() => checkStep1(step1({ decisionDeadline: new Date(Date.now() + 60_000).toISOString() }), want));
+  // The 0.1 spelling and shape — epoch seconds under `decisionDeadline` — is not one.
+  const { decisionClosesAt: _, ...rest } = step1();
+  assert.throws(() => checkStep1({ ...rest, decisionDeadline: Math.floor(Date.now() / 1000) + 60 }, want));
+  assert.throws(() => checkStep1(step1({ decisionClosesAt: Math.floor(Date.now() / 1000) + 60 }), want));
+  assert.throws(() => checkStep1(step1({ decisionClosesAt: "2026-10-10 10:02:40" }), want), "no offset, no T");
 });
 
 test("step 1 checks", () => {
@@ -288,9 +292,8 @@ test("step 1 checks", () => {
     { service: { did: "did:web:evil.example", name: "x" } },
     { purpose: "step-up" },
     { origin: "https://evil.example" },
-    { decisionDeadline: Math.floor(Date.now() / 1000) - 1 },
-    { decisionDeadline: new Date(Date.now() - 1000).toISOString() },
-    { decisionDeadline: "soon" },
+    { decisionClosesAt: new Date(Date.now() - 1000).toISOString() },
+    { decisionClosesAt: "soon" },
   ]) {
     assert.throws(() => checkStep1(step1(over), want), (e) => e.code === OOB_REPLY_INVALID, JSON.stringify(over));
   }
@@ -365,7 +368,7 @@ test("digests: contextDigest covers the proof; the grant digest excludes one; th
     approverKey: "did:key:z6Mk",
     origin: PORTAL,
     contextDigest: await contextDigest(signedA),
-    notAfter: Math.floor(Date.now() / 1000) + 3600,
+    sessionEndsAt: new Date(Date.now() + 3_600_000).toISOString(),
   });
   const d = await grantDigest(grant);
   assert.equal(d, await grantDigest({ ...grant, proof: { x: 1 } }));

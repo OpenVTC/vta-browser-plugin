@@ -112,7 +112,7 @@ export type ClaimType = string;
 /**
  * Discriminator: is this consumer a user-driven Companion or a headless Service?
  */
-export type ConsumerKind = Companion | Service;
+export type ConsumerKind = Companion_DeviceV0_2 | Service_DeviceV0_2;
 /**
  * Opaque identifier of one of the maintainer's contexts, compared by the maintainer's own ancestry predicate. Its grammar is the maintainer's.
  */
@@ -367,6 +367,10 @@ export type ListOrder = number;
  */
 export type Listing = "listed" | "findable" | "hidden";
 /**
+ * The two-digit number the service chooses at claim, shows only to the starter (through redeem), and the approver types from the starter's screen. A string so that a leading zero survives.
+ */
+export type MatchNumber = string;
+/**
  * What a member of a community-owned room may do there. `admin` is not among them: minting epochs, admitting and removing members are the community's, as the room's owner, and are exercised through the vtc/rooms/community/* tasks rather than by any member's credential. `curate` is not implied by `write`.
  */
 export type MemberAction = "read" | "write" | "curate";
@@ -385,6 +389,14 @@ export type MemberState = "offered" | "admitted" | "removed";
  * Scopes one application's records within a context, so several tools can share a context without colliding — `openvtc`, `cnm`, an agent runtime. The maintainer MUST NOT interpret the value; it is an opaque partition name. Namespaces are first-come and unreserved, so an application SHOULD pick a stable, specific one: a future per-namespace ACL would grant on this exact string, which makes renaming a namespace a migration rather than an edit.
  */
 export type Namespace = string;
+/**
+ * A starter key (`K_b`) or an approver lock key (`K_a`), as an Ed25519 `did:key` (`z6Mk…`) generated for this one request and used nowhere else. Ed25519 only: a service refuses any other key type with `auth/oob:keyUnsupported` before parsing beyond the multicodec prefix.
+ */
+export type OobKey = string;
+/**
+ * A web origin (`https://host[:port]`, no path, no trailing slash) — for `login`, the origin of the portal where the starter runs, which is the origin of the `serviceEndpoint` of the service's `SignInPortal` service in its DID document.
+ */
+export type Origin = string;
 /**
  * What the room is to the member, in a sentence or a short paragraph. Line breaks and tabs are allowed; other control characters are not.
  */
@@ -664,6 +676,10 @@ export type Provenance =
       derivedAt: string;
     };
 /**
+ * What the request is for. A CLOSED list: each purpose has a fixed row in CONVENTIONS.md §3 stating what is revealed at each step, what the grant contains, what redeem returns and the window lengths. Version 0.1 defines `login` only. `stepUp` and `deviceEnrol` are reserved names; adding one is a new version of this component and of every task that references it, never an in-place edit.
+ */
+export type Purpose = "login";
+/**
  * A device's platform push channel — the body the device registers with its push GATEWAY (push wake-up binding, https://trusttasks.org/binding/push/0.1; modeled on Aries RFC 0699/0734). The gateway holds this token and returns an opaque WakeHandle in exchange; the token is held by the gateway ONLY, never by the mediator or the maintainer/VTA. The gateway uses it to send a contentless wake-up when an authorized trigger asks — the push payload never carries Trust Task content. Tagged union over the discriminator `platform`.
  */
 export type PushRegistration = Apns | Fcm | WebPush;
@@ -757,6 +773,10 @@ export type RecordValidUntil = string;
  */
 export type ReleaseRequirement = "consent" | "stepUp";
 /**
+ * The service-generated handle of one request: 16 to 32 bytes from a cryptographically secure random source, written as unpadded base64url (22 to 43 characters; 16 bytes, 22 characters, is RECOMMENDED). It is also the nonce of the exchange, so the family needs no separate challenge, and it is the `_id` of the trigger link (VTI-LNK-033). Compared as a string. It confers no authority on its holder.
+ */
+export type RequestId = string;
+/**
  * Opaque qualifier naming the part of the maintainer's resources a capability applies to (e.g. `git-ns:github.com/acme`, `git-repo:github.com/acme/r#4211`, `policy:join`). Its grammar and containment rule are the maintainer's: a qualified capability covers the named resource and the resources inside it. A qualifier MUST NOT be read as widening the entry's act scope.
  */
 export type ResourceQualifier = string;
@@ -776,6 +796,10 @@ export type RoomLabel = string;
  * How a consent prompt reaches the approver: `wake` pushes to the approver's device for a DID-signed decision; `bridge-relay` renders it through an enrolled bridge (e.g. a numbered card in the operator's messaging app) for a bridge-attested decision.
  */
 export type Route = "wake" | "bridge-relay";
+/**
+ * Whether the starter's request and the approver's prove came from the same egress network, as the service saw them: `true`, `false`, or the string `unknown` when the service cannot tell. The service compares addresses; it never discloses them.
+ */
+export type SameNetwork = boolean | "unknown";
 /**
  * What the agent may do: `receive` = read inbound on this conversation; `converse` = read and reply.
  */
@@ -825,6 +849,21 @@ export type ServiceKind = "didcomm" | "rest" | "tsp" | "webauthn";
  */
 export type SignAlgorithm = "EdDSA" | "ES256" | "ML-DSA-44" | "ML-DSA-65";
 /**
+ * The task families a `login` grant lets the starter key sign documents for, as the approving DID, for the session the grant arms (auth/oob/grant/0.2). Offered by the service in step 2, copied unchanged into the grant, and bounded further by the exclusions auth/oob/grant/0.2 states. Absent means the starter key signs nothing beyond the family's own tasks.
+ *
+ * @minItems 1
+ * @maxItems 8
+ */
+export type SigningScope =
+  | [TaskFamily]
+  | [TaskFamily, TaskFamily]
+  | [TaskFamily, TaskFamily, TaskFamily]
+  | [TaskFamily, TaskFamily, TaskFamily, TaskFamily]
+  | [TaskFamily, TaskFamily, TaskFamily, TaskFamily, TaskFamily]
+  | [TaskFamily, TaskFamily, TaskFamily, TaskFamily, TaskFamily, TaskFamily]
+  | [TaskFamily, TaskFamily, TaskFamily, TaskFamily, TaskFamily, TaskFamily, TaskFamily]
+  | [TaskFamily, TaskFamily, TaskFamily, TaskFamily, TaskFamily, TaskFamily, TaskFamily, TaskFamily];
+/**
  * A single binding target for a vault entry. Tagged union over the discriminator `kind`. A VaultEntry's `targets` array MAY mix any number of these.
  */
 export type SiteTarget = WebOrigin | Did | IosApp | AndroidApp;
@@ -840,6 +879,10 @@ export type SiteTarget = WebOrigin | Did | IosApp | AndroidApp;
  * Other values are the holder's or the producer's own and carry no meaning a maintainer interprets.
  */
 export type Slot = string;
+/**
+ * A family of Trust Tasks, named by a slug prefix of whole segments (SPEC §6.1 grammar): `vtc/directory` names every task whose slug is `vtc/directory` or begins `vtc/directory/`, at any version. A prefix matches on segment boundaries only, so `vtc/dir` names nothing under `vtc/directory`.
+ */
+export type TaskFamily = string;
 /**
  * How the traffic reached or left the mediator. `peerMediator` is mediator-to-mediator forwarding.
  */
@@ -1663,11 +1706,11 @@ export interface ConsumerContext {
    */
   networkClass?: "unknown" | "home" | "corp" | "public" | "vpn";
 }
-export interface Companion {
+export interface Companion_DeviceV0_2 {
   kind: "companion";
   formFactor: "browser" | "mobile" | "desktop";
 }
-export interface Service {
+export interface Service_DeviceV0_2 {
   kind: "service";
   serviceKind: "mediator" | "aiAgent" | "daemon";
 }
@@ -3554,6 +3597,28 @@ export interface RequestedCredential {
   claims: string[];
 }
 /**
+ * What the service reports about where the request came from. Revealed only in the step 2 response, to the lock holder, after a membership and number proof. Reported by the service, signed by it, and a heuristic: a relaying attacker controls what is observed.
+ */
+export interface Requester {
+  /**
+   * City and country of the starter's connection, from a local lookup with no third-party call, or the literal `unknown`. Never an IP address.
+   */
+  location: string;
+  /**
+   * Browser family of the starter (e.g. `Chrome`), never the full User-Agent; `unknown` when it cannot be told.
+   */
+  browser: string;
+  /**
+   * Operating system family of the starter (e.g. `macOS`); `unknown` when it cannot be told.
+   */
+  os: string;
+  /**
+   * When the service accepted the starter's auth/oob/request.
+   */
+  createdAt: string;
+  sameNetwork: SameNetwork;
+}
+/**
  * One line of a profile AFTER resolution: what the profile would present at this entry, rather than how the entry is written.
  *
  * Distinct from `Attribute` because a profile is a PROJECTION and may contain values that have no pool record behind them. An `inline` entry is a value the holder keeps in one profile and nowhere else — it has no `attributeId`, no `version` and no `updatedAt`, because there is no pool attribute to have them. Describing a resolved profile with the pool record's shape therefore cannot represent one at all, which leaves a maintainer choosing between synthesising an `attributeId` — a false claim about where a value lives — and omitting the entry, which returns a profile that appears to present less than it does. Neither is acceptable, so the projection gets its own shape.
@@ -3791,6 +3856,19 @@ export interface SealedRecord {
    * A reader opens and verifies the body at this version, and MUST refuse a record whose `sealed.version` is greater than its own `version` — a body cannot have been sealed for a version the room had not reached. A host that pairs a newer version with an older body of the same key is rolling the record back; that is a change to the committed record like any other, visible to the comparisons `CommittedRecord` exists for.
    */
   version?: number;
+}
+/**
+ * Who the service says it is.
+ */
+export interface Service {
+  /**
+   * The service's DID: the `recipient` of every request in the family, and the `_from` of the trigger link.
+   */
+  did: string;
+  /**
+   * The name the service calls itself. Supplied by the service: an approver shows the name from its OWN records and flags a difference from this one (VTI-LNK-104); it never shows this value as the community's name on its own authority.
+   */
+  name: string;
 }
 /**
  * The outcome of a change to an advertised service. Every member describes the **log entry the change produced**, because that is what the change actually is: the agent's DID document is the record, and a consumer that treats the response as a mere acknowledgement will miss that a redeploy may be required.
