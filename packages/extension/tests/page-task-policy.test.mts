@@ -176,7 +176,6 @@ test("a page cannot have the wallet sign a step-up approval", () => {
   for (const t of [
     "https://trusttasks.org/spec/auth/step-up/approve-response/0.6",
     "https://trusttasks.org/spec/auth/step-up/approve-request/0.5",
-    "https://trusttasks.org/spec/auth/step-up/approve-request/0.2",
   ]) {
     const why = pageSignRefusal({ type: t, recipient: RP }, AGENT);
     assert.notEqual(why, null, t);

@@ -11,8 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  AGENT_APPROVE_REQUEST_TYPES,
-  RP_APPROVE_REQUEST_TYPES,
+  STEP_UP_APPROVE_REQUEST_TYPE,
   buildStepUpApproval,
   performStepUpVta,
   stepUpVtaFinish,
@@ -191,7 +190,7 @@ test("buildStepUpApproval: a denial carries a signed deniedReason; tampering bre
 
 // ── verifyStepUpApproveRequest ──────────────────────────────────────────────
 
-const rpOpts = { enrolledExecutorDids: [RP.did], acceptTypes: RP_APPROVE_REQUEST_TYPES };
+const rpOpts = { enrolledExecutorDids: [RP.did] };
 
 test("verifyStepUpApproveRequest: the RP's signed 0.5 verifies, fields come from inside the signature", async () => {
   const holder = generateSigningIdentity();
@@ -217,7 +216,7 @@ test("verifyStepUpApproveRequest: refusals", async () => {
     [
       "another party's version",
       await approveRequest(holder, { type: APPROVE_REQUEST_02 }),
-      /not a step-up approve-request this party mints/,
+      /is not https:\/\/trusttasks\.org\/spec\/auth\/step-up\/approve-request\/0\.5/,
     ],
     [
       "a lapsed request",
@@ -234,14 +233,26 @@ test("verifyStepUpApproveRequest: refusals", async () => {
   }
 });
 
-test("verifyStepUpApproveRequest: the agent's 0.2 passes only for a caller that accepts the agent's versions", async () => {
+test("verifyStepUpApproveRequest: a request that does not accept didSigned is refused before anyone is asked", async () => {
   const holder = generateSigningIdentity();
-  const doc = await approveRequest(holder, { type: APPROVE_REQUEST_02 });
-  const res = await verifyStepUpApproveRequest(doc, {
-    enrolledExecutorDids: [RP.did],
-    acceptTypes: AGENT_APPROVE_REQUEST_TYPES,
-  });
-  assert.equal(res.ok, true, res.reason);
+  for (const accepts of [["webauthn"], ["approverSigned"], "didSigned"]) {
+    const doc = await approveRequest(holder, { over: { accepts } });
+    const res = await verifyStepUpApproveRequest(doc, rpOpts);
+    assert.equal(res.ok, false, JSON.stringify(accepts));
+    assert.match(res.reason, /DID-signed/);
+  }
+});
+
+test("one approve-request version for every party: the pin, and the one start/0.2 embeds", async () => {
+  // The did-hosting control plane's start/0.2 reply names its request's type
+  // as a schema const; the wallet pins approve-request on its own. They are
+  // one version, or an RP step-up is refused at the first check.
+  const { RESPONSE_PAYLOAD_SCHEMA } = await import("../dist/specs/auth/step-up/start/0.2/payload.js");
+  assert.equal(
+    RESPONSE_PAYLOAD_SCHEMA.$defs.Response.properties.approveRequest.properties.type.const,
+    STEP_UP_APPROVE_REQUEST_TYPE,
+  );
+  assert.equal(STEP_UP_APPROVE_REQUEST_TYPE, APPROVE_REQUEST_05);
 });
 
 // ── stepUpVtaStart ──────────────────────────────────────────────────────────

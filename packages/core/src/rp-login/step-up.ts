@@ -30,7 +30,6 @@ import { buildTrustTask } from "../vta/trust-task.js";
 import { VtaClientError } from "../vta/errors.js";
 import type { TrustTask } from "../vta/protocol.js";
 import {
-  RP_APPROVE_REQUEST_TYPES,
   buildStepUpApproval,
   verifyStepUpApproveRequest,
   type StepUpApproveRequest,
@@ -171,7 +170,6 @@ export async function stepUpVtaStart(args: StepUpVtaStartArgs): Promise<Verified
   const approveRequest = reply.approveRequest as unknown as Record<string, unknown> | undefined;
   const verified = await verifyStepUpApproveRequest(approveRequest, {
     enrolledExecutorDids: args.enrolledExecutorDids,
-    acceptTypes: RP_APPROVE_REQUEST_TYPES,
     ...(args.now ? { now: args.now } : {}),
   });
   const refuse = (why: string): never => {

@@ -24,7 +24,7 @@ export * as AuthPasskeyLoginStart_v0_2 from "./auth/passkey/login/start/0.2/payl
 export * as AuthRefresh_v0_2 from "./auth/refresh/0.2/payload.js";
 export * as AuthRevokeSession_v0_2 from "./auth/revoke-session/0.2/payload.js";
 export * as AuthSessionsList_v0_1 from "./auth/sessions/list/0.1/payload.js";
-export * as AuthStepUpApproveRequest_v0_4 from "./auth/step-up/approve-request/0.4/payload.js";
+export * as AuthStepUpApproveRequest_v0_5 from "./auth/step-up/approve-request/0.5/payload.js";
 export * as AuthStepUpApproveResponse_v0_6 from "./auth/step-up/approve-response/0.6/payload.js";
 export * as AuthStepUpApproverAttest_v0_1 from "./auth/step-up/approver/attest/0.1/payload.js";
 export * as AuthStepUpStart_v0_2 from "./auth/step-up/start/0.2/payload.js";
