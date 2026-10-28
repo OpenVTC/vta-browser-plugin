@@ -68,6 +68,7 @@ import {
   runProvisionIntegration,
   type TrustTaskChannel,
   vaultDelete,
+  vaultGet,
   vaultList,
   vaultProxyLogin,
   vaultRelease,
@@ -2427,8 +2428,20 @@ async function doSignTrustTask(
     // override — a connection without one still reaches the VTA over TSP or
     // DIDComm, so it must not gate the session.
     const vta = await getVtaSession(vtaDid, restBaseUrl);
-    const listed = await vaultList(vta.session, { holder: vta.holder, service: vta.service });
-    const signer = chooseTrustTaskSigner(params.asDid, signing.did, listed.entries);
+    // Read to the end: the identity may sit on any page, and a short page is
+    // not exhaustion — stopping at the first would refuse an identity held.
+    const entries = await collectPages("vault/list", async (cursor) => {
+      const page = await vaultList(vta.session, {
+        holder: vta.holder,
+        service: vta.service,
+        ...(cursor ? { filter: { cursor } } : {}),
+      });
+      return {
+        items: page.entries,
+        ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      };
+    });
+    const signer = chooseTrustTaskSigner(params.asDid, signing.did, entries);
     // Unreachable — `chooseTrustTaskSigner` refuses rather than answering
     // `holder` for an identity other than the holder — and kept so this
     // branch can only ever end in a VTA signature or a refusal.
@@ -4571,9 +4584,10 @@ async function personaTaskSigner(
   entryId: string,
 ): Promise<TaskSigner> {
   const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-  const listed = await vaultList(session, { holder, service });
-  const entry = listed.entries.find((e) => e.id === entryId);
-  if (!entry?.principalDid) {
+  // Fetched by id rather than found in a listing, which would miss an entry
+  // past the first page.
+  const { entry } = await vaultGet(session, { holder, service, id: entryId });
+  if (!entry.principalDid) {
     throw new Error(`vault entry ${entryId} names no persona DID`);
   }
   return vaultTaskSigner({ session, holder, service, entryId, did: entry.principalDid });

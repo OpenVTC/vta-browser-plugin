@@ -196,6 +196,7 @@ test("a room is minted beside the context's DID, never as it", async () => {
 
   const mint = mintOf(a, "room");
   assert.equal(mint.payload.setPrimary, false, "absent means true at the agent");
+  assert.equal(mint.payload.didMethod, "webvh", "a room is did:webvh, whatever the agent defaults to");
   assert.equal(mint.payload.contextId, "openvtc");
   assert.equal(mint.payload.serverId, "webvh-1");
   assert.equal(mint.payload.templateVars.WEBVH_SERVER, "webvh-1");
@@ -324,6 +325,7 @@ test("the host's DID is minted as the context's own, from the room-host template
   const mint = mintOf(a, "room-host");
   assert.equal(mint.payload.contextId, "empty");
   assert.equal(mint.payload.setPrimary, true, "said, not left to the agent's default");
+  assert.equal(mint.payload.didMethod, "webvh", "a host is did:webvh, whatever the agent defaults to");
   assert.equal(mint.payload.serverId, "webvh-1");
   assert.equal(mint.payload.templateVars.WEBVH_SERVER, "webvh-1");
   assert.equal(mint.payload.templateVars.URL, "https://host.example");
