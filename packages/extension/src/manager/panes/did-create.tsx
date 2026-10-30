@@ -19,11 +19,19 @@
 // kind of wizard, so they are applied once at selection. They do not keep
 // overriding the controls: a checkbox that springs back is a checkbox that lies
 // about what will be sent.
+//
+// **The form the identity takes is the agent's call unless the operator makes
+// it.** `didMethod` absent means the agent's configuration decides (`webvh`
+// unless configured otherwise), and that configuration is how a community moves
+// its DIDs to did:scid — so the quiet path sends nothing, rather than a `webvh`
+// that would overrule it. The alias linking the two forms is left to the agent
+// too: its default is on, and did:scid refuses to exist without it.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   webvhDidCreate,
   webvhServerList,
+  type WebvhDidMethod,
   type WebvhServerRecord,
 } from "@openvtc/pnm-core/webvh";
 import {
@@ -101,6 +109,12 @@ const divider = (
 /** What the agent said when it minted, kept on screen afterwards. */
 interface Minted {
   did: string;
+  /** The form the agent applied, which `did` is in. */
+  didMethod: WebvhDidMethod;
+  /** The same log as did:webvh, and as the did:scid DID URL with its locator. */
+  webvhDid: string;
+  scidDidUrl: string;
+  scidAlsoKnownAs: boolean;
   scid: string;
   portable: boolean;
   preRotationKeyCount: number;
@@ -121,6 +135,10 @@ export function CreateDid({
   authority: Authority | null;
   onCreated: () => void;
 }) {
+  // ── Which form it takes ──
+  // Empty is "the agent decides", sent as no member at all.
+  const [didMethod, setDidMethod] = useState<WebvhDidMethod | "">("");
+
   // ── Where it is published ──
   const [serverId, setServerId] = useState("");
   const [servers, setServers] = useState<WebvhServerRecord[] | null>(null);
@@ -326,6 +344,7 @@ export function CreateDid({
           ...(domain.trim() ? { domain: domain.trim() } : {}),
           ...(label.trim() ? { label: label.trim() } : {}),
           ...(preRotationValue !== undefined ? { preRotationCount: preRotationValue } : {}),
+          ...(didMethod ? { didMethod } : {}),
           ...(signingKeyId ? { signingKeyId } : {}),
           ...(kaKeyId ? { kaKeyId } : {}),
           ...(drafts.length ? { additionalServices: additionalServices(drafts) } : {}),
@@ -339,6 +358,10 @@ export function CreateDid({
         });
         setMinted({
           did: res.did,
+          didMethod: res.didMethod,
+          webvhDid: res.webvhDid,
+          scidDidUrl: res.scidDidUrl,
+          scidAlsoKnownAs: res.scidAlsoKnownAs,
           scid: res.scid,
           portable: res.portable,
           preRotationKeyCount: res.preRotationKeyCount,
@@ -367,7 +390,7 @@ export function CreateDid({
       onCreated();
     }
   }, [
-    parties, contextId, serverId, path, domain, label, portable, setPrimary,
+    parties, contextId, didMethod, serverId, path, domain, label, portable, setPrimary,
     addMediator, addTsp, drafts, chosen, templateContext, vars, varValues,
     preRotationValue, signingKeyId, kaKeyId, onCreated,
   ]);
@@ -379,8 +402,10 @@ export function CreateDid({
         contextId ? (
           <>
             Created in <code style={{ fontFamily: font.mono }}>{contextId}</code> and published as
-            a <code style={{ fontFamily: font.mono }}>did:webvh</code> log on a hosting server.
-            Once published it is resolvable by anyone.
+            a <code style={{ fontFamily: font.mono }}>did:webvh</code> log on a hosting server —
+            named as a <code style={{ fontFamily: font.mono }}>did:webvh</code> or a{" "}
+            <code style={{ fontFamily: font.mono }}>did:scid</code> DID. Once published it is
+            resolvable by anyone.
           </>
         ) : (
           "Select a context in the tree to create a DID inside it."
@@ -389,12 +414,65 @@ export function CreateDid({
     >
       <div style={{ display: "grid", gap: 18, minWidth: 0 }}>
         <Section
+          title="Which identifier it is"
+          why={
+            <>
+              Either way it is the same log, verified the same way. The difference is what the
+              identifier is tied to: a <code style={{ fontFamily: font.mono }}>did:webvh</code>{" "}
+              DID names the host it is served from, a{" "}
+              <code style={{ fontFamily: font.mono }}>did:scid</code> DID names only the log, and
+              where to fetch it travels beside it as a locator.
+            </>
+          }
+        >
+          <div style={choices}>
+            <Choice
+              name="didMethod"
+              value=""
+              checked={didMethod === ""}
+              onSelect={() => setDidMethod("")}
+              title="Your agent decides"
+            >
+              Whatever your agent is configured to mint — <code style={{ fontFamily: font.mono }}>did:webvh</code>{" "}
+              unless its operator or community has chosen otherwise.
+            </Choice>
+            <Choice
+              name="didMethod"
+              value="webvh"
+              checked={didMethod === "webvh"}
+              onSelect={() => setDidMethod("webvh")}
+              title={<code style={{ fontFamily: font.mono }}>did:webvh</code>}
+            >
+              <span style={{ fontFamily: font.mono, wordBreak: "break-all" }}>did:webvh:&lt;scid&gt;:&lt;host&gt;[:&lt;path&gt;]</span>
+              <span>Readable as an address, and changes if a portable DID moves.</span>
+            </Choice>
+            <Choice
+              name="didMethod"
+              value="scid"
+              checked={didMethod === "scid"}
+              onSelect={() => setDidMethod("scid")}
+              title={<code style={{ fontFamily: font.mono }}>did:scid</code>}
+            >
+              <span style={{ fontFamily: font.mono, wordBreak: "break-all" }}>did:scid:vh:1:&lt;scid&gt;</span>
+              <span>
+                Stays the same wherever the log is served. Shared as a DID URL carrying{" "}
+                <code style={{ fontFamily: font.mono }}>?src=</code>, since the bare DID says
+                nothing about where to find it. Its did:webvh form is listed as an alias.
+              </span>
+            </Choice>
+          </div>
+        </Section>
+
+        {divider}
+
+        <Section
           title="Where it is published"
           why={
             <>
               A hosting server serves the DID&apos;s log. Which server and which path the log sits
-              at both become part of the identifier, so this is not only a storage choice — unless
-              the DID is portable, it is the one place it can ever be served from.
+              at both become part of the {didMethod === "scid" ? "did:webvh alias and the locator" : "identifier"},
+              so this is not only a storage choice — unless the DID is portable, it is the one
+              place it can ever be served from.
             </>
           }
         >
@@ -849,6 +927,25 @@ function MintedCard({ minted }: { minted: Minted }) {
           <Did value={minted.did} />
           <CopyButton value={minted.did} title="Copy this DID" />
         </div>
+        {/* The other form of the same log. For a did:scid DID the one to hand
+            out is the DID URL: a recipient holding only the bare DID has no
+            source to resolve it from. */}
+        {minted.didMethod === "scid" ? (
+          <AlsoForm
+            label="Share it as"
+            value={minted.scidDidUrl}
+            title="Copy the did:scid DID URL"
+            note="the DID with the locator a recipient needs to resolve it"
+          />
+        ) : null}
+        {minted.didMethod === "scid" || minted.scidAlsoKnownAs ? (
+          <AlsoForm
+            label="Also known as"
+            value={minted.didMethod === "scid" ? minted.webvhDid : minted.scidDidUrl}
+            title={minted.didMethod === "scid" ? "Copy the did:webvh alias" : "Copy the did:scid alias"}
+            note="the same log, listed in alsoKnownAs"
+          />
+        ) : null}
         <span style={{ fontSize: t.xs, color: c.muted, lineHeight: 1.6 }}>
           {minted.portable ? "Portable" : "Tied to where it is published"} ·{" "}
           {minted.preRotationKeyCount === 0
@@ -877,5 +974,30 @@ function MintedCard({ minted }: { minted: Minted }) {
         )}
       </div>
     </Note>
+  );
+}
+
+/** One more form of the minted identity, with what it is for. */
+function AlsoForm({
+  label,
+  value,
+  title,
+  note,
+}: {
+  label: string;
+  value: string;
+  title: string;
+  note: string;
+}) {
+  return (
+    <div style={{ display: "grid", gap: 4, minWidth: 0 }}>
+      <span style={{ fontSize: t.xs, color: c.muted }}>
+        {label} — {note}
+      </span>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <Did value={value} size={t.xs} />
+        <CopyButton value={value} title={title} />
+      </div>
+    </div>
   );
 }
