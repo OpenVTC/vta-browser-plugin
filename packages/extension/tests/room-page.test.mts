@@ -19,6 +19,7 @@ import {
 import {
   ROOM_GRANT_TTL_MS,
   ROOM_NAMES_MAX,
+  admittedOpenRooms,
   liveGrants,
   mergeRoomNames,
   rememberedRoomHosts,
@@ -50,6 +51,8 @@ const VTA = "did:webvh:QmAgent:agent.example";
 const ROOM = "did:webvh:QmRoom:rooms.example";
 const OTHER_ROOM = "did:webvh:QmOther:rooms.example";
 const PRIVATE_ROOM = "did:webvh:QmPrivate:rooms.example";
+/** An open room the member is in: no group, so the VTA never lists it. */
+const OPEN_ROOM = "did:webvh:QmOpen:rooms.example";
 const MEMBER = "did:webvh:QmAlice:people.example";
 /** A second identity the member signs in to this community with. */
 const MEMBER_2 = "did:webvh:QmAliceWork:people.example";
@@ -112,6 +115,8 @@ interface Harness {
   members: string[];
   /** What the VTA lists: one entry per (room, member). */
   held: { roomId: string; member?: string; actions?: string[] }[];
+  /** The open rooms the community's record says the member is in (`openRooms`). */
+  open: { roomId: string; member: string; actions: string[] }[];
   /** The names the community's offers give its rooms, or a failed reading. */
   names: Record<string, { label: string; visibility?: string }> | "fail";
   /** Each room's own profile, as the member's VTA reads it, or a failed reading. */
@@ -136,6 +141,7 @@ function harness(over: Partial<RoomPageBackgroundDeps> = {}): Harness {
       { roomId: PRIVATE_ROOM, member: MEMBER },
       { roomId: COMMUNITY_ROOM, member: HOST, actions: ["admin"] },
     ],
+    open: [],
     names: {},
     profiles: {},
   };
@@ -150,6 +156,8 @@ function harness(over: Partial<RoomPageBackgroundDeps> = {}): Harness {
           return { ok: true, result: h.held.map((r) => ({ ...r, epoch: 3, earliestReadableEpoch: 1 })) };
         case "members":
           return { ok: true, result: h.members };
+        case "openRooms":
+          return { ok: true, result: h.open.filter((r) => op.members.includes(r.member)) };
         case "roomNames":
           return h.names === "fail" ? { ok: false, error: "offers: notAMember" } : { ok: true, result: h.names };
         case "roomProfiles":
@@ -162,7 +170,7 @@ function harness(over: Partial<RoomPageBackgroundDeps> = {}): Harness {
             ok: true,
             result: {
               roomId: op.roomId,
-              visibility: op.roomId === PRIVATE_ROOM ? "private" : "attributed",
+              visibility: op.roomId === PRIVATE_ROOM ? "private" : op.roomId === OPEN_ROOM ? "open" : "attributed",
               epoch: 3,
               member: op.member,
               limits: {},
@@ -223,6 +231,98 @@ test("choose shares what the member ticks, checked with the host, and never a pr
   const again = await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST });
   assert.ok(again.ok);
   assert.deepEqual((again.result as { rooms: unknown[] }).rooms, []);
+});
+
+test("an open room the member is in is offered, shared, and listed as held — though the VTA never lists it", async () => {
+  const h = harness();
+  h.open = [{ roomId: OPEN_ROOM, member: MEMBER, actions: ["read"] }];
+  h.answer = { approved: true, selectedRooms: [as(OPEN_ROOM)] };
+  const res = await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST, suggest: OPEN_ROOM });
+  assert.ok(res.ok);
+  const view = h.prompts[0] as RoomShareConsentView;
+  const row = view.rooms.find((r) => r.roomId === OPEN_ROOM);
+  assert.ok(row, "offered in the share window");
+  assert.equal(row.member, MEMBER);
+  assert.ok(row.ticked, "the room the page suggested is ticked");
+  assert.ok(h.asked.some((a) => a.op === "openRooms" && (a.members as string[]).includes(MEMBER)));
+  assert.ok(!h.asked.some((a) => a.op === "openRooms" && (a.members as string[]).includes(HOST)), "never as the community");
+
+  const { rooms, refused } = res.result as {
+    rooms: { roomId: string; member: string; held: boolean; epoch?: number }[];
+    refused: unknown[];
+  };
+  assert.deepEqual(refused, []);
+  const shared = rooms.find((r) => r.roomId === OPEN_ROOM);
+  assert.ok(shared);
+  assert.equal(shared.held, true);
+  assert.equal(shared.epoch, undefined, "an open room has no epoch to report");
+
+  // A removal stops it counting at once: the record is read each time, never kept.
+  h.open = [];
+  const list = await h.gates.handle(PORTAL, { op: "list", hostDid: HOST });
+  assert.ok(list.ok);
+  const after = (list.result as { rooms: { roomId: string; held: boolean }[] }).rooms;
+  assert.equal(after.find((r) => r.roomId === OPEN_ROOM)?.held, false);
+});
+
+test("the community's record is asked about open rooms only for shares the VTA's listing does not name", async () => {
+  const h = harness();
+  h.answer = { approved: true, selectedRooms: [as(ROOM)] };
+  await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST });
+  h.asked.length = 0;
+  await h.gates.handle(PORTAL, { op: "list", hostDid: HOST });
+  assert.ok(!h.asked.some((a) => a.op === "openRooms"));
+});
+
+test("admittedOpenRooms: admitted, open, as the member asked about", () => {
+  const base = { host: HOST, label: "x", validUntil: "2030-01-01T00:00:00Z", offeredAt: "2026-01-01T00:00:00Z" };
+  assert.deepEqual(
+    admittedOpenRooms(
+      [
+        { ...base, roomId: OPEN_ROOM, visibility: "open", state: "admitted", actions: ["read"] },
+        { ...base, roomId: ROOM, visibility: "attributed", state: "admitted", actions: ["read"] },
+        { ...base, roomId: OTHER_ROOM, visibility: "open", state: "offered", actions: ["read"] },
+        { ...base, roomId: PRIVATE_ROOM, visibility: "open", state: "removed", actions: ["read"] },
+      ],
+      MEMBER,
+    ),
+    [{ roomId: OPEN_ROOM, member: MEMBER, actions: ["read"] }],
+  );
+});
+
+test("the offscreen open-room reading: each member's record, as that member; one failing costs only its own", async () => {
+  const actedAs: string[] = [];
+  const open = await runRoomsPageOp(
+    {
+      agent: async () => ({
+        holderDid: "did:key:zWallet",
+        sender: {
+          async send<Res>(envelope: { type: string; payload: { document: Record<string, unknown> } }) {
+            const doc = structuredClone(envelope.payload.document);
+            actedAs.push(String(doc.issuer));
+            if (doc.issuer === MEMBER_2) throw new Error("rooms/keys/act:issuerNotPrincipal");
+            doc.proof = { type: "DataIntegrityProof" };
+            return { principal: doc.issuer, document: doc } as Res;
+          },
+        } as never,
+      }),
+      portal: async () => ({ portalOrigin: PORTAL, endpoint: `${PORTAL}/v1/trust-tasks` }),
+      completed: () => ({
+        async sendCompleted<Res>() {
+          return {
+            items: [
+              { roomId: OPEN_ROOM, host: HOST, label: "Public", visibility: "open", state: "admitted", actions: ["read"] },
+              { roomId: ROOM, host: HOST, label: "Board pack", visibility: "attributed", state: "admitted", actions: ["read"] },
+            ],
+          } as Res;
+        },
+      }),
+    },
+    { vtaDid: VTA },
+    { op: "openRooms", hostDid: HOST, members: [MEMBER, MEMBER_2, MEMBER] },
+  );
+  assert.deepEqual(open, [{ roomId: OPEN_ROOM, member: MEMBER, actions: ["read"] }]);
+  assert.deepEqual(actedAs, [MEMBER, MEMBER_2], "each member once");
 });
 
 test("list never prompts, and reads need a share", async () => {

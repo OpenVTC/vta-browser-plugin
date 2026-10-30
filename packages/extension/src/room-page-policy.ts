@@ -435,9 +435,27 @@ export function shareRowKey(roomId: string, member: string): string {
 }
 
 /**
+ * The open rooms of a community's record of one member that the member is in:
+ * admitted, on the `open` tier. An open room has no group, so the VTA's listing
+ * never names it — the member reads it with the credentials the offer gave
+ * (`roomStanding` counts it joined) — and these entries stand beside the
+ * listing's wherever a page may use a room. Shaped as a listing entry, with no
+ * epoch: there is none to hold.
+ */
+export function admittedOpenRooms(
+  memberships: readonly { roomId: string; visibility: string; state: string; actions?: readonly string[] }[],
+  member: string,
+): { roomId: string; member: string; actions: string[] }[] {
+  return memberships
+    .filter((m) => m.state === "admitted" && m.visibility === "open")
+    .map((m) => ({ roomId: m.roomId, member, actions: [...(m.actions ?? [])] }));
+}
+
+/**
  * The share prompt's rows.
  *
- * `held` is the VTA's listing, one entry per (room, member). `members` the
+ * `held` is the VTA's listing, one entry per (room, member), and the open rooms
+ * the member is in (`admittedOpenRooms`), which it never lists. `members` the
  * identities the member uses at `hostDid` (their vault entries naming it).
  * Offered: an entry held as one of those identities — never as `hostDid`
  * itself, and never one whose member the VTA did not say. Pre-ticked: what is

@@ -27,7 +27,7 @@ import { didHost } from "../../did-display.js";
 import { isActionable, type OfferView } from "../../room-offers-policy.js";
 import { Button, Did, Note, Pill } from "../../ui.js";
 import { c, t } from "../../theme.js";
-import { communityLanes, rowStage, type Lane, type LaneRow } from "../community-lanes.js";
+import { communityLanes, joinedOpen, rowStage, type Lane, type LaneRow } from "../community-lanes.js";
 import type { RoomEntry } from "../room-groups.js";
 import type { KnownRoomHost } from "../room-hosts.js";
 import { mostReadable } from "../room-groups.js";
@@ -163,6 +163,19 @@ function joinedStep(row: LaneRow): Step {
         ...(words ? [words] : []),
         <span title={s.why} style={{ color: s.tone === "ok" ? c.ok : c.warn }}>
           {s.label}
+        </span>,
+      ],
+    };
+  }
+  const open = joinedOpen(row);
+  if (open) {
+    return {
+      label: "Joined",
+      state: "done",
+      lines: [
+        open.actions.join(" · "),
+        <span title="An open room has no keys: your agent reads it with the credentials the community gave you">
+          open room — no keys to hold
         </span>,
       ],
     };

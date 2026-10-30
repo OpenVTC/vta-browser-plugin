@@ -987,6 +987,18 @@ revocable in the console's **Communities** tab, beside the room it shares
 (`rooms-shares.tsx` reads, `rooms-communities.tsx` draws). A page asking
 about a room it was not given gets one sentence whatever the reason.
 
+**An open room is offered beside the listing, from the community's record.**
+An open room has no group, so `rooms/keys/list` never names it: the member
+reads it with the credentials the offer gave (`browse` / `read` present the
+vaulted authority, no group needed), and `roomStanding` counts it joined. So
+`choose` adds the open rooms the community's record says each identity is in
+(`openRooms` → `admittedOpenRooms`: `state: admitted`, `visibility: open`), and
+a page's list reports a share of one as `held` with no `epoch` — asked only
+for shares the listing does not name, read each time and never kept, so a
+removal stops counting at once. Without this, the portal shows an open room
+joined while the share window can never offer it, and the console's lane stops
+at "Joined: not yet" (`joinedOpen`).
+
 **A share names the member it acts as, and every request for the page names
 it.** One VTA can hold two members of one room — the community's own place in
 a room the community owns, beside an administrator's own membership, or two

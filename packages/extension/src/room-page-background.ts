@@ -51,11 +51,12 @@ import {
   type RoomWriteConsentView,
 } from "./room-page-policy.js";
 
-/** One entry of the VTA's listing, as the offscreen document reports it. */
+/** One entry of the VTA's listing, as the offscreen document reports it — or an
+ *  open room the member is in (`openRooms`), which has no epoch. */
 interface HeldEntry {
   roomId: string;
-  epoch: number;
-  earliestReadableEpoch: number;
+  epoch?: number;
+  earliestReadableEpoch?: number;
   member?: string;
   context?: string;
   actions?: string[];
@@ -387,6 +388,21 @@ export class RoomPageGates {
     return withProfiles(offered, profiles);
   }
 
+  /**
+   * The open rooms of `hostDid` that `members` are in (`openRooms`), read now —
+   * never kept, so a removal stops counting at once. Never throws: a reading that
+   * failed offers no open room.
+   */
+  private async openRooms(vta: ActiveVta, hostDid: string, members: readonly string[]): Promise<HeldEntry[]> {
+    if (members.length === 0) return [];
+    try {
+      const res = await this.deps.offscreen(vta, { op: "openRooms", hostDid, members: [...members] });
+      return res.ok && Array.isArray(res.result) ? (res.result as HeldEntry[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
   /** The live shares for this origin and community, joined with what the VTA still holds. */
   private async views(origin: string, hostDid: string, vta: ActiveVta): Promise<PageRoomView[]> {
     const grants = liveGrants(
@@ -395,7 +411,11 @@ export class RoomPageGates {
       this.deps.now(),
     );
     if (grants.length === 0) return [];
-    const held = (await this.offscreen(vta, { op: "held" })) as HeldEntry[];
+    const listed = (await this.offscreen(vta, { op: "held" })) as HeldEntry[];
+    // An open room is never listed: only the community's record says the member
+    // is in it, asked only about shares the listing does not name.
+    const unlisted = grants.filter((g) => !listed.some((h) => h.roomId === g.roomId && h.member === g.member));
+    const held = [...listed, ...(await this.openRooms(vta, hostDid, [...new Set(unlisted.map((g) => g.member))]))];
     const names = await this.displayNames(
       vta,
       hostDid,
@@ -410,7 +430,8 @@ export class RoomPageGates {
         roomId: g.roomId,
         member: g.member,
         held: h !== undefined,
-        ...(h ? { epoch: h.epoch, earliestReadableEpoch: h.earliestReadableEpoch } : {}),
+        ...(h?.epoch !== undefined ? { epoch: h.epoch } : {}),
+        ...(h?.earliestReadableEpoch !== undefined ? { earliestReadableEpoch: h.earliestReadableEpoch } : {}),
         sharedAt: new Date(g.grantedAt).toISOString(),
         expiresAt: new Date(g.expiresAt).toISOString(),
         ...(names[g.roomId] ? names[g.roomId] : {}),
@@ -427,11 +448,13 @@ export class RoomPageGates {
     const at = { origin, hostDid, vtaDid: vta.vtaDid };
     const now = this.deps.now();
     const grants = await this.deps.loadGrants(origin, vta.vtaDid);
-    const held = (await this.offscreen(vta, { op: "held" })) as HeldEntry[];
+    const listed = (await this.offscreen(vta, { op: "held" })) as HeldEntry[];
     // Who the member is at this community, by the wallet's own record — the
     // page's word only picks among these, never adds to them.
     const members = (await this.offscreen(vta, { op: "members", hostDid })) as string[];
     const usable = members.filter((m) => m !== hostDid);
+    // Beside the listing, the open rooms the member is in, which it never names.
+    const held = [...listed, ...(await this.openRooms(vta, hostDid, usable))];
     const names = await this.displayNames(
       vta,
       hostDid,
