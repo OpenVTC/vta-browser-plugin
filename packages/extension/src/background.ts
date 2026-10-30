@@ -2349,7 +2349,7 @@ async function handleDeriveSigningKeyId(
  * expiry)`, rememberable only for tasks the VTA classifies `sideEffects: none`.
  * Until those exist, ask.
  */
-/** `https://trusttasks.org/spec/webvh/dids/update/1.0` → `webvh/dids/update`.
+/** `https://trusttasks.org/spec/vta/webvh/dids/update/1.1` → `vta/webvh/dids/update`.
  *  A readable short label for prompt copy; falls back to the full URI. */
 function taskLabel(typeUri: string): string {
   const m = /\/spec\/(.+)\/[\d.]+$/.exec(typeUri);

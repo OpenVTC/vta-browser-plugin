@@ -13,7 +13,7 @@ import { ConsentReplayLedger, replayKey } from "../src/consent-replay.ts";
 
 const ORIGIN = "https://dids.eu.openvtc.net";
 const OTHER_ORIGIN = "https://evil.example";
-const PARAMS = { type: "https://trusttasks.org/spec/vta/webvh/dids/update/1.0", payload: { a: 1 } };
+const PARAMS = { type: "https://trusttasks.org/spec/vta/webvh/dids/update/1.1", payload: { a: 1 } };
 const OTHER_PARAMS = { ...PARAMS, payload: { a: 2 } };
 const DIGEST = "zQmGrantedDigest";
 

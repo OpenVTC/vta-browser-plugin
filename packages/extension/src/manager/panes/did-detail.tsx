@@ -16,6 +16,10 @@
 // Everything on screen is copyable, because the reason to open this panel at all
 // is usually to take something out of it: a version id to cite, an entry to
 // replay, the whole log to hand to someone verifying.
+//
+// It is also where the DID's did:scid alias is listed or removed
+// (`did-scid-alias.tsx`), because whether it is listed is a fact about the
+// latest document, and the latest document is in the log this panel reads.
 
 import { useEffect, useState } from "react";
 import { webvhDidGet, type WebvhDidRecord } from "@openvtc/pnm-core/webvh";
@@ -27,6 +31,7 @@ import { Loading, LoadError } from "../table.js";
 import { formatDate } from "../format.js";
 import { parseDidLog, servicesOf, methodsOf, type LogEntry } from "../did-log.js";
 import type { Parties } from "../use-vta.js";
+import { ScidAlias } from "./did-scid-alias.js";
 
 const mono: React.CSSProperties = {
   fontFamily: font.mono,
@@ -55,13 +60,22 @@ const pre: React.CSSProperties = {
 export function DidDetail({
   parties,
   record,
+  disabledReason = null,
+  onChanged,
 }: {
   parties: Parties;
   record: WebvhDidRecord;
+  /** Why this operator may not publish an entry, or `null` when they may. */
+  disabledReason?: string | null;
+  /** After this panel may have appended to the log, so the list can re-read. */
+  onChanged?: () => void;
 }) {
   const [log, setLog] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<number | null>(null);
+  // Bumped after an update from this panel: the log it drew is no longer the
+  // DID's latest, and an alias state read from it would be stale.
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -83,9 +97,10 @@ export function DidDetail({
     return () => {
       live = false;
     };
-  }, [parties, record.did]);
+  }, [parties, record.did, nonce]);
 
   const entries = log ? parseDidLog(log) : [];
+  const latest = entries.length > 0 ? entries[entries.length - 1]! : null;
 
   return (
     <div style={{ display: "grid", gap: 14, padding: "10px 0 2px", minWidth: 0 }}>
@@ -112,6 +127,19 @@ export function DidDetail({
           <span>created {formatDate(record.createdAt)}</span>
         </div>
       </div>
+
+      {!error && (
+        <ScidAlias
+          parties={parties}
+          record={record}
+          latest={latest}
+          disabledReason={disabledReason}
+          onChanged={() => {
+            setNonce((n) => n + 1);
+            onChanged?.();
+          }}
+        />
+      )}
 
       {error && <LoadError what="this DID's log" error={error} />}
       {log === null && !error && <Loading what="this DID's log" />}

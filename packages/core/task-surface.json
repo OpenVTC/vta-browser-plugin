@@ -1788,6 +1788,12 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/vta/webvh/dids/update/1.1",
+      "consts": [
+        "TASK_WEBVH_DIDS_UPDATE_1_1"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/vta/webvh/servers/domains/0.1",
       "consts": [
         "TASK_WEBVH_SERVERS_DOMAINS_0_1"

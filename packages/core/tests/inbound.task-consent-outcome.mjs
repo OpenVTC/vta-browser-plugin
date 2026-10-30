@@ -256,7 +256,7 @@ test("anything that is not an answer returns null, so other handlers still see i
   // the prompt, which is the failure this whole module exists to prevent.
   for (const body of [
     { id: "x", type: "https://trusttasks.org/spec/task-consent/request/0.1", payload: {} },
-    { id: "x", type: "https://trusttasks.org/spec/vta/webvh/dids/update/1.0", payload: {} },
+    { id: "x", type: "https://trusttasks.org/spec/vta/webvh/dids/update/1.1", payload: {} },
     {},
   ]) {
     assert.equal(await parseTaskConsentOutcome(envelope(body), OPTS), null);

@@ -45,7 +45,7 @@ import {
   RESPONSE_TYPE_URI as DIDS_UPDATE_RESPONSE,
   type Payload as DidsUpdatePayload,
   type Response as DidsUpdateResponse,
-} from "../specs/vta/webvh/dids/update/1.0/payload.js";
+} from "../specs/vta/webvh/dids/update/1.1/payload.js";
 import {
   TYPE_URI as DIDS_DELETE,
   RESPONSE_TYPE_URI as DIDS_DELETE_RESPONSE,
@@ -314,14 +314,30 @@ export async function webvhDidList(
     "vta/webvh/dids/list/1.0", payload);
 }
 
-/** Update a webvh DID document and republish its log. */
+/**
+ * Update a webvh DID document and republish its log.
+ *
+ * **Every update rotates the DID's update key**, whatever it changes — a new
+ * `document`, or `scidAlsoKnownAs` alone. Nothing in the payload says so; a
+ * surface asking a human to approve one has to.
+ *
+ * `scidAlsoKnownAs` lists (`true`) or removes (`false`) the log's
+ * `did:scid:vh:1:<scid>?src=<source>` DID URL in `alsoKnownAs`. The agent
+ * derives the DID URL from `did`; the caller never writes it, and the response
+ * reports it as `scidDidUrl` either way.
+ */
 export async function webvhDidUpdate(
   sender: TrustTaskSender,
   params: WebvhCall & DidsUpdatePayload,
 ): Promise<DidsUpdateResponse> {
-  const { holder, service, ...payload } = params;
+  const { holder, service, scidAlsoKnownAs, ...rest } = params;
+  const payload: DidsUpdatePayload = {
+    ...rest,
+    // `!== undefined`: `false` is the caller removing the alias, not silence.
+    ...(scidAlsoKnownAs !== undefined ? { scidAlsoKnownAs } : {}),
+  };
   return send(sender, { holder, service }, DIDS_UPDATE, DIDS_UPDATE_RESPONSE,
-    "vta/webvh/dids/update/1.0", payload);
+    "vta/webvh/dids/update/1.1", payload);
 }
 
 /** Delete a webvh DID. */
