@@ -7,7 +7,7 @@
 // it (`room-offers-background.ts`). This module does the work, as the CLI's
 // `pnm rooms offers list|accept` do: each request to the community is built
 // unsigned, completed by the member's VTA as the identity the offer is
-// addressed to (`rooms/keys/act/0.8`), and sent to the community's
+// addressed to (`rooms/keys/act/0.9`), and sent to the community's
 // `TrustTaskHTTPS` endpoint — resolved from its DID document, never guessed —
 // unchanged (`@openvtc/pnm-core/rooms`). What goes back is a view the wallet
 // built: never an offer's credentials, a KeyPackage or a Welcome.

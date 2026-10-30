@@ -14,7 +14,7 @@
 //    minted for that member and room (its recipient item 10), because a leaf
 //    minted anywhere else would have keys somebody else holds.
 // 5. The acceptance is built unsigned, completed by the VTA as the member
-//    (`rooms/keys/act/0.8`), and sent to the community unchanged.
+//    (`rooms/keys/act/0.9`), and sent to the community unchanged.
 // 6. The community answers with the Welcome, which goes to the member's own VTA
 //    (`rooms/keys/welcome`) and nowhere else.
 //
@@ -58,7 +58,7 @@ import {
 // ── Errors ──────────────────────────────────────────────────────────────────
 
 export type RoomOfferErrorCode =
-  /** The VTA does not serve `rooms/keys/act/0.8` or `rooms/keys/key-package/0.2`. */
+  /** The VTA does not serve `rooms/keys/act/0.9` or `rooms/keys/key-package/0.2`. */
   | "actUnsupported"
   /**
    * The party makes no room offers: it does not serve `vtc/rooms/offers/list`
@@ -130,7 +130,7 @@ function actRefusal(e: unknown, reader: OfferReader): RoomOfferError {
   if (local === "unsupportedType" || local === "unsupportedVersion") {
     return new RoomOfferError(
       "actUnsupported",
-      "Your agent does not serve rooms/keys/act 0.8, the version that signs your requests to a community about " +
+      "Your agent does not serve rooms/keys/act 0.9, the version that signs your requests to a community about " +
         "its rooms as you. It must be updated before offers can be read or accepted from the wallet.",
     );
   }
@@ -396,7 +396,7 @@ export async function acceptCommunityRoomOffer(
 /**
  * Reading the offers failed: the VTA's refusal, or the community's — each
  * mapped by the party that produced it. `unsupportedType` from the VTA is an
- * agent without act 0.8; from the community it is a party that makes no room
+ * agent without act 0.9; from the community it is a party that makes no room
  * offers, which is not the member's agent's fault and not a failure at all.
  */
 function listRefusal(e: unknown, reader: OfferReader): RoomOfferError {

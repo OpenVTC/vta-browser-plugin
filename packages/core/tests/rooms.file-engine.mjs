@@ -39,7 +39,6 @@ const ACTION = {
   "rooms/info/0.3": "read",
   "rooms/records/list/0.5": "read",
   "rooms/records/get/0.2": "read",
-  "rooms/records/put/0.3": "write",
   "rooms/records/put/0.4": "write",
   "rooms/blobs/upload/begin/0.2": "write",
   "rooms/blobs/get/0.2": "read",
@@ -65,13 +64,8 @@ function fakeVta() {
         asked.push(slug(envelope.type));
         assert.equal(envelope.issuer, SIGNER.did, "the wallet asks its own VTA");
         switch (slug(envelope.type)) {
-          case "rooms/keys/act/0.8":
           case "rooms/keys/act/0.9": {
             const doc = structuredClone(p.document);
-            // 0.8's table names put only to 0.3 (Recipient item 1).
-            if (slug(envelope.type) === "rooms/keys/act/0.8" && slug(doc.type) === "rooms/records/put/0.4") {
-              throw new Error(`rooms/keys/act:typeNotActable ${doc.type}`);
-            }
             assert.equal(doc.proof, undefined, "act takes an unsigned document");
             assert.equal(doc.payload.presentation, undefined, "and no presentation");
             const action = ACTION[slug(doc.type)];
@@ -170,7 +164,7 @@ function fakeHost(opts = {}) {
       case "rooms/records/list/0.5":
         presented(p, "read");
         return { records: [], headVersion: state.version };
-      case "rooms/records/put/0.3": {
+      case "rooms/records/put/0.4": {
         presented(p, "write");
         // Another member's write lands between this one's seal and its put.
         if (state.racesLeft > 0) {
@@ -180,19 +174,21 @@ function fakeHost(opts = {}) {
         if (p.expectedVersion !== undefined && p.expectedVersion !== 0) {
           assert.equal(p.expectedVersion, state.records.get(p.key)?.version, "a rewrite names what landed");
         }
+        // Host item 12: an open record's blobs are exactly its file's.
+        if (p.cleartext) {
+          const file = p.cleartext.file;
+          assert.ok(file, "an open put here carries a file");
+          assert.deepEqual(p.blobs, [file.blobRef], "an open record names exactly its file's blob");
+          assert.match(file.fileKey, /^[A-Za-z0-9_-]{43}$/, "and carries its key");
+        }
         const version = ++state.version;
-        state.records.set(p.key, { version, sealed: p.sealed, blobs: p.blobs, author: envelope.issuer });
-        return { key: p.key, version };
-      }
-      // put/0.4 Host item 12: an open record's blobs are exactly its file's.
-      case "rooms/records/put/0.4": {
-        presented(p, "write");
-        const file = p.cleartext?.file;
-        assert.ok(file, "a 0.4 put here carries a file");
-        assert.deepEqual(p.blobs, [file.blobRef], "an open record names exactly its file's blob");
-        assert.match(file.fileKey, /^[A-Za-z0-9_-]{43}$/, "and carries its key");
-        const version = ++state.version;
-        state.records.set(p.key, { version, cleartext: p.cleartext, blobs: p.blobs, author: envelope.issuer });
+        state.records.set(p.key, {
+          version,
+          ...(p.sealed ? { sealed: p.sealed } : {}),
+          ...(p.cleartext ? { cleartext: p.cleartext } : {}),
+          blobs: p.blobs,
+          author: envelope.issuer,
+        });
         return { key: p.key, version };
       }
       case "rooms/records/get/0.2": {
@@ -373,13 +369,13 @@ test("an open room's file is sealed under its own key, written at put/0.4 throug
   assert.equal(vta.asked.filter((s) => s === "rooms/keys/file-key/0.2").length, 0, "nor asked for to open it");
 });
 
-test("everything but an open room's file record stays on act/0.8", async () => {
+test("every request is completed at act/0.9", async () => {
   const vta = fakeVta();
   await putRoomFile(context(vta, fakeHost({ visibility: "open" })), { name: "a.txt", bytes: sample(10) });
   assert.deepEqual(
     vta.asked.filter((s) => s.startsWith("rooms/keys/act/")),
-    ["rooms/keys/act/0.8", "rooms/keys/act/0.8", "rooms/keys/act/0.9"],
-    "info and begin at 0.8, the put/0.4 record at 0.9",
+    ["rooms/keys/act/0.9", "rooms/keys/act/0.9", "rooms/keys/act/0.9"],
+    "info, begin and the put/0.4 record",
   );
 });
 
@@ -432,7 +428,7 @@ test("an upload that fails part way releases what begin reserved", async () => {
   const host = fakeHost({ failChunk: 1 });
   await assert.rejects(putRoomFile(context(fakeVta(), host), { name: "a.bin", bytes: sample() }), /connection reset/);
   assert.deepEqual(host.aborted, ["u1"]);
-  assert.ok(!host.asked.includes("rooms/records/put/0.3"), "no record names a blob that was never committed");
+  assert.ok(!host.asked.includes("rooms/records/put/0.4"), "no record names a blob that was never committed");
 });
 
 test("a host that commits some other blob is caught before the record is written", async () => {
@@ -441,7 +437,7 @@ test("a host that commits some other blob is caught before the record is written
     putRoomFile(context(fakeVta(), host), { name: "a.txt", bytes: sample(10) }),
     (e) => e instanceof RoomFileError && e.code === "hostMisbehaved",
   );
-  assert.ok(!host.asked.includes("rooms/records/put/0.3"));
+  assert.ok(!host.asked.includes("rooms/records/put/0.4"));
 });
 
 test("a chunk altered by the host is refused, and nothing is released", async () => {

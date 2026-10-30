@@ -42,10 +42,6 @@ import {
   type RoomsKeysActPayload,
   type RoomsKeysActResponsePayload,
   type UnsignedRoomRequest,
-} from "../specs/rooms/keys/act/0.8/payload.js";
-import {
-  TYPE_URI as KEYS_ACT_V9,
-  RESPONSE_TYPE_URI as KEYS_ACT_V9_RESPONSE,
 } from "../specs/rooms/keys/act/0.9/payload.js";
 import {
   TYPE_URI as KEYS_SEAL_V2,
@@ -67,10 +63,6 @@ import {
   TYPE_URI as RECORDS_PUT,
   RESPONSE_TYPE_URI as RECORDS_PUT_RESPONSE,
   type RoomsRecordsPutResponsePayload,
-} from "../specs/rooms/records/put/0.3/payload.js";
-import {
-  TYPE_URI as RECORDS_PUT_V4,
-  RESPONSE_TYPE_URI as RECORDS_PUT_V4_RESPONSE,
 } from "../specs/rooms/records/put/0.4/payload.js";
 import {
   TYPE_URI as RECORDS_CURATE,
@@ -146,21 +138,18 @@ export async function roomsKeysAct(
   parties: RoomsCaller,
   document: UnsignedRoomRequest,
 ): Promise<{ principal: string; document: Record<string, unknown> }> {
-  // 0.8 completes every request this wallet makes as a member — the host-bound
-  // room requests and a member's requests to a community about the rooms it
-  // offers them (`vtc/rooms/offers/*`, `vtc/rooms/memberships/list`) alike —
-  // but an open room's file record, `rooms/records/put/0.4`, which only 0.9's
-  // table names. 0.9 extends 0.8 (same request and response), so only that
-  // record asks for it: everything else keeps working on a VTA that serves 0.8.
-  const v9 = actVersionFor(document.type) === "0.9";
+  // 0.9 completes every request this wallet makes as a member — the host-bound
+  // room requests (records at `rooms/records/put/0.4`, with or without a file)
+  // and a member's requests to a community about the rooms it offers them
+  // (`vtc/rooms/offers/*`, `vtc/rooms/memberships/list`) alike.
   const payload: RoomsKeysActPayload = { document };
-  const envelope = buildTrustTask(v9 ? KEYS_ACT_V9 : KEYS_ACT, payload, {
+  const envelope = buildTrustTask(KEYS_ACT, payload, {
     issuer: parties.holder.did,
     recipient: parties.service.did,
   });
   const res = await sender.send<RoomsKeysActResponsePayload>(envelope, {
-    expectedResponseType: v9 ? KEYS_ACT_V9_RESPONSE : KEYS_ACT_RESPONSE,
-    operationLabel: v9 ? "rooms/keys/act/0.9" : "rooms/keys/act/0.8",
+    expectedResponseType: KEYS_ACT_RESPONSE,
+    operationLabel: "rooms/keys/act/0.9",
   });
   const completed = res.document as Record<string, unknown>;
   const principal = res.principal;
@@ -186,11 +175,6 @@ export async function roomsKeysAct(
     if (!(k in asked) && k !== "presentation") refuse(`it added ${k} to the payload`);
   }
   return { principal, document: completed };
-}
-
-/** The `rooms/keys/act` version that completes a document of `type`: 0.9 for `rooms/records/put/0.4`, else 0.8. */
-export function actVersionFor(type: string): "0.8" | "0.9" {
-  return type.replace(/#request$/, "") === RECORDS_PUT_V4 ? "0.9" : "0.8";
 }
 
 /** JSON with object members in sorted order, so two spellings of one value compare equal. */
@@ -400,13 +384,12 @@ export async function writeSealedAsMember(
 /**
  * Put a record in the clear, as the member — for an `open` room, whose records
  * the host stores and reads. `replaces`, as for {@link writeSealedAsMember}.
- * The cleartext's `body` is required by `rooms/records/put/0.3`, so a note with
+ * The cleartext's `body` is required by `rooms/records/put/0.4`, so a note with
  * none is sent with an empty one.
  *
  * With `file` — its manifest, `fileKey` included — and the `blobRef` it
- * describes, the record carries that file: `rooms/records/put/0.4`, completed
- * at `rooms/keys/act/0.9`, naming exactly that blob, as its host requires. A
- * note without one stays at 0.3, which every host serves.
+ * describes, the record carries that file, naming exactly that blob, as its
+ * host requires.
  */
 export async function putCleartextAsMember(
   room: PersonaRoom,
@@ -436,8 +419,8 @@ export async function putCleartextAsMember(
   }
   const { reply } = await actAndSend<RoomsRecordsPutResponsePayload>(
     room,
-    params.file ? RECORDS_PUT_V4 : RECORDS_PUT,
-    params.file ? RECORDS_PUT_V4_RESPONSE : RECORDS_PUT_RESPONSE,
+    RECORDS_PUT,
+    RECORDS_PUT_RESPONSE,
     payload,
   );
   return reply.version;
