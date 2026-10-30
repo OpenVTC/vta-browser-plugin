@@ -551,6 +551,19 @@ test("a retracted record is its tombstone, and an open room's cleartext says it 
   assert.ok(!("extra" in open));
 });
 
+test("an open room's file reaches the page as its name, size and type — never its key", async () => {
+  const view = await readView(ROOM, "k", {
+    key: "k", version: 2, status: "active", updatedAt: "x", verification: {},
+    cleartext: {
+      title: "Brochure",
+      body: "",
+      file: { name: "b.pdf", size: 42, mediaType: "application/pdf", blobRef: "zBlob", fileKey: "K".repeat(43) },
+    },
+  });
+  assert.deepEqual(view.file, { name: "b.pdf", size: 42, mediaType: "application/pdf" });
+  assert.ok(!JSON.stringify(view).includes("K".repeat(43)), "the key stays with the wallet");
+});
+
 test("liveGrants drops other communities", () => {
   const at = { origin: PORTAL, hostDid: HOST, vtaDid: VTA };
   const g = withGrants([], { ...at, hostDid: "did:web:other.example" }, [{ roomId: ROOM, member: MEMBER }], NOW);
