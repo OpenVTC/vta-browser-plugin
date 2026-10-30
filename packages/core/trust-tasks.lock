@@ -1462,9 +1462,9 @@ digest = "sha256:25ab10565b517b4dd533f5105b4e19e87c41ce47d03c1c743a23075d2ee0ecc
 
 [[task]]
 slug = "vta/webvh/dids/update"
-version = "1.0"
-type_uri = "https://trusttasks.org/spec/vta/webvh/dids/update/1.0"
-digest = "sha256:45fb824f465be209f2452c26695300b047f54d14c53e219307a8f69439e7a0cd"
+version = "1.1"
+type_uri = "https://trusttasks.org/spec/vta/webvh/dids/update/1.1"
+digest = "sha256:92f28b5b324f02541f128ce2cb9cff9f4e213bf8f142ddc32592cea927ecb805"
 
 [[task]]
 slug = "vta/webvh/servers/domains"
