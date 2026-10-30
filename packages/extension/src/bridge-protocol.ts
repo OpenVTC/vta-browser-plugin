@@ -2475,7 +2475,9 @@ export interface PageRoomView {
   /** The epoch the member's VTA is at, and the earliest it can read. */
   epoch?: number;
   earliestReadableEpoch?: number;
-  /** False when the VTA no longer holds keys for it (removed, or not yet welcomed). */
+  /** False when the VTA no longer holds keys for it (removed, or not yet welcomed).
+   *  True for an open room the member is in, which has no keys to hold: it is
+   *  read with the offer's credentials, and has no `epoch`. */
   held: boolean;
   sharedAt: string;
   expiresAt: string;
@@ -3247,6 +3249,12 @@ export type OffscreenRoomsPageOp =
    *  (`vtc/rooms/memberships/list`, signed as that member): `{ [roomId]: { label, visibility? } }`.
    *  A member whose record could not be read contributes nothing. */
   | { op: "roomNames"; hostDid: string; members: string[] }
+  /** The open rooms of `hostDid` each of `members` is in, from its record of
+   *  them (`vtc/rooms/memberships/list`): `{ roomId, member, actions }[]`
+   *  (`admittedOpenRooms`). The VTA's listing never names an open room — it has
+   *  no group — so these stand beside `held`. A member whose record could not
+   *  be read contributes nothing. */
+  | { op: "openRooms"; hostDid: string; members: string[] }
   /** Each room's own profile, read from `hostDid` as its member by the member's
    *  VTA (`rooms/keys/profile/read`): `{ [roomId]: RoomProfileSummary }`. A room
    *  whose profile could not be read contributes nothing. */

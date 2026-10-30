@@ -34,7 +34,7 @@ import {
 import { RoomHostChannel, verifyRecordBody } from "@openvtc/pnm-core/rooms/files";
 import { base64url } from "@openvtc/vti-didcomm-js";
 
-import { membersAt } from "./room-page-policy.js";
+import { admittedOpenRooms, membersAt } from "./room-page-policy.js";
 import type {
   OffscreenRoomsPageOp,
   PageListingView,
@@ -140,6 +140,31 @@ export async function runRoomsPageOp(
       }
     }
     return names;
+  }
+
+  if (op.op === "openRooms") {
+    // The community's record, member by member, as `roomNames` reads it: an open
+    // room has no group, so only the record says the member is in it.
+    const { endpoint } = await (deps.portal ?? ((d) => resolvePortal(d, now)))(op.hostDid);
+    const community = {
+      did: op.hostDid,
+      sender: (deps.completed ?? ((hostDid, ep) => new RoomHostChannel({ hostDid, endpoint: ep })))(op.hostDid, endpoint),
+    };
+    const out: { roomId: string; member: string; actions: string[] }[] = [];
+    for (const member of new Set(op.members)) {
+      try {
+        const rooms = await communityRoomMemberships({
+          holder: { did: holderDid },
+          vta: { did: vta.vtaDid, sender },
+          community,
+          member,
+        });
+        out.push(...admittedOpenRooms(rooms, member));
+      } catch {
+        // Nothing from this member this time: its open rooms are not offered.
+      }
+    }
+    return out;
   }
 
   if (op.op === "roomProfiles") {

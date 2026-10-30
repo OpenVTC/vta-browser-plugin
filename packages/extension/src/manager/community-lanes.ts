@@ -45,11 +45,19 @@ export interface Lane {
 /** Where one row has got to, read left to right. */
 export type RowStage = "offered" | "awaiting-keys" | "held" | "shared";
 
+/**
+ * The offer of an open room the member is in: the room has no group, so the
+ * agent never holds it, and joined is the community's record alone.
+ */
+export function joinedOpen(row: LaneRow): OfferView | undefined {
+  return row.offers.find((o) => o.state === "joined" && o.visibility === "open");
+}
+
 export function rowStage(row: LaneRow): RowStage {
-  if (row.shares.length > 0 && row.held) return "shared";
-  if (row.held) return "held";
-  // Joined an open room, which has no keys to hold.
-  if (row.offers.some((o) => o.state === "joined")) return "held";
+  // Joined an open room, which has no keys to hold, counts as held.
+  const held = row.held !== undefined || row.offers.some((o) => o.state === "joined");
+  if (row.shares.length > 0 && held) return "shared";
+  if (held) return "held";
   if (row.offers.some((o) => o.state === "unfinished" || o.state === "needsReadmission")) return "awaiting-keys";
   return "offered";
 }

@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { communityLanes, rowStage } from "../src/manager/community-lanes.js";
+import { communityLanes, joinedOpen, rowStage } from "../src/manager/community-lanes.js";
 import type { OfferStanding } from "../src/room-offers-policy.js";
 
 const AGENT = "did:webvh:QmAgent:agent.example";
@@ -64,6 +64,24 @@ test("each gap is its own stage", () => {
   });
   const stage = Object.fromEntries(lanes[0]!.rows.map((r) => [r.roomId, rowStage(r)]));
   assert.deepEqual(stage, { open: "offered", waiting: "awaiting-keys" });
+});
+
+test("an open room joined is held with no keys, and shared once its portal may show it", () => {
+  const joined = { ...offer(A, "pub", "joined", "Public"), visibility: "open" };
+  const lanes = communityLanes({
+    communities: [community(A, [joined])],
+    shares: [share(A, "pub")],
+    entries: [],
+    hosts: {},
+    agentDid: AGENT,
+  });
+  const [row] = lanes[0]!.rows;
+  assert.equal(row!.held, undefined, "the agent holds nothing for an open room");
+  assert.equal(joinedOpen(row!)?.roomId, "pub");
+  assert.equal(rowStage(row!), "shared");
+  assert.equal(rowStage({ ...row!, shares: [] }), "held");
+  // A sealed room joined is not an open one, whatever the agent holds.
+  assert.equal(joinedOpen({ ...row!, offers: [offer(A, "pub", "joined")] }), undefined);
 });
 
 test("a share made through another agent is not this agent's", () => {
