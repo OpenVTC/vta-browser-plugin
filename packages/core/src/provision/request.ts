@@ -6,10 +6,9 @@
 //
 // Wire shape mirrors
 // `verifiable-trust-infrastructure/vta-sdk/src/provision_integration/request.rs`
-// (`BootstrapRequest::sign`). This client now targets the canonical Trust
-// Task URI `https://trusttasks.org/spec/provision/integration/0.1` (see
-// `send.ts`); the VTA dual-registers it alongside the legacy FPN type, so
-// both validate during the FPN deprecation window.
+// (`BootstrapRequest::sign`). It travels as the payload of
+// `https://trusttasks.org/spec/provision/integration/0.3`, the one version
+// `trust-tasks.lock` pins (see `send.ts`).
 
 import { base64url } from "@openvtc/vti-didcomm-js";
 import type { SigningIdentity } from "../siop/self-issued.js";

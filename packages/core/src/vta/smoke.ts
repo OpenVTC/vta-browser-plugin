@@ -13,7 +13,7 @@ import { PickupProtocol, type LiveDeliveryChangeBody } from "./pickup.js";
 import {
   PasskeyVmTask,
   TRUST_TASK_ENVELOPE_TYPE,
-  TRUST_TASK_ERROR_TYPE,
+  TRUST_TASK_ERROR_TYPE_URI,
 } from "./protocol.js";
 import type { DidcommMessageBridge } from "./transport.js";
 import type { EnrollmentChallengeResponse } from "./types.js";
@@ -185,8 +185,10 @@ export async function smokeDidcommVtaTransportRoundtrip(): Promise<SmokeDidcommR
             type: TRUST_TASK_ENVELOPE_TYPE,
             body: {
               id: "resp-error",
-              type: TRUST_TASK_ERROR_TYPE,
-              payload: { code: "unsupported_type", message: tt.type ?? "" },
+              // What a current agent sends: the framework's own error version
+              // and its lowerCamelCase code.
+              type: TRUST_TASK_ERROR_TYPE_URI,
+              payload: { code: "unsupportedType", message: tt.type ?? "" },
             },
           };
         },

@@ -318,6 +318,13 @@ jobs:
           fi
           echo "OK: provider.js, content.js and background.js name no rooms/* task"
 
+      # The agents keep serving a superseded task version for as long as this
+      # wallet is known to send it, so a hand-spelled URI or one a dependency
+      # carries in holds their retirement back while every test stays green.
+      # Read what ships, and require each task URI in it at the lock's version.
+      - name: Assert every task the bundles name is at its pinned version
+        run: node packages/extension/scripts/check-task-versions.mjs
+
       # The console's isolation rests on it being one self-contained file: the
       # guard above names exactly one exception, so a second chunk would be a
       # file nothing checks. Losing `codeSplitting: false` in a future upgrade
