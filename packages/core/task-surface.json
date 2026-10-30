@@ -882,18 +882,6 @@
       "uri": "https://trusttasks.org/spec/rooms/info/0.1"
     },
     {
-      "uri": "https://trusttasks.org/spec/rooms/keys/act/0.1",
-      "consts": [
-        "TASK_ROOMS_KEYS_ACT_0_1"
-      ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/rooms/keys/act/0.5",
-      "consts": [
-        "TASK_ROOMS_KEYS_ACT_0_5"
-      ]
-    },
-    {
       "uri": "https://trusttasks.org/spec/rooms/keys/act/0.8",
       "consts": [
         "TASK_ROOMS_KEYS_ACT_0_8"
@@ -903,12 +891,6 @@
       "uri": "https://trusttasks.org/spec/rooms/keys/backfill/0.2",
       "consts": [
         "TASK_ROOMS_KEYS_BACKFILL_0_2"
-      ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/rooms/keys/browse/0.1",
-      "consts": [
-        "TASK_ROOMS_KEYS_BROWSE_0_1"
       ]
     },
     {
@@ -1014,15 +996,9 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/rooms/owner/group/remove/0.1",
+      "uri": "https://trusttasks.org/spec/rooms/owner/group/remove/0.4",
       "consts": [
-        "TASK_ROOMS_OWNER_GROUP_REMOVE_0_1"
-      ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/rooms/owner/group/remove/0.3",
-      "consts": [
-        "TASK_ROOMS_OWNER_GROUP_REMOVE_0_3"
+        "TASK_ROOMS_OWNER_GROUP_REMOVE_0_4"
       ]
     },
     {
@@ -1346,12 +1322,6 @@
       "uri": "https://trusttasks.org/spec/vta/contexts/create/1.0",
       "consts": [
         "TASK_CONTEXTS_CREATE_1_0"
-      ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/vta/contexts/delete/1.0",
-      "consts": [
-        "TASK_CONTEXTS_DELETE_1_0"
       ]
     },
     {
