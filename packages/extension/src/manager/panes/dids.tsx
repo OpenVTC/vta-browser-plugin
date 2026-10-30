@@ -161,6 +161,9 @@ export function DidsPane({
   const denied = authority && !hasRole(authority, "admin", "super-admin")
     ? "Deleting a DID needs the admin role at this agent."
     : null;
+  const updateDenied = authority && !hasRole(authority, "admin", "super-admin")
+    ? "Publishing an entry to a DID's log needs the admin role at this agent."
+    : null;
 
   const columns: Column<WebvhDidRecord>[] = [
     // A floor on the identifier column. A `did:webvh` has no natural break
@@ -282,7 +285,14 @@ export function DidsPane({
             rows={list.data.dids}
             rowKey={(d) => d.did}
             expanded={(d) =>
-              opened === d.did ? <DidDetail parties={parties} record={d} /> : null
+              opened === d.did ? (
+                <DidDetail
+                  parties={parties}
+                  record={d}
+                  disabledReason={updateDenied}
+                  onChanged={list.reload}
+                />
+              ) : null
             }
             empty={
               contextId
