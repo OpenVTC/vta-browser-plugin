@@ -398,8 +398,17 @@ document says it is:
   it admits members straight away or an administrator reviews each request,
   the details it asks applicants to give (required ones must be filled in),
   a "List me in its public member registry" box (unticked unless you tick it),
-  and the DIDs your agent hosts, each marked with any site it is already used
-  at, since one identity used at two communities links them. **Send request**
+  and who to join as. First, and chosen unless you pick otherwise, is **a new
+  identity for <host>**: your agent sets up a context of its own for the
+  community (`vtc-<host>`) and a new DID in it, published through one of its
+  DID hosting servers (you choose which when it has more than one), so the
+  community learns of no other identity you hold. It is made only when you
+  send the request, and a request that fails after it is made reuses it next
+  time rather than making another. It needs an agent this wallet administers
+  with at least one hosting server; without one it is shown but can't be
+  chosen. Below it are the DIDs your agent already hosts, each marked with any
+  site it is already used at, since one identity used at two communities links
+  them. **Send request**
   records the community in your vault (the same `did-self-issued` entry a
   member's sign-in uses: the portal's origin and the community's DID, in the
   chosen DID's context) and sends `vtc/join-requests/submit/0.3`, signed by

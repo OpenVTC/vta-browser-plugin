@@ -95,6 +95,7 @@ import {
   disclosureApprovalPayload,
   DISCLOSURE_APPROVE_RESPONSE_TYPE,
 } from "@openvtc/pnm-core/persona";
+import { webvhDidCreate, webvhServerList } from "@openvtc/pnm-core/webvh";
 import { base64url } from "@openvtc/vti-didcomm-js";
 import { grantCommand } from "./grant-command.js";
 import { forgetInbox, getSettings, inboxFor, inboxToAdopt, setInbox } from "./config.js";
@@ -1697,6 +1698,42 @@ const signInFlows = new SignInFlows({
     unbindIdentity: async (entryId) => {
       const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
       await vaultDelete(session, { holder, service, id: entryId, reason: "join request not taken" });
+    },
+    listHostingServers: async () => {
+      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+      const { servers } = await webvhServerList(session, { holder, service });
+      return (servers ?? []).map((s) => ({ id: s.id, ...(s.label ? { label: s.label } : {}) }));
+    },
+    // A community's own identity: its own context, one DID. Read before
+    // written, so a join retried after a failure reuses what the first
+    // attempt made (R2.1) rather than minting a second DID.
+    createCommunityIdentity: async ({ contextId, name, serverId }) => {
+      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+      const contexts = await contextsList(session, { holder, service });
+      if (!contexts.some((c) => c.id === contextId)) {
+        await contextsCreate(session, {
+          holder,
+          service,
+          id: contextId,
+          name,
+          description: `Your identity at ${name}, set up when you asked to join it`,
+        });
+      }
+      const [existing] = await vtaListDids(session, { holder, service, contextId });
+      if (existing) return { did: existing.did, contextId };
+      // No method named: the agent's configured form (webvh or did:scid) is
+      // the one a community should see. The DIDComm entry is how the community
+      // reaches the member's agent, to deliver what it issues.
+      const minted = await webvhDidCreate(session, {
+        holder,
+        service,
+        contextId,
+        serverId,
+        setPrimary: true,
+        addMediatorService: true,
+        label: `Member of ${name}`,
+      });
+      return { did: minted.did, contextId };
     },
     ensureDevice: () => ensureDeviceEnrolment(vtaDid, restBaseUrl),
     signIdentify: (entryId, unsigned) =>

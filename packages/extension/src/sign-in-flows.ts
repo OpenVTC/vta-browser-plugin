@@ -62,7 +62,11 @@
 //                      A community that asks for evidence this wallet cannot
 //                      assemble (a credential, an invitation, vetting) is
 //                      said so plainly (`join-elsewhere`) and the flow ends.
-//       join-submit    the person chose an identity and answered. The vault
+//       join-submit    the person chose an identity and answered. A new
+//                      identity, when they chose one, is set up first: a
+//                      context of its own at their agent and one DID in it
+//                      (`createCommunityIdentity`), so the community is not
+//                      told about any other identity they hold. The vault
 //                      entry is recorded first, in the shape every member's
 //                      has (`bindProfile`, as for a DID hosting service),
 //                      because the VTA signs only as a vault entry's principal
@@ -159,6 +163,7 @@ import {
 import type {
   SignInFailureParty,
   SignInFailureStage,
+  SignInNewIdentityView,
   SignInPersonaView,
   SignInIdentityView,
   SignInRefusalDetail,
@@ -244,6 +249,22 @@ export interface SignInVta {
   /** `vault/sign-trust-task` for any other document the member sends as the
    *  entry's principal (a join request). Returns the document with its proof. */
   signTask(entryId: string, unsigned: OobDocument): Promise<unknown>;
+  /** The DID hosting servers the agent publishes through
+   *  (`vta/webvh/servers/list`): where a new identity for a community can be
+   *  published. Absent: this wallet cannot set one up. */
+  listHostingServers?(): Promise<Array<{ id: string; label?: string }>>;
+  /**
+   * Set up an identity of its own for one community: the context
+   * `contextId` (created when it does not exist) and one DID in it, published
+   * through `serverId`. Safe to repeat: a context that already holds a DID
+   * answers with that DID, so a join that failed after this step reuses what
+   * it made rather than making another.
+   */
+  createCommunityIdentity?(request: {
+    contextId: string;
+    name: string;
+    serverId: string;
+  }): Promise<SignInPersona>;
   /** Remove an entry this flow recorded and no longer needs (`vault/delete`). */
   unbindIdentity(entryId: string): Promise<void>;
   /** Rename an entry (`vault/upsert` with its id and version), keeping
@@ -329,6 +350,22 @@ function hostOf(origin: string): string {
   }
 }
 
+/** The longest context id an agent accepts (`vta_sdk::identifier`). */
+const MAX_CONTEXT_ID_LEN = 64;
+
+/**
+ * The context a new identity for the community at `host` lives in: one per
+ * community, named for its verified portal host, so a second attempt finds
+ * the first one's context. Context ids take `A-Z a-z 0-9 . _ -` only.
+ */
+export function communityContextId(host: string): string {
+  const slug = host
+    .toLowerCase()
+    .replace(/[^a-z0-9.-]+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "");
+  return `vtc-${slug || "community"}`.slice(0, MAX_CONTEXT_ID_LEN).replace(/[-.]+$/, "");
+}
+
 /** A DID the agent hosts, with the sites it already signs in to. */
 function personaView(p: SignInPersona, entries: readonly SignInVaultEntry[]): SignInPersonaView {
   const usedAt = [
@@ -372,6 +409,8 @@ interface Flow {
   entries?: SignInVaultEntry[];
   /** A community's join manifest, as far as the wallet can apply under it. */
   joinPlan?: Extract<JoinPlan, { ok: true }>;
+  /** The new identity the wallet offered for this community, if it did. */
+  newIdentity?: SignInNewIdentityView;
   kA?: SigningIdentity;
   entry?: SignInIdentityView;
   /** The number the portal shows for this request, read from the page the
@@ -825,6 +864,8 @@ export class SignInFlows {
     }
     flow.joinPlan = plan;
     flow.personas = await flow.vta.listPersonas();
+    const newIdentity = await this.newIdentityOffer(flow);
+    if (newIdentity) flow.newIdentity = newIdentity;
     return {
       kind: "join-apply",
       host,
@@ -834,6 +875,26 @@ export class SignInFlows {
       attributes: plan.requestedAttributes,
       ...(plan.directory ? { directory: plan.directory } : {}),
       identities: flow.personas.map((p) => personaView(p, flow.entries ?? [])),
+      ...(newIdentity ? { newIdentity } : {}),
+    };
+  }
+
+  /** Whether the agent can set up a new identity for this community, and
+   *  where it could publish one. An agent that will not list its hosting
+   *  servers is one this wallet does not administer: no offer, and the
+   *  person joins as an identity they already have. */
+  private async newIdentityOffer(flow: Flow): Promise<SignInNewIdentityView | undefined> {
+    const { listHostingServers, createCommunityIdentity } = flow.vta;
+    if (!listHostingServers || !createCommunityIdentity) return undefined;
+    let servers: Array<{ id: string; label?: string }>;
+    try {
+      servers = await listHostingServers();
+    } catch {
+      return undefined;
+    }
+    return {
+      contextId: communityContextId(hostOf(flow.services.portalOrigin)),
+      servers: servers.map((s) => ({ id: s.id, ...(s.label ? { label: s.label } : {}) })),
     };
   }
 
@@ -842,14 +903,17 @@ export class SignInFlows {
     flowId: string,
     flow: Flow,
     req: {
-      did: string;
       attributes: Array<{ type: string; value: string }>;
       registryConsent: boolean;
-    },
+    } & ({ did: string } | { newIdentity: { serverId: string } }),
   ): Promise<SignInStepResult> {
     const plan = flow.joinPlan;
     if (flow.phase !== "joining" || flow.kind !== "community" || !plan) throw outOfOrder();
-    if (!flow.personas?.some((p) => p.did === req.did)) throw outOfOrder();
+    const offer = flow.newIdentity;
+    const serverId = "newIdentity" in req ? req.newIdentity?.serverId : undefined;
+    if ("newIdentity" in req) {
+      if (!offer || !offer.servers.some((s) => s.id === serverId)) throw outOfOrder();
+    } else if (!flow.personas?.some((p) => p.did === req.did)) throw outOfOrder();
     if (typeof req.registryConsent !== "boolean") throw outOfOrder();
     // Only what the community asked for, and every required one, non-empty.
     const asked = new Map(plan.requestedAttributes.map((a) => [a.type, a]));
@@ -866,12 +930,36 @@ export class SignInFlows {
     const host = flow.communityName;
     const { portalOrigin } = flow.services;
 
+    // A new identity before anything else: the community hears only of it.
+    let did: string;
+    if (offer && serverId !== undefined) {
+      flow.at = "join-identity";
+      try {
+        const made = await flow.vta.createCommunityIdentity!({
+          contextId: offer.contextId,
+          // The verified host, not the community's own word for itself.
+          name: host,
+          serverId,
+        });
+        did = made.did;
+      } catch (err) {
+        return this.joinFailed(
+          flowId,
+          flow,
+          err,
+          `Your agent couldn't set up an identity for ${host}, so nothing was sent to it`,
+        );
+      }
+    } else {
+      did = (req as { did: string }).did;
+    }
+
     // The entry first: the VTA signs only as a vault entry's principal, and
     // the community takes the applicant from that signature.
     flow.at = "join";
     let bound: { entryId: string; label: string };
     try {
-      bound = await flow.vta.bindIdentity({ origin: portalOrigin, did: req.did, rpDid: flow.vtcDid });
+      bound = await flow.vta.bindIdentity({ origin: portalOrigin, did, rpDid: flow.vtcDid });
     } catch (err) {
       this.end(flow);
       this.flows.delete(flowId);
@@ -887,7 +975,7 @@ export class SignInFlows {
 
     let outcome: ReturnType<typeof joinOutcomeOf>;
     try {
-      const unsigned = buildJoinSubmit(req.did, flow.vtcDid, {
+      const unsigned = buildJoinSubmit(did, flow.vtcDid, {
         criterion: plan.criterion,
         attributes: answers,
         registryConsent: req.registryConsent,
@@ -911,11 +999,12 @@ export class SignInFlows {
 
     if (outcome.kind === "admitted") {
       // A member now: on to the ordinary confirm (C3 step 5) for the same link.
-      const identity: SignInIdentityView = { entryId: bound.entryId, did: req.did, label: bound.label };
+      const identity: SignInIdentityView = { entryId: bound.entryId, did, label: bound.label };
       flow.identities = [identity];
       flow.communityName = bound.label;
       delete flow.personas;
       delete flow.joinPlan;
+      delete flow.newIdentity;
       delete flow.entries;
       flow.phase = "prepared";
       return {
@@ -1470,6 +1559,7 @@ const UNREACHED: ReadonlySet<string> = new Set(["network", "timeout"]);
 
 /** The exchanges the member's own VTA answers; the rest go to the community. */
 const VTA_STAGES: ReadonlySet<SignInFailureStage> = new Set([
+  "join-identity",
   "join-sign",
   "identify",
   "grant",
