@@ -28,7 +28,7 @@
 // claims, and never framed, since a `blob:` URL here has the extension's origin.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { HeldRoom } from "@openvtc/pnm-core/rooms";
+import type { RoomPlace } from "../room-groups.js";
 import { Button, Note } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
 import { requestOriginPermission } from "../../host-permissions.js";
@@ -107,7 +107,7 @@ export function PutRoomFile({
   prepared,
   onPut,
 }: {
-  room: HeldRoom;
+  room: RoomPlace;
   host: string;
   prepared: RoomFilesPrepared;
   onPut: () => void;
@@ -272,7 +272,7 @@ export function GetRoomFile({
   showTitle = true,
   autoPreview = false,
 }: {
-  room: HeldRoom;
+  room: RoomPlace;
   host: string;
   prepared: RoomFilesPrepared | null;
   recordKey: string;

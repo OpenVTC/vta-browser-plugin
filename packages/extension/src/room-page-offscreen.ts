@@ -20,6 +20,7 @@ import { resolveCommunityDocument, selectSignInServices, verifyDomainLinkage } f
 import {
   communityRoomMemberships,
   opaqueRecordKey,
+  putCleartextAsMember,
   roomInfoAsMember,
   roomNamesFromOffers,
   type CommunityRoomName,
@@ -238,10 +239,19 @@ export async function runRoomsPageOp(
     case "putNote": {
       const r = await room(op.roomId, op.member);
       const { principal, info } = await roomInfoAsMember(r);
-      if (info.visibility === "open") {
-        throw new Error("this room is open: notes from the portal go in attributed rooms, whose records are sealed");
-      }
       const key = opaqueRecordKey();
+      if (info.visibility === "open") {
+        // An open room's records are cleartext the host stores and reads: no group
+        // to seal under, and the member's request is what says the note is theirs.
+        const version = await putCleartextAsMember(r, {
+          key,
+          title: op.title,
+          ...(op.body !== undefined ? { body: op.body } : {}),
+          ...(op.description !== undefined ? { description: op.description } : {}),
+          ...(op.tags !== undefined ? { tags: op.tags } : {}),
+        });
+        return { key, version };
+      }
       const version = await writeSealedAsMember(r, {
         roomId: op.roomId,
         key,

@@ -228,6 +228,12 @@ function Write({ view, decide }: { view: RoomWriteConsentView; decide: (approved
         {originHost(view.origin)} asks to write to a room, signed as you. Every member of the room will read it as
         yours.
       </div>
+      {view.visibility === "open" && (
+        <div role="note" style={{ color: "var(--w-muted)", lineHeight: 1.45 }}>
+          This room is <b>open</b>: the note is stored in the clear, so the room's host can read it as well as its
+          members.
+        </div>
+      )}
       <div>
         <div style={label}>Room</div>
         <div style={card}>

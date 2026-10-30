@@ -14,6 +14,57 @@
 import type { HeldRoom } from "@openvtc/pnm-core/rooms";
 import type { KnownRoomHost } from "./room-hosts.js";
 
+/**
+ * What acting in a room as one member needs: the room, the member, and what the
+ * room's grant to it confers. A held place is one; so is an open room the member
+ * is in ({@link OpenRoom}), which has no group and so no epochs.
+ */
+export type RoomPlace = Pick<HeldRoom, "roomId" | "member" | "actions">;
+
+/**
+ * An open room the member is in, by the community's record (its offer, joined):
+ * an open room has no group, so `rooms/keys/list` never names it. The member
+ * reads and writes it with the credentials the offer gave.
+ */
+export interface OpenRoom extends RoomPlace {
+  actions: string[];
+  /** The community that offered it: the room's host. */
+  communityDid: string;
+  /** The community's name for the room. */
+  label?: string;
+}
+
+/**
+ * The open rooms the member is in that the agent does not also hold, one per
+ * (room, member), from the communities' offers as the wallet read them.
+ */
+export function openRooms(
+  communities: readonly {
+    communityDid: string;
+    members: readonly { offers: readonly { roomId: string; member: string; label: string; visibility: string; actions: string[]; state: string }[] }[];
+  }[],
+  held: readonly RoomEntry[],
+): OpenRoom[] {
+  const out: OpenRoom[] = [];
+  for (const cv of communities) {
+    for (const m of cv.members) {
+      for (const o of m.offers) {
+        if (o.state !== "joined" || o.visibility !== "open") continue;
+        if (held.some((e) => e.roomId === o.roomId)) continue;
+        if (out.some((r) => r.roomId === o.roomId && r.member === o.member)) continue;
+        out.push({
+          roomId: o.roomId,
+          member: o.member,
+          actions: [...o.actions],
+          communityDid: cv.communityDid,
+          ...(o.label ? { label: o.label } : {}),
+        });
+      }
+    }
+  }
+  return out;
+}
+
 /** One room, and every place this agent holds in it. */
 export interface RoomEntry {
   roomId: string;

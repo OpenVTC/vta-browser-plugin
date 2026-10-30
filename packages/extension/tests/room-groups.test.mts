@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { knownRoomHosts, ownedRooms, roomHostsKey, withRoomHost, ROOM_HOSTS_MAX } from "../src/manager/room-hosts.js";
-import { groupRooms, mostReadable, roomEntries } from "../src/manager/room-groups.js";
+import { groupRooms, mostReadable, openRooms, roomEntries } from "../src/manager/room-groups.js";
 import { roomNamesKey } from "../src/room-page-policy.js";
 
 const VTA = "did:webvh:QmAgent:agent.example";
@@ -108,4 +108,28 @@ test("only rooms created here, with a key, are owned", () => {
     },
   };
   assert.deepEqual(ownedRooms(all, VTA), [{ roomId: "c", signingKeyId: "kc" }]);
+});
+
+test("open rooms: joined and open, not already held, one per room and member", () => {
+  const o = (roomId: string, state: string, visibility = "open", member = "did:example:me") => ({
+    roomId,
+    member,
+    label: roomId.toUpperCase(),
+    visibility,
+    actions: ["read", "write"],
+    state,
+  });
+  const communities = [
+    {
+      communityDid: COMMUNITY,
+      members: [
+        { offers: [o("pub", "joined"), o("sealed", "joined", "attributed"), o("waiting", "offered"), o("gone", "removed"), o("held", "joined")] },
+        { offers: [o("pub", "joined")] },
+      ],
+    },
+  ];
+  const held = roomEntries([{ roomId: "held", member: "did:example:me", epoch: 1, earliestReadableEpoch: 1 }]);
+  assert.deepEqual(openRooms(communities, held), [
+    { roomId: "pub", member: "did:example:me", actions: ["read", "write"], communityDid: COMMUNITY, label: "PUB" },
+  ]);
 });

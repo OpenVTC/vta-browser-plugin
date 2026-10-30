@@ -31,6 +31,7 @@
 
 import { useState } from "react";
 import type { HeldRoom } from "@openvtc/pnm-core/rooms";
+import type { RoomPlace } from "../room-groups.js";
 import { Button, Note } from "../../ui.js";
 import { c, t } from "../../theme.js";
 import { curateRoomRecord, writeRoomNote } from "../room-files.js";
@@ -60,7 +61,7 @@ export function NoteEditor({
   onDone,
   onCancel,
 }: {
-  room: HeldRoom;
+  room: RoomPlace;
   host: string;
   existing?: { key: string; version: number; title?: string; body?: string };
   onDone: () => void;
@@ -140,7 +141,7 @@ export function RecordActions({
   onEdit,
   onChanged,
 }: {
-  room: HeldRoom;
+  room: RoomPlace;
   host: string;
   recordKey: string;
   version: number;
