@@ -460,9 +460,11 @@ test("a download's bytes reach the page only after the whole file verified", asy
   inner.receive({ kind: "progress", stage: "downloading", done: 1, total: 2 });
   assert.ok(!page.posted.some((m) => (m as { kind: string }).kind === "data"), "nothing provisional is posted");
   inner.receive({ kind: "provisional", data: "BBBB" });
-  inner.receive({ kind: "got", file: { name: "a.pdf", size: 6 }, author: MEMBER, version: 2 });
+  inner.receive({ kind: "got", file: { name: "a.pdf", size: 6 }, author: MEMBER, signed: false, version: 2 });
   const kinds = page.posted.map((m) => (m as { kind: string }).kind);
   assert.deepEqual(kinds, ["progress", "got", "data", "data", "done"]);
+  const got = page.posted.find((m) => (m as { kind: string }).kind === "got") as { signed?: boolean };
+  assert.equal(got.signed, false, "the page is told an open room's record is not signed");
   assert.equal(page.connected, false);
 });
 
@@ -547,6 +549,19 @@ test("a retracted record is its tombstone, and an open room's cleartext says it 
   assert.equal(open.sealed, false);
   assert.equal(open.title, "Hello");
   assert.ok(!("extra" in open));
+});
+
+test("an open room's file reaches the page as its name, size and type — never its key", async () => {
+  const view = await readView(ROOM, "k", {
+    key: "k", version: 2, status: "active", updatedAt: "x", verification: {},
+    cleartext: {
+      title: "Brochure",
+      body: "",
+      file: { name: "b.pdf", size: 42, mediaType: "application/pdf", blobRef: "zBlob", fileKey: "K".repeat(43) },
+    },
+  });
+  assert.deepEqual(view.file, { name: "b.pdf", size: 42, mediaType: "application/pdf" });
+  assert.ok(!JSON.stringify(view).includes("K".repeat(43)), "the key stays with the wallet");
 });
 
 test("liveGrants drops other communities", () => {

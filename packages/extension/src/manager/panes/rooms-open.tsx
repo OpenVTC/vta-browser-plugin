@@ -124,7 +124,8 @@ export function OpenRoomDetail({
       <Note tone="accent">
         This room is open: there are no keys to hold, so it is not among the rooms your agent holds keys for. Your
         agent reads and writes it with the credentials the community gave you, and what is in it — notes you add
-        included — is readable by its host. Files go in attributed and private rooms.
+        included — is readable by its host. A file you add is stored encrypted, under a key its record carries in
+        the clear: the host and the room&rsquo;s members can open it, whoever holds only the storage cannot.
       </Note>
       <RoomRecords key={`${room.roomId}|${room.member}`} parties={parties} room={room} host={room.communityDid} />
     </div>

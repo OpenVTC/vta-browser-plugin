@@ -10,6 +10,18 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Added
 
+- **Files in open rooms.** `putRoomFile` seals an open room's file under a key
+  minted for it alone and writes `rooms/records/put/0.4`, the manifest and its
+  `fileKey` in `cleartext.file`; `getRoomFile` opens it with that key, refusing
+  an open manifest without one and a sealed one with one. `RoomFileGot.signed`
+  says whether the author signed the record — false on an open room. The
+  `openRoom` refusal is gone from `RoomFileError`.
+- **`putCleartextAsMember` takes a `file`** — its manifest and `blobRef` —
+  and writes it at `rooms/records/put/0.4`, naming exactly that blob.
+- **`roomsKeysAct` completes `rooms/records/put/0.4` at `rooms/keys/act/0.9`**,
+  the one type 0.8's table lacks (`actVersionFor`); every other request stays at
+  0.8. Pins `rooms/keys/act/0.9` and `rooms/records/put/0.4`.
+
 - **`putCleartextAsMember` writes a whole open-room note.** It takes the
   cleartext's `description` and `tags`, and always sends a `body` — required by
   `rooms/records/put/0.3` — empty when the note has none.

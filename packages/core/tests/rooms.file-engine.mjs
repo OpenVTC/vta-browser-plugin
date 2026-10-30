@@ -40,6 +40,7 @@ const ACTION = {
   "rooms/records/list/0.5": "read",
   "rooms/records/get/0.2": "read",
   "rooms/records/put/0.3": "write",
+  "rooms/records/put/0.4": "write",
   "rooms/blobs/upload/begin/0.2": "write",
   "rooms/blobs/get/0.2": "read",
   "rooms/blobs/chunk/0.1": "read",
@@ -64,8 +65,13 @@ function fakeVta() {
         asked.push(slug(envelope.type));
         assert.equal(envelope.issuer, SIGNER.did, "the wallet asks its own VTA");
         switch (slug(envelope.type)) {
-          case "rooms/keys/act/0.8": {
+          case "rooms/keys/act/0.8":
+          case "rooms/keys/act/0.9": {
             const doc = structuredClone(p.document);
+            // 0.8's table names put only to 0.3 (Recipient item 1).
+            if (slug(envelope.type) === "rooms/keys/act/0.8" && slug(doc.type) === "rooms/records/put/0.4") {
+              throw new Error(`rooms/keys/act:typeNotActable ${doc.type}`);
+            }
             assert.equal(doc.proof, undefined, "act takes an unsigned document");
             assert.equal(doc.payload.presentation, undefined, "and no presentation");
             const action = ACTION[slug(doc.type)];
@@ -178,10 +184,29 @@ function fakeHost(opts = {}) {
         state.records.set(p.key, { version, sealed: p.sealed, blobs: p.blobs, author: envelope.issuer });
         return { key: p.key, version };
       }
+      // put/0.4 Host item 12: an open record's blobs are exactly its file's.
+      case "rooms/records/put/0.4": {
+        presented(p, "write");
+        const file = p.cleartext?.file;
+        assert.ok(file, "a 0.4 put here carries a file");
+        assert.deepEqual(p.blobs, [file.blobRef], "an open record names exactly its file's blob");
+        assert.match(file.fileKey, /^[A-Za-z0-9_-]{43}$/, "and carries its key");
+        const version = ++state.version;
+        state.records.set(p.key, { version, cleartext: p.cleartext, blobs: p.blobs, author: envelope.issuer });
+        return { key: p.key, version };
+      }
       case "rooms/records/get/0.2": {
         presented(p, "read");
         const r = state.records.get(p.key);
-        return { roomId: ROOM, key: p.key, version: r.version, author: r.author, sealed: r.sealed, blobs: r.blobs };
+        return {
+          roomId: ROOM,
+          key: p.key,
+          version: r.version,
+          author: opts.dropAuthor ? undefined : r.author,
+          ...(r.sealed ? { sealed: r.sealed } : {}),
+          ...(r.cleartext ? { cleartext: opts.rewriteCleartext?.(r.cleartext) ?? r.cleartext } : {}),
+          blobs: r.blobs,
+        };
       }
       case "rooms/blobs/get/0.2": {
         presented(p, "read");
@@ -315,13 +340,74 @@ test("the same file uploaded twice is stored once", async () => {
   assert.equal(chunkCalls(), before, "no chunk is sent for a blob the room holds");
 });
 
-test("an open room is refused before a file key is asked for", async () => {
+// An open room has no storage key: the file is sealed under a key minted for it
+// alone, which the record carries in the clear (`rooms/records/put/0.4`).
+test("an open room's file is sealed under its own key, written at put/0.4 through act/0.9, and comes back", async () => {
   const vta = fakeVta();
-  await assert.rejects(
-    putRoomFile(context(vta, fakeHost({ visibility: "open" })), { name: "a.txt", bytes: sample(10) }),
-    (e) => e instanceof RoomFileError && e.code === "openRoom",
+  const host = fakeHost({ visibility: "open" });
+  const bytes = sample();
+  const put = await putRoomFile(context(vta, host), {
+    name: "brochure.pdf",
+    mediaType: "application/pdf",
+    bytes,
+    title: "2026 brochure",
+    tags: ["public"],
+  });
+  assert.ok(!vta.asked.includes("rooms/keys/file-key/0.2"), "no key is asked of the VTA");
+  assert.ok(!vta.asked.includes("rooms/keys/seal/0.2"), "nothing is sealed as a record");
+  assert.ok(vta.asked.includes("rooms/keys/act/0.9"), "the record is completed at act/0.9");
+  assert.ok(host.asked.includes("rooms/records/put/0.4"));
+  const stored = host.records.get(put.key);
+  assert.equal(stored.cleartext.file.epoch, EPOCH, "written at the room's epoch");
+  assert.notEqual(stored.cleartext.file.fileKey, FILE_KEY);
+  assert.equal(stored.cleartext.title, "2026 brochure");
+
+  const { got, bytes: back } = await getAll(context(vta, host), put.key);
+  assert.deepEqual(new Uint8Array(back), bytes);
+  assert.equal(got.signed, false, "an open room's record is the host's word, not a signed body");
+  assert.equal(got.author, PERSONA.did);
+  assert.equal(got.file.name, "brochure.pdf");
+  assert.equal(got.file.fileKey, undefined, "the key is not handed back");
+  assert.equal(got.title, "2026 brochure");
+  assert.deepEqual(got.tags, ["public"]);
+  assert.equal(vta.asked.filter((s) => s === "rooms/keys/file-key/0.2").length, 0, "nor asked for to open it");
+});
+
+test("everything but an open room's file record stays on act/0.8", async () => {
+  const vta = fakeVta();
+  await putRoomFile(context(vta, fakeHost({ visibility: "open" })), { name: "a.txt", bytes: sample(10) });
+  assert.deepEqual(
+    vta.asked.filter((s) => s.startsWith("rooms/keys/act/")),
+    ["rooms/keys/act/0.8", "rooms/keys/act/0.8", "rooms/keys/act/0.9"],
+    "info and begin at 0.8, the put/0.4 record at 0.9",
   );
-  assert.ok(!vta.asked.includes("rooms/keys/file-key/0.2"));
+});
+
+test("an open room's file whose manifest carries no key is refused, never opened", async () => {
+  const vta = fakeVta();
+  const host = fakeHost({
+    visibility: "open",
+    rewriteCleartext: (c) => {
+      const { fileKey: _, ...file } = c.file;
+      return { ...c, file };
+    },
+  });
+  const put = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
+  await assert.rejects(
+    getAll(context(vta, host), put.key),
+    (e) => e instanceof RoomFileError && e.code === "hostMisbehaved",
+  );
+  assert.ok(!vta.asked.includes("rooms/keys/file-key/0.2"), "no derived key is asked for in its place");
+});
+
+test("an open room's file under the wrong key does not verify", async () => {
+  const vta = fakeVta();
+  const host = fakeHost({
+    visibility: "open",
+    rewriteCleartext: (c) => ({ ...c, file: { ...c.file, fileKey: Buffer.alloc(32, 1).toString("base64url") } }),
+  });
+  const put = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
+  await assert.rejects(getAll(context(vta, host), put.key));
 });
 
 test("a room that takes no files is refused before a file key is asked for", async () => {

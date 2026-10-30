@@ -139,6 +139,7 @@ const GOT = (size: number) => ({
   kind: "got",
   file: { name: "a.txt", mediaType: "text/html", size },
   author: "did:key:zAuthor",
+  signed: true,
   version: 1,
 });
 

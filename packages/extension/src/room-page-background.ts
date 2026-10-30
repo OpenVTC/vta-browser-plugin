@@ -649,6 +649,7 @@ export class RoomPageGates {
             kind: "got",
             file: m.file,
             author: m.author,
+            signed: m.signed,
             version: m.version,
             ...(m.title !== undefined ? { title: m.title } : {}),
             ...(m.description !== undefined ? { description: m.description } : {}),

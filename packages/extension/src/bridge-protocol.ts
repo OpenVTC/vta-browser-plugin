@@ -2595,6 +2595,9 @@ export type RoomFilesPageMessage =
       kind: "got";
       file: { name: string; mediaType?: string; size: number };
       author: string;
+      /** Whether `author` signed the record. An open room's record is not signed: there the
+       *  author and the digest the file matched are the host's word. */
+      signed: boolean;
       version: number;
       title?: string;
       description?: string;
@@ -3441,6 +3444,8 @@ export type RoomFilesMessage =
       /** The author's manifest. Untrusted text from another member. */
       file: { name: string; mediaType?: string; size: number };
       author: string;
+      /** Whether `author` signed the record; false on an open room, where it is the host's word. */
+      signed: boolean;
       version: number;
       title?: string;
       description?: string;

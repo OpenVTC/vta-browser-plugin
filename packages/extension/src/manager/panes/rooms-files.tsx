@@ -491,14 +491,23 @@ export function GetRoomFile({
 
       {got ? (
         saved ? (
-          <Note tone="accent">
-            Saved. It hashed to the digest its author signed, and the record is signed by{" "}
-            <code style={{ fontFamily: font.mono, wordBreak: "break-all" }}>{got.author}</code>. Its
-            type is the author&rsquo;s word for it — open it with that in mind.
-          </Note>
+          got.signed ? (
+            <Note tone="accent">
+              Saved. It hashed to the digest its author signed, and the record is signed by{" "}
+              <code style={{ fontFamily: font.mono, wordBreak: "break-all" }}>{got.author}</code>. Its
+              type is the author&rsquo;s word for it — open it with that in mind.
+            </Note>
+          ) : (
+            <Note tone="accent">
+              Saved. It hashed to the digest its record states. This is an open room, so the record is not
+              signed by its author: the host says{" "}
+              <code style={{ fontFamily: font.mono, wordBreak: "break-all" }}>{got.author}</code> wrote it, and
+              its name and type are that member&rsquo;s word — open it with that in mind.
+            </Note>
+          )
         ) : (
           <span style={{ fontSize: t.xs, color: c.ok }}>
-            ✓ Every byte matches the digest its author signed.
+            ✓ Every byte matches the digest {got.signed ? "its author signed" : "its record states"}.
           </span>
         )
       ) : (
@@ -506,7 +515,7 @@ export function GetRoomFile({
         !error && (
           <p style={{ margin: 0, fontSize: t.xs, color: c.faint }}>
             Name, size and type are what the record says; nothing has checked them yet. A preview or a download
-            happens only after every byte matches the digest its author signed.
+            happens only after every byte matches the digest the record states.
           </p>
         )
       )}

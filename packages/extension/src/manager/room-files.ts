@@ -375,7 +375,7 @@ const STAGE_WORDS: Record<string, string> = {
   writing: "Writing the record",
   reading: "Reading the record",
   downloading: "Downloading",
-  verifying: "Checking it against its author's digest",
+  verifying: "Checking it against its record's digest",
 };
 
 /** One line saying where a transfer has got to. */

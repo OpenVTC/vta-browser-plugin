@@ -344,12 +344,20 @@ export async function readView(
     const description = str(c.description);
     const body = str(c.body);
     const tags = Array.isArray(c.tags) ? c.tags.filter((t): t is string => typeof t === "string") : undefined;
+    // An open room's file (`rooms/records/put/0.4`): what the page shows of it —
+    // never its `fileKey`, which stays with the wallet's file engine.
+    const f = c.file && typeof c.file === "object" ? (c.file as Record<string, unknown>) : undefined;
+    const file =
+      f && typeof f.name === "string" && typeof f.size === "number" && Number.isSafeInteger(f.size) && f.size >= 0
+        ? { name: f.name, size: f.size, ...(typeof f.mediaType === "string" ? { mediaType: f.mediaType } : {}) }
+        : undefined;
     return {
       ...base,
       ...(title !== undefined ? { title } : {}),
       ...(description !== undefined ? { description } : {}),
       ...(body !== undefined ? { body } : {}),
       ...(tags !== undefined ? { tags } : {}),
+      ...(file !== undefined ? { file } : {}),
     };
   }
   // A retracted record: the tombstone is the answer.
