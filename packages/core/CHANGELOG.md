@@ -10,6 +10,10 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Added
 
+- **`putCleartextAsMember` writes a whole open-room note.** It takes the
+  cleartext's `description` and `tags`, and always sends a `body` — required by
+  `rooms/records/put/0.3` — empty when the note has none.
+
 - **did:scid contacts and DIDs, used natively.** A trigger link's `_from` may
   be a `did:scid:vh:1:<scid>?src=<host>[/<path>]` DID URL: it is host-named
   (route A, VTI-LNK-119), shown as its `src` host and path (VTI-LNK-050),

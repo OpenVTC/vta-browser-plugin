@@ -325,6 +325,60 @@ test("the offscreen open-room reading: each member's record, as that member; one
   assert.deepEqual(actedAs, [MEMBER, MEMBER_2], "each member once");
 });
 
+test("a note for an open room is confirmed with the room said to be open, then written", async () => {
+  const h = harness();
+  h.open = [{ roomId: OPEN_ROOM, member: MEMBER, actions: ["read", "write"] }];
+  h.answer = { approved: true, selectedRooms: [as(OPEN_ROOM)] };
+  await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST });
+  const res = await h.gates.handle(PORTAL, { op: "putNote", hostDid: HOST, roomId: OPEN_ROOM, title: "Hello", body: "World" });
+  assert.ok(res.ok);
+  const view = h.prompts.at(-1) as RoomWriteConsentView;
+  assert.equal(view.kind, "write");
+  assert.equal(view.visibility, "open");
+  assert.ok(h.asked.some((a) => a.op === "putNote" && a.roomId === OPEN_ROOM && a.member === MEMBER));
+});
+
+test("the offscreen note for an open room goes in the clear, as the member, with no seal", async () => {
+  const sent: Record<string, unknown>[] = [];
+  const out = await runRoomsPageOp(
+    {
+      agent: async () => ({
+        holderDid: "did:key:zWallet",
+        sender: {
+          async send<Res>(envelope: { type: string; payload: { document: Record<string, unknown> } }) {
+            if (!envelope.type.includes("rooms/keys/act/")) throw new Error(`unexpected ${envelope.type}`);
+            const doc = structuredClone(envelope.payload.document);
+            doc.proof = { type: "DataIntegrityProof" };
+            return { principal: doc.issuer, document: doc } as Res;
+          },
+        } as never,
+      }),
+      portal: async () => ({ portalOrigin: PORTAL, endpoint: `${PORTAL}/v1/trust-tasks` }),
+      completed: () => ({
+        async sendCompleted<Res>(doc: Record<string, unknown>) {
+          sent.push(doc);
+          const type = String(doc.type);
+          const payload = doc.payload as { roomId: string; key?: string };
+          if (type.includes("rooms/info/")) {
+            return { roomId: payload.roomId, visibility: "open", epoch: 1, limits: {}, usage: {} } as Res;
+          }
+          if (type.includes("rooms/records/put/")) return { key: payload.key, version: 1 } as Res;
+          throw new Error(`unexpected ${type}`);
+        },
+      }),
+    },
+    { vtaDid: VTA },
+    { op: "putNote", hostDid: HOST, roomId: OPEN_ROOM, member: MEMBER, title: "Hello", body: "World", tags: ["t"] },
+  );
+  const put = sent.find((d) => String(d.type).includes("rooms/records/put/"))!;
+  assert.ok(put, "a put reached the community");
+  assert.equal(put.issuer, MEMBER, "as the member");
+  const payload = put.payload as { key: string; cleartext?: unknown; sealed?: unknown };
+  assert.deepEqual(payload.cleartext, { body: "World", title: "Hello", tags: ["t"] });
+  assert.equal(payload.sealed, undefined);
+  assert.deepEqual(out, { key: payload.key, version: 1 });
+});
+
 test("list never prompts, and reads need a share", async () => {
   const h = harness();
   const list = await h.gates.handle(PORTAL, { op: "list", hostDid: HOST });

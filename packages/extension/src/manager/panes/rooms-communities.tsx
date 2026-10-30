@@ -237,9 +237,9 @@ function RoomRow({
   return (
     <div style={{ display: "grid", gap: 10, padding: "14px 0", borderTop: `1px solid ${c.lineSoft}` }}>
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-        {entry ? (
+        {entry || joinedOpen(row) ? (
           <button
-            onClick={() => onOpen(entry.roomId)}
+            onClick={() => onOpen(row.roomId)}
             aria-label={`Open ${name} in your rooms`}
             style={{ all: "unset", cursor: "pointer", fontSize: t.base, fontWeight: 650, color: c.accent, wordBreak: "break-word" }}
           >

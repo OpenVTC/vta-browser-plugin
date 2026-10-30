@@ -48,7 +48,7 @@ import { rememberedRoomLabels } from "../../room-page-policy.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
 import { Loading, LoadError } from "../table.js";
-import { groupRooms, mostReadable, roomEntries, type GroupBy, type RoomEntry, type RoomGroup } from "../room-groups.js";
+import { groupRooms, mostReadable, openRooms, roomEntries, type GroupBy, type RoomEntry, type RoomGroup } from "../room-groups.js";
 import { knownRoomHosts, ownedRooms, rememberRoomHost, type KnownRoomHost, type OwnedRoom } from "../room-hosts.js";
 import { memberLabel, placeWord, shortDid, standing } from "../room-words.js";
 import type { ContextRecord } from "@openvtc/pnm-core";
@@ -61,6 +61,7 @@ import { useRoomOffers } from "./rooms-offers.js";
 import { RoomCommunities } from "./rooms-communities.js";
 import { roomDisplayName, useRoomProfiles } from "./rooms-profile.js";
 import { profileNotices, RoomDetail, RoomTile, Segmented, TabStrip } from "./rooms-detail.js";
+import { OpenRoomCard, OpenRoomDetail } from "./rooms-open.js";
 
 type Tab = "rooms" | "communities" | "owner" | "new";
 
@@ -297,13 +298,19 @@ export function RoomsPane({
   const hostDids = Object.fromEntries(Object.entries(hosts).map(([roomId, h]) => [roomId, h.host]));
   const profiles = useRoomProfiles(parties, rooms, hostDids);
 
+  const entries = roomEntries(rooms ?? []);
+  // The open rooms the member is in, which the listing never names: the
+  // communities' record of them, as the offers reading carries it.
+  const open_ = openRooms(offerState.overview?.communities ?? [], entries);
+
   const names = useAgentNames([
     ...(rooms ?? []).map((r) => r.member),
     ...Object.values(hosts).map((h) => h.host),
+    ...open_.map((r) => r.member),
   ]);
 
-  const entries = roomEntries(rooms ?? []);
   const opened = open === null ? undefined : entries.find((e) => e.roomId === open);
+  const openedOpen = open === null || opened ? undefined : open_.find((r) => r.roomId === open);
   const places = rooms?.length ?? 0;
 
   const intro = !introHidden && (
@@ -322,7 +329,8 @@ export function RoomsPane({
       <p style={{ margin: 0, flex: 1, fontSize: t.sm, color: c.text, lineHeight: 1.55, maxWidth: "92ch" }}>
         These are the rooms your agent can <strong>open</strong> — its key custody, not its memberships.
         Holding keys is not permission to act: whether you may write is decided by the host, from
-        credentials the room issued. A room you belong to whose Welcome never arrived is not listed.
+        credentials the room issued. A room you belong to whose Welcome never arrived is not listed. Open
+        rooms have no keys, so the ones you are in are listed apart, below.
       </p>
       <Button
         kind="quiet"
@@ -345,7 +353,7 @@ export function RoomsPane({
       <LoadError what="its rooms" error={error} />
     ) : rooms === null ? (
       <Loading what="rooms" />
-    ) : entries.length === 0 ? (
+    ) : entries.length === 0 && open_.length === 0 ? (
       <div style={{ fontSize: t.sm, color: c.faint, lineHeight: 1.55 }}>
         No rooms. This agent has been given keys to none — which is also what it looks like before an
         invitation has been accepted.{" "}
@@ -357,22 +365,24 @@ export function RoomsPane({
       </div>
     ) : (
       <div style={{ display: "grid", gap: 22 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: t.sm, color: c.muted }}>Group by</span>
-          <Segmented<GroupBy>
-            label="Group rooms by"
-            current={by}
-            onPick={setBy}
-            options={[
-              { key: "host", label: "Where it lives" },
-              { key: "context", label: "Context" },
-            ]}
-          />
-          <span style={{ fontSize: t.sm, color: c.faint, marginLeft: "auto" }}>
-            {entries.length} {entries.length === 1 ? "room" : "rooms"}
-            {places !== entries.length ? ` · ${places} places` : ""}
-          </span>
-        </div>
+        {entries.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: t.sm, color: c.muted }}>Group by</span>
+            <Segmented<GroupBy>
+              label="Group rooms by"
+              current={by}
+              onPick={setBy}
+              options={[
+                { key: "host", label: "Where it lives" },
+                { key: "context", label: "Context" },
+              ]}
+            />
+            <span style={{ fontSize: t.sm, color: c.faint, marginLeft: "auto" }}>
+              {entries.length} {entries.length === 1 ? "room" : "rooms"}
+              {places !== entries.length ? ` · ${places} places` : ""}
+            </span>
+          </div>
+        )}
         {groupRooms(entries, hosts, by).map((g) => (
           <section key={g.key} style={{ display: "grid", gap: 10 }}>
             <GroupHeading group={g} names={names} />
@@ -391,6 +401,32 @@ export function RoomsPane({
             </div>
           </section>
         ))}
+        {open_.length > 0 && (
+          <section style={{ display: "grid", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", paddingBottom: 6, borderBottom: `1px solid ${c.lineSoft}` }}>
+              <h3 style={{ margin: 0, fontSize: t.md, fontWeight: 650 }}>Open rooms you are in</h3>
+              <Pill tone="off">no keys</Pill>
+              <span style={{ fontSize: t.xs, color: c.faint, flex: "1 1 20rem", minWidth: 0 }}>
+                An open room has no keys to hold. You are in these by the community's record, and your agent uses
+                them with the credentials it gave you.
+              </span>
+              <span style={{ fontSize: t.sm, color: c.faint, marginLeft: "auto" }}>
+                {open_.length} {open_.length === 1 ? "room" : "rooms"}
+              </span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(270px, 1fr))", gap: 12 }}>
+              {open_.map((r) => (
+                <OpenRoomCard
+                  key={`${r.roomId}|${r.member}`}
+                  room={r}
+                  agentDid={agentDid}
+                  names={names}
+                  onOpen={() => setOpen(r.roomId)}
+                />
+              ))}
+            </div>
+          </section>
+        )}
       </div>
     );
 
@@ -435,7 +471,9 @@ export function RoomsPane({
       />
 
       {tab === "rooms" &&
-        (opened ? (
+        (openedOpen ? (
+          <OpenRoomDetail key={`${openedOpen.roomId}|${openedOpen.member}`} parties={parties} room={openedOpen} names={names} onBack={() => setOpen(null)} />
+        ) : opened ? (
           <RoomDetail
             key={opened.roomId}
             parties={parties}

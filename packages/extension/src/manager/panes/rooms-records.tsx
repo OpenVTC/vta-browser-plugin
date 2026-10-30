@@ -26,8 +26,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   roomsKeysBrowse,
   roomsKeysRead,
-  type HeldRoom,
 } from "@openvtc/pnm-core/rooms";
+import type { RoomPlace } from "../room-groups.js";
 import { Button, Note, Pill } from "../../ui.js";
 import { displayAgentName } from "../../agent-name.js";
 import { useAgentNames } from "../../use-agent-names.js";
@@ -299,7 +299,7 @@ function RecordItem({
   onChanged,
 }: {
   parties: Parties;
-  room: HeldRoom;
+  room: RoomPlace;
   host: string;
   row: RecordRow;
   prepared: RoomFilesPrepared | null;
@@ -518,7 +518,7 @@ export function RoomRecords({
   onListed,
 }: {
   parties: Parties;
-  room: HeldRoom;
+  room: RoomPlace;
   host?: string | undefined;
   onListed?: ((host: string) => void) | undefined;
 }) {

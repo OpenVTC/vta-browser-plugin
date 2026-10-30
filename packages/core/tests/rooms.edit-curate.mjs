@@ -95,6 +95,13 @@ test("an open room's note goes in the clear, create-only unless it replaces", as
   assert.equal(puts(r.sent)[1].payload.expectedVersion, 4);
 });
 
+test("an open room's note carries its description and tags, and a body even when it has none", async () => {
+  const r = room({ landed: 1 });
+  await putCleartextAsMember(r.room, { key: "k", title: "T", description: "D", tags: ["a", "b"] });
+  // rooms/records/put/0.3 requires the cleartext's body.
+  assert.deepEqual(puts(r.sent)[0].payload.cleartext, { title: "T", description: "D", tags: ["a", "b"], body: "" });
+});
+
 test("a retraction carries its reason and the version read, and an empty reason is left out", async () => {
   const r = room();
   const out = await curateRecordAsMember(r.room, { key: "k", status: "retracted", reason: "posted in error", expectedVersion: 5 });

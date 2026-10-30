@@ -999,6 +999,18 @@ removal stops counting at once. Without this, the portal shows an open room
 joined while the share window can never offer it, and the console's lane stops
 at "Joined: not yet" (`joinedOpen`).
 
+**An open room takes notes in the clear, and lives apart in the console.** A
+page's `putNote` on an open room writes `rooms/records/put/0.3` with
+`cleartext` (`putCleartextAsMember`, completed as the member by `rooms/keys/act`
+like every host request) — there is no group to seal under — after the same
+confirmation, which says the note will be readable by the room's host. Files
+stay refused there: a file's manifest belongs inside a sealed body. The
+console's *My rooms* is key custody, so it lists the open rooms the member is in
+in their own section (`openRooms` in `room-groups.ts`, from the communities'
+offers, joined and open, not also held), and opens one as its records only
+(`rooms-open.tsx`): `RoomRecords` takes a `RoomPlace` — room, member, actions —
+which a held place and an open room both are.
+
 **A share names the member it acts as, and every request for the page names
 it.** One VTA can hold two members of one room — the community's own place in
 a room the community owns, beside an administrator's own membership, or two

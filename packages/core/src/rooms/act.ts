@@ -383,14 +383,17 @@ export async function writeSealedAsMember(
 /**
  * Put a record in the clear, as the member — for an `open` room, whose records
  * the host stores and reads. `replaces`, as for {@link writeSealedAsMember}.
+ * The cleartext's `body` is required by `rooms/records/put/0.3`, so a note with
+ * none is sent with an empty one.
  */
 export async function putCleartextAsMember(
   room: PersonaRoom,
-  params: { key: string; title?: string; body?: string; replaces?: number },
+  params: { key: string; title?: string; body?: string; description?: string; tags?: string[]; replaces?: number },
 ): Promise<number> {
-  const cleartext: Record<string, unknown> = {};
+  const cleartext: Record<string, unknown> = { body: params.body ?? "" };
   if (params.title !== undefined) cleartext.title = params.title;
-  if (params.body !== undefined) cleartext.body = params.body;
+  if (params.description !== undefined) cleartext.description = params.description;
+  if (params.tags !== undefined) cleartext.tags = params.tags;
   const { reply } = await actAndSend<RoomsRecordsPutResponsePayload>(room, RECORDS_PUT, RECORDS_PUT_RESPONSE, {
     roomId: room.roomId,
     key: params.key,
