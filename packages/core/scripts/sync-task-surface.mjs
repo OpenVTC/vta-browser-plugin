@@ -138,7 +138,7 @@ function specAliases(source) {
   const aliases = new Map();
   // `[\s\S]` rather than `.`: rustfmt wraps a braced group across lines the
   // moment it is long enough, and the vetting protocol has one that does.
-  for (const m of source.matchAll(/pub\s+use\s+trust_tasks_rs::specs::([\s\S]*?);/g)) {
+  for (const m of source.matchAll(/pub\s+use\s+(?:trust_tasks_rs::specs|vti_specs)::([\s\S]*?);/g)) {
     const path = m[1].replace(/\s+/g, "");
     const braced = /^(.*?)::\{(.+)\}$/.exec(path);
     const prefix = braced ? braced[1] : path.replace(/::[A-Za-z0-9_]+$/, "");
@@ -183,7 +183,7 @@ function crateTypeAliases(root, files) {
       .filter(Boolean)
       .join("::");
     const source = readFileSync(file, "utf8");
-    for (const m of source.matchAll(/pub\s+use\s+trust_tasks_rs::specs::([\s\S]*?);/g)) {
+    for (const m of source.matchAll(/pub\s+use\s+(?:trust_tasks_rs::specs|vti_specs)::([\s\S]*?);/g)) {
       const braced = /^(.*?)::(v\d+_\d+)::\{(.+)\}$/.exec(m[1].replace(/\s+/g, ""));
       if (!braced) continue;
       for (const item of braced[3].split(",")) {
@@ -284,6 +284,13 @@ for (const file of rustFiles(sdkSrc)) {
     // was taught every one of them stopped the sync.
     if (segs[0] === "trust_tasks_rs" && segs[1] === "specs" && segs.length > 2) {
       return uriFromModulePath(segs.slice(2), m[2]);
+    }
+    // `<vti_specs::rooms::keys::act::v0_9::Payload as …>` — VTI's generated
+    // facade (VTI #2340/#2343), which re-exports every family at the module path
+    // the deprecated `trust_tasks_rs::specs` used, so the path after it is the
+    // module path too.
+    if (segs[0] === "vti_specs" && segs.length > 1) {
+      return uriFromModulePath(segs.slice(1), m[2]);
     }
     const head = aliases.get(segs[0]);
     if (!head) {

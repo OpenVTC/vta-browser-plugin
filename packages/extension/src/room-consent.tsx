@@ -230,8 +230,8 @@ function Write({ view, decide }: { view: RoomWriteConsentView; decide: (approved
       </div>
       {view.visibility === "open" && (
         <div role="note" style={{ color: "var(--w-muted)", lineHeight: 1.45 }}>
-          This room is <b>open</b>: the note is stored in the clear, so the room's host can read it as well as its
-          members.
+          This room is <b>open</b>: {isFile ? "the file's record, and the key that opens it, are" : "the note is"}{" "}
+          stored in the clear, so the room's host can read {isFile ? "the file" : "it"} as well as its members.
         </div>
       )}
       <div>

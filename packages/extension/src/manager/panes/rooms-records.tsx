@@ -254,10 +254,24 @@ function VerdictLine({
 /** What an opened record says, as far as this pane reads it. */
 interface Opened {
   text: string;
+  /** Whether the body is one its author signed — false for an open room's cleartext. */
+  signed: boolean;
   title?: string;
   body?: string;
   author?: string;
   verification: Verification | null;
+}
+
+/**
+ * An open room's cleartext with its file's `fileKey` left out. The key is in the
+ * record by design — the host and every member may open the file — but nobody
+ * needs to read it, and what is shown here is copied and screenshotted.
+ */
+function withoutFileKey(cleartext: Record<string, unknown>): Record<string, unknown> {
+  const file = cleartext.file;
+  if (typeof file !== "object" || file === null || !("fileKey" in file)) return cleartext;
+  const { fileKey: _, ...rest } = file as Record<string, unknown>;
+  return { ...cleartext, file: rest };
 }
 
 /** A note's title, body and author, where its body is the JSON a note is written as. */
@@ -343,11 +357,16 @@ function RecordItem({
       const text = res.plaintext
         ? decodeBody(res.plaintext)
         : res.cleartext
-          ? JSON.stringify(res.cleartext, null, 2)
+          ? JSON.stringify(withoutFileKey(res.cleartext), null, 2)
           : res.status === "retracted"
             ? "(retracted — the body is gone)"
             : "(no body)";
-      setOpened({ text, ...readNote(text), verification: (res.verification as unknown as Verification) ?? null });
+      setOpened({
+        text,
+        signed: res.plaintext !== undefined,
+        ...readNote(text),
+        verification: (res.verification as unknown as Verification) ?? null,
+      });
     } catch (e) {
       if (live.current) setError(e instanceof Error ? e.message : String(e));
     }
@@ -448,7 +467,9 @@ function RecordItem({
           )}
           {opened && (opened.body !== undefined || claim) && (
             <details>
-              <summary style={{ fontSize: t.xs, color: c.muted, cursor: "pointer" }}>The signed record</summary>
+              <summary style={{ fontSize: t.xs, color: c.muted, cursor: "pointer" }}>
+                {opened.signed ? "The signed record" : "The record, as the host stores it"}
+              </summary>
               <pre style={bodyStyle}>{opened.text}</pre>
             </details>
           )}

@@ -7,4 +7,6 @@
  * `extendsChain` follows them transitively.
  */
 export const EXTENDS_BY_TYPE_URI: Readonly<Record<string, string>> = Object.freeze({
+  "https://trusttasks.org/spec/rooms/keys/act/0.9": "0.8",
+  "https://trusttasks.org/spec/rooms/records/put/0.4": "0.3",
 });

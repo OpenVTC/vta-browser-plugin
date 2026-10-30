@@ -132,19 +132,19 @@ digest = "sha256:96f197d5ede1e9dc7776ce316a8b5b53798f0649132a9b50af97944a931bff4
 slug = "auth/step-up/approve-request"
 version = "0.5"
 type_uri = "https://trusttasks.org/spec/auth/step-up/approve-request/0.5"
-digest = "sha256:708ba6e7447f9d62556f59019bd4da90ae73f5fe1b2a5b339b7f5665ec53811e"
+digest = "sha256:7b0c8a13b2c9383a2210ab9c69a6beeed823a03e4af853ad023aa047fa8210bc"
 
 [[task]]
 slug = "auth/step-up/approve-response"
 version = "0.6"
 type_uri = "https://trusttasks.org/spec/auth/step-up/approve-response/0.6"
-digest = "sha256:bc641e92ffcd694d3ddf40ca01687f99fce4aeb3c8f818e009bfe7d422099b39"
+digest = "sha256:b1bf4dbb47414f38e5458b07ee09968400cebcd5715973b4ef2c5b05a13af77c"
 
 [[task]]
 slug = "auth/step-up/approver/attest"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/auth/step-up/approver/attest/0.1"
-digest = "sha256:13537212655103f61acf1d116f6699ebdfb72b736036b98e8aa856dcfd846472"
+digest = "sha256:9ad1dde405b9db723c790a741cb797af997fff412e62f4617bea8919a706ca9e"
 
 [[task]]
 slug = "auth/step-up/start"
@@ -468,7 +468,7 @@ digest = "sha256:b9ca31404b9588f9b3483299ee8ec59bfdedfc8242d5b82bca464523fb45224
 slug = "keys/revoke"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/keys/revoke/0.1"
-digest = "sha256:c2a90cb5dfe814ab0f4b35c514f405a6602904ef4fc796d5cb5393c41d9e3f37"
+digest = "sha256:a10152f642c81e572dc5e5665ece9310daa7fd7e221a2dfbc8e8fbfc2bb32d33"
 
 [[task]]
 slug = "keys/show"
@@ -900,7 +900,13 @@ digest = "sha256:576083d47c1cc049040ab9352653cc0793a7ccc43774817d91ce198c6be1923
 slug = "rooms/keys/act"
 version = "0.8"
 type_uri = "https://trusttasks.org/spec/rooms/keys/act/0.8"
-digest = "sha256:b0c5b95f563bfb7ee736f7049ac5a752f724435e20c889434306953887b4bf9b"
+digest = "sha256:a5fca31854f7d918b86928e4ec8dce7b110be3360abba5cea8ac8715786e9a0e"
+
+[[task]]
+slug = "rooms/keys/act"
+version = "0.9"
+type_uri = "https://trusttasks.org/spec/rooms/keys/act/0.9"
+digest = "sha256:a1d7e0d143c4d35edb48ed68d2ffb64b3d8c7a1d15ab0b4caae3042f977674d1"
 
 [[task]]
 slug = "rooms/keys/backfill"
@@ -1026,13 +1032,19 @@ digest = "sha256:5666d28984f38ce7e36fa7e3141d1e53ffd555fbc9b1c575a91b656bebbf445
 slug = "rooms/records/put"
 version = "0.3"
 type_uri = "https://trusttasks.org/spec/rooms/records/put/0.3"
-digest = "sha256:9480eebe7b7c731327d8fb45822cdb1d1c216d9f9462b8c6b309bc2a9305457a"
+digest = "sha256:0d8dcea9fd55ffdd964354af2e4ea622cc8881554ecd93a07ec702092f718500"
+
+[[task]]
+slug = "rooms/records/put"
+version = "0.4"
+type_uri = "https://trusttasks.org/spec/rooms/records/put/0.4"
+digest = "sha256:d33fd2a46cdac61912a196ab24c52cda8214e0ac783379157bfadc017457e4f3"
 
 [[task]]
 slug = "task-consent/decision"
 version = "0.2"
 type_uri = "https://trusttasks.org/spec/task-consent/decision/0.2"
-digest = "sha256:a9d930908eab1ed96e3fb5e8b4c161f4f1b35f0f8fb65dfb25d99a3ee9b15ff2"
+digest = "sha256:d1b365601c48c1552ef3791c07225a23297c1f0b8f240b1102b8808c659d1740"
 
 [[task]]
 slug = "task-consent/granted"
@@ -1254,7 +1266,7 @@ digest = "sha256:b9e9204a4dfa12570f614d75d75f8d24bbbca7c9f85e206dbedabe945cfdcc0
 slug = "vta/did-templates/create"
 version = "3.1"
 type_uri = "https://trusttasks.org/spec/vta/did-templates/create/3.1"
-digest = "sha256:abcb506c3fc90b7871658ebb03198e6e391ea9ef1fede5fbda823637373f4710"
+digest = "sha256:c00a6720251bb149d410d083c47fc09aa0408169a8479ed1497ab8bb172df197"
 
 [[task]]
 slug = "vta/did-templates/delete"
@@ -1266,13 +1278,13 @@ digest = "sha256:a997dfb45adb8a869bb935e5c8888334117a525d72869f1c38a4144c456ad18
 slug = "vta/did-templates/get"
 version = "3.1"
 type_uri = "https://trusttasks.org/spec/vta/did-templates/get/3.1"
-digest = "sha256:1fb75b921164502d6c1186fb23239b88346a8f45986a5d5d1e64e480bc0eb8ad"
+digest = "sha256:bc2d62c1b14385509171b587c6977fe791d28c876a602389e04cc8d8c92eaf34"
 
 [[task]]
 slug = "vta/did-templates/list"
 version = "3.1"
 type_uri = "https://trusttasks.org/spec/vta/did-templates/list/3.1"
-digest = "sha256:8dc9200e5208c8aab0af8e5703ad690ff468f6101bc1dd17cef01cf2e0777df4"
+digest = "sha256:2ea1b2dcefdb4d89252c9d9cc96354212fec9bb4e281b78ff31a25785c5023a2"
 
 [[task]]
 slug = "vta/did-templates/render"
@@ -1284,7 +1296,7 @@ digest = "sha256:67b5ddb60749a0746e626f46eddf38916f576dafd98cf5f144fd81d1f97e148
 slug = "vta/did-templates/update"
 version = "3.1"
 type_uri = "https://trusttasks.org/spec/vta/did-templates/update/3.1"
-digest = "sha256:9a757640ab7a9a9541820d3b781d74683378c037bd8da9f5c97124318632920c"
+digest = "sha256:ea9acabd4051cd6b354af17008560a0935abcbb2c87c7940211730beec0babd9"
 
 [[task]]
 slug = "vta/management/reload-services"
@@ -1458,13 +1470,13 @@ digest = "sha256:6413b528f6faff65454436266a7954ef08975a4367c82c9320aee7f339a7c9f
 slug = "vta/webvh/dids/rotate-keys"
 version = "1.0"
 type_uri = "https://trusttasks.org/spec/vta/webvh/dids/rotate-keys/1.0"
-digest = "sha256:c0cbd1626353f859024f043385f2dd105916e95e1ec5a082b52bf16bfe41a8bd"
+digest = "sha256:25ab10565b517b4dd533f5105b4e19e87c41ce47d03c1c743a23075d2ee0ecc9"
 
 [[task]]
 slug = "vta/webvh/dids/update"
 version = "1.0"
 type_uri = "https://trusttasks.org/spec/vta/webvh/dids/update/1.0"
-digest = "sha256:0b138a951683d5411e2a8b0659c8b1ae5778ba29a5181874d09759dff9ad0d3e"
+digest = "sha256:45fb824f465be209f2452c26695300b047f54d14c53e219307a8f69439e7a0cd"
 
 [[task]]
 slug = "vta/webvh/servers/domains"

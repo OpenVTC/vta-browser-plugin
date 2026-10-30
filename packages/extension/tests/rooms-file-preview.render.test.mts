@@ -18,8 +18,8 @@ const b64url = (b: Uint8Array) => Buffer.from(b).toString("base64url");
 
 const PREPARED = { endpoint: "https://host.example/trust-tasks", granted: true, vtaDid: "did:webvh:QmAgent:agent.example" };
 
-/** A transfer port that answers a `get` with `bytes`, verified. */
-function chromeServing(bytes: Uint8Array) {
+/** A transfer port that answers a `get` with `bytes`, verified — from a signed body unless `signed` is false. */
+function chromeServing(bytes: Uint8Array, signed = true) {
   const opened: string[] = [];
   const connect = ({ name }: { name: string }) => {
     assert.equal(name, ROOM_FILES_PORT);
@@ -39,7 +39,7 @@ function chromeServing(bytes: Uint8Array) {
           if (closed) return;
           for (const f of onMessage) f({ kind: "provisional", data: b64url(bytes) });
           for (const f of onMessage) {
-            f({ kind: "got", file: { name: "design.png", size: bytes.length, mediaType: "image/png" }, author: "did:example:author", version: 2 });
+            f({ kind: "got", file: { name: "design.png", size: bytes.length, mediaType: "image/png" }, author: "did:example:author", signed, version: 2 });
           }
         }, 1);
       },
@@ -87,4 +87,15 @@ test("bytes that are not a picture are not drawn as one, whatever the record cla
   await screen.settle();
   assert.equal(screen.all("img").length, 0);
   assert.match(screen.text(), /No preview for this kind of file/);
+});
+
+// An open room's record is not signed by its author: the file matched the digest
+// the record states, and the preview says so rather than claiming a signature.
+test("an open room's file says it matched its record's digest, not a signature", async () => {
+  const { chrome } = chromeServing(PNG, false);
+  const screen = await render(h(GetRoomFile, props(PNG.length) as never), { chrome: chrome as never });
+  await wait();
+  await screen.settle();
+  assert.match(screen.text(), /Every byte matches the digest its record states/);
+  assert.doesNotMatch(screen.text(), /its author signed/);
 });

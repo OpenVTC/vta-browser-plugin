@@ -1003,8 +1003,24 @@ at "Joined: not yet" (`joinedOpen`).
 page's `putNote` on an open room writes `rooms/records/put/0.3` with
 `cleartext` (`putCleartextAsMember`, completed as the member by `rooms/keys/act`
 like every host request) — there is no group to seal under — after the same
-confirmation, which says the note will be readable by the room's host. Files
-stay refused there: a file's manifest belongs inside a sealed body. The
+confirmation, which says the note will be readable by the room's host.
+
+**An open room's file carries its own key, and only its record rides
+`rooms/keys/act/0.9`.** With no storage key to derive from, `putRoomFile` mints
+32 random bytes for the file, seals the blob exactly as on a sealed tier, and
+writes `rooms/records/put/0.4` with the manifest — `fileKey` included — in
+`cleartext.file` and `blobs` exactly `[file.blobRef]` (`putCleartextAsMember`
+with `file`). `rooms/keys/act/0.8`'s closed table names `put` only to 0.3, so
+`roomsKeysAct` sends that one record type at 0.9 (`actVersionFor`) and
+everything else at 0.8, which keeps the wallet working against a VTA that has
+not moved. `getRoomFile` holds the key to the tier: required in an open
+record's manifest, refused in a sealed body's; the opener is handed the
+manifest without it, and nothing returns or shows it (`withoutFileKey` in the
+records pane). An open record is not signed by its author, so the result says
+`signed: false` and every surface says the file matched the digest *its record
+states*, not one its author signed.
+
+The
 console's *My rooms* is key custody, so it lists the open rooms the member is in
 in their own section (`openRooms` in `room-groups.ts`, from the communities'
 offers, joined and open, not also held), and opens one as its records only

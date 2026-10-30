@@ -460,9 +460,11 @@ test("a download's bytes reach the page only after the whole file verified", asy
   inner.receive({ kind: "progress", stage: "downloading", done: 1, total: 2 });
   assert.ok(!page.posted.some((m) => (m as { kind: string }).kind === "data"), "nothing provisional is posted");
   inner.receive({ kind: "provisional", data: "BBBB" });
-  inner.receive({ kind: "got", file: { name: "a.pdf", size: 6 }, author: MEMBER, version: 2 });
+  inner.receive({ kind: "got", file: { name: "a.pdf", size: 6 }, author: MEMBER, signed: false, version: 2 });
   const kinds = page.posted.map((m) => (m as { kind: string }).kind);
   assert.deepEqual(kinds, ["progress", "got", "data", "data", "done"]);
+  const got = page.posted.find((m) => (m as { kind: string }).kind === "got") as { signed?: boolean };
+  assert.equal(got.signed, false, "the page is told an open room's record is not signed");
   assert.equal(page.connected, false);
 });
 

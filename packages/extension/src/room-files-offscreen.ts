@@ -321,6 +321,7 @@ async function run(
       ...(got.file.mediaType !== undefined ? { mediaType: got.file.mediaType } : {}),
     },
     author: got.author,
+    signed: got.signed,
     version: got.version,
     ...(got.title !== undefined ? { title: got.title } : {}),
     ...(got.description !== undefined ? { description: got.description } : {}),

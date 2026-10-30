@@ -40,7 +40,7 @@
 // a definition in `rooms/_shared/0.1/blobs.schema.json` that no task schema
 // references (it travels inside a sealed record body), so no generated task
 // module re-exports it. Type-only, so nothing of the prebuilt modules loads.
-import type { FileManifest } from "@openvtc/trust-tasks/_shared/components";
+import type { FileManifest } from "../specs/_shared/components.js";
 import { base64url, multibase } from "@openvtc/vti-didcomm-js";
 
 import type { SigningIdentity } from "../siop/self-issued.js";
