@@ -98,7 +98,7 @@ test("an open room's note goes in the clear, create-only unless it replaces", as
 test("an open room's note carries its description and tags, and a body even when it has none", async () => {
   const r = room({ landed: 1 });
   await putCleartextAsMember(r.room, { key: "k", title: "T", description: "D", tags: ["a", "b"] });
-  // rooms/records/put/0.3 requires the cleartext's body.
+  // rooms/records/put/0.4 requires the cleartext's body.
   assert.deepEqual(puts(r.sent)[0].payload.cleartext, { title: "T", description: "D", tags: ["a", "b"], body: "" });
 });
 

@@ -58,7 +58,7 @@ test("a completed document is accepted only when it is the request that was aske
 
   const cases = [
     [(d) => ({ ...d, recipient: "did:key:zElsewhere" }), /not the one it was asked/],
-    [(d) => ({ ...d, type: "https://trusttasks.org/spec/rooms/records/put/0.3" }), /not the one it was asked/],
+    [(d) => ({ ...d, type: "https://trusttasks.org/spec/rooms/records/put/0.4" }), /not the one it was asked/],
     [(d) => ({ ...d, payload: { ...d.payload, roomId: "did:key:zOther" } }), /changed the payload's roomId/],
     [(d) => ({ ...d, payload: { ...d.payload, extra: 1 } }), /added extra/],
     [(d) => ({ ...d, issuer: "did:key:zSomeoneElse" }), /issued by did:key:zSomeoneElse/],

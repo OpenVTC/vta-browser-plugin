@@ -11,7 +11,7 @@
 //          32 random bytes minted here → seal locally → upload begin/0.2
 //          (proxied, naming the upload key) → chunks / commit under the upload key
 //        → sealed: the VTA signs the record body as the member and seals it
-//          (rooms/keys/seal/0.2) → records/put/0.3 naming the blob, re-sealing
+//          (rooms/keys/seal/0.2) → records/put/0.4 naming the blob, re-sealing
 //          for the version the host actually assigned.
 //          open: records/put/0.4 (through rooms/keys/act/0.9), the manifest and
 //          its key in `cleartext.file`, naming exactly that blob.

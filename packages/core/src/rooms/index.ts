@@ -718,7 +718,7 @@ import {
   RESPONSE_TYPE_URI as RECORDS_PUT_RESPONSE,
   type RoomsRecordsPutPayload,
   type RoomsRecordsPutResponsePayload,
-} from "../specs/rooms/records/put/0.3/payload.js";
+} from "../specs/rooms/records/put/0.4/payload.js";
 import {
   TYPE_URI as EPOCH_MINT,
   RESPONSE_TYPE_URI as EPOCH_MINT_RESPONSE,
@@ -814,7 +814,7 @@ export async function roomsRecordsPut(
     { holder, service },
     RECORDS_PUT,
     RECORDS_PUT_RESPONSE,
-    "rooms/records/put/0.3",
+    "rooms/records/put/0.4",
     rest as unknown as RoomsRecordsPutPayload,
   );
 }

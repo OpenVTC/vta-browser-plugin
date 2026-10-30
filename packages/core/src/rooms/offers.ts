@@ -7,7 +7,7 @@
 // `label`, `visibility` and `description` as the community's administrators set them. The
 // member reads their offers with a document signed as the DID the offers are
 // addressed to — a persona their VTA holds — so the wallet builds the request
-// unsigned and has the VTA complete it as that DID (`rooms/keys/act/0.8`, which
+// unsigned and has the VTA complete it as that DID (`rooms/keys/act/0.9`, which
 // inserts no presentation for the community's types), then sends it to the
 // community unchanged. That is the CLI's `pnm rooms offers list`, step for step.
 //
