@@ -105,6 +105,12 @@ const pickTemplate = async (
   await screen.click(radio);
 };
 
+/** The copy button for one form of the minted DID, found by what it copies. */
+const copyFor = (
+  screen: { container: { querySelector: (s: string) => Element | null } },
+  title: string,
+) => screen.container.querySelector(`button[title="${title}"]`);
+
 /** The payload of the one mint that was sent. */
 const mintPayload = (a: ReturnType<typeof agent>) => {
   const calls = a.of("dids/create");
@@ -270,6 +276,74 @@ test("switching pre-rotation off is sent, and is spelled out first", async () =>
   await screen.click(screen.button("Create DID"));
   await screen.settle();
   assert.equal(mintPayload(a)["preRotationCount"], 0);
+  await screen.unmount();
+});
+
+// Absent means the agent's configuration decides, and that configuration is how
+// a community moves to did:scid. A form that always sent `webvh` would quietly
+// overrule it on every mint.
+test("the quiet path leaves the identifier form to the agent", async () => {
+  const { a, screen } = await mount();
+  await screen.click(screen.button("Create DID"));
+  await screen.settle();
+  assert.equal(mintPayload(a)["didMethod"], undefined);
+  await screen.unmount();
+});
+
+test("choosing did:scid is sent, and the alias is left to the agent", async () => {
+  const { a, screen } = await mount();
+  await screen.click(screen.container.querySelector('input[name="didMethod"][value="scid"]')!);
+  await screen.click(screen.button("Create DID"));
+  await screen.settle();
+  const payload = mintPayload(a);
+  assert.equal(payload["didMethod"], "scid");
+  // did:scid is refused without the alias, and the agent's default is on.
+  assert.equal(payload["scidAlsoKnownAs"], undefined);
+  await screen.unmount();
+});
+
+test("choosing did:webvh is said rather than defaulted", async () => {
+  const { a, screen } = await mount();
+  await screen.click(screen.container.querySelector('input[name="didMethod"][value="webvh"]')!);
+  await screen.click(screen.button("Create DID"));
+  await screen.settle();
+  assert.equal(mintPayload(a)["didMethod"], "webvh");
+  await screen.unmount();
+});
+
+// A bare did:scid names no source, so the form a recipient can resolve is the
+// DID URL — it has to be on screen to be handed out.
+test("a did:scid mint shows the DID URL to share and its did:webvh alias", async () => {
+  const { screen } = await mount({
+    [CREATE]: {
+      ...created,
+      did: "did:scid:vh:1:QmNew",
+      didMethod: "scid",
+    },
+  });
+  await screen.click(screen.button("Create DID"));
+  await screen.settle();
+  const text = screen.text();
+  assert.match(text, /Share it as/);
+  assert.ok(copyFor(screen, "Copy the did:scid DID URL"));
+  assert.ok(copyFor(screen, "Copy the did:webvh alias"));
+  await screen.unmount();
+});
+
+test("a did:webvh mint names its did:scid alias when the log lists one", async () => {
+  const { screen } = await mount();
+  await screen.click(screen.button("Create DID"));
+  await screen.settle();
+  assert.ok(copyFor(screen, "Copy the did:scid alias"));
+  assert.equal(copyFor(screen, "Copy the did:scid DID URL"), null);
+  await screen.unmount();
+});
+
+test("a did:webvh mint without the alias names no did:scid form", async () => {
+  const { screen } = await mount({ [CREATE]: { ...created, scidAlsoKnownAs: false } });
+  await screen.click(screen.button("Create DID"));
+  await screen.settle();
+  assert.equal(copyFor(screen, "Copy the did:scid alias"), null);
   await screen.unmount();
 });
 
