@@ -21,6 +21,7 @@ import {
   notListedMessage,
   siteKindOf,
   communityNameMismatch,
+  communityContextId,
   type SignInVaultEntry,
 } from "../src/sign-in-flows.ts";
 
@@ -154,6 +155,11 @@ function world(
     grantAnswers?: Array<Error | undefined>;
     /** The phones the VTA lists, or an error. */
     approvers?: Array<{ did: string; displayName?: string }> | Error;
+    /** The VTA's DID hosting servers, or an error listing them. Absent: the
+     *  wallet cannot set up a new identity at all. */
+    servers?: Array<{ id: string; label?: string }> | Error;
+    /** Setting up a new identity fails with this error. */
+    createIdentityError?: Error;
   } = {},
 ): World {
   const sent: World["sent"] = [];
@@ -248,6 +254,20 @@ function world(
         vtaCalls.push({ what: "unbind" });
         unbinds.push(entryId);
       },
+      ...(opts.servers
+        ? {
+            listHostingServers: async () => {
+              vtaCalls.push({ what: "servers" });
+              if (opts.servers instanceof Error) throw opts.servers;
+              return opts.servers!;
+            },
+            createCommunityIdentity: async (request: { contextId: string; name: string; serverId: string }) => {
+              vtaCalls.push({ what: "create-identity", decision: request });
+              if (opts.createIdentityError) throw opts.createIdentityError;
+              return { did: NEW_DID, contextId: request.contextId };
+            },
+          }
+        : {}),
       renameIdentity: async (entryId, label) => {
         vtaCalls.push({ what: "rename", decision: { entryId, label } });
         if (opts.renameError) throw opts.renameError;
@@ -958,6 +978,7 @@ test("an operator-console sign-in: the audience is read from step 1 and held thr
 // ── An unknown community (VTC): joining ─────────────────────────────────────
 
 const NAME = [{ type: "name.display", value: "Ada" }];
+const NEW_DID = "did:webvh:QmNew:dids.example.net:vtc-members";
 
 test("an unknown community is offered to join, by its verified origin, and nothing is sent", async () => {
   const w = world({ known: UNKNOWN, doc: communityDoc });
@@ -1487,4 +1508,77 @@ test("the phones to approve on come from the agent; a listing it refuses is empt
   await toReview(w2);
   assert.deepEqual(await step(w2, { step: "uv-approvers" }), { kind: "uv-approvers", approvers: [], error: "unsupportedType" });
   assert.equal(w2.flows.has("f1"), true);
+});
+
+// ── A new identity for the community ────────────────────────────────────────
+
+test("a community's context id is its verified host, in the characters an agent takes", () => {
+  assert.equal(communityContextId("members.example.org"), "vtc-members.example.org");
+  assert.equal(communityContextId("Members.Example.ORG"), "vtc-members.example.org");
+  assert.equal(communityContextId("xn--bcher-kva.example"), "vtc-xn--bcher-kva.example");
+  assert.equal(communityContextId(""), "vtc-community");
+  const long = communityContextId(`${"a".repeat(70)}.example`);
+  assert.ok(long.length <= 64 && /^[a-z0-9.-]+$/.test(long) && !/[-.]$/.test(long));
+});
+
+test("the join screen offers a new identity, in a context of the community's own", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, servers: [{ id: "host-1", label: "My host" }] });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = await step(w, { step: "join-manifest" });
+  assert.equal(r.kind, "join-apply");
+  assert.deepEqual((r as { newIdentity?: unknown }).newIdentity, {
+    contextId: "vtc-members.example.org",
+    servers: [{ id: "host-1", label: "My host" }],
+  });
+  assert.equal(w.vtaCalls.some((c) => c.what === "create-identity"), false, "nothing made until asked");
+});
+
+test("an agent that won't list its hosting servers gets no offer", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, servers: new Error("forbidden") });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = await step(w, { step: "join-manifest" });
+  assert.equal(r.kind, "join-apply");
+  assert.equal("newIdentity" in r, false);
+});
+
+test("joining as a new identity: it is made first, then recorded, signed and sent as that identity", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, servers: [{ id: "host-1" }, { id: "host-2" }] });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "join-manifest" });
+  const r = await step(w, { step: "join-submit", newIdentity: { serverId: "host-2" }, attributes: NAME, registryConsent: false });
+  assert.deepEqual(r, { kind: "join-pending", host: "members.example.org", portalOrigin: PORTAL });
+  const made = w.vtaCalls.filter((c) => c.what === "create-identity");
+  assert.deepEqual(made.map((c) => c.decision), [
+    { contextId: "vtc-members.example.org", name: "members.example.org", serverId: "host-2" },
+  ]);
+  const order = w.vtaCalls.map((c) => c.what).filter((x) => ["create-identity", "bind", "sign-task"].includes(x));
+  assert.deepEqual(order, ["create-identity", "bind", "sign-task"]);
+  assert.deepEqual(w.binds, [{ origin: PORTAL, did: NEW_DID, rpDid: VTC }]);
+  assert.equal((w.sent[1]!.doc as { issuer: string }).issuer, NEW_DID);
+});
+
+test("a new identity the agent couldn't make: said so, and nothing about the person is sent", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, servers: [{ id: "host-1" }], createIdentityError: new Error("contexts/create: forbidden") });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "join-manifest" });
+  const r = (await step(w, { step: "join-submit", newIdentity: { serverId: "host-1" }, attributes: NAME, registryConsent: false })) as {
+    kind: string;
+    stage?: string;
+    message: string;
+  };
+  assert.equal(r.kind, "failed");
+  assert.equal(r.stage, "join-identity");
+  assert.match(r.message, /couldn't set up an identity for members\.example\.org/);
+  assert.deepEqual(w.sent.map((s) => s.type), ["join-manifest"]);
+  assert.equal(w.binds.length, 0);
+});
+
+test("a new identity on a server the wallet didn't offer is out of order", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, servers: [{ id: "host-1" }] });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "join-manifest" });
+  const r = await step(w, { step: "join-submit", newIdentity: { serverId: "elsewhere" }, attributes: NAME, registryConsent: false });
+  assert.equal(r.kind, "failed");
+  assert.equal(w.vtaCalls.some((c) => c.what === "create-identity"), false);
+  assert.deepEqual(w.sent.map((s) => s.type), ["join-manifest"]);
 });

@@ -2860,13 +2860,14 @@ export type SignInStep =
    *  asking. */
   | { step: "join-manifest" }
   /** Unknown community: the person sent a join request as `did` (one of the
-   *  `join-apply` candidates), with their answers to what it asked. */
-  | {
+   *  `join-apply` candidates), or as a new identity their agent sets up for
+   *  this community on the hosting server `serverId` (one of `join-apply`'s
+   *  `newIdentity.servers`), with their answers to what it asked. */
+  | ({
       step: "join-submit";
-      did: string;
       attributes: Array<{ type: string; value: string }>;
       registryConsent: boolean;
-    }
+    } & ({ did: string } | { newIdentity: { serverId: string } }))
   | { step: "claim"; entryId: string }
   | { step: "prove"; enteredNumber: string }
   /** The community's signed name differs from the wallet's record and the
@@ -2931,6 +2932,13 @@ export interface SignInIdentityView {
 
 /** A DID the member's agent hosts, offered when they start using a DID
  *  hosting service (`join-hosting`). */
+/** A new identity the agent can set up for one community. `servers` empty:
+ *  it has no DID hosting server to publish one through. */
+export interface SignInNewIdentityView {
+  contextId: string;
+  servers: Array<{ id: string; label?: string }>;
+}
+
 export interface SignInPersonaView {
   did: string;
   contextId: string;
@@ -2986,6 +2994,11 @@ export type SignInStepResult =
        *  statement. Absent when the community states none. */
       directory?: { lines: string[]; statementDigest: string };
       identities: SignInPersonaView[];
+      /** The agent can set up a new identity for this community: a context of
+       *  its own (`contextId`) holding one new DID, published through one of
+       *  `servers`. Absent when the agent would not say which servers it
+       *  publishes through (it is not one this wallet administers). */
+      newIdentity?: SignInNewIdentityView;
     }
   /** The community asks for evidence this wallet cannot provide (a
    *  credential, an invitation, vetting), or takes no members. The flow has
@@ -3123,7 +3136,7 @@ export interface SignInRefusalDetail {
  *  checking a domain-linked community's website (its DID Configuration);
  *  `identify` and `grant` are the member's VTA signing; `claim`, `prove` and
  *  `respond` are the exchanges with the community. */
-export type SignInFailureStage = "domain-linkage" | "join" | "join-manifest" | "join-sign" | "join-submit" | "claim" | "identify" | "prove" | "grant-digest" | "enrol-uv" | "grant" | "respond";
+export type SignInFailureStage = "domain-linkage" | "join-identity" | "join" | "join-manifest" | "join-sign" | "join-submit" | "claim" | "identify" | "prove" | "grant-digest" | "enrol-uv" | "grant" | "respond";
 export type SignInFailureParty = "community" | "vta" | "wallet";
 
 export type RuntimeSignInStepResponse =

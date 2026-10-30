@@ -33,6 +33,7 @@ export const STAGE_LABEL: Readonly<Record<SignInFailureStage, string>> = {
   "join-manifest": "asking the community what it requires to join",
   "join-sign": "your agent signing the join request",
   "join-submit": "sending the join request to the community",
+  "join-identity": "setting up an identity for the community at your agent",
   claim: "claim (sending the code to the community)",
   identify: "identify (your agent signing who you are)",
   prove: "prove (sending the number to the community)",
