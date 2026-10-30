@@ -29,7 +29,7 @@
 
 import { TYPE_URI as WEBVH_DIDS_CREATE } from "../specs/vta/webvh/dids/create/1.2/payload.js";
 import { TYPE_URI as WEBVH_DIDS_DELETE } from "../specs/vta/webvh/dids/delete/1.0/payload.js";
-import { TYPE_URI as WEBVH_DIDS_UPDATE } from "../specs/vta/webvh/dids/update/1.0/payload.js";
+import { TYPE_URI as WEBVH_DIDS_UPDATE } from "../specs/vta/webvh/dids/update/1.1/payload.js";
 import { TYPE_URI as WEBVH_DIDS_ROTATE_KEYS } from "../specs/vta/webvh/dids/rotate-keys/1.0/payload.js";
 import { TYPE_URI as WEBVH_DIDS_REGISTER_WITH_SERVER } from "../specs/vta/webvh/dids/register-with-server/1.0/payload.js";
 import { TYPE_URI as WEBVH_AGENT_NAME_LIST } from "../specs/vta/webvh/agent-name/list/1.1/payload.js";

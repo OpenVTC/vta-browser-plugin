@@ -1118,7 +1118,7 @@ function matchCode(payloadDigest: string): string | null {
 }
 
 function taskLabel(typeUri: string): string {
-  // `https://trusttasks.org/spec/webvh/dids/update/1.0` → `webvh/dids/update`
+  // `https://trusttasks.org/spec/vta/webvh/dids/update/1.1` → `vta/webvh/dids/update`
   const m = /\/spec\/(.+)\/[\d.]+$/.exec(typeUri);
   return m?.[1] ?? typeUri;
 }

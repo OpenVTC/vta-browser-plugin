@@ -56,7 +56,7 @@ test("a major version bump is NOT assumed compatible", () => {
 
 test("a success document is not an error", () => {
   assert.equal(
-    isTrustTaskErrorType("https://trusttasks.org/spec/vta/webvh/dids/update/1.0#response"),
+    isTrustTaskErrorType("https://trusttasks.org/spec/vta/webvh/dids/update/1.1#response"),
     false,
   );
   // Nor is anything that merely mentions the slug — a task type could.

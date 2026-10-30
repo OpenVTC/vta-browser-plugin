@@ -10,6 +10,13 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Added
 
+- **`webvhDidUpdate` speaks `vta/webvh/dids/update/1.1`** and takes
+  `scidAlsoKnownAs`: `true` lists the log's `did:scid:vh:1:<scid>?src=<source>`
+  DID URL in `alsoKnownAs` for its current location, `false` removes every
+  did:scid entry for its SCID (sent explicitly, never dropped as silence). The
+  agent derives the DID URL; the response reports it as `scidDidUrl`, beside
+  `scidAlsoKnownAs`. Pins `vta/webvh/dids/update/1.1` in place of 1.0.
+
 - **Files in open rooms.** `putRoomFile` seals an open room's file under a key
   minted for it alone and writes `rooms/records/put/0.4`, the manifest and its
   `fileKey` in `cleartext.file`; `getRoomFile` opens it with that key, refusing
