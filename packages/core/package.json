@@ -151,7 +151,7 @@
     "@openvtc/vti-didcomm-js": "^0.13.0",
     "@openvtc/vti-tsp-js": "^0.4.0",
     "@scure/base": "^2.2.0",
-    "cbor-x": "^1.6.6"
+    "cbor-x": "^1.6.8"
   },
   "devDependencies": {
     "@hpke/chacha20poly1305": "^1.8.0",
