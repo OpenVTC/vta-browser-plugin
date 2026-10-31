@@ -1246,6 +1246,23 @@ test("a request already open under that identity is pending, and its entry stays
   assert.deepEqual(w.unbinds, []);
 });
 
+test("an identity that is already a member: its entry stays, and the person signs in instead", async () => {
+  const w = world({ known: UNKNOWN, doc: communityDoc, submit: { refuse: "vtc/join-requests/submit:alreadyMember" } });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  await step(w, { step: "join-manifest" });
+  const r = await step(w, { step: "join-submit", did: PERSONAS[0]!.did, attributes: NAME, registryConsent: false });
+  assert.deepEqual(r, {
+    kind: "confirm",
+    communityName: "members.example.org",
+    portalOrigin: PORTAL,
+    identities: [{ entryId: "e-new", did: PERSONAS[0]!.did, label: "members.example.org" }],
+    alreadyMember: true,
+  });
+  assert.deepEqual(w.unbinds, []);
+  const enter = await step(w, { step: "claim", entryId: "e-new" });
+  assert.equal(enter.kind, "enter-number");
+});
+
 test("the agent refusing to sign the request: nothing goes to the community, and the entry is removed", async () => {
   const w = world({ known: UNKNOWN, doc: communityDoc, signTaskError: vtaRefusal("notSignable") });
   await step(w, { step: "prepare", link: LINK, origin: PORTAL });

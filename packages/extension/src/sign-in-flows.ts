@@ -973,7 +973,7 @@ export class SignInFlows {
     }
     const unbind = () => flow.vta.unbindIdentity(bound.entryId).catch(() => undefined);
 
-    let outcome: ReturnType<typeof joinOutcomeOf>;
+    let outcome: ReturnType<typeof joinOutcomeOf> | { kind: "already-member" };
     try {
       const unsigned = buildJoinSubmit(did, flow.vtcDid, {
         criterion: plan.criterion,
@@ -993,12 +993,20 @@ export class SignInFlows {
         this.flows.delete(flowId);
         return { kind: "join-pending", host, portalOrigin };
       }
-      await unbind();
-      return this.joinFailed(flowId, flow, err, `${host} didn't take the request`);
+      // Already a member as this DID — joined from another wallet, or with an
+      // identity whose entry here was removed. Nothing was queued; keep the
+      // entry just recorded and sign in as the member they already are.
+      if (err instanceof OobRefusedError && oobCode(err.code) === "alreadyMember") {
+        outcome = { kind: "already-member" };
+      } else {
+        await unbind();
+        return this.joinFailed(flowId, flow, err, `${host} didn't take the request`);
+      }
     }
 
-    if (outcome.kind === "admitted") {
-      // A member now: on to the ordinary confirm (C3 step 5) for the same link.
+    if (outcome.kind === "admitted" || outcome.kind === "already-member") {
+      // A member now, or already: on to the ordinary confirm (C3 step 5) for
+      // the same link.
       const identity: SignInIdentityView = { entryId: bound.entryId, did, label: bound.label };
       flow.identities = [identity];
       flow.communityName = bound.label;
@@ -1012,6 +1020,7 @@ export class SignInFlows {
         communityName: flow.communityName,
         portalOrigin,
         identities: flow.identities,
+        ...(outcome.kind === "already-member" ? { alreadyMember: true as const } : {}),
       };
     }
     this.end(flow);
