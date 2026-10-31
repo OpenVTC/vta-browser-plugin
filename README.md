@@ -427,6 +427,15 @@ document says it is:
     required detail missing, unreachable): the reason, plainly, and the vault
     entry is removed again.
 
+  **Already a member, from the join page.** A portal marks the code on its
+  join page `data-oob-intent="join"`. When this wallet already signs in to that
+  community, the sign-in screen does not go on by itself: it says you are
+  already a member and offers **Join with a new identity** beside signing in.
+  That reads the manifest as above, without the identities you already use
+  there, and makes the new identity in a context none of them is in
+  (`vtc-<host>`, else `vtc-<host>-2`, …). The page's mark only changes what you
+  are offered; nothing is sent until you choose.
+
   A community whose every way in needs something this wallet cannot send yet —
   a credential, an invitation or identity vetting — gets a screen that lists
   what it asks for and closes; nothing about you was sent. VTC DID documents

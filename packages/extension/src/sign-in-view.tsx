@@ -787,7 +787,8 @@ export function SignInView({
         const only =
           res.result.identities.length === 1 &&
           !res.result.changedFromDid &&
-          !res.result.alreadyMember
+          !res.result.alreadyMember &&
+          !res.result.joinOffered
             ? res.result.identities[0]!
             : undefined;
         if (only) {
@@ -1564,6 +1565,29 @@ export function SignInView({
           }}
           secondary={declineToClose}
         >
+          {screen.joinOffered && (
+            <div role="status" data-testid="join-offered">
+              <Note tone="accent">
+                You're already a member of{" "}
+                <strong style={wrap}>{screen.communityName}</strong>. Sign in as the
+                identity below, or join again with a new identity of its own.
+              </Note>
+              <button
+                type="button"
+                data-testid="join-new"
+                disabled={busy}
+                onClick={() => void run({ step: "join-new" })}
+                style={{
+                  ...button("default"),
+                  marginTop: 8,
+                  fontSize: t.sm,
+                  padding: "5px 12px",
+                }}
+              >
+                Join with a new identity
+              </button>
+            </div>
+          )}
           {screen.alreadyMember && (
             <div role="status" data-testid="already-member">
               <Note tone="accent">

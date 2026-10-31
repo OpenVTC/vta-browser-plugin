@@ -60,6 +60,9 @@ export interface TriggerLinkActivation {
   link: string;
   /** `location.origin` at the moment of the click. */
   origin: string;
+  /** The anchor's `data-oob-intent`, when it is `join`: the page offered the
+   *  code as a way to join. Only what the wallet offers depends on it. */
+  intent?: "join";
 }
 
 /** The number the portal shows for a clicked request (C11). `content.ts`
@@ -213,7 +216,9 @@ function onClick(
   if (event.defaultPrevented) return;
   if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
 
-  const href = anchorHref(event, win);
+  const anchor = anchorOf(event);
+  if (anchor === undefined) return;
+  const href = anchorHref(anchor, win);
   if (href === undefined) return;
 
   // Only a link on the link host, at `/t`, with the fields in the fragment.
@@ -235,7 +240,8 @@ function onClick(
   // 4. Fire and forget. Errors are swallowed: reporting one to the page would
   //    tell it something, and there is nothing it could do with it anyway.
   try {
-    deps.send({ link: href, origin });
+    const intent = anchor.getAttribute("data-oob-intent") === "join" ? { intent: "join" as const } : {};
+    deps.send({ link: href, origin, ...intent });
   } catch {
     // The extension context may have been invalidated by a reload. The click
     // is already prevented; the person clicks again after the page reloads.
@@ -259,19 +265,22 @@ function shadowRootsOf(event: Event): ShadowRoot[] {
   );
 }
 
-function anchorHref(event: Event, win: Window): string | undefined {
+function anchorOf(event: Event): Element | undefined {
   const path = typeof event.composedPath === "function" ? event.composedPath() : [];
   for (const node of path) {
     if (!node || typeof (node as Element).tagName !== "string") continue;
     const el = node as Element;
-    if (el.tagName.toLowerCase() !== "a") continue;
-    const raw = el.getAttribute("href") ?? el.getAttribute("xlink:href");
-    if (raw === null) return undefined;
-    try {
-      return new URL(raw, win.document.baseURI).href;
-    } catch {
-      return undefined;
-    }
+    if (el.tagName.toLowerCase() === "a") return el;
   }
   return undefined;
+}
+
+function anchorHref(el: Element, win: Window): string | undefined {
+  const raw = el.getAttribute("href") ?? el.getAttribute("xlink:href");
+  if (raw === null) return undefined;
+  try {
+    return new URL(raw, win.document.baseURI).href;
+  } catch {
+    return undefined;
+  }
 }

@@ -46,6 +46,18 @@ test("a person's click on a sign-in code is taken, with the page's origin", () =
   assert.deepEqual(sent, [{ link: LINK, origin: "https://members.example.org" }]);
 });
 
+test("a code the page offers as a way to join says so; any other intent is not passed on", () => {
+  const { win, sent } = page(
+    `<a id="j" data-oob-intent="join" href="${LINK}">join</a><a id="x" data-oob-intent="admin" href="${LINK}">x</a>`,
+  );
+  click(win, win.document.getElementById("j")!);
+  click(win, win.document.getElementById("x")!);
+  assert.deepEqual(sent, [
+    { link: LINK, origin: "https://members.example.org", intent: "join" },
+    { link: LINK, origin: "https://members.example.org" },
+  ]);
+});
+
 test("a synthetic click (a.click(), dispatchEvent) is never acted on", () => {
   const { win, sent } = page(`<a id="qr" href="${LINK}">code</a>`);
   const a = win.document.getElementById("qr")!;
