@@ -17,7 +17,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.4",
-    "zustand": "^5.0.0"
+    "zustand": "^5.0.16"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
