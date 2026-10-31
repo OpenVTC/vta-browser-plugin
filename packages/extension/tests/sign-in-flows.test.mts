@@ -1599,3 +1599,60 @@ test("a new identity on a server the wallet didn't offer is out of order", async
   assert.equal(w.vtaCalls.some((c) => c.what === "create-identity"), false);
   assert.deepEqual(w.sent.map((s) => s.type), ["join-manifest"]);
 });
+
+// ── Joining again from the community's join page ────────────────────────────
+
+/** Alice is a member, as the DID in the community's own context. */
+const MEMBER_PERSONAS = [...PERSONAS, { did: ALICE, contextId: "vtc-members.example.org" }];
+
+test("a member's code from the join page offers a new identity beside signing in; a sign-in page's does not", async () => {
+  const joined = world({ doc: communityDoc, personas: MEMBER_PERSONAS, servers: [{ id: "host-1" }] });
+  const r = await step(joined, { step: "prepare", link: LINK, origin: PORTAL, intent: "join" });
+  assert.equal(r.kind, "confirm");
+  assert.equal((r as { joinOffered?: boolean }).joinOffered, true);
+
+  const signIn = await step(world({ doc: communityDoc }), { step: "prepare", link: LINK, origin: PORTAL });
+  assert.equal(signIn.kind, "confirm");
+  assert.equal("joinOffered" in signIn, false);
+  assert.equal(signIn.kind === "confirm" && signIn.joinOffered, undefined);
+});
+
+test("joining with a new identity: not as the member, and in a context no member identity is in", async () => {
+  const w = world({ doc: communityDoc, personas: MEMBER_PERSONAS, servers: [{ id: "host-1" }] });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL, intent: "join" });
+  const r = await step(w, { step: "join-new" });
+  assert.equal(r.kind, "join-apply");
+  const apply = r as Extract<typeof r, { kind: "join-apply" }>;
+  assert.deepEqual(apply.identities.map((i) => i.did), PERSONAS.map((p) => p.did), "the member's DID can't apply again");
+  assert.equal(apply.newIdentity?.contextId, "vtc-members.example.org-2");
+  assert.deepEqual(w.sent.map((s) => s.type), ["join-manifest"]);
+
+  await step(w, { step: "join-submit", newIdentity: { serverId: "host-1" }, attributes: NAME, registryConsent: false });
+  const made = w.vtaCalls.filter((c) => c.what === "create-identity").map((c) => c.decision);
+  assert.deepEqual(made, [{ contextId: "vtc-members.example.org-2", name: "members.example.org", serverId: "host-1" }]);
+  assert.equal((w.sent[1]!.doc as { issuer: string }).issuer, NEW_DID);
+});
+
+test("join-new is only for a code from the join page", async () => {
+  const w = world({ doc: communityDoc });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = await step(w, { step: "join-new" });
+  assert.equal(r.kind, "failed");
+  assert.equal(w.sent.length, 0);
+});
+
+test("an unfinished join's context is reused; one already used at the community is not", async () => {
+  // An identity made by a join that never got as far as the vault entry: no
+  // entry names it, so a retry takes its context rather than minting another.
+  const leftover = { did: "did:webvh:QmLeft:dids.example.net:left", contextId: "vtc-members.example.org" };
+  const w = world({ known: UNKNOWN, doc: communityDoc, personas: [...PERSONAS, leftover], servers: [{ id: "host-1" }] });
+  await step(w, { step: "prepare", link: LINK, origin: PORTAL });
+  const r = await step(w, { step: "join-manifest" });
+  assert.equal((r as { newIdentity?: { contextId: string } }).newIdentity?.contextId, "vtc-members.example.org");
+});
+
+test("a numbered community context still fits an agent's context id", () => {
+  assert.equal(communityContextId("members.example.org", 2), "vtc-members.example.org-2");
+  const long = communityContextId(`${"a".repeat(70)}.example`, 12);
+  assert.ok(long.length <= 64 && long.endsWith("-12") && /^[a-z0-9.-]+$/.test(long));
+});

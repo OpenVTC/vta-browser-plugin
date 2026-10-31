@@ -251,7 +251,12 @@ installTriggerLinkClickHandler(window, {
   now: () => Math.floor(Date.now() / 1000),
   send: (activation) => {
     void chrome.runtime
-      .sendMessage({ type: RUNTIME_TRIGGER_LINK, link: activation.link, origin: activation.origin })
+      .sendMessage({
+        type: RUNTIME_TRIGGER_LINK,
+        link: activation.link,
+        origin: activation.origin,
+        ...(activation.intent ? { intent: activation.intent } : {}),
+      })
       .catch(() => undefined);
   },
   sendNumber: (n) => {

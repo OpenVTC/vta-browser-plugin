@@ -2822,6 +2822,10 @@ export interface RuntimeTriggerLinkRequest {
   link: string;
   /** Overwritten by the background with the attested `sender.origin`. */
   origin: string;
+  /** The clicked code's `data-oob-intent`: `join` when the page offered it
+   *  as a way to join rather than to sign in. A page's word, so it only
+   *  changes what the wallet offers the person — never what it sends. */
+  intent?: "join";
 }
 
 export interface RuntimeTriggerLinkNumberRequest {
@@ -2859,6 +2863,11 @@ export type SignInStep =
    *  fetches its join manifest as a throwaway key, saying nothing of who is
    *  asking. */
   | { step: "join-manifest" }
+  /** A community the person is already a member of, reached from its join
+   *  page (`confirm` with `joinOffered`): they chose to join with a new
+   *  identity instead of signing in. Reads the join manifest, as
+   *  `join-manifest` does, and answers `join-apply`. */
+  | { step: "join-new" }
   /** Unknown community: the person sent a join request as `did` (one of the
    *  `join-apply` candidates), or as a new identity their agent sets up for
    *  this community on the hosting server `serverId` (one of `join-apply`'s
@@ -2909,6 +2918,8 @@ export type OffscreenSignInStepRequest = {
    *  when the link's community is a different one, so a changed pairing gets
    *  the loud prompt the page-bridge logins give it. */
   pinnedDid?: string;
+  /** Present on `prepare` only: the page offered the code as a way to join. */
+  intent?: "join";
 } & SignInStep;
 
 /** How this browser approves sign-ins at an agent: the kind of UV key the
@@ -3029,6 +3040,10 @@ export type SignInStepResult =
       identities: SignInIdentityView[];
       changedFromDid?: string;
       alreadyMember?: true;
+      /** The code came from the community's join page (`data-oob-intent`):
+       *  the window does not skip the screen, and offers `join-new` beside
+       *  signing in. */
+      joinOffered?: true;
     }
   /** After the claim: type the number. `nameMismatch` is the community's own
    *  name for itself when it differs from this wallet's record (VTI-LNK-104).

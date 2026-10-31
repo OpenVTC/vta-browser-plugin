@@ -223,6 +223,35 @@ test("one identity that was already a member: the screen says so, and waits for 
   await screen.unmount();
 });
 
+test("a member's code from the join page: the screen waits, and offers joining with a new identity", async () => {
+  const { steps, send } = script({
+    ...RESULTS,
+    prepare: {
+      ...(RESULTS.prepare as Extract<SignInStepResult, { kind: "confirm" }>),
+      identities: [{ entryId: "e1", did: "did:web:alice.example", label: "Alice" }],
+      joinOffered: true,
+    },
+    "join-new": {
+      kind: "join-apply",
+      host: "members.example.org",
+      portalOrigin: PORTAL,
+      admission: "review",
+      attributes: [],
+      identities: [],
+      newIdentity: { contextId: "vtc-members.example.org-2", servers: [{ id: "host-1" }] },
+    } as SignInStepResult,
+  });
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, uv: ENROLLED_UV, close: () => {} }),
+  );
+  await screen.settle();
+  assert.deepEqual(steps, [{ step: "prepare" }], "no claim goes out on its own");
+  assert.match(screen.text(), /already a member of Example Community/);
+  await screen.click(screen.container.querySelector('[data-testid="join-new"]')!);
+  assert.deepEqual(steps[1], { step: "join-new" });
+  await screen.unmount();
+});
+
 test("one identity, no number from the page: the number screen, without the identity screen", async () => {
   const { steps, send } = script({
     ...RESULTS,

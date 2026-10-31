@@ -3604,6 +3604,7 @@ const SIGN_IN_FLOW_PREFIX = "sign-in-flow:";
 interface SignInFlowRecord {
   link: string;
   origin: string;
+  intent?: "join";
 }
 
 async function handleTriggerLink(msg: RuntimeTriggerLinkRequest, tabId: number | undefined): Promise<void> {
@@ -3622,7 +3623,11 @@ async function handleTriggerLink(msg: RuntimeTriggerLinkRequest, tabId: number |
     return;
   }
   const flowId = crypto.randomUUID();
-  const record: SignInFlowRecord = { link: msg.link, origin: msg.origin };
+  const record: SignInFlowRecord = {
+    link: msg.link,
+    origin: msg.origin,
+    ...(msg.intent === "join" ? { intent: "join" as const } : {}),
+  };
   await chrome.storage.session.set({ [`${SIGN_IN_FLOW_PREFIX}${flowId}`]: record });
   const url = `${chrome.runtime.getURL("confirm.html")}?kind=sign-in&flow=${flowId}`;
   const bounds = await consentWindowBounds(660, 560);
@@ -3727,6 +3732,7 @@ async function handleSignInStep(msg: RuntimeSignInStepRequest): Promise<RuntimeS
           link: record.link,
           origin: record.origin,
           ...(await signInPinnedDid(record.origin)),
+          ...(record.intent ? { intent: record.intent } : {}),
         }
       : {}),
   } as OffscreenSignInStepRequest;

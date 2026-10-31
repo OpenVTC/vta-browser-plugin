@@ -358,12 +358,44 @@ const MAX_CONTEXT_ID_LEN = 64;
  * community, named for its verified portal host, so a second attempt finds
  * the first one's context. Context ids take `A-Z a-z 0-9 . _ -` only.
  */
-export function communityContextId(host: string): string {
+export function communityContextId(host: string, n = 1): string {
   const slug = host
     .toLowerCase()
     .replace(/[^a-z0-9.-]+/g, "-")
     .replace(/^[-.]+|[-.]+$/g, "");
-  return `vtc-${slug || "community"}`.slice(0, MAX_CONTEXT_ID_LEN).replace(/[-.]+$/, "");
+  const suffix = n > 1 ? `-${n}` : "";
+  return (
+    `vtc-${slug || "community"}`.slice(0, MAX_CONTEXT_ID_LEN - suffix.length).replace(/[-.]+$/, "") +
+    suffix
+  );
+}
+
+/** Whether `e` is a sign-in entry for the community `vtcDid`. */
+function isEntryFor(e: SignInVaultEntry, vtcDid: string): boolean {
+  return (
+    e.secretKind === "didSelfIssued" &&
+    typeof e.principalDid === "string" &&
+    e.targets.some((t) => t.kind === "did" && typeof t.did === "string" && didIdentity(t.did) === vtcDid)
+  );
+}
+
+/**
+ * The context a new identity for the community at `host` goes in: the first of
+ * `vtc-<host>`, `vtc-<host>-2`, … holding no DID this wallet already uses at
+ * the community. A context whose DID is not used there is the one an earlier,
+ * unfinished join made, and is reused, so a retry does not mint another; one
+ * whose DID is already a member there is passed over, so "a new identity" is
+ * new.
+ */
+function freeCommunityContextId(
+  host: string,
+  personas: readonly SignInPersona[],
+  usedHere: ReadonlySet<string>,
+): string {
+  for (let n = 1; ; n++) {
+    const id = communityContextId(host, n);
+    if (!personas.some((p) => p.contextId === id && usedHere.has(p.did))) return id;
+  }
 }
 
 /** A DID the agent hosts, with the sites it already signs in to. */
@@ -407,6 +439,9 @@ interface Flow {
   /** Every `didSelfIssued` entry, read at `prepare`: which sites a DID is
    *  already used at, for the community join offer. */
   entries?: SignInVaultEntry[];
+  /** Reached from the community's join page while already a member of it:
+   *  `confirm` offers `join-new` beside signing in. */
+  joinOffered?: boolean;
   /** A community's join manifest, as far as the wallet can apply under it. */
   joinPlan?: Extract<JoinPlan, { ok: true }>;
   /** The new identity the wallet offered for this community, if it did. */
@@ -511,6 +546,7 @@ export class SignInFlows {
       link?: string;
       origin?: string;
       pinnedDid?: string;
+      intent?: "join";
     } & SignInStep,
   ): Promise<SignInStepResult> {
     if (req.step === "prepare")
@@ -521,6 +557,7 @@ export class SignInFlows {
         req.vtaDid,
         req.restBaseUrl,
         req.pinnedDid,
+        req.intent,
       );
     const flow = this.flows.get(req.flowId);
     if (!flow || flow.phase === "ended") {
@@ -536,6 +573,8 @@ export class SignInFlows {
           return await this.join(req.flowId, flow, req.did);
         case "join-manifest":
           return await this.joinManifest(req.flowId, flow);
+        case "join-new":
+          return await this.joinNew(req.flowId, flow);
         case "join-submit":
           return await this.joinSubmit(req.flowId, flow, req);
         case "claim":
@@ -607,6 +646,7 @@ export class SignInFlows {
     vtaDid: string,
     restBaseUrl: string | undefined,
     pinnedDid: string | undefined,
+    intent?: "join",
   ): Promise<SignInStepResult> {
     if (this.flows.has(flowId))
       return {
@@ -646,12 +686,7 @@ export class SignInFlows {
     await vta.ensureDevice?.().catch(() => undefined);
     const entries = await vta.listIdentities();
     const identities: SignInIdentityView[] = entries
-      .filter(
-        (e) =>
-          e.secretKind === "didSelfIssued" &&
-          typeof e.principalDid === "string" &&
-          e.targets.some((t) => t.kind === "did" && typeof t.did === "string" && didIdentity(t.did) === vtcDid),
-      )
+      .filter((e) => isEntryFor(e, vtcDid))
       .map((e) => ({ entryId: e.id, did: e.principalDid!, label: e.label }))
       // Two entries for one DID sign in identically (the VTA signs as the DID,
       // whichever entry names it), so the person is offered the DID once.
@@ -745,6 +780,10 @@ export class SignInFlows {
 
     // C3 step 5: the name from the wallet's own record.
     const communityName = identities[0]!.label;
+    // The person clicked the community's join page while already a member: a
+    // new identity is offered beside signing in. The page's word changes only
+    // the offer; nothing is sent until the person picks.
+    const joinOffered = intent === "join" && kind === "community";
     this.flows.set(flowId, {
       vtaDid,
       phase: "prepared",
@@ -757,12 +796,14 @@ export class SignInFlows {
       identities,
       kind,
       route: resolved.route,
+      ...(joinOffered ? { joinOffered, entries } : {}),
     });
     return {
       kind: "confirm",
       communityName,
       portalOrigin: selected.services.portalOrigin,
       identities,
+      ...(joinOffered ? { joinOffered: true as const } : {}),
       // The page was signed in to another community before (M5). The pairing
       // was verified above all the same — the document names this origin as
       // its portal — but the person decides whether that is the community they
@@ -825,6 +866,18 @@ export class SignInFlows {
 
   // ── join (an unknown community) ─────────────────────────────────────────────
 
+  /** Already a member, and the person chose to join with a new identity
+   *  instead of signing in: on to the join manifest, as for a community the
+   *  wallet does not know. */
+  private async joinNew(flowId: string, flow: Flow): Promise<SignInStepResult> {
+    if (flow.phase !== "prepared" || !flow.joinOffered) throw outOfOrder();
+    delete flow.joinOffered;
+    flow.phase = "joining";
+    flow.identities = [];
+    flow.communityName = hostOf(flow.services.portalOrigin);
+    return this.joinManifest(flowId, flow);
+  }
+
   /** The person asked what the community requires. The manifest is asked for
    *  as a throwaway key: the community learns nothing of who is looking. */
   private async joinManifest(
@@ -863,8 +916,12 @@ export class SignInFlows {
       return { kind: "join-elsewhere", host, portalOrigin, reason: plan.reason, needs: plan.needs, ...named };
     }
     flow.joinPlan = plan;
-    flow.personas = await flow.vta.listPersonas();
-    const newIdentity = await this.newIdentityOffer(flow);
+    // An identity already used at this community is a member, or has a
+    // request open: it cannot apply again.
+    const usedHere = this.usedHere(flow);
+    const personas = await flow.vta.listPersonas();
+    flow.personas = personas.filter((p) => !usedHere.has(p.did));
+    const newIdentity = await this.newIdentityOffer(flow, personas, usedHere);
     if (newIdentity) flow.newIdentity = newIdentity;
     return {
       kind: "join-apply",
@@ -883,7 +940,11 @@ export class SignInFlows {
    *  where it could publish one. An agent that will not list its hosting
    *  servers is one this wallet does not administer: no offer, and the
    *  person joins as an identity they already have. */
-  private async newIdentityOffer(flow: Flow): Promise<SignInNewIdentityView | undefined> {
+  private async newIdentityOffer(
+    flow: Flow,
+    personas: readonly SignInPersona[],
+    usedHere: ReadonlySet<string>,
+  ): Promise<SignInNewIdentityView | undefined> {
     const { listHostingServers, createCommunityIdentity } = flow.vta;
     if (!listHostingServers || !createCommunityIdentity) return undefined;
     let servers: Array<{ id: string; label?: string }>;
@@ -893,9 +954,14 @@ export class SignInFlows {
       return undefined;
     }
     return {
-      contextId: communityContextId(hostOf(flow.services.portalOrigin)),
+      contextId: freeCommunityContextId(hostOf(flow.services.portalOrigin), personas, usedHere),
       servers: servers.map((s) => ({ id: s.id, ...(s.label ? { label: s.label } : {}) })),
     };
+  }
+
+  /** The DIDs this wallet already signs in to the flow's community as. */
+  private usedHere(flow: Flow): Set<string> {
+    return new Set((flow.entries ?? []).filter((e) => isEntryFor(e, flow.vtcDid)).map((e) => e.principalDid!));
   }
 
   /** The person sent the request, as `did`, with their answers. */
