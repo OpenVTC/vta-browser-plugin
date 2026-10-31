@@ -3018,13 +3018,17 @@ export type SignInStepResult =
   /** C3 step 5: "Sign in to <name> at <portal origin>?" `changedFromDid` is
    *  the community this origin was pinned to by an earlier sign-in, when the
    *  link names a different one (M5): the window warns, and does not skip the
-   *  screen for a single identity. */
+   *  screen for a single identity. `alreadyMember`: the person asked to join,
+   *  and the community answered that the identity they applied as is already
+   *  one of its members (`submit:alreadyMember`) — the window says so, and does
+   *  not skip the screen either. */
   | {
       kind: "confirm";
       communityName: string;
       portalOrigin: string;
       identities: SignInIdentityView[];
       changedFromDid?: string;
+      alreadyMember?: true;
     }
   /** After the claim: type the number. `nameMismatch` is the community's own
    *  name for itself when it differs from this wallet's record (VTI-LNK-104).

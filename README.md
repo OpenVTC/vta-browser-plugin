@@ -420,6 +420,9 @@ document says it is:
   - **Waiting for an administrator** (or for more evidence): "Request sent —
     you can sign in once <host> approves it". Nothing else is sent, and the
     vault entry stays, because the request is open under that DID.
+  - **Already a member** as that DID (`submit:alreadyMember` — joined from
+    another wallet, or the entry here was removed): nothing is queued; the
+    window says so and goes on to "Sign in to <host>?", keeping the entry.
   - **Declined, or the request was refused** (not accepting members, a
     required detail missing, unreachable): the reason, plainly, and the vault
     entry is removed again.

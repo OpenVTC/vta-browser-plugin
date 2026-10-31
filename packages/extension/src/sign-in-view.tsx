@@ -785,7 +785,9 @@ export function SignInView({
         // page that signed in to a different community before is shown either
         // way: the warning is the point of the screen then (M5).
         const only =
-          res.result.identities.length === 1 && !res.result.changedFromDid
+          res.result.identities.length === 1 &&
+          !res.result.changedFromDid &&
+          !res.result.alreadyMember
             ? res.result.identities[0]!
             : undefined;
         if (only) {
@@ -1562,6 +1564,15 @@ export function SignInView({
           }}
           secondary={declineToClose}
         >
+          {screen.alreadyMember && (
+            <div role="status" data-testid="already-member">
+              <Note tone="accent">
+                You're already a member of{" "}
+                <strong style={wrap}>{screen.communityName}</strong>, so no request was
+                sent. Continue to sign in.
+              </Note>
+            </div>
+          )}
           <p style={{ margin: 0, color: c.muted }}>
             Nothing is sent to the community until you continue.
           </p>
