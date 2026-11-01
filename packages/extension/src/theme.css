@@ -145,3 +145,40 @@ pre {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* The ballot window's active step (`election-consent.tsx`): a soft pulse that
+ * says "working on it". Stills entirely when motion is reduced, rather than
+ * running at the near-zero duration the rule above gives other animations. */
+@keyframes w-step-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--w-accent) 45%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--w-accent) 0%, transparent);
+  }
+}
+
+@keyframes w-step-pop {
+  from {
+    transform: scale(0.6);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+.w-step-active {
+  animation: w-step-pulse 1.4s ease-in-out infinite;
+}
+
+.w-step-done {
+  animation: w-step-pop 0.22s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .w-step-active,
+  .w-step-done {
+    animation: none !important;
+  }
+}

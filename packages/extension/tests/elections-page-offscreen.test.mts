@@ -4,7 +4,8 @@
 // replies, and a ballot box that signs its receipt.
 //
 // What is pinned: nothing the community receives carries a ballot or a cast;
-// the cast reaches the ballot box exactly as the VTA built it, after a pause;
+// the cast reaches the ballot box exactly as the VTA built it, after the pause
+// the background chose (capped);
 // the receipt goes back to the VTA; the community's ticket answer reaches the
 // VTA without its `ext`.
 
@@ -186,13 +187,37 @@ test("a ticket the agent already holds is not taken again", async () => {
   assert.equal(w.toCommunity.length, 1, "only the read reached the community");
 });
 
-test("a cast goes to the ballot box as the VTA built it, after a pause, and never to the community", async () => {
+async function castInSteps(w: ReturnType<typeof world>, delayMs: number) {
+  const prepared = (await runElectionsPageOp(w.deps, VTA, {
+    op: "castPrepare",
+    hostDid: VTC,
+    member: MEMBER,
+    electionId: "agm-2027",
+    ballot,
+  })) as { castDocument: Record<string, unknown>; endpoint: string; ballotBox: string };
+  const posted = (await runElectionsPageOp(w.deps, VTA, { op: "castPost", ...prepared, delayMs })) as {
+    receipt: Record<string, unknown>;
+  };
+  const kept = await runElectionsPageOp(w.deps, VTA, {
+    op: "castKeep",
+    hostDid: VTC,
+    member: MEMBER,
+    electionId: "agm-2027",
+    receipt: posted.receipt,
+  });
+  return { prepared, posted, kept };
+}
+
+test("a cast goes to the ballot box as the VTA built it, after the pause it is given, and never to the community", async () => {
   const w = world();
-  const got = await runElectionsPageOp(w.deps, VTA, { op: "cast", hostDid: VTC, member: MEMBER, electionId: "agm-2027", ballot });
-  assert.deepEqual(got, { status: "counted", leafIndex: 7 });
+  const { prepared, posted, kept } = await castInSteps(w, 7_000);
+  assert.equal(prepared.endpoint, BOX_DOOR);
+  assert.equal(prepared.ballotBox, box.did);
+  assert.deepEqual(prepared.castDocument, w.cast());
+  assert.equal((posted.receipt.payload as { outcome: string }).outcome, "counted");
+  assert.deepEqual(kept, { status: "included", leafIndex: 7 });
   assert.deepEqual(w.toBox, [w.cast()]);
-  assert.equal(w.slept.length, 1);
-  assert.ok(w.slept[0]! >= 0 && w.slept[0]! < 20_000);
+  assert.deepEqual(w.slept, [7_000]);
   assert.equal(
     w.toCommunity.some((d) => JSON.stringify(d).includes("ballot") || JSON.stringify(d).includes("cast")),
     false,
@@ -200,16 +225,40 @@ test("a cast goes to the ballot box as the VTA built it, after a pause, and neve
   );
   const vote = w.vtaAsked.find((a) => a.type === `${T}vta/pcs/vote/0.2`)!;
   assert.deepEqual(vote.payload.ballot, ballot);
-  const kept = w.vtaAsked.at(-1)!;
-  assert.equal(kept.type, `${T}vta/pcs/voter/receipt/0.1`);
-  assert.equal((kept.payload.receipt as { issuer: string }).issuer, box.did);
+  const receipt = w.vtaAsked.at(-1)!;
+  assert.equal(receipt.type, `${T}vta/pcs/voter/receipt/0.1`);
+  assert.equal((receipt.payload.receipt as { issuer: string }).issuer, box.did);
+});
+
+test("the pause is capped at the longest the wallet waits, and never negative", async () => {
+  const long = world();
+  await castInSteps(long, 10 * 60_000);
+  assert.deepEqual(long.slept, [20_000]);
+  const negative = world();
+  await castInSteps(negative, -5);
+  assert.deepEqual(negative.slept, [0]);
+});
+
+test("a cast addressed to another ballot box is never posted", async () => {
+  const w = world();
+  await assert.rejects(
+    runElectionsPageOp(w.deps, VTA, {
+      op: "castPost",
+      castDocument: { id: "c", recipient: "did:webvh:QmOther:other.example" },
+      ballotBox: box.did,
+      endpoint: BOX_DOOR,
+      delayMs: 0,
+    }),
+    /another ballot box/,
+  );
+  assert.equal(w.toBox.length, 0);
 });
 
 test("a ballot that no longer fits the election is refused before the VTA builds a cast", async () => {
   const w = world();
   await assert.rejects(
     runElectionsPageOp(w.deps, VTA, {
-      op: "cast",
+      op: "castPrepare",
       hostDid: VTC,
       member: MEMBER,
       electionId: "agm-2027",

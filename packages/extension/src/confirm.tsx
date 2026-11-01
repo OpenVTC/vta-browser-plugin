@@ -1464,7 +1464,11 @@ if (root) {
         <ElectionConsent
           consentId={consentId}
           decide={(d) =>
-            void sendConsentResult({ approved: d.approved, remember: false, ...(d.ballot !== undefined ? { ballot: d.ballot } : {}) })
+            void sendConsentResult(
+              { approved: d.approved, remember: false, ...(d.ballot !== undefined ? { ballot: d.ballot } : {}) },
+              // The ballot window stays to show the cast's progress.
+              { keepOpen: d.keepOpen === true },
+            )
           }
         />
       ) : isGitConsent ? (

@@ -8,9 +8,12 @@
 //
 // - **A ballot is filled in only in the wallet's own window.** The page gets
 //   no choice, no cast, no receipt — and, from `vote`, not even whether a vote
-//   was cast: only that the wallet's window closed, and whether a ticket had to
-//   be taken first (which the community knows anyway). The outcome is shown in
-//   the wallet's window.
+//   was cast: only that the member answered the wallet's window, and whether a
+//   ticket had to be taken first (which the community knows anyway). The same
+//   window stays open and shows the cast step by step until the ballot box's
+//   receipt is kept (`CastProgress`), and this wallet remembers that the member
+//   voted — when, and how the ballot box answered, never a choice — so the next
+//   ballot window can say so. The page is never told either.
 // - **The cast never passes the community.** The member's VTA builds and signs
 //   it under a key made for that cast alone, and the wallet posts it to the
 //   ballot box's HTTPS door after a random pause (`elections-page-offscreen.ts`).
@@ -35,7 +38,7 @@
 // Written against injected dependencies, not `chrome.*`, so the gates are
 // tested as they run.
 
-import { ballotRefusal, type ElectionBallot, type ElectionManifest, type ElectionShown } from "@openvtc/pnm-core/vtc";
+import { ballotRefusal, castDelayMs, type ElectionBallot, type ElectionManifest, type ElectionShown } from "@openvtc/pnm-core/vtc";
 
 import type {
   ElectionsPageOp,
@@ -52,9 +55,33 @@ import type {
 /** `chrome.storage.session` key prefix for an election window's view. */
 export const ELECTION_CONSENT_PREFIX = "election-consent:";
 
+/** `chrome.storage.session` key prefix for a ballot window's cast progress
+ *  (`CastProgress`), written by the background as each step starts and ends. */
+export const ELECTION_PROGRESS_PREFIX = "election-progress:";
+
 /** A ballot window opened sooner than this after its ticket was taken says so:
  *  the community and the ballot box could pair the two by time. */
 export const TICKET_TO_VOTE_GAP_MS = 60 * 60 * 1000;
+
+/** The steps of a cast, in order, as the ballot window shows them. */
+export const CAST_STEPS = ["check", "seal", "wait", "send", "receipt"] as const;
+export type CastStep = (typeof CAST_STEPS)[number];
+
+/** A vote this wallet cast: when, and how the ballot box answered. Never a choice. */
+export interface RememberedVote {
+  at: number;
+  /** The ballot box's outcome: `replaced` when it replaced an earlier vote. */
+  status: string;
+  leafIndex?: number;
+}
+
+/** How far a cast has got. `wait` carries the pause's end, so the window counts
+ *  it down and moves on to `send` when it is over: the post follows the pause
+ *  inside one offscreen call. */
+export type CastProgress =
+  | { phase: "running"; step: CastStep; waitMs?: number; waitUntil?: number }
+  | ({ phase: "done"; receiptNotKept?: string } & RememberedVote)
+  | { phase: "failed"; step: CastStep; error: string };
 
 /** What the person is shown in the wallet's window. */
 export type ElectionConsentView =
@@ -76,11 +103,21 @@ export type ElectionConsentView =
       election: PageElectionView;
       manifest: ElectionManifest;
       manifestDigest: string;
+      /** The ballot box's HTTPS origin: where the wallet sends the cast. */
+      boxOrigin: string;
+      /** The wallet holds no host permission for `boxOrigin` yet: the window asks first. */
+      needsReach: boolean;
       /** When this wallet took the ticket, if it did so recently. */
       ticketTakenAt?: number;
+      /** The vote this wallet remembers casting in this election, if any. */
+      voted?: RememberedVote;
+      /** Whether a new vote would replace it: the election allows it, and voting is open. */
+      canRevote: boolean;
     }
   | {
-      /** How the vote went: never waited for, never seen by the page. */
+      /** How a vote went, when its ballot window was closed before the end:
+       *  only a failure is shown this way (a vote that went in is remembered,
+       *  and the next ballot window says so). Never seen by the page. */
       kind: "cast";
       communityName: string;
       electionTitle: string;
@@ -98,11 +135,20 @@ export interface ElectionsPageDeps {
   offscreen(vta: ActiveVta, op: OffscreenElectionsPageOp): Promise<OffscreenElectionsPageResponse>;
   /** Whether the wallet holds a host permission for `url`'s origin. */
   canReach(url: string): Promise<boolean>;
-  /** Raise a window and wait. A closed window is a denial. */
-  prompt(view: ElectionConsentView): Promise<{ approved: boolean; ballot?: unknown }>;
+  /** Raise a window and wait for its decision. A closed window is a denial.
+   *  `window` names the window, for `progress`; it may still be open. */
+  prompt(view: ElectionConsentView): Promise<{ approved: boolean; ballot?: unknown; window?: string }>;
+  /** Show a ballot window how its cast is going. `false` once the window is
+   *  gone: the cast goes on regardless. */
+  progress(window: string, state: CastProgress): Promise<boolean>;
   /** When this wallet last took the ticket for `key`, if it remembers. */
   ticketTakenAt(key: string): Promise<number | undefined>;
   rememberTicket(key: string, at: number): Promise<void>;
+  /** The vote this wallet cast for `key`, if it remembers one. */
+  votedAt(key: string): Promise<RememberedVote | undefined>;
+  rememberVote(key: string, vote: RememberedVote): Promise<void>;
+  /** The pause before a cast is posted; defaults to `castDelayMs()`. */
+  castDelayMs?(): number;
   now(): number;
 }
 
@@ -348,14 +394,13 @@ export class ElectionsPageGates {
     const { endpoint } = (await this.offscreen(vta, { op: "ballotBox", ballotBox: shown.manifest.ballotBox })) as {
       endpoint: string;
     };
-    if (!(await this.deps.canReach(endpoint))) {
-      throw new ElectionsPageRefusal(
-        `To vote, the wallet must reach the ballot box at ${new URL(endpoint).origin}. Allow it from the wallet's popup, then try again.`,
-      );
-    }
-    const takenAt = await this.deps.ticketTakenAt(ticketKey(hostDid, who.did, electionId));
+    const key = ticketKey(hostDid, who.did, electionId);
+    const takenAt = await this.deps.ticketTakenAt(key);
     const recent = takenAt !== undefined && this.deps.now() - takenAt < TICKET_TO_VOTE_GAP_MS;
+    const voted = await this.deps.votedAt(key);
     const election = pageElectionViewOf(shown);
+    // No host permission for the ballot box is not a refusal: the window asks
+    // for it, from the member's own click (`host-permissions.ts`).
     const decided = await this.deps.prompt({
       kind: "ballot",
       origin,
@@ -364,34 +409,111 @@ export class ElectionsPageGates {
       election,
       manifest: shown.manifest,
       manifestDigest: shown.manifestDigest,
+      boxOrigin: new URL(endpoint).origin,
+      needsReach: !(await this.deps.canReach(endpoint)),
       ...(recent ? { ticketTakenAt: takenAt } : {}),
+      ...(voted ? { voted } : {}),
+      canRevote: election.disclosure.revote === "replace" && shown.state === "voting",
     });
     // Whatever the member did in the window, the page hears the same.
     if (!decided.approved || decided.ballot === undefined) return { ticketTaken: false };
 
-    const ballot = decided.ballot as ElectionBallot;
-    const refused = ballotRefusal(shown.manifest, shown.manifestDigest, ballot);
-    const title = election.title ?? electionId;
-    if (refused) {
-      void this.deps.prompt({ kind: "cast", communityName: who.communityName, electionTitle: title, outcome: { ok: false, error: refused } });
-      return { ticketTaken: false };
-    }
-    // Not awaited by the page: the cast waits a random pause before it goes.
-    const work = this.offscreen(vta, { op: "cast", hostDid, member: who.did, electionId, ballot })
-      .then(
-        (r) => r as { status: string; leafIndex?: number },
-        (e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }),
-      )
-      .then(async (r) => {
-        const outcome =
-          "error" in r
-            ? { ok: false as const, error: r.error }
-            : { ok: true as const, status: r.status, ...(r.leafIndex !== undefined ? { leafIndex: r.leafIndex } : {}) };
-        await this.deps.prompt({ kind: "cast", communityName: who.communityName, electionTitle: title, outcome });
-      })
+    // Not awaited by the page: the cast waits a random pause before it goes,
+    // and the window shows each step.
+    const work = this.cast(vta, hostDid, who, electionId, shown, endpoint, decided.ballot as ElectionBallot, decided.window)
       .catch(() => undefined)
       .finally(() => this.casting.delete(work));
     this.casting.add(work);
     return { ticketTaken: false };
+  }
+
+  /** The cast, step by step, reported to the ballot window `window`. A window
+   *  closed early does not stop it; a failure it can no longer show opens one. */
+  private async cast(
+    vta: ActiveVta,
+    hostDid: string,
+    who: Identity,
+    electionId: string,
+    shown: ElectionShown,
+    endpoint: string,
+    ballot: ElectionBallot,
+    window: string | undefined,
+  ): Promise<void> {
+    let open = window !== undefined;
+    const report = async (state: CastProgress): Promise<void> => {
+      if (!open || window === undefined) return;
+      open = await this.deps.progress(window, state).catch(() => false);
+    };
+    const host = new URL(endpoint).host;
+    let step: CastStep = "check";
+    try {
+      await report({ phase: "running", step });
+      const refused = ballotRefusal(shown.manifest, shown.manifestDigest, ballot);
+      if (refused) throw new ElectionsPageRefusal(refused);
+      if (!(await this.deps.canReach(endpoint))) {
+        throw new ElectionsPageRefusal(
+          `The wallet may not reach the ballot box at ${host}, so nothing was sent. Vote again and allow it when asked.`,
+        );
+      }
+
+      step = "seal";
+      await report({ phase: "running", step });
+      const prepared = (await this.offscreen(vta, { op: "castPrepare", hostDid, member: who.did, electionId, ballot })) as {
+        castDocument: Record<string, unknown>;
+        endpoint: string;
+        ballotBox: string;
+      };
+      if (prepared.endpoint !== endpoint && !(await this.deps.canReach(prepared.endpoint))) {
+        throw new ElectionsPageRefusal(
+          `The ballot box now names another door (${new URL(prepared.endpoint).host}), which the wallet may not reach. Vote again.`,
+        );
+      }
+
+      step = "wait";
+      const delayMs = (this.deps.castDelayMs ?? castDelayMs)();
+      await report({ phase: "running", step, waitMs: delayMs, waitUntil: this.deps.now() + delayMs });
+      const { receipt } = (await this.offscreen(vta, {
+        op: "castPost",
+        castDocument: prepared.castDocument,
+        ballotBox: prepared.ballotBox,
+        endpoint: prepared.endpoint,
+        delayMs,
+      }).catch((e: unknown) => {
+        step = "send";
+        throw e;
+      })) as { receipt: Record<string, unknown> };
+
+      // The ballot box counted it: what follows cannot undo that.
+      step = "receipt";
+      await report({ phase: "running", step });
+      const said = (receipt.payload ?? {}) as { outcome?: unknown; leafIndex?: unknown };
+      let status = typeof said.outcome === "string" ? said.outcome : "counted";
+      let leafIndex = typeof said.leafIndex === "number" ? said.leafIndex : undefined;
+      let receiptNotKept: string | undefined;
+      try {
+        const kept = (await this.offscreen(vta, { op: "castKeep", hostDid, member: who.did, electionId, receipt })) as {
+          status?: string;
+          leafIndex?: number;
+        };
+        if (typeof said.outcome !== "string" && typeof kept.status === "string") status = kept.status;
+        if (typeof kept.leafIndex === "number") leafIndex = kept.leafIndex;
+      } catch (e) {
+        receiptNotKept = e instanceof Error ? e.message : String(e);
+      }
+      const vote: RememberedVote = { at: this.deps.now(), status, ...(leafIndex !== undefined ? { leafIndex } : {}) };
+      await this.deps.rememberVote(ticketKey(hostDid, who.did, electionId), vote).catch(() => undefined);
+      await report({ phase: "done", ...vote, ...(receiptNotKept !== undefined ? { receiptNotKept } : {}) });
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      await report({ phase: "failed", step, error });
+      if (!open) {
+        await this.deps.prompt({
+          kind: "cast",
+          communityName: who.communityName,
+          electionTitle: named(shown.manifest.title) ? shown.manifest.title : electionId,
+          outcome: { ok: false, error },
+        });
+      }
+    }
   }
 }

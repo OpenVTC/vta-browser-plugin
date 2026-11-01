@@ -1536,7 +1536,26 @@ stops; a ballot opened within an hour of this wallet taking the ticket warns
 (`TICKET_TO_VOTE_GAP_MS`, a time in `chrome.storage.local`, never a choice).
 `requestTask` refuses `vta/pcs/` and `vtc/elections/` (`page-task-policy.ts`).
 
-**What breaks it:** returning a ballot, a cast, a receipt or "voted" to the page;
+**One ballot window, from permission to receipt.** A ballot box the wallet may
+not reach yet is not a refusal: the ballot window opens with `needsReach` and
+asks first, its Allow button calling `requestOriginPermission` as the click's
+first statement; the gates check `canReach` again before anything is sent.
+After *Cast my vote* the window sends its decision with `keepOpen`
+(`consent-result.ts` — it stays only once the background took the decision)
+and shows the cast as the gates drive it: offscreen `castPrepare` (fresh
+`show`, `ballotRefusal`, the VTA's `pcsCast`) → `castPost` (the pause the gates
+chose with `castDelayMs`, capped, then `postCast`) → `castKeep`
+(`pcsVoterReceipt`), each step reported as a `CastProgress` in
+`chrome.storage.session` under `ELECTION_PROGRESS_PREFIX + consentId`, which
+the window follows with `storage.onChanged`. Closing the window early never
+stops the cast; a failure it can no longer show opens a `kind: "cast"` window.
+A vote the ballot box counted is remembered in `chrome.storage.local`
+(`election-vote:` + `ticketKey`: when, outcome, board entry — never a choice),
+and the next ballot window opens on "You voted…", offering a change only where
+`revote` is `replace` and voting is open. The page is told none of this.
+
+**What breaks it:** returning a ballot, a cast, a receipt or "voted" to the page
+(the remembered vote included); storing a choice;
 rendering a ballot in a page; sending a cast or a ballot to the community's
 endpoint; signing a cast with any key but the one the VTA made for it.
 
