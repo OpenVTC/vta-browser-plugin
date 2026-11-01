@@ -162,7 +162,7 @@ export function pageElectionViewOf(shown: ElectionShown): PageElectionView {
   });
   return {
     electionId: m.electionId,
-    ...(m.title !== undefined ? { title: m.title } : {}),
+    ...(named(m.title) ? { title: m.title } : {}),
     ...(m.description !== undefined ? { description: m.description } : {}),
     state: shown.state,
     secrecy: m.secrecy,
@@ -184,10 +184,17 @@ export function pageElectionViewOf(shown: ElectionShown): PageElectionView {
   };
 }
 
+/** A title worth showing. The console's manifest builder starts from `title: ""`, and an
+ *  empty title would leave the member nothing to recognise the election by; with none, the
+ *  page and the wallet's windows name it by its id. */
+function named(title: unknown): title is string {
+  return typeof title === "string" && title.trim() !== "";
+}
+
 function pageElectionOf(e: Record<string, unknown>): PageElection {
   return {
     electionId: String(e.electionId),
-    ...(typeof e.title === "string" ? { title: e.title } : {}),
+    ...(named(e.title) ? { title: e.title } : {}),
     state: String(e.state),
     votingOpensAt: String(e.votingOpensAt),
     votingClosesAt: String(e.votingClosesAt),
