@@ -175,6 +175,12 @@ test("show gives the page what is asked and how it is run — not the parameters
   assert.deepEqual(pageElectionViewOf(shown as never).disclosure.ballotBoxOperator, "Independent Ballots Ltd");
 });
 
+test("an empty title is no title: the election is named by its id", () => {
+  const untitled = structuredClone(shown) as { manifest: { title?: string } };
+  untitled.manifest.title = "  ";
+  assert.equal("title" in pageElectionViewOf(untitled as never), false);
+});
+
 test("a ticket is taken only after the member agrees in the wallet's window, and its time is remembered", async () => {
   const declined = harness({ approve: false });
   const no = await declined.gates.handle(PORTAL, { op: "takeTicket", hostDid: HOST, electionId: "agm-2027" });
