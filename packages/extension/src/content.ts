@@ -52,6 +52,7 @@ const RUNTIME_TRIGGER_LINK_NUMBER = "vta-wallet/trigger-link-number";
 const RUNTIME_ROOMS_PAGE = "vta-wallet/rooms-page";
 const RUNTIME_DIRECTORY_PAGE = "vta-wallet/directory-page";
 const RUNTIME_GIT_PAGE = "vta-wallet/git-page";
+const RUNTIME_ELECTIONS_PAGE = "vta-wallet/elections-page";
 const ROOM_FILES_PAGE_PORT = "vta-wallet/room-files-page";
 
 // ─── 1. Inject the provider into the page world. ───
@@ -94,6 +95,7 @@ const RUNTIME_TYPE_BY_METHOD: Record<BridgeMethod, string> = {
   rooms: RUNTIME_ROOMS_PAGE,
   directory: RUNTIME_DIRECTORY_PAGE,
   git: RUNTIME_GIT_PAGE,
+  elections: RUNTIME_ELECTIONS_PAGE,
 };
 
 // ─── 2. Relay provider → background → provider. ───

@@ -3,7 +3,7 @@
  * Source: https://trusttasks.org/spec/vta/app-state/get/1.0 (registry bundle)
  */
 
-import type { AppStateRecord, Ext, Key, Namespace, Version_VtaV0_1 as Version } from "../../../../_shared/components.js";
+import type { AppStateRecord, Ext, Key_VtaV0_1 as Key, Namespace, Version_VtaV0_1 as Version } from "../../../../_shared/components.js";
 
 
 /**

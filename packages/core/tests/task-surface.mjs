@@ -60,6 +60,14 @@ const NOT_IN_SDK = [
       "not the VTA, is the counterparty, so vta-sdk carries no constant for them.",
   },
   {
+    prefix: "https://trusttasks.org/spec/vtc/elections/",
+    why:
+      "A member's elections at a community (vtc/elections.ts): list and show are read, and " +
+      "tickets/issue sent, as documents the member's VTA signs through vta/pcs/voter/read and " +
+      "vta/pcs/voter/register, posted by the wallet to the community's VTC. The VTC, not the " +
+      "VTA, is the counterparty, so vta-sdk carries no constant for them.",
+  },
+  {
     prefix: "https://trusttasks.org/spec/trust-task-error/",
     why:
       "The error envelope the *service* emits (vta-service/src/trust_tasks/wire_v0_2.rs). " +
@@ -531,7 +539,10 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // (−1). `domain/disable` → `domain/set-state` is one family for one. The
   // same resync moved 64 tasks to the version the agent serves today;
   // `persona/facet/*` became `persona/world/*`, one family each for one.
-  const expected = 229;
+  // 229 → 235: the member's voter engine behind a community's elections
+  // (vtc/elections.ts): `vta/pcs/voter/{read,register,accept,receipt}`,
+  // `vta/pcs/vote` and `vta/pcs/vote-encrypted`.
+  const expected = 235;
   assert.equal(
     implemented.size,
     expected,

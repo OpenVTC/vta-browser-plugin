@@ -3,7 +3,7 @@
  * Source: https://trusttasks.org/spec/vta/app-state/put-many/1.1 (registry bundle)
  */
 
-import type { Ext, Key, Namespace, Version_VtaV0_1 as Version, WriteResult } from "../../../../_shared/components.js";
+import type { Ext, Key_VtaV0_1 as Key, Namespace, Version_VtaV0_1 as Version, WriteResult } from "../../../../_shared/components.js";
 
 
 /**
