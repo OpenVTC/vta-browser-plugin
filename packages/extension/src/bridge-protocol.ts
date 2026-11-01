@@ -42,7 +42,8 @@ export type BridgeMethod =
   | "approveDecision"
   | "rooms"
   | "directory"
-  | "git";
+  | "git"
+  | "elections";
 
 /** Parameters for `window.vtaWallet.login(...)` (REST SIOPv2).
  *  @deprecated Legacy sign-in (sign-in contract C7); kept working. New pages
@@ -639,6 +640,10 @@ export interface RuntimeConsentResult {
   /** Directory credential prompt only: the credential the member picked to
    *  present, one of those the prompt offered. Ignored on a denial. */
   selectedCredential?: string;
+  /** Ballot prompt only: the ballot the member filled in, in the wallet's own
+   *  window (`voting/ballot/cast` `Ballot`). Checked again by the background
+   *  against the election before anything is built. Ignored on a denial. */
+  ballot?: unknown;
 }
 
 /** confirm popup → background: resolve + verify an RP DID. */
@@ -2759,6 +2764,108 @@ export type RuntimeGitPageResponse =
   | { ok: true; result: PageGitLinkView | PageGitUnlinkView }
   | { ok: false; error: string };
 
+// ─── A member's elections for a page: `window.vtaWallet.elections` ─────────
+//
+// The community's portal lists and shows its elections, and asks the wallet to
+// take the member's ticket or to vote. The page is the community's own code and
+// knows who is signed in, so it never sees a choice: the ballot is filled in
+// the wallet's own window, built and signed by the member's VTA under a key
+// made for that cast alone, and sent by the wallet to the ballot box — never
+// through the community (VTI-VOT-001 – 004; `elections-page.ts`). As with the
+// directory and git channels, the background refuses unless the page's
+// browser-attested origin is the origin of `hostDid`'s `SignInPortal`.
+
+/** page → background, through the content script: one elections operation. */
+export const RUNTIME_ELECTIONS_PAGE = "vta-wallet/elections-page" as const;
+
+/** `member` is the DID the page says is signed in: a hint that picks among the
+ *  identities the wallet holds for this community, never adds one. */
+export type ElectionsPageOp =
+  | { op: "list"; hostDid: string; member?: string }
+  | { op: "show"; hostDid: string; electionId: string; member?: string }
+  | { op: "takeTicket"; hostDid: string; electionId: string; member?: string }
+  | { op: "vote"; hostDid: string; electionId: string; member?: string };
+
+export interface RuntimeElectionsPageRequest {
+  type: typeof RUNTIME_ELECTIONS_PAGE;
+  /** Overwritten by the background with the browser-attested origin. */
+  origin: string;
+  params: ElectionsPageOp;
+}
+
+/** One election as the community lists it to the member (`vtc/elections/list/0.3`). */
+export interface PageElection {
+  electionId: string;
+  title?: string;
+  state: string;
+  votingOpensAt: string;
+  votingClosesAt: string;
+  binding: boolean;
+  /** Whether the community has issued the member's ticket. The community
+   *  knows this already; whether the member has voted is never told the page. */
+  ticketHeld: boolean;
+}
+
+/** A question as the page may show it: what is asked, never an answer. */
+export interface PageElectionQuestion {
+  key: string;
+  type: "choice" | "ranking" | "score" | "text";
+  text?: string;
+  options: { key: string; label?: string }[];
+  optional: boolean;
+  minSelections?: number;
+  maxSelections?: number;
+  partial?: boolean;
+  min?: number;
+  max?: number;
+  maxLength?: number;
+}
+
+/** One election as the community shows it to the member (`vtc/elections/show/0.2`),
+ *  without the voting parameters, the trustees' ceremony or the board's checkpoints. */
+export interface PageElectionView {
+  electionId: string;
+  title?: string;
+  description?: string;
+  state: string;
+  secrecy: string;
+  registrationOpensAt: string;
+  votingOpensAt: string;
+  votingClosesAt: string;
+  binding: boolean;
+  questions: PageElectionQuestion[];
+  /** What the community publishes about how the election is run (VTI-VOT-090). */
+  disclosure: {
+    ballotBox: string;
+    ballotBoxOperator: string;
+    sameOperator: boolean;
+    boardVisibility: string;
+    revote: string;
+    auditors: string[];
+  };
+  ticketsIssued?: number;
+  /** The certified result, once the community has certified it. */
+  certified?: { certifiedAt: string; result: unknown };
+}
+
+/** After `takeTicket`: the member holds a ticket. `taken` is false when their
+ *  agent already held it. */
+export interface PageTicketView {
+  ticketHeld: true;
+  taken: boolean;
+}
+
+/** After `vote`. The page learns only that the wallet's window closed, and
+ *  whether a ticket had to be taken first — never whether a vote was cast, and
+ *  never a choice: the outcome is shown in the wallet's own window. */
+export interface PageVoteView {
+  ticketTaken: boolean;
+}
+
+export type RuntimeElectionsPageResponse =
+  | { ok: true; result: { elections: PageElection[] } | PageElectionView | PageTicketView | PageVoteView }
+  | { ok: false; error: string };
+
 export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
@@ -2780,6 +2887,7 @@ export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_ROOMS_PAGE,
   RUNTIME_DIRECTORY_PAGE,
   RUNTIME_GIT_PAGE,
+  RUNTIME_ELECTIONS_PAGE,
   // Not a provider method: the content script's own click listener sends it
   // (`trigger-link-click.ts`). Listed so the background takes the activation
   // origin from the browser, never from the body (VTI-LNK-056).
@@ -3410,6 +3518,37 @@ export interface OffscreenGitPageRequest {
 }
 
 export type OffscreenGitPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
+
+/** background → offscreen: the elections work behind a page's call, after the
+ *  background checked the page is the community's portal (and, for a ticket or
+ *  a vote, the person approved in the wallet's window). */
+export const OFFSCREEN_ELECTIONS_PAGE = "offscreen/elections-page" as const;
+
+export type OffscreenElectionsPageOp =
+  /** The community's portal origin and Trust-Task endpoint, from its verified DID document. */
+  | { op: "portal"; hostDid: string }
+  /** The identities the member signs in with at this community, with its name. */
+  | { op: "members"; hostDid: string }
+  /** The ballot box's cast door, `<TrustTaskHTTPS>/trust-tasks`, from its DID document. */
+  | { op: "ballotBox"; ballotBox: string }
+  /** `vtc/elections/list`, signed by the member's VTA as the member. */
+  | { op: "list"; hostDid: string; member: string }
+  /** `vtc/elections/show`, the same way — the whole answer, for the background. */
+  | { op: "show"; hostDid: string; member: string; electionId: string }
+  /** Take the member's ticket: register → the community issues it blind → accept. */
+  | { op: "takeTicket"; hostDid: string; member: string; electionId: string }
+  /** Build the cast in the VTA, wait, post it to the ballot box, keep the receipt. */
+  | { op: "cast"; hostDid: string; member: string; electionId: string; ballot: unknown };
+
+export interface OffscreenElectionsPageRequest {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_ELECTIONS_PAGE;
+  vtaDid: string;
+  restBaseUrl?: string;
+  params: OffscreenElectionsPageOp;
+}
+
+export type OffscreenElectionsPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
 
 /**
  * Port name for one room write from the console — a file transfer, a note, or a

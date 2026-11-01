@@ -98,6 +98,26 @@ const REFUSED: { prefix: string; why: string }[] = [
       "The community's record of which of its rooms the member is in is read by the wallet, as the member. " +
       "A community's own member portal lists it with window.vtaWallet.rooms.offers.",
   },
+  // The member's voter and vetter engine. `vote` and `vote-encrypted` take the
+  // member's ballot in their payload, so a page that drove one would hold the
+  // member's choices; `voter/register` asks for a ticket signed as the member;
+  // `voter/read` signs as the member to the community. A community's own
+  // portal asks through `window.vtaWallet.elections`, whose ballot is filled in
+  // the wallet's own window and never reaches the page.
+  {
+    prefix: "https://trusttasks.org/spec/vta/pcs/",
+    why:
+      "The member's voting and vetting engine holds their tickets, their ballots and their hidden vetting, and a " +
+      "generic prompt cannot say what a page would learn from them — a ballot in a page is a vote the page has " +
+      "seen. A community's own member portal lists elections, takes a ticket and opens the wallet's ballot with " +
+      "window.vtaWallet.elections.",
+  },
+  {
+    prefix: "https://trusttasks.org/spec/vtc/elections/",
+    why:
+      "A community's elections are read, and tickets taken, by the member's own agent signing as them. A " +
+      "community's own member portal uses window.vtaWallet.elections.",
+  },
   // A mediator's own operations surface (`@openvtc/pnm-core/mediator`). A page
   // routing one of these to an agent would be misaddressed anyway — they are
   // served by the relay, not the agent — but the refusal is about what they

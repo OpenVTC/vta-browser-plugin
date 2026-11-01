@@ -49,6 +49,7 @@ export type ConsentDecision = (
   selectedDid?: string,
   selectedRooms?: string[],
   selectedCredential?: string,
+  ballot?: unknown,
 ) => void;
 
 /** The subset of `chrome.windows` this file drives — narrow so a test can
@@ -162,6 +163,7 @@ export function deliverConsentResult(
     selectedDid?: string;
     selectedRooms?: string[];
     selectedCredential?: string;
+    ballot?: unknown;
   },
 ): boolean {
   const decision = pending.get(result.consentId);
@@ -170,6 +172,10 @@ export function deliverConsentResult(
     ? result.selectedRooms.filter((r): r is string => typeof r === "string")
     : undefined;
   const credential = typeof result.selectedCredential === "string" ? result.selectedCredential : undefined;
-  decision(result.approved, !!result.remember, result.prfOutputB64u, result.selectedDid, rooms, credential);
+  // A ballot is plain data from the wallet's own window: an object, checked
+  // against the election by the gate that asked for it.
+  const ballot =
+    result.ballot !== null && typeof result.ballot === "object" && !Array.isArray(result.ballot) ? result.ballot : undefined;
+  decision(result.approved, !!result.remember, result.prfOutputB64u, result.selectedDid, rooms, credential, ballot);
   return true;
 }

@@ -29,6 +29,7 @@ import { ApproverConsent } from "./approver-consent.js";
 import { RoomConsent } from "./room-consent.js";
 import { DirectoryConsent } from "./directory-consent.js";
 import { GitConsent } from "./git-consent.js";
+import { ElectionConsent } from "./election-consent.js";
 import { consentResultSender } from "./consent-result.js";
 import { DidQrButton } from "./did-qr-view.js";
 import { SessionKeyNotice } from "./session-key-notice.js";
@@ -67,6 +68,10 @@ const isDirectoryConsent = params.get("kind") === "directory";
 // `kind=git` selects linking or unlinking the member's forge account from a
 // community's portal, and where to authorise a link (`git-consent.tsx`).
 const isGitConsent = params.get("kind") === "git";
+// `kind=election` selects a member's election window from a community's
+// portal: taking a ticket, the ballot, and how the vote went
+// (`election-consent.tsx`). The ballot exists only in this window.
+const isElectionConsent = params.get("kind") === "election";
 /** Wallet sign-in from a trigger link (sign-in-view.tsx). Names a flow id and
  *  nothing else; the link and the origin stay in the background's record. */
 const signInFlowId = params.get("kind") === "sign-in" ? params.get("flow") : null;
@@ -1455,6 +1460,13 @@ if (root) {
     <StrictMode>
       {signInFlowId ? (
         <SignInView flowId={signInFlowId} />
+      ) : isElectionConsent ? (
+        <ElectionConsent
+          consentId={consentId}
+          decide={(d) =>
+            void sendConsentResult({ approved: d.approved, remember: false, ...(d.ballot !== undefined ? { ballot: d.ballot } : {}) })
+          }
+        />
       ) : isGitConsent ? (
         <GitConsent consentId={consentId} decide={(ok) => void sendConsentResult({ approved: ok, remember: false })} />
       ) : isDirectoryConsent ? (

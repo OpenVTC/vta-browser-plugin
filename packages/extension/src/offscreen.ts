@@ -219,6 +219,7 @@ import { installRoomFilesPort, isNoTrustTaskService, resolveRoomHostEndpoint } f
 import { runRoomsPageOp } from "./room-page-offscreen.js";
 import { runDirectoryPageOp } from "./directory-page-offscreen.js";
 import { runGitPageOp } from "./git-page-offscreen.js";
+import { runElectionsPageOp } from "./elections-page-offscreen.js";
 import { OfferOpError, runRoomOffersOp } from "./room-offers-offscreen.js";
 import {
   OFFSCREEN_ROOM_OFFERS,
@@ -233,6 +234,9 @@ import {
   type OffscreenDirectoryPageRequest,
   type OffscreenDirectoryPageResponse,
   OFFSCREEN_GIT_PAGE,
+  OFFSCREEN_ELECTIONS_PAGE,
+  type OffscreenElectionsPageRequest,
+  type OffscreenElectionsPageResponse,
   type OffscreenGitPageRequest,
   type OffscreenGitPageResponse,
 } from "./bridge-protocol.js";
@@ -671,6 +675,39 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       .then((result) => sendResponse({ ok: true, result }))
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_ELECTIONS_PAGE) {
+    // Only the background sends this, after checking the page is the
+    // community's portal and, for a ticket or a vote, the person decided in
+    // the wallet's window (`elections-page.ts`).
+    if (!isExtensionContextSender(sender)) {
+      sendResponse({ ok: false, error: "elections work is asked for by the wallet" } satisfies OffscreenElectionsPageResponse);
+      return false;
+    }
+    const req = message as OffscreenElectionsPageRequest;
+    runElectionsPageOp(
+      {
+        async agent(vtaDid, restBaseUrl) {
+          const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+          return { sender: session, holder, service };
+        },
+        identities: (vtaDid, restBaseUrl) => listSelfIssued(vtaDid, restBaseUrl),
+        // The member's voter keys are derived in the context their identity
+        // here lives in at their agent.
+        async contextOf(vtaDid, restBaseUrl, did) {
+          const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+          const dids = await vtaListDids(session, { holder, service });
+          return dids.find((d) => d.did === did)?.contextId ?? null;
+        },
+      },
+      { vtaDid: req.vtaDid, ...(req.restBaseUrl ? { restBaseUrl: req.restBaseUrl } : {}) },
+      req.params,
+    )
+      .then((result) => sendResponse({ ok: true, result } satisfies OffscreenElectionsPageResponse))
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) } satisfies OffscreenElectionsPageResponse),
       );
     return true; // async sendResponse
   }

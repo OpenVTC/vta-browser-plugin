@@ -38,6 +38,11 @@ import type {
   PageVerifiedFieldsView,
   GitPageOp,
   PageGitLinkView,
+  ElectionsPageOp,
+  PageElection,
+  PageElectionView,
+  PageTicketView,
+  PageVoteView,
   PageGitUnlinkView,
   PagePublishedCardView,
   PageRoomView,
@@ -211,6 +216,29 @@ interface VtaWallet {
    *  signs as them, and for a link opens the forge's page and shows any code in
    *  its own window; the page gets the link's id to follow it, never the code. */
   git: VtaWalletGit;
+  /** The member's elections at the community, for its own portal
+   *  (`vtc/elections/*` through the member's VTA). Refused unless this page's
+   *  origin is the `SignInPortal` of `hostDid`'s DID document. Taking a ticket
+   *  and voting are decided in the wallet's own window; the ballot is filled in
+   *  there and sent by the wallet to the ballot box, so the page never sees a
+   *  choice — nor, from `vote`, whether a vote was cast. */
+  elections: VtaWalletElections;
+}
+
+/** `window.vtaWallet.elections`. `member` is the DID the page says is signed
+ *  in: a hint among the wallet's identities there. */
+export interface VtaWalletElections {
+  /** The elections the community lets the member vote in, and whether it has
+   *  issued their ticket. Never prompts. */
+  list(p: { hostDid: string; member?: string }): Promise<{ elections: PageElection[] }>;
+  /** One election: what it asks and how it is run. Never prompts. */
+  show(p: { hostDid: string; electionId: string; member?: string }): Promise<PageElectionView>;
+  /** Ask to take the member's ticket: they decide in the wallet's window. */
+  takeTicket(p: { hostDid: string; electionId: string; member?: string }): Promise<PageTicketView>;
+  /** Ask to vote: the wallet opens its ballot. With no ticket held it takes one
+   *  instead and stops (`ticketTaken: true`) — vote later. Resolves when the
+   *  wallet's window closes, whatever the member did there. */
+  vote(p: { hostDid: string; electionId: string; member?: string }): Promise<PageVoteView>;
 }
 
 /** `window.vtaWallet.git`. */
@@ -414,6 +442,7 @@ function call<T>(
     | RoomsPageOp
     | DirectoryPageOp
     | GitPageOp
+    | ElectionsPageOp
     | Record<string, never>,
 ): Promise<T> {
   const id = crypto.randomUUID();
@@ -668,6 +697,35 @@ if (!window.vtaWallet) {
           hostDid: p.hostDid,
           forge: p.forge,
           ...(p.accountId !== undefined ? { accountId: p.accountId } : {}),
+          ...(p.member !== undefined ? { member: p.member } : {}),
+        }),
+    },
+    elections: {
+      list: (p) =>
+        call<{ elections: PageElection[] }>("elections", {
+          op: "list",
+          hostDid: p.hostDid,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+        }),
+      show: (p) =>
+        call<PageElectionView>("elections", {
+          op: "show",
+          hostDid: p.hostDid,
+          electionId: p.electionId,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+        }),
+      takeTicket: (p) =>
+        call<PageTicketView>("elections", {
+          op: "takeTicket",
+          hostDid: p.hostDid,
+          electionId: p.electionId,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+        }),
+      vote: (p) =>
+        call<PageVoteView>("elections", {
+          op: "vote",
+          hostDid: p.hostDid,
+          electionId: p.electionId,
           ...(p.member !== undefined ? { member: p.member } : {}),
         }),
     },

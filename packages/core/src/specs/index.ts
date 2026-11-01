@@ -224,6 +224,12 @@ export * as VtaPasskeyVmsEnrollChallenge_v0_1 from "./vta/passkey-vms/enroll-cha
 export * as VtaPasskeyVmsEnrollSubmit_v0_2 from "./vta/passkey-vms/enroll-submit/0.2/payload.js";
 export * as VtaPasskeyVmsList_v0_1 from "./vta/passkey-vms/list/0.1/payload.js";
 export * as VtaPasskeyVmsRevoke_v0_1 from "./vta/passkey-vms/revoke/0.1/payload.js";
+export * as VtaPcsVoteEncrypted_v0_3 from "./vta/pcs/vote-encrypted/0.3/payload.js";
+export * as VtaPcsVote_v0_2 from "./vta/pcs/vote/0.2/payload.js";
+export * as VtaPcsVoterAccept_v0_1 from "./vta/pcs/voter/accept/0.1/payload.js";
+export * as VtaPcsVoterRead_v0_2 from "./vta/pcs/voter/read/0.2/payload.js";
+export * as VtaPcsVoterReceipt_v0_1 from "./vta/pcs/voter/receipt/0.1/payload.js";
+export * as VtaPcsVoterRegister_v0_2 from "./vta/pcs/voter/register/0.2/payload.js";
 export * as VtaServicesDisable_v1_1 from "./vta/services/disable/1.1/payload.js";
 export * as VtaServicesDrainCancel_v1_0 from "./vta/services/drain/cancel/1.0/payload.js";
 export * as VtaServicesDrainList_v1_1 from "./vta/services/drain/list/1.1/payload.js";
@@ -256,6 +262,9 @@ export * as VtcDirectoryCardPresent_v0_1 from "./vtc/directory/card/present/0.1/
 export * as VtcDirectoryCardPublish_v0_1 from "./vtc/directory/card/publish/0.1/payload.js";
 export * as VtcDirectoryCardShow_v0_1 from "./vtc/directory/card/show/0.1/payload.js";
 export * as VtcDirectoryFieldsList_v0_1 from "./vtc/directory/fields/list/0.1/payload.js";
+export * as VtcElectionsList_v0_3 from "./vtc/elections/list/0.3/payload.js";
+export * as VtcElectionsShow_v0_2 from "./vtc/elections/show/0.2/payload.js";
+export * as VtcElectionsTicketsIssue_v0_1 from "./vtc/elections/tickets/issue/0.1/payload.js";
 export * as VtcJoinRequestsManifest_v0_4 from "./vtc/join-requests/manifest/0.4/payload.js";
 export * as VtcJoinRequestsStatus_v0_1 from "./vtc/join-requests/status/0.1/payload.js";
 export * as VtcJoinRequestsSubmitReceipt_v0_1 from "./vtc/join-requests/submit-receipt/0.1/payload.js";

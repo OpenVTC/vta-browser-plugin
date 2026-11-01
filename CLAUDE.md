@@ -1514,6 +1514,32 @@ custom headers, so no preflight, and any status is a pass because reading a
 status at all proves the origin was allowed. Swapping it for a health endpoint
 would test a different policy than the one that breaks.
 
+## A portal page votes through the wallet, and never sees a choice
+
+`window.vtaWallet.elections.{list, show, takeTicket, vote}` is how a community's
+member portal lets a member take part in its elections (VTI-VOT-001 – 100). The
+portal is the community's own code and knows who is signed in, and the
+community is never trusted to learn how anyone voted or to link a ticket to a
+cast. So the page **never sees a choice**: the ballot is filled in the wallet's
+own window (`election-consent.tsx`, `kind=election`), the member's VTA builds and
+signs the cast under a key made for that cast alone (`vta/pcs/vote`,
+`vote-encrypted`), and the wallet posts it to the ballot box's HTTPS door after a
+random pause of up to 20 s — never through the community. `vote` answers the
+page the same whether the member cast, cancelled or failed (`{ ticketTaken }`
+only); the outcome is shown in the wallet's window. Gates are
+`elections-page.ts` (`ElectionsPageGates`, the git channel's four), work is
+`elections-page-offscreen.ts`, the VTA tasks and ballot rules
+`@openvtc/pnm-core/vtc` `elections.ts`; reference client `pnm elections`.
+
+**Ticket and vote apart in time.** `vote` with no ticket held takes one and
+stops; a ballot opened within an hour of this wallet taking the ticket warns
+(`TICKET_TO_VOTE_GAP_MS`, a time in `chrome.storage.local`, never a choice).
+`requestTask` refuses `vta/pcs/` and `vtc/elections/` (`page-task-policy.ts`).
+
+**What breaks it:** returning a ballot, a cast, a receipt or "voted" to the page;
+rendering a ballot in a page; sending a cast or a ballot to the community's
+endpoint; signing a cast with any key but the one the VTA made for it.
+
 ## A consent window reports its decision before it closes (VTI-40)
 
 Every consent surface — site consent, task consent, the WebAuthn approver and

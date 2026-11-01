@@ -57,6 +57,7 @@ import {
   type MarksGrant,
 } from "./directory-page.js";
 import { GIT_CONSENT_PREFIX, GitPageGates, type GitConsentView } from "./git-page.js";
+import { ELECTION_CONSENT_PREFIX, ElectionsPageGates, type ElectionConsentView } from "./elections-page.js";
 import { RoomOffers, RoomOffersRefusal } from "./room-offers-background.js";
 import type { RoomOfferConsentView } from "./room-offers-policy.js";
 import {
@@ -184,6 +185,10 @@ import {
   OFFSCREEN_GIT_PAGE,
   type OffscreenGitPageResponse,
   type RuntimeGitPageRequest,
+  RUNTIME_ELECTIONS_PAGE,
+  OFFSCREEN_ELECTIONS_PAGE,
+  type OffscreenElectionsPageResponse,
+  type RuntimeElectionsPageRequest,
   OFFSCREEN_ROOM_HOST_ENDPOINT,
   ROOM_FILES_PORT,
   type RuntimeRoomFilesPrepareRequest,
@@ -1080,6 +1085,71 @@ const gitPageGates = new GitPageGates({
   prompt: requestGitConsent,
   async openForge(url) {
     await chrome.tabs.create({ url });
+  },
+  now: () => Date.now(),
+});
+
+// ── A page's `window.vtaWallet.elections` ───────────────────────────────────
+//
+// A member's elections from the community's portal: list, show, take a ticket,
+// vote. The gates — the page is the portal by the community's DID document, the
+// member is one of the wallet's identities there, a ticket or a ballot is
+// decided in the wallet's own window, and the page never sees a choice — are
+// `elections-page.ts`; this wires them up.
+
+/** Raise an election window and wait. Closed or unopened is a denial. */
+async function requestElectionConsent(view: ElectionConsentView): Promise<{ approved: boolean; ballot?: unknown }> {
+  const consentId = crypto.randomUUID();
+  await chrome.storage.session.set({ [`${ELECTION_CONSENT_PREFIX}${consentId}`]: view });
+  const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=election`;
+  const bounds = await consentWindowBounds(view.kind === "cast" ? 460 : 640);
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (approved: boolean, ballot?: unknown) => {
+      if (settled) return;
+      settled = true;
+      pendingConsents.delete(consentId);
+      void chrome.storage.session.remove(`${ELECTION_CONSENT_PREFIX}${consentId}`);
+      resolve(approved && ballot !== undefined ? { approved, ballot } : { approved });
+    };
+    pendingConsents.set(consentId, (approved, _remember, _prf, _did, _rooms, _credential, ballot) => settle(approved, ballot));
+    openConsentWindow({ url, bounds, deny: () => settle(false), tag: "[pnm elections]", what: "election window" });
+  });
+}
+
+/** `chrome.storage.local` key prefix for when this wallet took a ticket. A
+ *  time, never a choice: it lets the ballot window warn a vote straight after. */
+const ELECTION_TICKET_PREFIX = "election-ticket:";
+
+const electionsPageGates = new ElectionsPageGates({
+  async active() {
+    const active = await readActiveConnection();
+    if (!active.ok) return { ok: false, error: active.error };
+    return {
+      ok: true,
+      vta: { vtaDid: active.conn.vtaDid, ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}) },
+    };
+  },
+  async offscreen(vta, params) {
+    await ensureOffscreenDocument();
+    const reply = (await chrome.runtime.sendMessage({
+      target: OFFSCREEN_TARGET,
+      type: OFFSCREEN_ELECTIONS_PAGE,
+      vtaDid: vta.vtaDid,
+      ...(vta.restBaseUrl ? { restBaseUrl: vta.restBaseUrl } : {}),
+      params,
+    })) as OffscreenElectionsPageResponse | undefined;
+    return reply ?? { ok: false, error: "the offscreen document did not answer" };
+  },
+  canReach: (url) => hasOriginPermission(url),
+  prompt: requestElectionConsent,
+  async ticketTakenAt(key) {
+    const k = `${ELECTION_TICKET_PREFIX}${key}`;
+    const v = (await chrome.storage.local.get(k))[k];
+    return typeof v === "number" ? v : undefined;
+  },
+  async rememberTicket(key, at) {
+    await chrome.storage.local.set({ [`${ELECTION_TICKET_PREFIX}${key}`]: at });
   },
   now: () => Date.now(),
 });
@@ -3910,6 +3980,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const req = message as RuntimeGitPageRequest;
     // `origin` was overwritten above with the browser-attested one.
     gitPageGates
+      .handle(req.origin, req.params)
+      .then(sendResponse)
+      .catch((e: unknown) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    return true; // async sendResponse
+  }
+
+  if (msgType === RUNTIME_ELECTIONS_PAGE) {
+    const req = message as RuntimeElectionsPageRequest;
+    // `origin` was overwritten above with the browser-attested one.
+    electionsPageGates
       .handle(req.origin, req.params)
       .then(sendResponse)
       .catch((e: unknown) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
