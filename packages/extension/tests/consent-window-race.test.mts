@@ -331,3 +331,26 @@ test("the popup's message carries the consent id and the decision fields", async
     selectedDid: "did:key:z6Mk",
   });
 });
+
+test("a window that asks to stay open stays only once the background took its decision", async () => {
+  const events: string[] = [];
+  const kept = consentResultSender("cid-4", {
+    send: async () => ({ ok: true, matched: true }),
+    close: () => events.push("close"),
+  });
+  assert.equal(await kept({ approved: true }, { keepOpen: true }), true);
+  assert.deepEqual(events, [], "the ballot window stays to show the vote's progress");
+  assert.equal(await kept({ approved: false }), false, "and still sends only once");
+
+  const unmatched = consentResultSender("cid-5", {
+    send: async () => ({ ok: true, matched: false }),
+    close: () => events.push("close"),
+  });
+  assert.equal(await unmatched({ approved: true }, { keepOpen: true }), false);
+  const failed = consentResultSender("cid-6", {
+    send: () => Promise.reject(new Error("Receiving end does not exist")),
+    close: () => events.push("close"),
+  });
+  assert.equal(await failed({ approved: true }, { keepOpen: true }), false);
+  assert.deepEqual(events, ["close", "close"], "a decision nobody took closes the window as before");
+});

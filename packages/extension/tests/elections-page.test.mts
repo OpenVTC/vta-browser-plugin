@@ -5,7 +5,8 @@
 // by its DID document, the member must be one of the wallet's own identities
 // there, and a ticket or a vote is decided in the wallet's window. The page
 // never sees a choice, and from `vote` learns only whether a ticket had to be
-// taken first — not whether a vote was cast.
+// taken first — not whether a vote was cast. The cast's steps go to the ballot
+// window, and a vote that went in is remembered by the wallet alone.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -15,8 +16,10 @@ import {
   TICKET_TO_VOTE_GAP_MS,
   electionsPageParamsRefusal,
   pageElectionViewOf,
+  type CastProgress,
   type ElectionConsentView,
   type ElectionsPageDeps,
+  type RememberedVote,
 } from "../src/elections-page.ts";
 import type { OffscreenElectionsPageOp } from "../src/bridge-protocol.ts";
 import { pageTaskRefusal } from "../src/page-task-policy.ts";
@@ -80,11 +83,21 @@ function harness(
     takenAt?: number;
     now?: number;
     castFails?: string;
+    postFails?: string;
+    keepFails?: string;
+    voted?: RememberedVote;
+    revote?: string;
+    windowClosed?: boolean;
+    reachAtCast?: boolean;
   } = {},
 ) {
   const asked: OffscreenElectionsPageOp[] = [];
   const prompts: ElectionConsentView[] = [];
   const remembered: [string, number][] = [];
+  const progress: [string, CastProgress][] = [];
+  const votes: [string, RememberedVote][] = [];
+  let reachChecks = 0;
+  const shownNow = opts.revote ? { ...shown, disclosure: { ...shown.disclosure, revote: opts.revote } } : shown;
   const deps: ElectionsPageDeps = {
     async active() {
       return { ok: true, vta: VTA };
@@ -116,24 +129,45 @@ function harness(
             },
           };
         case "show":
-          return { ok: true, result: shown };
+          return { ok: true, result: shownNow };
         case "takeTicket":
           return { ok: true, result: { taken: true } };
-        case "cast":
-          return opts.castFails ? { ok: false, error: opts.castFails } : { ok: true, result: { status: "counted", leafIndex: 4 } };
+        case "castPrepare":
+          return opts.castFails
+            ? { ok: false, error: opts.castFails }
+            : { ok: true, result: { castDocument: { id: "cast-1", recipient: BOX }, endpoint: BOX_DOOR, ballotBox: BOX } };
+        case "castPost":
+          return opts.postFails
+            ? { ok: false, error: opts.postFails }
+            : { ok: true, result: { receipt: { issuer: BOX, payload: { outcome: "counted", leafIndex: 4 } } } };
+        case "castKeep":
+          return opts.keepFails ? { ok: false, error: opts.keepFails } : { ok: true, result: { status: "included", leafIndex: 4 } };
       }
     },
     async canReach(url) {
-      return url === BOX_DOOR ? (opts.reachBox ?? true) : true;
+      if (url !== BOX_DOOR) return true;
+      // The first check is before the window opens; the next is at the cast.
+      return reachChecks++ === 0 ? (opts.reachBox ?? true) : (opts.reachAtCast ?? opts.reachBox ?? true);
     },
     async prompt(view) {
       prompts.push(view);
       if (view.kind === "ballot") {
         const approved = opts.approve ?? true;
-        return approved ? { approved, ballot: "ballot" in opts ? opts.ballot : ballot } : { approved };
+        return approved ? { approved, ballot: "ballot" in opts ? opts.ballot : ballot, window: "w1" } : { approved };
       }
       return { approved: view.kind === "cast" ? true : (opts.approve ?? true) };
     },
+    async progress(window, state) {
+      progress.push([window, state]);
+      return !opts.windowClosed;
+    },
+    async votedAt() {
+      return opts.voted;
+    },
+    async rememberVote(key, vote) {
+      votes.push([key, vote]);
+    },
+    castDelayMs: () => 7_000,
     async ticketTakenAt() {
       return opts.takenAt;
     },
@@ -142,7 +176,7 @@ function harness(
     },
     now: () => opts.now ?? 10 * TICKET_TO_VOTE_GAP_MS,
   };
-  return { gates: new ElectionsPageGates(deps), asked, prompts, remembered };
+  return { gates: new ElectionsPageGates(deps), asked, prompts, remembered, progress, votes };
 }
 
 test("only list, show, takeTicket and vote, with a DID and an election id, are calls", () => {
@@ -200,8 +234,11 @@ test("voting with no ticket takes one and stops: no ballot is opened", async () 
   assert.deepEqual(res, { ok: true, result: { ticketTaken: true } });
   assert.deepEqual(h.prompts.map((p) => p.kind), ["ticket"]);
   assert.equal((h.prompts[0] as { fromVote: boolean }).fromVote, true);
-  assert.equal(h.asked.some((o) => o.op === "cast"), false);
+  assert.equal(h.asked.some((o) => o.op.startsWith("cast")), false);
 });
+
+const KEY = `${HOST}\n${MEMBER}\nagm-2027`;
+const NOW = 10 * TICKET_TO_VOTE_GAP_MS;
 
 test("a vote: the ballot is the wallet's, the cast runs after the page is answered, and the page learns nothing of it", async () => {
   const h = harness();
@@ -211,11 +248,59 @@ test("a vote: the ballot is the wallet's, the cast runs after the page is answer
   const ballotWindow = h.prompts.find((p) => p.kind === "ballot") as Extract<ElectionConsentView, { kind: "ballot" }>;
   assert.equal(ballotWindow.manifestDigest, DIGEST);
   assert.equal(ballotWindow.ticketTakenAt, undefined);
+  assert.equal(ballotWindow.boxOrigin, "https://ballots.example");
+  assert.equal(ballotWindow.needsReach, false);
+  assert.equal(ballotWindow.canRevote, true);
   await Promise.all([...h.gates.casting]);
-  const cast = h.asked.find((o) => o.op === "cast") as Extract<OffscreenElectionsPageOp, { op: "cast" }>;
-  assert.deepEqual(cast.ballot, ballot);
-  const outcome = h.prompts.at(-1) as Extract<ElectionConsentView, { kind: "cast" }>;
-  assert.deepEqual(outcome.outcome, { ok: true, status: "counted", leafIndex: 4 });
+  const prepared = h.asked.find((o) => o.op === "castPrepare") as Extract<OffscreenElectionsPageOp, { op: "castPrepare" }>;
+  assert.deepEqual(prepared.ballot, ballot);
+  const posted = h.asked.find((o) => o.op === "castPost") as Extract<OffscreenElectionsPageOp, { op: "castPost" }>;
+  assert.deepEqual(posted, { op: "castPost", castDocument: { id: "cast-1", recipient: BOX }, ballotBox: BOX, endpoint: BOX_DOOR, delayMs: 7_000 });
+  assert.deepEqual(h.prompts.map((p) => p.kind), ["ballot"], "one window: no separate outcome window");
+});
+
+test("the ballot window is shown each step of the cast, in order, with the pause it waits", async () => {
+  const h = harness();
+  await h.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  await Promise.all([...h.gates.casting]);
+  assert.ok(h.progress.every(([w]) => w === "w1"));
+  assert.deepEqual(
+    h.progress.map(([, p]) => p),
+    [
+      { phase: "running", step: "check" },
+      { phase: "running", step: "seal" },
+      { phase: "running", step: "wait", waitMs: 7_000, waitUntil: NOW + 7_000 },
+      { phase: "running", step: "receipt" },
+      { phase: "done", at: NOW, status: "counted", leafIndex: 4 },
+    ],
+  );
+  assert.deepEqual(
+    h.asked.filter((o) => o.op.startsWith("cast")).map((o) => o.op),
+    ["castPrepare", "castPost", "castKeep"],
+  );
+});
+
+test("a vote that went in is remembered by the wallet — when and how it counted, never a choice", async () => {
+  const h = harness();
+  await h.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  await Promise.all([...h.gates.casting]);
+  assert.deepEqual(h.votes, [[KEY, { at: NOW, status: "counted", leafIndex: 4 }]]);
+  assert.equal(JSON.stringify(h.votes).includes("ana"), false);
+});
+
+test("a vote is remembered only once the ballot box counted it", async () => {
+  for (const fail of [{ castFails: "Your agent refused." }, { postFails: "The ballot box did not answer in time." }]) {
+    const h = harness(fail);
+    await h.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+    await Promise.all([...h.gates.casting]);
+    assert.deepEqual(h.votes, []);
+  }
+  // The ballot box counted it, but the agent could not keep the receipt: it is in.
+  const h = harness({ keepFails: "Your agent is offline." });
+  await h.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  await Promise.all([...h.gates.casting]);
+  assert.deepEqual(h.votes, [[KEY, { at: NOW, status: "counted", leafIndex: 4 }]]);
+  assert.deepEqual(h.progress.at(-1)![1], { phase: "done", at: NOW, status: "counted", leafIndex: 4, receiptNotKept: "Your agent is offline." });
 });
 
 test("a declined ballot and a cast one look the same to the page", async () => {
@@ -223,34 +308,86 @@ test("a declined ballot and a cast one look the same to the page", async () => {
   const a = await declined.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
   const cast = harness();
   const b = await cast.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
-  assert.deepEqual(a, b);
-  assert.equal(declined.asked.some((o) => o.op === "cast"), false);
+  const failed = harness({ postFails: "The ballot box did not answer in time." });
+  const c = await failed.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  const voted = harness({ voted: { at: 5, status: "counted", leafIndex: 1 }, approve: false });
+  const d = await voted.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  const unreachable = harness({ reachBox: false });
+  const e = await unreachable.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  for (const r of [b, c, d, e]) assert.deepEqual(r, a);
+  assert.equal(declined.asked.some((o) => o.op.startsWith("cast")), false);
+  await Promise.all([...cast.gates.casting, ...failed.gates.casting, ...unreachable.gates.casting]);
 });
 
-test("a ballot that breaks the election's rules is never cast, and the wallet says why", async () => {
+test("a ballot that breaks the election's rules is never cast, and the window says why", async () => {
   const h = harness({ ballot: { ...ballot, answers: [{ question: "chair", choice: ["ana", "bo"] }] } });
   await h.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
   await Promise.all([...h.gates.casting]);
-  assert.equal(h.asked.some((o) => o.op === "cast"), false);
-  const last = h.prompts.at(-1) as Extract<ElectionConsentView, { kind: "cast" }>;
-  assert.equal(last.outcome.ok, false);
+  assert.equal(h.asked.some((o) => o.op.startsWith("cast")), false);
+  const last = h.progress.at(-1)![1];
+  assert.equal(last.phase, "failed");
+  assert.equal((last as { step: string }).step, "check");
 });
 
-test("a failed cast is shown in the wallet's window, not to the page", async () => {
-  const h = harness({ castFails: "The ballot box did not answer in time." });
+test("a failed cast is shown in the ballot window at the step it failed, not to the page", async () => {
+  const h = harness({ postFails: "The ballot box did not answer in time." });
   const res = await h.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
   assert.deepEqual(res, { ok: true, result: { ticketTaken: false } });
   await Promise.all([...h.gates.casting]);
-  const last = h.prompts.at(-1) as Extract<ElectionConsentView, { kind: "cast" }>;
+  assert.deepEqual(h.progress.at(-1)![1], { phase: "failed", step: "send", error: "The ballot box did not answer in time." });
+  assert.deepEqual(h.prompts.map((p) => p.kind), ["ballot"]);
+});
+
+test("a ballot window closed early does not stop the cast; a failure it cannot show opens a window", async () => {
+  const ok = harness({ windowClosed: true });
+  await ok.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  await Promise.all([...ok.gates.casting]);
+  assert.deepEqual(ok.asked.filter((o) => o.op.startsWith("cast")).map((o) => o.op), ["castPrepare", "castPost", "castKeep"]);
+  assert.equal(ok.progress.length, 1, "nothing more is written once the window is gone");
+  assert.equal(ok.votes.length, 1, "the vote is still remembered");
+  assert.deepEqual(ok.prompts.map((p) => p.kind), ["ballot"]);
+
+  const failed = harness({ windowClosed: true, postFails: "The ballot box did not answer in time." });
+  await failed.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  await Promise.all([...failed.gates.casting]);
+  const last = failed.prompts.at(-1) as Extract<ElectionConsentView, { kind: "cast" }>;
   assert.deepEqual(last.outcome, { ok: false, error: "The ballot box did not answer in time." });
 });
 
-test("the wallet must be allowed to reach the ballot box before a ballot opens", async () => {
-  const h = harness({ reachBox: false });
+test("a ballot box the wallet may not reach yet opens the window, which asks for it", async () => {
+  const h = harness({ reachBox: false, reachAtCast: true });
   const res = await h.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
-  assert.equal(res.ok, false);
-  assert.match((res as { error: string }).error, /ballots\.example/);
-  assert.equal(h.prompts.length, 0);
+  assert.deepEqual(res, { ok: true, result: { ticketTaken: false } });
+  const w = h.prompts[0] as Extract<ElectionConsentView, { kind: "ballot" }>;
+  assert.equal(w.kind, "ballot");
+  assert.equal(w.needsReach, true);
+  assert.equal(w.boxOrigin, "https://ballots.example");
+  await Promise.all([...h.gates.casting]);
+  assert.equal(h.progress.at(-1)![1].phase, "done");
+});
+
+test("a ballot box still out of reach at the cast sends nothing, and the window says so", async () => {
+  const h = harness({ reachBox: false });
+  await h.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  await Promise.all([...h.gates.casting]);
+  assert.equal(h.asked.some((o) => o.op.startsWith("cast")), false);
+  const last = h.progress.at(-1)![1] as Extract<CastProgress, { phase: "failed" }>;
+  assert.equal(last.step, "check");
+  assert.match(last.error, /ballots\.example/);
+});
+
+test("a remembered vote opens the window on it; a revote is offered only when the election allows it and voting is open", async () => {
+  const voted = { at: 1234, status: "counted", leafIndex: 2 };
+  const h = harness({ voted, approve: false });
+  await h.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  const w = h.prompts[0] as Extract<ElectionConsentView, { kind: "ballot" }>;
+  assert.deepEqual(w.voted, voted);
+  assert.equal(w.canRevote, true);
+
+  const once = harness({ voted, revote: "reject", approve: false });
+  await once.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  assert.equal((once.prompts[0] as Extract<ElectionConsentView, { kind: "ballot" }>).canRevote, false);
+  assert.equal(once.asked.some((o) => o.op.startsWith("cast")), false);
 });
 
 test("a ballot opened soon after the ticket says so", async () => {

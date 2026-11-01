@@ -57,7 +57,13 @@ import {
   type MarksGrant,
 } from "./directory-page.js";
 import { GIT_CONSENT_PREFIX, GitPageGates, type GitConsentView } from "./git-page.js";
-import { ELECTION_CONSENT_PREFIX, ElectionsPageGates, type ElectionConsentView } from "./elections-page.js";
+import {
+  ELECTION_CONSENT_PREFIX,
+  ELECTION_PROGRESS_PREFIX,
+  ElectionsPageGates,
+  type ElectionConsentView,
+  type RememberedVote,
+} from "./elections-page.js";
 import { RoomOffers, RoomOffersRefusal } from "./room-offers-background.js";
 import type { RoomOfferConsentView } from "./room-offers-policy.js";
 import {
@@ -1097,12 +1103,23 @@ const gitPageGates = new GitPageGates({
 // decided in the wallet's own window, and the page never sees a choice — are
 // `elections-page.ts`; this wires them up.
 
-/** Raise an election window and wait. Closed or unopened is a denial. */
-async function requestElectionConsent(view: ElectionConsentView): Promise<{ approved: boolean; ballot?: unknown }> {
+/** Election windows still on screen, by consent id. A ballot window stays open
+ *  after its decision to show the cast's progress; it leaves this set when it
+ *  closes, and its progress key goes with it. */
+const openElectionWindows = new Set<string>();
+
+/** Raise an election window and wait for its decision. Closed or unopened is a
+ *  denial. A ballot window may stay open after deciding (`consent-result.ts`
+ *  `keepOpen`): its closing later settles nothing — the consent is settled — and
+ *  only ends its progress, never the cast. */
+async function requestElectionConsent(
+  view: ElectionConsentView,
+): Promise<{ approved: boolean; ballot?: unknown; window?: string }> {
   const consentId = crypto.randomUUID();
   await chrome.storage.session.set({ [`${ELECTION_CONSENT_PREFIX}${consentId}`]: view });
   const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=election`;
   const bounds = await consentWindowBounds(view.kind === "cast" ? 460 : 640);
+  openElectionWindows.add(consentId);
   return new Promise((resolve) => {
     let settled = false;
     const settle = (approved: boolean, ballot?: unknown) => {
@@ -1110,16 +1127,32 @@ async function requestElectionConsent(view: ElectionConsentView): Promise<{ appr
       settled = true;
       pendingConsents.delete(consentId);
       void chrome.storage.session.remove(`${ELECTION_CONSENT_PREFIX}${consentId}`);
-      resolve(approved && ballot !== undefined ? { approved, ballot } : { approved });
+      resolve(approved && ballot !== undefined ? { approved, ballot, window: consentId } : { approved });
     };
     pendingConsents.set(consentId, (approved, _remember, _prf, _did, _rooms, _credential, ballot) => settle(approved, ballot));
-    openConsentWindow({ url, bounds, deny: () => settle(false), tag: "[pnm elections]", what: "election window" });
+    openConsentWindow({
+      url,
+      bounds,
+      // Called when the window is gone (or never opened), settled or not.
+      deny: () => {
+        openElectionWindows.delete(consentId);
+        void chrome.storage.session.remove(`${ELECTION_PROGRESS_PREFIX}${consentId}`);
+        settle(false);
+      },
+      tag: "[pnm elections]",
+      what: "election window",
+    });
   });
 }
 
 /** `chrome.storage.local` key prefix for when this wallet took a ticket. A
  *  time, never a choice: it lets the ballot window warn a vote straight after. */
 const ELECTION_TICKET_PREFIX = "election-ticket:";
+
+/** `chrome.storage.local` key prefix for a vote this wallet cast: when, and the
+ *  ballot box's outcome and board entry — never a choice. Only the wallet's own
+ *  ballot window reads it; the page is never told. */
+const ELECTION_VOTE_PREFIX = "election-vote:";
 
 const electionsPageGates = new ElectionsPageGates({
   async active() {
@@ -1150,6 +1183,21 @@ const electionsPageGates = new ElectionsPageGates({
   },
   async rememberTicket(key, at) {
     await chrome.storage.local.set({ [`${ELECTION_TICKET_PREFIX}${key}`]: at });
+  },
+  async progress(window, state) {
+    if (!openElectionWindows.has(window)) return false;
+    await chrome.storage.session.set({ [`${ELECTION_PROGRESS_PREFIX}${window}`]: state });
+    return true;
+  },
+  async votedAt(key) {
+    const k = `${ELECTION_VOTE_PREFIX}${key}`;
+    const v = (await chrome.storage.local.get(k))[k] as Partial<RememberedVote> | undefined;
+    return v && typeof v.at === "number" && typeof v.status === "string"
+      ? { at: v.at, status: v.status, ...(typeof v.leafIndex === "number" ? { leafIndex: v.leafIndex } : {}) }
+      : undefined;
+  },
+  async rememberVote(key, vote) {
+    await chrome.storage.local.set({ [`${ELECTION_VOTE_PREFIX}${key}`]: vote });
   },
   now: () => Date.now(),
 });

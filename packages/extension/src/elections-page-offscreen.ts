@@ -14,14 +14,17 @@
 // - a cast goes to the ballot box exactly as the VTA built it under a key made
 //   for that cast alone, after a random pause, and the receipt goes back to the
 //   VTA (`voter/receipt`). Nothing here sends a ballot or a cast to the
-//   community. The reference is `pnm elections`.
+//   community. The reference is `pnm elections`. It runs as three operations
+//   (`castPrepare`, `castPost`, `castKeep`) so the background can show the
+//   member each step as it happens; the pause is the background's to choose
+//   (`castDelayMs`), and is capped here.
 
 import { resolveDidDocument } from "@openvtc/pnm-core/didcomm";
 import { trustTaskBaseFromDocument, trustTaskUrl, type TrustTaskSender } from "@openvtc/pnm-core/vta";
 import {
   OobRefusedError,
   ballotRefusal,
-  castDelayMs,
+  MAX_CAST_DELAY_MS,
   pcsCast,
   pcsVoterAccept,
   pcsVoterRead,
@@ -107,6 +110,17 @@ export async function runElectionsPageOp(
   if (op.op === "ballotBox") {
     return { endpoint: await ballotBoxEndpoint(op.ballotBox, deps.resolve) };
   }
+  if (op.op === "castPost") {
+    // So the cast's arrival is not timed to anything the community saw.
+    const delay = Math.min(Math.max(0, Math.floor(Number(op.delayMs) || 0)), MAX_CAST_DELAY_MS);
+    await (deps.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms))))(delay);
+    const receipt = await postCast(op.castDocument, {
+      ballotBox: op.ballotBox,
+      endpoint: op.endpoint,
+      ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    });
+    return { receipt };
+  }
   const entries = identitiesAt(await deps.identities(vta.vtaDid, vta.restBaseUrl), op.hostDid);
   if (op.op === "members") {
     return entries.map((e) => ({ did: e.principalDid as string, communityName: e.label?.trim() || "This community" }));
@@ -163,23 +177,18 @@ export async function runElectionsPageOp(
         await pcsVoterAccept(sender, agent, target, op.electionId, shown.parameters, response);
         return { taken: true };
       }
-      case "cast": {
+      case "castPrepare": {
         const shown = await read<ElectionShown>("show", { electionId: op.electionId });
         const ballot = op.ballot as ElectionBallot;
         const refused = ballotRefusal(shown.manifest, shown.manifestDigest, ballot);
         if (refused) throw new Error(`${refused} ${name} may have changed the election since you filled it in.`);
         const endpoint = await ballotBoxEndpoint(shown.manifest.ballotBox, deps.resolve);
         const { castDocument } = await pcsCast(sender, agent, target, shown, ballot);
-        // So the cast's arrival is not timed to anything the community saw.
-        await (deps.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms))))(castDelayMs());
-        const receipt = await postCast(castDocument, {
-          ballotBox: shown.manifest.ballotBox,
-          endpoint,
-          ...(deps.fetch ? { fetch: deps.fetch } : {}),
-        });
-        const kept = await pcsVoterReceipt(sender, agent, target, op.electionId, receipt);
-        const outcome = (receipt.payload as { outcome?: unknown } | undefined)?.outcome;
-        return { status: typeof outcome === "string" ? outcome : kept.status, leafIndex: kept.leafIndex };
+        return { castDocument, endpoint, ballotBox: shown.manifest.ballotBox };
+      }
+      case "castKeep": {
+        const kept = await pcsVoterReceipt(sender, agent, target, op.electionId, op.receipt);
+        return { status: kept.status, ...(kept.leafIndex !== undefined ? { leafIndex: kept.leafIndex } : {}) };
       }
     }
   } catch (e) {

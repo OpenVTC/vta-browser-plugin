@@ -3537,8 +3537,15 @@ export type OffscreenElectionsPageOp =
   | { op: "show"; hostDid: string; member: string; electionId: string }
   /** Take the member's ticket: register → the community issues it blind → accept. */
   | { op: "takeTicket"; hostDid: string; member: string; electionId: string }
-  /** Build the cast in the VTA, wait, post it to the ballot box, keep the receipt. */
-  | { op: "cast"; hostDid: string; member: string; electionId: string; ballot: unknown };
+  /** A cast, in the three steps the ballot window shows (`elections-page.ts`).
+   *  First: read the election afresh, check the ballot against it, and have the
+   *  VTA build and sign the cast under a key made for it alone. */
+  | { op: "castPrepare"; hostDid: string; member: string; electionId: string; ballot: unknown }
+  /** Then: wait `delayMs` (at most `MAX_CAST_DELAY_MS`), and post the cast to
+   *  the ballot box exactly as the VTA built it. Answers the ballot box's receipt. */
+  | { op: "castPost"; castDocument: Record<string, unknown>; ballotBox: string; endpoint: string; delayMs: number }
+  /** Last: the VTA keeps and checks the receipt (`vta/pcs/voter/receipt`). */
+  | { op: "castKeep"; hostDid: string; member: string; electionId: string; receipt: Record<string, unknown> };
 
 export interface OffscreenElectionsPageRequest {
   target: typeof OFFSCREEN_TARGET;
