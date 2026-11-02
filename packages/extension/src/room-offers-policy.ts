@@ -4,7 +4,7 @@
 // A community that owns a room offers its members admission
 // (`vtc/rooms/community/members/add`), and the member takes it up with
 // `vtc/rooms/offers/{list,accept}/0.1`, signed as the DID the offer is addressed
-// to by their own VTA (`rooms/keys/act/0.9`). The CLI does it with
+// to by their own VTA (`rooms/keys/act/0.10`). The CLI does it with
 // `pnm rooms offers list|accept`; the wallet does the same, from its console's
 // Data rooms page and from the community's own member portal.
 //
@@ -81,7 +81,35 @@ export function isOfferSource(sources: readonly OfferSource[], communityDid: str
  * `@openvtc/pnm-core/rooms`'s `roomStanding`. The portal, `pnm` and OpenVTC read
  * the same two records, so a room accepted in one shows the same in all of them.
  */
-export type OfferStanding = "offered" | "joined" | "unfinished" | "needsReadmission" | "removed";
+export type OfferStanding = "offered" | "joined" | "unfinished" | "needsReadmission" | "suspended" | "removed";
+
+/**
+ * A room's state in its owner's lifecycle (`vtc/rooms/memberships/list/0.2`
+ * `roomState`). Spelled as the community's member portal reads it
+ * (`PageOffer.roomState` in vtc-service's `wallet-rooms.ts`).
+ */
+export type RoomOwnerState = "active" | "archived" | "removalScheduled" | "purging" | "removed";
+
+/** The room-state members a view carries, copied from the community's record. */
+export interface RoomStateView {
+  roomState?: RoomOwnerState;
+  /** Present when the room is archived or scheduled for removal. */
+  roomAccess?: "readOnly" | "noAccess";
+  /** When a room scheduled for removal is purged. */
+  purgeAt?: string;
+  /** When the member's admission was suspended — the room was closed to every member. */
+  suspendedAt?: string;
+}
+
+/** The room-state members of a community record, only those it carries. */
+export function roomStateView(r: RoomStateView): RoomStateView {
+  return {
+    ...(r.roomState !== undefined ? { roomState: r.roomState } : {}),
+    ...(r.roomAccess !== undefined ? { roomAccess: r.roomAccess } : {}),
+    ...(r.purgeAt !== undefined ? { purgeAt: r.purgeAt } : {}),
+    ...(r.suspendedAt !== undefined ? { suspendedAt: r.suspendedAt } : {}),
+  };
+}
 
 /** One room the community offered the member, as the wallet shows it: no credential, ever. */
 export interface OfferView {
@@ -102,6 +130,11 @@ export interface OfferView {
   /** While a sealed room's acceptance can still be finished, from any surface. */
   repeatAcceptUntil?: string;
   state: OfferStanding;
+  /** The room's own state (`vtc/rooms/memberships/list/0.2`). */
+  roomState?: RoomOwnerState;
+  roomAccess?: "readOnly" | "noAccess";
+  purgeAt?: string;
+  suspendedAt?: string;
 }
 
 /**
@@ -180,6 +213,10 @@ export interface PageOfferView {
   removedAt?: string;
   repeatAcceptUntil?: string;
   state: OfferStanding;
+  roomState?: RoomOwnerState;
+  roomAccess?: "readOnly" | "noAccess";
+  purgeAt?: string;
+  suspendedAt?: string;
 }
 
 /** Member by member: nothing of the community's answer rides along. */
@@ -197,6 +234,7 @@ export function pageOfferView(o: OfferView): PageOfferView {
     ...(o.removedAt !== undefined ? { removedAt: o.removedAt } : {}),
     ...(o.repeatAcceptUntil !== undefined ? { repeatAcceptUntil: o.repeatAcceptUntil } : {}),
     state: o.state,
+    ...roomStateView(o),
   };
 }
 

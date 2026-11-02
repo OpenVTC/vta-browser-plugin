@@ -33,6 +33,10 @@ export type ApproveCapabilityScope = CapabilityScopeCeiling | CapabilityScopeNon
  */
 export type ApproverDid = string;
 /**
+ * What an archived room's members may still do. `readOnly`: their credentials stand and they keep reading what the room holds; the room's host refuses every write, upload and curation from a member. `noAccess`: every credential the room issued before the archival is withdrawn at its host — a room reset — so the host refuses every member's every task; the content is kept intact, and each withdrawn admission is `suspended`, restored when the room is unarchived or made `readOnly`. Neither recalls what a member already read or saved, and on a sealed tier neither removes anyone from the room's group.
+ */
+export type ArchiveAccess = "readOnly" | "noAccess";
+/**
  * Who may see a directory field, ordered from narrowest to widest. `admins`: holders of `vtc.directory.admin` (and, for derived fields, `vtc.members.manage`). `groups`: members who share at least one community group with the subject (narrowed to the groups the subject names in `groupAudience`, where it names any). `connections`: members holding an attributed, in-force verified relationship with the subject at the community. `members`: every active member. `public`: anyone, and what the member's signed public card carries outside the community.
  *
  * `groups` and `connections` are not a chain: a viewer sees a field when they satisfy the audience the subject chose for it or any wider audience. Every audience includes the administrators, and the subject always sees their own whole card. There is no `onlyMe`: a value nobody else should see is not directory data.
@@ -398,9 +402,9 @@ export type MemberAction = "read" | "write" | "curate";
  */
 export type MemberActions = [MemberAction] | [MemberAction, MemberAction] | [MemberAction, MemberAction, MemberAction];
 /**
- * Where an admission stands. `offered`: credentials issued and waiting for the member to collect and accept them. `admitted`: accepted — on a sealed tier, the member is in the room's group. `removed`: an administrator removed them; on a sealed tier the room has advanced past them.
+ * `MemberState` plus `suspended`. `offered`: credentials issued and waiting for the member to collect and accept them. `admitted`: accepted — on a sealed tier, the member is in the room's group. `suspended`: admitted, but the room was archived with `noAccess` (or scheduled for removal), so the room's host refuses the member's credentials; on a sealed tier they are still in the room's group. Restored to `admitted` with freshly issued credentials when the room leaves that state, and never restored if it is removed. `removed`: an administrator removed them, or withdrew their offer — archiving withdraws every open offer; on a sealed tier the room has advanced past an admitted member.
  */
-export type MemberState = "offered" | "admitted" | "removed";
+export type MemberStateV2 = "offered" | "admitted" | "suspended" | "removed";
 /**
  * An RFC 9162 audit or consistency path: the node hashes, in the order §2.1.3 / §2.1.4 define.
  *
@@ -826,6 +830,10 @@ export type RoomDescription = string;
  * A name for the room, chosen by an administrator: shown to administrators and to the members a room is offered to. Not part of the room's identity and never in anything a room's host can read. From `vtc/rooms/community/create` 0.3 and `vtc/rooms/community/update` 0.2 the community also writes it, through its own VTA, as the `name` of the room's own profile (`RoomProfile` in rooms/_shared), sealed inside the room for its members; earlier versions keep it out of the room altogether. MUST NOT carry personal data.
  */
 export type RoomLabel = string;
+/**
+ * Where a room the community owns stands in its owner's lifecycle — distinct from `HostedRoom.lifecycle`, which is the host's clock (`live`, `lapsed`, `dormant`, `reclaimable`) and is computed from the room's epoch, never set. `active`: open to change. `archived`: closed to change by an administrator — no admissions, and the room's host accepts no writes from its members; what members may still do is `ArchiveAccess`. Reversible with vtc/rooms/community/unarchive. `removalScheduled`: an administrator removed the room with a grace period; it admits nobody and its content is kept until `purgeAt`, and vtc/rooms/community/removal/cancel returns it to `archived`. `purging`: the grace period ended (or there was none) and the community is deleting the room's content from its host and storage; not reversible. `removed`: the content is gone; the community keeps only this record of the room, for its history.
+ */
+export type RoomState = "active" | "archived" | "removalScheduled" | "purging" | "removed";
 /**
  * How a consent prompt reaches the approver: `wake` pushes to the approver's device for a DID-signed decision; `bridge-relay` renders it through an enrolled bridge (e.g. a numbered card in the operator's messaging app) for a bridge-attested decision.
  */
@@ -4082,9 +4090,9 @@ export interface RoomLimits {
   member?: ScopeLimits;
 }
 /**
- * What vtc/rooms/memberships/list/0.1 returns: one room the community owns, and where the caller's admission to it stands in the community's own record. Unlike `OfferV2` it carries no credentials — those are collected with vtc/rooms/offers/list while an offer is open — and it is listed in every state, for as long as the community keeps the record, not only while an accept can be repeated. `label` and `description` are the room's as they stand when the record is read.
+ * What vtc/rooms/memberships/list/0.2 returns: `RoomMembership` with `MemberStateV2`, `suspendedAt`, and the room's own state, so that a member can tell a room that is read-only, closed or going away from one they were removed from.
  */
-export interface RoomMembership {
+export interface RoomMembershipV2 {
   roomId: string;
   /**
    * The room's host: this community.
@@ -4101,7 +4109,7 @@ export interface RoomMembership {
    * When the member's authority credential expires.
    */
   validUntil: string;
-  state: MemberState;
+  state: MemberStateV2;
   offeredAt: string;
   /**
    * When the community recorded the admission. Present when `state` is `admitted`, and kept when it becomes `removed`.
@@ -4115,6 +4123,22 @@ export interface RoomMembership {
    * On an `attributed` or `private` room in state `admitted`: until when the community keeps the Welcome, so that a repeated vtc/rooms/offers/accept carrying the same KeyPackage is answered with it. Absent on an `open` room, in any other state, and once the community no longer keeps it. A surface finding the member admitted but the room absent from its key holder's rooms/keys/list finishes the acceptance before this time, and asks an administrator to re-admit the member after it.
    */
   repeatAcceptUntil?: string;
+  /**
+   * Present exactly when `state` is `suspended`.
+   */
+  suspendedAt?: string;
+  /**
+   * The room's state in its owner's lifecycle. `purging` is shown to members as `removalScheduled`: to them, the room is going away either way.
+   */
+  roomState: RoomState;
+  /**
+   * Present exactly when `roomState` is `archived` or `removalScheduled`.
+   */
+  roomAccess?: ArchiveAccess;
+  /**
+   * Present when `roomState` is `removalScheduled`: when the room's content is to be deleted.
+   */
+  purgeAt?: string;
 }
 /**
  * What a room says about itself to its own members: a name and, optionally, a description, short tags and an emoji, so that a member's wallet, portal or CLI can show what each room is rather than a DID.

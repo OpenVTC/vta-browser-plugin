@@ -13,7 +13,7 @@
 //        → sealed: the VTA signs the record body as the member and seals it
 //          (rooms/keys/seal/0.2) → records/put/0.4 naming the blob, re-sealing
 //          for the version the host actually assigned.
-//          open: records/put/0.4 (through rooms/keys/act/0.9), the manifest and
+//          open: records/put/0.4 (through rooms/keys/act/0.10), the manifest and
 //          its key in `cleartext.file`, naming exactly that blob.
 //   get  records/get/0.2 → sealed: rooms/keys/open → verify the body; open:
 //        the manifest in `cleartext.file`, its key held to the tier

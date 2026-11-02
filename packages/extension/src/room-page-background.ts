@@ -36,6 +36,8 @@ import {
   excerpt,
   liveGrants,
   mergeRoomNames,
+  storedRoomState,
+  type RoomOwnerState,
   portalRefusal,
   roomFilesPageOpenRefusal,
   roomGrant,
@@ -101,6 +103,10 @@ type RoomNames = Record<
   {
     label: string;
     visibility?: string;
+    /** The room's own state, from the community's record (`vtc/rooms/memberships/list/0.2`). */
+    roomState?: RoomOwnerState;
+    roomAccess?: "readOnly" | "noAccess";
+    purgeAt?: string;
     labelSource?: "profile" | "community";
     description?: string;
     profileStale?: boolean;
@@ -332,7 +338,7 @@ export class RoomPageGates {
     return Object.fromEntries(
       Object.entries(names).map(([roomId, n]) => [
         roomId,
-        { label: n.label, ...(n.visibility !== undefined ? { visibility: n.visibility } : {}) },
+        { label: n.label, ...(n.visibility !== undefined ? { visibility: n.visibility } : {}), ...storedRoomState(n as unknown as Record<string, unknown>) },
       ]),
     );
   }
@@ -718,6 +724,8 @@ export function withProfiles(
       out[roomId] = {
         label: p.name,
         ...(had?.visibility !== undefined ? { visibility: had.visibility } : {}),
+        // The room's state is the community's, whatever the room calls itself.
+        ...(had ? storedRoomState(had as unknown as Record<string, unknown>) : {}),
         labelSource: "profile",
         ...(p.description !== undefined ? { description: p.description } : {}),
         ...facts,

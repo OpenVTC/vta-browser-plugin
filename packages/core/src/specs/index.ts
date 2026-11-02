@@ -152,7 +152,7 @@ export * as RoomsCreate_v0_2 from "./rooms/create/0.2/payload.js";
 export * as RoomsEpochChain_v0_2 from "./rooms/epoch/chain/0.2/payload.js";
 export * as RoomsEpochMint_v0_1 from "./rooms/epoch/mint/0.1/payload.js";
 export * as RoomsInfo_v0_3 from "./rooms/info/0.3/payload.js";
-export * as RoomsKeysAct_v0_9 from "./rooms/keys/act/0.9/payload.js";
+export * as RoomsKeysAct_v0_10 from "./rooms/keys/act/0.10/payload.js";
 export * as RoomsKeysBackfill_v0_2 from "./rooms/keys/backfill/0.2/payload.js";
 export * as RoomsKeysBrowse_v0_3 from "./rooms/keys/browse/0.3/payload.js";
 export * as RoomsKeysChain_v0_2 from "./rooms/keys/chain/0.2/payload.js";
@@ -274,7 +274,7 @@ export * as VtcMembersRequestVmc_v0_1 from "./vtc/members/request-vmc/0.1/payloa
 export * as VtcMembersSelfRemoveReceipt_v0_1 from "./vtc/members/self-remove-receipt/0.1/payload.js";
 export * as VtcMembersSelfRemove_v0_1 from "./vtc/members/self-remove/0.1/payload.js";
 export * as VtcMembersVmc_v0_1 from "./vtc/members/vmc/0.1/payload.js";
-export * as VtcRoomsMembershipsList_v0_1 from "./vtc/rooms/memberships/list/0.1/payload.js";
+export * as VtcRoomsMembershipsList_v0_2 from "./vtc/rooms/memberships/list/0.2/payload.js";
 export * as VtcRoomsOffersAccept_v0_1 from "./vtc/rooms/offers/accept/0.1/payload.js";
 export * as VtcRoomsOffersList_v0_4 from "./vtc/rooms/offers/list/0.4/payload.js";
 

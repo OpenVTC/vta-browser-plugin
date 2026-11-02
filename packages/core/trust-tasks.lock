@@ -898,9 +898,9 @@ digest = "sha256:576083d47c1cc049040ab9352653cc0793a7ccc43774817d91ce198c6be1923
 
 [[task]]
 slug = "rooms/keys/act"
-version = "0.9"
-type_uri = "https://trusttasks.org/spec/rooms/keys/act/0.9"
-digest = "sha256:a1d7e0d143c4d35edb48ed68d2ffb64b3d8c7a1d15ab0b4caae3042f977674d1"
+version = "0.10"
+type_uri = "https://trusttasks.org/spec/rooms/keys/act/0.10"
+digest = "sha256:b3f1ed60feaf9aa38b11d619b32a29b41ebef2e6756433ea6c58069994dfd3ce"
 
 [[task]]
 slug = "rooms/keys/backfill"
@@ -1636,9 +1636,9 @@ digest = "sha256:1a24ae31b8e99bdb1025d5533b8904ca41e75da598d4fb28efdb23ec53f2c37
 
 [[task]]
 slug = "vtc/rooms/memberships/list"
-version = "0.1"
-type_uri = "https://trusttasks.org/spec/vtc/rooms/memberships/list/0.1"
-digest = "sha256:e9f3391572fea47054b34bc4e14bd0cb1ea1c620ed66c3084e91cb791d8dd814"
+version = "0.2"
+type_uri = "https://trusttasks.org/spec/vtc/rooms/memberships/list/0.2"
+digest = "sha256:a74c13ce9666e64df99c2874dd5555d25465258ce4dd49e7fbbcdbd85c4adf39"
 
 [[task]]
 slug = "vtc/rooms/offers/accept"

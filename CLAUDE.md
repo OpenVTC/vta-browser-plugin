@@ -1010,9 +1010,10 @@ confirmation, which says the note will be readable by the room's host.
 writes `rooms/records/put/0.4` with the manifest — `fileKey` included — in
 `cleartext.file` and `blobs` exactly `[file.blobRef]` (`putCleartextAsMember`
 with `file`). Every record, with a file or without, is `put/0.4`, and every
-request the VTA completes as the member is `rooms/keys/act/0.9`, whose closed
-table names it — one version of each, as the lock requires (VTI serves 0.3 and
-0.8 only for wallets that predate the cutover). `getRoomFile` holds the key to the tier: required in an open
+request the VTA completes as the member is `rooms/keys/act/0.10`, whose closed
+table names it — one version of each, as the lock requires (VTI serves 0.3,
+0.8 and 0.9 only for wallets that predate the cutover; 0.10 is 0.9's table plus
+`vtc/rooms/memberships/list/0.2`). `getRoomFile` holds the key to the tier: required in an open
 record's manifest, refused in a sealed body's; the opener is handed the
 manifest without it, and nothing returns or shows it (`withoutFileKey` in the
 records pane). An open record is not signed by its author, so the result says
@@ -1061,8 +1062,8 @@ answer.
 
 **A community's own rooms are shown by name.** A room the community owns has
 a label its administrators gave it, and the community's offer to the member
-carries it (`vtc/rooms/memberships/list/0.1`, built unsigned and completed by
-the VTA as the member with `rooms/keys/act/0.9`, sent to the community's
+carries it (`vtc/rooms/memberships/list/0.2`, built unsigned and completed by
+the VTA as the member with `rooms/keys/act/0.10`, sent to the community's
 `TrustTaskHTTPS` unchanged — `@openvtc/pnm-core/rooms`'s
 `communityRoomMemberships`).
 `list` and `choose` read it for the members the shares (or the share prompt)
@@ -1146,14 +1147,31 @@ or removed, for as long as the community keeps it) read beside the VTA's custody
 (`roomsKeysList`, for that member), and its `state` is the standing every
 surface derives from those two (`roomStanding`): `offered`, `joined`,
 `unfinished` (accepted somewhere and not held — accepting again finishes it),
-`needsReadmission` (too late to finish: an administrator re-admits) or
-`removed`. The wallet keeps no record of an accept of its own, so a room
-accepted in OpenVTC shows joined here, and one interrupted here is finished
-there (`vtc/rooms/memberships/list/0.1`, *One record, every surface*).
+`needsReadmission` (too late to finish: an administrator re-admits),
+`suspended` (the community closed the room to every member — archived with no
+access, or scheduled for removal) or `removed`. Beside it each view carries the
+room's own state as the record gives it — `roomState`, `roomAccess`, `purgeAt`,
+`suspendedAt` — spelled as the community's member portal reads them
+(`PageOffer` / `PageRoom` in vtc-service's `wallet-rooms.ts`), so the portal
+says read-only, closed for now, or going away. The wallet keeps no record of an
+accept of its own, so a room accepted in OpenVTC shows joined here, and one
+interrupted here is finished there (`vtc/rooms/memberships/list/0.2`, *One
+record, every surface*).
+
+**Renewals are collected as the rooms are read.** A community renews an
+admission — and restores every suspended member when a room it archived with no
+access reopens — by listing a renewal beside the member's offers
+(`vtc/rooms/offers/list/0.4` `renewals`). Whenever the offscreen listing finds
+the member in one of the community's rooms, it stores each renewal's membership
+and authority in the member's VTA **in place of** the ones they renew
+(`collectRoomRenewals`, `vault/credentials/{query,get,receive}`), as `pnm rooms
+offers renew` does by hand. A credential the vault already holds is not sent
+again, two held of one kind are never guessed between, and a failure never
+fails the listing: the next read tries again.
 
 **Every request is the member's, completed by the VTA.** The lists and the
 acceptance are built unsigned and completed as the member with
-`rooms/keys/act/0.9` (the version that admits the community's types; a VTA
+`rooms/keys/act/0.10` (the version that admits the community's types; a VTA
 without it gets "must be updated"), then sent to the community unchanged over
 HTTPS; `roomsKeysAct` refuses an answer made as anyone else. On a sealed tier
 the **VTA gives the KeyPackage** (`rooms/keys/key-package/0.2`) — act completes

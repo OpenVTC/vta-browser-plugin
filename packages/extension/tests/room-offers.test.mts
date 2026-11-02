@@ -12,11 +12,13 @@ import {
   acceptWords,
   offerSources,
   openOfferCount,
+  pageOfferView,
   pickOffer,
   type OfferView,
   type RoomOfferConsentView,
 } from "../src/room-offers-policy.ts";
 import { RoomPageGates, type RoomPageBackgroundDeps } from "../src/room-page-background.ts";
+import { mergeRoomNames } from "../src/room-page-policy.ts";
 import { pageTaskRefusal } from "../src/page-task-policy.ts";
 
 const VTA = "did:webvh:QmAgent:agent.example";
@@ -83,7 +85,7 @@ test("the window says what accepting does, by tier", () => {
 
 test("a page may not have the wallet sign or request an offer task", () => {
   assert.match(pageTaskRefusal("https://trusttasks.org/spec/vtc/rooms/offers/accept/0.1")!, /acceptOffer/);
-  assert.match(pageTaskRefusal("https://trusttasks.org/spec/vtc/rooms/memberships/list/0.1")!, /rooms\.offers/);
+  assert.match(pageTaskRefusal("https://trusttasks.org/spec/vtc/rooms/memberships/list/0.2")!, /rooms\.offers/);
 });
 
 // ── The background ──────────────────────────────────────────────────────────
@@ -325,7 +327,7 @@ test("the offscreen listing is the community's record beside the VTA's custody, 
   assert.equal(views.find((v) => v.roomId === PICNIC)!.state, "joined");
   assert.equal("credentials" in board, false);
   assert.equal(sent[0]!.issuer, MEMBER);
-  assert.equal(sent[0]!.type, "https://trusttasks.org/spec/vtc/rooms/memberships/list/0.1");
+  assert.equal(sent[0]!.type, "https://trusttasks.org/spec/vtc/rooms/memberships/list/0.2");
 
   await assert.rejects(
     runRoomOffersOp(deps, { vtaDid: VTA }, { op: "list", communityDid: COMMUNITY, member: COMMUNITY }),
@@ -410,4 +412,121 @@ test("the offscreen endpoint lookup gives a party with no TrustTaskHTTPS the qui
     runRoomOffersOp(deps, { vtaDid: VTA }, { op: "endpoint", communityDid: OLD_VTC }),
     (e: Error & { code?: string }) => e.code === "noRoomOffers",
   );
+});
+
+// ── A room's owner lifecycle, and renewals (VTI #2380, trust-tasks-tf #1006) ──
+
+const OFFERS_LIST = "https://trusttasks.org/spec/vtc/rooms/offers/list/0.4";
+
+function lifecycleDeps(stored: { id: unknown; replaces?: string }[]) {
+  return {
+    agent: async () => ({
+      holderDid: "did:key:zWallet",
+      sender: {
+        async send<Res>(envelope: { type: string; payload: { document?: Record<string, unknown> } }): Promise<Res> {
+          if (envelope.type === KEYS_LIST) return { rooms: [{ roomId: PICNIC, member: MEMBER, epoch: 3, earliestReadableEpoch: 1 }] } as Res;
+          const doc = structuredClone(envelope.payload.document!);
+          doc.proof = { type: "DataIntegrityProof" };
+          return { principal: doc.issuer, document: doc } as Res;
+        },
+      },
+    }),
+    identities: async () => ENTRIES,
+    endpoint: async () => ENDPOINT,
+    completed: () => ({
+      async sendCompleted<Res>(doc: Record<string, unknown>): Promise<Res> {
+        if (doc.type === OFFERS_LIST) {
+          return {
+            items: [],
+            renewals: [
+              {
+                roomId: BOARD, host: COMMUNITY, label: "Board pack", visibility: "private", actions: ["read"],
+                validUntil: "2027-10-01T00:00:00Z", renewsAt: "2027-10-01T00:00:00Z", issuedAt: "2026-11-03T10:00:00Z",
+                credentials: { membership: JSON.stringify({ id: "urn:m2" }), authority: JSON.stringify({ id: "urn:a2" }) },
+              },
+            ],
+          } as Res;
+        }
+        const room = (over: Record<string, unknown>) => ({
+          host: COMMUNITY, visibility: "private", actions: ["read"],
+          validUntil: "2027-10-01T00:00:00Z", offeredAt: "2026-10-14T10:00:00Z", admittedAt: "2026-10-01T00:00:00Z", ...over,
+        });
+        return {
+          items: [
+            room({ roomId: BOARD, label: "Board pack", state: "suspended", suspendedAt: "2026-11-02T10:00:00Z",
+              roomState: "archived", roomAccess: "noAccess" }),
+            room({ roomId: PICNIC, label: "Picnic", state: "admitted", roomState: "removalScheduled",
+              roomAccess: "noAccess", purgeAt: "2026-12-02T10:00:00Z" }),
+          ],
+        } as Res;
+      },
+    }),
+    renewalVault: () => ({
+      async query() {
+        return ["held-1"];
+      },
+      async get() {
+        return { id: "urn:old" };
+      },
+      async receive(credential: Record<string, unknown>, replaces?: string) {
+        stored.push({ id: credential.id, ...(replaces !== undefined ? { replaces } : {}) });
+      },
+    }),
+  };
+}
+
+test("a listing carries each room's own state and a suspended standing, and the portal sees them by the same names", async () => {
+  const stored: { id: unknown; replaces?: string }[] = [];
+  const views = (await runRoomOffersOp(lifecycleDeps(stored), { vtaDid: VTA }, {
+    op: "list", communityDid: COMMUNITY, member: MEMBER,
+  })) as OfferView[];
+  const board = views.find((v) => v.roomId === BOARD)!;
+  assert.equal(board.state, "suspended");
+  assert.equal(board.roomState, "archived");
+  assert.equal(board.roomAccess, "noAccess");
+  assert.equal(board.suspendedAt, "2026-11-02T10:00:00Z");
+  const picnic = views.find((v) => v.roomId === PICNIC)!;
+  assert.equal(picnic.roomState, "removalScheduled");
+  assert.equal(picnic.purgeAt, "2026-12-02T10:00:00Z");
+  const page = pageOfferView(board);
+  assert.deepEqual(
+    { state: page.state, roomState: page.roomState, roomAccess: page.roomAccess, suspendedAt: page.suspendedAt },
+    { state: "suspended", roomState: "archived", roomAccess: "noAccess", suspendedAt: "2026-11-02T10:00:00Z" },
+  );
+});
+
+test("reading the member's rooms stores each renewal in place of what it renews", async () => {
+  const stored: { id: unknown; replaces?: string }[] = [];
+  await runRoomOffersOp(lifecycleDeps(stored), { vtaDid: VTA }, { op: "list", communityDid: COMMUNITY, member: MEMBER });
+  assert.deepEqual(stored, [
+    { id: "urn:m2", replaces: "held-1" },
+    { id: "urn:a2", replaces: "held-1" },
+  ]);
+});
+
+test("a renewal that cannot be stored never fails the listing", async () => {
+  const deps = {
+    ...lifecycleDeps([]),
+    renewalVault: () => ({
+      async query(): Promise<string[]> {
+        throw new Error("vault down");
+      },
+      async get() {
+        return undefined;
+      },
+      async receive() {},
+    }),
+  };
+  const views = (await runRoomOffersOp(deps, { vtaDid: VTA }, { op: "list", communityDid: COMMUNITY, member: MEMBER })) as OfferView[];
+  assert.equal(views.length, 2);
+});
+
+test("remembered room names keep the room's state, and drop a state the schema does not allow", () => {
+  const merged = mergeRoomNames(
+    { [PICNIC]: { label: "Picnic", roomState: "exploded", roomAccess: "noAccess", seenAt: 1 } },
+    { [BOARD]: { label: "Board pack", roomState: "archived", roomAccess: "readOnly" } },
+    2,
+  );
+  assert.deepEqual(merged[BOARD], { label: "Board pack", roomState: "archived", roomAccess: "readOnly", seenAt: 2 });
+  assert.deepEqual(merged[PICNIC], { label: "Picnic", roomAccess: "noAccess", seenAt: 1 });
 });
