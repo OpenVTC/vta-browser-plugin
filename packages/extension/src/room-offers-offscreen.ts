@@ -7,7 +7,7 @@
 // it (`room-offers-background.ts`). This module does the work, as the CLI's
 // `pnm rooms offers list|accept` do: each request to the community is built
 // unsigned, completed by the member's VTA as the identity the offer is
-// addressed to (`rooms/keys/act/0.9`), and sent to the community's
+// addressed to (`rooms/keys/act/0.10`), and sent to the community's
 // `TrustTaskHTTPS` endpoint — resolved from its DID document, never guessed —
 // unchanged (`@openvtc/pnm-core/rooms`). What goes back is a view the wallet
 // built: never an offer's credentials, a KeyPackage or a Welcome.
@@ -19,9 +19,10 @@
 // them; and an accept interrupted here — or anywhere — is finished by accepting
 // again, because the VTA gives the same KeyPackage (`rooms/keys/key-package/0.2`).
 
-import { credVaultReceive, type TrustTaskSender } from "@openvtc/pnm-core";
+import { credVaultGet, credVaultQuery, credVaultReceive, type TrustTaskSender } from "@openvtc/pnm-core";
 import {
   acceptCommunityRoomOffer,
+  collectRoomRenewals,
   communityRoomMemberships,
   offerListRefusal,
   roomStanding,
@@ -29,6 +30,7 @@ import {
   RoomOfferError,
   type CompletedDocumentSender,
   type OfferReader,
+  type RenewalVault,
 } from "@openvtc/pnm-core/rooms";
 import { isNoTrustTaskService, RoomHostChannel, roomHostEndpoint } from "@openvtc/pnm-core/rooms/files";
 
@@ -39,6 +41,7 @@ import {
   offerDescription,
   offerLabel,
   offerSources,
+  roomStateView,
   type OfferView,
   type SignInVaultEntryLike,
 } from "./room-offers-policy.js";
@@ -54,6 +57,25 @@ export interface RoomOffersOffscreenDeps {
   completed?(communityDid: string, endpoint: string): CompletedDocumentSender;
   /** Store a credential in the member's VTA vault. Defaults to `vault/credentials/receive`. */
   receive?(sender: TrustTaskSender, holderDid: string, vtaDid: string, credential: Record<string, unknown>): Promise<void>;
+  /** The member's VTA vault, as collecting a renewal uses it. Defaults to `vault/credentials/{query,get,receive}`. */
+  renewalVault?(sender: TrustTaskSender, holderDid: string, vtaDid: string): RenewalVault;
+}
+
+/** The member's VTA vault, through `vault/credentials/{query,get,receive}`. */
+export function vtaRenewalVault(sender: TrustTaskSender, holderDid: string, vtaDid: string): RenewalVault {
+  const parties = { holder: { did: holderDid }, service: { did: vtaDid } };
+  return {
+    async query(filter) {
+      return (await credVaultQuery(sender, { ...parties, ...filter })).map((d) => d.id);
+    },
+    async get(id) {
+      const got = await credVaultGet(sender, { ...parties, id });
+      return "credential" in got && got.credential ? got.credential : undefined;
+    },
+    async receive(credential, replaces) {
+      await credVaultReceive(sender, { ...parties, credential, ...(replaces !== undefined ? { id: replaces } : {}) });
+    },
+  };
 }
 
 /** A refusal the background can tell apart: the core's code rides along (R3.7). */
@@ -139,7 +161,24 @@ export async function runRoomOffersOp(
         ...(r.removedAt !== undefined ? { removedAt: r.removedAt } : {}),
         ...(r.repeatAcceptUntil !== undefined ? { repeatAcceptUntil: r.repeatAcceptUntil } : {}),
         state: roomStanding(r, held.has(r.roomId)),
+        // A member reading 0.2 sees `purging` as `removalScheduled` already;
+        // passed through as the community said it.
+        ...roomStateView(r),
       });
+    }
+    // Renewals, stored in place of what they renew: an admission the community
+    // renewed, or one it restored when a room it archived with no access
+    // reopened (`vtc/rooms/offers/list/0.4` `renewals`). Only where the member
+    // is in a room, and never at the listing's expense: a renewal not stored now
+    // is stored on the next read, and one already held is not sent again.
+    if (views.some((v) => v.state === "joined" || v.state === "suspended" || v.state === "unfinished")) {
+      try {
+        const vault = (deps.renewalVault ?? vtaRenewalVault)(sender, holderDid, vta.vtaDid);
+        const got = await collectRoomRenewals(reader, vault);
+        for (const f of got.failed) console.warn(`[room-offers] a renewal of ${f.roomId} was not stored: ${f.error}`);
+      } catch (e) {
+        console.warn(`[room-offers] renewals were not read: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
     return views;
   }

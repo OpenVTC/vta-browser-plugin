@@ -882,6 +882,12 @@
       "uri": "https://trusttasks.org/spec/rooms/info/0.1"
     },
     {
+      "uri": "https://trusttasks.org/spec/rooms/keys/act/0.10",
+      "consts": [
+        "TASK_ROOMS_KEYS_ACT_0_10"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/rooms/keys/act/0.8",
       "consts": [
         "TASK_ROOMS_KEYS_ACT_0_8"
@@ -1996,13 +2002,16 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vtc/rooms/community/members/add/0.1"
+      "uri": "https://trusttasks.org/spec/vtc/rooms/community/members/add/0.2"
     },
     {
       "uri": "https://trusttasks.org/spec/vtc/rooms/community/members/list/0.1"
     },
     {
       "uri": "https://trusttasks.org/spec/vtc/rooms/memberships/list/0.1"
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vtc/rooms/memberships/list/0.2"
     },
     {
       "uri": "https://trusttasks.org/spec/vtc/rooms/offers/accept/0.1"

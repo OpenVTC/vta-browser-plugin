@@ -85,10 +85,43 @@ export interface RoomGrant {
 /** `chrome.storage.local` key prefix for remembered room names. One record per (VTA, community). */
 export const ROOM_NAMES_PREFIX = "room-names:";
 
+/** A room's state in its owner's lifecycle (`vtc/rooms/memberships/list/0.2` `roomState`). */
+export type RoomOwnerState = "active" | "archived" | "removalScheduled" | "purging" | "removed";
+
+const ROOM_OWNER_STATES: readonly string[] = ["active", "archived", "removalScheduled", "purging", "removed"];
+
+/** A room's name as just read from the community, with its state when the record carried one. */
+export interface FreshRoomName {
+  label: string;
+  visibility?: string;
+  roomState?: RoomOwnerState;
+  roomAccess?: "readOnly" | "noAccess";
+  purgeAt?: string;
+}
+
+/**
+ * The room-state members of a name, each only when it is one the schema allows:
+ * stored records are read back from `chrome.storage`, and a value this wallet
+ * did not write is dropped rather than shown.
+ */
+export function storedRoomState(o: Record<string, unknown>): Pick<FreshRoomName, "roomState" | "roomAccess" | "purgeAt"> {
+  return {
+    ...(typeof o.roomState === "string" && ROOM_OWNER_STATES.includes(o.roomState)
+      ? { roomState: o.roomState as RoomOwnerState }
+      : {}),
+    ...(o.roomAccess === "readOnly" || o.roomAccess === "noAccess" ? { roomAccess: o.roomAccess } : {}),
+    ...(typeof o.purgeAt === "string" && !Number.isNaN(Date.parse(o.purgeAt)) ? { purgeAt: o.purgeAt } : {}),
+  };
+}
+
 /** A room's name, as remembered: when it was last read from the community. */
 export interface RememberedRoomName {
   label: string;
   visibility?: string;
+  /** The room's own state when it was last read (`vtc/rooms/memberships/list/0.2`). */
+  roomState?: RoomOwnerState;
+  roomAccess?: "readOnly" | "noAccess";
+  purgeAt?: string;
   seenAt: number;
 }
 
@@ -107,7 +140,7 @@ export const ROOM_NAMES_MAX = 500;
  */
 export function mergeRoomNames(
   remembered: unknown,
-  fresh: Readonly<Record<string, { label: string; visibility?: string }>>,
+  fresh: Readonly<Record<string, FreshRoomName>>,
   now: number,
 ): Record<string, RememberedRoomName> {
   const out: Record<string, RememberedRoomName> = {};
@@ -118,13 +151,19 @@ export function mergeRoomNames(
       out[roomId] = {
         label: r.label,
         ...(typeof r.visibility === "string" ? { visibility: r.visibility } : {}),
+        ...storedRoomState(r as Record<string, unknown>),
         seenAt: r.seenAt,
       };
     }
   }
   for (const [roomId, n] of Object.entries(fresh)) {
     if (typeof n?.label !== "string" || n.label === "") continue;
-    out[roomId] = { label: n.label, ...(n.visibility !== undefined ? { visibility: n.visibility } : {}), seenAt: now };
+    out[roomId] = {
+      label: n.label,
+      ...(n.visibility !== undefined ? { visibility: n.visibility } : {}),
+      ...storedRoomState(n as unknown as Record<string, unknown>),
+      seenAt: now,
+    };
   }
   const entries = Object.entries(out);
   if (entries.length <= ROOM_NAMES_MAX) return out;

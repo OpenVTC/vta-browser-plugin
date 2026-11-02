@@ -2497,6 +2497,16 @@ export interface PageRoomView {
   /** The room's tier, as the same offer carried it. */
   visibility?: string;
   /**
+   * The room's own state in its owner's lifecycle, as the community's record
+   * carries it (`vtc/rooms/memberships/list/0.2`): archived (`roomAccess`
+   * `readOnly` or `noAccess`), scheduled for removal (`purgeAt`), removed.
+   * Absent for an active room the record does not mark, and for a room the
+   * community does not own. Spelled as the community's member portal reads it.
+   */
+  roomState?: "active" | "archived" | "removalScheduled" | "purging" | "removed";
+  roomAccess?: "readOnly" | "noAccess";
+  purgeAt?: string;
+  /**
    * Where `label` came from: `profile` — the room's own profile, sealed inside
    * it and read by the member's VTA (`rooms/keys/profile/read`), which wins —
    * or `community`, the label of the community's offer.
