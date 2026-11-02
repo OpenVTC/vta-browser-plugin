@@ -225,6 +225,7 @@ export function pageElectionViewOf(shown: ElectionShown): PageElectionView {
       revote: d.revote,
       auditors: [...d.auditors],
     },
+    ...(typeof m.textReleaseThreshold === "number" ? { textReleaseThreshold: m.textReleaseThreshold } : {}),
     ...(shown.ticketsIssued !== undefined ? { ticketsIssued: shown.ticketsIssued } : {}),
     ...(shown.certified ? { certified: { certifiedAt: shown.certified.certifiedAt, result: shown.certified.result } } : {}),
   };

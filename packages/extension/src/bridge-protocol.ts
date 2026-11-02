@@ -2821,7 +2821,7 @@ export interface PageElectionQuestion {
   maxLength?: number;
 }
 
-/** One election as the community shows it to the member (`vtc/elections/show/0.2`),
+/** One election as the community shows it to the member (`vtc/elections/show/0.3`),
  *  without the voting parameters, the trustees' ceremony or the board's checkpoints. */
 export interface PageElectionView {
   electionId: string;
@@ -2843,6 +2843,11 @@ export interface PageElectionView {
     revote: string;
     auditors: string[];
   };
+  /** The manifest's `textReleaseThreshold`: counted ballots before any written
+   *  answer is released. As low as 1 (VTI-VOT-065); below 10 a written answer
+   *  may identify who wrote it, and the wallet warns before a ticket and on the
+   *  ballot (VTI-VOT-090). */
+  textReleaseThreshold?: number;
   ticketsIssued?: number;
   /** The certified result, once the community has certified it. */
   certified?: { certifiedAt: string; result: unknown };
