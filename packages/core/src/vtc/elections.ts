@@ -32,19 +32,19 @@ import { buildTrustTask, verifyTrustTaskReply } from "../vta/trust-task.js";
 
 import type { Answer, Ballot, Manifest, Question } from "../specs/_shared/components.js";
 import type { ElectionListItem } from "../specs/vtc/elections/list/0.3/payload.js";
-import type { VTCElectionsShowResponsePayload } from "../specs/vtc/elections/show/0.2/payload.js";
+import type { VTCElectionsShowResponsePayload } from "../specs/vtc/elections/show/0.3/payload.js";
 import {
   TYPE_URI as VOTER_READ,
   RESPONSE_TYPE_URI as VOTER_READ_RESPONSE,
   type VTAPCSVoterReadPayload,
   type VTAPCSVoterReadResponsePayload,
-} from "../specs/vta/pcs/voter/read/0.2/payload.js";
+} from "../specs/vta/pcs/voter/read/0.3/payload.js";
 import {
   TYPE_URI as VOTER_REGISTER,
   RESPONSE_TYPE_URI as VOTER_REGISTER_RESPONSE,
   type VTAPCSVoterRegisterPayload,
   type VTAPCSVoterRegisterResponsePayload,
-} from "../specs/vta/pcs/voter/register/0.2/payload.js";
+} from "../specs/vta/pcs/voter/register/0.3/payload.js";
 import {
   TYPE_URI as VOTER_ACCEPT,
   RESPONSE_TYPE_URI as VOTER_ACCEPT_RESPONSE,
@@ -62,13 +62,13 @@ import {
   RESPONSE_TYPE_URI as VOTE_RESPONSE,
   type VTAPCSVotePayload,
   type VTAPCSVoteResponsePayload,
-} from "../specs/vta/pcs/vote/0.2/payload.js";
+} from "../specs/vta/pcs/vote/0.3/payload.js";
 import {
   TYPE_URI as VOTE_ENCRYPTED,
   RESPONSE_TYPE_URI as VOTE_ENCRYPTED_RESPONSE,
   type VTAPCSVoteEncryptedPayload,
   type VTAPCSVoteEncryptedResponsePayload,
-} from "../specs/vta/pcs/vote-encrypted/0.3/payload.js";
+} from "../specs/vta/pcs/vote-encrypted/0.4/payload.js";
 
 export type {
   Answer as ElectionAnswer,
@@ -85,7 +85,7 @@ export {
 export {
   TYPE_URI as ELECTIONS_SHOW_TYPE,
   RESPONSE_TYPE_URI as ELECTIONS_SHOW_RESPONSE_TYPE,
-} from "../specs/vtc/elections/show/0.2/payload.js";
+} from "../specs/vtc/elections/show/0.3/payload.js";
 export { RESPONSE_TYPE_URI as TICKETS_ISSUE_RESPONSE_TYPE } from "../specs/vtc/elections/tickets/issue/0.1/payload.js";
 
 /** Who the VTA is asked as, and which VTA. */
@@ -114,7 +114,7 @@ function ask<P, R>(
   return sender.send<R>(envelope, { expectedResponseType: responseType, operationLabel: label });
 }
 
-/** `vta/pcs/voter/read/0.2`: the VTA signs one election read as the member,
+/** `vta/pcs/voter/read/0.3`: the VTA signs one election read as the member,
  *  addressed to the community. The wallet sends the document unchanged. */
 export function pcsVoterRead(
   sender: TrustTaskSender,
@@ -124,10 +124,10 @@ export function pcsVoterRead(
   payload: Record<string, unknown>,
 ): Promise<VTAPCSVoterReadResponsePayload> {
   const p: VTAPCSVoterReadPayload = { ...t, read, payload };
-  return ask(sender, agent, VOTER_READ, VOTER_READ_RESPONSE, "vta/pcs/voter/read/0.2", p);
+  return ask(sender, agent, VOTER_READ, VOTER_READ_RESPONSE, "vta/pcs/voter/read/0.3", p);
 }
 
-/** `vta/pcs/voter/register/0.2`: the blinded ticket request, and — because
+/** `vta/pcs/voter/register/0.3`: the blinded ticket request, and — because
  *  `member` is named — that request as a document signed as the member. */
 export function pcsVoterRegister(
   sender: TrustTaskSender,
@@ -142,7 +142,7 @@ export function pcsVoterRegister(
     parameters: shown.parameters,
     manifest: shown.manifest,
   } as VTAPCSVoterRegisterPayload;
-  return ask(sender, agent, VOTER_REGISTER, VOTER_REGISTER_RESPONSE, "vta/pcs/voter/register/0.2", p);
+  return ask(sender, agent, VOTER_REGISTER, VOTER_REGISTER_RESPONSE, "vta/pcs/voter/register/0.3", p);
 }
 
 /** `vta/pcs/voter/accept/0.1`: unblind the community's answer into the VTA. */
@@ -165,8 +165,8 @@ export function pcsVoterAccept(
 }
 
 /** The cast, built and signed in the VTA under a key made for it alone: open
- *  (`vta/pcs/vote/0.2`), or encrypted under the election key the trustees'
- *  signed steps form (`vta/pcs/vote-encrypted/0.3`) — the VTA forms it from
+ *  (`vta/pcs/vote/0.3`), or encrypted under the election key the trustees'
+ *  signed steps form (`vta/pcs/vote-encrypted/0.4`) — the VTA forms it from
  *  `ceremony` itself and encrypts under no other. */
 export async function pcsCast(
   sender: TrustTaskSender,
@@ -178,7 +178,7 @@ export async function pcsCast(
   const base = { contextId: t.contextId, community: t.community, parameters: shown.parameters, manifest: shown.manifest, ballot };
   if (shown.manifest.secrecy === "open") {
     const r = await ask<VTAPCSVotePayload, VTAPCSVoteResponsePayload>(
-      sender, agent, VOTE, VOTE_RESPONSE, "vta/pcs/vote/0.2", base as VTAPCSVotePayload,
+      sender, agent, VOTE, VOTE_RESPONSE, "vta/pcs/vote/0.3", base as VTAPCSVotePayload,
     );
     return { castDocument: r.castDocument as unknown as Record<string, unknown>, tag: String(r.tag) };
   }
@@ -186,7 +186,7 @@ export async function pcsCast(
     throw new Error("The trustees have not formed this election's key yet. Vote once voting opens.");
   }
   const r = await ask<VTAPCSVoteEncryptedPayload, VTAPCSVoteEncryptedResponsePayload>(
-    sender, agent, VOTE_ENCRYPTED, VOTE_ENCRYPTED_RESPONSE, "vta/pcs/vote-encrypted/0.3",
+    sender, agent, VOTE_ENCRYPTED, VOTE_ENCRYPTED_RESPONSE, "vta/pcs/vote-encrypted/0.4",
     { ...base, ceremony: shown.ceremony } as unknown as VTAPCSVoteEncryptedPayload,
   );
   return { castDocument: r.castDocument as unknown as Record<string, unknown>, tag: String(r.tag) };
@@ -203,6 +203,27 @@ export function pcsVoterReceipt(
 ): Promise<VTAPCSVoterReceiptResponsePayload> {
   const p = { contextId: t.contextId, community: t.community, electionId, receipt } as unknown as VTAPCSVoterReceiptPayload;
   return ask(sender, agent, VOTER_RECEIPT, VOTER_RECEIPT_RESPONSE, "vta/pcs/voter/receipt/0.1", p);
+}
+
+// ── Written answers ──────────────────────────────────────────────────────────
+
+/** The `textReleaseThreshold` the specification advises: a manifest may set as
+ *  little as 1 (`voting/_shared/0.3`, VTI-VOT-065), but below this a written
+ *  answer released with few others can identify who wrote it. */
+export const TEXT_RELEASE_THRESHOLD_ADVISED = 10;
+
+/**
+ * What the member must be told before taking a ticket, and again on the ballot,
+ * when `threshold` — the manifest's `textReleaseThreshold` — is below the
+ * advised 10 (VTI-VOT-090); `null` at or above it. Derived from the manifest:
+ * the community's disclosure carries no member for it.
+ */
+export function textReleaseWarning(threshold: number | undefined): string | null {
+  if (typeof threshold !== "number" || !Number.isFinite(threshold) || threshold >= TEXT_RELEASE_THRESHOLD_ADVISED) {
+    return null;
+  }
+  const counted = threshold === 1 ? "1 ballot is" : `${threshold} ballots are`;
+  return `Written answers are released once ${counted} counted. Below ${TEXT_RELEASE_THRESHOLD_ADVISED}, a written answer may identify who wrote it.`;
 }
 
 // ── The ballot ───────────────────────────────────────────────────────────────

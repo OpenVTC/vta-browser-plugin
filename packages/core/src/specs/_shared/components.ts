@@ -346,7 +346,7 @@ export type KeyType = "ed25519" | "x25519" | "p256" | "mldsa44" | "mldsa65";
 /**
  * A question or option key, unique within its manifest or question.
  */
-export type Key_VotingV0_2 = string;
+export type Key_VotingV0_3 = string;
 /**
  * Application-chosen identifier for a record within a namespace. Opaque to the maintainer: it MUST NOT be parsed, normalized, or case-folded, and prefix matching in `list` is a byte-prefix comparison over the UTF-8 encoding. Applications SHOULD use `/`-delimited hierarchical keys (`community/acme`, `contact/z6Mk…`) so that `prefix` can address a record family, but the delimiter is a convention between an application and itself — the maintainer attaches no meaning to it.
  */
@@ -1252,9 +1252,9 @@ export interface AgentNameEntry {
  * The answer to one question. Exactly one member besides `question` is present, matching the question's type, or `abstain` for an optional question left unanswered.
  */
 export interface Answer {
-  question: Key_VotingV0_2;
-  choice?: Key_VotingV0_2[];
-  ranking?: Key_VotingV0_2[];
+  question: Key_VotingV0_3;
+  choice?: Key_VotingV0_3[];
+  ranking?: Key_VotingV0_3[];
   scores?: {
     [k: string]: number | undefined;
   };
@@ -2875,7 +2875,7 @@ export interface Manifest {
    */
   resultsBeforeClose: boolean;
   /**
-   * Counted ballots required before any text answer is disclosed (VTI-VOT-065).
+   * Counted ballots required before any text answer is disclosed (VTI-VOT-065). At least 1, and SHOULD be at least 10: a written answer can identify its author by what it says or how it is phrased, and the fewer the ballots released together, the easier that is. Where it is below 10, the disclosure a member is shown before they request a ticket MUST say so, and MUST say that a written answer may identify its author (VTI-VOT-090).
    */
   textReleaseThreshold: number;
 }
@@ -3510,7 +3510,7 @@ export interface WebPush {
  * Select between `minSelections` and `maxSelections` of `options`. A yes/no/abstain motion is a choice of exactly one of three.
  */
 export interface ChoiceQuestion {
-  key: Key_VotingV0_2;
+  key: Key_VotingV0_3;
   type: "choice";
   text?: string;
   /**
@@ -3526,7 +3526,7 @@ export interface ChoiceQuestion {
  * Order `options`; a ballot ranks every option or, when `partial` is true, a prefix of them.
  */
 export interface RankingQuestion {
-  key: Key_VotingV0_2;
+  key: Key_VotingV0_3;
   type: "ranking";
   text?: string;
   /**
@@ -3541,7 +3541,7 @@ export interface RankingQuestion {
  * Give each option an integer score within [min, max].
  */
 export interface ScoreQuestion {
-  key: Key_VotingV0_2;
+  key: Key_VotingV0_3;
   type: "score";
   text?: string;
   /**
@@ -3557,14 +3557,14 @@ export interface ScoreQuestion {
  * Free text of at most `maxLength` characters.
  */
 export interface TextQuestion {
-  key: Key_VotingV0_2;
+  key: Key_VotingV0_3;
   type: "text";
   text?: string;
   maxLength: number;
   optional: boolean;
 }
 export interface QuestionOption {
-  key: Key_VotingV0_2;
+  key: Key_VotingV0_3;
   /**
    * Display text. Absent from a manifest registered with a ballot box that holds no question text (VTI-VOT-014).
    */
@@ -3574,7 +3574,7 @@ export interface QuestionOption {
  * One question's totals. `choice`: selections per option. `ranking`: per option, how many ballots placed it at each position (index 0 = first). `score`: per option, the sum and the number of ballots that scored it. `text`: the answers, in board order, withheld (`withheld: true`) below the manifest's `textReleaseThreshold`. `abstained` counts ballots that left the question unanswered.
  */
 export interface QuestionResult {
-  question: Key_VotingV0_2;
+  question: Key_VotingV0_3;
   abstained: number;
   choice?: {
     [k: string]: number | undefined;

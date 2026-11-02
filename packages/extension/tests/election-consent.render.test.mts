@@ -228,3 +228,39 @@ test("a ballot opened just after the ticket warns that the two can be paired by 
   assert.match(rendered.text(), /You took your ticket just now/);
   await rendered.unmount();
 });
+
+// VTI-VOT-065 lets a manifest release written answers after as few as one
+// counted ballot; VTI-VOT-090 has the member told so before the ticket, and the
+// wallet says it again on the ballot.
+const WRITTEN_WARNING = /Written answers are released once 3 ballots are counted\. Below 10, a written answer may identify who wrote it\./;
+
+test("before the ticket, a release threshold below 10 warns that a written answer may identify who wrote it", async () => {
+  const ticket = {
+    kind: "ticket",
+    origin: "https://members.acme.example",
+    communityName: "Acme Guild",
+    member: "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp",
+    fromVote: false,
+  };
+  const low = await mount({ ...ticket, election: { ...election, textReleaseThreshold: 3 } });
+  assert.match(low.rendered.text(), /Take your ticket/);
+  assert.match(low.rendered.text(), WRITTEN_WARNING);
+  await low.rendered.unmount();
+  for (const e of [{ ...election, textReleaseThreshold: 10 }, election]) {
+    const ok = await mount({ ...ticket, election: e });
+    assert.doesNotMatch(ok.rendered.text(), /Written answers are released/);
+    await ok.rendered.unmount();
+  }
+});
+
+test("the ballot repeats the warning below 10, and not at or above it", async () => {
+  const low = await mount(view({ election: { ...election, textReleaseThreshold: 3 } }));
+  assert.match(low.rendered.text(), WRITTEN_WARNING);
+  await low.rendered.unmount();
+  const one = await mount(view({ election: { ...election, textReleaseThreshold: 1 } }));
+  assert.match(one.rendered.text(), /released once 1 ballot is counted/);
+  await one.rendered.unmount();
+  const ok = await mount(view({ election: { ...election, textReleaseThreshold: 12 } }));
+  assert.doesNotMatch(ok.rendered.text(), /Written answers are released/);
+  await ok.rendered.unmount();
+});

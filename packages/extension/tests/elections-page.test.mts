@@ -209,6 +209,13 @@ test("show gives the page what is asked and how it is run — not the parameters
   assert.deepEqual(pageElectionViewOf(shown as never).disclosure.ballotBoxOperator, "Independent Ballots Ltd");
 });
 
+test("the page sees the manifest's textReleaseThreshold, as low as 1 (VTI-VOT-065)", () => {
+  assert.equal(pageElectionViewOf(shown as never).textReleaseThreshold, 10);
+  const low = structuredClone(shown) as { manifest: { textReleaseThreshold: number } };
+  low.manifest.textReleaseThreshold = 1;
+  assert.equal(pageElectionViewOf(low as never).textReleaseThreshold, 1);
+});
+
 test("an empty title is no title: the election is named by its id", () => {
   const untitled = structuredClone(shown) as { manifest: { title?: string } };
   untitled.manifest.title = "  ";

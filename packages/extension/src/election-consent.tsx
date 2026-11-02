@@ -13,7 +13,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ballotOf, ballotRefusal, type ElectionAnswer } from "@openvtc/pnm-core/vtc";
+import { ballotOf, ballotRefusal, textReleaseWarning, type ElectionAnswer } from "@openvtc/pnm-core/vtc";
 
 import { CONSENT_KEEPALIVE_PORT, type PageElectionView } from "./bridge-protocol.js";
 import {
@@ -97,6 +97,8 @@ export function ElectionConsent({ consentId, decide }: { consentId: string; deci
 /** How the election is run, as the community publishes it (VTI-VOT-090). */
 export function Disclosure({ election }: { election: PageElectionView }) {
   const d = election.disclosure;
+  // From the manifest: the community's disclosure has no member for it.
+  const textRelease = textReleaseWarning(election.textReleaseThreshold);
   return (
     <div style={{ ...card, display: "grid", gap: 6 }} data-testid="election-disclosure">
       <div>
@@ -115,6 +117,11 @@ export function Disclosure({ election }: { election: PageElectionView }) {
       <div style={{ color: "var(--w-muted)" }}>
         You can prove how you voted, so this election cannot protect you against being made to vote a certain way.
       </div>
+      {textRelease && (
+        <div style={warn} data-testid="election-text-release">
+          {textRelease}
+        </div>
+      )}
       {d.sameOperator && (
         <div style={warn} data-testid="election-same-operator">
           The same operator runs this community and its ballot box: together they could link your ticket to your

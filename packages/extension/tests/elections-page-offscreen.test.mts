@@ -70,11 +70,11 @@ function world(opts: { registerFails?: string } = {}) {
       vtaAsked.push(envelope);
       const p = envelope.payload;
       switch (envelope.type) {
-        case `${T}vta/pcs/voter/read/0.2`:
+        case `${T}vta/pcs/voter/read/0.3`:
           return {
-            document: memberDoc(p.read === "list" ? `${T}vtc/elections/list/0.3` : `${T}vtc/elections/show/0.2`, p.payload),
+            document: memberDoc(p.read === "list" ? `${T}vtc/elections/list/0.3` : `${T}vtc/elections/show/0.3`, p.payload),
           };
-        case `${T}vta/pcs/voter/register/0.2`:
+        case `${T}vta/pcs/voter/register/0.3`:
           if (opts.registerFails) throw new Error(opts.registerFails);
           return {
             electionId: "agm-2027",
@@ -84,7 +84,7 @@ function world(opts: { registerFails?: string } = {}) {
           };
         case `${T}vta/pcs/voter/accept/0.1`:
           return { electionId: "agm-2027", ticketHeld: true };
-        case `${T}vta/pcs/vote/0.2`:
+        case `${T}vta/pcs/vote/0.3`:
           cast = {
             id: crypto.randomUUID(),
             type: `${T}voting/ballot/cast/0.1#request`,
@@ -122,7 +122,7 @@ function world(opts: { registerFails?: string } = {}) {
     const type = String(doc.type);
     const payload = type.endsWith("list/0.3")
       ? { elections: [{ electionId: "agm-2027", state: "voting", ticketHeld: true }] }
-      : type.endsWith("show/0.2")
+      : type.endsWith("show/0.3")
         ? shown
         : { electionId: "agm-2027", label: "voter/agm-2027", preCredential: "zPre", ext: { "org.example": { x: 1 } } };
     const res = {
@@ -172,7 +172,7 @@ test("a ticket: register as the member, the community issues it, the VTA accepts
   assert.deepEqual(got, { taken: true });
   assert.deepEqual(
     w.vtaAsked.map((a) => a.type.slice(T.length)),
-    ["vta/pcs/voter/read/0.2", "vta/pcs/voter/register/0.2", "vta/pcs/voter/accept/0.1"],
+    ["vta/pcs/voter/read/0.3", "vta/pcs/voter/register/0.3", "vta/pcs/voter/accept/0.1"],
   );
   assert.equal(w.toCommunity[1]!.type, `${T}vtc/elections/tickets/issue/0.1`);
   assert.deepEqual(w.vtaAsked[2]!.payload.response, { electionId: "agm-2027", label: "voter/agm-2027", preCredential: "zPre" });
@@ -223,7 +223,7 @@ test("a cast goes to the ballot box as the VTA built it, after the pause it is g
     false,
     "the community saw no ballot and no cast",
   );
-  const vote = w.vtaAsked.find((a) => a.type === `${T}vta/pcs/vote/0.2`)!;
+  const vote = w.vtaAsked.find((a) => a.type === `${T}vta/pcs/vote/0.3`)!;
   assert.deepEqual(vote.payload.ballot, ballot);
   const receipt = w.vtaAsked.at(-1)!;
   assert.equal(receipt.type, `${T}vta/pcs/voter/receipt/0.1`);
@@ -266,7 +266,7 @@ test("a ballot that no longer fits the election is refused before the VTA builds
     }),
     /changed the election/,
   );
-  assert.equal(w.vtaAsked.some((a) => a.type === `${T}vta/pcs/vote/0.2`), false);
+  assert.equal(w.vtaAsked.some((a) => a.type === `${T}vta/pcs/vote/0.3`), false);
   assert.equal(w.toBox.length, 0);
 });
 

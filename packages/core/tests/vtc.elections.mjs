@@ -15,6 +15,8 @@ import {
   pcsVoterRead,
   pcsVoterRegister,
   postCast,
+  TEXT_RELEASE_THRESHOLD_ADVISED,
+  textReleaseWarning,
 } from "../dist/vtc/index.js";
 import { signingIdentityFromSecret } from "../dist/siop/index.js";
 import { signTrustTask } from "../dist/trust-tasks/sign.js";
@@ -57,10 +59,10 @@ test("a read is asked of the member's VTA as the member, never sent to the commu
   const s = recordingSender({ document: { id: "x" } });
   await pcsVoterRead(s, { holder: WALLET, service: VTA }, TARGET, "show", { electionId: "agm-2027" });
   const { envelope, opts } = s.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/read/0.2");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/read/0.3");
   assert.equal(envelope.recipient, VTA.did);
   assert.deepEqual(envelope.payload, { ...TARGET, read: "show", payload: { electionId: "agm-2027" } });
-  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vta/pcs/voter/read/0.2#response");
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vta/pcs/voter/read/0.3#response");
 });
 
 test("the ticket request names the member, so the VTA returns it signed as them", async () => {
@@ -70,11 +72,11 @@ test("the ticket request names the member, so the VTA returns it signed as them"
   assert.deepEqual(s.sent[0].envelope.payload.manifest, manifest);
 });
 
-test("an open election casts with vote/0.2; an encrypted one needs the trustees' ceremony", async () => {
+test("an open election casts with vote/0.3; an encrypted one needs the trustees' ceremony", async () => {
   const s = recordingSender({ castDocument: { id: "c" }, tag: "t" });
   const ballot = ballotOf(manifest, DIGEST, { chair: { choice: ["ana"] } });
   await pcsCast(s, { holder: WALLET, service: VTA }, TARGET, { manifest, parameters: {}, manifestDigest: DIGEST }, ballot);
-  assert.equal(s.sent[0].envelope.type, "https://trusttasks.org/spec/vta/pcs/vote/0.2");
+  assert.equal(s.sent[0].envelope.type, "https://trusttasks.org/spec/vta/pcs/vote/0.3");
 
   const sealed = { ...manifest, secrecy: "sealed" };
   await assert.rejects(
@@ -82,7 +84,7 @@ test("an open election casts with vote/0.2; an encrypted one needs the trustees'
     /trustees have not formed/,
   );
   await pcsCast(s, { holder: WALLET, service: VTA }, TARGET, { manifest: sealed, parameters: {}, manifestDigest: DIGEST, ceremony: { steps: [] } }, ballot);
-  assert.equal(s.sent[1].envelope.type, "https://trusttasks.org/spec/vta/pcs/vote-encrypted/0.3");
+  assert.equal(s.sent[1].envelope.type, "https://trusttasks.org/spec/vta/pcs/vote-encrypted/0.4");
   assert.deepEqual(s.sent[1].envelope.payload.ceremony, { steps: [] });
 });
 
@@ -188,4 +190,24 @@ test("a refusal is the ballot box's code, in words", async () => {
     assert.match(e.message, /not open/);
     return true;
   });
+});
+
+test("a release threshold below 10 is warned of, in the words VTI-VOT-090 asks for; 10 and above is not", () => {
+  assert.equal(TEXT_RELEASE_THRESHOLD_ADVISED, 10);
+  assert.equal(
+    textReleaseWarning(3),
+    "Written answers are released once 3 ballots are counted. Below 10, a written answer may identify who wrote it.",
+  );
+  assert.match(textReleaseWarning(1), /released once 1 ballot is counted/);
+  assert.match(textReleaseWarning(9), /once 9 ballots/);
+  for (const t of [10, 25, undefined]) assert.equal(textReleaseWarning(t), null);
+});
+
+test("a manifest releasing written answers after one ballot is a manifest the wallet votes in", async () => {
+  const low = { ...manifest, textReleaseThreshold: 1 };
+  const ballot = ballotOf(low, DIGEST, { chair: { choice: ["ana"] }, note: { text: "hi" } });
+  assert.equal(ballotRefusal(low, DIGEST, ballot), null);
+  const s = recordingSender({ castDocument: { id: "c" }, tag: "t" });
+  await pcsCast(s, { holder: WALLET, service: VTA }, TARGET, { manifest: low, parameters: {}, manifestDigest: DIGEST }, ballot);
+  assert.equal(s.sent[0].envelope.payload.manifest.textReleaseThreshold, 1);
 });
