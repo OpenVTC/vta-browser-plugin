@@ -350,22 +350,24 @@ function hostOf(origin: string): string {
   }
 }
 
-/** The longest context id an agent accepts (`vta_sdk::identifier`). */
+/** The longest context id an agent accepts (`vta_support::contexts::validate_slug`). */
 const MAX_CONTEXT_ID_LEN = 64;
 
 /**
  * The context a new identity for the community at `host` lives in: one per
  * community, named for its verified portal host, so a second attempt finds
- * the first one's context. Context ids take `A-Z a-z 0-9 . _ -` only.
+ * the first one's context. An agent takes a context id only as a lowercase
+ * slug — `a-z 0-9 -`, not starting or ending with `-` — so the host's dots
+ * become hyphens.
  */
 export function communityContextId(host: string, n = 1): string {
   const slug = host
     .toLowerCase()
-    .replace(/[^a-z0-9.-]+/g, "-")
-    .replace(/^[-.]+|[-.]+$/g, "");
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
   const suffix = n > 1 ? `-${n}` : "";
   return (
-    `vtc-${slug || "community"}`.slice(0, MAX_CONTEXT_ID_LEN - suffix.length).replace(/[-.]+$/, "") +
+    `vtc-${slug || "community"}`.slice(0, MAX_CONTEXT_ID_LEN - suffix.length).replace(/-+$/, "") +
     suffix
   );
 }

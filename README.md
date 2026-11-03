@@ -400,7 +400,7 @@ document says it is:
   a "List me in its public member registry" box (unticked unless you tick it),
   and who to join as. First, and chosen unless you pick otherwise, is **a new
   identity for <host>**: your agent sets up a context of its own for the
-  community (`vtc-<host>`) and a new DID in it, published through one of its
+  community (`vtc-<host>`, its dots as hyphens: `vtc-first-openvtc-net`) and a new DID in it, published through one of its
   DID hosting servers (you choose which when it has more than one), so the
   community learns of no other identity you hold. It is made only when you
   send the request, and a request that fails after it is made reuses it next

@@ -238,7 +238,7 @@ test("a member's code from the join page: the screen waits, and offers joining w
       admission: "review",
       attributes: [],
       identities: [],
-      newIdentity: { contextId: "vtc-members.example.org-2", servers: [{ id: "host-1" }] },
+      newIdentity: { contextId: "vtc-members-example-org-2", servers: [{ id: "host-1" }] },
     } as SignInStepResult,
   });
   const screen = await render(
@@ -966,7 +966,7 @@ test("a new identity is offered first and preselected, and the request asks the 
     "join-manifest": {
       ...(VTC_JOIN["join-manifest"] as Extract<SignInStepResult, { kind: "join-apply" }>),
       attributes: [],
-      newIdentity: { contextId: "vtc-members.example.org", servers: [{ id: "host-1" }, { id: "host-2", label: "Backup" }] },
+      newIdentity: { contextId: "vtc-members-example-org", servers: [{ id: "host-1" }, { id: "host-2", label: "Backup" }] },
     },
   });
   const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
@@ -975,7 +975,7 @@ test("a new identity is offered first and preselected, and the request asks the 
   const radios = screen.container.querySelectorAll<HTMLInputElement>('input[name="applicant"]');
   assert.equal(radios.length, 3);
   assert.equal(radios[0]!.checked, true, "the new identity is the default");
-  assert.match(screen.container.querySelector('[data-testid="new-identity"]')!.textContent!, /A new identity for members\.example\.org.*vtc-members\.example\.org/);
+  assert.match(screen.container.querySelector('[data-testid="new-identity"]')!.textContent!, /A new identity for members\.example\.org.*vtc-members-example-org/);
   const server = screen.container.querySelector<HTMLSelectElement>('[data-testid="new-identity-server"]')!;
   assert.equal(server.value, "host-1");
   server.value = "host-2";
@@ -997,7 +997,7 @@ test("with no hosting server, the new identity is shown but can't be chosen", as
     ...VTC_JOIN,
     "join-manifest": {
       ...(VTC_JOIN["join-manifest"] as Extract<SignInStepResult, { kind: "join-apply" }>),
-      newIdentity: { contextId: "vtc-members.example.org", servers: [] },
+      newIdentity: { contextId: "vtc-members-example-org", servers: [] },
     },
   });
   const screen = await render(h(SignInView, { flowId: "f", send, close: () => {} }));
