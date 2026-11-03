@@ -116,13 +116,6 @@ const NOT_IN_SDK = [
       "up at (rp-login/step-up.ts). The VTA is not the counterparty.",
   },
   {
-    prefix: "https://trusttasks.org/spec/auth/step-up/approve-response/0.6",
-    why:
-      "The version a VTC takes `approverSigned` evidence in. The console builds it and has " +
-      "the wallet sign it as the subject; the VTA is not the counterparty " +
-      "(trust-tasks/approver-attest.ts names it only to recognise it).",
-  },
-  {
     prefix: "https://trusttasks.org/spec/auth/step-up/approver/attest/",
     why:
       "A step-up approver's statement, issued by the wallet's per-audience approver and " +

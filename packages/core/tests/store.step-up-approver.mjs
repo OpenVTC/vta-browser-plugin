@@ -442,7 +442,7 @@ test("approveDecision never mints: an audience with no approver is refused", asy
 
 test("an approve-response is signed for assertionMethod; operational documents for authentication", () => {
   const S = "https://trusttasks.org/spec/";
-  assert.equal(proofPurposeForDocumentType(`${S}auth/step-up/approve-response/0.6`), "assertionMethod");
+  assert.equal(proofPurposeForDocumentType(`${S}auth/step-up/approve-response/0.7`), "assertionMethod");
   assert.equal(proofPurposeForDocumentType(`${S}task-consent/decision/0.2`), "assertionMethod");
   assert.equal(proofPurposeForDocumentType(`${S}confirm/response/0.1`), "assertionMethod");
   // Wallet sign-in (contract C5): the grant is an attestation, identify is not.
@@ -450,14 +450,14 @@ test("an approve-response is signed for assertionMethod; operational documents f
   assert.equal(proofPurposeForDocumentType(`${S}auth/oob/identify/0.1`), "authentication");
   // The executor's reply is operational.
   assert.equal(
-    proofPurposeForDocumentType(`${S}auth/step-up/approve-response/0.6#response`),
+    proofPurposeForDocumentType(`${S}auth/step-up/approve-response/0.7#response`),
     "authentication",
   );
   assert.equal(proofPurposeForDocumentType(`${S}git-ns/right/grant/0.3`), "authentication");
   assert.equal(proofPurposeForDocumentType(`${S}auth/step-up/approver/attest/0.1`), "authentication");
   // A private registry's reuse of the slug is not classified.
   assert.equal(
-    proofPurposeForDocumentType("https://example.com/spec/auth/step-up/approve-response/0.6"),
+    proofPurposeForDocumentType("https://example.com/spec/auth/step-up/approve-response/0.7"),
     "authentication",
   );
 });

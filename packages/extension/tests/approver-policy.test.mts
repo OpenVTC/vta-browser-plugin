@@ -3,7 +3,7 @@
 //   - every approver call is held to the relying party the origin is pinned to,
 //     so a page can neither read another community's approver DID nor have one
 //     sign for another community;
-//   - the approve-response 0.6 around a statement is signable only when it
+//   - the approve-response 0.7 around a statement is signable only when it
 //     carries, unchanged, the statement this wallet issued to this origin, for
 //     the same subject, challenge and relying party, signed as the subject;
 //   - the operation is rendered so nothing in it can hide;
@@ -18,7 +18,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
-  APPROVE_RESPONSE_0_6,
+  APPROVE_RESPONSE_0_7,
   TASK_CONSENT_DECISION_0_2,
   approverGestureBinding,
   approverResponseRefusal,
@@ -75,7 +75,7 @@ const issued = (over: Partial<IssuedApproverStatement> = {}): IssuedApproverStat
 
 const envelope = (over: Record<string, unknown> = {}, payload: Record<string, unknown> = {}) => ({
   id: "urn:uuid:outer",
-  type: APPROVE_RESPONSE_0_6,
+  type: APPROVE_RESPONSE_0_7,
   issuer: SUBJECT,
   recipient: VTC,
   issuedAt: "2026-10-03T00:00:01.000Z",
@@ -166,7 +166,7 @@ test("the operation is rendered whole, with invisible characters spelled out", (
 
 test("the holder signs a page's document for the purpose its type decides", () => {
   // The holder path used to hard-code `authentication`; an approve-response
-  // must be the holder's `assertionMethod` (approve-response 0.6, consumer
+  // must be the holder's `assertionMethod` (approve-response 0.7, consumer
   // step 1a), exactly as the VTA's vault/sign-trust-task decides it.
   const offscreen = readFileSync(
     fileURLToPath(new URL("../src/offscreen.ts", import.meta.url)),

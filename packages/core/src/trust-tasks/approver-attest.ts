@@ -6,7 +6,7 @@
 // to this value". It is issued and proved by the approver's own `did:key`
 // (`proofPurpose: authentication`, verified by the relying party over the
 // object exactly as received) and carried embedded in the document it backs —
-// `auth/step-up/approve-response/0.6` for `stepUp`, the enrolment document for
+// `auth/step-up/approve-response/0.7` for `stepUp`, the enrolment document for
 // `enrol`. It is never sent on its own.
 //
 // ## Why the wallet recomputes `boundTo`
@@ -36,7 +36,7 @@
 import type { Payload as ApproverAttestPayload } from "../specs/auth/step-up/approver/attest/0.1/payload.js";
 import { TYPE_URI as ATTEST_0_1 } from "../specs/auth/step-up/approver/attest/0.1/payload.js";
 import type { Payload as StepUpApproverRequest } from "../specs/auth/step-up/approve-request/0.5/payload.js";
-import { TYPE_URI as APPROVE_RESPONSE_0_6 } from "../specs/auth/step-up/approve-response/0.6/payload.js";
+import { TYPE_URI as APPROVE_RESPONSE_0_7 } from "../specs/auth/step-up/approve-response/0.7/payload.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { taskConsentWireDigest, vtcStepUpBoundTo } from "./domain-digest.js";
 import { signTrustTask, type TrustTaskEnvelope } from "./sign.js";
@@ -44,9 +44,9 @@ import { signTrustTask, type TrustTaskEnvelope } from "./sign.js";
 /** `auth/step-up/approver/attest/0.1`. */
 export const APPROVER_ATTEST_TYPE = ATTEST_0_1;
 
-/** `auth/step-up/approve-response/0.6` — the version that carries
+/** `auth/step-up/approve-response/0.7` — the version that carries
  *  `approverSigned` evidence. */
-export const APPROVE_RESPONSE_0_6_TYPE = APPROVE_RESPONSE_0_6;
+export const APPROVE_RESPONSE_0_7_TYPE = APPROVE_RESPONSE_0_7;
 
 /** attest/0.1's payload, from the generated bindings. */
 export type { ApproverAttestPayload };

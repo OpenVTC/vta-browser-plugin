@@ -295,7 +295,7 @@ test("an operational document declares authentication; an attestation declares a
     [VAULT_DELETE, "authentication"],
     [`${S}auth/challenge/0.1`, "authentication"],
     [`${S}auth/authenticate/0.3`, "authentication"],
-    [`${S}auth/step-up/approve-response/0.6`, "assertionMethod"],
+    [`${S}auth/step-up/approve-response/0.7`, "assertionMethod"],
     [`${S}task-consent/decision/0.2`, "assertionMethod"],
     [`${S}auth/oob/grant/0.1`, "assertionMethod"],
   ]) {

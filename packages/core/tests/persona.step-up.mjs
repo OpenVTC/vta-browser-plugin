@@ -291,8 +291,8 @@ test("the disclosure approval is minted as 0.6, the version that can answer `rec
   });
   assert.equal(
     disclosure.type,
-    "https://trusttasks.org/spec/auth/step-up/approve-response/0.6",
-    "a bound disclosure approval must be minted in 0.6, or the agent answers `elevated` and the \
+    "https://trusttasks.org/spec/auth/step-up/approve-response/0.7",
+    "a bound disclosure approval must be minted in 0.7, or the agent answers `elevated` and the \
      session is raised on the strength of a decision about one card number",
   );
 

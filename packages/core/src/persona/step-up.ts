@@ -47,7 +47,7 @@ import {
 import type { SigningIdentity } from "../siop/self-issued.js";
 import type { TrustTask } from "../vta/protocol.js";
 
-import { TYPE_URI as APPROVE_RESPONSE_TYPE } from "../specs/auth/step-up/approve-response/0.6/payload.js";
+import { TYPE_URI as APPROVE_RESPONSE_TYPE } from "../specs/auth/step-up/approve-response/0.7/payload.js";
 
 /**
  * The extended error code `persona/disclosure/present/1.0` rule 6 declares.
@@ -183,7 +183,7 @@ export function disclosureStepUpFrom(
   };
 }
 
-/** Payload of the `approve-response/0.6` that answers a disclosure step-up. */
+/** Payload of the `approve-response/0.7` that answers a disclosure step-up. */
 export interface DisclosureApprovalPayload {
   subject: string;
   sessionId: string;
@@ -219,7 +219,7 @@ export function disclosureApprovalPayload(
   };
 }
 
-/** `auth/step-up/approve-response/0.6` — the version the agent serves, which
+/** `auth/step-up/approve-response/0.7` — the version the agent serves, which
  *  can be answered `recorded`: what a bound disclosure approval must be. */
 export const DISCLOSURE_APPROVE_RESPONSE_TYPE = APPROVE_RESPONSE_TYPE;
 

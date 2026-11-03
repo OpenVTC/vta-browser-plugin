@@ -1593,7 +1593,7 @@ consent surface that opens its own window — the disclosure prompt did, with no
 `window.vtaWallet.{approverIdentity, approveStepUp, attestApprover,
 approveDecision}` serve a VTC's `approverSigned` step-up
 (`auth/step-up/approver/attest/0.1`, carried in
-`auth/step-up/approve-response/0.6`) and its `approverSigned` decision evidence
+`auth/step-up/approve-response/0.7`) and its `approverSigned` decision evidence
 (carried in `task-consent/decision/0.2`). The store is
 `core/src/store/step-up-approver.ts`; the checks and the statement are
 `core/src/trust-tasks/approver-attest.ts`; the page rules are

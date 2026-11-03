@@ -1,6 +1,6 @@
 // Step-up against a did-hosting relying party, as Trust Tasks:
 // `auth/step-up/start/0.2` → verified approve-request/0.5 → consent →
-// `approve-response/0.6` → `auth/refresh/0.2`, all to `{base}/trust-tasks`.
+// `approve-response/0.7` → `auth/refresh/0.2`, all to `{base}/trust-tasks`.
 //
 // The RP here is a fake that answers the way the control plane does: every
 // reply signed by the RP's key (`proofPurpose: authentication`), threaded to
@@ -26,7 +26,7 @@ const TT = "https://trusttasks.org/spec/";
 const START = `${TT}auth/step-up/start/0.2`;
 const APPROVE_REQUEST_05 = `${TT}auth/step-up/approve-request/0.5`;
 const APPROVE_REQUEST_02 = `${TT}auth/step-up/approve-request/0.2`;
-const APPROVE_RESPONSE_06 = `${TT}auth/step-up/approve-response/0.6`;
+const APPROVE_RESPONSE_07 = `${TT}auth/step-up/approve-response/0.7`;
 const REFRESH = `${TT}auth/refresh/0.2`;
 const ERROR = `${TT}trust-task-error/0.3`;
 
@@ -117,7 +117,7 @@ function honestRp(holder, { request, ack, tokens } = {}) {
     switch (req.type) {
       case START:
         return reply(req, { approveRequest: request ?? (await approveRequest(holder)) });
-      case APPROVE_RESPONSE_06:
+      case APPROVE_RESPONSE_07:
         return reply(req, ack ?? { status: "elevated", session: session(holder) });
       case REFRESH:
         return reply(req, {
@@ -161,7 +161,7 @@ test("buildStepUpApproval: a 0.6 approval echoes the request and is the holder's
     approved: true,
   });
 
-  assert.equal(doc.type, APPROVE_RESPONSE_06);
+  assert.equal(doc.type, APPROVE_RESPONSE_07);
   assert.equal(doc.issuer, holder.did);
   assert.equal(doc.recipient, RP.did);
   assert.ok(doc.issuedAt, "0.6 requires issuedAt");
@@ -394,7 +394,7 @@ test("stepUpVtaFinish: sends the approval, then a signed refresh, and returns th
     refreshToken: "elevated-refresh",
     sessionId: SESSION,
   });
-  assert.deepEqual(calls.map((c) => c.doc.type), [APPROVE_RESPONSE_06, REFRESH]);
+  assert.deepEqual(calls.map((c) => c.doc.type), [APPROVE_RESPONSE_07, REFRESH]);
   assert.equal(calls[0].doc.id, approval.id);
   const refresh = calls[1].doc;
   assert.deepEqual(refresh.payload, { refreshToken: "aal1-refresh" });
@@ -460,7 +460,7 @@ test("performStepUpVta: consent sees the verified reason, then approve-response 
   assert.deepEqual(seen, [
     { issuer: RP.did, subject: holder.did, sessionId: SESSION, reason: "Elevate this session to aal2" },
   ]);
-  assert.deepEqual(calls.map((c) => c.doc.type), [START, APPROVE_RESPONSE_06, REFRESH]);
+  assert.deepEqual(calls.map((c) => c.doc.type), [START, APPROVE_RESPONSE_07, REFRESH]);
   const approval = calls[1].doc;
   assert.equal(approval.payload.challenge, "a".repeat(64));
   assert.equal(approval.payload.decision, "approved");
