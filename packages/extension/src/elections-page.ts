@@ -58,18 +58,22 @@ import {
   type ElectionShown,
   type RollCredential,
 } from "@openvtc/pnm-core/vtc";
+import type { NotifiedElection } from "@openvtc/pnm-core/notifications";
 
 import type {
   ElectionReadAs,
   ElectionsPageOp,
+  NotifiedElectionOutcome,
   OffscreenElectionsPageOp,
   OffscreenElectionsPageResponse,
   PageElection,
   PageElectionQuestion,
   PageElectionView,
+  PageNotifiedElection,
   PageTicketView,
   PageVoteView,
   RuntimeElectionsPageResponse,
+  RuntimeNotifiedElectionResponse,
 } from "./bridge-protocol.js";
 
 /** `chrome.storage.session` key prefix for an election window's view. */
@@ -407,9 +411,49 @@ export class ElectionsPageGates {
     return { vta, who };
   }
 
-  private async list(vta: ActiveVta, hostDid: string, who: Identity): Promise<{ elections: PageElection[] }> {
+  private async listed(vta: ActiveVta, hostDid: string, who: Identity): Promise<PageElection[]> {
     const listed = (await this.offscreen(vta, { op: "list", hostDid, member: who.did })) as { elections?: unknown[] };
-    return { elections: (listed.elections ?? []).map((e) => pageElectionOf(e as Record<string, unknown>)) };
+    return (listed.elections ?? []).map((e) => pageElectionOf(e as Record<string, unknown>));
+  }
+
+  /** The elections of this community the member's agent holds a notification
+   *  of, in the context of the identity they use here (VTI-NTF-063). */
+  private async notified(vta: ActiveVta, hostDid: string, who: Identity): Promise<NotifiedElection[]> {
+    return (await this.offscreen(vta, { op: "notified", hostDid, member: who.did })) as NotifiedElection[];
+  }
+
+  /**
+   * The member's elections here: both those the community's list shows them
+   * and those their agent holds a notification of (VTI-NTF-063). A notified
+   * one is shown only as notified — its identifier, the party it is put to and
+   * its period — until the member opens it; one the list also shows is not
+   * repeated.
+   */
+  private async list(
+    vta: ActiveVta,
+    hostDid: string,
+    who: Identity,
+  ): Promise<{ elections: PageElection[]; notified: PageNotifiedElection[] }> {
+    const [elections, held] = await Promise.all([this.listed(vta, hostDid, who), this.notified(vta, hostDid, who)]);
+    const listedIds = new Set(elections.map((e) => e.electionId));
+    const notified: PageNotifiedElection[] = held
+      .filter((n) => !listedIds.has(n.electionId))
+      .map((n) => ({
+        electionId: n.electionId,
+        audience: n.audience,
+        status: n.status,
+        ...(n.votingOpensAt !== undefined ? { votingOpensAt: n.votingOpensAt } : {}),
+        ...(n.votingClosesAt !== undefined ? { votingClosesAt: n.votingClosesAt } : {}),
+      }));
+    return { elections, notified };
+  }
+
+  /** The party a notification the member's agent holds names for this
+   *  election, while it stands: what `memberOf` is when the page named none.
+   *  A withdrawn one names nothing (VTI-NTF-024). */
+  private async notifiedAudience(vta: ActiveVta, hostDid: string, who: Identity, electionId: string): Promise<string | undefined> {
+    const held = await this.notified(vta, hostDid, who);
+    return held.find((n) => n.electionId === electionId && n.status === "available")?.audience;
   }
 
   /**
@@ -436,7 +480,11 @@ export class ElectionsPageGates {
     try {
       return { shown: (await this.offscreen(vta, { op: "show", hostDid, member: who.did, electionId })) as ElectionShown };
     } catch (e) {
-      if (!(e instanceof ElectionsPageRefusal) || e.code !== "electionUnknown" || memberOf === undefined) throw e;
+      if (!(e instanceof ElectionsPageRefusal) || e.code !== "electionUnknown") throw e;
+      // The page named no party: the one a notification the member's agent
+      // holds for this election names, if any (VTI-NTF-063).
+      memberOf ??= await this.notifiedAudience(vta, hostDid, who, electionId);
+      if (memberOf === undefined) throw e;
     }
     const held = (await this.offscreen(vta, { op: "membership", hostDid, member: who.did, memberOf })) as { held: boolean };
     if (!held.held) {
@@ -519,8 +567,7 @@ export class ElectionsPageGates {
   ): Promise<PageVoteView> {
     const key = ticketKey(hostDid, who.did, electionId);
     // Whether the community issued the ticket, from the member's own list.
-    const listed = await this.list(vta, hostDid, who);
-    const mine = listed.elections.find((e) => e.electionId === electionId);
+    const mine = (await this.listed(vta, hostDid, who)).find((e) => e.electionId === electionId);
     if (mine && !mine.ticketHeld) {
       // Take it and stop: a cast sent straight after its ticket can be paired
       // with it by time (CONVENTIONS §6 item 3).
@@ -531,7 +578,11 @@ export class ElectionsPageGates {
       // An election put to a member party's members is never in the
       // community's list (VTI-VOT-015). Only one this wallet was told of by the
       // page, or already read presenting the membership, is gone on with; its
-      // ticket is the one this wallet remembers taking, else it takes one.
+      // ticket is the one this wallet remembers taking, else it takes one. A
+      // notification the member's agent holds names the party as a link does.
+      if (memberOf === undefined && (await this.deps.disclosedFor(key)) === undefined) {
+        memberOf = await this.notifiedAudience(vta, hostDid, who, electionId);
+      }
       if (memberOf === undefined && (await this.deps.disclosedFor(key)) === undefined) {
         throw new ElectionsPageRefusal("No such election is open to you at this community.");
       }
@@ -576,6 +627,61 @@ export class ElectionsPageGates {
       .finally(() => this.casting.delete(work));
     this.casting.add(work);
     return { ticketTaken: false };
+  }
+
+  /**
+   * Open an election the member holds a notification of, from the wallet's own
+   * notifications view (VTI-NTF-063). Not a page's call: the console's, which
+   * names only the held record. The community, the election, the member (the
+   * DID the notification was addressed to) and the party come from the record
+   * as the VTA holds it.
+   *
+   * The election is read without presenting first. Only when the community
+   * answers `electionUnknown` is the member asked whether to present their
+   * membership credential issued by exactly the notification's audience
+   * (VTI-VOT-016) — and that answer comes back from the console as `present`.
+   * Once presented, the choice is remembered for the election as a page's is.
+   */
+  async openNotified(params: { contextId: string; recordId: string; present?: boolean }): Promise<RuntimeNotifiedElectionResponse> {
+    try {
+      const active = await this.deps.active();
+      if (!active.ok) throw new ElectionsPageRefusal(active.error);
+      const vta = active.vta;
+      const ref = { contextId: params.contextId, recordId: params.recordId };
+      const target = (await this.offscreen(vta, { op: "notifiedTarget", ...ref })) as NotifiedElection & { endpoint: string };
+      const base = { community: target.community };
+      if (!(await this.deps.canReach(target.endpoint))) {
+        return { ok: true, result: { kind: "needsReach", origin: new URL(target.endpoint).origin, ...base } };
+      }
+      const key = ticketKey(target.community, target.addressee, target.electionId);
+      const who = { ...base, member: target.addressee, audience: target.audience };
+      const shownAs = (shown: ElectionShown, presented: boolean): NotifiedElectionOutcome => ({
+        kind: "shown",
+        election: pageElectionViewOf(shown),
+        presented,
+        ...who,
+      });
+      if (params.present === true || (await this.deps.disclosedFor(key)) === target.audience) {
+        const shown = (await this.offscreen(vta, { op: "notifiedShow", ...ref, present: true })) as ElectionShown;
+        // The community has now learnt the membership: later reads of this
+        // election, here or from its portal, present it without asking again.
+        await this.deps.rememberDisclosure(key, target.audience);
+        return { ok: true, result: shownAs(shown, true) };
+      }
+      try {
+        return { ok: true, result: shownAs((await this.offscreen(vta, { op: "notifiedShow", ...ref })) as ElectionShown, false) };
+      } catch (e) {
+        if (!(e instanceof ElectionsPageRefusal) || e.code !== "electionUnknown") throw e;
+      }
+      const { held } = (await this.offscreen(vta, { op: "notifiedMembership", ...ref })) as { held: boolean };
+      return { ok: true, result: { kind: "needsPresent", audience: target.audience, held, ...base, member: target.addressee } };
+    } catch (e) {
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+        ...(e instanceof ElectionsPageRefusal && e.code ? { code: e.code } : {}),
+      };
+    }
   }
 
   /** The cast, step by step, reported to the ballot window `window`. A window

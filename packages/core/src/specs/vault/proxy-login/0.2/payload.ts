@@ -3,7 +3,7 @@
  * Source: https://trusttasks.org/spec/vault/proxy-login/0.2 (registry bundle)
  */
 
-import type { AndroidApp, ConsumerContext, Did, DidcommAuthcryptEnvelope, Ext, HpkeArmoredEnvelope, IosApp, SealedEnvelope, SiteTarget, StepUpProof, TspMessageEnvelope, WebOrigin } from "../../../_shared/components.js";
+import type { AndroidApp_VaultV0_2 as AndroidApp, ConsumerContext, Did_VaultV0_2 as Did, DidcommAuthcryptEnvelope, Ext, HpkeArmoredEnvelope, IosApp_VaultV0_2 as IosApp, SealedEnvelope, SiteTarget, StepUpProof, TspMessageEnvelope, WebOrigin_VaultV0_2 as WebOrigin } from "../../../_shared/components.js";
 
 
 /**

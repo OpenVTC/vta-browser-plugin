@@ -1581,7 +1581,7 @@ community (`presents`, `rollCredentialWarning`), and the offscreen work refuses 
 credential roll whose `memberOf` is not the `presentFor` the member approved. An
 election put to a **member party**'s members is in nobody's list but its
 managers' and the party's, so a page opens it by id with `memberOf` (from a
-link — the `notifications/*` family is the coming way): the wallet reads it
+link, or from a held notification — below): the wallet reads it
 without presenting first, and only on `electionUnknown` asks in a `disclose`
 window, then reads again presenting (`readAs`). That choice is remembered per
 election (`election-disclosed:` + `ticketKey`, the party's DID only) so later
@@ -1597,6 +1597,61 @@ community documents, with backoff — never by a second loop above it.
 member was not first told of, or one issued by any DID but the roll's own;
 rendering a ballot in a page; sending a cast or a ballot to the community's
 endpoint; signing a cast with any key but the one the VTA made for it.
+
+## Notifications: held at the agent, read by the wallet, opened only by the member
+
+A notification (VTI-NTF-001 – 074, kinds in the spec's Appendix G) is an
+originator's signed statement that a thing exists — an election, say — with
+where it is held (`subject.heldBy`), its id there, the task that opens it and
+the audience it concerns. It confers nothing and is no evidence of
+eligibility (VTI-NTF-004). The member's VTA holds what it accepts in the
+context of the DID it was addressed to; the wallet reads them with
+`@openvtc/pnm-core/notifications` (`vta/notifications/{list,show,dismiss}/0.1`).
+Reading, listing and dismissing tell nobody anything (VTI-NTF-053).
+
+**Two views, one source.** The console's *Notifications* pane
+(`panes/notifications.tsx`) lists every context's (or the selected one's),
+shows an unknown kind as existing and nothing more (VTI-NTF-012), shows the
+delivering document as received, and dismisses. A portal's
+`elections.list` answers `{ elections, notified }`: the community's list
+**and** the election notifications held in the member's context for that
+community, the second only as notified — id, audience, period, status
+(VTI-NTF-063). When the community answers `electionUnknown` and the page named
+no `memberOf`, the gates take it from a held, unwithdrawn notification for
+that election; the `disclose` window still asks before anything is presented.
+
+**Opening from the console names only the record.** *Open the election* sends
+`RUNTIME_NOTIFIED_ELECTION` `{ contextId, recordId, present? }` (extension
+pages only). `ElectionsPageGates.openNotified` re-reads the record from the VTA
+(`notifiedTarget`), reads the election from `heldBy` as the record's
+`addressee` in its context (`notifiedShow`), and only on `electionUnknown`
+returns `needsPresent` — the console tells the member what presenting shows
+and sends `present: true` only from their click. The choice is remembered as a
+page's is (`election-disclosed:`). A withdrawn notification is not opened.
+Tickets and ballots stay the portal's flow.
+
+**Deposit has nowhere to happen in this wallet — and that is a finding, not a
+gap to paper over.** VTI-NTF-054 has a client that holds a *persona* DID's
+mediator socket hand each `notifications/notify` / `relay` it receives to the
+VTA exactly as received (`notificationsDeposit`, in core for a client that
+does). This wallet holds no such socket: its sessions are the holder's
+`did:key` (no service, so nothing can be addressed to it, VTI-NTF-020), the
+approver and the onboarding ephemeral; a persona's keys, keyAgreement
+included, live only at the VTA, so the wallet could neither authenticate to
+the mediator as one nor open what is sealed to it. A persona minted with
+`addMediatorService` (the join flow) advertises the VTA's mediator, where no
+party collects it today. Do not "fix" this with a REST path or by having the
+VTA decrypt for the wallet; the resolution belongs to the VTA (it holding its
+personas' sockets is a direct delivery, VTI-NTF-050) and is recorded as an
+open point against VTI.
+
+**What breaks it:** opening an election (or contacting `heldBy` or the
+originator) because a notification arrived; showing a notified election as
+anything but notified before it is opened; taking the community, election or
+member for `openNotified` from the console rather than the held record;
+presenting a membership without the member's click; letting a page drive
+`vta/notifications/*` (`page-task-policy.ts` refuses the prefix); or
+re-serialising a document before depositing it.
 
 ## A consent window reports its decision before it closes (VTI-40)
 

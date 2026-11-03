@@ -542,7 +542,12 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // 229 → 235: the member's voter engine behind a community's elections
   // (vtc/elections.ts): `vta/pcs/voter/{read,register,accept,receipt}`,
   // `vta/pcs/vote` and `vta/pcs/vote-encrypted`.
-  const expected = 235;
+  // 235 → 242, with the snapshot resynced from vta-sdk 0.79.0 (canonical total
+  // 340): the held notifications (notifications/index.ts) —
+  // `vta/notifications/{list,show,dismiss,deposit}` and the `notifications/
+  // {notify,relay}` a deposit carries (+6) — and `vtc/elections/show`, which
+  // this library read all along and the SDK now names (+1).
+  const expected = 242;
   assert.equal(
     implemented.size,
     expected,

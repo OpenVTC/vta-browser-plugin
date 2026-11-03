@@ -26,6 +26,13 @@
 //   the member's vault, by its issuer; its handle never leaves this document.
 
 import { credVaultQuery } from "@openvtc/pnm-core";
+import {
+  ELECTION_KIND,
+  notificationsListAll,
+  notificationsShow,
+  notifiedElectionOf,
+  type NotifiedElection,
+} from "@openvtc/pnm-core/notifications";
 import { resolveDidDocument } from "@openvtc/pnm-core/didcomm";
 import { trustTaskBaseFromDocument, trustTaskUrl, type TrustTaskSender } from "@openvtc/pnm-core/vta";
 import {
@@ -137,6 +144,57 @@ export async function ballotBoxEndpoint(
   return trustTaskUrl(base);
 }
 
+/** The member's voter reads and credentials at one community, as `target`. */
+async function voterWork(
+  deps: ElectionsPageDeps,
+  vta: { vtaDid: string; restBaseUrl?: string },
+  target: VoterTarget,
+  now: () => number,
+  community: (hostDid: string) => Promise<VerifiedCommunity>,
+) {
+  const verified = await community(target.community);
+  const sendOpts = {
+    vtcDid: target.community,
+    vtcDocument: verified.document,
+    trustTaskEndpoint: verified.endpoint,
+    ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    // The wait before a document the community could not yet check goes again.
+    ...(deps.sleep ? { sleep: deps.sleep } : {}),
+    ...(deps.now ? { now: deps.now } : {}),
+  };
+  const { sender, holder, service } = await deps.agent(vta.vtaDid, vta.restBaseUrl);
+  const agent = { holder, service };
+
+  /** The member's membership credential issued by exactly `memberOf`, about
+   *  them: its vault handle, or `null` when they hold none. */
+  const membership = async (memberOf: string): Promise<string | null> => {
+    const held = await credVaultQuery(sender, { holder, service, issuerDid: memberOf, subjectDid: target.member, status: "valid" });
+    return membershipCredentialFor(held, memberOf, now());
+  };
+  const noMembership = (memberOf: string) =>
+    new ElectionsWorkError(`You don't hold a membership credential issued by ${memberOf}, so you are not a member of that party here.`, "membershipNotHeld");
+  const presenting = async (readAs: ElectionReadAs | undefined): Promise<ReadPresenting | undefined> => {
+    if (!readAs) return undefined;
+    const handle = await membership(readAs.memberOf);
+    if (!handle) throw noMembership(readAs.memberOf);
+    return { membershipCredential: handle, memberOf: readAs.memberOf };
+  };
+
+  /** A document the VTA signed as the member, sent to the community unchanged. */
+  const toCommunity = async <P>(doc: unknown, label: string): Promise<P> => {
+    const reply = await postCommunityTask<P>(doc as OobDocument, sendOpts, label, "authentication");
+    return reply.payload;
+  };
+  const read = async <P>(which: "list" | "show", payload: Record<string, unknown>, readAs?: ElectionReadAs): Promise<P> => {
+    // A presenting read is a fresh document each time: the community accepts a
+    // presentation in one document once (show/0.6 item 8).
+    const signed = await pcsVoterRead(sender, agent, target, which, payload, await presenting(readAs));
+    return toCommunity<P>(signed.document, `vtc/elections/${which}`);
+  };
+  const show = (electionId: string, readAs?: ElectionReadAs) => read<ElectionShown>("show", { electionId }, readAs);
+  return { sender, agent, membership, noMembership, toCommunity, read, show };
+}
+
 /** Run one elections operation. Throws with a message fit for the person. */
 export async function runElectionsPageOp(
   deps: ElectionsPageDeps,
@@ -163,6 +221,32 @@ export async function runElectionsPageOp(
     });
     return { receipt };
   }
+  // An election the member was notified of (VTI-NTF-063), opened from the
+  // wallet's own view: the community, the election and the member it was
+  // addressed to come from the notification the VTA holds — read afresh here,
+  // never taken from the caller — and the member need not sign in to that
+  // community at all (a member of a party the community's roll names).
+  if (op.op === "notifiedTarget" || op.op === "notifiedShow" || op.op === "notifiedMembership") {
+    const { sender, holder, service } = await deps.agent(vta.vtaDid, vta.restBaseUrl);
+    const held = notifiedElectionOf((await notificationsShow(sender, { holder, service }, op.contextId, op.recordId)).item);
+    if (!held) throw new ElectionsWorkError("That notification is not of an election.", "notAnElection");
+    if (op.op === "notifiedTarget") {
+      const { endpoint } = await community(held.community);
+      return { ...held, endpoint };
+    }
+    if (held.status === "withdrawn") {
+      throw new ElectionsWorkError("The community withdrew this election: it is cancelled, or no longer open to you.", "withdrawn");
+    }
+    const target: VoterTarget = { contextId: held.contextId, community: held.community, member: held.addressee };
+    const work = await voterWork(deps, vta, target, now, community);
+    try {
+      if (op.op === "notifiedMembership") return { held: (await work.membership(held.audience)) !== null };
+      return await work.show(held.electionId, op.present ? { memberOf: held.audience } : undefined);
+    } catch (e) {
+      throw refusalWords(e, "The community");
+    }
+  }
+
   const entries = identitiesAt(await deps.identities(vta.vtaDid, vta.restBaseUrl), op.hostDid);
   if (op.op === "members") {
     return entries.map((e) => ({ did: e.principalDid as string, communityName: e.label?.trim() || "This community" }));
@@ -174,46 +258,20 @@ export async function runElectionsPageOp(
   const contextId = await deps.contextOf(vta.vtaDid, vta.restBaseUrl, op.member);
   if (!contextId) throw new Error("Your agent does not list the identity you signed in with, so it cannot vote as it.");
   const target: VoterTarget = { contextId, community: op.hostDid, member: op.member };
-  const verified = await community(op.hostDid);
-  const sendOpts = {
-    vtcDid: op.hostDid,
-    vtcDocument: verified.document,
-    trustTaskEndpoint: verified.endpoint,
-    ...(deps.fetch ? { fetch: deps.fetch } : {}),
-    // The wait before a document the community could not yet check goes again.
-    ...(deps.sleep ? { sleep: deps.sleep } : {}),
-    ...(deps.now ? { now: deps.now } : {}),
-  };
-  const { sender, holder, service } = await deps.agent(vta.vtaDid, vta.restBaseUrl);
-  const agent = { holder, service };
 
-  /** The member's membership credential issued by exactly `memberOf`, about
-   *  them: its vault handle, or `null` when they hold none. */
-  const membership = async (memberOf: string): Promise<string | null> => {
-    const held = await credVaultQuery(sender, { holder, service, issuerDid: memberOf, subjectDid: op.member, status: "valid" });
-    return membershipCredentialFor(held, memberOf, now());
-  };
-  const noMembership = (memberOf: string) =>
-    new ElectionsWorkError(`You don't hold a membership credential issued by ${memberOf}, so you are not a member of that party here.`, "membershipNotHeld");
-  const presenting = async (readAs: ElectionReadAs | undefined): Promise<ReadPresenting | undefined> => {
-    if (!readAs) return undefined;
-    const handle = await membership(readAs.memberOf);
-    if (!handle) throw noMembership(readAs.memberOf);
-    return { membershipCredential: handle, memberOf: readAs.memberOf };
-  };
+  if (op.op === "notified") {
+    // The notifications of this community's elections the VTA holds in the
+    // context of the identity the member uses there (VTI-NTF-050, VTI-NTF-063).
+    // A read of the member's own agent: nothing is sent to the community or to
+    // anyone else because of it (VTI-NTF-053).
+    const { sender, holder, service } = await deps.agent(vta.vtaDid, vta.restBaseUrl);
+    const held = await notificationsListAll(sender, { holder, service }, contextId, { kind: ELECTION_KIND, heldBy: op.hostDid });
+    return held
+      .map(notifiedElectionOf)
+      .filter((n): n is NotifiedElection => n !== null && n.community === op.hostDid);
+  }
 
-  /** A document the VTA signed as the member, sent to the community unchanged. */
-  const toCommunity = async <P>(doc: unknown, label: string): Promise<P> => {
-    const reply = await postCommunityTask<P>(doc as OobDocument, sendOpts, label, "authentication");
-    return reply.payload;
-  };
-  const read = async <P>(which: "list" | "show", payload: Record<string, unknown>, readAs?: ElectionReadAs): Promise<P> => {
-    // A presenting read is a fresh document each time: the community accepts a
-    // presentation in one document once (show/0.6 item 8).
-    const signed = await pcsVoterRead(sender, agent, target, which, payload, await presenting(readAs));
-    return toCommunity<P>(signed.document, `vtc/elections/${which}`);
-  };
-  const show = (electionId: string, readAs?: ElectionReadAs) => read<ElectionShown>("show", { electionId }, readAs);
+  const { sender, agent, membership, noMembership, toCommunity, read, show } = await voterWork(deps, vta, target, now, community);
 
   try {
     switch (op.op) {

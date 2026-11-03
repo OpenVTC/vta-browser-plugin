@@ -3,7 +3,7 @@
  * Source: https://trusttasks.org/spec/vault/list/0.4 (registry bundle)
  */
 
-import type { AndroidApp, AttachmentRef, Did, DigestMultibase, Ext, IosApp, SecretKind, SiteTarget, VaultEntry, WebOrigin } from "../../../_shared/components.js";
+import type { AndroidApp_VaultV0_2 as AndroidApp, AttachmentRef, Did_VaultV0_2 as Did, DigestMultibase, Ext, IosApp_VaultV0_2 as IosApp, SecretKind, SiteTarget, VaultEntry, WebOrigin_VaultV0_2 as WebOrigin } from "../../../_shared/components.js";
 
 
 /**

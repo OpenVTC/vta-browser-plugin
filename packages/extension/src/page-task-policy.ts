@@ -118,6 +118,19 @@ const REFUSED: { prefix: string; why: string }[] = [
       "A community's elections are read, and tickets taken, by the member's own agent signing as them. A " +
       "community's own member portal uses window.vtaWallet.elections.",
   },
+  // The member's held notifications (VTI-NTF-050). Each says that a party the
+  // member belongs to, or a community it belongs to, told them something exists
+  // — a list of them is a list of the member's relationships, which is exactly
+  // what VTI-NTF-023 keeps from a sender. A deposit is the client's hand-over of
+  // what it received for a persona, never a page's. A community's own portal
+  // sees its own notified elections through window.vtaWallet.elections.
+  {
+    prefix: "https://trusttasks.org/spec/vta/notifications/",
+    why:
+      "Your held notifications say which communities and parties you belong to, and a generic prompt cannot say " +
+      "what a page would learn from them. Read them in the wallet's console; a community's own member portal " +
+      "sees the elections it notified you of with window.vtaWallet.elections.",
+  },
   // A mediator's own operations surface (`@openvtc/pnm-core/mediator`). A page
   // routing one of these to an agent would be misaddressed anyway — they are
   // served by the relay, not the agent — but the refusal is about what they

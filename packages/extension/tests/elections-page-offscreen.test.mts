@@ -69,6 +69,8 @@ interface WorldOpts {
   vault?: Record<string, unknown>[];
   /** The community refuses the n-th document it receives (0-based) with this code. */
   refuse?: { at: number; code: string; retryable?: boolean }[];
+  /** The notifications the member's VTA holds (`vta/notifications/*`). */
+  held?: Record<string, unknown>[];
 }
 
 function world(opts: WorldOpts = {}) {
@@ -125,6 +127,13 @@ function world(opts: WorldOpts = {}) {
           return { castDocument: cast, tag: "zTag" };
         case `${T}vta/pcs/voter/receipt/0.1`:
           return { electionId: "agm-2027", status: "included", leafIndex: 7 };
+        case `${T}vta/notifications/list/0.1`:
+          return { items: opts.held ?? [] };
+        case `${T}vta/notifications/show/0.1`: {
+          const item = (opts.held ?? []).find((h) => h.recordId === p.recordId);
+          if (!item) throw new Error("notificationUnknown");
+          return { item, document: { type: `${T}notifications/notify/0.1` } };
+        }
       }
       throw new Error(`unexpected ${envelope.type}`);
     },
@@ -425,4 +434,61 @@ test("an electionUnknown refusal reaches the background with its code", async ()
     runElectionsPageOp(w.deps, VTA, { op: "show", hostDid: VTC, member: MEMBER, electionId: "agm-2027" }),
     (e: Error & { code?: string }) => e.code === "electionUnknown",
   );
+});
+
+const NOTE_MEMBER = "did:webvh:QmBob:people.example";
+const heldElection = (over: Record<string, unknown> = {}) => ({
+  recordId: "hn-0123456789abcdef",
+  contextId: "vtc-party",
+  addressee: NOTE_MEMBER,
+  originator: VTC,
+  relayedBy: [PARTY],
+  state: "active",
+  receivedAt: "2026-11-01T00:00:00Z",
+  notification: {
+    notificationId: "n-1",
+    revision: 1,
+    kind: "election",
+    subject: { heldBy: VTC, id: "agm-2027", openWith: `${T}vtc/elections/show/0.6` },
+    audience: PARTY,
+    status: "available",
+    relayable: true,
+    validUntil: "2026-11-03T00:00:00Z",
+  },
+  ...over,
+});
+
+test("vti_ntf_063: the member's election notifications are read from the context of their identity, of this community only", async () => {
+  const other = heldElection({ recordId: "hn-other-0000000000" });
+  (other.notification as { subject: { heldBy: string } }).subject = { heldBy: "did:webvh:QmElse:else.example", id: "x", openWith: "https://x.example/t" };
+  const w = world({ held: [heldElection(), other] });
+  const got = (await runElectionsPageOp(w.deps, VTA, { op: "notified", hostDid: VTC, member: MEMBER })) as { electionId: string; audience: string }[];
+  assert.deepEqual(got.map((n) => [n.electionId, n.audience]), [["agm-2027", PARTY]]);
+  const ask = w.vtaAsked.find((a) => a.type === `${T}vta/notifications/list/0.1`)!;
+  assert.deepEqual(ask.payload, { contextId: "vtc-acme", kind: "election", heldBy: VTC });
+  assert.equal(w.toCommunity.length, 0, "listing notifications tells the community nothing (VTI-NTF-053)");
+});
+
+test("vti_ntf_063: a notified election is read as the DID it was addressed to, in its context, presenting only when told", async () => {
+  const w = world({ held: [heldElection()], memberOf: PARTY, vault: [VMC] });
+  await runElectionsPageOp(w.deps, VTA, { op: "notifiedShow", contextId: "vtc-party", recordId: "hn-0123456789abcdef" });
+  await runElectionsPageOp(w.deps, VTA, { op: "notifiedShow", contextId: "vtc-party", recordId: "hn-0123456789abcdef", present: true });
+  const reads = w.vtaAsked.filter((a) => a.type === `${T}vta/pcs/voter/read/0.6`);
+  assert.equal(reads.length, 2);
+  assert.equal(reads[0]!.payload.member, NOTE_MEMBER);
+  assert.equal(reads[0]!.payload.contextId, "vtc-party");
+  assert.equal(reads[0]!.payload.membershipCredential, undefined);
+  assert.equal(reads[1]!.payload.membershipCredential, VMC.id);
+  assert.equal(reads[1]!.payload.memberOf, PARTY);
+});
+
+test("a withdrawn election notification is not opened", async () => {
+  const held = heldElection();
+  (held.notification as { status: string }).status = "withdrawn";
+  const w = world({ held: [held] });
+  await assert.rejects(
+    runElectionsPageOp(w.deps, VTA, { op: "notifiedShow", contextId: "vtc-party", recordId: "hn-0123456789abcdef" }),
+    /withdrew/,
+  );
+  assert.equal(w.toCommunity.length, 0);
 });

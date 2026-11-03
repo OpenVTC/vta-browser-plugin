@@ -3,7 +3,7 @@
  * Source: https://trusttasks.org/spec/consent/request/1.0 (registry bundle)
  */
 
-import type { ConsentSubject, DigestMultibase, Ext, Kind, Scope_ConsentV0_1 as Scope } from "../../../_shared/components.js";
+import type { ConsentSubject, DigestMultibase, Ext, Kind_ConsentV0_1 as Kind, Scope_ConsentV0_1 as Scope } from "../../../_shared/components.js";
 
 
 /**
