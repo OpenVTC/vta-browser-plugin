@@ -97,6 +97,8 @@ export * as MessagingQueueList_v0_1 from "./messaging/queue/list/0.1/payload.js"
 export * as MessagingQueuePurge_v0_1 from "./messaging/queue/purge/0.1/payload.js";
 export * as MessagingQueueStatus_v0_1 from "./messaging/queue/status/0.1/payload.js";
 export * as MessagingStatsShow_v0_1 from "./messaging/stats/show/0.1/payload.js";
+export * as NotificationsNotify_v0_1 from "./notifications/notify/0.1/payload.js";
+export * as NotificationsRelay_v0_1 from "./notifications/relay/0.1/payload.js";
 export * as PersonaAttributeDelete_v1_0 from "./persona/attribute/delete/1.0/payload.js";
 export * as PersonaAttributeList_v1_0 from "./persona/attribute/list/1.0/payload.js";
 export * as PersonaAttributePromote_v1_1 from "./persona/attribute/promote/1.1/payload.js";
@@ -220,6 +222,10 @@ export * as VtaManagementReloadServices_v1_0 from "./vta/management/reload-servi
 export * as VtaMemoryDelete_v0_1 from "./vta/memory/delete/0.1/payload.js";
 export * as VtaMemoryList_v0_1 from "./vta/memory/list/0.1/payload.js";
 export * as VtaMemoryPut_v0_1 from "./vta/memory/put/0.1/payload.js";
+export * as VtaNotificationsDeposit_v0_1 from "./vta/notifications/deposit/0.1/payload.js";
+export * as VtaNotificationsDismiss_v0_1 from "./vta/notifications/dismiss/0.1/payload.js";
+export * as VtaNotificationsList_v0_1 from "./vta/notifications/list/0.1/payload.js";
+export * as VtaNotificationsShow_v0_1 from "./vta/notifications/show/0.1/payload.js";
 export * as VtaPasskeyVmsEnrollChallenge_v0_1 from "./vta/passkey-vms/enroll-challenge/0.1/payload.js";
 export * as VtaPasskeyVmsEnrollSubmit_v0_2 from "./vta/passkey-vms/enroll-submit/0.2/payload.js";
 export * as VtaPasskeyVmsList_v0_1 from "./vta/passkey-vms/list/0.1/payload.js";

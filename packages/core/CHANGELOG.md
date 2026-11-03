@@ -10,6 +10,18 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Added
 
+- **`@openvtc/pnm-core/notifications`: the principal's held notifications**
+  (VTI-NTF-050 – 056). `notificationsList` / `notificationsListAll`,
+  `notificationsShow` (the delivering document as received) and
+  `notificationsDismiss`; `notificationsDeposit` hands a notify or relay a
+  client received for a persona DID to its VTA unchanged (VTI-NTF-054), with
+  `inboundNotificationOf` to recognise one and `notificationReceiptOf` for the
+  receipt its sender is answered with; `notifiedElectionOf` reduces a held
+  notification of the kind `election` to what VTI-NTF-063 lets an agent show
+  before it is opened. Pins `notifications/{notify,relay}/0.1` and
+  `vta/notifications/{list,show,dismiss,deposit}/0.1`; `task-surface.json`
+  resynced from vta-sdk 0.79.0.
+
 - **`webvhDidUpdate` speaks `vta/webvh/dids/update/1.1`** and takes
   `scidAlsoKnownAs`: `true` lists the log's `did:scid:vh:1:<scid>?src=<source>`
   DID URL in `alsoKnownAs` for its current location, `false` removes every

@@ -567,6 +567,18 @@ type_uri = "https://trusttasks.org/spec/messaging/stats/show/0.1"
 digest = "sha256:afb8e7e8a159c5aa546b949b006bf880506e6463812124a964180c2ceb50fddd"
 
 [[task]]
+slug = "notifications/notify"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/notifications/notify/0.1"
+digest = "sha256:1cf46e8a09267d5e18cb88c0bf03a7eacd602caede7142a25629fdb79dbf316f"
+
+[[task]]
+slug = "notifications/relay"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/notifications/relay/0.1"
+digest = "sha256:2ed8495eda8c4e3f7d1916b1a66ecd3a4ae1ccd1cbf30abbca48ec1a0116d8d7"
+
+[[task]]
 slug = "persona/attribute/delete"
 version = "1.0"
 type_uri = "https://trusttasks.org/spec/persona/attribute/delete/1.0"
@@ -1309,6 +1321,30 @@ slug = "vta/memory/put"
 version = "0.1"
 type_uri = "https://trusttasks.org/spec/vta/memory/put/0.1"
 digest = "sha256:d1393419ddd756ddd4aaf6ed9662bf879684951345a41f6624f0a8fe3b792218"
+
+[[task]]
+slug = "vta/notifications/deposit"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/vta/notifications/deposit/0.1"
+digest = "sha256:47803439a1572a70439b9aade612784988bb4a0e97c59542e46a9440d0afea8a"
+
+[[task]]
+slug = "vta/notifications/dismiss"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/vta/notifications/dismiss/0.1"
+digest = "sha256:6ffa2eb7935f48d976dd91a47f7751cdfc818ec514b64c85cde329ed284c8088"
+
+[[task]]
+slug = "vta/notifications/list"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/vta/notifications/list/0.1"
+digest = "sha256:238dab02968b9b6080824b732296b388f54d063b2c6553563684d7bc6f684953"
+
+[[task]]
+slug = "vta/notifications/show"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/vta/notifications/show/0.1"
+digest = "sha256:f860f47fa062396b6d6dde0aef10843dcf34eacf93198aba651077b08f6aee71"
 
 [[task]]
 slug = "vta/passkey-vms/enroll-challenge"

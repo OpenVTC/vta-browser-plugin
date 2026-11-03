@@ -3,7 +3,7 @@
  * Source: https://trusttasks.org/spec/vault/upsert/0.4 (registry bundle)
  */
 
-import type { AndroidApp, AttachmentRef, Did, DidcommAuthcryptEnvelope, DigestMultibase, Ext, HpkeArmoredEnvelope, IosApp, SealedEnvelope, SecretKind, SiteTarget, TspMessageEnvelope, VaultEntry, WebOrigin } from "../../../_shared/components.js";
+import type { AndroidApp_VaultV0_2 as AndroidApp, AttachmentRef, Did_VaultV0_2 as Did, DidcommAuthcryptEnvelope, DigestMultibase, Ext, HpkeArmoredEnvelope, IosApp_VaultV0_2 as IosApp, SealedEnvelope, SecretKind, SiteTarget, TspMessageEnvelope, VaultEntry, WebOrigin_VaultV0_2 as WebOrigin } from "../../../_shared/components.js";
 
 
 /**

@@ -3,7 +3,7 @@
  * Source: https://trusttasks.org/spec/consent/revoke/1.0 (registry bundle)
  */
 
-import type { ConsentSubject, Ext, Kind } from "../../../_shared/components.js";
+import type { ConsentSubject, Ext, Kind_ConsentV0_1 as Kind } from "../../../_shared/components.js";
 
 
 /**

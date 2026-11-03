@@ -101,6 +101,12 @@ function harness(
     disclosed?: string;
     /** Whether the ticket was taken by this call (false: the agent held it). */
     taken?: boolean;
+    /** The election notifications the member's agent holds for this community. */
+    notified?: Record<string, unknown>[];
+    /** The record the console opens, as the VTA holds it (`notifiedTarget`). */
+    notifiedRecord?: Record<string, unknown>;
+    /** Whether the community's endpoint is reachable (the console's open). */
+    reachCommunity?: boolean;
   } = {},
 ) {
   const asked: OffscreenElectionsPageOp[] = [];
@@ -167,9 +173,21 @@ function harness(
             : { ok: true, result: { receipt: { issuer: BOX, payload: { outcome: "counted", leafIndex: 4 } } } };
         case "castKeep":
           return opts.keepFails ? { ok: false, error: opts.keepFails } : { ok: true, result: { status: "included", leafIndex: 4 } };
+        case "notified":
+          return { ok: true, result: opts.notified ?? [] };
+        case "notifiedTarget":
+          return { ok: true, result: { ...opts.notifiedRecord, endpoint: ENDPOINT } };
+        case "notifiedShow":
+          if (opts.unknownUnlessPresenting && !op.present) {
+            return { ok: false, error: "The community shows you no such election", code: "electionUnknown" };
+          }
+          return { ok: true, result: shownNow };
+        case "notifiedMembership":
+          return { ok: true, result: { held: opts.held ?? true } };
       }
     },
     async canReach(url) {
+      if (url === ENDPOINT) return opts.reachCommunity ?? true;
       if (url !== BOX_DOOR) return true;
       // The first check is before the window opens; the next is at the cast.
       return reachChecks++ === 0 ? (opts.reachBox ?? true) : (opts.reachAtCast ?? opts.reachBox ?? true);
@@ -561,5 +579,96 @@ test("a page cannot drive the voter engine or the community's elections through 
     "https://trusttasks.org/spec/vtc/elections/show/0.6",
   ]) {
     assert.match(String(pageTaskRefusal(t)), /window\.vtaWallet\.elections/);
+  }
+});
+
+// Notifications of the kind `election` (VTI-NTF-063): the member's view is both
+// what the community lists and what their agent holds a notification of.
+
+const NOTIFIED = {
+  recordId: "hn-0123456789abcdef",
+  contextId: "vtc-acme",
+  community: HOST,
+  electionId: "party-vote",
+  audience: PARTY,
+  addressee: MEMBER,
+  originator: HOST,
+  relayedBy: [PARTY],
+  status: "available",
+  votingOpensAt: "2026-11-02T00:00:00Z",
+  votingClosesAt: "2026-11-03T00:00:00Z",
+  openWith: "https://trusttasks.org/spec/vtc/elections/show/0.6",
+  dismissed: false,
+};
+
+test("vti_ntf_063: list shows the elections the community lists and, only as notified, those the agent was told of", async () => {
+  const listedToo = { ...NOTIFIED, electionId: "agm-2027", recordId: "hn-listed-000000000" };
+  const h = harness({ notified: [NOTIFIED, listedToo] });
+  const res = await h.gates.handle(PORTAL, { op: "list", hostDid: HOST });
+  assert.equal(res.ok, true);
+  const { elections, notified } = (res as { result: { elections: { electionId: string }[]; notified: unknown[] } }).result;
+  assert.deepEqual(elections.map((e) => e.electionId), ["agm-2027"]);
+  // Community, identifier, audience and period — the page's call already names
+  // the community — and nothing else of the notification or the election.
+  assert.deepEqual(notified, [
+    { electionId: "party-vote", audience: PARTY, status: "available", votingOpensAt: NOTIFIED.votingOpensAt, votingClosesAt: NOTIFIED.votingClosesAt },
+  ]);
+  const ask = h.asked.find((o) => o.op === "notified");
+  assert.deepEqual(ask, { op: "notified", hostDid: HOST, member: MEMBER });
+});
+
+test("vti_ntf_063: a notified election the page names no party for is opened as the notification's audience's member", async () => {
+  const h = harness({ rollOf: { memberOf: PARTY, memberOfKind: "memberParty" }, unknownUnlessPresenting: true, listed: false, notified: [{ ...NOTIFIED, electionId: "agm-2027" }] });
+  const res = await h.gates.handle(PORTAL, { op: "show", hostDid: HOST, electionId: "agm-2027" });
+  assert.equal(res.ok, true);
+  // Still only after the member chose to, in the wallet's window (VTI-VOT-016).
+  const w = h.prompts[0] as Extract<ElectionConsentView, { kind: "disclose" }>;
+  assert.equal(w.kind, "disclose");
+  assert.equal(w.memberOf, PARTY);
+  const shows = h.asked.filter((o) => o.op === "show") as Extract<OffscreenElectionsPageOp, { op: "show" }>[];
+  assert.deepEqual(shows.map((s) => s.readAs), [undefined, { memberOf: PARTY }]);
+});
+
+test("a withdrawn notification names no party to read as", async () => {
+  const h = harness({ unknownUnlessPresenting: true, listed: false, notified: [{ ...NOTIFIED, electionId: "agm-2027", status: "withdrawn" }] });
+  const res = await h.gates.handle(PORTAL, { op: "show", hostDid: HOST, electionId: "agm-2027" });
+  assert.equal(res.ok, false);
+  assert.equal(h.prompts.length, 0);
+});
+
+test("vti_ntf_063: from the wallet's own view, a notified election is read without presenting first", async () => {
+  const h = harness({ notifiedRecord: NOTIFIED });
+  const res = await h.gates.openNotified({ contextId: "vtc-acme", recordId: NOTIFIED.recordId });
+  assert.equal(res.ok, true);
+  const out = (res as { result: { kind: string; presented: boolean; member: string } }).result;
+  assert.equal(out.kind, "shown");
+  assert.equal(out.presented, false);
+  assert.equal(out.member, MEMBER, "read as the DID the notification was addressed to");
+  assert.deepEqual(h.asked.map((o) => o.op), ["notifiedTarget", "notifiedShow"]);
+  assert.equal((h.asked[1] as { present?: boolean }).present, undefined);
+});
+
+test("vti_vot_016: an election shown only to the audience's members asks before presenting, and presents only when told to", async () => {
+  const h = harness({ notifiedRecord: NOTIFIED, unknownUnlessPresenting: true, held: true });
+  const first = await h.gates.openNotified({ contextId: "vtc-acme", recordId: NOTIFIED.recordId });
+  assert.deepEqual((first as { result: unknown }).result, { kind: "needsPresent", audience: PARTY, held: true, community: HOST, member: MEMBER });
+  assert.deepEqual(h.disclosures, []);
+  const second = await h.gates.openNotified({ contextId: "vtc-acme", recordId: NOTIFIED.recordId, present: true });
+  assert.equal((second as { result: { kind: string; presented: boolean } }).result.presented, true);
+  assert.deepEqual(h.disclosures, [[`${HOST}\n${MEMBER}\nparty-vote`, PARTY]]);
+  const presented = h.asked.filter((o) => o.op === "notifiedShow" && (o as { present?: boolean }).present === true);
+  assert.equal(presented.length, 1);
+});
+
+test("a community the wallet may not reach yet is asked for before anything is read", async () => {
+  const h = harness({ notifiedRecord: NOTIFIED, reachCommunity: false });
+  const res = await h.gates.openNotified({ contextId: "vtc-acme", recordId: NOTIFIED.recordId });
+  assert.deepEqual((res as { result: unknown }).result, { kind: "needsReach", origin: new URL(ENDPOINT).origin, community: HOST });
+  assert.deepEqual(h.asked.map((o) => o.op), ["notifiedTarget"]);
+});
+
+test("a page cannot read, dismiss or deposit the member's notifications through the generic task prompt", () => {
+  for (const verb of ["list", "show", "dismiss", "deposit"]) {
+    assert.match(String(pageTaskRefusal(`https://trusttasks.org/spec/vta/notifications/${verb}/0.1`)), /which communities and parties/);
   }
 });

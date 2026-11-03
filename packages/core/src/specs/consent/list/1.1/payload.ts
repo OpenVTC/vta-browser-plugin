@@ -3,7 +3,7 @@
  * Source: https://trusttasks.org/spec/consent/list/1.1 (registry bundle)
  */
 
-import type { ConsentGrant, ConsentSubject, Effect_ConsentV0_1 as Effect, Ext, Kind, Scope_ConsentV0_1 as Scope } from "../../../_shared/components.js";
+import type { ConsentGrant, ConsentSubject, Effect_ConsentV0_1 as Effect, Ext, Kind_ConsentV0_1 as Kind, Scope_ConsentV0_1 as Scope } from "../../../_shared/components.js";
 
 
 /**

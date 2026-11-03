@@ -128,6 +128,10 @@
     "./links": {
       "types": "./dist/links/index.d.ts",
       "import": "./dist/links/index.js"
+    },
+    "./notifications": {
+      "types": "./dist/notifications/index.d.ts",
+      "import": "./dist/notifications/index.js"
     }
   },
   "sideEffects": false,

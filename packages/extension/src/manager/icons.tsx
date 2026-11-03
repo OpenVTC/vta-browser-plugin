@@ -43,7 +43,7 @@ import type { CSSProperties } from "react";
 export type IconName =
   // Sections, one per `SectionId`.
   | "contexts" | "keys" | "dids" | "did-templates"
-  | "credentials" | "persona" | "memory" | "app-state" | "rooms"
+  | "credentials" | "persona" | "memory" | "app-state" | "rooms" | "notifications"
   | "services" | "mediator" | "maintenance" | "audit"
   | "access" | "approvals" | "policy" | "sessions"
   // Attribute families, one per `AttributeFamily`.
@@ -81,6 +81,9 @@ const PATHS: Record<IconName, string> = {
     "M3.4 9.1h17.2M7 13.2h6.4M7 16.1h4",
   rooms:
     "M12 8.5V6.9M12 17.1v-1.6M8.5 12H6.9M17.1 12h-1.6",
+  // A bell: something exists that you may take part in.
+  notifications:
+    "M6.4 16.6V11a5.6 5.6 0 0 1 11.2 0v5.6l1.6 1.8H4.8zM10.2 20.6a1.9 1.9 0 0 0 3.6 0",
   services:
     "M7.9 6.4h5.9a2.9 2.9 0 0 1 0 5.8h-3.6a2.9 2.9 0 0 0 0 5.8h5.9",
   // A hub with three spokes: a relay, and the accounts whose mail it carries.

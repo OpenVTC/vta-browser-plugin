@@ -2895,9 +2895,61 @@ export interface PageVoteView {
   ticketTaken: boolean;
 }
 
+/** An election the member's agent holds a notification of (VTI-NTF-063), as
+ *  the page may show it until the member opens it: the community's identifier
+ *  for it, the party it is put to, the period the notification states and
+ *  whether it was withdrawn — nothing of the election itself. Elections the
+ *  community's list shows the member are in `elections`; one it does not list
+ *  (put to a party that is itself a member of the community, VTI-VOT-015) is
+ *  opened with `show` by its id, and the wallet reads it as that party's member. */
+export interface PageNotifiedElection {
+  electionId: string;
+  /** The DID the election is put to: under a credential roll, the party whose
+   *  members may take part (`roll.memberOf`). */
+  audience: string;
+  status: "available" | "withdrawn";
+  votingOpensAt?: string;
+  votingClosesAt?: string;
+}
+
 export type RuntimeElectionsPageResponse =
-  | { ok: true; result: { elections: PageElection[] } | PageElectionView | PageTicketView | PageVoteView }
+  | {
+      ok: true;
+      result:
+        | { elections: PageElection[]; notified: PageNotifiedElection[] }
+        | PageElectionView
+        | PageTicketView
+        | PageVoteView;
+    }
   | { ok: false; error: string };
+
+/** console → background: open an election the member holds a notification of,
+ *  from the wallet's own notifications view (VTI-NTF-063). Only the record is
+ *  named: the community, the election, the member and the party all come from
+ *  the notification as the VTA holds it. `present`: the member chose, on the
+ *  console, to present their membership credential issued by the
+ *  notification's audience (VTI-VOT-016). Never page-reachable. */
+export const RUNTIME_NOTIFIED_ELECTION = "vta-wallet/notified-election" as const;
+
+export interface RuntimeNotifiedElectionRequest {
+  type: typeof RUNTIME_NOTIFIED_ELECTION;
+  params: { contextId: string; recordId: string; present?: boolean };
+}
+
+/** What opening a notified election came to. */
+export type NotifiedElectionOutcome =
+  /** Read. `presented`: the read presented the member's membership. */
+  | { kind: "shown"; election: PageElectionView; presented: boolean; community: string; member: string; audience: string }
+  /** The wallet may not reach the community yet: the console asks, in a click. */
+  | { kind: "needsReach"; origin: string; community: string }
+  /** The community shows the election only to the audience's members: reading
+   *  it presents the member's membership credential issued by `audience`, and
+   *  the member decides first. `held`: whether they hold one at all. */
+  | { kind: "needsPresent"; audience: string; held: boolean; community: string; member: string };
+
+export type RuntimeNotifiedElectionResponse =
+  | { ok: true; result: NotifiedElectionOutcome }
+  | { ok: false; error: string; code?: string };
 
 export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_LOGIN,
@@ -3586,7 +3638,22 @@ export type OffscreenElectionsPageOp =
    *  the ballot box exactly as the VTA built it. Answers the ballot box's receipt. */
   | { op: "castPost"; castDocument: Record<string, unknown>; ballotBox: string; endpoint: string; delayMs: number }
   /** Last: the VTA keeps and checks the receipt (`vta/pcs/voter/receipt`). */
-  | { op: "castKeep"; hostDid: string; member: string; electionId: string; receipt: Record<string, unknown> };
+  | { op: "castKeep"; hostDid: string; member: string; electionId: string; receipt: Record<string, unknown> }
+  /** The notifications of the kind `election` the member's VTA holds for this
+   *  community's elections, in the context of the identity `member` lives in
+   *  (`vta/notifications/list`, VTI-NTF-063). */
+  | { op: "notified"; hostDid: string; member: string }
+  /** An election notification the VTA holds, opened from the wallet's own
+   *  view: read afresh from the VTA, with the community's Trust-Task endpoint. */
+  | { op: "notifiedTarget"; contextId: string; recordId: string }
+  /** Read the notified election from its community as the DID the
+   *  notification was addressed to. `present`: present that member's
+   *  membership credential issued by exactly the notification's audience,
+   *  which the member chose to show (VTI-VOT-016). */
+  | { op: "notifiedShow"; contextId: string; recordId: string; present?: boolean }
+  /** Whether that member holds a membership credential issued by exactly the
+   *  notification's audience — answered before they are asked to present it. */
+  | { op: "notifiedMembership"; contextId: string; recordId: string };
 
 export interface OffscreenElectionsPageRequest {
   target: typeof OFFSCREEN_TARGET;

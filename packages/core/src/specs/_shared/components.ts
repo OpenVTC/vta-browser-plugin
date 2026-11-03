@@ -122,6 +122,10 @@ export type ClaimType = string;
  */
 export type ConsumerKind = Companion_DeviceV0_2 | Service_DeviceV0_2;
 /**
+ * The trust context the notification is held in: the one the addressed DID belongs to.
+ */
+export type ContextId = string;
+/**
  * Opaque identifier of one of the maintainer's contexts, compared by the maintainer's own ancestry predicate. Its grammar is the maintainer's.
  */
 export type ContextPath = string;
@@ -168,6 +172,10 @@ export type DeviceAttestation =
   | Tpm
   | NitroEnclave
   | NoAttestation;
+/**
+ * A DID.
+ */
+export type Did = string;
 /**
  * A cryptographic digest as a multibase-encoded multihash — the encoding the W3C Verifiable Credentials Data Model 2.0 defines for `digestMultibase`, and the one `did:webvh` uses for its SCID and entry hashes.
  *
@@ -358,7 +366,11 @@ export type Key_VtaV0_1 = string;
 /**
  * The interaction kind: a 1:1 direct message, a multi-party group, or a broadcast channel.
  */
-export type Kind = "dm" | "group" | "channel";
+export type Kind_ConsentV0_1 = "dm" | "group" | "channel";
+/**
+ * What the thing is. Either a registered kind — one lowerCamelCase name in the VTI specification's notification kind registry (Appendix G), such as `election` — or an unregistered kind, written `<reverse-DNS domain>:<name>` under a domain its definer controls, such as `org.example:meetingInvite`. A recipient that does not recognise a kind holds, lists and discards it and does nothing else with it (VTI-NTF-012).
+ */
+export type Kind_NotificationsV0_1 = string;
 /**
  * A colour the holder picked for a list, as a six-digit lowercase sRGB hex value (`#1f8a70`). A rendering hint: a consumer MAY map it to the nearest colour of its own palette that keeps contrast in light and dark themes, and MUST NOT rely on colour alone to tell lists apart.
  */
@@ -419,6 +431,10 @@ export type Multibase = string;
  * Scopes one application's records within a context, so several tools can share a context without colliding — `openvtc`, `cnm`, an agent runtime. The maintainer MUST NOT interpret the value; it is an opaque partition name. Namespaces are first-come and unreserved, so an application SHOULD pick a stable, specific one: a future per-namespace ACL would grant on this exact string, which makes renaming a namespace a migration rather than an edit.
  */
 export type Namespace = string;
+/**
+ * The originator's identifier for one notification, unique among the notifications that originator issues and the same in every document that carries it — retries, re-issued documents and relayed copies alike. It is the notification's idempotency key (VTI-NTF-021). Compared for equality only. An originator SHOULD make it unguessable and SHOULD NOT make it descriptive: it travels as far as the notification does.
+ */
+export type NotificationId = string;
 /**
  * A starter key (`K_b`) or an approver lock key (`K_a`), as an Ed25519 `did:key` (`z6Mk…`) generated for this one request and used nowhere else. Ed25519 only: a service refuses any other key type with `auth/oob:keyUnsupported` before parsing beyond the multicodec prefix.
  */
@@ -763,6 +779,10 @@ export type RecordEvidence = RecordEvidenceRecord | RecordEvidenceCredential;
  */
 export type RecordEvidenceList = [RecordEvidence, ...RecordEvidence[]];
 /**
+ * The VTA's own identifier for one held notification, stable across the revisions that replace it. Opaque and compared for equality only; unguessable, because a show of a record in a context the caller may not read is refused and an enumerable identifier would turn the refusal into an oracle.
+ */
+export type RecordId = string;
+/**
  * The path from one record's leaf to the room's `DataCommitment` — a Merkle inclusion proof, in the vocabulary this work already uses for it.
  *
  * **It is not called `proof`** because in this framework that word is taken: `proof` is the document's data-integrity proof (SPEC §7.3), and a payload member of the same name in the same document invites reading one for the other. The two are not interchangeable and the confusion would be silent.
@@ -912,7 +932,7 @@ export type SigningScope =
 /**
  * A single binding target for a vault entry. Tagged union over the discriminator `kind`. A VaultEntry's `targets` array MAY mix any number of these.
  */
-export type SiteTarget = WebOrigin | Did | IosApp | AndroidApp;
+export type SiteTarget = WebOrigin_VaultV0_2 | Did_VaultV0_2 | IosApp_VaultV0_2 | AndroidApp_VaultV0_2;
 /**
  * A role a profile entry plays within its profile, so a consumer can find it without guessing from its claim type. A profile MAY hold several entries of one type — a legal name and a display name, two phone numbers — and only a slot says which answers a given question. Unique within a profile.
  *
@@ -925,6 +945,14 @@ export type SiteTarget = WebOrigin | Did | IosApp | AndroidApp;
  * Other values are the holder's or the producer's own and carry no meaning a maintainer interprets.
  */
 export type Slot = string;
+/**
+ * The principal's disposition of a held notification: `active`, or `dismissed` by vta/notifications/dismiss. Dismissal is the principal's alone and changes nothing outside the VTA (VTI-NTF-052).
+ */
+export type State = "active" | "dismissed";
+/**
+ * Whether the thing is still open to the audience: `available`, or `withdrawn` — cancelled by its holder, or no longer open to the audience — in which case the recipient keeps the record only to show that it was withdrawn (VTI-NTF-024).
+ */
+export type Status = "available" | "withdrawn";
 /**
  * A family of Trust Tasks, named by a slug prefix of whole segments (SPEC §6.1 grammar): `vtc/directory` names every task whose slug is `vtc/directory` or begins `vtc/directory/`, at any version. A prefix matches on segment boundaries only, so `vtc/dir` names nothing under `vtc/directory`.
  */
@@ -1780,7 +1808,7 @@ export interface ConsentSubject {
    * The bridge's OPAQUE conversation handle (e.g. "sig-1a2b3c4d"). NEVER the raw platform address — the VTA never learns the phone number / chat id.
    */
   conversationRef: string;
-  kind: Kind;
+  kind: Kind_ConsentV0_1;
   /**
    * VID (DID) of the AI agent the conversation would reach.
    */
@@ -2715,6 +2743,40 @@ export interface GroupDisclosure {
   credentialValidity: string;
 }
 /**
+ * One notification the VTA holds, as a client with standing in its context sees it. `originator` and every entry of `relayedBy` were verified by the VTA when it accepted the notification (VTI-NTF-042); a client that does not take the VTA's word for them reads the document with vta/notifications/show and verifies it itself.
+ */
+export interface HeldNotification {
+  recordId: RecordId;
+  contextId: ContextId;
+  /**
+   * The principal's DID the notification, or the relay that delivered it, was addressed to.
+   */
+  addressee: Did;
+  /**
+   * The issuer of the notifications/notify document: who said the thing exists.
+   */
+  originator: Did;
+  /**
+   * The relayers the held revision passed through, in the order they relayed it: the first is the notification's own addressee, the last the relayer that delivered it to `addressee`. Empty for a notification the originator sent to `addressee` directly. The acceptance policy counted the last one (VTI-NTF-031).
+   *
+   * @maxItems 4
+   */
+  relayedBy: [] | [Did] | [Did, Did] | [Did, Did, Did] | [Did, Did, Did, Did];
+  /**
+   * The notification's members at the revision held.
+   */
+  notification: Notification;
+  state: State;
+  /**
+   * When the VTA accepted the revision held.
+   */
+  receivedAt: string;
+  /**
+   * When the principal dismissed it. Present exactly when `state` is `dismissed`.
+   */
+  dismissedAt?: string;
+}
+/**
  * OpenPGP-style ASCII-armored HPKE bundle — the existing OpenVTC sealed-transfer wire form (X25519-HKDF-SHA256 KEM + ChaCha20-Poly1305 AEAD, framed in armor with Bundle-Id / Digest-Algo headers and a CRC24 checksum). Producer assertion (`didSigned` / `attested` / `pinnedOnly`) is the integrity / authenticity anchor.
  *
  * No open-source implementation reads this yet outside vta-sdk's `sealed_transfer` crate; new code SHOULD prefer the DIDComm variant. Defined here for parity with the existing offline-bundle / cross-VTA workflows that the design plan reserves for M5+.
@@ -3212,6 +3274,35 @@ export interface NewCardDefaults {
    * From whom a new card accepts introductions. Absent where the community does not deliver introductions.
    */
   introductions?: Introductions;
+}
+/**
+ * The members of one notification, as notifications/notify carries them and as a recipient's agent records them. The originator is the `issuer` of the notifications/notify document and the addressee its `recipient`; neither is repeated here, because the originator's proof covers both.
+ */
+export interface Notification {
+  notificationId: NotificationId;
+  /**
+   * The revision of this notification. A recipient replaces the record it holds with a higher revision and leaves it unchanged for an equal or lower one (VTI-NTF-022). The first revision is 1.
+   */
+  revision: number;
+  kind: Kind_NotificationsV0_1;
+  subject: Subject;
+  /**
+   * The DID whose holders or members the thing concerns — for an election under a credential roll, the DID the roll names (`roll.memberOf`); otherwise the community's own. It says whom the thing is for, not that the recipient is one of them: a recipient may be the audience itself, or a party the audience relayed the notification to.
+   */
+  audience: Did;
+  status: Status;
+  /**
+   * Whether the addressee may relay this notification to the parties it stands for (notifications/relay). The originator states it explicitly; an addressee MUST NOT relay a notification whose `relayable` is false, or whose kind may not be relayed (VTI-NTF-041).
+   */
+  relayable: boolean;
+  /**
+   * When the thing can first be acted on — for an election, when voting opens. Absent: it can be acted on now.
+   */
+  validFrom?: string;
+  /**
+   * When the thing can no longer be acted on, and the notification lapses — for an election, when voting closes. A recipient discards a notification received after it (VTI-NTF-032). Absent: the kind's definition says when it lapses.
+   */
+  validUntil?: string;
 }
 /**
  * The three credentials the room issued to the member, serialized as rooms/owner/{invite,issue-membership,issue-authority} return them. None is a secret: each names its subject, and a presentation of it must be signed by that subject. The member stores them in their own key holder's vault.
@@ -4412,21 +4503,21 @@ export interface Session_AuthV0_3 {
  * A whole Trust Task request document — `id`, `type`, `issuer`, `payload` and every other member, `proof` included — exactly as the ballot box received it, never re-serialised: its proof is taken over its members, and a re-serialised copy does not reliably reproduce them. Typed as an open object so every member survives; CONVENTIONS §9.6 gives the checks that make it a trustee's step.
  */
 export interface SignedRequest {}
-export interface WebOrigin {
+export interface WebOrigin_VaultV0_2 {
   kind: "webOrigin";
   /**
    * Web origin per RFC 6454 (scheme + host + optional port), e.g. "https://github.com". Compared by exact string equality after canonicalisation (lowercase host, default port elided). Consumers wanting subdomain coverage SHOULD add multiple targets, not encode a wildcard.
    */
   origin: string;
 }
-export interface Did {
+export interface Did_VaultV0_2 {
   kind: "did";
   /**
    * DID identifying the relying party (e.g. did:web:rp.example). The vault maintainer is responsible for any DID resolution required to act on this entry.
    */
   did: string;
 }
-export interface IosApp {
+export interface IosApp_VaultV0_2 {
   kind: "iosApp";
   /**
    * iOS bundle identifier in reverse-DNS form (e.g. "com.github.stwalkerster.codehub"). Compared by exact string equality. Matches when an iOS Companion identifies the requesting app via its bundle id (typically via the OS Credential Manager integration).
@@ -4437,7 +4528,7 @@ export interface IosApp {
    */
   teamId?: string;
 }
-export interface AndroidApp {
+export interface AndroidApp_VaultV0_2 {
   kind: "androidApp";
   /**
    * Android package name in reverse-DNS form (e.g. "com.github.android").
@@ -4473,6 +4564,23 @@ export interface StepUpProof {
    * Maintainer-issued challenge id the proof responds to.
    */
   challengeId: string;
+}
+/**
+ * Where the thing is and how to open it. Only these three members: what the thing contains is shown by its holder, to a reader it admits, when the thing is opened with `openWith`.
+ */
+export interface Subject {
+  /**
+   * The DID of the party holding the thing — for an election, the community. The party a recipient sends `openWith` to.
+   */
+  heldBy: Did;
+  /**
+   * The thing's identifier at `heldBy`, in the form the `openWith` task takes it — for an election, its `electionId`.
+   */
+  id: string;
+  /**
+   * The Type URI of the Trust Task by which a recipient opens the thing at `heldBy` — for an election, `https://trusttasks.org/spec/vtc/elections/show/0.6`. A recipient opens it only at its principal's choice (VTI-NTF-053), and only by a version of that task it and `heldBy` both serve.
+   */
+  openWith: string;
 }
 /**
  * An access token (typically short-lived JWT) paired with an optional refresh token (typically long-lived opaque string). The shapes follow OAuth 2.0 (RFC 6749 §5.1) conventions but are not coupled to any particular OAuth profile.

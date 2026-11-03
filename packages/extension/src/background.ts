@@ -175,6 +175,9 @@ import {
   RUNTIME_ROOM_FILES_PREPARE,
   RUNTIME_ROOMS_PAGE,
   RUNTIME_ROOM_OFFERS,
+  RUNTIME_NOTIFIED_ELECTION,
+  type RuntimeNotifiedElectionRequest,
+  type RuntimeNotifiedElectionResponse,
   OFFSCREEN_ROOM_OFFERS,
   type OffscreenRoomOffersResponse,
   type RuntimeRoomOffersRequest,
@@ -4327,6 +4330,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
+    return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_NOTIFIED_ELECTION) {
+    // Console only: the wallet's own notifications view. A portal reaches its
+    // community's elections, notified ones included, through
+    // `window.vtaWallet.elections`, whose gates hold it to that community.
+    if (!isExtensionPageSender(sender)) {
+      console.warn(`[background] rejecting ${RUNTIME_NOTIFIED_ELECTION} from non-extension sender url=${sender.url}`);
+      sendResponse({ ok: false, error: "notified elections are not page-reachable" } satisfies RuntimeNotifiedElectionResponse);
+      return false;
+    }
+    const { params } = message as RuntimeNotifiedElectionRequest;
+    if (!params || typeof params.contextId !== "string" || typeof params.recordId !== "string") {
+      sendResponse({ ok: false, error: "name the notification by its context and record" } satisfies RuntimeNotifiedElectionResponse);
+      return false;
+    }
+    electionsPageGates
+      .openNotified({ contextId: params.contextId, recordId: params.recordId, present: params.present === true })
+      .then(sendResponse)
+      .catch((e: unknown) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
     return true; // async sendResponse
   }
 
