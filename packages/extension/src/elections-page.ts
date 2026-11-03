@@ -34,6 +34,10 @@
 //      does not hold.
 //   4. For a ticket or a vote, **the person decides** in the wallet's window. A
 //      closed window is a refusal.
+//      `takeTickets` asks once for several elections, in one window that
+//      lists each, and then asks the community for each ticket in a request of
+//      its own, a random pause apart (`TICKET_SPACING_MS`), so the requests do
+//      not arrive as one burst (VTI-BRD-034).
 //   5. **A membership credential is presented only once the person chose to**
 //      (VTI-VOT-016, VTI-VOT-090). Under a credential roll the ticket claim
 //      presents the member's credential for the roll's `memberOf`, and the
@@ -70,7 +74,9 @@ import type {
   PageElectionQuestion,
   PageElectionView,
   PageNotifiedElection,
+  PageBatchTicket,
   PageTicketView,
+  PageTicketsView,
   PageVoteView,
   RuntimeElectionsPageResponse,
   RuntimeNotifiedElectionResponse,
@@ -86,6 +92,14 @@ export const ELECTION_PROGRESS_PREFIX = "election-progress:";
 /** A ballot window opened sooner than this after its ticket was taken says so:
  *  the community and the ballot box could pair the two by time. */
 export const TICKET_TO_VOTE_GAP_MS = 60 * 60 * 1000;
+
+/** The most elections one `takeTickets` call names. A board of a few dozen
+ *  ideas fits; a page asking for more asks again. */
+export const MAX_BATCH_TICKETS = 50;
+
+/** The random pause between two ticket requests of one `takeTickets`, so the
+ *  community does not receive them as one burst: `[min, max)` milliseconds. */
+export const TICKET_SPACING_MS: readonly [number, number] = [1_000, 6_000];
 
 /** The steps of a cast, in order, as the ballot window shows them. */
 export const CAST_STEPS = ["check", "seal", "wait", "send", "receipt"] as const;
@@ -120,6 +134,15 @@ export type ElectionConsentView =
       /** Under a credential roll: the party whose membership credential the
        *  claim presents. The window says so before the member decides. */
       presents?: RollCredential;
+    }
+  | {
+      /** Take the member's tickets for several elections at once. Each one is
+       *  listed with what claiming it presents, if anything. */
+      kind: "tickets";
+      origin: string;
+      communityName: string;
+      member: string;
+      elections: { election: PageElectionView; presents?: RollCredential }[];
     }
   | {
       /** Present the member's membership credential issued by `memberOf` just
@@ -189,6 +212,11 @@ export interface ElectionsPageDeps {
    *  election `key` names, if they did (step 5 above). */
   disclosedFor(key: string): Promise<string | undefined>;
   rememberDisclosure(key: string, memberOf: string): Promise<void>;
+  /** The pause between two ticket requests of one `takeTickets`; defaults to
+   *  a random time within `TICKET_SPACING_MS`. */
+  ticketSpacingMs?(): number;
+  /** Wait `ms`; defaults to a timer. Tests pass one that returns at once. */
+  sleep?(ms: number): Promise<void>;
   /** The pause before a cast is posted; defaults to `castDelayMs()`. */
   castDelayMs?(): number;
   now(): number;
@@ -209,15 +237,26 @@ export function electionsPageParamsRefusal(raw: unknown): string | null {
   const allowed =
     p.op === "list"
       ? ["op", "hostDid", "member"]
-      : p.op === "show" || p.op === "takeTicket" || p.op === "vote"
-        ? ["op", "hostDid", "electionId", "member", "memberOf"]
-        : null;
+      : p.op === "takeTickets"
+        ? ["op", "hostDid", "electionIds", "member"]
+        : p.op === "show" || p.op === "takeTicket" || p.op === "vote"
+          ? ["op", "hostDid", "electionId", "member", "memberOf"]
+          : null;
   if (!allowed) return "unknown elections operation";
   for (const k of Object.keys(p)) {
     if (!allowed.includes(k)) return `${String(p.op)} takes no \`${k}\``;
   }
   if (!isDid(p.hostDid)) return "hostDid must be a DID";
-  if (p.op !== "list" && (typeof p.electionId !== "string" || !ELECTION_ID.test(p.electionId))) {
+  if (p.op === "takeTickets") {
+    const ids = p.electionIds;
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > MAX_BATCH_TICKETS) {
+      return `electionIds must list 1 to ${MAX_BATCH_TICKETS} elections`;
+    }
+    if (!ids.every((id) => typeof id === "string" && ELECTION_ID.test(id))) {
+      return "electionIds must be election identifiers";
+    }
+    if (new Set(ids).size !== ids.length) return "electionIds must not repeat an election";
+  } else if (p.op !== "list" && (typeof p.electionId !== "string" || !ELECTION_ID.test(p.electionId))) {
     return "electionId must be an election identifier";
   }
   if (p.member !== undefined && !isDid(p.member)) return "member must be a DID";
@@ -302,6 +341,14 @@ function pageElectionOf(e: Record<string, unknown>): PageElection {
   };
 }
 
+/** A random pause within `TICKET_SPACING_MS`, from the platform's CSPRNG so a
+ *  community cannot predict it. */
+export function defaultTicketSpacingMs(): number {
+  const [min, max] = TICKET_SPACING_MS;
+  const r = crypto.getRandomValues(new Uint32Array(1))[0]! / 2 ** 32;
+  return Math.floor(min + r * (max - min));
+}
+
 /** Where a ticket's time is remembered: per member, community and election. */
 export function ticketKey(hostDid: string, member: string, electionId: string): string {
   return `${hostDid}\n${member}\n${electionId}`;
@@ -367,6 +414,8 @@ export class ElectionsPageGates {
           return { ok: true, result: pageElectionViewOf((await this.show(origin, vta, p.hostDid, who, p.electionId, p.memberOf)).shown) };
         case "takeTicket":
           return { ok: true, result: await this.takeTicket(origin, vta, p.hostDid, who, p.electionId, false, p.memberOf) };
+        case "takeTickets":
+          return { ok: true, result: await this.takeTickets(origin, vta, p.hostDid, who, p.electionIds) };
         case "vote":
           return { ok: true, result: await this.vote(origin, vta, p.hostDid, who, p.electionId, p.memberOf) };
       }
@@ -555,6 +604,97 @@ export class ElectionsPageGates {
     };
     if (got.taken) await this.deps.rememberTicket(ticketKey(hostDid, who.did, electionId), this.deps.now());
     return { ticketHeld: true, taken: got.taken };
+  }
+
+  /**
+   * Several tickets, decided once (VTI-BRD-034). Each election is read as
+   * `takeTicket` reads it, but nothing is ever presented just to read one: an
+   * election shown only to a party's members is `unavailable` here, and the
+   * page takes it alone. The member sees every election in one window, each with
+   * what claiming it presents; once they agree, each ticket is still its own
+   * request to the community, a random pause after the last, and a failure of
+   * one does not stop the rest.
+   */
+  private async takeTickets(
+    origin: string,
+    vta: ActiveVta,
+    hostDid: string,
+    who: Identity,
+    electionIds: string[],
+  ): Promise<PageTicketsView> {
+    const held = new Set((await this.listed(vta, hostDid, who)).filter((e) => e.ticketHeld).map((e) => e.electionId));
+    const outcome = new Map<string, PageBatchTicket>();
+    const pending: { electionId: string; shown: ElectionShown; readAs?: ElectionReadAs; presents?: RollCredential }[] = [];
+    for (const electionId of electionIds) {
+      if (held.has(electionId)) {
+        outcome.set(electionId, { electionId, outcome: "held" });
+        continue;
+      }
+      let read: Read;
+      try {
+        read = await this.readQuietly(vta, hostDid, who, electionId);
+      } catch (e) {
+        outcome.set(
+          electionId,
+          e instanceof ElectionsPageRefusal && e.code === "electionUnknown"
+            ? { electionId, outcome: "unavailable" }
+            : { electionId, outcome: "failed", error: e instanceof Error ? e.message : String(e) },
+        );
+        continue;
+      }
+      const presents = rollCredentialOf(read.shown) ?? undefined;
+      if (presents) {
+        const has = (await this.offscreen(vta, { op: "membership", hostDid, member: who.did, memberOf: presents.memberOf })) as {
+          held: boolean;
+        };
+        if (!has.held) {
+          outcome.set(electionId, { electionId, outcome: "notEligible" });
+          continue;
+        }
+      }
+      pending.push({ electionId, shown: read.shown, ...(read.readAs ? { readAs: read.readAs } : {}), ...(presents ? { presents } : {}) });
+    }
+    if (pending.length > 0) {
+      const decided = await this.deps.prompt({
+        kind: "tickets",
+        origin,
+        communityName: who.communityName,
+        member: who.did,
+        elections: pending.map((p) => ({ election: pageElectionViewOf(p.shown), ...(p.presents ? { presents: p.presents } : {}) })),
+      });
+      if (!decided.approved) throw new ElectionsPageRefusal("You did not take your tickets.");
+      const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+      const spacing = this.deps.ticketSpacingMs ?? defaultTicketSpacingMs;
+      for (const [i, p] of pending.entries()) {
+        if (i > 0) await sleep(spacing());
+        try {
+          const got = (await this.offscreen(vta, {
+            op: "takeTicket",
+            hostDid,
+            member: who.did,
+            electionId: p.electionId,
+            ...(p.readAs ? { readAs: p.readAs } : {}),
+            ...(p.presents ? { presentFor: p.presents.memberOf } : {}),
+          })) as { taken: boolean };
+          if (got.taken) await this.deps.rememberTicket(ticketKey(hostDid, who.did, p.electionId), this.deps.now());
+          outcome.set(p.electionId, { electionId: p.electionId, outcome: got.taken ? "taken" : "held" });
+        } catch (e) {
+          outcome.set(p.electionId, { electionId: p.electionId, outcome: "failed", error: e instanceof Error ? e.message : String(e) });
+        }
+      }
+    }
+    return { tickets: electionIds.map((id) => outcome.get(id)!) };
+  }
+
+  /** Read an election without ever asking to present a membership: as the
+   *  member chose to read it before, or plainly. */
+  private async readQuietly(vta: ActiveVta, hostDid: string, who: Identity, electionId: string): Promise<Read> {
+    const chosen = await this.deps.disclosedFor(ticketKey(hostDid, who.did, electionId));
+    if (chosen !== undefined) {
+      const readAs: ElectionReadAs = { memberOf: chosen };
+      return { shown: (await this.offscreen(vta, { op: "show", hostDid, member: who.did, electionId, readAs })) as ElectionShown, readAs };
+    }
+    return { shown: (await this.offscreen(vta, { op: "show", hostDid, member: who.did, electionId })) as ElectionShown };
   }
 
   private async vote(

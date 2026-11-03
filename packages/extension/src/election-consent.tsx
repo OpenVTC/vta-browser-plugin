@@ -98,6 +98,7 @@ export function ElectionConsent({ consentId, decide }: { consentId: string; deci
 
   if (!view) return <div style={{ padding: 20, fontSize: 13 }}>Loading…</div>;
   if (view.kind === "ticket") return <TicketWindow view={view} decide={decide} />;
+  if (view.kind === "tickets") return <TicketsWindow view={view} decide={decide} />;
   if (view.kind === "disclose") return <DiscloseWindow view={view} decide={decide} />;
   if (view.kind === "ballot") return <BallotWindow consentId={consentId} view={view} decide={decide} />;
   return <CastWindow view={view} done={() => decide({ approved: true })} />;
@@ -189,6 +190,71 @@ function TicketWindow({ view, decide }: { view: Extract<ElectionConsentView, { k
         </button>
         <button onClick={() => decide({ approved: true })} style={primary}>
           {view.presents ? "Show my membership and take my ticket" : "Take my ticket"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Several tickets at once (a board's ideas): every election listed, with what
+ *  claiming each presents, and one decision for them all. Each ticket is still
+ *  asked for on its own, a pause apart, after the member agrees. */
+function TicketsWindow({ view, decide }: { view: Extract<ElectionConsentView, { kind: "tickets" }>; decide: ElectionDecision }) {
+  const n = view.elections.length;
+  const presenting = view.elections.filter((e) => e.presents);
+  return (
+    <div style={{ padding: 20, fontSize: 13, display: "grid", gap: 14 }}>
+      <strong style={{ fontSize: 14 }}>
+        Take your ticket{n === 1 ? "" : "s"} for {n === 1 ? "1 election" : `${n} elections`}?
+      </strong>
+      <div style={{ display: "grid", gap: 6 }}>
+        <p style={muted}>
+          {view.communityName} signs each ticket without seeing it, so it never knows which ballot is yours. Each ticket
+          lets you vote once in its own election.
+        </p>
+        <p style={muted}>
+          Your wallet asks for them one at a time, a few seconds apart. Vote later rather than straight away:{" "}
+          {view.communityName} knows when it gave you each ticket, and the ballot box knows when your vote arrives.
+        </p>
+        <p style={muted}>Asked for by {originHost(view.origin)}.</p>
+      </div>
+      {presenting.length > 0 && (
+        <div style={{ display: "grid", gap: 6 }} data-testid="election-tickets-presents">
+          {presenting.map((e) => (
+            <div key={e.election.electionId} style={warn}>
+              <strong>{e.election.title ?? e.election.electionId}:</strong>{" "}
+              {rollCredentialWarning(e.presents!, view.communityName)}
+            </div>
+          ))}
+        </div>
+      )}
+      <div>
+        <div style={label}>The elections</div>
+        <ul style={{ ...card, margin: 0, paddingLeft: 28, display: "grid", gap: 4 }} data-testid="election-tickets-list">
+          {view.elections.map((e) => (
+            <li key={e.election.electionId}>
+              {e.election.title ?? e.election.electionId}
+              <span style={{ ...muted, fontSize: 12 }}> · voting closes {when(e.election.votingClosesAt)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div>
+        <div style={label}>Your tickets are for</div>
+        <div style={{ ...card, display: "grid", gap: 6 }}>
+          <Did value={view.member} />
+          <p style={{ ...muted, fontSize: 12 }}>
+            {view.communityName} gives each ticket to this identity, so it knows you hold them. Your votes will not
+            carry this identity: each goes with its blind ticket and a key made for that vote alone.
+          </p>
+        </div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+        <button autoFocus onClick={() => decide({ approved: false })} style={{ padding: "8px 16px", fontSize: 13 }}>
+          Cancel
+        </button>
+        <button onClick={() => decide({ approved: true })} style={primary}>
+          {presenting.length > 0 ? `Show my membership and take ${n === 1 ? "my ticket" : `all ${n} tickets`}` : n === 1 ? "Take my ticket" : `Take all ${n} tickets`}
         </button>
       </div>
     </div>

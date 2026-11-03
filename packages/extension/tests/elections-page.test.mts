@@ -107,6 +107,8 @@ function harness(
     notifiedRecord?: Record<string, unknown>;
     /** Whether the community's endpoint is reachable (the console's open). */
     reachCommunity?: boolean;
+    /** Elections whose ticket request the community refuses. */
+    ticketFails?: string[];
   } = {},
 ) {
   const asked: OffscreenElectionsPageOp[] = [];
@@ -115,6 +117,7 @@ function harness(
   const progress: [string, CastProgress][] = [];
   const votes: [string, RememberedVote][] = [];
   const disclosures: [string, string][] = [];
+  const slept: number[] = [];
   let reachChecks = 0;
   let shownNow: Record<string, unknown> = opts.revote ? { ...shown, disclosure: { ...shown.disclosure, revote: opts.revote } } : shown;
   if (opts.rollOf) {
@@ -162,6 +165,7 @@ function harness(
         case "membership":
           return { ok: true, result: { held: opts.held ?? true } };
         case "takeTicket":
+          if (opts.ticketFails?.includes(op.electionId)) return { ok: false, error: "the community is not issuing tickets" };
           return { ok: true, result: { taken: opts.taken ?? true } };
         case "castPrepare":
           return opts.castFails
@@ -211,6 +215,10 @@ function harness(
       votes.push([key, vote]);
     },
     castDelayMs: () => 7_000,
+    ticketSpacingMs: () => 3_000,
+    async sleep(ms) {
+      slept.push(ms);
+    },
     async ticketTakenAt() {
       return opts.takenAt;
     },
@@ -225,7 +233,7 @@ function harness(
     },
     now: () => opts.now ?? 10 * TICKET_TO_VOTE_GAP_MS,
   };
-  return { gates: new ElectionsPageGates(deps), asked, prompts, remembered, progress, votes, disclosures };
+  return { gates: new ElectionsPageGates(deps), asked, prompts, remembered, progress, votes, disclosures, slept };
 }
 
 test("only list, show, takeTicket and vote, with a DID and an election id, are calls", () => {
@@ -670,5 +678,103 @@ test("a community the wallet may not reach yet is asked for before anything is r
 test("a page cannot read, dismiss or deposit the member's notifications through the generic task prompt", () => {
   for (const verb of ["list", "show", "dismiss", "deposit"]) {
     assert.match(String(pageTaskRefusal(`https://trusttasks.org/spec/vta/notifications/${verb}/0.1`)), /which communities and parties/);
+  }
+});
+
+// ── takeTickets: several tickets, one decision (VTI-BRD-034) ───────────────
+
+const batch = (electionIds: string[], extra: Record<string, unknown> = {}) => ({ op: "takeTickets", hostDid: HOST, electionIds, ...extra });
+
+test("takeTickets takes 1 to 50 distinct election ids and nothing else", () => {
+  assert.equal(electionsPageParamsRefusal(batch(["agm-2027", "b-2"])), null);
+  assert.match(electionsPageParamsRefusal(batch([]))!, /1 to 50/);
+  assert.match(electionsPageParamsRefusal(batch(Array.from({ length: 51 }, (_, i) => `e${i}`)))!, /1 to 50/);
+  assert.match(electionsPageParamsRefusal(batch(["agm-2027", "agm-2027"]))!, /repeat/);
+  assert.match(electionsPageParamsRefusal(batch(["../x"]))!, /election identifiers/);
+  assert.match(electionsPageParamsRefusal(batch(["agm-2027"], { memberOf: HOST }))!, /takes no `memberOf`/);
+  assert.match(electionsPageParamsRefusal({ op: "takeTickets", hostDid: HOST, electionId: "agm-2027" })!, /takes no `electionId`/);
+});
+
+test("vti_brd_034: one window for every ticket, then each asked for alone, a pause apart", async () => {
+  const h = harness({ ticketHeld: false, now: 77 });
+  const res = await h.gates.handle(PORTAL, batch(["agm-2027", "b-2", "c-3"]));
+  assert.deepEqual(res, {
+    ok: true,
+    result: {
+      tickets: [
+        { electionId: "agm-2027", outcome: "taken" },
+        { electionId: "b-2", outcome: "taken" },
+        { electionId: "c-3", outcome: "taken" },
+      ],
+    },
+  });
+  assert.deepEqual(h.prompts.map((p) => p.kind), ["tickets"]);
+  assert.equal((h.prompts[0] as Extract<ElectionConsentView, { kind: "tickets" }>).elections.length, 3);
+  const takes = h.asked.filter((o) => o.op === "takeTicket");
+  assert.deepEqual(takes.map((o) => (o as { electionId: string }).electionId), ["agm-2027", "b-2", "c-3"]);
+  // A pause before every request but the first.
+  assert.deepEqual(h.slept, [3_000, 3_000]);
+  assert.equal(h.remembered.length, 3);
+  assert.deepEqual(h.remembered[0], [`${HOST}\n${MEMBER}\nagm-2027`, 77]);
+});
+
+test("a ticket the member already holds is not asked for, and needs no window", async () => {
+  const h = harness({ ticketHeld: true });
+  const res = await h.gates.handle(PORTAL, batch(["agm-2027"]));
+  assert.deepEqual(res, { ok: true, result: { tickets: [{ electionId: "agm-2027", outcome: "held" }] } });
+  assert.equal(h.prompts.length, 0);
+  assert.equal(h.asked.some((o) => o.op === "takeTicket" || o.op === "show"), false);
+});
+
+test("declining the window takes no ticket at all", async () => {
+  const h = harness({ ticketHeld: false, approve: false });
+  const res = await h.gates.handle(PORTAL, batch(["agm-2027", "b-2"]));
+  assert.equal(res.ok, false);
+  assert.match((res as { error: string }).error, /did not take your tickets/);
+  assert.equal(h.asked.some((o) => o.op === "takeTicket"), false);
+});
+
+test("an election shown only to a party's members is unavailable here: nothing is presented to read it", async () => {
+  const h = harness({ ticketHeld: false, unknownUnlessPresenting: true });
+  const res = await h.gates.handle(PORTAL, batch(["agm-2027"]));
+  assert.deepEqual(res, { ok: true, result: { tickets: [{ electionId: "agm-2027", outcome: "unavailable" }] } });
+  assert.equal(h.prompts.length, 0, "no disclose window, and no tickets window for nothing");
+  assert.equal(h.asked.some((o) => o.op === "show" && "readAs" in o), false);
+  assert.equal(h.asked.some((o) => o.op === "membership"), false);
+});
+
+test("vti_vot_025: under a credential roll the window says what each claim presents, and the claim presents it", async () => {
+  const rollOf = { memberOf: "did:webvh:QmGroup:acme.example", memberOfKind: "communityGroup" as const, memberOfName: "Identity WG" };
+  const h = harness({ ticketHeld: false, rollOf });
+  await h.gates.handle(PORTAL, batch(["agm-2027"]));
+  const view = h.prompts[0] as Extract<ElectionConsentView, { kind: "tickets" }>;
+  assert.equal(view.elections[0]!.presents?.memberOf, rollOf.memberOf);
+  const take = h.asked.find((o) => o.op === "takeTicket") as { presentFor?: string };
+  assert.equal(take.presentFor, rollOf.memberOf);
+});
+
+test("a roll the member holds no membership for is notEligible, and asks nothing", async () => {
+  const rollOf = { memberOf: "did:webvh:QmGroup:acme.example", memberOfKind: "communityGroup" as const };
+  const h = harness({ ticketHeld: false, rollOf, held: false });
+  const res = await h.gates.handle(PORTAL, batch(["agm-2027"]));
+  assert.deepEqual(res, { ok: true, result: { tickets: [{ electionId: "agm-2027", outcome: "notEligible" }] } });
+  assert.equal(h.prompts.length, 0);
+});
+
+test("one refused ticket does not stop the rest, and the page is told which", async () => {
+  const h = harness({ ticketHeld: false, ticketFails: ["b-2"] });
+  const res = await h.gates.handle(PORTAL, batch(["agm-2027", "b-2", "c-3"]));
+  const tickets = (res as { result: { tickets: { electionId: string; outcome: string; error?: string }[] } }).result.tickets;
+  assert.deepEqual(tickets.map((t) => t.outcome), ["taken", "failed", "taken"]);
+  assert.match(tickets[1]!.error!, /not issuing tickets/);
+  assert.equal(h.remembered.length, 2);
+});
+
+test("the page learns nothing from takeTickets that list would not tell it", async () => {
+  const h = harness({ ticketHeld: false });
+  const res = await h.gates.handle(PORTAL, batch(["agm-2027"]));
+  const text = JSON.stringify(res);
+  for (const k of ["manifest", "ballot", "receipt", "voted", "presentation", "credential"]) {
+    assert.equal(text.includes(k), false, `${k} stays with the wallet`);
   }
 });
