@@ -231,14 +231,18 @@ export interface VtaWalletElections {
   /** The elections the community lets the member vote in, and whether it has
    *  issued their ticket. Never prompts. */
   list(p: { hostDid: string; member?: string }): Promise<{ elections: PageElection[] }>;
-  /** One election: what it asks and how it is run. Never prompts. */
-  show(p: { hostDid: string; electionId: string; member?: string }): Promise<PageElectionView>;
+  /** One election: what it asks and how it is run. Prompts only to read an
+   *  election the community shows nobody but members of `memberOf`, a party
+   *  that is itself its member (VTI-VOT-015): the member first chooses, in the
+   *  wallet's window, whether to show the community that membership. Such an
+   *  election is never in `list`; the page learns of it from a link. */
+  show(p: { hostDid: string; electionId: string; member?: string; memberOf?: string }): Promise<PageElectionView>;
   /** Ask to take the member's ticket: they decide in the wallet's window. */
-  takeTicket(p: { hostDid: string; electionId: string; member?: string }): Promise<PageTicketView>;
+  takeTicket(p: { hostDid: string; electionId: string; member?: string; memberOf?: string }): Promise<PageTicketView>;
   /** Ask to vote: the wallet opens its ballot. With no ticket held it takes one
    *  instead and stops (`ticketTaken: true`) — vote later. Resolves when the
    *  wallet's window closes, whatever the member did there. */
-  vote(p: { hostDid: string; electionId: string; member?: string }): Promise<PageVoteView>;
+  vote(p: { hostDid: string; electionId: string; member?: string; memberOf?: string }): Promise<PageVoteView>;
 }
 
 /** `window.vtaWallet.git`. */
@@ -713,6 +717,7 @@ if (!window.vtaWallet) {
           hostDid: p.hostDid,
           electionId: p.electionId,
           ...(p.member !== undefined ? { member: p.member } : {}),
+          ...(p.memberOf !== undefined ? { memberOf: p.memberOf } : {}),
         }),
       takeTicket: (p) =>
         call<PageTicketView>("elections", {
@@ -720,6 +725,7 @@ if (!window.vtaWallet) {
           hostDid: p.hostDid,
           electionId: p.electionId,
           ...(p.member !== undefined ? { member: p.member } : {}),
+          ...(p.memberOf !== undefined ? { memberOf: p.memberOf } : {}),
         }),
       vote: (p) =>
         call<PageVoteView>("elections", {
@@ -727,6 +733,7 @@ if (!window.vtaWallet) {
           hostDid: p.hostDid,
           electionId: p.electionId,
           ...(p.member !== undefined ? { member: p.member } : {}),
+          ...(p.memberOf !== undefined ? { memberOf: p.memberOf } : {}),
         }),
     },
   };

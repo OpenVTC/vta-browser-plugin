@@ -219,7 +219,7 @@ import { installRoomFilesPort, isNoTrustTaskService, resolveRoomHostEndpoint } f
 import { runRoomsPageOp } from "./room-page-offscreen.js";
 import { runDirectoryPageOp } from "./directory-page-offscreen.js";
 import { runGitPageOp } from "./git-page-offscreen.js";
-import { runElectionsPageOp } from "./elections-page-offscreen.js";
+import { ElectionsWorkError, runElectionsPageOp } from "./elections-page-offscreen.js";
 import { OfferOpError, runRoomOffersOp } from "./room-offers-offscreen.js";
 import {
   OFFSCREEN_ROOM_OFFERS,
@@ -707,7 +707,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     )
       .then((result) => sendResponse({ ok: true, result } satisfies OffscreenElectionsPageResponse))
       .catch((e: unknown) =>
-        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) } satisfies OffscreenElectionsPageResponse),
+        sendResponse({
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+          ...(e instanceof ElectionsWorkError && e.code ? { code: e.code } : {}),
+        } satisfies OffscreenElectionsPageResponse),
       );
     return true; // async sendResponse
   }

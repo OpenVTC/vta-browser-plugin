@@ -89,6 +89,18 @@ function harness(
     revote?: string;
     windowClosed?: boolean;
     reachAtCast?: boolean;
+    /** The election's roll: the holders of a membership credential for this party. */
+    rollOf?: { memberOf: string; memberOfKind: "thisCommunity" | "communityGroup" | "memberParty"; memberOfName?: string };
+    /** Whether the member holds a credential from the party the roll names. */
+    held?: boolean;
+    /** Whether the community lists the election to the member at all. */
+    listed?: boolean;
+    /** The community shows the election only to a read presenting a membership. */
+    unknownUnlessPresenting?: boolean;
+    /** The party the member already chose to present their membership of. */
+    disclosed?: string;
+    /** Whether the ticket was taken by this call (false: the agent held it). */
+    taken?: boolean;
   } = {},
 ) {
   const asked: OffscreenElectionsPageOp[] = [];
@@ -96,8 +108,16 @@ function harness(
   const remembered: [string, number][] = [];
   const progress: [string, CastProgress][] = [];
   const votes: [string, RememberedVote][] = [];
+  const disclosures: [string, string][] = [];
   let reachChecks = 0;
-  const shownNow = opts.revote ? { ...shown, disclosure: { ...shown.disclosure, revote: opts.revote } } : shown;
+  let shownNow: Record<string, unknown> = opts.revote ? { ...shown, disclosure: { ...shown.disclosure, revote: opts.revote } } : shown;
+  if (opts.rollOf) {
+    shownNow = {
+      ...shownNow,
+      manifest: { ...manifest, roll: { rule: "credential", memberOf: opts.rollOf.memberOf } },
+      disclosure: { ...(shownNow.disclosure as object), rollCredential: { ...opts.rollOf, presenterDisclosed: true } },
+    };
+  }
   const deps: ElectionsPageDeps = {
     async active() {
       return { ok: true, vta: VTA };
@@ -115,7 +135,7 @@ function harness(
           return {
             ok: true,
             result: {
-              elections: [
+              elections: opts.listed === false ? [] : [
                 {
                   electionId: "agm-2027",
                   title: "AGM 2027",
@@ -129,9 +149,14 @@ function harness(
             },
           };
         case "show":
+          if (opts.unknownUnlessPresenting && !op.readAs) {
+            return { ok: false, error: "Acme Guild shows you no such election", code: "electionUnknown" };
+          }
           return { ok: true, result: shownNow };
+        case "membership":
+          return { ok: true, result: { held: opts.held ?? true } };
         case "takeTicket":
-          return { ok: true, result: { taken: true } };
+          return { ok: true, result: { taken: opts.taken ?? true } };
         case "castPrepare":
           return opts.castFails
             ? { ok: false, error: opts.castFails }
@@ -174,9 +199,15 @@ function harness(
     async rememberTicket(key, at) {
       remembered.push([key, at]);
     },
+    async disclosedFor() {
+      return disclosures.at(-1)?.[1] ?? opts.disclosed;
+    },
+    async rememberDisclosure(key, memberOf) {
+      disclosures.push([key, memberOf]);
+    },
     now: () => opts.now ?? 10 * TICKET_TO_VOTE_GAP_MS,
   };
-  return { gates: new ElectionsPageGates(deps), asked, prompts, remembered, progress, votes };
+  return { gates: new ElectionsPageGates(deps), asked, prompts, remembered, progress, votes, disclosures };
 }
 
 test("only list, show, takeTicket and vote, with a DID and an election id, are calls", () => {
@@ -405,11 +436,129 @@ test("a ballot opened soon after the ticket says so", async () => {
   await Promise.all([...h.gates.casting]);
 });
 
+// ── Credential rolls (VTI-VOT-015 – 017, 025, 090) ──────────────────────────
+
+const PARTY = "did:webvh:QmParty:party.example";
+
+test("vti_vot_090: show passes the roll's credential disclosure on to the page", async () => {
+  const h = harness({ rollOf: { memberOf: PARTY, memberOfKind: "memberParty", memberOfName: "Party Co-op" } });
+  const res = await h.gates.handle(PORTAL, { op: "show", hostDid: HOST, electionId: "agm-2027" });
+  assert.equal(res.ok, true);
+  const view = (res as { result: { disclosure: Record<string, unknown> } }).result;
+  assert.deepEqual(view.disclosure.rollCredential, { memberOf: PARTY, memberOfKind: "memberParty", memberOfName: "Party Co-op" });
+});
+
+test("vti_vot_025: a ticket under a credential roll says, first, that claiming it presents the membership", async () => {
+  const h = harness({ rollOf: { memberOf: PARTY, memberOfKind: "communityGroup", memberOfName: "Engineering" } });
+  const res = await h.gates.handle(PORTAL, { op: "takeTicket", hostDid: HOST, electionId: "agm-2027" });
+  assert.deepEqual(res, { ok: true, result: { ticketHeld: true, taken: true } });
+  const w = h.prompts[0] as Extract<ElectionConsentView, { kind: "ticket" }>;
+  assert.deepEqual(w.presents, { memberOf: PARTY, memberOfKind: "communityGroup", memberOfName: "Engineering" });
+  const take = h.asked.find((o) => o.op === "takeTicket") as Extract<OffscreenElectionsPageOp, { op: "takeTicket" }>;
+  assert.equal(take.presentFor, PARTY, "the claim presents for exactly the party the member was told of");
+  // Membership is checked before the window, and the window before the claim.
+  const ops = h.asked.map((o) => o.op);
+  assert.ok(ops.indexOf("membership") < ops.indexOf("takeTicket"));
+});
+
+test("a ticket the member declines under a credential roll presents nothing", async () => {
+  const h = harness({ rollOf: { memberOf: PARTY, memberOfKind: "thisCommunity" }, approve: false });
+  const res = await h.gates.handle(PORTAL, { op: "takeTicket", hostDid: HOST, electionId: "agm-2027" });
+  assert.equal(res.ok, false);
+  assert.equal(h.asked.some((o) => o.op === "takeTicket"), false);
+});
+
+test("a member holding no membership of the roll's party is told so, before any window", async () => {
+  const h = harness({ rollOf: { memberOf: PARTY, memberOfKind: "memberParty" }, held: false });
+  const res = await h.gates.handle(PORTAL, { op: "takeTicket", hostDid: HOST, electionId: "agm-2027" });
+  assert.equal(res.ok, false);
+  assert.match((res as { error: string }).error, /don't hold one, so you are not a member of that party/);
+  assert.equal(h.prompts.length, 0);
+});
+
+test("a ticket under any other roll presents nothing and checks no membership", async () => {
+  const h = harness();
+  await h.gates.handle(PORTAL, { op: "takeTicket", hostDid: HOST, electionId: "agm-2027" });
+  assert.equal(h.asked.some((o) => o.op === "membership"), false);
+  const take = h.asked.find((o) => o.op === "takeTicket") as Extract<OffscreenElectionsPageOp, { op: "takeTicket" }>;
+  assert.equal("presentFor" in take, false);
+  assert.equal((h.prompts[0] as { presents?: unknown }).presents, undefined);
+});
+
+test("vti_vot_015/016: a member-party election is read presenting the membership only after the member chose to", async () => {
+  const h = harness({ rollOf: { memberOf: PARTY, memberOfKind: "memberParty" }, unknownUnlessPresenting: true, listed: false });
+  const res = await h.gates.handle(PORTAL, { op: "show", hostDid: HOST, electionId: "agm-2027", memberOf: PARTY });
+  assert.equal(res.ok, true);
+  const shows = h.asked.filter((o) => o.op === "show") as Extract<OffscreenElectionsPageOp, { op: "show" }>[];
+  assert.equal(shows[0]!.readAs, undefined, "read without presenting first");
+  assert.deepEqual(shows[1]!.readAs, { memberOf: PARTY });
+  const w = h.prompts[0] as Extract<ElectionConsentView, { kind: "disclose" }>;
+  assert.equal(w.kind, "disclose");
+  assert.equal(w.memberOf, PARTY);
+  assert.deepEqual(h.disclosures, [[`${HOST}\n${MEMBER}\nagm-2027`, PARTY]]);
+});
+
+test("declining to show the membership reads nothing more", async () => {
+  const h = harness({ unknownUnlessPresenting: true, approve: false });
+  const res = await h.gates.handle(PORTAL, { op: "show", hostDid: HOST, electionId: "agm-2027", memberOf: PARTY });
+  assert.equal(res.ok, false);
+  assert.equal(h.asked.filter((o) => o.op === "show").length, 1);
+  assert.deepEqual(h.disclosures, []);
+});
+
+test("an unknown election with no party named is not presented for", async () => {
+  const h = harness({ unknownUnlessPresenting: true });
+  const res = await h.gates.handle(PORTAL, { op: "show", hostDid: HOST, electionId: "agm-2027" });
+  assert.equal(res.ok, false);
+  assert.equal(h.prompts.length, 0);
+  assert.equal(h.asked.some((o) => o.op === "membership"), false);
+});
+
+test("a party the member holds no membership of is not asked about", async () => {
+  const h = harness({ unknownUnlessPresenting: true, held: false });
+  const res = await h.gates.handle(PORTAL, { op: "show", hostDid: HOST, electionId: "agm-2027", memberOf: PARTY });
+  assert.equal(res.ok, false);
+  assert.match((res as { error: string }).error, /not a member of that party/);
+  assert.equal(h.prompts.length, 0);
+});
+
+test("once chosen, later reads of that election present without asking again — the cast's included", async () => {
+  const h = harness({ rollOf: { memberOf: PARTY, memberOfKind: "memberParty" }, unknownUnlessPresenting: true, listed: false, disclosed: PARTY, takenAt: 1 });
+  const res = await h.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  assert.deepEqual(res, { ok: true, result: { ticketTaken: false } });
+  await Promise.all([...h.gates.casting]);
+  assert.equal(h.prompts.some((p) => p.kind === "disclose"), false);
+  const prepare = h.asked.find((o) => o.op === "castPrepare") as Extract<OffscreenElectionsPageOp, { op: "castPrepare" }>;
+  assert.deepEqual(prepare.readAs, { memberOf: PARTY });
+});
+
+test("an unlisted election this wallet holds no ticket for takes one first", async () => {
+  const h = harness({ rollOf: { memberOf: PARTY, memberOfKind: "memberParty" }, unknownUnlessPresenting: true, listed: false, disclosed: PARTY });
+  const res = await h.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  assert.deepEqual(res, { ok: true, result: { ticketTaken: true } });
+  assert.deepEqual(h.prompts.map((p) => p.kind), ["ticket"]);
+});
+
+test("an unlisted election the page names no party for is refused as before", async () => {
+  const h = harness({ listed: false });
+  const res = await h.gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  assert.equal(res.ok, false);
+  assert.match((res as { error: string }).error, /No such election/);
+});
+
+test("memberOf must be a DID, and list takes none", () => {
+  assert.equal(electionsPageParamsRefusal({ op: "show", hostDid: HOST, electionId: "agm-2027", memberOf: PARTY }), null);
+  assert.match(electionsPageParamsRefusal({ op: "show", hostDid: HOST, electionId: "agm-2027", memberOf: "party" })!, /memberOf/);
+  assert.match(electionsPageParamsRefusal({ op: "list", hostDid: HOST, memberOf: PARTY })!, /takes no `memberOf`/);
+});
+
 test("a page cannot drive the voter engine or the community's elections through the generic task prompt", () => {
   for (const t of [
-    "https://trusttasks.org/spec/vta/pcs/vote/0.2",
-    "https://trusttasks.org/spec/vta/pcs/voter/register/0.2",
-    "https://trusttasks.org/spec/vtc/elections/tickets/issue/0.1",
+    "https://trusttasks.org/spec/vta/pcs/vote/0.4",
+    "https://trusttasks.org/spec/vta/pcs/voter/register/0.5",
+    "https://trusttasks.org/spec/vta/pcs/voter/read/0.6",
+    "https://trusttasks.org/spec/vtc/elections/tickets/issue/0.3",
+    "https://trusttasks.org/spec/vtc/elections/show/0.6",
   ]) {
     assert.match(String(pageTaskRefusal(t)), /window\.vtaWallet\.elections/);
   }

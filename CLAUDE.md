@@ -1572,8 +1572,29 @@ A vote the ballot box counted is remembered in `chrome.storage.local`
 and the next ballot window opens on "You voted…", offering a change only where
 `revote` is `replace` and voting is open. The page is told none of this.
 
+**A membership credential is presented only after the member chose to**
+(credential rolls, VTI-VOT-015 – 018, 025, 090). Under `roll.rule: credential`
+the ticket claim carries a presentation of the member's membership credential
+issued by exactly `roll.memberOf`: the gates check the member holds one
+(offscreen `membership`), the ticket window says what claiming shows the
+community (`presents`, `rollCredentialWarning`), and the offscreen work refuses a
+credential roll whose `memberOf` is not the `presentFor` the member approved. An
+election put to a **member party**'s members is in nobody's list but its
+managers' and the party's, so a page opens it by id with `memberOf` (from a
+link — the `notifications/*` family is the coming way): the wallet reads it
+without presenting first, and only on `electionUnknown` asks in a `disclose`
+window, then reads again presenting (`readAs`). That choice is remembered per
+election (`election-disclosed:` + `ticketKey`, the party's DID only) so later
+reads and the cast's fresh read present without asking. The credential is
+picked in the offscreen document from `vault/credentials/query`
+(`membershipCredentialFor`); its handle never leaves it. An `indeterminate`
+answer (an issuer's DID document or status list the community could not read)
+is resent as the same document by `postCommunityTask`, the one resender of
+community documents, with backoff — never by a second loop above it.
+
 **What breaks it:** returning a ballot, a cast, a receipt or "voted" to the page
-(the remembered vote included); storing a choice;
+(the remembered vote included); storing a choice; presenting a membership the
+member was not first told of, or one issued by any DID but the roll's own;
 rendering a ballot in a page; sending a cast or a ballot to the community's
 endpoint; signing a cast with any key but the one the VTA made for it.
 

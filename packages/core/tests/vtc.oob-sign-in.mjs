@@ -235,6 +235,74 @@ test("sendOob: a long Retry-After is capped, and a limiter that never relents is
   assert.equal(c.seen.length, 4);
 });
 
+/** A community that cannot yet check what the document carries: the first `n`
+ *  posts are answered with the framework's retryable `indeterminate`. */
+function indeterminate(n, extra = {}) {
+  const c = community(() => ({ payload: step1() }));
+  let refused = 0;
+  const waits = [];
+  const fetch = async (url, init) => {
+    if (refused < n) {
+      refused++;
+      c.seen.push({ url, doc: JSON.parse(init.body), indeterminate: true });
+      return new Response(
+        JSON.stringify({
+          type: "https://trusttasks.org/spec/trust-task-error/0.2",
+          payload: { code: "indeterminate", retryable: true, ...extra },
+        }),
+        { status: 503, headers: { "content-type": "application/json" } },
+      );
+    }
+    return c.fetch(url, init);
+  };
+  const sleep = async (ms) => void waits.push(ms);
+  return { fetch, sleep, seen: c.seen, waits };
+}
+
+test("vti_vot_018: an indeterminate answer is resent as the same document, with backoff", async () => {
+  const kA = newApproverKey();
+  const c = indeterminate(2);
+  const reply = await sendOob(kA, buildClaim(kA, VTC, REQ), { ...sendOpts(c.fetch), sleep: c.sleep }, "claim");
+  assert.equal(reply.payload.service.name, "Example Community");
+  assert.deepEqual(c.waits, [2000, 4000]);
+  assert.equal(c.seen.length, 3);
+  assert.deepEqual(c.seen[2].doc, c.seen[0].doc, "the same signed document, byte for byte");
+});
+
+test("an indeterminate answer's retryAfter is waited for, capped; one that persists is a refusal with its code", async () => {
+  const kA = newApproverKey();
+  const now = Date.parse("2026-11-03T00:00:00Z");
+  const c = indeterminate(99, { retryAfter: "2026-11-03T00:00:05Z" });
+  await assert.rejects(
+    sendOob(kA, buildClaim(kA, VTC, REQ), { ...sendOpts(c.fetch), sleep: c.sleep, now: () => now }, "claim"),
+    (e) => e instanceof OobRefusedError && e.code === "indeterminate",
+  );
+  assert.deepEqual(c.waits, [5000, 5000, 5000]);
+  assert.equal(c.seen.length, 4);
+  const far = indeterminate(1, { retryAfter: "2026-11-03T01:00:00Z" });
+  await sendOob(kA, buildClaim(kA, VTC, REQ), { ...sendOpts(far.fetch), sleep: far.sleep, now: () => now }, "claim");
+  assert.deepEqual(far.waits, [10_000]);
+});
+
+test("an indeterminate answer is not resent once the document would have expired", async () => {
+  const kA = newApproverKey();
+  const now = Date.now();
+  const c = indeterminate(99);
+  const doc = { ...buildClaim(kA, VTC, REQ), expiresAt: new Date(now + 1000).toISOString() };
+  await assert.rejects(
+    sendOob(kA, doc, { ...sendOpts(c.fetch), sleep: c.sleep, now: () => now }, "claim"),
+    (e) => e instanceof OobRefusedError && e.code === "indeterminate",
+  );
+  assert.equal(c.seen.length, 1);
+});
+
+test("a refusal that is not retryable is not resent", async () => {
+  const kA = newApproverKey();
+  const c = community(() => ({ error: "indeterminate" })); // retryable: false
+  await assert.rejects(sendOob(kA, buildClaim(kA, VTC, REQ), sendOpts(c.fetch), "claim"), (e) => e.code === "indeterminate");
+  assert.equal(c.seen.length, 1);
+});
+
 test("sendOob: a refusal carries its stable code", async () => {
   const kA = newApproverKey();
   const c = community(() => ({ error: "alreadyClaimed" }));
