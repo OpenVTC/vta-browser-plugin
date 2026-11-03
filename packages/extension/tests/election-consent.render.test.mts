@@ -264,3 +264,61 @@ test("the ballot repeats the warning below 10, and not at or above it", async ()
   assert.doesNotMatch(ok.rendered.text(), /Written answers are released/);
   await ok.rendered.unmount();
 });
+
+// ── Credential rolls (VTI-VOT-016, VTI-VOT-025, VTI-VOT-090) ────────────────
+
+const PARTY = "did:webvh:QmParty:party.example";
+const rollCredential = { memberOf: PARTY, memberOfKind: "communityGroup", memberOfName: "Engineering" };
+const ticketView = {
+  kind: "ticket",
+  origin: "https://members.acme.example",
+  communityName: "Acme Guild",
+  member: "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp",
+  fromVote: false,
+};
+
+test("vti_vot_025: the ticket window says claiming presents the membership, and the button says so too", async () => {
+  const { rendered, decided } = await mount({
+    ...ticketView,
+    election: { ...election, disclosure: { ...election.disclosure, rollCredential } },
+    presents: rollCredential,
+  });
+  const text = rendered.text();
+  assert.match(text, /Only holders of a membership credential issued by the group Engineering take a ticket/);
+  assert.match(text, /Acme Guild learns that you are a member of that party/);
+  await rendered.click(rendered.button("Show my membership and take my ticket"));
+  assert.deepEqual(decided, [{ approved: true }]);
+  await rendered.unmount();
+});
+
+test("a ticket window under any other roll says nothing of a membership", async () => {
+  const { rendered } = await mount({ ...ticketView, election });
+  assert.doesNotMatch(rendered.text(), /membership credential/);
+  assert.ok(rendered.button("Take my ticket"));
+  await rendered.unmount();
+});
+
+test("vti_vot_090: the ballot window's disclosure names whose membership credential counts", async () => {
+  const { rendered } = await mount(
+    view({ election: { ...election, disclosure: { ...election.disclosure, rollCredential: { memberOf: PARTY, memberOfKind: "memberParty" } } } }),
+  );
+  assert.match(rendered.text(), new RegExp(`issued by ${PARTY}, a member of this community`));
+  await rendered.unmount();
+});
+
+test("vti_vot_016: the disclose window says the community learns the membership before the election is seen", async () => {
+  const { rendered, decided } = await mount({
+    kind: "disclose",
+    origin: "https://members.acme.example",
+    communityName: "Acme Guild",
+    member: "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp",
+    electionId: "agm-2027",
+    memberOf: PARTY,
+  });
+  const text = rendered.text();
+  assert.match(text, /Acme Guild shows this election only to members of/);
+  assert.match(text, /before you have seen what the election asks/);
+  await rendered.click(rendered.button("Cancel"));
+  assert.deepEqual(decided, [{ approved: false }]);
+  await rendered.unmount();
+});

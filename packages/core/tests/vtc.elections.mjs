@@ -15,6 +15,10 @@ import {
   pcsVoterRead,
   pcsVoterRegister,
   postCast,
+  membershipCredentialFor,
+  readPresentationWarning,
+  rollCredentialOf,
+  rollCredentialWarning,
   TEXT_RELEASE_THRESHOLD_ADVISED,
   textReleaseWarning,
 } from "../dist/vtc/index.js";
@@ -59,10 +63,10 @@ test("a read is asked of the member's VTA as the member, never sent to the commu
   const s = recordingSender({ document: { id: "x" } });
   await pcsVoterRead(s, { holder: WALLET, service: VTA }, TARGET, "show", { electionId: "agm-2027" });
   const { envelope, opts } = s.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/read/0.3");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/read/0.6");
   assert.equal(envelope.recipient, VTA.did);
   assert.deepEqual(envelope.payload, { ...TARGET, read: "show", payload: { electionId: "agm-2027" } });
-  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vta/pcs/voter/read/0.3#response");
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vta/pcs/voter/read/0.6#response");
 });
 
 test("the ticket request names the member, so the VTA returns it signed as them", async () => {
@@ -72,11 +76,11 @@ test("the ticket request names the member, so the VTA returns it signed as them"
   assert.deepEqual(s.sent[0].envelope.payload.manifest, manifest);
 });
 
-test("an open election casts with vote/0.3; an encrypted one needs the trustees' ceremony", async () => {
+test("an open election casts with vote/0.4; an encrypted one needs the trustees' ceremony", async () => {
   const s = recordingSender({ castDocument: { id: "c" }, tag: "t" });
   const ballot = ballotOf(manifest, DIGEST, { chair: { choice: ["ana"] } });
   await pcsCast(s, { holder: WALLET, service: VTA }, TARGET, { manifest, parameters: {}, manifestDigest: DIGEST }, ballot);
-  assert.equal(s.sent[0].envelope.type, "https://trusttasks.org/spec/vta/pcs/vote/0.3");
+  assert.equal(s.sent[0].envelope.type, "https://trusttasks.org/spec/vta/pcs/vote/0.4");
 
   const sealed = { ...manifest, secrecy: "sealed" };
   await assert.rejects(
@@ -84,7 +88,7 @@ test("an open election casts with vote/0.3; an encrypted one needs the trustees'
     /trustees have not formed/,
   );
   await pcsCast(s, { holder: WALLET, service: VTA }, TARGET, { manifest: sealed, parameters: {}, manifestDigest: DIGEST, ceremony: { steps: [] } }, ballot);
-  assert.equal(s.sent[1].envelope.type, "https://trusttasks.org/spec/vta/pcs/vote-encrypted/0.4");
+  assert.equal(s.sent[1].envelope.type, "https://trusttasks.org/spec/vta/pcs/vote-encrypted/0.5");
   assert.deepEqual(s.sent[1].envelope.payload.ceremony, { steps: [] });
 });
 
@@ -210,4 +214,72 @@ test("a manifest releasing written answers after one ballot is a manifest the wa
   const s = recordingSender({ castDocument: { id: "c" }, tag: "t" });
   await pcsCast(s, { holder: WALLET, service: VTA }, TARGET, { manifest: low, parameters: {}, manifestDigest: DIGEST }, ballot);
   assert.equal(s.sent[0].envelope.payload.manifest.textReleaseThreshold, 1);
+});
+
+// ── Credential rolls (VTI-VOT-015, 016, 025, 090) ───────────────────────────
+
+const PARTY = "did:webvh:QmParty:party.example";
+
+test("vti_vot_015: a show can present the member's credential, naming memberOf; a list cannot", async () => {
+  const s = recordingSender({ document: { id: "x" } });
+  const presenting = { membershipCredential: "cred-1", memberOf: PARTY };
+  await pcsVoterRead(s, { holder: WALLET, service: VTA }, TARGET, "show", { electionId: "agm-2027" }, presenting);
+  assert.deepEqual(s.sent[0].envelope.payload, {
+    ...TARGET,
+    read: "show",
+    payload: { electionId: "agm-2027" },
+    membershipCredential: "cred-1",
+    memberOf: PARTY,
+  });
+  await assert.rejects(
+    pcsVoterRead(s, { holder: WALLET, service: VTA }, TARGET, "list", {}, presenting),
+    /Only a show presents/,
+  );
+  assert.equal(s.sent.length, 1);
+});
+
+test("vti_vot_025: register/0.5 carries the membership credential only when given one", async () => {
+  const s = recordingSender({});
+  await pcsVoterRegister(s, { holder: WALLET, service: VTA }, TARGET, { parameters: {}, manifest }, "cred-1");
+  assert.equal(s.sent[0].envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/register/0.5");
+  assert.equal(s.sent[0].envelope.payload.membershipCredential, "cred-1");
+  await pcsVoterRegister(s, { holder: WALLET, service: VTA }, TARGET, { parameters: {}, manifest });
+  assert.equal("membershipCredential" in s.sent[1].envelope.payload, false);
+});
+
+test("a credential roll is the manifest's memberOf, with the disclosure's kind and name only when they agree", () => {
+  const roll = { rule: "credential", memberOf: PARTY };
+  const d = { rollCredential: { memberOf: PARTY, memberOfKind: "memberParty", memberOfName: "Party Co-op", presenterDisclosed: true } };
+  assert.deepEqual(rollCredentialOf({ manifest: { ...manifest, roll }, disclosure: d }), {
+    memberOf: PARTY,
+    memberOfKind: "memberParty",
+    memberOfName: "Party Co-op",
+  });
+  const other = { rollCredential: { ...d.rollCredential, memberOf: "did:webvh:QmElse:else.example" } };
+  assert.deepEqual(rollCredentialOf({ manifest: { ...manifest, roll }, disclosure: other }), { memberOf: PARTY });
+  assert.equal(rollCredentialOf({ manifest: { ...manifest, roll: { rule: "members" } }, disclosure: {} }), null);
+});
+
+test("vti_vot_016: only an active, valid credential issued by exactly memberOf is chosen, the longest-lived first", () => {
+  const now = Date.parse("2026-11-03T00:00:00Z");
+  const held = [
+    { id: "group", issuerDid: `${PARTY}:groups:g1`, status: "valid" },
+    { id: "revoked", issuerDid: PARTY, status: "revoked" },
+    { id: "archived", issuerDid: PARTY, status: "valid", lifecycle: "archived" },
+    { id: "expired", issuerDid: PARTY, status: "valid", validUntil: "2026-10-01T00:00:00Z" },
+    { id: "short", issuerDid: PARTY, status: "valid", validUntil: "2026-12-01T00:00:00Z" },
+    { id: "long", issuerDid: PARTY, status: "valid", validUntil: "2027-06-01T00:00:00Z" },
+  ];
+  assert.equal(membershipCredentialFor(held, PARTY, now), "long");
+  assert.equal(membershipCredentialFor(held.slice(0, 4), PARTY, now), null);
+  assert.equal(membershipCredentialFor(held, "did:webvh:QmNone:none.example", now), null);
+});
+
+test("vti_vot_090: the member is told whose credential counts, and that presenting it shows the membership", () => {
+  assert.equal(
+    rollCredentialWarning({ memberOf: PARTY, memberOfKind: "communityGroup", memberOfName: "Engineering" }, "Acme"),
+    "Only holders of a membership credential issued by the group Engineering take a ticket. Taking one presents yours to Acme, so Acme learns that you are a member of that party.",
+  );
+  assert.match(rollCredentialWarning({ memberOf: PARTY, memberOfKind: "thisCommunity" }, "Acme"), /a member of it\.$/);
+  assert.match(readPresentationWarning(PARTY, "Acme"), /before you have seen what the election asks/);
 });

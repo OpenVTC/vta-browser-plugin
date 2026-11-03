@@ -2789,12 +2789,21 @@ export type RuntimeGitPageResponse =
 export const RUNTIME_ELECTIONS_PAGE = "vta-wallet/elections-page" as const;
 
 /** `member` is the DID the page says is signed in: a hint that picks among the
- *  identities the wallet holds for this community, never adds one. */
+ *  identities the wallet holds for this community, never adds one.
+ *
+ *  `memberOf` opens an election the community lists to nobody but its managers
+ *  and the party it is put to: one whose credential roll names a party that is
+ *  itself a member of the community (VTI-VOT-015, VTI-VOT-017). The member
+ *  learns of it from outside the community's list — from a link, for now — and
+ *  the page passes on the party the link names. Nothing is presented on the
+ *  page's say-so: the wallet first reads the election without presenting, and
+ *  presents the member's credential issued by exactly `memberOf` only after the
+ *  member chose to in the wallet's own window (VTI-VOT-016). */
 export type ElectionsPageOp =
   | { op: "list"; hostDid: string; member?: string }
-  | { op: "show"; hostDid: string; electionId: string; member?: string }
-  | { op: "takeTicket"; hostDid: string; electionId: string; member?: string }
-  | { op: "vote"; hostDid: string; electionId: string; member?: string };
+  | { op: "show"; hostDid: string; electionId: string; member?: string; memberOf?: string }
+  | { op: "takeTicket"; hostDid: string; electionId: string; member?: string; memberOf?: string }
+  | { op: "vote"; hostDid: string; electionId: string; member?: string; memberOf?: string };
 
 export interface RuntimeElectionsPageRequest {
   type: typeof RUNTIME_ELECTIONS_PAGE;
@@ -2803,7 +2812,7 @@ export interface RuntimeElectionsPageRequest {
   params: ElectionsPageOp;
 }
 
-/** One election as the community lists it to the member (`vtc/elections/list/0.3`). */
+/** One election as the community lists it to the member (`vtc/elections/list/0.5`). */
 export interface PageElection {
   electionId: string;
   title?: string;
@@ -2831,7 +2840,7 @@ export interface PageElectionQuestion {
   maxLength?: number;
 }
 
-/** One election as the community shows it to the member (`vtc/elections/show/0.3`),
+/** One election as the community shows it to the member (`vtc/elections/show/0.6`),
  *  without the voting parameters, the trustees' ceremony or the board's checkpoints. */
 export interface PageElectionView {
   electionId: string;
@@ -2852,6 +2861,15 @@ export interface PageElectionView {
     boardVisibility: string;
     revote: string;
     auditors: string[];
+    /** Under a credential roll, whose membership credential admits a voter
+     *  (voting/_shared/0.4 `RollCredentialDisclosure`, VTI-VOT-090): the portal
+     *  tells the member, before a ticket, that taking one shows the community
+     *  their membership of that party. Absent under any other rule. */
+    rollCredential?: {
+      memberOf: string;
+      memberOfKind: "thisCommunity" | "communityGroup" | "memberParty";
+      memberOfName?: string;
+    };
   };
   /** The manifest's `textReleaseThreshold`: counted ballots before any written
    *  answer is released. As low as 1 (VTI-VOT-065); below 10 a written answer
@@ -3548,14 +3566,22 @@ export type OffscreenElectionsPageOp =
   | { op: "ballotBox"; ballotBox: string }
   /** `vtc/elections/list`, signed by the member's VTA as the member. */
   | { op: "list"; hostDid: string; member: string }
-  /** `vtc/elections/show`, the same way — the whole answer, for the background. */
-  | { op: "show"; hostDid: string; member: string; electionId: string }
-  /** Take the member's ticket: register → the community issues it blind → accept. */
-  | { op: "takeTicket"; hostDid: string; member: string; electionId: string }
+  /** `vtc/elections/show`, the same way — the whole answer, for the background.
+   *  `readAs`: the read presents the member's membership credential issued by
+   *  exactly `memberOf`, which the member chose to show (VTI-VOT-015, 016). */
+  | { op: "show"; hostDid: string; member: string; electionId: string; readAs?: ElectionReadAs }
+  /** Whether the member holds a membership credential issued by exactly
+   *  `memberOf`, about `member` — answered before they are asked to present it. */
+  | { op: "membership"; hostDid: string; member: string; memberOf: string }
+  /** Take the member's ticket: register → the community issues it blind → accept.
+   *  `presentFor`: under a credential roll, the `roll.memberOf` the member chose
+   *  to present their membership of in the claim (VTI-VOT-025); the work refuses
+   *  a credential roll naming any other. */
+  | { op: "takeTicket"; hostDid: string; member: string; electionId: string; readAs?: ElectionReadAs; presentFor?: string }
   /** A cast, in the three steps the ballot window shows (`elections-page.ts`).
    *  First: read the election afresh, check the ballot against it, and have the
    *  VTA build and sign the cast under a key made for it alone. */
-  | { op: "castPrepare"; hostDid: string; member: string; electionId: string; ballot: unknown }
+  | { op: "castPrepare"; hostDid: string; member: string; electionId: string; ballot: unknown; readAs?: ElectionReadAs }
   /** Then: wait `delayMs` (at most `MAX_CAST_DELAY_MS`), and post the cast to
    *  the ballot box exactly as the VTA built it. Answers the ballot box's receipt. */
   | { op: "castPost"; castDocument: Record<string, unknown>; ballotBox: string; endpoint: string; delayMs: number }
@@ -3570,7 +3596,14 @@ export interface OffscreenElectionsPageRequest {
   params: OffscreenElectionsPageOp;
 }
 
-export type OffscreenElectionsPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
+/** A read that presents the member's membership credential for `memberOf`. */
+export interface ElectionReadAs {
+  memberOf: string;
+}
+
+/** `code`: the community's or the VTA's refusal code (its local name), where
+ *  the work was refused by one — what the background switches on (R3.7). */
+export type OffscreenElectionsPageResponse = { ok: true; result: unknown } | { ok: false; error: string; code?: string };
 
 /**
  * Port name for one room write from the console — a file transfer, a note, or a

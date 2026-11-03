@@ -18,13 +18,21 @@
 //   (`castPrepare`, `castPost`, `castKeep`) so the background can show the
 //   member each step as it happens; the pause is the background's to choose
 //   (`castDelayMs`), and is capped here.
+// - under a credential roll (VTI-VOT-025), the VTA presents the member's
+//   membership credential issued by exactly the roll's `memberOf` — in the
+//   ticket claim, and in a read of an election put to a member party's members
+//   (VTI-VOT-015) — and only where the background says the member chose to
+//   (`presentFor`, `readAs`; VTI-VOT-016). The credential is picked here from
+//   the member's vault, by its issuer; its handle never leaves this document.
 
+import { credVaultQuery } from "@openvtc/pnm-core";
 import { resolveDidDocument } from "@openvtc/pnm-core/didcomm";
 import { trustTaskBaseFromDocument, trustTaskUrl, type TrustTaskSender } from "@openvtc/pnm-core/vta";
 import {
   OobRefusedError,
   ballotRefusal,
   MAX_CAST_DELAY_MS,
+  membershipCredentialFor,
   pcsCast,
   pcsVoterAccept,
   pcsVoterRead,
@@ -32,13 +40,15 @@ import {
   pcsVoterRegister,
   postCast,
   postCommunityTask,
+  rollCredentialOf,
   type ElectionBallot,
   type ElectionShown,
   type OobDocument,
+  type ReadPresenting,
   type VoterTarget,
 } from "@openvtc/pnm-core/vtc";
 
-import type { OffscreenElectionsPageOp } from "./bridge-protocol.js";
+import type { ElectionReadAs, OffscreenElectionsPageOp } from "./bridge-protocol.js";
 import {
   identitiesAt,
   resolveCommunity,
@@ -59,26 +69,58 @@ export interface ElectionsPageDeps {
   /** A DID document, for the ballot box. Defaults to resolving it. */
   resolve?(did: string): Promise<Record<string, unknown>>;
   fetch?: typeof fetch;
-  /** The pause before a cast goes; defaults to a real one. */
+  /** The pause before a cast goes, and before a document the community answered
+   *  `indeterminate` is resent; defaults to a real one. */
   sleep?(ms: number): Promise<void>;
   now?(): number;
 }
 
+/** A refusal in the person's words, with the refusing party's code (its local
+ *  name) for the background to switch on. */
+export class ElectionsWorkError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "ElectionsWorkError";
+  }
+}
+
+/** The local name of a VTA refusal's Trust Task error code (`details.code`). */
+function vtaRefusalCode(e: unknown): string | undefined {
+  const code = (e as { details?: { code?: unknown } } | null)?.details?.code;
+  return typeof code === "string" ? code.slice(code.lastIndexOf(":") + 1) : undefined;
+}
+
 /** What the community or the VTA said, in the person's words. */
 function refusalWords(e: unknown, community: string): Error {
+  if (e instanceof ElectionsWorkError) return e;
   const text = e instanceof Error ? e.message : String(e);
   if (e instanceof OobRefusedError) {
     const local = e.code.slice(e.code.lastIndexOf(":") + 1);
     const said: Record<string, string> = {
       electionUnknown: `${community} shows you no such election — it may not be open to you.`,
+      indeterminate: `${community} could not check your membership credential just now: its issuer's DID document or status list could not be read. Nothing was recorded. Try again in a little while.`,
+      presentationRequired: `${community} needs your membership credential to give you a ticket for this election.`,
+      membershipNotProven: `${community} did not accept your membership credential for this election.`,
+      membershipRevoked: `Your membership credential for this election has been revoked.`,
+      rollUntrusted: `${community} no longer accepts the party this election's roll names. Ask the community about it.`,
       notOpen: "Tickets for this election are not being issued now.",
       alreadyIssued: `${community} has issued your ticket for this election already.`,
       notEligible: "This election's roll does not admit you.",
       manifestMismatch: `${community} changed this election while you were taking your ticket. Try again.`,
       permissionDenied: `${community} doesn't count you as an active member.`,
     };
-    return new Error(said[local] ?? `${community} refused (${e.code}).`);
+    return new ElectionsWorkError(said[local] ?? `${community} refused (${e.code}).`, local);
   }
+  const vta = vtaRefusalCode(e);
+  const vtaSaid: Record<string, string> = {
+    membershipCredentialMismatch: "Your agent will present only a membership credential issued by the party this election names, and that one was not.",
+    membershipCredentialUnusable: "Your agent cannot present that membership credential: it is not in your vault, not about you, revoked or out of date.",
+    membershipCredentialRequired: "This election's roll asks for your membership credential, and none was given to your agent.",
+  };
+  if (vta && vtaSaid[vta]) return new ElectionsWorkError(vtaSaid[vta]!, vta);
   if (/memberNotHeld/.test(text)) {
     return new Error("Your agent holds no key of the identity you signed in with that you may act as.");
   }
@@ -138,31 +180,69 @@ export async function runElectionsPageOp(
     vtcDocument: verified.document,
     trustTaskEndpoint: verified.endpoint,
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    // The wait before a document the community could not yet check goes again.
+    ...(deps.sleep ? { sleep: deps.sleep } : {}),
+    ...(deps.now ? { now: deps.now } : {}),
   };
   const { sender, holder, service } = await deps.agent(vta.vtaDid, vta.restBaseUrl);
   const agent = { holder, service };
+
+  /** The member's membership credential issued by exactly `memberOf`, about
+   *  them: its vault handle, or `null` when they hold none. */
+  const membership = async (memberOf: string): Promise<string | null> => {
+    const held = await credVaultQuery(sender, { holder, service, issuerDid: memberOf, subjectDid: op.member, status: "valid" });
+    return membershipCredentialFor(held, memberOf, now());
+  };
+  const noMembership = (memberOf: string) =>
+    new ElectionsWorkError(`You don't hold a membership credential issued by ${memberOf}, so you are not a member of that party here.`, "membershipNotHeld");
+  const presenting = async (readAs: ElectionReadAs | undefined): Promise<ReadPresenting | undefined> => {
+    if (!readAs) return undefined;
+    const handle = await membership(readAs.memberOf);
+    if (!handle) throw noMembership(readAs.memberOf);
+    return { membershipCredential: handle, memberOf: readAs.memberOf };
+  };
 
   /** A document the VTA signed as the member, sent to the community unchanged. */
   const toCommunity = async <P>(doc: unknown, label: string): Promise<P> => {
     const reply = await postCommunityTask<P>(doc as OobDocument, sendOpts, label, "authentication");
     return reply.payload;
   };
-  const read = async <P>(which: "list" | "show", payload: Record<string, unknown>): Promise<P> => {
-    const signed = await pcsVoterRead(sender, agent, target, which, payload);
+  const read = async <P>(which: "list" | "show", payload: Record<string, unknown>, readAs?: ElectionReadAs): Promise<P> => {
+    // A presenting read is a fresh document each time: the community accepts a
+    // presentation in one document once (show/0.6 item 8).
+    const signed = await pcsVoterRead(sender, agent, target, which, payload, await presenting(readAs));
     return toCommunity<P>(signed.document, `vtc/elections/${which}`);
   };
+  const show = (electionId: string, readAs?: ElectionReadAs) => read<ElectionShown>("show", { electionId }, readAs);
 
   try {
     switch (op.op) {
       case "list":
         return await read("list", {});
       case "show":
-        return await read<ElectionShown>("show", { electionId: op.electionId });
+        return await show(op.electionId, op.readAs);
+      case "membership":
+        return { held: (await membership(op.memberOf)) !== null };
       case "takeTicket": {
-        const shown = await read<ElectionShown>("show", { electionId: op.electionId });
+        const shown = await show(op.electionId, op.readAs);
+        // Under a credential roll the claim presents the member's credential for
+        // `roll.memberOf` — only the one the member was told of and chose to
+        // show (VTI-VOT-016, VTI-VOT-025).
+        const roll = rollCredentialOf(shown);
+        let credential: string | undefined;
+        if (roll) {
+          if (op.presentFor !== roll.memberOf) {
+            throw new ElectionsWorkError(
+              `${name} changed whose membership this election's ticket asks for. Nothing was presented; open the election again.`,
+              "rollChanged",
+            );
+          }
+          credential = (await membership(roll.memberOf)) ?? undefined;
+          if (!credential) throw noMembership(roll.memberOf);
+        }
         let registered;
         try {
-          registered = await pcsVoterRegister(sender, agent, target, shown);
+          registered = await pcsVoterRegister(sender, agent, target, shown, credential);
         } catch (e) {
           // The agent holds this election's ticket already.
           if (/ticketHeld/.test(e instanceof Error ? e.message : String(e))) return { taken: false };
@@ -178,7 +258,7 @@ export async function runElectionsPageOp(
         return { taken: true };
       }
       case "castPrepare": {
-        const shown = await read<ElectionShown>("show", { electionId: op.electionId });
+        const shown = await show(op.electionId, op.readAs);
         const ballot = op.ballot as ElectionBallot;
         const refused = ballotRefusal(shown.manifest, shown.manifestDigest, ballot);
         if (refused) throw new Error(`${refused} ${name} may have changed the election since you filled it in.`);

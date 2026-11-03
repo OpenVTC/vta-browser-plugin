@@ -34,13 +34,33 @@
 //      does not hold.
 //   4. For a ticket or a vote, **the person decides** in the wallet's window. A
 //      closed window is a refusal.
+//   5. **A membership credential is presented only once the person chose to**
+//      (VTI-VOT-016, VTI-VOT-090). Under a credential roll the ticket claim
+//      presents the member's credential for the roll's `memberOf`, and the
+//      ticket window says so first. An election put to the members of a party
+//      that is itself a member of the community is shown to nobody else
+//      (VTI-VOT-015): the wallet reads it without presenting first, and only
+//      when the community answers `electionUnknown` and the page named the
+//      party (`memberOf`) does it ask, in its own window, whether to present
+//      the member's credential issued by exactly that party. The choice is
+//      remembered for that election (`disclosedFor`), since the community has
+//      then learnt the membership already.
 //
 // Written against injected dependencies, not `chrome.*`, so the gates are
 // tested as they run.
 
-import { ballotRefusal, castDelayMs, type ElectionBallot, type ElectionManifest, type ElectionShown } from "@openvtc/pnm-core/vtc";
+import {
+  ballotRefusal,
+  castDelayMs,
+  rollCredentialOf,
+  type ElectionBallot,
+  type ElectionManifest,
+  type ElectionShown,
+  type RollCredential,
+} from "@openvtc/pnm-core/vtc";
 
 import type {
+  ElectionReadAs,
   ElectionsPageOp,
   OffscreenElectionsPageOp,
   OffscreenElectionsPageResponse,
@@ -93,6 +113,20 @@ export type ElectionConsentView =
       member: string;
       election: PageElectionView;
       fromVote: boolean;
+      /** Under a credential roll: the party whose membership credential the
+       *  claim presents. The window says so before the member decides. */
+      presents?: RollCredential;
+    }
+  | {
+      /** Present the member's membership credential issued by `memberOf` just
+       *  to read an election the community shows only to that party's members
+       *  (VTI-VOT-015, VTI-VOT-016). Asked before anything is presented. */
+      kind: "disclose";
+      origin: string;
+      communityName: string;
+      member: string;
+      electionId: string;
+      memberOf: string;
     }
   | {
       /** Fill in the ballot. The manifest and its digest are what the ballot binds to. */
@@ -147,6 +181,10 @@ export interface ElectionsPageDeps {
   /** The vote this wallet cast for `key`, if it remembers one. */
   votedAt(key: string): Promise<RememberedVote | undefined>;
   rememberVote(key: string, vote: RememberedVote): Promise<void>;
+  /** The party the member chose to present their membership of to read the
+   *  election `key` names, if they did (step 5 above). */
+  disclosedFor(key: string): Promise<string | undefined>;
+  rememberDisclosure(key: string, memberOf: string): Promise<void>;
   /** The pause before a cast is posted; defaults to `castDelayMs()`. */
   castDelayMs?(): number;
   now(): number;
@@ -168,7 +206,7 @@ export function electionsPageParamsRefusal(raw: unknown): string | null {
     p.op === "list"
       ? ["op", "hostDid", "member"]
       : p.op === "show" || p.op === "takeTicket" || p.op === "vote"
-        ? ["op", "hostDid", "electionId", "member"]
+        ? ["op", "hostDid", "electionId", "member", "memberOf"]
         : null;
   if (!allowed) return "unknown elections operation";
   for (const k of Object.keys(p)) {
@@ -179,6 +217,7 @@ export function electionsPageParamsRefusal(raw: unknown): string | null {
     return "electionId must be an election identifier";
   }
   if (p.member !== undefined && !isDid(p.member)) return "member must be a DID";
+  if (p.memberOf !== undefined && !isDid(p.memberOf)) return "memberOf must be a DID";
   return null;
 }
 
@@ -224,6 +263,15 @@ export function pageElectionViewOf(shown: ElectionShown): PageElectionView {
       boardVisibility: d.boardVisibility,
       revote: d.revote,
       auditors: [...d.auditors],
+      ...(d.rollCredential
+        ? {
+            rollCredential: {
+              memberOf: d.rollCredential.memberOf,
+              memberOfKind: d.rollCredential.memberOfKind,
+              ...(d.rollCredential.memberOfName !== undefined ? { memberOfName: d.rollCredential.memberOfName } : {}),
+            },
+          }
+        : {}),
     },
     ...(typeof m.textReleaseThreshold === "number" ? { textReleaseThreshold: m.textReleaseThreshold } : {}),
     ...(shown.ticketsIssued !== undefined ? { ticketsIssued: shown.ticketsIssued } : {}),
@@ -258,7 +306,21 @@ export function ticketKey(hostDid: string, member: string, electionId: string): 
 /** How long a community's resolved portal is trusted before it is resolved again. */
 const PORTAL_CACHE_MS = 5 * 60 * 1000;
 
-class ElectionsPageRefusal extends Error {}
+class ElectionsPageRefusal extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+  }
+}
+
+/** An election as read, and how it was read: `readAs` when the read presented
+ *  the member's membership credential, so the reads that follow do too. */
+interface Read {
+  shown: ElectionShown;
+  readAs?: ElectionReadAs;
+}
 
 interface Identity {
   did: string;
@@ -274,7 +336,7 @@ export class ElectionsPageGates {
 
   private async offscreen(vta: ActiveVta, op: OffscreenElectionsPageOp): Promise<unknown> {
     const res = await this.deps.offscreen(vta, op);
-    if (!res.ok) throw new ElectionsPageRefusal(res.error);
+    if (!res.ok) throw new ElectionsPageRefusal(res.error, res.code);
     return res.result;
   }
 
@@ -298,11 +360,11 @@ export class ElectionsPageGates {
         case "list":
           return { ok: true, result: await this.list(vta, p.hostDid, who) };
         case "show":
-          return { ok: true, result: pageElectionViewOf(await this.show(vta, p.hostDid, who, p.electionId)) };
+          return { ok: true, result: pageElectionViewOf((await this.show(origin, vta, p.hostDid, who, p.electionId, p.memberOf)).shown) };
         case "takeTicket":
-          return { ok: true, result: await this.takeTicket(origin, vta, p.hostDid, who, p.electionId, false) };
+          return { ok: true, result: await this.takeTicket(origin, vta, p.hostDid, who, p.electionId, false, p.memberOf) };
         case "vote":
-          return { ok: true, result: await this.vote(origin, vta, p.hostDid, who, p.electionId) };
+          return { ok: true, result: await this.vote(origin, vta, p.hostDid, who, p.electionId, p.memberOf) };
       }
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -350,8 +412,53 @@ export class ElectionsPageGates {
     return { elections: (listed.elections ?? []).map((e) => pageElectionOf(e as Record<string, unknown>)) };
   }
 
-  private async show(vta: ActiveVta, hostDid: string, who: Identity, electionId: string): Promise<ElectionShown> {
-    return (await this.offscreen(vta, { op: "show", hostDid, member: who.did, electionId })) as ElectionShown;
+  /**
+   * Read one election (step 5). Without presenting first, unless the member
+   * already chose to present their membership for it; then, only where the
+   * community answered `electionUnknown` and `memberOf` names the party, ask the
+   * member whether to present their credential issued by exactly that party.
+   */
+  private async show(
+    origin: string,
+    vta: ActiveVta,
+    hostDid: string,
+    who: Identity,
+    electionId: string,
+    memberOf?: string,
+  ): Promise<Read> {
+    const key = ticketKey(hostDid, who.did, electionId);
+    const chosen = await this.deps.disclosedFor(key);
+    const readAs = (m: string): ElectionReadAs => ({ memberOf: m });
+    if (chosen !== undefined && (memberOf === undefined || memberOf === chosen)) {
+      const shown = (await this.offscreen(vta, { op: "show", hostDid, member: who.did, electionId, readAs: readAs(chosen) })) as ElectionShown;
+      return { shown, readAs: readAs(chosen) };
+    }
+    try {
+      return { shown: (await this.offscreen(vta, { op: "show", hostDid, member: who.did, electionId })) as ElectionShown };
+    } catch (e) {
+      if (!(e instanceof ElectionsPageRefusal) || e.code !== "electionUnknown" || memberOf === undefined) throw e;
+    }
+    const held = (await this.offscreen(vta, { op: "membership", hostDid, member: who.did, memberOf })) as { held: boolean };
+    if (!held.held) {
+      throw new ElectionsPageRefusal(
+        `${who.communityName} shows you no such election. If it is put to the members of ${memberOf}, you don't hold a membership credential issued by it, so you are not a member of that party here.`,
+        "membershipNotHeld",
+      );
+    }
+    const decided = await this.deps.prompt({
+      kind: "disclose",
+      origin,
+      communityName: who.communityName,
+      member: who.did,
+      electionId,
+      memberOf,
+    });
+    if (!decided.approved) throw new ElectionsPageRefusal("You chose not to show your membership, so the election was not read.");
+    const shown = (await this.offscreen(vta, { op: "show", hostDid, member: who.did, electionId, readAs: readAs(memberOf) })) as ElectionShown;
+    // The community has now learnt the membership: later reads of this
+    // election present it without asking again.
+    await this.deps.rememberDisclosure(key, memberOf);
+    return { shown, readAs: readAs(memberOf) };
   }
 
   private async takeTicket(
@@ -361,8 +468,23 @@ export class ElectionsPageGates {
     who: Identity,
     electionId: string,
     fromVote: boolean,
+    memberOf?: string,
   ): Promise<PageTicketView> {
-    const shown = await this.show(vta, hostDid, who, electionId);
+    const { shown, readAs } = await this.show(origin, vta, hostDid, who, electionId, memberOf);
+    // Under a credential roll the claim presents the member's credential for
+    // `roll.memberOf` (VTI-VOT-025): one they hold, and only once they chose to.
+    const presents = rollCredentialOf(shown) ?? undefined;
+    if (presents) {
+      const held = (await this.offscreen(vta, { op: "membership", hostDid, member: who.did, memberOf: presents.memberOf })) as {
+        held: boolean;
+      };
+      if (!held.held) {
+        throw new ElectionsPageRefusal(
+          `This election is for holders of a membership credential issued by ${presents.memberOfName ?? presents.memberOf}, and you don't hold one, so you are not a member of that party here.`,
+          "membershipNotHeld",
+        );
+      }
+    }
     const decided = await this.deps.prompt({
       kind: "ticket",
       origin,
@@ -370,32 +492,60 @@ export class ElectionsPageGates {
       member: who.did,
       election: pageElectionViewOf(shown),
       fromVote,
+      ...(presents ? { presents } : {}),
     });
     if (!decided.approved) throw new ElectionsPageRefusal("You did not take a ticket.");
-    const got = (await this.offscreen(vta, { op: "takeTicket", hostDid, member: who.did, electionId })) as {
+    const got = (await this.offscreen(vta, {
+      op: "takeTicket",
+      hostDid,
+      member: who.did,
+      electionId,
+      ...(readAs ? { readAs } : {}),
+      ...(presents ? { presentFor: presents.memberOf } : {}),
+    })) as {
       taken: boolean;
     };
     if (got.taken) await this.deps.rememberTicket(ticketKey(hostDid, who.did, electionId), this.deps.now());
     return { ticketHeld: true, taken: got.taken };
   }
 
-  private async vote(origin: string, vta: ActiveVta, hostDid: string, who: Identity, electionId: string): Promise<PageVoteView> {
+  private async vote(
+    origin: string,
+    vta: ActiveVta,
+    hostDid: string,
+    who: Identity,
+    electionId: string,
+    memberOf?: string,
+  ): Promise<PageVoteView> {
+    const key = ticketKey(hostDid, who.did, electionId);
     // Whether the community issued the ticket, from the member's own list.
     const listed = await this.list(vta, hostDid, who);
     const mine = listed.elections.find((e) => e.electionId === electionId);
-    if (!mine) throw new ElectionsPageRefusal("No such election is open to you at this community.");
-    if (!mine.ticketHeld) {
+    if (mine && !mine.ticketHeld) {
       // Take it and stop: a cast sent straight after its ticket can be paired
       // with it by time (CONVENTIONS §6 item 3).
-      await this.takeTicket(origin, vta, hostDid, who, electionId, true);
+      await this.takeTicket(origin, vta, hostDid, who, electionId, true, memberOf);
       return { ticketTaken: true };
     }
+    if (!mine) {
+      // An election put to a member party's members is never in the
+      // community's list (VTI-VOT-015). Only one this wallet was told of by the
+      // page, or already read presenting the membership, is gone on with; its
+      // ticket is the one this wallet remembers taking, else it takes one.
+      if (memberOf === undefined && (await this.deps.disclosedFor(key)) === undefined) {
+        throw new ElectionsPageRefusal("No such election is open to you at this community.");
+      }
+      if ((await this.deps.ticketTakenAt(key)) === undefined) {
+        const took = await this.takeTicket(origin, vta, hostDid, who, electionId, true, memberOf);
+        // `taken: false`: the member's agent held it already, so go on to vote.
+        if (took.taken) return { ticketTaken: true };
+      }
+    }
 
-    const shown = await this.show(vta, hostDid, who, electionId);
+    const { shown, readAs } = await this.show(origin, vta, hostDid, who, electionId, memberOf);
     const { endpoint } = (await this.offscreen(vta, { op: "ballotBox", ballotBox: shown.manifest.ballotBox })) as {
       endpoint: string;
     };
-    const key = ticketKey(hostDid, who.did, electionId);
     const takenAt = await this.deps.ticketTakenAt(key);
     const recent = takenAt !== undefined && this.deps.now() - takenAt < TICKET_TO_VOTE_GAP_MS;
     const voted = await this.deps.votedAt(key);
@@ -421,7 +571,7 @@ export class ElectionsPageGates {
 
     // Not awaited by the page: the cast waits a random pause before it goes,
     // and the window shows each step.
-    const work = this.cast(vta, hostDid, who, electionId, shown, endpoint, decided.ballot as ElectionBallot, decided.window)
+    const work = this.cast(vta, hostDid, who, electionId, shown, readAs, endpoint, decided.ballot as ElectionBallot, decided.window)
       .catch(() => undefined)
       .finally(() => this.casting.delete(work));
     this.casting.add(work);
@@ -436,6 +586,7 @@ export class ElectionsPageGates {
     who: Identity,
     electionId: string,
     shown: ElectionShown,
+    readAs: ElectionReadAs | undefined,
     endpoint: string,
     ballot: ElectionBallot,
     window: string | undefined,
@@ -459,7 +610,14 @@ export class ElectionsPageGates {
 
       step = "seal";
       await report({ phase: "running", step });
-      const prepared = (await this.offscreen(vta, { op: "castPrepare", hostDid, member: who.did, electionId, ballot })) as {
+      const prepared = (await this.offscreen(vta, {
+        op: "castPrepare",
+        hostDid,
+        member: who.did,
+        electionId,
+        ballot,
+        ...(readAs ? { readAs } : {}),
+      })) as {
         castDocument: Record<string, unknown>;
         endpoint: string;
         ballotBox: string;

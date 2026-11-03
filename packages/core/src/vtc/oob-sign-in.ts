@@ -451,8 +451,11 @@ export interface OobSenderOptions {
    *  `selectSignInServices` composes it. */
   trustTaskEndpoint: string;
   fetch?: typeof fetch;
-  /** Waits out a `429` before the retry (tests pass an instant one). */
+  /** Waits out a `429` or an `indeterminate` before the resend (tests pass an
+   *  instant one). */
   sleep?: (ms: number) => Promise<void>;
+  /** The clock a refusal's `retryAfter` and the document's `expiresAt` are read against. */
+  now?: () => number;
 }
 
 /** How many times a document the community's rate limiter refused is sent
@@ -465,6 +468,30 @@ function retryAfterMs(res: Response): number {
   const secs = Number(res.headers.get("retry-after"));
   const ms = Number.isFinite(secs) && secs > 0 ? secs * 1000 : 2000;
   return Math.min(ms, RATE_LIMIT_MAX_WAIT_MS);
+}
+
+/** How many times a document the community answered with the framework's
+ *  retryable `indeterminate` is sent again, and the longest single wait (ms).
+ *  `indeterminate` says a check could not be completed — an issuer's DID
+ *  document or a status list the community could not obtain — and that nothing
+ *  was recorded, so the **same** document goes again, with backoff, while it is
+ *  unexpired (SPEC §8.3; tickets/issue/0.3 and show/0.6, VTI-VOT-018). This is
+ *  the one place that resends a document to the community, as for a `429`;
+ *  nothing above it retries. */
+export const INDETERMINATE_RETRIES = 3;
+export const INDETERMINATE_MAX_WAIT_MS = 10_000;
+
+/** The wait before resending after an `indeterminate`: the refusal's
+ *  `retryAfter` where it names one, else 2 s doubling, capped. */
+function indeterminateWaitMs(payload: { retryAfter?: unknown }, resent: number, now: number): number {
+  const after = typeof payload.retryAfter === "string" ? Date.parse(payload.retryAfter) - now : Number.NaN;
+  const ms = Number.isFinite(after) && after > 0 ? after : 2000 * 2 ** resent;
+  return Math.min(ms, INDETERMINATE_MAX_WAIT_MS);
+}
+
+/** Whether a refusal is the framework's retryable `indeterminate`. */
+function isIndeterminate(payload: { code?: unknown; retryable?: unknown } | undefined): boolean {
+  return payload?.code === "indeterminate" && payload.retryable === true;
 }
 
 export interface OobReply<P> {
@@ -521,8 +548,11 @@ export async function postCommunityTask<P>(
   }
   const fetchFn = withFetchTimeout(opts.fetch);
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = opts.now ?? Date.now;
+  const expiresAt = typeof doc.expiresAt === "string" ? Date.parse(doc.expiresAt) : Number.NaN;
   let res: Response;
-  for (let attempt = 0; ; attempt++) {
+  let reply: OobDocument<P> & { payload: P };
+  for (let limited = 0, resent = 0; ; ) {
     try {
       res = await fetchFn(opts.trustTaskEndpoint, {
         method: "POST",
@@ -539,18 +569,31 @@ export async function postCommunityTask<P>(
     // the same document goes again once the wait it names is over. The person
     // and the page share one address with the wallet; a busy minute there is
     // not a reason to end their sign-in.
-    if (res.status !== 429 || attempt >= RATE_LIMIT_RETRIES) break;
-    await sleep(retryAfterMs(res));
-  }
-  let reply: OobDocument<P> & { payload: P };
-  try {
-    reply = (await res.json()) as OobDocument<P> & { payload: P };
-  } catch {
-    throw new OobRefusedError(`http-${res.status}`, `${label}: the community answered ${res.status} with no document`);
-  }
-  if (isTrustTaskErrorType(reply?.type)) {
-    const code = (reply.payload as { code?: unknown } | undefined)?.code;
-    throw new OobRefusedError(typeof code === "string" ? code : "taskFailed", `${label}: refused (${String(code)})`);
+    if (res.status === 429 && limited < RATE_LIMIT_RETRIES) {
+      limited++;
+      await sleep(retryAfterMs(res));
+      continue;
+    }
+    try {
+      reply = (await res.json()) as OobDocument<P> & { payload: P };
+    } catch {
+      throw new OobRefusedError(`http-${res.status}`, `${label}: the community answered ${res.status} with no document`);
+    }
+    if (isTrustTaskErrorType(reply?.type)) {
+      const refusal = reply.payload as { code?: unknown; retryable?: unknown; retryAfter?: unknown } | undefined;
+      if (isIndeterminate(refusal) && resent < INDETERMINATE_RETRIES) {
+        const wait = indeterminateWaitMs(refusal!, resent, now());
+        // A document past its expiry would be refused for that, not checked again.
+        if (!(Number.isFinite(expiresAt) && now() + wait >= expiresAt)) {
+          resent++;
+          await sleep(wait);
+          continue;
+        }
+      }
+      const code = refusal?.code;
+      throw new OobRefusedError(typeof code === "string" ? code : "taskFailed", `${label}: refused (${String(code)})`);
+    }
+    break;
   }
   if (!res.ok) throw new OobRefusedError(`http-${res.status}`, `${label}: the community answered ${res.status}`);
   if (reply?.type !== responseType(doc.type)) {

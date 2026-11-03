@@ -13,7 +13,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ballotOf, ballotRefusal, textReleaseWarning, type ElectionAnswer } from "@openvtc/pnm-core/vtc";
+import {
+  ballotOf,
+  ballotRefusal,
+  readPresentationWarning,
+  rollCredentialWarning,
+  rollPartyWords,
+  textReleaseWarning,
+  type ElectionAnswer,
+} from "@openvtc/pnm-core/vtc";
 
 import { CONSENT_KEEPALIVE_PORT, type PageElectionView } from "./bridge-protocol.js";
 import {
@@ -90,6 +98,7 @@ export function ElectionConsent({ consentId, decide }: { consentId: string; deci
 
   if (!view) return <div style={{ padding: 20, fontSize: 13 }}>Loading…</div>;
   if (view.kind === "ticket") return <TicketWindow view={view} decide={decide} />;
+  if (view.kind === "disclose") return <DiscloseWindow view={view} decide={decide} />;
   if (view.kind === "ballot") return <BallotWindow consentId={consentId} view={view} decide={decide} />;
   return <CastWindow view={view} done={() => decide({ approved: true })} />;
 }
@@ -117,6 +126,11 @@ export function Disclosure({ election }: { election: PageElectionView }) {
       <div style={{ color: "var(--w-muted)" }}>
         You can prove how you voted, so this election cannot protect you against being made to vote a certain way.
       </div>
+      {d.rollCredential && (
+        <div data-testid="election-roll-credential">
+          Only holders of a membership credential issued by <strong>{rollPartyWords(d.rollCredential)}</strong> vote.
+        </div>
+      )}
       {textRelease && (
         <div style={warn} data-testid="election-text-release">
           {textRelease}
@@ -153,6 +167,11 @@ function TicketWindow({ view, decide }: { view: Extract<ElectionConsentView, { k
         </p>
         <p style={muted}>Asked for by {originHost(view.origin)}.</p>
       </div>
+      {view.presents && (
+        <div style={warn} data-testid="election-ticket-presents">
+          {rollCredentialWarning(view.presents, view.communityName)}
+        </div>
+      )}
       <Disclosure election={view.election} />
       <div>
         <div style={label}>Your ticket is for</div>
@@ -169,7 +188,39 @@ function TicketWindow({ view, decide }: { view: Extract<ElectionConsentView, { k
           Cancel
         </button>
         <button onClick={() => decide({ approved: true })} style={primary}>
-          Take my ticket
+          {view.presents ? "Show my membership and take my ticket" : "Take my ticket"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Present the member's membership credential just to read an election
+ *  (VTI-VOT-015, VTI-VOT-016): asked before anything is shown, and only for the
+ *  one party the election is said to be put to. */
+function DiscloseWindow({ view, decide }: { view: Extract<ElectionConsentView, { kind: "disclose" }>; decide: ElectionDecision }) {
+  return (
+    <div style={{ padding: 20, fontSize: 13, display: "grid", gap: 14 }}>
+      <strong style={{ fontSize: 14 }}>Show your membership to read {view.electionId}?</strong>
+      <div style={warn} data-testid="election-disclose-warning">
+        {readPresentationWarning(view.memberOf, view.communityName)}
+      </div>
+      <div>
+        <div style={label}>The membership shown</div>
+        <div style={{ ...card, display: "grid", gap: 6 }}>
+          <Did value={view.memberOf} />
+          <p style={{ ...muted, fontSize: 12 }}>
+            Your agent presents only a credential this party issued you, as <Did value={view.member} />.
+          </p>
+        </div>
+      </div>
+      <p style={muted}>Asked for by {originHost(view.origin)}.</p>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+        <button autoFocus onClick={() => decide({ approved: false })} style={{ padding: "8px 16px", fontSize: 13 }}>
+          Cancel
+        </button>
+        <button onClick={() => decide({ approved: true })} style={primary}>
+          Show my membership
         </button>
       </div>
     </div>

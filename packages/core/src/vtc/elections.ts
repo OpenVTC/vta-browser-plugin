@@ -31,20 +31,20 @@ import { isTrustTaskErrorType } from "../vta/protocol.js";
 import { buildTrustTask, verifyTrustTaskReply } from "../vta/trust-task.js";
 
 import type { Answer, Ballot, Manifest, Question } from "../specs/_shared/components.js";
-import type { ElectionListItem } from "../specs/vtc/elections/list/0.3/payload.js";
-import type { VTCElectionsShowResponsePayload } from "../specs/vtc/elections/show/0.3/payload.js";
+import type { ElectionListItem } from "../specs/vtc/elections/list/0.5/payload.js";
+import type { VTCElectionsShowResponsePayload } from "../specs/vtc/elections/show/0.6/payload.js";
 import {
   TYPE_URI as VOTER_READ,
   RESPONSE_TYPE_URI as VOTER_READ_RESPONSE,
   type VTAPCSVoterReadPayload,
   type VTAPCSVoterReadResponsePayload,
-} from "../specs/vta/pcs/voter/read/0.3/payload.js";
+} from "../specs/vta/pcs/voter/read/0.6/payload.js";
 import {
   TYPE_URI as VOTER_REGISTER,
   RESPONSE_TYPE_URI as VOTER_REGISTER_RESPONSE,
   type VTAPCSVoterRegisterPayload,
   type VTAPCSVoterRegisterResponsePayload,
-} from "../specs/vta/pcs/voter/register/0.3/payload.js";
+} from "../specs/vta/pcs/voter/register/0.5/payload.js";
 import {
   TYPE_URI as VOTER_ACCEPT,
   RESPONSE_TYPE_URI as VOTER_ACCEPT_RESPONSE,
@@ -62,13 +62,13 @@ import {
   RESPONSE_TYPE_URI as VOTE_RESPONSE,
   type VTAPCSVotePayload,
   type VTAPCSVoteResponsePayload,
-} from "../specs/vta/pcs/vote/0.3/payload.js";
+} from "../specs/vta/pcs/vote/0.4/payload.js";
 import {
   TYPE_URI as VOTE_ENCRYPTED,
   RESPONSE_TYPE_URI as VOTE_ENCRYPTED_RESPONSE,
   type VTAPCSVoteEncryptedPayload,
   type VTAPCSVoteEncryptedResponsePayload,
-} from "../specs/vta/pcs/vote-encrypted/0.4/payload.js";
+} from "../specs/vta/pcs/vote-encrypted/0.5/payload.js";
 
 export type {
   Answer as ElectionAnswer,
@@ -81,12 +81,12 @@ export type {
 export {
   TYPE_URI as ELECTIONS_LIST_TYPE,
   RESPONSE_TYPE_URI as ELECTIONS_LIST_RESPONSE_TYPE,
-} from "../specs/vtc/elections/list/0.3/payload.js";
+} from "../specs/vtc/elections/list/0.5/payload.js";
 export {
   TYPE_URI as ELECTIONS_SHOW_TYPE,
   RESPONSE_TYPE_URI as ELECTIONS_SHOW_RESPONSE_TYPE,
-} from "../specs/vtc/elections/show/0.3/payload.js";
-export { RESPONSE_TYPE_URI as TICKETS_ISSUE_RESPONSE_TYPE } from "../specs/vtc/elections/tickets/issue/0.1/payload.js";
+} from "../specs/vtc/elections/show/0.6/payload.js";
+export { RESPONSE_TYPE_URI as TICKETS_ISSUE_RESPONSE_TYPE } from "../specs/vtc/elections/tickets/issue/0.3/payload.js";
 
 /** Who the VTA is asked as, and which VTA. */
 export interface VoterAgent {
@@ -114,26 +114,53 @@ function ask<P, R>(
   return sender.send<R>(envelope, { expectedResponseType: responseType, operationLabel: label });
 }
 
-/** `vta/pcs/voter/read/0.3`: the VTA signs one election read as the member,
- *  addressed to the community. The wallet sends the document unchanged. */
-export function pcsVoterRead(
+/** What a read presents (`vta/pcs/voter/read/0.6`, VTI-VOT-015): the vault
+ *  handle of the membership credential the member chose to show, and the DID
+ *  they were told the election's credential roll names. The VTA presents it
+ *  only where that credential's issuer is exactly `memberOf`, and refuses
+ *  `membershipCredentialMismatch` otherwise (VTI-VOT-016). */
+export interface ReadPresenting {
+  membershipCredential: string;
+  memberOf: string;
+}
+
+/** `vta/pcs/voter/read/0.6`: the VTA signs one election read as the member,
+ *  addressed to the community — a `vtc/elections/list/0.5` or
+ *  `vtc/elections/show/0.6` request. The wallet sends the document unchanged.
+ *  `presenting`, for a `show` only, has the VTA present the member's
+ *  membership credential in it, bound to that document; a community answers
+ *  such a read once, so a lost answer is a new read, never a resend. */
+export async function pcsVoterRead(
   sender: TrustTaskSender,
   agent: VoterAgent,
   t: VoterTarget,
   read: "list" | "show",
   payload: Record<string, unknown>,
+  presenting?: ReadPresenting,
 ): Promise<VTAPCSVoterReadResponsePayload> {
-  const p: VTAPCSVoterReadPayload = { ...t, read, payload };
-  return ask(sender, agent, VOTER_READ, VOTER_READ_RESPONSE, "vta/pcs/voter/read/0.3", p);
+  if (presenting && read !== "show") throw new Error("Only a show presents a membership credential.");
+  const p: VTAPCSVoterReadPayload = {
+    ...t,
+    read,
+    payload,
+    ...(presenting ? { membershipCredential: presenting.membershipCredential, memberOf: presenting.memberOf } : {}),
+  };
+  return ask(sender, agent, VOTER_READ, VOTER_READ_RESPONSE, "vta/pcs/voter/read/0.6", p);
 }
 
-/** `vta/pcs/voter/register/0.3`: the blinded ticket request, and — because
- *  `member` is named — that request as a document signed as the member. */
+/** `vta/pcs/voter/register/0.5`: the blinded ticket request, and — because
+ *  `member` is named — that request (`vtc/elections/tickets/issue/0.3`) as a
+ *  document signed as the member. Under a `credential` roll,
+ *  `membershipCredential` is the vault handle of the member's membership
+ *  credential for `roll.memberOf`, which the VTA presents in that document
+ *  (VTI-VOT-025); the VTA refuses a credential roll without one
+ *  (`membershipCredentialRequired`). */
 export function pcsVoterRegister(
   sender: TrustTaskSender,
   agent: VoterAgent,
   t: VoterTarget,
   shown: Pick<VTCElectionsShowResponsePayload, "parameters" | "manifest">,
+  membershipCredential?: string,
 ): Promise<VTAPCSVoterRegisterResponsePayload> {
   const p: VTAPCSVoterRegisterPayload = {
     contextId: t.contextId,
@@ -141,8 +168,9 @@ export function pcsVoterRegister(
     member: t.member,
     parameters: shown.parameters,
     manifest: shown.manifest,
+    ...(membershipCredential !== undefined ? { membershipCredential } : {}),
   } as VTAPCSVoterRegisterPayload;
-  return ask(sender, agent, VOTER_REGISTER, VOTER_REGISTER_RESPONSE, "vta/pcs/voter/register/0.3", p);
+  return ask(sender, agent, VOTER_REGISTER, VOTER_REGISTER_RESPONSE, "vta/pcs/voter/register/0.5", p);
 }
 
 /** `vta/pcs/voter/accept/0.1`: unblind the community's answer into the VTA. */
@@ -165,8 +193,8 @@ export function pcsVoterAccept(
 }
 
 /** The cast, built and signed in the VTA under a key made for it alone: open
- *  (`vta/pcs/vote/0.3`), or encrypted under the election key the trustees'
- *  signed steps form (`vta/pcs/vote-encrypted/0.4`) — the VTA forms it from
+ *  (`vta/pcs/vote/0.4`), or encrypted under the election key the trustees'
+ *  signed steps form (`vta/pcs/vote-encrypted/0.5`) — the VTA forms it from
  *  `ceremony` itself and encrypts under no other. */
 export async function pcsCast(
   sender: TrustTaskSender,
@@ -178,7 +206,7 @@ export async function pcsCast(
   const base = { contextId: t.contextId, community: t.community, parameters: shown.parameters, manifest: shown.manifest, ballot };
   if (shown.manifest.secrecy === "open") {
     const r = await ask<VTAPCSVotePayload, VTAPCSVoteResponsePayload>(
-      sender, agent, VOTE, VOTE_RESPONSE, "vta/pcs/vote/0.3", base as VTAPCSVotePayload,
+      sender, agent, VOTE, VOTE_RESPONSE, "vta/pcs/vote/0.4", base as VTAPCSVotePayload,
     );
     return { castDocument: r.castDocument as unknown as Record<string, unknown>, tag: String(r.tag) };
   }
@@ -186,7 +214,7 @@ export async function pcsCast(
     throw new Error("The trustees have not formed this election's key yet. Vote once voting opens.");
   }
   const r = await ask<VTAPCSVoteEncryptedPayload, VTAPCSVoteEncryptedResponsePayload>(
-    sender, agent, VOTE_ENCRYPTED, VOTE_ENCRYPTED_RESPONSE, "vta/pcs/vote-encrypted/0.4",
+    sender, agent, VOTE_ENCRYPTED, VOTE_ENCRYPTED_RESPONSE, "vta/pcs/vote-encrypted/0.5",
     { ...base, ceremony: shown.ceremony } as unknown as VTAPCSVoteEncryptedPayload,
   );
   return { castDocument: r.castDocument as unknown as Record<string, unknown>, tag: String(r.tag) };
@@ -203,6 +231,102 @@ export function pcsVoterReceipt(
 ): Promise<VTAPCSVoterReceiptResponsePayload> {
   const p = { contextId: t.contextId, community: t.community, electionId, receipt } as unknown as VTAPCSVoterReceiptPayload;
   return ask(sender, agent, VOTER_RECEIPT, VOTER_RECEIPT_RESPONSE, "vta/pcs/voter/receipt/0.1", p);
+}
+
+// ── Credential rolls ─────────────────────────────────────────────────────────
+
+/** The party a `credential` roll admits the holders of a membership credential
+ *  for (voting/_shared/0.4 `RollRule`, VTI-VOT-025), as the member is told it. */
+export interface RollCredential {
+  /** The manifest's `roll.memberOf`: the one DID whose membership credential counts. */
+  memberOf: string;
+  /** What `memberOf` is to the community, from its disclosure; absent when the
+   *  community's disclosure does not say. */
+  memberOfKind?: "thisCommunity" | "communityGroup" | "memberParty";
+  memberOfName?: string;
+}
+
+/**
+ * The election's credential roll, or `null` under any other rule. `memberOf` is
+ * the manifest's — the digest binds it, and it is what the community checks a
+ * presentation against — and the kind and name the disclosure's
+ * (`disclosure.rollCredential`, VTI-VOT-090).
+ */
+export function rollCredentialOf(shown: Pick<VTCElectionsShowResponsePayload, "manifest" | "disclosure">): RollCredential | null {
+  const roll = shown.manifest.roll;
+  if (roll?.rule !== "credential" || typeof roll.memberOf !== "string" || roll.memberOf === "") return null;
+  const d = shown.disclosure?.rollCredential;
+  const told = d && d.memberOf === roll.memberOf ? d : undefined;
+  return {
+    memberOf: roll.memberOf,
+    ...(told ? { memberOfKind: told.memberOfKind } : {}),
+    ...(told?.memberOfName !== undefined ? { memberOfName: told.memberOfName } : {}),
+  };
+}
+
+/** A vault credential as `vault/credentials/query` describes it: what choosing one needs. */
+export interface HeldCredential {
+  id: string;
+  issuerDid?: string;
+  status?: string;
+  lifecycle?: string;
+  validUntil?: string;
+}
+
+/**
+ * Which of the member's credentials to present for a roll naming `memberOf`:
+ * an active, valid one whose issuer is **exactly** `memberOf` — the VTA refuses
+ * any other (VTI-VOT-016), and a credential from a group of that party is not
+ * one from the party. Of several, the one valid longest. `null` when the member
+ * holds none, which means they hold no membership of that party here.
+ */
+export function membershipCredentialFor(held: readonly HeldCredential[], memberOf: string, now: number = Date.now()): string | null {
+  const until = (c: HeldCredential): number => (c.validUntil ? Date.parse(c.validUntil) : Number.POSITIVE_INFINITY);
+  const usable = held.filter(
+    (c) =>
+      c.issuerDid === memberOf &&
+      (c.lifecycle === undefined || c.lifecycle === "active") &&
+      (c.status === undefined || c.status === "valid") &&
+      !(until(c) <= now),
+  );
+  if (usable.length === 0) return null;
+  return usable.reduce((best, c) => (until(c) > until(best) ? c : best)).id;
+}
+
+/** How the party a roll names is spoken of to the member. */
+export function rollPartyWords(rc: RollCredential): string {
+  const name = rc.memberOfName?.trim();
+  switch (rc.memberOfKind) {
+    case "thisCommunity":
+      return name ? `this community (${name})` : "this community";
+    case "communityGroup":
+      return name ? `the group ${name}` : `a group of this community (${rc.memberOf})`;
+    case "memberParty":
+      return name ? `${name}, a member of this community` : `${rc.memberOf}, a member of this community`;
+    default:
+      return name ? `${name} (${rc.memberOf})` : rc.memberOf;
+  }
+}
+
+/**
+ * What the member must be told before their membership credential is presented
+ * to claim a ticket (VTI-VOT-025, VTI-VOT-090): whose credential counts, and
+ * that presenting it shows the community their membership of that party.
+ */
+export function rollCredentialWarning(rc: RollCredential, communityName: string): string {
+  const party = rollPartyWords(rc);
+  const of = rc.memberOfKind === "thisCommunity" ? "it" : "that party";
+  return `Only holders of a membership credential issued by ${party} take a ticket. Taking one presents yours to ${communityName}, so ${communityName} learns that you are a member of ${of}.`;
+}
+
+/**
+ * What the member must be told before their membership credential is presented
+ * just to read an election put to a member party's members (VTI-VOT-015,
+ * VTI-VOT-016, VTI-VOT-090): the community learns the membership before the
+ * member has seen what the election asks.
+ */
+export function readPresentationWarning(memberOf: string, communityName: string): string {
+  return `${communityName} shows this election only to members of ${memberOf}. To read it, your agent presents your membership credential issued by ${memberOf} to ${communityName}, which then learns that you are a member of that party — before you have seen what the election asks. No other credential is shown.`;
 }
 
 // ── Written answers ──────────────────────────────────────────────────────────

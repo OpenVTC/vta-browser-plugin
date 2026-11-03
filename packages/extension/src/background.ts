@@ -1154,6 +1154,13 @@ const ELECTION_TICKET_PREFIX = "election-ticket:";
  *  ballot window reads it; the page is never told. */
 const ELECTION_VOTE_PREFIX = "election-vote:";
 
+/** `chrome.storage.local` key prefix for the party a member chose to present
+ *  their membership of, to read an election put to that party's members
+ *  (VTI-VOT-015, VTI-VOT-016). The party's DID only — never the credential: the
+ *  community learnt the membership when it was first presented, so later reads
+ *  of the same election present it without asking again. */
+const ELECTION_DISCLOSED_PREFIX = "election-disclosed:";
+
 const electionsPageGates = new ElectionsPageGates({
   async active() {
     const active = await readActiveConnection();
@@ -1198,6 +1205,14 @@ const electionsPageGates = new ElectionsPageGates({
   },
   async rememberVote(key, vote) {
     await chrome.storage.local.set({ [`${ELECTION_VOTE_PREFIX}${key}`]: vote });
+  },
+  async disclosedFor(key) {
+    const k = `${ELECTION_DISCLOSED_PREFIX}${key}`;
+    const v = (await chrome.storage.local.get(k))[k];
+    return typeof v === "string" ? v : undefined;
+  },
+  async rememberDisclosure(key, memberOf) {
+    await chrome.storage.local.set({ [`${ELECTION_DISCLOSED_PREFIX}${key}`]: memberOf });
   },
   now: () => Date.now(),
 });

@@ -350,7 +350,7 @@ export type KeyType = "ed25519" | "x25519" | "p256" | "mldsa44" | "mldsa65";
 /**
  * A question or option key, unique within its manifest or question.
  */
-export type Key_VotingV0_3 = string;
+export type Key_VotingV0_4 = string;
 /**
  * Application-chosen identifier for a record within a namespace. Opaque to the maintainer: it MUST NOT be parsed, normalized, or case-folded, and prefix matching in `list` is a byte-prefix comparison over the UTF-8 encoding. Applications SHOULD use `/`-delimited hierarchical keys (`community/acme`, `contact/z6Mk…`) so that `prefix` can address a record family, but the delimiter is a convention between an application and itself — the maintainer attaches no meaning to it.
  */
@@ -1260,9 +1260,9 @@ export interface AgentNameEntry {
  * The answer to one question. Exactly one member besides `question` is present, matching the question's type, or `abstain` for an optional question left unanswered.
  */
 export interface Answer {
-  question: Key_VotingV0_3;
-  choice?: Key_VotingV0_3[];
-  ranking?: Key_VotingV0_3[];
+  question: Key_VotingV0_4;
+  choice?: Key_VotingV0_4[];
+  ranking?: Key_VotingV0_4[];
   scores?: {
     [k: string]: number | undefined;
   };
@@ -2341,7 +2341,7 @@ export interface DisclosedField {
   facet?: boolean;
 }
 /**
- * The statement a community publishes, and shows a member before they request a ticket, about how one election is run (VTI-VOT-090). Generated from the election's manifest and the community's configuration, never written by hand.
+ * The statement a community publishes, and shows a member before they request a ticket, about how one election is run (VTI-VOT-090). Generated from the election's manifest and the community's configuration, never written by hand. Under a `credential` roll it also says whose membership credential counts (`rollCredential`).
  */
 export interface Disclosure {
   /**
@@ -2360,6 +2360,7 @@ export interface Disclosure {
   boardVisibility: BoardVisibility;
   auditors: string[];
   revote: Revote;
+  rollCredential?: RollCredentialDisclosure;
   /**
    * Always false: a voter can prove how they voted, so the community cannot protect a member against being made to vote a certain way.
    */
@@ -3518,7 +3519,7 @@ export interface WebPush {
  * Select between `minSelections` and `maxSelections` of `options`. A yes/no/abstain motion is a choice of exactly one of three.
  */
 export interface ChoiceQuestion {
-  key: Key_VotingV0_3;
+  key: Key_VotingV0_4;
   type: "choice";
   text?: string;
   /**
@@ -3534,7 +3535,7 @@ export interface ChoiceQuestion {
  * Order `options`; a ballot ranks every option or, when `partial` is true, a prefix of them.
  */
 export interface RankingQuestion {
-  key: Key_VotingV0_3;
+  key: Key_VotingV0_4;
   type: "ranking";
   text?: string;
   /**
@@ -3549,7 +3550,7 @@ export interface RankingQuestion {
  * Give each option an integer score within [min, max].
  */
 export interface ScoreQuestion {
-  key: Key_VotingV0_3;
+  key: Key_VotingV0_4;
   type: "score";
   text?: string;
   /**
@@ -3565,14 +3566,14 @@ export interface ScoreQuestion {
  * Free text of at most `maxLength` characters.
  */
 export interface TextQuestion {
-  key: Key_VotingV0_3;
+  key: Key_VotingV0_4;
   type: "text";
   text?: string;
   maxLength: number;
   optional: boolean;
 }
 export interface QuestionOption {
-  key: Key_VotingV0_3;
+  key: Key_VotingV0_4;
   /**
    * Display text. Absent from a manifest registered with a ballot box that holds no question text (VTI-VOT-014).
    */
@@ -3582,7 +3583,7 @@ export interface QuestionOption {
  * One question's totals. `choice`: selections per option. `ranking`: per option, how many ballots placed it at each position (index 0 = first). `score`: per option, the sum and the number of ballots that scored it. `text`: the answers, in board order, withheld (`withheld: true`) below the manifest's `textReleaseThreshold`. `abstained` counts ballots that left the question unanswered.
  */
 export interface QuestionResult {
-  question: Key_VotingV0_3;
+  question: Key_VotingV0_4;
   abstained: number;
   choice?: {
     [k: string]: number | undefined;
@@ -4032,11 +4033,36 @@ export interface RevocationHead {
   digest: DigestMultibase;
 }
 /**
- * Who may be issued a ticket (VTI-VOT-021): the community's active members, its active members and the parties `listed` names, or only the parties `listed` names.
+ * Under a `credential` roll, whose membership credential admits a party to a ticket, as a member is shown it before they claim one (VTI-VOT-090): the DID the roll names, what kind of party it is to this community, and its name as the community knows it. Present in a disclosure exactly when the election's roll rule is `credential`.
+ */
+export interface RollCredentialDisclosure {
+  /**
+   * The manifest's `roll.memberOf`.
+   */
+  memberOf: string;
+  /**
+   * `thisCommunity`: the community itself. `communityGroup`: one of the community's own groups, whose membership credentials it authorizes the group to issue (VTI-DIR-083). `memberParty`: a party outside the community that is itself an active member of it — another community, a group of another community, or a network — whose own membership credentials admit their holders (VTI-VOT-026).
+   */
+  memberOfKind: "thisCommunity" | "communityGroup" | "memberParty";
+  /**
+   * The name the community shows for the party `memberOf` names: the group's name, or the member party's name as the community's records hold it. Absent where showing it would disclose more than the group's visibility admits (VTI-DIR-070).
+   */
+  memberOfName?: string;
+  /**
+   * Always true: claiming a ticket shows the community the presenter's membership credential for `memberOf`, so the community learns that the presenter is a member of that party.
+   */
+  presenterDisclosed?: true;
+}
+/**
+ * Who may be issued a ticket (VTI-VOT-021): the community's active members (`members`), its active members and the parties `listed` names (`membersAndListed`), only the parties `listed` names (`listed`), or the holders of a membership credential for the one DID `memberOf` names (`credential`), proven by presentation when the holder claims their ticket and never resolved when the election is created (VTI-VOT-025). `memberOf` is present exactly when `rule` is `credential`, and `listed` is never present with it.
  */
 export interface RollRule {
-  rule: "members" | "membersAndListed" | "listed";
+  rule: "members" | "membersAndListed" | "listed" | "credential";
   listed?: string[];
+  /**
+   * The DID whose membership credential admits its holder, under the `credential` rule: this community, one of its groups, or a party that is itself an active member of this community — holding a membership credential this community issued it — such as another community, a group of another community, or a network (VTI-VOT-026). Always a DID, never a group's local identifier or name. A community refuses to create an election naming any other DID (vtc/elections/create:rollUntrusted).
+   */
+  memberOf?: string;
 }
 /**
  * The outcome of a rollback. Distinct from ServiceMutationResult because a rollback can legitimately publish nothing: if the previous state already equals the current one there is no change to write, and `kind: "noOp"` says so with `logEntryVersionId` absent. Treating that as a failure would be wrong — the requested state holds — and treating it as an ordinary success would report a log entry that does not exist.
