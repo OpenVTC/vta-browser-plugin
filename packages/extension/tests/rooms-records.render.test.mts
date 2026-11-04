@@ -265,3 +265,49 @@ test("a record that fails its check says so in full without being expanded", asy
   assert.match(screen.text(), /check failed/);
   assert.match(screen.text(), /does not reach the root it asserted/);
 });
+
+// A message is written as `body` alone (a chat-style client, Keyring from
+// 277.8). It is named by its own first line, not listed as "Untitled record".
+test("an untitled record is named by its first line, and previewed by the rest", async () => {
+  const { screen } = await mount({
+    [BROWSE]: { roomId: ROOM, records: [record("m")], complete: true, verification: { priorRoots: "agree", count: "agrees", head: head(1) } },
+    [READ]: {
+      roomId: ROOM,
+      key: "m",
+      version: 412,
+      status: "active",
+      plaintext: b64({ body: "Lunch at one?\nBring the slides." }),
+      verification: { trace: "verified", priorRoots: "agree", head: head(1) },
+    },
+  });
+  await browse(screen);
+  await screen.settle();
+  const text = screen.text();
+  assert.doesNotMatch(text, /Untitled record/);
+  assert.ok(screen.button("Lunch at one?"), "the first line names the row");
+  assert.match(text, /Bring the slides\./);
+});
+
+// A file record's `body` is its caption. It was never shown, so a photo's words
+// were lost here.
+test("a file record shows its caption", async () => {
+  const { screen } = await mount({
+    [BROWSE]: { roomId: ROOM, records: [record("f")], complete: true, verification: { priorRoots: "agree", count: "agrees", head: head(1) } },
+    [READ]: {
+      roomId: ROOM,
+      key: "f",
+      version: 412,
+      status: "active",
+      plaintext: b64({
+        body: "The view from the venue",
+        file: { name: "venue.png", size: 12, mediaType: "image/png", blobRef: "zQmBlob" },
+      }),
+      verification: { trace: "verified", priorRoots: "agree", head: head(1) },
+    },
+  });
+  await browse(screen);
+  await screen.settle();
+  assert.match(screen.text(), /The view from the venue/, "collapsed, as the row's preview");
+  await screen.click(screen.button("venue.png"));
+  assert.match(screen.text(), /The view from the venue/, "and expanded");
+});
