@@ -170,6 +170,16 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Fixed
 
+- **`verifyRecordBody` accepts every member of the released `SealedRecordBody`**
+  (`rooms/_shared/0.2`): `basis`, `confidence`, `evidence`, `validFor`,
+  `validUntil` and `roomProfile` beside the earlier nine, each checked against
+  the shape the schema gives it, and a profile record carrying a record's
+  members refused. Previously a body carrying any of them was refused as
+  malformed. `signRecordBody` writes them. The verifier now lives in
+  `rooms/record-body` and is exported from `@openvtc/pnm-core/rooms` (still
+  re-exported from `rooms/files`), with `RECORD_BODY_MEMBERS`, and
+  `readSealedVersion` gives the version a `rooms/keys/read` body was sealed at.
+
 - **A relayed task outlasts the VTA.** Tasks the VTA answers by waiting on a
   third party — `vta/webvh/dids/create` and the other server-managed did:webvh
   and agent-name verbs, room key reads, `vault/proxy-login`, `vta/services/*`,

@@ -15,6 +15,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { RoomRecords } from "../src/manager/panes/rooms-records.js";
+import { signingIdentityFromSecret } from "@openvtc/pnm-core";
+import { signRecordBody, type SealedRecordBody } from "@openvtc/pnm-core/rooms";
 
 const BROWSE = "rooms/keys/browse/0.3";
 const READ = "rooms/keys/read/0.1";
@@ -31,14 +33,27 @@ const head = (recordCount: number, headVersion = 412) => ({
 
 const record = (key: string, version = 412) => ({ key, version, status: "active" });
 
+// The author of every sealed body below, and someone who is not.
+const AUTHOR = signingIdentityFromSecret(new Uint8Array(32).fill(5));
+const OTHER = signingIdentityFromSecret(new Uint8Array(32).fill(6));
+
+type Fields = Omit<SealedRecordBody, "roomId" | "key" | "version" | "author">;
+
+/** A body signed by `by` for `key` at `version` in ROOM, as the agent returns it opened: base64url. */
+const sealed = async (key: string, version: number, fields: Fields, by = AUTHOR) =>
+  Buffer.from(
+    await signRecordBody({ roomId: ROOM, key, version, author: by.did, ...fields }, by),
+  ).toString("base64url");
+
 // Every listing opens its newest records straight away, so a test about the
 // listing's verdict still needs the agent to answer a read. A clean one.
+const QUIET = await sealed("a", 412, { title: "Quiet" });
 const QUIET_READ = (p: { key: string }) => ({
   roomId: ROOM,
   key: p.key,
   version: 412,
   status: "active",
-  plaintext: "eyJ0aXRsZSI6IlF1aWV0In0", // {"title":"Quiet"}
+  plaintext: QUIET,
   verification: { trace: "verified", priorRoots: "agree", head: head(1) },
 });
 
@@ -55,6 +70,11 @@ const mount = async (answers: Record<string, unknown>) => {
 const browse = async (screen: Awaited<ReturnType<typeof mount>>["screen"]) =>
   screen.click(screen.button("List the records"));
 
+/** Let the reads land and their bodies verify: a signature check is a few turns of the loop. */
+const settled = async (screen: Awaited<ReturnType<typeof mount>>["screen"]) => {
+  for (let i = 0; i < 20; i++) await screen.settle();
+};
+
 // ── Caught, and said out loud ───────────────────────────────────────────────
 
 // The case the whole mechanism exists for, and the one a member must not read
@@ -69,6 +89,7 @@ test("two roots at one version names what was observed, and what happens next", 
     },
   });
   await browse(screen);
+  await settled(screen);
   const text = screen.text();
   assert.match(text, /two different answers about this room/i);
   assert.match(text, /version 412/);
@@ -89,6 +110,7 @@ test("a short listing is caught on a first reading, with no history to compare",
     },
   });
   await browse(screen);
+  await settled(screen);
   const text = screen.text();
   assert.match(text, /fewer records than it committed to/i);
   assert.match(text, /118/);
@@ -110,6 +132,7 @@ test("a verified trace never stands alone as though it settled the question", as
     },
   });
   await browse(screen);
+  await settled(screen);
   const text = screen.text();
   assert.match(text, /different question/i);
   assert.match(text, /not keeping the history/i);
@@ -129,6 +152,7 @@ test("a host that offers no tree is reported as making no claim, not as failing"
     },
   });
   await browse(screen);
+  await settled(screen);
   const text = screen.text();
   assert.match(text, /keeps no record tree/i);
   assert.match(text, /would look exactly like a room that never held one/i);
@@ -150,13 +174,12 @@ test("opening a record asks the agent, and the key never enters the console", as
       key: "giXFLTGBdnnQJRoIsktuIg",
       version: 412,
       status: "active",
-      // base64url of `{"title":"Pricing holds"}`
-      plaintext: "eyJ0aXRsZSI6IlByaWNpbmcgaG9sZHMifQ",
+      plaintext: await sealed("giXFLTGBdnnQJRoIsktuIg", 412, { title: "Pricing holds" }),
       verification: { trace: "verified", priorRoots: "agree", head: head(1) },
     },
   });
   await browse(screen);
-  await screen.settle();
+  await settled(screen);
 
   // The newest records open as the list arrives: the title is the row's name.
   assert.match(screen.text(), /Pricing holds/);
@@ -201,6 +224,9 @@ const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url")
 // click rather than costing the agent a read each on every listing.
 test("the newest five records open themselves, newest first, and the rest wait", async () => {
   const records = Array.from({ length: 7 }, (_, i) => record(`k${i + 1}`, i + 1));
+  const bodies = Object.fromEntries(
+    await Promise.all(records.map(async (r) => [r.key, await sealed(r.key, r.version, { title: `Note ${r.key}` })])),
+  );
   const { a, screen } = await mount({
     [BROWSE]: { roomId: ROOM, records, complete: true, verification: { priorRoots: "agree", count: "agrees", head: head(7, 7) } },
     [READ]: (p: { key: string }) => ({
@@ -208,12 +234,12 @@ test("the newest five records open themselves, newest first, and the rest wait",
       key: p.key,
       version: Number(p.key.slice(1)),
       status: "active",
-      plaintext: b64({ title: `Note ${p.key}` }),
+      plaintext: bodies[p.key],
       verification: { trace: "verified", priorRoots: "agree", head: head(7, 7) },
     }),
   });
   await browse(screen);
-  await screen.settle();
+  await settled(screen);
   const read = a.of("keys/read").map((call: { payload: { key: string } }) => call.payload.key).sort();
   assert.deepEqual(read, ["k3", "k4", "k5", "k6", "k7"]);
   const text = screen.text();
@@ -232,12 +258,12 @@ test("a note reads as its title and text, with the signed record folded", async 
       key: "n",
       version: 412,
       status: "active",
-      plaintext: b64({ title: "Mascot Name", body: "Settled on \"Trustie\"\n\nNot T-Bot", proof: { proofValue: "z4bj" } }),
+      plaintext: await sealed("n", 412, { title: "Mascot Name", body: "Settled on \"Trustie\"\n\nNot T-Bot" }),
       verification: { trace: "verified", priorRoots: "agree", head: head(1) },
     },
   });
   await browse(screen);
-  await screen.settle();
+  await settled(screen);
   await screen.click(screen.button("Mascot Name"));
   const text = screen.text();
   assert.match(text, /Settled on "Trustie"/);
@@ -256,12 +282,12 @@ test("a record that fails its check says so in full without being expanded", asy
       key: "bad",
       version: 412,
       status: "active",
-      plaintext: b64({ title: "Suspect" }),
+      plaintext: await sealed("bad", 412, { title: "Suspect" }),
       verification: { trace: "failed", priorRoots: "agree", head: head(1) },
     },
   });
   await browse(screen);
-  await screen.settle();
+  await settled(screen);
   assert.match(screen.text(), /check failed/);
   assert.match(screen.text(), /does not reach the root it asserted/);
 });
@@ -276,12 +302,12 @@ test("an untitled record is named by its first line, and previewed by the rest",
       key: "m",
       version: 412,
       status: "active",
-      plaintext: b64({ body: "Lunch at one?\nBring the slides." }),
+      plaintext: await sealed("m", 412, { body: "Lunch at one?\nBring the slides." }),
       verification: { trace: "verified", priorRoots: "agree", head: head(1) },
     },
   });
   await browse(screen);
-  await screen.settle();
+  await settled(screen);
   const text = screen.text();
   assert.doesNotMatch(text, /Untitled record/);
   assert.ok(screen.button("Lunch at one?"), "the first line names the row");
@@ -298,16 +324,156 @@ test("a file record shows its caption", async () => {
       key: "f",
       version: 412,
       status: "active",
-      plaintext: b64({
+      plaintext: await sealed("f", 412, {
         body: "The view from the venue",
-        file: { name: "venue.png", size: 12, mediaType: "image/png", blobRef: "zQmBlob" },
+        file: { name: "venue.png", size: 12, mediaType: "image/png", blobRef: "zQmBlob" } as never,
       }),
       verification: { trace: "verified", priorRoots: "agree", head: head(1) },
     },
   });
   await browse(screen);
-  await screen.settle();
+  await settled(screen);
   assert.match(screen.text(), /The view from the venue/, "collapsed, as the row's preview");
   await screen.click(screen.button("venue.png"));
   assert.match(screen.text(), /The view from the venue/, "and expanded");
+});
+
+// ── The author's signature (`SealedRecordBody`, *Reading*) ──────────────────
+//
+// A sealed body is shown only once its author's proof, its signed location and,
+// on an attributed room, the host's author all hold. One that fails shows none
+// of its content — never the content with a warning — and "signed" is said only
+// of one that passed. The host's listing verdict is a separate finding, worded
+// apart.
+
+const OK = { trace: "verified", priorRoots: "agree", head: head(1) };
+
+/** One record listed and read, opened by a click; the screen's text and the rows' folds. */
+async function readOne(
+  row: { key: string; version: number; author?: string },
+  read: Record<string, unknown>,
+) {
+  const { screen } = await mount({
+    [BROWSE]: { roomId: ROOM, records: [{ ...row, status: "active" }], complete: true, verification: { priorRoots: "agree", count: "agrees", head: head(1) } },
+    [READ]: { roomId: ROOM, key: row.key, version: row.version, status: "active", verification: OK, ...read },
+  });
+  await browse(screen);
+  await settled(screen);
+  const rowButton = screen.all("button").find((b) => b.getAttribute("aria-expanded") !== null);
+  assert.ok(rowButton, "the record's row");
+  await screen.click(rowButton);
+  await settled(screen);
+  return screen.text();
+}
+
+/** What a refused record must and must not say. */
+function assertRefused(text: string, secret: RegExp) {
+  assert.match(text, /could not be verified, so none of it is shown/);
+  assert.match(text, /signature not verified/);
+  assert.doesNotMatch(text, secret, "none of the body is shown");
+  assert.doesNotMatch(text, /The signed record/);
+  assert.doesNotMatch(text, /Signed by/);
+}
+
+test("a valid sealed record is shown as signed, by its signed author", async () => {
+  const text = await readOne(
+    { key: "v", version: 412, author: AUTHOR.did },
+    { author: AUTHOR.did, plaintext: await sealed("v", 412, { title: "Budget", body: "Approved at 40k" }) },
+  );
+  assert.match(text, /Approved at 40k/);
+  assert.match(text, /Signed by/);
+  assert.ok(text.includes(AUTHOR.did.slice(0, 22)), "the signed author is named");
+  assert.match(text, /The signed record/);
+  // The host's verdict is still there, and still about the host.
+  assert.match(text, /In the set this host committed to/);
+});
+
+test("a private room's record is signed by whoever its body names, once that verifies", async () => {
+  const text = await readOne({ key: "p", version: 412 }, { plaintext: await sealed("p", 412, { body: "Private words" }) });
+  assert.match(text, /Private words/);
+  assert.match(text, /Signed by/);
+  assert.ok(text.includes(AUTHOR.did.slice(0, 22)));
+});
+
+test("a body whose proof does not verify shows none of its content", async () => {
+  const signed = JSON.parse(Buffer.from(await sealed("t", 412, { title: "Original", body: "Original text" }), "base64url").toString());
+  signed.title = "Altered";
+  signed.body = "Altered text";
+  const text = await readOne({ key: "t", version: 412 }, { plaintext: Buffer.from(JSON.stringify(signed)).toString("base64url") });
+  assertRefused(text, /Altered|Original/);
+  assert.match(text, /author's signature does not verify/);
+});
+
+test("a body that carries no proof at all is refused", async () => {
+  const text = await readOne({ key: "u", version: 412 }, { plaintext: b64({ roomId: ROOM, key: "u", version: 412, author: AUTHOR.did, title: "Unsigned" }) });
+  assertRefused(text, /Unsigned/);
+});
+
+test("a host author that is not the signer fails the record", async () => {
+  const text = await readOne(
+    { key: "h", version: 412, author: OTHER.did },
+    { author: OTHER.did, plaintext: await sealed("h", 412, { title: "Minutes", body: "Minutes text" }) },
+  );
+  assertRefused(text, /Minutes/);
+  assert.match(text, /host names a different author/);
+});
+
+test("a listing author that is not the signer fails the record", async () => {
+  const text = await readOne(
+    { key: "l", version: 412, author: OTHER.did },
+    { plaintext: await sealed("l", 412, { title: "Listed", body: "Listed text" }) },
+  );
+  assertRefused(text, /Listed text/);
+  assert.match(text, /host names a different author/);
+});
+
+test("a body signed for another record is refused", async () => {
+  const text = await readOne({ key: "here", version: 412 }, { plaintext: await sealed("elsewhere", 412, { title: "Moved", body: "Moved text" }) });
+  assertRefused(text, /Moved/);
+  assert.match(text, /signed for a different room, record or version/);
+});
+
+test("a body signed for another version is refused", async () => {
+  const text = await readOne({ key: "w", version: 412 }, { plaintext: await sealed("w", 400, { title: "Older", body: "Older text" }) });
+  assertRefused(text, /Older/);
+});
+
+test("a body signed for another room is refused", async () => {
+  const signed = Buffer.from(
+    await signRecordBody({ roomId: "did:webvh:QmOther:rooms.example", key: "r", version: 412, author: AUTHOR.did, title: "Foreign" }, AUTHOR),
+  ).toString("base64url");
+  const text = await readOne({ key: "r", version: 412 }, { plaintext: signed });
+  assertRefused(text, /Foreign/);
+});
+
+// A curated record moves past the version its body was sealed at; the agent
+// says where it opened (`ext["org.openvtc.rooms"].sealedAt`), and that is the
+// location the signature is checked against.
+test("a curated record verifies at the version its body was sealed at", async () => {
+  const text = await readOne(
+    { key: "c", version: 412 },
+    { plaintext: await sealed("c", 300, { title: "Archived note", body: "Still readable" }), ext: { "org.openvtc.rooms": { sealedAt: 300 } } },
+  );
+  assert.match(text, /Still readable/);
+  assert.match(text, /Signed by/);
+});
+
+// The provenance members are in the released schema: an honest record carrying
+// them must read, not be refused as malformed.
+test("a record carrying provenance members verifies and reads", async () => {
+  const text = await readOne(
+    { key: "pv", version: 412 },
+    {
+      plaintext: await sealed("pv", 412, {
+        body: "Venue is booked",
+        basis: "observed",
+        confidence: 0.9,
+        evidence: [{ kind: "record", key: "booking" }],
+        validFor: { note: "planning only" },
+        validUntil: "2099-01-01T00:00:00Z",
+      }),
+    },
+  );
+  assert.match(text, /Venue is booked/);
+  assert.match(text, /Signed by/);
 });

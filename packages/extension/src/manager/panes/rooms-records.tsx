@@ -21,12 +21,28 @@
 //
 // So `Verdict` below says *what was observed*, never how alarmed to be, and
 // always says that reading still works and writing will not.
+//
+// ## Two checks, and they are said apart
+//
+// The verdict is about the **host**: whether a record is in the set it
+// committed to. It says nothing about who wrote the record. That is the
+// **author's signature** over the sealed body, which this pane checks itself
+// (`verifyRecordBody`, the `SealedRecordBody` *Reading* rule): the proof for
+// `assertionMethod`, the room, key and version it was sealed at, and on an
+// `attributed` room that the host's author is the signer. Nothing of a body is
+// shown before that holds, and a body that fails shows none of its content —
+// never the content with a warning. "Signed" is said only of a body that passed.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  readSealedVersion,
+  RecordBodyError,
   roomsKeysBrowse,
   roomsKeysRead,
+  verifyRecordBody,
+  type VerifiedRecordBody,
 } from "@openvtc/pnm-core/rooms";
+import { base64url } from "@openvtc/vti-didcomm-js";
 import type { RoomPlace } from "../room-groups.js";
 import { Button, Note, Pill } from "../../ui.js";
 import { displayAgentName } from "../../agent-name.js";
@@ -189,19 +205,6 @@ function Verdict({
   );
 }
 
-/** base64url → text, for a body this agent just opened. */
-function decodeBody(plaintext: string): string {
-  const padded = plaintext.replace(/-/g, "+").replace(/_/g, "/");
-  try {
-    const bytes = Uint8Array.from(atob(padded), (ch) => ch.charCodeAt(0));
-    return new TextDecoder().decode(bytes);
-  } catch {
-    // Not text. Saying so is better than printing mojibake and letting a member
-    // conclude the record is corrupt.
-    return "(this record's body is not text)";
-  }
-}
-
 /** Whether a verdict reports a host caught out — said in full, never folded away. */
 function adverse(v: Verification): boolean {
   return v.priorRoots === "conflict" || v.count === "short" || v.trace === "failed";
@@ -253,13 +256,66 @@ function VerdictLine({
 
 /** What an opened record says, as far as this pane reads it. */
 interface Opened {
+  /** The record as read: the signed body once verified, an open room's cleartext. Empty when refused. */
   text: string;
-  /** Whether the body is one its author signed — false for an open room's cleartext. */
+  /** Whether the body's author signature, location and author all verified — never true for cleartext. */
   signed: boolean;
+  /** Why a sealed body was refused. Set, nothing of the body is shown. */
+  refused?: string;
+  /** The body is the room's own profile, which is not one of its records. */
+  profile?: boolean;
   title?: string;
   body?: string;
+  /** The verified signer on a sealed room; the host's record of the author on an open one. */
   author?: string;
   verification: Verification | null;
+}
+
+/** Words for a refused body: what failed, never the body. */
+function refusalWords(e: unknown): string {
+  if (e instanceof RecordBodyError) {
+    switch (e.kind) {
+      case "signature":
+        return "Its author's signature does not verify.";
+      case "relocated":
+        return "It is signed for a different room, record or version than the one it was read from.";
+      case "authorMismatch":
+        return "The host names a different author from the one who signed it.";
+      case "malformed":
+        return "It is not a record body this wallet can read.";
+      default:
+        break;
+    }
+  }
+  return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * Verify a sealed body before anything in it is read (`SealedRecordBody`,
+ * *Reading*). `hostAuthor` is the read's author; `listedAuthor` the listing's
+ * for the same version — both are the host's, and on an `attributed` room both
+ * must be the signer.
+ */
+async function verifySealed(
+  plaintext: string,
+  at: { roomId: string; key: string; version: number },
+  hostAuthor: string | undefined,
+  listedAuthor: string | undefined,
+): Promise<VerifiedRecordBody> {
+  let bytes: Uint8Array;
+  try {
+    bytes = base64url.decode(plaintext);
+  } catch {
+    throw new RecordBodyError("malformed", "the record body is not base64url");
+  }
+  const body = await verifyRecordBody(bytes, at, hostAuthor);
+  if (listedAuthor !== undefined && listedAuthor !== body.author) {
+    throw new RecordBodyError(
+      "authorMismatch",
+      `the record body is signed by ${body.author}, but the host listed ${listedAuthor} as its author`,
+    );
+  }
+  return body;
 }
 
 /**
@@ -274,19 +330,12 @@ function withoutFileKey(cleartext: Record<string, unknown>): Record<string, unkn
   return { ...cleartext, file: rest };
 }
 
-/** A note's title, body and author, where its body is the JSON a note is written as. */
-function readNote(text: string): Pick<Opened, "title" | "body" | "author"> {
-  try {
-    const doc = JSON.parse(text) as Record<string, unknown>;
-    if (typeof doc !== "object" || doc === null) return {};
-    return {
-      ...(typeof doc.title === "string" && doc.title ? { title: doc.title } : {}),
-      ...(typeof doc.body === "string" ? { body: doc.body } : {}),
-      ...(typeof doc.author === "string" ? { author: doc.author } : {}),
-    };
-  } catch {
-    return {};
-  }
+/** An open room's note: its title and body, read from the cleartext. Never its author, which only the host records. */
+function readCleartext(cleartext: Record<string, unknown>): Pick<Opened, "title" | "body"> {
+  return {
+    ...(typeof cleartext.title === "string" && cleartext.title ? { title: cleartext.title } : {}),
+    ...(typeof cleartext.body === "string" ? { body: cleartext.body } : {}),
+  };
 }
 
 function when(iso: string | undefined): string {
@@ -352,21 +401,50 @@ function RecordItem({
         });
       const res = await (queued ? READS.run(read) : read());
       if (!live.current) return;
-      // A retracted record has no body, and that is an answer rather than a
-      // failure — the tombstone is what the room retains of it.
-      const text = res.plaintext
-        ? decodeBody(res.plaintext)
-        : res.cleartext
-          ? JSON.stringify(withoutFileKey(res.cleartext), null, 2)
-          : res.status === "retracted"
-            ? "(retracted — the body is gone)"
-            : "(no body)";
-      setOpened({
-        text,
-        signed: res.plaintext !== undefined,
-        ...readNote(text),
-        verification: (res.verification as unknown as Verification) ?? null,
-      });
+      const verification = (res.verification as unknown as Verification) ?? null;
+      const hostAuthor = res.author ?? (res.version === row.version ? row.author : undefined);
+      let next: Opened;
+      if (res.plaintext !== undefined) {
+        // Sealed: nothing of the body before its author's signature holds.
+        try {
+          const verified = await verifySealed(
+            res.plaintext,
+            { roomId: room.roomId, key: row.key, version: readSealedVersion(res) },
+            res.author,
+            res.version === row.version ? row.author : undefined,
+          );
+          next = verified.roomProfile
+            ? { text: "", signed: true, profile: true, author: verified.author, verification }
+            : {
+                text: new TextDecoder().decode(base64url.decode(res.plaintext)),
+                signed: true,
+                ...(verified.title ? { title: verified.title } : {}),
+                ...(verified.body !== undefined ? { body: verified.body } : {}),
+                author: verified.author,
+                verification,
+              };
+        } catch (e) {
+          next = { text: "", signed: false, refused: refusalWords(e), verification };
+        }
+      } else if (res.cleartext) {
+        next = {
+          text: JSON.stringify(withoutFileKey(res.cleartext), null, 2),
+          signed: false,
+          ...readCleartext(res.cleartext),
+          ...(hostAuthor !== undefined ? { author: hostAuthor } : {}),
+          verification,
+        };
+      } else {
+        // A retracted record has no body, and that is an answer rather than a
+        // failure — the tombstone is what the room retains of it.
+        next = {
+          text: res.status === "retracted" ? "(retracted — the body is gone)" : "(no body)",
+          signed: false,
+          ...(hostAuthor !== undefined ? { author: hostAuthor } : {}),
+          verification,
+        };
+      }
+      if (live.current) setOpened(next);
     } catch (e) {
       if (live.current) setError(e instanceof Error ? e.message : String(e));
     }
@@ -380,20 +458,33 @@ function RecordItem({
     void open(true);
   }, [autoOpen, open]);
 
-  const claim = opened ? roomFileClaimOf(opened.text) : null;
+  const refused = opened?.refused !== undefined;
+  const claim = opened && !refused && !opened.profile ? roomFileClaimOf(opened.text) : null;
   const retracted = row.status === "retracted";
   // A file record's `body` is its caption: the schema allows one, and a photo
   // posted with words should not lose them here.
   const caption = claim && opened?.body?.trim() ? opened.body : undefined;
-  const labelled = opened?.title ?? claim?.title ?? claim?.name ?? row.title;
+  const labelled = refused
+    ? "This record could not be verified"
+    : opened?.profile
+      ? "The room's own profile"
+      : (opened?.title ?? claim?.title ?? claim?.name ?? row.title);
   // An untitled record — a message, as a chat-style client writes one — is
   // named by its own first line, and previewed by the rest.
   const derived = labelled === undefined && !claim && opened?.body ? untitledLabel(opened.body) : null;
   const title =
     labelled ?? derived?.label ??
     (retracted ? "Retracted record" : opened ? "Untitled record" : busy ? "Opening…" : "Not opened yet");
-  const preview = claim ? caption : derived ? derived.rest || undefined : (opened?.body ?? row.description);
-  const author = row.author ?? opened?.author;
+  const preview = refused || opened?.profile
+    ? undefined
+    : claim
+      ? caption
+      : derived
+        ? derived.rest || undefined
+        : (opened?.body ?? row.description);
+  // Once opened, the author is the verified signer (or, on an open room, the
+  // host's record) — never a body member read before its signature held.
+  const author = opened ? opened.author : row.author;
   // No version here: it is the room's write counter, not this record's revision.
   const meta = [author ? authorName(author) : "", when(row.updatedAt)].filter(Boolean).join(" · ");
   const caught = opened?.verification ? adverse(opened.verification) : false;
@@ -443,6 +534,7 @@ function RecordItem({
           )}
         </span>
         <span style={{ display: "flex", gap: 8, alignItems: "center", flex: "0 0 auto", fontSize: t.xs, color: c.faint }}>
+          {refused && <Pill tone="danger">signature not verified</Pill>}
           {caught && <Pill tone="danger">check failed</Pill>}
           {row.status && row.status !== "active" && (
             <Pill tone="warn">{row.status === "deprecated" ? "archived" : row.status}</Pill>
@@ -455,6 +547,15 @@ function RecordItem({
           <Note tone="danger">{error}</Note>
         </div>
       )}
+      {/* Refused, it is said where the record is, whether or not it is expanded. */}
+      {opened?.refused !== undefined && (
+        <div style={{ padding: "0 14px 12px 38px" }}>
+          <Note tone="danger">
+            <strong>Your agent opened this record, but it could not be verified, so none of it is shown.</strong>{" "}
+            {opened.refused}
+          </Note>
+        </div>
+      )}
       {/* A file is shown whether or not the row is expanded: its thumbnail and
           download are the point of it, and the rest is behind the expand. */}
       {opened && claim && (
@@ -465,12 +566,22 @@ function RecordItem({
       {expanded && (
         <div style={{ display: "grid", gap: 10, padding: "0 14px 14px 38px" }}>
           {busy && !opened && <Loading what="the record" />}
-          {opened && (!claim || caption) && (
+          {opened?.profile && (
+            <div style={{ fontSize: t.sm, color: c.muted }}>
+              This is how the room describes itself, not something a member wrote into it.
+            </div>
+          )}
+          {opened && !refused && !opened.profile && (!claim || caption) && (
             <div style={{ fontSize: t.base, color: c.text, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.55 }}>
               {claim ? caption : (opened.body ?? (opened.title ? "" : opened.text))}
             </div>
           )}
-          {opened && (opened.body !== undefined || claim) && (
+          {opened?.signed && opened.author && !opened.profile && (
+            <div style={{ fontSize: t.xs, color: c.ok }}>
+              ✓ Signed by {authorName(opened.author)} — the author&rsquo;s signature checks out
+            </div>
+          )}
+          {opened && !refused && !opened.profile && (opened.body !== undefined || claim) && (
             <details>
               <summary style={{ fontSize: t.xs, color: c.muted, cursor: "pointer" }}>
                 {opened.signed ? "The signed record" : "The record, as the host stores it"}
@@ -504,7 +615,7 @@ function RecordItem({
               version={row.version}
               status={row.status}
               // A note this place wrote: replacing someone else's is not an edit.
-              editable={!!opened && !claim && opened.body !== undefined && !!author && author === room.member}
+              editable={!!opened && !refused && !claim && opened.body !== undefined && !!author && author === room.member}
               onEdit={() => setEditing(true)}
               onChanged={onChanged}
             />

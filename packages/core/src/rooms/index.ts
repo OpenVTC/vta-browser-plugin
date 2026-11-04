@@ -345,6 +345,28 @@ export async function roomsKeysOpenAt(
   return { plaintext: res.plaintext, sealedAt: named };
 }
 
+/**
+ * The version a `rooms/keys/read` body was sealed at: the one the key holder
+ * names in `ext["org.openvtc.rooms"].sealedAt` where it opened the body at a
+ * version other than the record's own (a record curated since it was written),
+ * else the record's `version`. The location a reader checks the author's
+ * signature against (`verifyRecordBody`).
+ *
+ * A named version above the record's is refused: a body cannot have been
+ * sealed for a version the room had not reached.
+ */
+export function readSealedVersion(res: { version: number; ext?: unknown }): number {
+  const ext = res.ext as Record<string, { sealedAt?: unknown } | undefined> | undefined;
+  const named = ext?.[ROOMS_MEMBER_EXT]?.sealedAt;
+  if (named === undefined) return res.version;
+  if (typeof named !== "number" || !Number.isSafeInteger(named) || named < 1 || named > res.version) {
+    throw new Error(
+      `the agent says this body was sealed at version ${String(named)}, which is not a version at or before the record's ${res.version}`,
+    );
+  }
+  return named;
+}
+
 export interface RoomsSealParams extends RoomsCaller {
   roomId: string;
   key: string;
@@ -1067,3 +1089,7 @@ export * from "./offer-accept.js";
 
 // The room's own profile — what it calls itself, read through the member's VTA.
 export * from "./profile.js";
+
+// The signed record body, and the one way to read one: `verifyRecordBody`.
+// Its own module so the console can verify without `./files.js`'s task URIs.
+export * from "./record-body.js";
