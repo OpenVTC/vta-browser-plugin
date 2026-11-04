@@ -890,6 +890,19 @@ authority to admin the room — and the room would be right to honour it.
 whole family because the boundary is "a page is not a member", not a judgement
 about particular verbs.
 
+**Every surface that shows a sealed record verifies it first, with the one
+verifier.** `verifyRecordBody` (`@openvtc/pnm-core/rooms`, module
+`rooms/record-body.ts`, re-exported from `rooms/files`) applies
+`SealedRecordBody`'s *Reading* rule: the author's proof for `assertionMethod`,
+the room, key and the version the body was sealed at (`readSealedVersion` for a
+`rooms/keys/read` answer), and on an `attributed` room the host's author equal
+to the signer. The records pane, the page view (`readView`) and the file engine
+all go through it. A body that fails shows none of its content; "signed" is
+said only of one that passed, and is worded apart from the host-listing
+verdict. Its member list is the released schema's exactly
+(`RECORD_BODY_MEMBERS`, pinned by `tests/rooms.record-body.mjs`): a member is
+added when the schema that defines it is released, not from a draft.
+
 **What breaks it:** exporting `rooms` from the root barrel (its URIs then reach
 the service worker); sending a `keys/*` task to the host or a host verb to the
 VTA; drawing a failed listing as an empty one ("this agent holds keys to no

@@ -27,6 +27,7 @@ import {
   roomsKeysBrowse,
   roomsKeysList,
   roomsKeysRead,
+  readSealedVersion,
   roomProfileView,
   roomsKeysProfileRead,
   writeSealedAsMember,
@@ -283,7 +284,8 @@ function summary(r: Record<string, unknown>): PageRecordSummary {
 
 /**
  * One record as a page may see it. On a sealed room the body is verified —
- * signed by its author for `assertionMethod`, for this room, key and version,
+ * signed by its author for `assertionMethod`, for this room, key and the
+ * version it was sealed at (`readSealedVersion`),
  * and (on `attributed`) by the author the host recorded — before any of it is
  * put in the view. A body that fails is refused.
  */
@@ -299,6 +301,7 @@ export async function readView(
     plaintext?: string;
     cleartext?: Record<string, unknown>;
     verification: unknown;
+    ext?: unknown;
   },
   resolveDid?: (did: string) => Promise<Record<string, unknown>>,
 ): Promise<PageRecordView> {
@@ -315,7 +318,8 @@ export async function readView(
   if (read.plaintext !== undefined) {
     const body = await verifyRecordBody(
       base64url.decode(read.plaintext),
-      { roomId, key, version: read.version },
+      // The version the body was sealed at: a curated record has moved past it.
+      { roomId, key, version: readSealedVersion(read) },
       read.author,
       resolveDid ? { resolveDid } : {},
     );

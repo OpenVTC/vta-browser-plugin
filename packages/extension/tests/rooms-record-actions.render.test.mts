@@ -11,19 +11,29 @@ import assert from "node:assert/strict";
 import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { RoomRecords } from "../src/manager/panes/rooms-records.js";
 import { ROOM_FILES_PORT } from "../src/bridge-protocol.js";
+import { signingIdentityFromSecret } from "@openvtc/pnm-core";
+import { signRecordBody } from "@openvtc/pnm-core/rooms";
 
 const BROWSE = "rooms/keys/browse/0.3";
 const READ = "rooms/keys/read/0.1";
 const HOST = "did:webvh:QmHost:host.example";
 const ROOM = "did:webvh:QmRoom:rooms.example";
-const ME = "did:webvh:QmMe:people.example";
+// did:key, so the pane can verify each note's signature here without a resolver.
+const ME_KEY = signingIdentityFromSecret(new Uint8Array(32).fill(1));
+const SOMEONE_ELSE = signingIdentityFromSecret(new Uint8Array(32).fill(2));
+const ME = ME_KEY.did;
 const PREPARED = { endpoint: "https://host.example/trust-tasks", granted: true, vtaDid: "did:webvh:QmAgent:agent.example" };
 
-const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+/** The note `by` signed, as the agent returns it opened. */
+const note = async (by: typeof ME_KEY) =>
+  Buffer.from(
+    await signRecordBody({ roomId: ROOM, key: "n1", version: 5, author: by.did, title: "Mascot Name", body: "Settled on Trustie" }, by),
+  ).toString("base64url");
 const head = { dataCommitment: "zQm", recordCount: 1, headVersion: 5 };
 
 /** A room with one note by `author`, an agent that reads it, and a port that answers writes. */
-const mount = async ({ author = ME, actions, status = "active" }: { author?: string; actions?: string[]; status?: string } = {}) => {
+const mount = async ({ author = ME_KEY, actions, status = "active" }: { author?: typeof ME_KEY; actions?: string[]; status?: string } = {}) => {
+  const plaintext = await note(author);
   const a = agent({
     [BROWSE]: { roomId: ROOM, records: [{ key: "n1", version: 5, status }], complete: true, verification: { priorRoots: "agree", count: "agrees", head } },
     [READ]: {
@@ -31,7 +41,7 @@ const mount = async ({ author = ME, actions, status = "active" }: { author?: str
       key: "n1",
       version: 5,
       status,
-      plaintext: b64({ title: "Mascot Name", body: "Settled on Trustie", author }),
+      plaintext,
       verification: { trace: "verified", priorRoots: "agree", head },
     },
   });
@@ -59,8 +69,11 @@ const mount = async ({ author = ME, actions, status = "active" }: { author?: str
   const screen = await render(h(RoomRecords, { parties: PARTIES, room, host: HOST } as never), {
     chrome: { runtime: { sendMessage, connect } } as never,
   });
-  await screen.settle();
-  await new Promise((r) => setTimeout(r, 10));
+  // The read lands, then its signature is checked: a few turns of the loop.
+  for (let i = 0; i < 5; i++) {
+    await screen.settle();
+    await new Promise((r) => setTimeout(r, 10));
+  }
   await screen.settle();
   return { a, screen, opened };
 };
@@ -102,7 +115,7 @@ test("an edit names the record and the version that was read", async () => {
 
 // Replacing a note someone else wrote is not an edit: the button is not there.
 test("another member's note offers no Edit", async () => {
-  const { screen } = await mount({ author: "did:webvh:QmSomeoneElse:people.example" });
+  const { screen } = await mount({ author: SOMEONE_ELSE });
   await screen.click(screen.button("Mascot Name"));
   assert.equal(screen.all("button").some((b) => b.textContent === "Edit"), false);
   assert.ok(screen.button("Retract"), "curating is still a room action");
