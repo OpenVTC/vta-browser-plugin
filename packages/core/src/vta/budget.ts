@@ -43,8 +43,8 @@ import { TYPE_URI as WEBVH_SERVERS_RECONCILE } from "../specs/vta/webvh/servers/
 import { TYPE_URI as WEBVH_SERVERS_RETIRE_ORPHAN } from "../specs/vta/webvh/servers/retire-orphan/0.1/payload.js";
 import { TYPE_URI as ROOMS_OWNER_REGISTER } from "../specs/rooms/owner/register/0.2/payload.js";
 import { TYPE_URI as ROOMS_KEYS_BACKFILL } from "../specs/rooms/keys/backfill/0.2/payload.js";
-import { TYPE_URI as ROOMS_KEYS_READ } from "../specs/rooms/keys/read/0.1/payload.js";
-import { TYPE_URI as ROOMS_KEYS_BROWSE } from "../specs/rooms/keys/browse/0.3/payload.js";
+import { TYPE_URI as ROOMS_KEYS_READ } from "../specs/rooms/keys/read/0.2/payload.js";
+import { TYPE_URI as ROOMS_KEYS_BROWSE } from "../specs/rooms/keys/browse/0.4/payload.js";
 import { TYPE_URI as VAULT_PROXY_LOGIN } from "../specs/vault/proxy-login/0.2/payload.js";
 import { TYPE_URI as PROVISION_INTEGRATION } from "../specs/provision/integration/0.3/payload.js";
 

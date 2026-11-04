@@ -18,8 +18,8 @@ import { RoomRecords } from "../src/manager/panes/rooms-records.js";
 import { signingIdentityFromSecret } from "@openvtc/pnm-core";
 import { signRecordBody, type SealedRecordBody } from "@openvtc/pnm-core/rooms";
 
-const BROWSE = "rooms/keys/browse/0.3";
-const READ = "rooms/keys/read/0.1";
+const BROWSE = "rooms/keys/browse/0.4";
+const READ = "rooms/keys/read/0.2";
 const HOST = "did:webvh:QmHost:host.example";
 const ROOM = "did:webvh:QmRoom:rooms.example";
 
@@ -57,8 +57,28 @@ const QUIET_READ = (p: { key: string }) => ({
   verification: { trace: "verified", priorRoots: "agree", head: head(1) },
 });
 
+/**
+ * `rooms/keys/read/0.2` naming `keys`, from an answer for one key: one entry per
+ * key, in order, with what a single read says in its `ext` said once, by key.
+ */
+const batch = (one: unknown) => (p: { keys: string[] }) => {
+  const sealedAt: Record<string, number> = {};
+  const results = p.keys.map((key) => {
+    const a = (typeof one === "function" ? one({ key }) : one) as Record<string, unknown>;
+    const { roomId: _r, ext, ...rest } = a;
+    const at = (ext as { "org.openvtc.rooms"?: { sealedAt?: number } } | undefined)?.["org.openvtc.rooms"]?.sealedAt;
+    if (at !== undefined) sealedAt[key] = at;
+    return rest;
+  });
+  return {
+    roomId: ROOM,
+    results,
+    ...(Object.keys(sealedAt).length > 0 ? { ext: { "org.openvtc.rooms": { sealedAt } } } : {}),
+  };
+};
+
 const mount = async (answers: Record<string, unknown>) => {
-  const a = agent({ [READ]: QUIET_READ, ...answers });
+  const a = agent({ ...answers, [READ]: batch(answers[READ] ?? QUIET_READ) });
   const screen = await render(
     h(RoomRecords, { parties: PARTIES, room: ROOMS_ROOM } as never),
     { chrome: { runtime: { sendMessage: a.sendMessage } } },
@@ -190,7 +210,8 @@ test("opening a record asks the agent, and the key never enters the console", as
 });
 
 // A tombstone is an answer. A member told "no body" without being told why
-// reads a retraction as a fault.
+// reads a retraction as a fault. One the reader held nothing of is shown in no
+// conversation (`SealedRecordBody`, *Tombstones*): it is counted, not listed.
 test("a retracted record says the body is gone rather than failing", async () => {
   const { a, screen } = await mount({
     [BROWSE]: {
@@ -208,21 +229,21 @@ test("a retracted record says the body is gone rather than failing", async () =>
     },
   });
   await browse(screen);
-  // A tombstone is not opened unasked — there is no body to read.
+  await settled(screen);
+  // A tombstone is not read — there is no body to read.
   assert.equal(a.of("keys/read").length, 0);
-  await screen.click(screen.button("Retracted record"));
-  await screen.settle();
-  assert.match(screen.text(), /retracted — the body is gone/);
+  assert.match(screen.text(), /1 record was retracted — the body is gone/);
+  assert.doesNotMatch(screen.text(), /could not be/);
 });
 
 // ── The list ────────────────────────────────────────────────────────────────
 
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
 
-// Keys are opaque and the title is sealed with the body, so a closed record
-// says nothing. The newest five open as the list arrives; the rest wait for a
-// click rather than costing the agent a read each on every listing.
-test("the newest five records open themselves, newest first, and the rest wait", async () => {
+// Keys are opaque and the title is sealed with the body, so an unread record
+// says nothing — and replies, reactions and the order of a conversation need
+// every record. All are read, in batches of keys, and shown newest first.
+test("every record is read in one batch, and shown newest first", async () => {
   const records = Array.from({ length: 7 }, (_, i) => record(`k${i + 1}`, i + 1));
   const bodies = Object.fromEntries(
     await Promise.all(records.map(async (r) => [r.key, await sealed(r.key, r.version, { title: `Note ${r.key}` })])),
@@ -240,11 +261,11 @@ test("the newest five records open themselves, newest first, and the rest wait",
   });
   await browse(screen);
   await settled(screen);
-  const read = a.of("keys/read").map((call: { payload: { key: string } }) => call.payload.key).sort();
-  assert.deepEqual(read, ["k3", "k4", "k5", "k6", "k7"]);
+  const reads = a.of("keys/read");
+  assert.equal(reads.length, 1, "one request");
+  assert.deepEqual([...reads[0].payload.keys].sort(), records.map((r) => r.key).sort());
   const text = screen.text();
-  assert.ok(text.indexOf("Note k7") < text.indexOf("Note k3"), "newest first");
-  assert.equal((text.match(/Not opened yet/g) ?? []).length, 2);
+  assert.ok(text.indexOf("Note k7") < text.indexOf("Note k1"), "newest first");
   assert.match(text, /Holds exactly the 7 records this host committed to/);
 });
 
@@ -476,4 +497,90 @@ test("a record carrying provenance members verifies and reads", async () => {
   );
   assert.match(text, /Venue is booked/);
   assert.match(text, /Signed by/);
+});
+
+// ── The reading rules (`SealedRecordBody`, trust-tasks-tf #1027) ─────────────
+
+/** A room of sealed records by AUTHOR, each `[key, fields]`, read and verified. */
+async function room(entries: [string, Fields, Record<string, unknown>?][], extra: Record<string, unknown> = {}) {
+  const bodies = Object.fromEntries(
+    await Promise.all(entries.map(async ([key, fields]) => [key, await sealed(key, 412, fields)])),
+  );
+  const rows = entries.map(([key, , meta]) => ({ ...record(key), ...(meta ?? {}) }));
+  const { a, screen } = await mount({
+    [BROWSE]: { roomId: ROOM, records: rows, complete: true, verification: { priorRoots: "agree", count: "agrees", head: head(rows.length) } },
+    [READ]: (p: { key: string }) => ({
+      key: p.key,
+      version: 412,
+      status: "active",
+      plaintext: bodies[p.key],
+      verification: { trace: "verified", priorRoots: "agree", head: head(rows.length) },
+    }),
+    ...extra,
+  });
+  await browse(screen);
+  await settled(screen);
+  return { a, screen };
+}
+
+test("a reaction is shown beside its target, counted, and never as a record of its own", async () => {
+  const { screen } = await room([
+    ["m", { kind: "message", body: "Ship it?" }],
+    ["r1", { kind: "reaction", inReplyTo: { key: "m" }, body: "\u{1F44D}" }],
+    ["r2", { kind: "reaction", inReplyTo: { key: "m" }, body: "\u{1F44D}" }],
+    ["r3", { kind: "reaction", inReplyTo: { key: "gone" }, body: "\u{1F389}" }],
+  ]);
+  const text = screen.text();
+  assert.match(text, /Ship it\?/);
+  // One author, one value, one target: counted once, however many records.
+  assert.match(text, /\u{1F44D} 1/u);
+  assert.doesNotMatch(text, /\u{1F389}/u, "no reaction whose target is not available");
+  assert.equal(screen.all("button[aria-expanded]").length, 1, "the reactions are not rows");
+});
+
+test("a reply whose target is not available is shown, and says so", async () => {
+  const { screen } = await room([["r", { kind: "message", body: "Agreed", inReplyTo: { key: "never-written" } }]]);
+  const text = screen.text();
+  assert.match(text, /Agreed/);
+  assert.match(text, /In reply to a record that is not available/);
+});
+
+test("a reply names the record it answers", async () => {
+  const { screen } = await room([
+    ["q", { title: "Venue", body: "Where?" }],
+    ["r", { kind: "message", body: "The hall", inReplyTo: { key: "q" } }],
+  ]);
+  assert.match(screen.text(), /In reply to Venue/);
+});
+
+test("a withdrawn message shows nothing of itself", async () => {
+  const { screen } = await room([["w", { kind: "message", body: "" }]]);
+  assert.match(screen.text(), /Withdrawn message/);
+});
+
+test("an edited message says it was edited", async () => {
+  const { screen } = await room(
+    [["e", { kind: "message", body: "Fixed", writtenAt: "2026-11-01T09:00:00Z", editedAt: "2026-11-01T09:10:00Z" }, { updatedAt: "2026-11-01T09:10:00Z", createdAt: "2026-11-01T09:00:00Z" }]],
+  );
+  assert.match(screen.text(), /edited/);
+});
+
+test("a message written more than a day before the room received it is shown as arriving later than it claims", async () => {
+  const { screen } = await room([
+    ["old", { kind: "message", body: "From the past", writtenAt: "2026-10-01T09:00:00Z" }, { createdAt: "2026-11-01T09:00:00Z" }],
+  ]);
+  assert.match(screen.text(), /later than the .* it claims/);
+});
+
+test("a record past its validUntil is hidden, and shown on request marked expired", async () => {
+  const { screen } = await room([
+    ["x", { title: "Old plan", body: "Stale", validUntil: "2020-01-01T00:00:00Z" }],
+    ["y", { title: "Current plan", body: "Fresh" }],
+  ]);
+  assert.doesNotMatch(screen.text(), /Old plan/);
+  assert.match(screen.text(), /1 record is past the time its author stood behind it/);
+  await screen.click(screen.button("Show expired records"));
+  await settled(screen);
+  assert.match(screen.text(), /Old plan/);
+  assert.match(screen.text(), /expired/);
 });

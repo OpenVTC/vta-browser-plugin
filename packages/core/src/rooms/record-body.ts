@@ -37,6 +37,8 @@ import type { RoomProfile } from "../specs/rooms/keys/profile/read/0.1/payload.j
 import type { SigningIdentity } from "../siop/self-issued.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
 import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
+import { resolveDidDocument } from "../didcomm/index.js";
+import { stripScidSrc } from "@openvtc/vti-didcomm-js";
 
 /** Where a record was written or read: what the body's signature has to name. */
 export interface RecordLocation {
@@ -60,6 +62,16 @@ export interface RoomProfileStatement {
   ext?: Record<string, unknown>;
 }
 
+/**
+ * `RecordReference`: another record of the same room, by key and optionally the
+ * version the author was answering. A reader resolves it only against records
+ * it can already read, and fetches nothing because of it.
+ */
+export interface RecordReference {
+  key: string;
+  version?: number;
+}
+
 /** A record body before signing or after verification. */
 export interface SealedRecordBody extends RecordLocation {
   /** The DID that signs: the member, or the agent acting under an attenuated credential. */
@@ -69,6 +81,18 @@ export interface SealedRecordBody extends RecordLocation {
   /** Markdown. Untrusted text from another member: render it inert. */
   body?: string;
   tags?: string[];
+  /**
+   * `RecordKind`: `note`, `message`, `reaction`, or a kind this reader does not
+   * know, which it shows as a note. Absent means `note`. Describes the record
+   * and confers nothing.
+   */
+  kind?: string;
+  /** The record this one answers or, on a `reaction`, responds to. */
+  inReplyTo?: RecordReference;
+  /** When the author wrote the record: their claim, kept across edits (RFC 3339, UTC). */
+  writtenAt?: string;
+  /** When the author made the edit that produced this version: their claim (RFC 3339, UTC). */
+  editedAt?: string;
   /** Provenance for display and weighting, never authority. Absent means the author did not say. */
   basis?: RecordBasis;
   confidence?: RecordConfidence;
@@ -92,6 +116,10 @@ export const RECORD_BODY_MEMBERS: readonly string[] = Object.freeze([
   "description",
   "body",
   "tags",
+  "kind",
+  "inReplyTo",
+  "writtenAt",
+  "editedAt",
   "basis",
   "confidence",
   "evidence",
@@ -105,7 +133,8 @@ const BODY_MEMBERS = new Set(RECORD_BODY_MEMBERS);
 
 /** The members a profile record must not carry (`SealedRecordBody`, *A profile record*). */
 const NOT_ON_A_PROFILE = [
-  "title", "description", "body", "tags", "file", "basis", "confidence", "evidence", "validFor", "validUntil",
+  "title", "description", "body", "tags", "kind", "inReplyTo", "writtenAt", "editedAt", "file", "basis",
+  "confidence", "evidence", "validFor", "validUntil",
 ] as const;
 
 // The schema's bounds.
@@ -126,15 +155,42 @@ const MAX_PROFILE_NAME = 128;
 const MAX_PROFILE_DESCRIPTION = 1000;
 const MAX_PROFILE_TAGS = 8;
 const MAX_EMOJI = 16;
+const MAX_KIND = 64;
+const MAX_RECORD_MEMBERS = 32;
 
 const IRI = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const DIGEST_MULTIBASE = /^(z[1-9A-HJ-NP-Za-km-z]+|u[A-Za-z0-9_-]+)$/;
 const PROFILE_TAG = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const EXT_NAME = /^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$/;
+// `RecordKind`, and the names `RoomProfile.recordMembers` lists: lowerCamelCase.
+const LOWER_CAMEL = /^[a-z][A-Za-z0-9]*$/;
+// `RecordWrittenAt` / `RecordEditedAt`: RFC 3339 in UTC, `Z` only.
+const UTC_DATE_TIME = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?Z$/;
 // RFC 3339 `date-time`, as JSON Schema's `format` names it.
 const DATE_TIME = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/;
 
-export type RecordBodyErrorKind = "malformed" | "signature" | "relocated" | "authorMismatch" | "signing";
+/**
+ * Why a body was refused, or could not be signed.
+ *
+ * Two kinds are not refusals but the placeholder `SealedRecordBody` requires in
+ * their place — the record shown as one whose author cannot be verified, none
+ * of it shown, never dropped silently ({@link RecordBodyError.placeholder}):
+ *
+ * - `authorUnresolvable` — the author's DID does not resolve (*An author whose
+ *   DID does not resolve*);
+ * - `authorUnverifiable` — the proof fails against the author's **current**
+ *   document, where the reader could not resolve the document as it stood at
+ *   the host's `bodyStoredAt`: a forgery and a key rotated away since cannot be
+ *   told apart (*Which DID document*).
+ */
+export type RecordBodyErrorKind =
+  | "malformed"
+  | "signature"
+  | "relocated"
+  | "authorMismatch"
+  | "signing"
+  | "authorUnresolvable"
+  | "authorUnverifiable";
 
 /** Why a body could not be signed, or was refused on reading. */
 export class RecordBodyError extends Error {
@@ -144,6 +200,11 @@ export class RecordBodyError extends Error {
   ) {
     super(message);
     this.name = "RecordBodyError";
+  }
+
+  /** Whether the record is shown as an unverifiable-author placeholder rather than refused. Nothing of it is shown either way. */
+  get placeholder(): boolean {
+    return this.kind === "authorUnresolvable" || this.kind === "authorUnverifiable";
   }
 }
 
@@ -156,6 +217,9 @@ const onlyMembers = (o: Record<string, unknown>, allowed: readonly string[]) =>
   Object.keys(o).every((k) => allowed.includes(k));
 const isDateTime = (v: unknown): v is string =>
   typeof v === "string" && DATE_TIME.test(v) && !Number.isNaN(Date.parse(v));
+const isUtcDateTime = (v: unknown): v is string =>
+  typeof v === "string" && UTC_DATE_TIME.test(v) && !Number.isNaN(Date.parse(v));
+const isVersion = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 1;
 const isExt = (v: unknown) =>
   isObject(v) && Object.keys(v).length > 0 && Object.keys(v).every((k) => EXT_NAME.test(k));
 const unique = (xs: unknown[]) => new Set(xs).size === xs.length;
@@ -199,7 +263,7 @@ function isPermittedUse(v: unknown): boolean {
 }
 
 function isRoomProfile(v: unknown): boolean {
-  if (!isObject(v) || !onlyMembers(v, ["name", "description", "tags", "emoji", "ext"])) return false;
+  if (!isObject(v) || !onlyMembers(v, ["name", "description", "tags", "emoji", "recordMembers", "ext"])) return false;
   if (!isString(v.name, 1, MAX_PROFILE_NAME)) return false;
   if (v.description !== undefined && !isString(v.description, 1, MAX_PROFILE_DESCRIPTION)) return false;
   if (
@@ -212,7 +276,28 @@ function isRoomProfile(v: unknown): boolean {
     return false;
   }
   if (v.emoji !== undefined && !isString(v.emoji, 1, MAX_EMOJI)) return false;
+  // `recordMembers`: which optional body members the room's writers may use.
+  // A reader that refused it would refuse every profile that turns them on.
+  if (
+    v.recordMembers !== undefined &&
+    (!Array.isArray(v.recordMembers) ||
+      v.recordMembers.length < 1 ||
+      v.recordMembers.length > MAX_RECORD_MEMBERS ||
+      !unique(v.recordMembers) ||
+      v.recordMembers.some((m) => typeof m !== "string" || m.length > MAX_KIND || !LOWER_CAMEL.test(m)))
+  ) {
+    return false;
+  }
   return v.ext === undefined || isExt(v.ext);
+}
+
+function isRecordReference(v: unknown): boolean {
+  return (
+    isObject(v) &&
+    onlyMembers(v, ["key", "version"]) &&
+    isString(v.key, 1, MAX_KEY) &&
+    (v.version === undefined || isVersion(v.version))
+  );
 }
 
 function isProfileStatement(v: unknown): boolean {
@@ -248,6 +333,12 @@ function checkBody(body: SealedRecordBody): void {
   ) {
     bad(`at most ${MAX_TAGS} tags of ${MAX_TAG} characters each`);
   }
+  if (body.kind !== undefined && (typeof body.kind !== "string" || body.kind.length > MAX_KIND || !LOWER_CAMEL.test(body.kind))) {
+    bad("kind is not a lowerCamelCase name of at most 64 characters");
+  }
+  if (body.inReplyTo !== undefined && !isRecordReference(body.inReplyTo)) bad("inReplyTo is not a record reference");
+  if (body.writtenAt !== undefined && !isUtcDateTime(body.writtenAt)) bad("writtenAt is not a UTC date-time");
+  if (body.editedAt !== undefined && !isUtcDateTime(body.editedAt)) bad("editedAt is not a UTC date-time");
   if (body.basis !== undefined && !BASES.includes(body.basis)) bad(`basis is not one of ${BASES.join(", ")}`);
   if (
     body.confidence !== undefined &&
@@ -286,6 +377,10 @@ function wireBody(body: SealedRecordBody): Record<string, unknown> {
   if (body.description !== undefined) out.description = body.description;
   if (body.body !== undefined) out.body = body.body;
   if (body.tags !== undefined && body.tags.length > 0) out.tags = body.tags;
+  if (body.kind !== undefined) out.kind = body.kind;
+  if (body.inReplyTo !== undefined) out.inReplyTo = body.inReplyTo;
+  if (body.writtenAt !== undefined) out.writtenAt = body.writtenAt;
+  if (body.editedAt !== undefined) out.editedAt = body.editedAt;
   if (body.basis !== undefined) out.basis = body.basis;
   if (body.confidence !== undefined) out.confidence = body.confidence;
   if (body.evidence !== undefined) out.evidence = body.evidence;
@@ -321,6 +416,52 @@ declare const verifiedBrand: unique symbol;
 export type VerifiedRecordBody = Readonly<SealedRecordBody> & { readonly [verifiedBrand]: true };
 
 /**
+ * How a reader may resolve the author's DID document **as it stood at an
+ * instant** — `did:webvh` with `versionTime`, for a method that keeps its
+ * history. Returns `undefined` where it cannot (a method without history),
+ * and throws where the DID does not resolve.
+ */
+export type ResolveDidAt = (did: string, at: string) => Promise<Record<string, unknown> | undefined>;
+
+/** What {@link verifyRecordBody} may be told beyond the record's location. */
+export interface VerifyRecordBodyOptions {
+  /** Resolve a DID to its current document. Defaults to the wallet's resolver. */
+  resolveDid?: (did: string) => Promise<Record<string, unknown>>;
+  /**
+   * The host's `bodyStoredAt` for the version being read (`RecordMetadataV3`):
+   * when it stored the body this version carries. Absent from a host that
+   * predates it, and from a read that does not carry it.
+   */
+  bodyStoredAt?: string;
+  /** Resolve the author's document as of `bodyStoredAt`, where the method keeps its history. */
+  resolveDidAt?: ResolveDidAt;
+}
+
+/**
+ * Methods whose document can never differ from the one resolved now: the DID
+ * *is* its key (or keys). A proof that fails against it cannot be a key
+ * rotated away since the record was written, so it is refused, never shown as
+ * the placeholder `SealedRecordBody` (*Which DID document*) keeps for a method
+ * without history.
+ */
+const FIXED_DOCUMENT = ["did:key:", "did:peer:0", "did:peer:2"];
+
+/** The proof's shape, checked before any key is looked for: a failure here is no key's fault. */
+function proofShapeFault(proof: unknown): string | undefined {
+  if (!isObject(proof)) return "no proof";
+  if (proof.type !== "DataIntegrityProof" || proof.cryptosuite !== "eddsa-jcs-2022") {
+    return `unsupported proof suite: ${String(proof.type)}/${String(proof.cryptosuite)}`;
+  }
+  if (proof.proofPurpose !== "assertionMethod") return `proofPurpose ${String(proof.proofPurpose)} != assertionMethod`;
+  const vm = proof.verificationMethod;
+  if (typeof vm !== "string" || !vm.includes("#")) return "missing/invalid verificationMethod";
+  if (typeof proof.proofValue !== "string" || !proof.proofValue.startsWith("z")) {
+    return "missing/invalid proofValue (expected multibase 'z')";
+  }
+  return undefined;
+}
+
+/**
  * Check an opened record's body before anything in it is shown or trusted.
  *
  * `plaintext` is the opened record, decoded. `readAt` is where the record was
@@ -334,6 +475,17 @@ export type VerifiedRecordBody = Readonly<SealedRecordBody> & { readonly [verifi
  * does not verify for `author` under `assertionMethod`; names another location
  * than `readAt`; or is signed by someone other than `hostAuthor`.
  *
+ * **Which DID document** (rule 2): the author's, as it stood at the host's
+ * `bodyStoredAt` for this version. Where `opts.resolveDidAt` can resolve it as
+ * of then, a proof that fails against it is refused. Where it cannot — a method
+ * without history, no `bodyStoredAt`, or no such resolver — the current
+ * document is used, and a proof that fails there is a forgery or a key rotated
+ * away since, which a reader cannot tell apart: it throws
+ * `authorUnverifiable`, which a reader shows as a placeholder (nothing of the
+ * record) rather than dropping. A `did:key` (or `did:peer` 0 / 2) document never
+ * changes, so its failure is refused. An author whose DID does not resolve
+ * throws `authorUnresolvable`, shown the same way.
+ *
  * One proof, `eddsa-jcs-2022`: what every writer in the workspace produces. The
  * Rust reader also takes `ecdsa-jcs-2019` and proof sets; this one refuses them
  * as unverifiable rather than accepting what it cannot check.
@@ -342,7 +494,7 @@ export async function verifyRecordBody(
   plaintext: Uint8Array,
   readAt: RecordLocation,
   hostAuthor: string | undefined,
-  opts: { resolveDid?: (did: string) => Promise<Record<string, unknown>> } = {},
+  opts: VerifyRecordBodyOptions = {},
 ): Promise<VerifiedRecordBody> {
   let signed: unknown;
   try {
@@ -354,16 +506,55 @@ export async function verifyRecordBody(
     throw new RecordBodyError("malformed", "the record body is malformed: not an object");
   }
   const document = signed as Record<string, unknown>;
+  const refuseSignature = (why: string): never => {
+    throw new RecordBodyError("signature", `the record body's signature does not hold: ${why}`);
+  };
 
+  // What no key could excuse is refused before any document is fetched.
+  const fault = proofShapeFault(document.proof);
+  if (fault !== undefined) refuseSignature(fault);
+  const author = document.author;
+  if (typeof author !== "string" || !author.startsWith("did:")) {
+    throw new RecordBodyError("malformed", "the record body is malformed: author is not a DID");
+  }
+  const vm = (document.proof as { verificationMethod: string }).verificationMethod;
+  const controller = vm.slice(0, vm.indexOf("#"));
+  if (stripScidSrc(controller) !== author) {
+    refuseSignature(`it is made with a key of ${stripScidSrc(controller)}, but the body names ${author} as its author`);
+  }
+
+  // The author's document: as of `bodyStoredAt` where that can be had, else now.
+  const fixed = FIXED_DOCUMENT.some((p) => author.startsWith(p));
+  let asOf = fixed;
+  let doc: Record<string, unknown> | undefined;
+  if (!controller.startsWith("did:key:")) {
+    try {
+      if (opts.bodyStoredAt !== undefined && opts.resolveDidAt !== undefined) {
+        doc = await opts.resolveDidAt(controller, opts.bodyStoredAt);
+        if (doc !== undefined) asOf = true;
+      }
+      doc ??= await (opts.resolveDid ?? resolveDidDocument)(controller);
+    } catch (e) {
+      throw new RecordBodyError(
+        "authorUnresolvable",
+        `the record's author ${author} does not resolve to a DID document: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+  const resolved = doc;
   const proof = await verifyTrustTaskProof(document, {
     expectedProofPurpose: "assertionMethod",
-    ...(opts.resolveDid ? { resolveDid: opts.resolveDid } : {}),
+    ...(resolved !== undefined ? { resolveDid: async () => resolved } : {}),
   });
   if (!proof.verified || !proof.signer) {
-    throw new RecordBodyError(
-      "signature",
-      `the record body's signature does not hold: ${proof.reason ?? "unverified"}`,
-    );
+    if (!asOf) {
+      throw new RecordBodyError(
+        "authorUnverifiable",
+        `the record's author cannot be verified: its proof does not hold against ${author}'s current DID document ` +
+          `(${proof.reason ?? "unverified"}), and the document as it stood when the host stored the body could not be resolved`,
+      );
+    }
+    refuseSignature(proof.reason ?? "unverified");
   }
 
   const unknown = Object.keys(document).filter((k) => k !== "proof" && !BODY_MEMBERS.has(k));
@@ -375,10 +566,7 @@ export async function verifyRecordBody(
   checkBody(body);
 
   if (proof.signer !== body.author) {
-    throw new RecordBodyError(
-      "signature",
-      `the record body's signature does not hold: it verifies for ${proof.signer}, but the body names ${body.author} as its author`,
-    );
+    refuseSignature(`it verifies for ${proof.signer}, but the body names ${body.author} as its author`);
   }
   if (body.roomId !== readAt.roomId || body.key !== readAt.key || body.version !== readAt.version) {
     throw new RecordBodyError(

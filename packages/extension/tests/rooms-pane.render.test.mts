@@ -195,7 +195,7 @@ test("two members of one room are one card, and the detail acts as one place at 
 // ── Where a room was last found ─────────────────────────────────────────────
 
 const HOST = "did:webvh:QmCommunity:community.example";
-const BROWSE = "rooms/keys/browse/0.3";
+const BROWSE = "rooms/keys/browse/0.4";
 const PROFILE = "rooms/keys/profile/read/0.1";
 
 // The host used to be asked for twice per room on every visit. A room a

@@ -557,15 +557,18 @@ export async function roomsKeysBackfill(
 import {
   TYPE_URI as KEYS_READ,
   RESPONSE_TYPE_URI as KEYS_READ_RESPONSE,
+  type ReadResult,
   type RoomsKeysReadPayload,
   type RoomsKeysReadResponsePayload,
-} from "../specs/rooms/keys/read/0.1/payload.js";
+} from "../specs/rooms/keys/read/0.2/payload.js";
 import {
   TYPE_URI as KEYS_BROWSE,
   RESPONSE_TYPE_URI as KEYS_BROWSE_RESPONSE,
   type RoomsKeysBrowsePayload,
   type RoomsKeysBrowseResponsePayload,
-} from "../specs/rooms/keys/browse/0.3/payload.js";
+} from "../specs/rooms/keys/browse/0.4/payload.js";
+
+export type { ReadResult };
 
 /**
  * Ask this agent to read one record from a room's host — and to check what the
@@ -593,6 +596,9 @@ export async function roomsKeysRead(
   sender: TrustTaskSender,
   params: RoomsCaller & { roomId: string; host: string; key: string; member?: string },
 ): Promise<RoomsKeysReadResponsePayload> {
+  // 0.2 passes the host's `createdAt`, `createdBy` and `bodyStoredAt` through
+  // (`rooms/records/get/0.3`): what a reader orders a conversation and checks
+  // the author's signature by.
   const payload: RoomsKeysReadPayload = {
     roomId: params.roomId,
     host: params.host,
@@ -604,9 +610,89 @@ export async function roomsKeysRead(
     { holder: params.holder, service: params.service },
     KEYS_READ,
     KEYS_READ_RESPONSE,
-    "rooms/keys/read/0.1",
+    "rooms/keys/read/0.2",
     payload,
   );
+}
+
+/** The most keys one `rooms/keys/read/0.2` request may name. */
+export const ROOMS_KEYS_READ_MAX_KEYS = 32;
+
+/**
+ * One key's answer from {@link roomsKeysReadMany}: the record, or an `error`.
+ *
+ * A batch entry carries no `ext` (`ReadResult` is closed), so what a single
+ * read says there — the version a curated body opened at, and that the record
+ * is the room's profile — the agent says once for the whole batch, by key. It
+ * is put back here under the single read's spelling, so `readSealedVersion`
+ * reads either answer alike.
+ */
+export type ReadManyResult = ReadResult & { ext?: Record<string, unknown> };
+
+/**
+ * Read several records of one room through this agent (`rooms/keys/read/0.2`
+ * naming `keys`), in batches of {@link ROOMS_KEYS_READ_MAX_KEYS}, answering
+ * one entry per key in the order asked. One key's failure is its own `error`
+ * and never fails another's. A key the agent did not come to (`notAttempted`)
+ * is asked again in the next request, for as long as each request reads at
+ * least one key.
+ */
+export async function roomsKeysReadMany(
+  sender: TrustTaskSender,
+  params: RoomsCaller & { roomId: string; host: string; keys: readonly string[]; member?: string },
+): Promise<ReadManyResult[]> {
+  const answers = new Map<string, ReadManyResult>();
+  const parties = { holder: params.holder, service: params.service };
+  let pending = [...new Set(params.keys)];
+  while (pending.length > 0) {
+    const next: string[] = [];
+    let progressed = false;
+    for (let i = 0; i < pending.length; i += ROOMS_KEYS_READ_MAX_KEYS) {
+      const keys = pending.slice(i, i + ROOMS_KEYS_READ_MAX_KEYS);
+      const payload: RoomsKeysReadPayload = {
+        roomId: params.roomId,
+        host: params.host,
+        keys: keys as [string, ...string[]],
+        ...memberExt(params.member),
+      };
+      const res = await call<RoomsKeysReadResponsePayload>(
+        sender,
+        parties,
+        KEYS_READ,
+        KEYS_READ_RESPONSE,
+        "rooms/keys/read/0.2",
+        payload,
+      );
+      const results = res.results ?? [];
+      if (results.length !== keys.length || results.some((r, n) => r.key !== keys[n])) {
+        throw new Error(`${params.service.did} answered a batch read with entries that are not the keys asked, in order`);
+      }
+      const ours = (res.ext as Record<string, { sealedAt?: unknown; roomProfile?: unknown } | undefined> | undefined)?.[
+        ROOMS_MEMBER_EXT
+      ];
+      const sealedAt = ours?.sealedAt && typeof ours.sealedAt === "object" ? (ours.sealedAt as Record<string, unknown>) : {};
+      const profiles = Array.isArray(ours?.roomProfile) ? (ours.roomProfile as unknown[]) : [];
+      for (const r of results) {
+        if (r.error && /(^|:)notAttempted$/.test(r.error.code)) {
+          next.push(r.key);
+          continue;
+        }
+        progressed = true;
+        const mine: Record<string, unknown> = {};
+        if (Object.hasOwn(sealedAt, r.key)) mine.sealedAt = sealedAt[r.key];
+        if (profiles.includes(r.key)) mine.roomProfile = true;
+        answers.set(r.key, Object.keys(mine).length > 0 ? { ...r, ext: { [ROOMS_MEMBER_EXT]: mine } } : r);
+      }
+    }
+    if (!progressed) {
+      for (const key of next) {
+        answers.set(key, { key, error: { code: "notAttempted", message: "the agent read none of the keys asked", retryable: true } });
+      }
+      break;
+    }
+    pending = next;
+  }
+  return params.keys.map((key) => answers.get(key)!);
 }
 
 /**
@@ -650,12 +736,13 @@ export async function roomsKeysBrowse(
     ...(params.limit !== undefined ? { limit: params.limit } : {}),
     ...memberExt(params.member),
   };
+  // 0.4's rows carry the host's `createdAt`, `createdBy` and `bodyStoredAt` (`RecordMetadataV3`).
   return call<RoomsKeysBrowseResponsePayload>(
     sender,
     { holder: params.holder, service: params.service },
     KEYS_BROWSE,
     KEYS_BROWSE_RESPONSE,
-    "rooms/keys/browse/0.3",
+    "rooms/keys/browse/0.4",
     payload,
   );
 }
@@ -728,13 +815,13 @@ import {
   RESPONSE_TYPE_URI as RECORDS_LIST_RESPONSE,
   type RoomsRecordsListPayload,
   type RoomsRecordsListResponsePayload,
-} from "../specs/rooms/records/list/0.5/payload.js";
+} from "../specs/rooms/records/list/0.6/payload.js";
 import {
   TYPE_URI as RECORDS_GET,
   RESPONSE_TYPE_URI as RECORDS_GET_RESPONSE,
   type RoomsRecordsGetPayload,
   type RoomsRecordsGetResponsePayload,
-} from "../specs/rooms/records/get/0.2/payload.js";
+} from "../specs/rooms/records/get/0.3/payload.js";
 import {
   TYPE_URI as RECORDS_PUT,
   RESPONSE_TYPE_URI as RECORDS_PUT_RESPONSE,
@@ -787,7 +874,7 @@ export async function roomsCreate(
   );
 }
 
-/** Record metadata. Bodies come from `roomsRecordsGet`, one at a time. */
+/** Record metadata (`RecordMetadataV3`: with `createdAt`, `createdBy`, `bodyStoredAt`). Bodies come from `roomsRecordsGet`, one at a time. */
 export async function roomsRecordsList(
   sender: TrustTaskSender,
   params: RoomsHostCall & { prefix?: string; sinceVersion?: number; limit?: number },
@@ -798,7 +885,7 @@ export async function roomsRecordsList(
     { holder, service },
     RECORDS_LIST,
     RECORDS_LIST_RESPONSE,
-    "rooms/records/list/0.5",
+    "rooms/records/list/0.6",
     rest as unknown as RoomsRecordsListPayload,
   );
   return res.records ?? [];
@@ -815,7 +902,7 @@ export async function roomsRecordsGet(
     { holder, service },
     RECORDS_GET,
     RECORDS_GET_RESPONSE,
-    "rooms/records/get/0.2",
+    "rooms/records/get/0.3",
     rest as unknown as RoomsRecordsGetPayload,
   );
 }
@@ -1093,3 +1180,7 @@ export * from "./profile.js";
 // The signed record body, and the one way to read one: `verifyRecordBody`.
 // Its own module so the console can verify without `./files.js`'s task URIs.
 export * from "./record-body.js";
+
+// How a reader shows a room's records once they are read and verified: kind,
+// replies, reactions, withdrawals, tombstones, `writtenAt`, `editedAt`, expiry.
+export * from "./record-view.js";

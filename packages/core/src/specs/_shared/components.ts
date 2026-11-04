@@ -783,6 +783,10 @@ export type RecordEvidenceList = [RecordEvidence, ...RecordEvidence[]];
  */
 export type RecordId = string;
 /**
+ * What a reader shows a record as. Defined values: `note` — something kept in the room's library, titled or not, its `body` markdown; `message` — a turn in the room's conversation, its words in `body` as plain text; `reaction` — a short response to another record, its value in `body` (`SealedRecordBody`, *Reactions*). An open set, not an enumeration, so a new kind needs no new version of any schema: a reader MUST present a record whose kind it does not know as a note, and MUST NOT refuse a record for its kind. Absent means `note`, though a reader that keeps a conversation apart MAY show an untitled record without a kind as a message (*Untitled records*). A new version of a record MUST keep its kind. lowerCamelCase, at most 64 characters.
+ */
+export type RecordKind = string;
+/**
  * The path from one record's leaf to the room's `DataCommitment` — a Merkle inclusion proof, in the vocabulary this work already uses for it.
  *
  * **It is not called `proof`** because in this framework that word is taken: `proof` is the document's data-integrity proof (SPEC §7.3), and a payload member of the same name in the same document invites reading one for the other. The two are not interchangeable and the confusion would be silent.
@@ -3836,9 +3840,9 @@ export interface RecordEvidenceRecord {
   roomId?: string;
 }
 /**
- * What `rooms/records/list` returns. Never the body: ranking happens on the client, and a host that returned every body would make the caller pay for the whole room on every listing.
+ * What `rooms/records/list/0.6` returns, and `rooms/keys/browse/0.4` passes through: `RecordMetadataV2` plus `kind` on an `open` room, `createdAt` and `bodyStoredAt` on every tier and `createdBy` on `open` and `attributed`. A separate definition, not a change to `RecordMetadataV2`, so that `rooms/records/list/0.2` to `0.5` keep the exact shape they published. Never the body.
  */
-export interface RecordMetadata {
+export interface RecordMetadataV3 {
   /**
    * The record's key within the room. On `attributed` and `private` rooms this MUST be opaque — a random identifier, never a descriptive slug. A key reading `decision/acquire-northwind` defeats the encryption sitting beside it; structured naming belongs inside the sealed body.
    */
@@ -3857,39 +3861,17 @@ export interface RecordMetadata {
   status?: "active" | "deprecated" | "retracted";
   updatedAt: string;
   /**
-   * Present only on an `open` room; sealed with the body otherwise.
+   * When the host stored the record's first version: RFC 3339, set by the host, never by a writer. Host metadata, not body, so it is served on every tier. A host MUST set it when it stores a record's first version and MUST keep it unchanged for as long as it holds the record — across every later version, every curation, retraction included, and a member's withdrawal — so that it says when the room received the record, which `updatedAt` cannot once the record has been edited or curated. A host that stored a record before it kept `createdAt` MUST omit it for that record rather than supply a guess such as the earliest `updatedAt` it still holds; a reader then falls back to `updatedAt` (`SealedRecordBody`, *When it was written*). Readers order messages and judge `writtenAt` by it.
    */
-  title?: string;
+  createdAt?: string;
   /**
-   * Present only on an `open` room; sealed with the body otherwise.
+   * The author of the record's first version, as the host recorded it when it stored that version: the DID it authenticated for the write on an `open` room, and on an `attributed` one the author it records for every write. Set by the host, never by a writer, and kept unchanged for as long as it holds the record — across every later version, every curation and a retraction — like `createdAt`. Served on `open` and `attributed` rooms only: a `private` room's host records no author, and MUST NOT serve this. Omitted for a record stored before the host kept it, rather than guessed. Readers use it to apply the rules about a rewrite by another member to a record they see for the first time (`SealedRecordBody`, *The record's original author*).
    */
-  description?: string;
+  createdBy?: string;
   /**
-   * The member who wrote it. Present on `open` and `attributed`; on `private` the author is inside the sealed body, where only members can read it.
+   * When the host stored the body the record's current version carries: the time of the `rooms/records/put` that wrote that body. Set by the host, never by a writer. A curation (`rooms/records/curate`), and anything else that moves the version without writing a new author-signed body, leaves it unchanged; for the first version it equals `createdAt`. The host knows which task wrote each version, so it is served on every tier, `private` included, and says nothing about the body. Readers verify the current version's proof against the author's DID document as it stood at this time (`SealedRecordBody`, *Which DID document*). Omitted for a version stored before the host kept it, rather than guessed.
    */
-  author?: string;
-}
-/**
- * What `rooms/records/list/0.2` returns: `RecordMetadata` plus `blobs`. A separate definition, not a change to `RecordMetadata`, so that `rooms/records/list/0.1` keeps the exact shape it published. Never the body.
- */
-export interface RecordMetadataV2 {
-  /**
-   * The record's key within the room. On `attributed` and `private` rooms this MUST be opaque — a random identifier, never a descriptive slug. A key reading `decision/acquire-northwind` defeats the encryption sitting beside it; structured naming belongs inside the sealed body.
-   */
-  key: string;
-  /**
-   * Server-assigned, monotonic per room.
-   */
-  version: number;
-  /**
-   * The epoch the record was sealed under. Absent on an `open` room.
-   */
-  epoch?: number;
-  /**
-   * Curation state. `retracted` is a tombstone: the body is gone, the key and version remain so incremental sync converges and the audit chain stays intact.
-   */
-  status?: "active" | "deprecated" | "retracted";
-  updatedAt: string;
+  bodyStoredAt?: string;
   /**
    * Present only on an `open` room; sealed with the body otherwise.
    */
@@ -3909,6 +3891,10 @@ export interface RecordMetadataV2 {
    * @maxItems 1
    */
   blobs?: [BlobRef];
+  /**
+   * The record's `kind` as its current version's `cleartext` carries it. Present only on an `open` room, where the host reads the body anyway; on `attributed` and `private` rooms `kind` is sealed with the body and a host MUST NOT serve it, nor anything from which it could be inferred. Absent on a record that carries none — which a reader reads as `note` — and on a tombstone, which keeps nothing of its body.
+   */
+  kind?: RecordKind;
 }
 /**
  * The mark a prune leaves: **that** records were removed, when, and how many — never which, and never anything they said.

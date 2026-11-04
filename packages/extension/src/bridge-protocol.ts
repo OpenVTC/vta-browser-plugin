@@ -2552,6 +2552,12 @@ export interface PageRecordSummary {
   /** `open` rooms only: on a sealed room the title is inside the body. */
   title?: string;
   description?: string;
+  /** When the host stored the record's first version: what messages without `writtenAt` are ordered by. */
+  createdAt?: string;
+  /** The author of the record's first version, as the host recorded it (`open` and `attributed`). */
+  createdBy?: string;
+  /** `open` rooms only: on a sealed room the kind is inside the body. */
+  kind?: string;
 }
 
 export interface PageListingView {
@@ -2574,6 +2580,30 @@ export interface PageRecordView {
   body?: string;
   tags?: string[];
   file?: { name: string; mediaType?: string; size: number };
+  /**
+   * `note`, `message`, `reaction`, or a kind to show as a note; absent means a
+   * note (trust-tasks-tf #1027). A message's and a reaction's `body` is plain
+   * text, never markup, and a page opens no link in it unless the member asks
+   * and confirms.
+   */
+  kind?: string;
+  /** The record this one answers, or a reaction responds to. Resolved only against records the page already holds. */
+  inReplyTo?: { key: string; version?: number };
+  /** When the author says they wrote it — their claim, judged against `createdAt` (more than 24 hours before it: backdated). */
+  writtenAt?: string;
+  /** Present when this version is an edit: the author's claim of when. */
+  editedAt?: string;
+  createdAt?: string;
+  createdBy?: string;
+  /** Past its `validUntil`: nothing of the record is in the view. Shown only on an explicit request, marked expired. */
+  expired?: true;
+  validUntil?: string;
+  /**
+   * Its author cannot be verified — their DID no longer resolves, or the proof
+   * fails against their current DID document where the one at the time it was
+   * stored could not be had. Nothing of the record is in the view.
+   */
+  authorUnverified?: true;
   /** False on an `open` room, where the host stores and can alter cleartext. */
   sealed: boolean;
   verification: unknown;
