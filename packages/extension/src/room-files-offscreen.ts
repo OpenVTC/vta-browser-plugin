@@ -45,6 +45,7 @@ import {
   type RoomFilesOpen,
   type RoomFilesUpload,
 } from "./bridge-protocol.js";
+import { pageErrorCode } from "./page-error.js";
 
 export interface RoomFilesDeps {
   /** The agent's session and the wallet's signing identity for it. */
@@ -153,11 +154,9 @@ export function serveRoomFilesPort(port: chrome.runtime.Port, deps: RoomFilesDep
     const code = (e as { code?: unknown })?.code;
     // The error and its code only: never a key, a body or a byte.
     console.warn(`[room files] ${what} failed${typeof code === "string" ? ` (${code})` : ""}:`, e instanceof Error ? e.message : String(e));
-    finish({
-      kind: "failed",
-      error: e instanceof Error ? e.message : String(e),
-      ...(typeof code === "string" ? { code } : {}),
-    });
+    // The page code, read off the error while its class is known: a portal's
+    // transfer carries it to the page (`page-error.ts`).
+    finish({ kind: "failed", error: e instanceof Error ? e.message : String(e), code: pageErrorCode(e) });
   };
 
   let upload: { into: Uint8Array; filled: number; begin: RoomFilesOpen & { kind: "put" } } | undefined;

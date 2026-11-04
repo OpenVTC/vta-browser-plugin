@@ -53,6 +53,7 @@ import type {
   RoomFilesPageMessage,
 } from "./bridge-protocol.js";
 import type { PageOfferView } from "./room-offers-policy.js";
+import type { PageErrorCode } from "./page-error.js";
 
 // Bundled as a standalone page-world script, so it must be self-contained
 // (no shared-chunk imports). Inline the protocol constants — keep in sync
@@ -387,6 +388,29 @@ declare global {
   }
 }
 
+/**
+ * What every `window.vtaWallet.*` call rejects with (docs/page-bridge-errors.md):
+ * an `Error` named `VtaWalletError` whose `message` is the wallet's words, for
+ * the member, and whose `code` is the machine-readable reason — a Trust Task
+ * error code's local name when the community or the member's agent refused, or
+ * one of the wallet's own codes (`page-error.ts` `WALLET_ERROR_CODES`). Switch
+ * on `code`, never on `message`: the message is reworded freely.
+ */
+export interface VtaWalletError extends Error {
+  name: "VtaWalletError";
+  code: PageErrorCode;
+}
+
+/** Same rule as `page-error.ts` `PAGE_CODE`, inlined: this script imports nothing. */
+const PAGE_CODE = /^[a-z][A-Za-z0-9]{0,63}$/;
+
+function walletError(message: unknown, code: unknown): VtaWalletError {
+  const err = new Error(typeof message === "string" ? message : String(message)) as VtaWalletError;
+  err.name = "VtaWalletError";
+  err.code = typeof code === "string" && PAGE_CODE.test(code) ? code : "unclassified";
+  return err;
+}
+
 const pending = new Map<
   string,
   { resolve: (r: unknown) => void; reject: (e: Error) => void }
@@ -426,7 +450,7 @@ window.addEventListener("message", (event: MessageEvent) => {
   if (!entry) return;
   pending.delete(data.id);
   if (data.ok) entry.resolve(data.result);
-  else entry.reject(new Error(data.error));
+  else entry.reject(walletError(data.error, data.code));
 });
 
 // `BridgeMethod`, not a copy of it. This used to inline the same union, and the
@@ -522,7 +546,7 @@ function getRoomFile(params: Parameters<VtaWalletRooms["getFile"]>[0]): ReturnTy
         case "done": {
           transfers.delete(id);
           postFrame(id, { kind: "cancel" });
-          if (!meta) return reject(new Error("the wallet finished a download it never described"));
+          if (!meta) return reject(walletError("the wallet finished a download it never described", "unclassified"));
           const { kind: _kind, ...rest } = meta;
           void _kind;
           const type = meta.file.mediaType ?? "application/octet-stream";
@@ -531,11 +555,11 @@ function getRoomFile(params: Parameters<VtaWalletRooms["getFile"]>[0]): ReturnTy
         }
         case "failed":
           transfers.delete(id);
-          reject(new Error(msg.error));
+          reject(walletError(msg.error, msg.code));
           return;
         case "closed":
           transfers.delete(id);
-          reject(new Error("the wallet stopped the download"));
+          reject(walletError("the wallet stopped the download", "walletUnavailable"));
           return;
         default:
           return;
@@ -565,7 +589,7 @@ function putRoomFile(params: Parameters<VtaWalletRooms["putFile"]>[0]): ReturnTy
           })().catch((e: unknown) => {
             transfers.delete(id);
             postFrame(id, { kind: "cancel" });
-            reject(e instanceof Error ? e : new Error(String(e)));
+            reject(walletError(e instanceof Error ? e.message : String(e), "unclassified"));
           });
           return;
         case "put":
@@ -575,11 +599,11 @@ function putRoomFile(params: Parameters<VtaWalletRooms["putFile"]>[0]): ReturnTy
           return;
         case "failed":
           transfers.delete(id);
-          reject(new Error(msg.error));
+          reject(walletError(msg.error, msg.code));
           return;
         case "closed":
           transfers.delete(id);
-          reject(new Error("the wallet stopped the upload"));
+          reject(walletError("the wallet stopped the upload", "walletUnavailable"));
           return;
         default:
           return;

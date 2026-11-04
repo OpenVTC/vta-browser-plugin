@@ -51,6 +51,13 @@ Rules that bite hardest here:
   `errorFromBody(doc, status, statusText)`, never by handing the spent
   `Response` back to `errorFromResponse` — that throws into a swallowing
   `catch` and silently degrades to a status-only guess.
+  The same rule faces the other way on the page bridge: every
+  `window.vtaWallet.*` rejection carries a `code` beside its `message`
+  (`src/page-error.ts`, `docs/page-bridge-errors.md`). A refusal a gate or the
+  offscreen document raises names its code (`PageRefusal`, or the channel's
+  refusal class); the offscreen document sends `pageFailure(e)` so the code is
+  read while the error's class is still known. A new wallet code goes in
+  `WALLET_ERROR_CODES` and the document's table together — a test compares them.
 - **Endpoints this wallet did not choose are vetted before they are dialed, and
   production gets no opt-out.** A mediator's REST, auth and WebSocket URLs come
   out of its DID document; a VTA's REST base is written from one at onboarding.

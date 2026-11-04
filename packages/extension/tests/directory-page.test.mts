@@ -140,6 +140,7 @@ test("a page that is not the community's portal is refused before anything is re
   const res = await h.gates.handle("https://evil.example", { op: "publishCard", hostDid: HOST });
   assert.equal(res.ok, false);
   assert.match((res as { error: string }).error, /not .*portal/);
+  assert.equal((res as { code?: string }).code, "originNotPermitted");
   assert.deepEqual(
     h.asked.map((o) => o.op),
     ["portal"],
@@ -151,6 +152,7 @@ test("an endpoint the wallet may not reach is refused before the card is read", 
   const h = harness({ reach: false });
   const res = await h.gates.handle(PORTAL, { op: "publishCard", hostDid: HOST });
   assert.equal(res.ok, false);
+  assert.equal((res as { code?: string }).code, "hostPermissionRequired");
   assert.ok(!h.asked.some((o) => o.op === "prepare"));
 });
 
@@ -158,23 +160,28 @@ test("the member is the wallet's: a page cannot name one the wallet does not hol
   const h = harness();
   const res = await h.gates.handle(PORTAL, { op: "publishCard", hostDid: HOST, member: OTHER });
   assert.equal(res.ok, false);
+  assert.equal((res as { code?: string }).code, "identityUnknown");
   assert.ok(!h.asked.some((o) => o.op === "prepare"));
 
   const two = harness({ members: [MEMBER, OTHER] });
   const ambiguous = await two.gates.handle(PORTAL, { op: "publishCard", hostDid: HOST });
   assert.equal(ambiguous.ok, false, "with two identities and no hint, nothing is chosen for the person");
+  assert.equal((ambiguous as { code?: string }).code, "identityAmbiguous");
   const picked = await two.gates.handle(PORTAL, { op: "publishCard", hostDid: HOST, member: OTHER });
   assert.equal(picked.ok, true);
   assert.equal((two.prompts[0] as DirectoryPublishConsentView).member, OTHER);
 
   const none = harness({ members: [] });
-  assert.equal((await none.gates.handle(PORTAL, { op: "publishCard", hostDid: HOST })).ok, false);
+  const nobody = await none.gates.handle(PORTAL, { op: "publishCard", hostDid: HOST });
+  assert.equal(nobody.ok, false);
+  assert.equal((nobody as { code?: string }).code, "identityUnknown");
 });
 
 test("a declined prompt publishes nothing", async () => {
   const h = harness({ approve: false });
   const res = await h.gates.handle(PORTAL, { op: "publishCard", hostDid: HOST });
   assert.equal(res.ok, false);
+  assert.equal((res as { code?: string }).code, "declined");
   assert.equal(h.prompts.length, 1);
   assert.ok(!h.asked.some((o) => o.op === "publish"));
 });

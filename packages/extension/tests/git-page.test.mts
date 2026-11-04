@@ -103,6 +103,7 @@ test("a page that is not the community's portal is refused before anything is sh
   const res = await h.gates.handle("https://evil.example", { op: "linkAccount", hostDid: HOST, forge: "github.com" });
   assert.equal(res.ok, false);
   assert.match((res as { error: string }).error, /not .*portal/);
+  assert.equal((res as { code?: string }).code, "originNotPermitted");
   assert.deepEqual(
     h.asked.map((o) => o.op),
     ["portal"],
@@ -114,6 +115,7 @@ test("an endpoint the wallet may not reach is refused before the person is asked
   const h = harness({ reach: false });
   const res = await h.gates.handle(PORTAL, { op: "linkAccount", hostDid: HOST, forge: "github.com" });
   assert.equal(res.ok, false);
+  assert.equal((res as { code?: string }).code, "hostPermissionRequired");
   assert.equal(h.prompts.length, 0);
 });
 
@@ -121,10 +123,13 @@ test("the member is the wallet's: a page cannot name one the wallet does not hol
   const h = harness();
   const res = await h.gates.handle(PORTAL, { op: "linkAccount", hostDid: HOST, forge: "github.com", member: OTHER });
   assert.equal(res.ok, false);
+  assert.equal((res as { code?: string }).code, "identityUnknown");
   assert.ok(!h.asked.some((o) => o.op === "link"));
 
   const two = harness({ members: [MEMBER, OTHER] });
-  assert.equal((await two.gates.handle(PORTAL, { op: "linkAccount", hostDid: HOST, forge: "github.com" })).ok, false);
+  const ambiguous = await two.gates.handle(PORTAL, { op: "linkAccount", hostDid: HOST, forge: "github.com" });
+  assert.equal(ambiguous.ok, false);
+  assert.equal((ambiguous as { code?: string }).code, "identityAmbiguous");
   const picked = await two.gates.handle(PORTAL, { op: "linkAccount", hostDid: HOST, forge: "github.com", member: OTHER });
   assert.equal(picked.ok, true);
   assert.equal((two.prompts[0] as { member: string }).member, OTHER);
@@ -134,8 +139,10 @@ test("a declined prompt signs nothing", async () => {
   const h = harness({ approve: false });
   const link = await h.gates.handle(PORTAL, { op: "linkAccount", hostDid: HOST, forge: "github.com" });
   assert.equal(link.ok, false);
+  assert.equal((link as { code?: string }).code, "declined");
   const unlink = await h.gates.handle(PORTAL, { op: "unlinkAccount", hostDid: HOST, forge: "github.com" });
   assert.equal(unlink.ok, false);
+  assert.equal((unlink as { code?: string }).code, "declined");
   assert.ok(!h.asked.some((o) => o.op === "link" || o.op === "unlink"));
   assert.equal(h.opened.length, 0);
 });

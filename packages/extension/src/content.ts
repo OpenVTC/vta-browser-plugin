@@ -13,6 +13,7 @@
 
 import { parseActiveVtaDid } from "./active-vta.js";
 import { installTriggerLinkClickHandler } from "./trigger-link-click.js";
+import { PageRefusal, forwardedCode } from "./page-error.js";
 import type {
   BridgeMethod,
   ContentResponse,
@@ -129,7 +130,7 @@ window.addEventListener("message", (event: MessageEvent) => {
       // removes a whole class of surprise.
       const runtimeType = RUNTIME_TYPE_BY_METHOD[req.method];
       if (!runtimeType) {
-        throw new Error(`unsupported method: ${String(req.method)}`);
+        throw new PageRefusal(`unsupported method: ${String(req.method)}`, "invalidCall");
       }
       const runtimeResponse = (await chrome.runtime.sendMessage({
         type: runtimeType,
@@ -143,13 +144,23 @@ window.addEventListener("message", (event: MessageEvent) => {
 
       response = runtimeResponse.ok
         ? { source: CONTENT_SOURCE, id: req.id, ok: true, result: runtimeResponse.result }
-        : { source: CONTENT_SOURCE, id: req.id, ok: false, error: runtimeResponse.error };
+        : {
+            source: CONTENT_SOURCE,
+            id: req.id,
+            ok: false,
+            error: runtimeResponse.error,
+            // Only a code that is one name crosses into the page.
+            code: forwardedCode(runtimeResponse.code),
+          };
     } catch (e) {
+      // The worker did not answer (an extension reload, a worker that is
+      // gone), or the call named no method this wallet serves.
       response = {
         source: CONTENT_SOURCE,
         id: req.id,
         ok: false,
         error: e instanceof Error ? e.message : String(e),
+        code: e instanceof PageRefusal ? e.code : "walletUnavailable",
       };
     }
     window.postMessage(response, window.origin);
@@ -188,7 +199,7 @@ function relayRoomFile(frame: RoomFileFrame): void {
     try {
       port = chrome.runtime.connect({ name: ROOM_FILES_PAGE_PORT });
     } catch (e) {
-      back({ kind: "failed", error: e instanceof Error ? e.message : String(e) });
+      back({ kind: "failed", error: e instanceof Error ? e.message : String(e), code: "walletUnavailable" });
       return;
     }
     roomFilePorts.set(frame.id, port);
