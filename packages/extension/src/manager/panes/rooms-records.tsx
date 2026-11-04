@@ -32,7 +32,7 @@ import { Button, Note, Pill } from "../../ui.js";
 import { displayAgentName } from "../../agent-name.js";
 import { useAgentNames } from "../../use-agent-names.js";
 import { shortDid } from "../room-words.js";
-import { formatBytes } from "../room-files.js";
+import { untitledLabel } from "../room-record-text.js";
 import { createLimiter } from "../limit.js";
 import { didHost } from "../../did-display.js";
 import { c, t, font } from "../../theme.js";
@@ -382,12 +382,17 @@ function RecordItem({
 
   const claim = opened ? roomFileClaimOf(opened.text) : null;
   const retracted = row.status === "retracted";
+  // A file record's `body` is its caption: the schema allows one, and a photo
+  // posted with words should not lose them here.
+  const caption = claim && opened?.body?.trim() ? opened.body : undefined;
+  const labelled = opened?.title ?? claim?.title ?? claim?.name ?? row.title;
+  // An untitled record — a message, as a chat-style client writes one — is
+  // named by its own first line, and previewed by the rest.
+  const derived = labelled === undefined && !claim && opened?.body ? untitledLabel(opened.body) : null;
   const title =
-    opened?.title ?? claim?.title ?? claim?.name ?? row.title ??
+    labelled ?? derived?.label ??
     (retracted ? "Retracted record" : opened ? "Untitled record" : busy ? "Opening…" : "Not opened yet");
-  const preview = claim
-    ? `${claim.name} · ${formatBytes(claim.size)}${claim.mediaType ? ` · ${claim.mediaType}` : ""}`
-    : (opened?.body ?? row.description);
+  const preview = claim ? caption : derived ? derived.rest || undefined : (opened?.body ?? row.description);
   const author = row.author ?? opened?.author;
   // No version here: it is the room's write counter, not this record's revision.
   const meta = [author ? authorName(author) : "", when(row.updatedAt)].filter(Boolean).join(" · ");
@@ -421,7 +426,7 @@ function RecordItem({
           <span style={{ fontSize: t.base, fontWeight: 600, color: opened || row.title ? c.text : c.muted, wordBreak: "break-word" }}>
             {title}
           </span>
-          {preview && !expanded && !claim && (
+          {preview && !expanded && (
             <span
               style={{
                 fontSize: t.sm,
@@ -460,9 +465,9 @@ function RecordItem({
       {expanded && (
         <div style={{ display: "grid", gap: 10, padding: "0 14px 14px 38px" }}>
           {busy && !opened && <Loading what="the record" />}
-          {opened && !claim && (
+          {opened && (!claim || caption) && (
             <div style={{ fontSize: t.base, color: c.text, whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.55 }}>
-              {opened.body ?? (opened.title ? "" : opened.text)}
+              {claim ? caption : (opened.body ?? (opened.title ? "" : opened.text))}
             </div>
           )}
           {opened && (opened.body !== undefined || claim) && (
