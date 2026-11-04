@@ -42,6 +42,7 @@ import type {
   PageElection,
   PageElectionView,
   PageTicketView,
+  PageTicketsView,
   PageVoteView,
   PageGitUnlinkView,
   PagePublishedCardView,
@@ -239,6 +240,12 @@ export interface VtaWalletElections {
   show(p: { hostDid: string; electionId: string; member?: string; memberOf?: string }): Promise<PageElectionView>;
   /** Ask to take the member's ticket: they decide in the wallet's window. */
   takeTicket(p: { hostDid: string; electionId: string; member?: string; memberOf?: string }): Promise<PageTicketView>;
+  /** Ask to take the member's tickets for several elections (a board's ideas):
+   *  they decide once, in one wallet window listing each. Each ticket is still
+   *  its own request to the community, a random pause apart, so this resolves
+   *  some seconds after the member agrees. An election shown only to a party's
+   *  members comes back `unavailable`: take that one with `takeTicket`. */
+  takeTickets(p: { hostDid: string; electionIds: string[]; member?: string }): Promise<PageTicketsView>;
   /** Ask to vote: the wallet opens its ballot. With no ticket held it takes one
    *  instead and stops (`ticketTaken: true`) — vote later. Resolves when the
    *  wallet's window closes, whatever the member did there. */
@@ -726,6 +733,13 @@ if (!window.vtaWallet) {
           electionId: p.electionId,
           ...(p.member !== undefined ? { member: p.member } : {}),
           ...(p.memberOf !== undefined ? { memberOf: p.memberOf } : {}),
+        }),
+      takeTickets: (p) =>
+        call<PageTicketsView>("elections", {
+          op: "takeTickets",
+          hostDid: p.hostDid,
+          electionIds: p.electionIds,
+          ...(p.member !== undefined ? { member: p.member } : {}),
         }),
       vote: (p) =>
         call<PageVoteView>("elections", {

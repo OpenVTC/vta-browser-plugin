@@ -1534,7 +1534,7 @@ would test a different policy than the one that breaks.
 
 ## A portal page votes through the wallet, and never sees a choice
 
-`window.vtaWallet.elections.{list, show, takeTicket, vote}` is how a community's
+`window.vtaWallet.elections.{list, show, takeTicket, takeTickets, vote}` is how a community's
 member portal lets a member take part in its elections (VTI-VOT-001 – 100). The
 portal is the community's own code and knows who is signed in, and the
 community is never trusted to learn how anyone voted or to link a ticket to a
@@ -1553,6 +1553,18 @@ only); the outcome is shown in the wallet's window. Gates are
 stops; a ballot opened within an hour of this wallet taking the ticket warns
 (`TICKET_TO_VOTE_GAP_MS`, a time in `chrome.storage.local`, never a choice).
 `requestTask` refuses `vta/pcs/` and `vtc/elections/` (`page-task-policy.ts`).
+
+**Several tickets, one decision.** `takeTickets({ hostDid, electionIds })`
+(1–50 ids; a community board's ideas, VTI-BRD-034) reads each election as
+`takeTicket` does — never presenting a membership just to read one, so an
+election shown only to a party's members is `unavailable` and taken alone — and
+asks once, in one `kind: "tickets"` window listing every election with what each
+claim presents. Then each ticket is still its own `takeTicket` to the community,
+a random `TICKET_SPACING_MS` pause apart (CSPRNG, `defaultTicketSpacingMs`), and
+one refusal does not stop the rest. The page gets one outcome per election
+(`taken`, `held`, `unavailable`, `notEligible`, `failed`) — nothing `list` would
+not tell it. Don't collapse the requests into one, or drop the pause: either
+hands the community one request that ties the elections together in time.
 
 **One ballot window, from permission to receipt.** A ballot box the wallet may
 not reach yet is not a refusal: the ballot window opens with `needsReach` and

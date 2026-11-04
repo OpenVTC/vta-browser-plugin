@@ -2803,6 +2803,7 @@ export type ElectionsPageOp =
   | { op: "list"; hostDid: string; member?: string }
   | { op: "show"; hostDid: string; electionId: string; member?: string; memberOf?: string }
   | { op: "takeTicket"; hostDid: string; electionId: string; member?: string; memberOf?: string }
+  | { op: "takeTickets"; hostDid: string; electionIds: string[]; member?: string }
   | { op: "vote"; hostDid: string; electionId: string; member?: string; memberOf?: string };
 
 export interface RuntimeElectionsPageRequest {
@@ -2888,6 +2889,29 @@ export interface PageTicketView {
   taken: boolean;
 }
 
+/** One election of a `takeTickets` call, and what came of it. The community
+ *  knows all of this already — it issued the tickets — so the page learns
+ *  nothing it could not read from `list`.
+ *
+ *  - `taken`: the wallet took the ticket now.
+ *  - `held`: the member held it already; nothing was asked.
+ *  - `unavailable`: the community shows the member no such election, or shows
+ *    it only to the members of a party (VTI-VOT-015) — take that one alone,
+ *    with `takeTicket` and its `memberOf`.
+ *  - `notEligible`: its roll admits holders of a membership credential the
+ *    member does not hold.
+ *  - `failed`: the community refused, or could not be reached; `error` says why. */
+export interface PageBatchTicket {
+  electionId: string;
+  outcome: "taken" | "held" | "unavailable" | "notEligible" | "failed";
+  error?: string;
+}
+
+/** After `takeTickets`: each election asked for, in the order asked. */
+export interface PageTicketsView {
+  tickets: PageBatchTicket[];
+}
+
 /** After `vote`. The page learns only that the wallet's window closed, and
  *  whether a ticket had to be taken first — never whether a vote was cast, and
  *  never a choice: the outcome is shown in the wallet's own window. */
@@ -2919,6 +2943,7 @@ export type RuntimeElectionsPageResponse =
         | { elections: PageElection[]; notified: PageNotifiedElection[] }
         | PageElectionView
         | PageTicketView
+        | PageTicketsView
         | PageVoteView;
     }
   | { ok: false; error: string };
