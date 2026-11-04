@@ -19,7 +19,7 @@
 // A relying party that binds proofs to key roles refuses the wrong one either
 // way: an operational document signed for `assertionMethod` reads as an
 // attestation, and an approve-response signed for `authentication` is refused
-// by a VTC that requires the subject's assertion (approve-response 0.6,
+// by a VTC that requires the subject's assertion (approve-response 0.7,
 // consumer step 1a).
 
 const REGISTRY_PREFIX = "https://trusttasks.org/spec/";

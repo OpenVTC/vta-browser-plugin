@@ -11,7 +11,7 @@
 //   1. `auth/step-up/start/0.2`            → the RP's signed approve-request/0.5
 //   2. verify the reply, then the approve-request inside it
 //   3. the human decides, on the verified reason
-//   4. `auth/step-up/approve-response/0.6` → `elevated`
+//   4. `auth/step-up/approve-response/0.7` → `elevated`
 //   5. `auth/refresh/0.2`                  → tokens at the new level
 //
 // Every document goes to the RP's Trust Task endpoint (`{base}/trust-tasks`),
@@ -45,7 +45,7 @@ import {
 import {
   RESPONSE_TYPE_URI as APPROVE_RESPONSE_RESPONSE,
   type AuthStepUpApproveResponseRelyingPartyAck,
-} from "../specs/auth/step-up/approve-response/0.6/payload.js";
+} from "../specs/auth/step-up/approve-response/0.7/payload.js";
 import {
   TYPE_URI as AUTH_REFRESH,
   RESPONSE_TYPE_URI as AUTH_REFRESH_RESPONSE,
@@ -205,7 +205,7 @@ export interface StepUpVtaFinishArgs extends RpStepUpParty {
   /** The session's refresh token, spent on `auth/refresh` once the RP has
    *  elevated the session. */
   refreshToken: string;
-  /** The signed approve-response/0.6 from {@link buildStepUpApproval}. */
+  /** The signed approve-response/0.7 from {@link buildStepUpApproval}. */
   approval: TrustTask<StepUpApproveResponsePayload> & { proof?: unknown };
 }
 
@@ -222,7 +222,7 @@ export async function stepUpVtaFinish(args: StepUpVtaFinishArgs): Promise<StepUp
     args,
     args.approval,
     APPROVE_RESPONSE_RESPONSE,
-    "auth/step-up/approve-response/0.6",
+    "auth/step-up/approve-response/0.7",
   );
   if (ack.status !== "elevated") {
     throw new VtaClientError(

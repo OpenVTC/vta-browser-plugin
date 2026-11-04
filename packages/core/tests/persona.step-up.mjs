@@ -272,9 +272,9 @@ test("an action with no kind at all is refused", async () => {
   assert.equal(res.ok, false, "an action with no kind was approved as a disclosure");
 });
 
-test("the disclosure approval is minted as 0.6, the version that can answer `recorded`", async () => {
+test("the disclosure approval is minted as 0.7, the version that can answer `recorded`", async () => {
   // A bound approval answered in a version without `recorded` needlessly
-  // elevates a session. The agent serves 0.6 and nothing older, and so does
+  // elevates a session. The agent serves 0.7 and nothing older, and so does
   // the did-hosting control plane rp-login answers: one builder, one version.
   const seen = disclosureStepUpRequiredFrom(
     refusal({ previewId: PREVIEW, previewRetained: true, approveRequest: await approveRequest() }),
@@ -291,8 +291,8 @@ test("the disclosure approval is minted as 0.6, the version that can answer `rec
   });
   assert.equal(
     disclosure.type,
-    "https://trusttasks.org/spec/auth/step-up/approve-response/0.6",
-    "a bound disclosure approval must be minted in 0.6, or the agent answers `elevated` and the \
+    "https://trusttasks.org/spec/auth/step-up/approve-response/0.7",
+    "a bound disclosure approval must be minted in 0.7, or the agent answers `elevated` and the \
      session is raised on the strength of a decision about one card number",
   );
 

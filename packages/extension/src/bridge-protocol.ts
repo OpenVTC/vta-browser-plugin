@@ -89,7 +89,7 @@ export interface DidcommLoginParams {
 /** Parameters for `window.vtaWallet.stepUpVta(...)`: raise an existing RP
  *  session to `aal2`. The wallet sends `auth/step-up/start/0.2`, verifies the
  *  RP's signed reply and the approve-request inside it, asks the human, sends
- *  a signed `approve-response/0.6`, and renews the session with
+ *  a signed `approve-response/0.7`, and renews the session with
  *  `auth/refresh/0.2` — all to `{baseUrl}/trust-tasks`. The holder that signs
  *  is the active connection's; the page does not choose it. */
 export interface StepUpVtaParams {

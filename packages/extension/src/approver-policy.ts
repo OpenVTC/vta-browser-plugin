@@ -16,7 +16,7 @@
 // 2. **The approve-response around a statement is signed only for the
 //    statement just issued.** `pageSignRefusal` refuses every
 //    `auth/step-up/approve-*` document a page asks to have signed, because an
-//    approval is built by the wallet's own ceremony. approve-response 0.6 with
+//    approval is built by the wallet's own ceremony. approve-response 0.7 with
 //    `approverSigned` evidence is that ceremony's second half: the console
 //    wraps the statement `approveStepUp` returned and has the wallet sign it as
 //    the subject. So it is signable exactly when it carries, unchanged, a
@@ -33,12 +33,20 @@
 //    (approve/deny), reason and action id the human was shown, signed as the
 //    statement's subject — once (`decisionResponseRefusal`).
 
-import { jcsCanonicalize } from "@openvtc/pnm-core";
+import { APPROVER_RESPONSE_TYPE, jcsCanonicalize } from "@openvtc/pnm-core";
 
 import type { PageRpPin } from "./page-task-policy.js";
 
-export const APPROVE_RESPONSE_0_6 =
-  "https://trusttasks.org/spec/auth/step-up/approve-response/0.6";
+/** The approve-response version this wallet speaks, taken from core's lock
+ *  rather than spelled here, so the two cannot disagree after a pin move. */
+export const APPROVE_RESPONSE = APPROVER_RESPONSE_TYPE;
+
+/** Any version of approve-response. Used only to *route* a document claiming
+ *  `approverSigned` evidence to `approverResponseRefusal`, which then refuses a
+ *  version other than {@link APPROVE_RESPONSE} by name — instead of letting it
+ *  fall through to `pageSignRefusal`, whose reason (use `stepUpVta`) is wrong
+ *  for this caller. */
+const APPROVE_RESPONSE_FAMILY = "https://trusttasks.org/spec/auth/step-up/approve-response/";
 
 /** The decision version that carries `approverSigned` evidence. */
 export const TASK_CONSENT_DECISION_0_2 =
@@ -96,7 +104,7 @@ export function pageApproverAudienceRefusal(
   return null;
 }
 
-/** The statement id an approve-response 0.6 carries, or `null`. */
+/** The statement id an approve-response 0.7 carries, or `null`. */
 export function approverResponseStatementId(envelope: unknown): string | null {
   const ev = (envelope as { payload?: { evidence?: { statement?: { id?: unknown } } } })?.payload
     ?.evidence;
@@ -107,7 +115,7 @@ export function approverResponseStatementId(envelope: unknown): string | null {
 const RESPONSE_MEMBERS = new Set(["subject", "challenge", "decision", "evidence", "sessionId"]);
 
 /**
- * Why `envelope` — an approve-response 0.6 the page at `origin` wants signed as
+ * Why `envelope` — an approver-signed approve-response the page at `origin` wants signed as
  * `asDid` — may not be signed, or `null` when it may. `issued` is the statement
  * this wallet issued under the id the envelope carries, if any.
  */
@@ -119,7 +127,7 @@ export function approverResponseRefusal(
   now: number = Date.now(),
 ): string | null {
   const refuse = (why: string) =>
-    `${APPROVE_RESPONSE_0_6} cannot be signed for this page: ${why}.`;
+    `An approver-signed approve-response cannot be signed for this page: ${why}.`;
   if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
     return refuse("it is not a Trust Task document");
   }
@@ -130,7 +138,11 @@ export function approverResponseRefusal(
     payload?: unknown;
     proof?: unknown;
   };
-  if (doc.type !== APPROVE_RESPONSE_0_6) return refuse("wrong type");
+  if (doc.type !== APPROVE_RESPONSE) {
+    return refuse(
+      `its type is ${String(doc.type)}; this wallet signs approver statements only as ${APPROVE_RESPONSE}`,
+    );
+  }
   if (doc.proof !== undefined) return refuse("it is already signed");
   const p = doc.payload as Record<string, unknown> | undefined;
   if (!p || typeof p !== "object" || Array.isArray(p)) return refuse("it has no payload");
@@ -160,7 +172,7 @@ export function approverResponseRefusal(
     return refuse("its subject or challenge differs from the statement's");
   }
   // Signed as the subject — the outer proof must be the subject's own DID
-  // (approve-response 0.6, consumer step 1a), never the approver's.
+  // (approve-response 0.7, consumer step 1a), never the approver's.
   if (asDid !== issued.subject) return refuse("it must be signed as its subject");
   if (doc.issuer !== undefined && doc.issuer !== issued.subject) {
     return refuse("its issuer is not its subject");
@@ -204,6 +216,19 @@ export function decisionStatementId(envelope: unknown): string | null {
 
 /** Whether `envelope` is a decision 0.2 claiming `approverSigned` evidence —
  *  the shape `decisionResponseRefusal` decides, whatever else it carries. */
+/** True when `envelope` is an approve-response, at any version, whose evidence
+ *  claims an approver's statement — the documents `approverResponseRefusal`
+ *  decides. Keyed on the evidence, like {@link isApproverSignedDecision}, so a
+ *  version mismatch is refused with its real reason. */
+export function isApproverSignedResponse(envelope: unknown): boolean {
+  const doc = envelope as { type?: unknown; payload?: { evidence?: { kind?: unknown } } } | null;
+  return (
+    typeof doc?.type === "string" &&
+    doc.type.startsWith(APPROVE_RESPONSE_FAMILY) &&
+    doc.payload?.evidence?.kind === "approverSigned"
+  );
+}
+
 export function isApproverSignedDecision(envelope: unknown): boolean {
   const doc = envelope as { type?: unknown; payload?: { evidence?: { kind?: unknown } } } | null;
   return (

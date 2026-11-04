@@ -21,7 +21,7 @@ import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import type { SigningIdentity } from "../siop/self-issued.js";
 import type { TrustTask } from "./protocol.js";
 
-import { TYPE_URI as MSG_APPROVE_RESPONSE } from "../specs/auth/step-up/approve-response/0.6/payload.js";
+import { TYPE_URI as MSG_APPROVE_RESPONSE } from "../specs/auth/step-up/approve-response/0.7/payload.js";
 import { TYPE_URI as APPROVE_REQUEST } from "../specs/auth/step-up/approve-request/0.5/payload.js";
 
 /**
@@ -163,7 +163,7 @@ export async function verifyStepUpApproveRequest(
   };
 }
 
-/** Payload of the `approve-response/0.6` the wallet signs. */
+/** Payload of the `approve-response/0.7` the wallet signs. */
 export interface StepUpApproveResponsePayload {
   subject: string;
   sessionId: string;
@@ -189,8 +189,9 @@ export interface BuildStepUpApprovalArgs {
 }
 
 /**
- * Build and sign an `auth/step-up/approve-response/0.6` Trust-Task document —
- * the version the agent and the did-hosting control plane both serve. The DI
+ * Build and sign an `auth/step-up/approve-response/0.7` Trust-Task document —
+ * the only version the agent serves (VTI #2346), and the one the did-hosting
+ * control plane cuts over to with it. The DI
  * proof (`eddsa-jcs-2022`, `proofPurpose: assertionMethod`) over the subject key
  * is what the RP verifies.
  */

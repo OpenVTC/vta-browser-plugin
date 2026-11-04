@@ -174,7 +174,7 @@ test("a page cannot have the wallet sign a document to the holder's own agent", 
 
 test("a page cannot have the wallet sign a step-up approval", () => {
   for (const t of [
-    "https://trusttasks.org/spec/auth/step-up/approve-response/0.6",
+    "https://trusttasks.org/spec/auth/step-up/approve-response/0.7",
     "https://trusttasks.org/spec/auth/step-up/approve-request/0.5",
   ]) {
     const why = pageSignRefusal({ type: t, recipient: RP }, AGENT);
