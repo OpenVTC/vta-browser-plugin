@@ -10,6 +10,26 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Added
 
+- **The reading rules for a room's records** (`SealedRecordBody` at
+  `rooms/_shared/0.2`, trust-tasks-tf #1027). `verifyRecordBody` accepts
+  `kind`, `inReplyTo`, `writtenAt` and `editedAt` with the schema's shapes, and
+  a profile's `recordMembers`. It checks the author's proof against the DID
+  document as it stood at the host's `bodyStoredAt` where `resolveDidAt` can
+  resolve it then; otherwise it uses the current document, and a proof that
+  fails there, or an author whose DID does not resolve, comes back as a
+  placeholder (`RecordBodyError.placeholder`, kinds `authorUnverifiable` and
+  `authorUnresolvable`) rather than a refusal. A `did:key` document cannot
+  change, so a proof that fails against it is refused. The new
+  `assembleRoomRecords` (`rooms/record-view`) turns verified records into what
+  a reader shows: notes and messages by `kind`; replies marked when their
+  target is not available; reactions counted once per author, value and
+  target, with values normalised to NFC and VS15/VS16 removed; withdrawn
+  messages; tombstones placed by the version held; ordering by `writtenAt`,
+  with implausible and backdated (more than 24 hours) claims ordered by
+  `createdAt`; `editedAt`; and records past `validUntil` hidden. Also new:
+  `roomsKeysReadMany`, a batch read of up to 32 keys a request
+  (`rooms/keys/read/0.2`).
+
 - **`@openvtc/pnm-core/notifications`: the principal's held notifications**
   (VTI-NTF-050 – 056). `notificationsList` / `notificationsListAll`,
   `notificationsShow` (the delivering document as received) and
@@ -60,6 +80,13 @@ For history before this file, see `git log` on `packages/core`.
   `hostPath` names no host has no route.
 
 ### Changed
+
+- Rooms reads move to the versions that carry the host's `createdAt`,
+  `createdBy` and `bodyStoredAt`: `rooms/keys/browse/0.4`, `rooms/keys/read/0.2`,
+  `rooms/records/list/0.6` and `rooms/records/get/0.3`, with every request made
+  as the member completed by `rooms/keys/act/0.11`. The pins replace
+  browse/0.3, read/0.1, list/0.5, get/0.2 and act/0.10. `task-surface.json` is
+  resynced from vta-sdk 0.81.0.
 
 - `verifyTrustTaskProof` attributes a proof to its verification method's DID
   without a did:scid `src` (`signer` is the identity) and matches the key and

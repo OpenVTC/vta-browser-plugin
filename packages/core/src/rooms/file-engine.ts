@@ -13,9 +13,9 @@
 //        → sealed: the VTA signs the record body as the member and seals it
 //          (rooms/keys/seal/0.2) → records/put/0.4 naming the blob, re-sealing
 //          for the version the host actually assigned.
-//          open: records/put/0.4 (through rooms/keys/act/0.10), the manifest and
+//          open: records/put/0.4 (through rooms/keys/act/0.11), the manifest and
 //          its key in `cleartext.file`, naming exactly that blob.
-//   get  records/get/0.2 → sealed: rooms/keys/open → verify the body; open:
+//   get  records/get/0.3 → sealed: rooms/keys/open → verify the body; open:
 //        the manifest in `cleartext.file`, its key held to the tier
 //        → the record names the file's blob → blobs/get/0.2 (proxied)
 //        → the file key: file-key(open), or the open manifest's own
@@ -89,7 +89,7 @@ import {
   TYPE_URI as RECORDS_GET,
   RESPONSE_TYPE_URI as RECORDS_GET_RESPONSE,
   type RoomsRecordsGetResponsePayload,
-} from "../specs/rooms/records/get/0.2/payload.js";
+} from "../specs/rooms/records/get/0.3/payload.js";
 
 // ── The cipher, as this module needs it ─────────────────────────────────────
 
@@ -186,7 +186,7 @@ function repairableEpoch(e: unknown): boolean {
  *
  * `open` and `file-key` carry no host, so the agent cannot fetch what it is
  * missing for them. `rooms/keys/read` names the host and does exactly that
- * before it answers (rooms/keys/read/0.1, *Opening, and when it cannot*): it
+ * before it answers (rooms/keys/read/0.2, *Opening, and when it cannot*): it
  * applies the commits the host relays, or fetches the epoch links. So the repair
  * is one read of the same record; its answer is not needed, only what it did to
  * the agent's state. The agent stays the one party that repairs. Once only: what
@@ -500,6 +500,7 @@ export async function getRoomFile(
   const vta = { holder: ctx.holder, service: { did: ctx.vta.did } };
 
   progress({ stage: "reading" });
+  // get/0.3 carries the host's `bodyStoredAt`, which the author's signature is checked against.
   const { principal, reply: record } = await actAndSend<RoomsRecordsGetResponsePayload>(
     ctx,
     RECORDS_GET,
@@ -673,6 +674,7 @@ async function sealedFile(
     base64url.decode(plaintext),
     { roomId: ctx.roomId, key, version: openedAt },
     record.author,
+    record.bodyStoredAt !== undefined ? { bodyStoredAt: record.bodyStoredAt } : {},
   );
   const file = verified.file;
   if (!file) throw new RoomFileError("noFile", "the record carries no file");

@@ -1,4 +1,4 @@
-// Acting in a room **as the member** — `rooms/keys/act` 0.10, and
+// Acting in a room **as the member** — `rooms/keys/act` 0.11, and
 // `rooms/keys/seal/0.2` with `signAsPrincipal`.
 //
 // ## The member is the persona, never this wallet
@@ -42,7 +42,7 @@ import {
   type RoomsKeysActPayload,
   type RoomsKeysActResponsePayload,
   type UnsignedRoomRequest,
-} from "../specs/rooms/keys/act/0.10/payload.js";
+} from "../specs/rooms/keys/act/0.11/payload.js";
 import {
   TYPE_URI as KEYS_SEAL_V2,
   RESPONSE_TYPE_URI as KEYS_SEAL_V2_RESPONSE,
@@ -58,7 +58,7 @@ import {
   TYPE_URI as RECORDS_LIST,
   RESPONSE_TYPE_URI as RECORDS_LIST_RESPONSE,
   type RoomsRecordsListResponsePayload,
-} from "../specs/rooms/records/list/0.5/payload.js";
+} from "../specs/rooms/records/list/0.6/payload.js";
 import {
   TYPE_URI as RECORDS_PUT,
   RESPONSE_TYPE_URI as RECORDS_PUT_RESPONSE,
@@ -138,11 +138,12 @@ export async function roomsKeysAct(
   parties: RoomsCaller,
   document: UnsignedRoomRequest,
 ): Promise<{ principal: string; document: Record<string, unknown> }> {
-  // 0.10 completes every request this wallet makes as a member — the host-bound
-  // room requests (records at `rooms/records/put/0.4`, with or without a file)
-  // and a member's requests to a community about the rooms it offers them
-  // (`vtc/rooms/offers/*`, `vtc/rooms/memberships/list/0.2`) alike. 0.10 is 0.9's
-  // table plus `memberships/list/0.2`, which carries each room's own state.
+  // 0.11 completes every request this wallet makes as a member — the host-bound
+  // room requests (records at `rooms/records/put/0.4`, with or without a file,
+  // read at `rooms/records/get/0.3` and listed at `rooms/records/list/0.6`) and a
+  // member's requests to a community about the rooms it offers them
+  // (`vtc/rooms/offers/*`, `vtc/rooms/memberships/list/0.2`) alike. 0.11 is
+  // 0.10's table plus put/0.5, list/0.6 and get/0.3.
   const payload: RoomsKeysActPayload = { document };
   const envelope = buildTrustTask(KEYS_ACT, payload, {
     issuer: parties.holder.did,
@@ -150,7 +151,7 @@ export async function roomsKeysAct(
   });
   const res = await sender.send<RoomsKeysActResponsePayload>(envelope, {
     expectedResponseType: KEYS_ACT_RESPONSE,
-    operationLabel: "rooms/keys/act/0.10",
+    operationLabel: "rooms/keys/act/0.11",
   });
   const completed = res.document as Record<string, unknown>;
   const principal = res.principal;

@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { agent, h, render, PARTIES } from "./harness/dom.mjs";
 import { OpenRoomCard, OpenRoomDetail } from "../src/manager/panes/rooms-open.js";
 
-const BROWSE = "rooms/keys/browse/0.3";
+const BROWSE = "rooms/keys/browse/0.4";
 const COMMUNITY = "did:webvh:QmCommunity:first.example";
 const ROOM = "did:webvh:QmOpen:first.example:room-dids:1";
 const MEMBER = "did:webvh:QmMember:people.example";

@@ -14,8 +14,8 @@ import { ROOM_FILES_PORT } from "../src/bridge-protocol.js";
 import { signingIdentityFromSecret } from "@openvtc/pnm-core";
 import { signRecordBody } from "@openvtc/pnm-core/rooms";
 
-const BROWSE = "rooms/keys/browse/0.3";
-const READ = "rooms/keys/read/0.1";
+const BROWSE = "rooms/keys/browse/0.4";
+const READ = "rooms/keys/read/0.2";
 const HOST = "did:webvh:QmHost:host.example";
 const ROOM = "did:webvh:QmRoom:rooms.example";
 // did:key, so the pane can verify each note's signature here without a resolver.
@@ -36,14 +36,17 @@ const mount = async ({ author = ME_KEY, actions, status = "active" }: { author?:
   const plaintext = await note(author);
   const a = agent({
     [BROWSE]: { roomId: ROOM, records: [{ key: "n1", version: 5, status }], complete: true, verification: { priorRoots: "agree", count: "agrees", head } },
-    [READ]: {
+    // Every record listed is read in one batch (`keys`), each key its own answer.
+    [READ]: (p: { keys: string[] }) => ({
       roomId: ROOM,
-      key: "n1",
-      version: 5,
-      status,
-      plaintext,
-      verification: { trace: "verified", priorRoots: "agree", head },
-    },
+      results: p.keys.map((key) => ({
+        key,
+        version: 5,
+        status,
+        plaintext,
+        verification: { trace: "verified", priorRoots: "agree", head },
+      })),
+    }),
   });
   const opened: Record<string, unknown>[] = [];
   const connect = () => {

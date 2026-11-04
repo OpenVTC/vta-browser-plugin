@@ -564,6 +564,62 @@ test("an open room's file reaches the page as its name, size and type — never 
   assert.ok(!JSON.stringify(view).includes("K".repeat(43)), "the key stays with the wallet");
 });
 
+// trust-tasks-tf #1027: what a record is and where it sits reach the page; a
+// record past its `validUntil`, or whose author cannot be verified, reaches it
+// with nothing of its content.
+test("a record's kind, reply, writtenAt and editedAt reach the page with its body", async () => {
+  const author = signingIdentityFromSecret(new Uint8Array(32).fill(4));
+  const body = {
+    roomId: ROOM, key: "k", version: 2, author: author.did, kind: "message", body: "Yes",
+    inReplyTo: { key: "q", version: 1 }, writtenAt: "2026-11-01T09:00:00Z", editedAt: "2026-11-01T09:05:00Z",
+  };
+  const plaintext = Buffer.from(await signRecordBody(body, author)).toString("base64url");
+  const view = await readView(ROOM, "k", {
+    key: "k", version: 2, updatedAt: "2026-11-01T09:05:00Z", createdAt: "2026-11-01T09:00:00Z",
+    bodyStoredAt: "2026-11-01T09:05:00Z", plaintext, verification: {},
+  });
+  assert.equal(view.kind, "message");
+  assert.deepEqual(view.inReplyTo, { key: "q", version: 1 });
+  assert.equal(view.writtenAt, "2026-11-01T09:00:00Z");
+  assert.equal(view.editedAt, "2026-11-01T09:05:00Z");
+  assert.equal(view.createdAt, "2026-11-01T09:00:00Z");
+  const open = await readView(ROOM, "k", {
+    key: "k", version: 1, verification: {}, cleartext: { body: "hi", kind: "reaction", inReplyTo: { key: "q" } },
+  });
+  assert.equal(open.kind, "reaction");
+  assert.deepEqual(open.inReplyTo, { key: "q" });
+});
+
+test("a record past its validUntil reaches the page as expired, with nothing of it", async () => {
+  const author = signingIdentityFromSecret(new Uint8Array(32).fill(4));
+  const body = { roomId: ROOM, key: "k", version: 2, author: author.did, title: "Old", body: "Stale", validUntil: "2026-01-01T00:00:00Z" };
+  const plaintext = Buffer.from(await signRecordBody(body, author)).toString("base64url");
+  const view = await readView(ROOM, "k", { key: "k", version: 2, plaintext, verification: {} });
+  assert.equal(view.expired, true);
+  assert.equal(view.title, undefined);
+  assert.equal(view.body, undefined);
+  const open = await readView(ROOM, "k", { key: "k", version: 1, verification: {}, cleartext: { body: "x", validUntil: "2026-01-01T00:00:00Z" } });
+  assert.equal(open.expired, true);
+  assert.equal(open.body, undefined);
+});
+
+test("a record whose author's DID does not resolve reaches the page as a placeholder, not a failure", async () => {
+  const doc = { roomId: ROOM, key: "k", version: 2, author: "did:webvh:QmGone:people.example", body: "Hidden" };
+  const signer = { ...signingIdentityFromSecret(new Uint8Array(32).fill(4)), did: doc.author, kid: `${doc.author}#key-1` };
+  const { signTrustTask } = await import("@openvtc/pnm-core/trust-tasks");
+  await signTrustTask({ envelope: doc, signing: signer, proofPurpose: "assertionMethod" });
+  const view = await readView(
+    ROOM,
+    "k",
+    { key: "k", version: 2, plaintext: Buffer.from(JSON.stringify(doc)).toString("base64url"), verification: {} },
+    async () => {
+      throw new Error("not found");
+    },
+  );
+  assert.equal(view.authorUnverified, true);
+  assert.equal(view.body, undefined);
+});
+
 test("liveGrants drops other communities", () => {
   const at = { origin: PORTAL, hostDid: HOST, vtaDid: VTA };
   const g = withGrants([], { ...at, hostDid: "did:web:other.example" }, [{ roomId: ROOM, member: MEMBER }], NOW);

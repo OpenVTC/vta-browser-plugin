@@ -910,9 +910,9 @@ digest = "sha256:576083d47c1cc049040ab9352653cc0793a7ccc43774817d91ce198c6be1923
 
 [[task]]
 slug = "rooms/keys/act"
-version = "0.10"
-type_uri = "https://trusttasks.org/spec/rooms/keys/act/0.10"
-digest = "sha256:b3f1ed60feaf9aa38b11d619b32a29b41ebef2e6756433ea6c58069994dfd3ce"
+version = "0.11"
+type_uri = "https://trusttasks.org/spec/rooms/keys/act/0.11"
+digest = "sha256:c811729ef4381ae7cf61a54e9821cb580a245feaa4f845426211c61bcf6aff34"
 
 [[task]]
 slug = "rooms/keys/backfill"
@@ -922,9 +922,9 @@ digest = "sha256:7d11aae739817251befd7a777786abf99f553250657a69c5e99bc5511acacc1
 
 [[task]]
 slug = "rooms/keys/browse"
-version = "0.3"
-type_uri = "https://trusttasks.org/spec/rooms/keys/browse/0.3"
-digest = "sha256:6316a5fd63ae2096b1ec27824d6d3e1ec7cd2a43e960e764761db50256ca03ca"
+version = "0.4"
+type_uri = "https://trusttasks.org/spec/rooms/keys/browse/0.4"
+digest = "sha256:0dcaa1ea64a91bb92da01392585a8c404a022fde9055c256399f6522f9bef8f8"
 
 [[task]]
 slug = "rooms/keys/chain"
@@ -976,9 +976,9 @@ digest = "sha256:7a2a87b74dc7a24703f26def24ec64195df93e14afbe2a1ccc0e21198560f6a
 
 [[task]]
 slug = "rooms/keys/read"
-version = "0.1"
-type_uri = "https://trusttasks.org/spec/rooms/keys/read/0.1"
-digest = "sha256:bc64ad27d3a38decac9c7466edd424f799fe1cfe3215457850e5acfbe859371a"
+version = "0.2"
+type_uri = "https://trusttasks.org/spec/rooms/keys/read/0.2"
+digest = "sha256:eea45b67397c0d8c7c1765e70c25db1ae82f8431d2a95a7e487ebc385c4fea3b"
 
 [[task]]
 slug = "rooms/keys/seal"
@@ -1024,15 +1024,15 @@ digest = "sha256:e91fc17e9271decb1f2d4319809f9e6eb17ee9c4fbabd99e6ee3ecc6af894d7
 
 [[task]]
 slug = "rooms/records/get"
-version = "0.2"
-type_uri = "https://trusttasks.org/spec/rooms/records/get/0.2"
-digest = "sha256:84c6406c461af7746926bc626021b250a6d9c159f3b23c47b5e3ea6ca188191b"
+version = "0.3"
+type_uri = "https://trusttasks.org/spec/rooms/records/get/0.3"
+digest = "sha256:a2933e3a8b9c33da5c884bf6a3395b81be3e7bae72a44896c89ac844ec2023cd"
 
 [[task]]
 slug = "rooms/records/list"
-version = "0.5"
-type_uri = "https://trusttasks.org/spec/rooms/records/list/0.5"
-digest = "sha256:5666d28984f38ce7e36fa7e3141d1e53ffd555fbc9b1c575a91b656bebbf445e"
+version = "0.6"
+type_uri = "https://trusttasks.org/spec/rooms/records/list/0.6"
+digest = "sha256:ff174f85e82cbdbdf0acdcf99179576cb5dc11b723d4b73f631c3fc916ab7a21"
 
 [[task]]
 slug = "rooms/records/put"

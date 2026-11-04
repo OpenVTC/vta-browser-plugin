@@ -37,8 +37,8 @@ const slug = (type) => type.replace("https://trusttasks.org/spec/", "");
 /** `rooms/keys/act`'s table, as much of it as these flows use. */
 const ACTION = {
   "rooms/info/0.3": "read",
-  "rooms/records/list/0.5": "read",
-  "rooms/records/get/0.2": "read",
+  "rooms/records/list/0.6": "read",
+  "rooms/records/get/0.3": "read",
   "rooms/records/put/0.4": "write",
   "rooms/blobs/upload/begin/0.2": "write",
   "rooms/blobs/get/0.2": "read",
@@ -64,7 +64,7 @@ function fakeVta() {
         asked.push(slug(envelope.type));
         assert.equal(envelope.issuer, SIGNER.did, "the wallet asks its own VTA");
         switch (slug(envelope.type)) {
-          case "rooms/keys/act/0.10": {
+          case "rooms/keys/act/0.11": {
             const doc = structuredClone(p.document);
             assert.equal(doc.proof, undefined, "act takes an unsigned document");
             assert.equal(doc.payload.presentation, undefined, "and no presentation");
@@ -161,7 +161,7 @@ function fakeHost(opts = {}) {
         state.blobs.set(u.ref, u);
         return { blobRef: opts.commitAs ?? u.ref, size: u.manifest.size };
       }
-      case "rooms/records/list/0.5":
+      case "rooms/records/list/0.6":
         presented(p, "read");
         return { records: [], headVersion: state.version };
       case "rooms/records/put/0.4": {
@@ -191,9 +191,10 @@ function fakeHost(opts = {}) {
         });
         return { key: p.key, version };
       }
-      case "rooms/records/get/0.2": {
+      case "rooms/records/get/0.3": {
         presented(p, "read");
         const r = state.records.get(p.key);
+        state.gets = [...(state.gets ?? []), slug(envelope.type)];
         return {
           roomId: ROOM,
           key: p.key,
@@ -338,7 +339,7 @@ test("the same file uploaded twice is stored once", async () => {
 
 // An open room has no storage key: the file is sealed under a key minted for it
 // alone, which the record carries in the clear (`rooms/records/put/0.4`).
-test("an open room's file is sealed under its own key, written at put/0.4 through act/0.10, and comes back", async () => {
+test("an open room's file is sealed under its own key, written at put/0.4 through act/0.11, and comes back", async () => {
   const vta = fakeVta();
   const host = fakeHost({ visibility: "open" });
   const bytes = sample();
@@ -351,7 +352,7 @@ test("an open room's file is sealed under its own key, written at put/0.4 throug
   });
   assert.ok(!vta.asked.includes("rooms/keys/file-key/0.2"), "no key is asked of the VTA");
   assert.ok(!vta.asked.includes("rooms/keys/seal/0.2"), "nothing is sealed as a record");
-  assert.ok(vta.asked.includes("rooms/keys/act/0.10"), "the record is completed at act/0.10");
+  assert.ok(vta.asked.includes("rooms/keys/act/0.11"), "the record is completed at act/0.11");
   assert.ok(host.asked.includes("rooms/records/put/0.4"));
   const stored = host.records.get(put.key);
   assert.equal(stored.cleartext.file.epoch, EPOCH, "written at the room's epoch");
@@ -369,12 +370,12 @@ test("an open room's file is sealed under its own key, written at put/0.4 throug
   assert.equal(vta.asked.filter((s) => s === "rooms/keys/file-key/0.2").length, 0, "nor asked for to open it");
 });
 
-test("every request is completed at act/0.10", async () => {
+test("every request is completed at act/0.11", async () => {
   const vta = fakeVta();
   await putRoomFile(context(vta, fakeHost({ visibility: "open" })), { name: "a.txt", bytes: sample(10) });
   assert.deepEqual(
     vta.asked.filter((s) => s.startsWith("rooms/keys/act/")),
-    ["rooms/keys/act/0.10", "rooms/keys/act/0.10", "rooms/keys/act/0.10"],
+    ["rooms/keys/act/0.11", "rooms/keys/act/0.11", "rooms/keys/act/0.11"],
     "info, begin and the put/0.4 record",
   );
 });
@@ -485,7 +486,7 @@ test("a record that no longer names its blob is reported as released", async () 
   const put = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
   const stripped = { sendCompleted: async (env) => {
     const r = await host.sender.sendCompleted(env);
-    return slug(env.type) === "rooms/records/get/0.2" ? { ...r, blobs: undefined } : r;
+    return slug(env.type).startsWith("rooms/records/get/") ? { ...r, blobs: undefined } : r;
   } };
   await assert.rejects(
     getRoomFile(context(vta, { ...host, sender: stripped }), put.key, () => undefined),
@@ -499,7 +500,7 @@ test("a body signed by someone other than the recorded author is refused before 
   const put = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
   const misattributed = { sendCompleted: async (env) => {
     const r = await host.sender.sendCompleted(env);
-    return slug(env.type) === "rooms/records/get/0.2" ? { ...r, author: "did:key:zSomeoneElse" } : r;
+    return slug(env.type).startsWith("rooms/records/get/") ? { ...r, author: "did:key:zSomeoneElse" } : r;
   } };
   const asked = host.asked.length;
   await assert.rejects(getRoomFile(context(vta, { ...host, sender: misattributed }), put.key, () => undefined), /host recorded/);
@@ -610,7 +611,7 @@ function curated(host, by, told) {
     sender: {
       sendCompleted: async (env) => {
         const r = await host.sender.sendCompleted(env);
-        if (slug(env.type) !== "rooms/records/get/0.2") return r;
+        if (!slug(env.type).startsWith("rooms/records/get/")) return r;
         return {
           ...r,
           version: r.version + by,
@@ -633,7 +634,7 @@ function behindVta(vta, task, reason, reads) {
     sender: {
       async send(envelope) {
         const s = slug(envelope.type);
-        if (s === "rooms/keys/read/0.1") {
+        if (s.startsWith("rooms/keys/read/")) {
           reads.push(structuredClone(envelope.payload));
           repaired = true;
           return {};
@@ -727,7 +728,7 @@ test("a sealed-at version after the record's own is refused before anything is o
   const put = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
   const lying = { ...host, sender: { sendCompleted: async (env) => {
     const r = await host.sender.sendCompleted(env);
-    return slug(env.type) === "rooms/records/get/0.2" ? { ...r, sealed: { ...r.sealed, version: r.version + 1 } } : r;
+    return slug(env.type).startsWith("rooms/records/get/") ? { ...r, sealed: { ...r.sealed, version: r.version + 1 } } : r;
   } } };
   const opened = [];
   await assert.rejects(
@@ -735,4 +736,15 @@ test("a sealed-at version after the record's own is refused before anything is o
     /not a version at or before the record's/,
   );
   assert.equal(opened.length, 0);
+});
+
+// get/0.3 carries the host's `bodyStoredAt`, which the author's signature is
+// checked against; act/0.11 is the version whose table completes it.
+test("a file is read at get/0.3 through act/0.11", async () => {
+  const vta = fakeVta();
+  const host = fakeHost();
+  const { key } = await putRoomFile(context(vta, host), { name: "a.txt", bytes: sample(10) });
+  await getRoomFile(context(vta, host), key, () => {});
+  assert.deepEqual(host.gets, ["rooms/records/get/0.3"]);
+  assert.ok(vta.asked.includes("rooms/keys/act/0.11"));
 });
