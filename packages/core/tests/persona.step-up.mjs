@@ -272,9 +272,9 @@ test("an action with no kind at all is refused", async () => {
   assert.equal(res.ok, false, "an action with no kind was approved as a disclosure");
 });
 
-test("the disclosure approval is minted as 0.6, the version that can answer `recorded`", async () => {
+test("the disclosure approval is minted as 0.7, the version that can answer `recorded`", async () => {
   // A bound approval answered in a version without `recorded` needlessly
-  // elevates a session. The agent serves 0.6 and nothing older, and so does
+  // elevates a session. The agent serves 0.7 and nothing older, and so does
   // the did-hosting control plane rp-login answers: one builder, one version.
   const seen = disclosureStepUpRequiredFrom(
     refusal({ previewId: PREVIEW, previewRetained: true, approveRequest: await approveRequest() }),

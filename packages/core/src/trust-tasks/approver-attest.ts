@@ -44,9 +44,10 @@ import { signTrustTask, type TrustTaskEnvelope } from "./sign.js";
 /** `auth/step-up/approver/attest/0.1`. */
 export const APPROVER_ATTEST_TYPE = ATTEST_0_1;
 
-/** `auth/step-up/approve-response/0.7` — the version that carries
- *  `approverSigned` evidence. */
-export const APPROVE_RESPONSE_0_7_TYPE = APPROVE_RESPONSE_0_7;
+/** The `auth/step-up/approve-response` type that carries `approverSigned`
+ *  evidence — whichever version `trust-tasks.lock` pins, so a pin move needs
+ *  no rename here or in any consumer. */
+export const APPROVER_RESPONSE_TYPE = APPROVE_RESPONSE_0_7;
 
 /** attest/0.1's payload, from the generated bindings. */
 export type { ApproverAttestPayload };

@@ -305,7 +305,7 @@ export async function verifyDisclosureStepUp(
  * for it. `request` must come from {@link verifyDisclosureStepUp}, never from
  * the refusal directly.
  *
- * **Minted as `0.6`, which can answer `recorded` — the whole point of this
+ * **Minted as `0.7`, which can answer `recorded` — the whole point of this
  * call existing.** The
  * approval is bound to one `previewId`, so the honest acknowledgement is
  * `recorded` — applied to that disclosure, elevating nothing. An approval sent
@@ -313,8 +313,9 @@ export async function verifyDisclosureStepUp(
  * step-up gates for its window on the strength of a decision the holder made
  * about a card number.
  *
- * The agent serves 0.6 and nothing older (0.3 introduced `recorded`, VTI
- * #1316); the did-hosting control plane `rp-login` answers serves 0.6 too.
+ * The agent serves 0.7 and nothing older (0.3 introduced `recorded`, VTI
+ * #1316; 0.4 and 0.6 were dropped in VTI #2346), and the did-hosting control
+ * plane `rp-login` answers cuts over to 0.7 with it: one builder, one version.
  */
 export async function approveDisclosureStepUp(args: {
   signing: SigningIdentity;

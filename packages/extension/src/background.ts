@@ -15,7 +15,6 @@ import {
   pageTaskRefusal,
 } from "./page-task-policy.js";
 import {
-  APPROVE_RESPONSE_0_7,
   ISSUED_STATEMENT_TTL_MS,
   approverResponseRefusal,
   approverResponseStatementId,
@@ -24,6 +23,7 @@ import {
   decisionStatementId,
   decisionSummaryText,
   isApproverSignedDecision,
+  isApproverSignedResponse,
   pageApproverAudienceRefusal,
   type ApproverConsentRequest,
   type IssuedApproverStatement,
@@ -2668,7 +2668,7 @@ async function handleSignTrustTask(
 ): Promise<RuntimeSignTrustTaskResponse> {
   const active = await readActiveConnection();
   if (!active.ok) return { ok: false, error: active.error };
-  if ((req.params.envelope as { type?: unknown } | undefined)?.type === APPROVE_RESPONSE_0_7) {
+  if (isApproverSignedResponse(req.params.envelope)) {
     return handleSignApproverResponse(req, active.conn.vtaDid, active.conn.restBaseUrl);
   }
   if (isApproverSignedDecision(req.params.envelope)) {

@@ -151,7 +151,7 @@ const startArgs = (holder, fetchFn) => ({
 
 // ── buildStepUpApproval ─────────────────────────────────────────────────────
 
-test("buildStepUpApproval: a 0.6 approval echoes the request and is the holder's attestation", async () => {
+test("buildStepUpApproval: a 0.7 approval echoes the request and is the holder's attestation", async () => {
   const holder = generateSigningIdentity();
   const request = { subject: holder.did, sessionId: SESSION, challenge: "c".repeat(64) };
   const doc = await buildStepUpApproval({
@@ -164,7 +164,7 @@ test("buildStepUpApproval: a 0.6 approval echoes the request and is the holder's
   assert.equal(doc.type, APPROVE_RESPONSE_07);
   assert.equal(doc.issuer, holder.did);
   assert.equal(doc.recipient, RP.did);
-  assert.ok(doc.issuedAt, "0.6 requires issuedAt");
+  assert.ok(doc.issuedAt, "0.7 requires issuedAt");
   assert.deepEqual(doc.payload, { ...request, decision: "approved" });
   const proof = await verifyTrustTaskProof(doc, { expectedProofPurpose: "assertionMethod" });
   assert.equal(proof.verified, true, proof.reason);
