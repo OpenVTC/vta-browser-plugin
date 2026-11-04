@@ -2233,6 +2233,9 @@ function scopeLabel(family: string): string {
       return "the member directory (reading it, and editing your own card)";
     case "vtc/groups":
       return "community groups";
+    case "vtc/boards":
+      // Proposals and notes only: a ticket or a vote is never signed this way (VTI-BRD-051).
+      return "community boards (proposing ideas and leaving notes as you — never voting)";
     default:
       return family;
   }
