@@ -1,4 +1,4 @@
-// Room files — `rooms/blobs/*`, `rooms/info`, `rooms/records/get/0.3`, `rooms/records/put/0.4`,
+// Room files — `rooms/blobs/*`, `rooms/info`, `rooms/records/get/0.3`, `rooms/records/put/0.5`,
 // `rooms/keys/file-key`, and the signed record body a file's manifest lives in.
 //
 // A file in a room is a record plus a blob. The record is an ordinary sealed

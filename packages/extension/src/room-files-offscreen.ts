@@ -33,6 +33,7 @@ import {
   opaqueRecordKey,
   putCleartextAsMember,
   roomInfoAsMember,
+  writeMemberNameAsMember,
   writeSealedAsMember,
   type CompletedDocumentSender,
   type PersonaRoom,
@@ -179,9 +180,11 @@ export function serveRoomFilesPort(port: chrome.runtime.Port, deps: RoomFilesDep
                   : "new note"
                 : msg.kind === "curate"
                   ? `curate ${msg.key}`
-                  : String(msg.kind);
+                  : msg.kind === "name"
+                    ? "member name"
+                    : String(msg.kind);
         console.info(`[room files] ${what} in ${"roomId" in msg ? msg.roomId : "?"}: started`);
-        if (msg.kind === "get" || msg.kind === "note" || msg.kind === "curate") {
+        if (msg.kind === "get" || msg.kind === "note" || msg.kind === "curate" || msg.kind === "name") {
           void run(deps, msg, abort.signal, post).then(finish, fail);
         } else if (msg.kind === "put") {
           // Allocated once, at the size declared, so a console that sends more
@@ -232,7 +235,7 @@ async function run(
     files ? loadCipher() : Promise.resolve(undefined),
   ]);
   const host = await (deps.host ?? hostChannels)(open.hostDid);
-  if (open.kind === "note" || open.kind === "curate") {
+  if (open.kind === "note" || open.kind === "curate" || open.kind === "name") {
     // The same room handle the portal's writes use: built here, completed by
     // the VTA as the member, sent to the host unchanged.
     const room: PersonaRoom = {
@@ -242,6 +245,16 @@ async function run(
       host: { did: open.hostDid, sender: host.completed },
       ...(open.member !== undefined ? { member: open.member } : {}),
     };
+    if (open.kind === "name") {
+      // The writer's gate (`recordMembers` listing `kind` and `memberProfile`) is
+      // applied in core, against the profile read here as the member, before
+      // anything is sealed or sent.
+      const out = await writeMemberNameAsMember(room, {
+        name: open.name,
+        ...(open.held !== undefined ? { held: open.held } : {}),
+      });
+      return { kind: "named", key: out.key, version: out.version, author: out.principal };
+    }
     if (open.kind === "curate") {
       const out = await curateRecordAsMember(room, {
         key: open.key,

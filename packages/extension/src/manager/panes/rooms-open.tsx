@@ -76,11 +76,14 @@ export function OpenRoomDetail({
   parties,
   room,
   names,
+  petnames,
   onBack,
 }: {
   parties: Parties;
   room: OpenRoom;
   names: Readonly<Record<string, AgentName>>;
+  /** The member's own petnames, by DID. */
+  petnames?: ReadonlyMap<string, string> | undefined;
   onBack: () => void;
 }) {
   const agentDid = parties.service.did;
@@ -127,7 +130,7 @@ export function OpenRoomDetail({
         included — is readable by its host. A file you add is stored encrypted, under a key its record carries in
         the clear: the host and the room&rsquo;s members can open it, whoever holds only the storage cannot.
       </Note>
-      <RoomRecords key={`${room.roomId}|${room.member}`} parties={parties} room={room} host={room.communityDid} />
+      <RoomRecords key={`${room.roomId}|${room.member}`} parties={parties} room={room} host={room.communityDid} petnames={petnames} />
     </div>
   );
 }

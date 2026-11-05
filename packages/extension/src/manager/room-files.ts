@@ -273,6 +273,7 @@ export async function getRoomFileIntoConsole(
 
 export type NoteResult = Omit<Extract<RoomFilesMessage, { kind: "noted" }>, "kind">;
 export type CurateResult = Omit<Extract<RoomFilesMessage, { kind: "curated" }>, "kind">;
+export type NameResult = Omit<Extract<RoomFilesMessage, { kind: "named" }>, "kind">;
 
 /** The open message's common half: whom to ask, for which room, as which member. */
 async function targetOf(target: RoomFileTarget, opts: TransferOptions) {
@@ -306,6 +307,31 @@ export async function writeRoomNote(
   };
   return transfer<NoteResult>(open, opts, (m) => {
     if (m.kind !== "noted") return undefined;
+    const { kind: _kind, ...rest } = m;
+    return rest;
+  });
+}
+
+/**
+ * Write the member's own name in the room (`memberProfile`), or withdraw it with
+ * an empty one. `held` is every author's name record this page read: the
+ * member's own is written over, so a member keeps one. The offscreen document
+ * refuses before anything is sent unless the room's profile lists `kind` and
+ * `memberProfile` in `recordMembers`.
+ */
+export async function writeRoomMemberName(
+  target: RoomFileTarget,
+  params: { name: string; held?: { author: string; key: string; version: number }[] },
+  opts: TransferOptions = {},
+): Promise<NameResult> {
+  const open: RoomFilesOpen = {
+    kind: "name",
+    ...(await targetOf(target, opts)),
+    name: params.name,
+    ...(params.held !== undefined ? { held: params.held } : {}),
+  };
+  return transfer<NameResult>(open, opts, (m) => {
+    if (m.kind !== "named") return undefined;
     const { kind: _kind, ...rest } = m;
     return rest;
   });

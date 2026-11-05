@@ -26,6 +26,14 @@
 // nothing.
 
 import type { RecordReference, VerifiedRecordBody } from "./record-body.js";
+import {
+  isNameWithdrawal,
+  MEMBER_PROFILE_KIND,
+  memberProfileRefusal,
+  namesByAuthor,
+  type MemberNameCandidate,
+  type MemberNameRecord,
+} from "./member-name.js";
 
 /** What a record says, once a reader may show it: a verified sealed body, or an open room's cleartext. */
 export interface RecordContent {
@@ -48,6 +56,15 @@ export interface RecordContent {
    * (which a curation leaves behind), or the record's version on an `open` room.
    */
   bodyVersion: number;
+  /**
+   * The content members the record carries, by name — the sealed body's beyond
+   * its location, author and proof, or every member of an open room's
+   * cleartext. What a rule about which members a record may carry reads
+   * (`memberProfile`); absent where the surface did not say.
+   */
+  members?: readonly string[];
+  /** An open room's cleartext, rather than a verified sealed body. */
+  cleartext?: true;
 }
 
 /** What reading one key came to. */
@@ -81,6 +98,10 @@ export interface RecordInput {
   createdAt?: string;
   /** The author of the record's first version, as the host recorded it (`open` and `attributed` only). */
   createdBy?: string;
+  /** When the host stored the body this version carries (`RecordMetadataV3`). */
+  bodyStoredAt?: string;
+  /** The record's `kind` as the listing gave it (an `open` room's): where the record could not be read, it still says what it was. */
+  listedKind?: string;
   reading: RecordReading;
   /** An earlier version of this record the reader held, if any. Only one with a lower version counts. */
   held?: HeldRecord;
@@ -160,6 +181,15 @@ export interface RoomRecordsView {
   tombstones: { key: string; version: number }[];
   /** Records shown nowhere, and why: a reaction that breaks the rules, a record answering a reaction, a rewrite that changed `kind`. */
   ignored: { key: string; reason: string }[];
+  /**
+   * Members' names in this room, by author (`memberProfile`; rooms/_shared/0.3):
+   * the record that decides each author's name, and the name where it gives
+   * one. Only for this room, and only for that author. Name records are shown
+   * nowhere else — in no conversation, library or count.
+   */
+  names: Record<string, MemberNameRecord>;
+  /** The keys of every name record read, whatever it came to. */
+  nameRecords: string[];
 }
 
 const FIVE_MINUTES = 5 * 60_000;
@@ -214,8 +244,12 @@ export function contentFromBody(body: VerifiedRecordBody): RecordContent {
     ...(body.validUntil !== undefined ? { validUntil: body.validUntil } : {}),
     hasFile: body.file !== undefined,
     bodyVersion: body.version,
+    members: Object.keys(body).filter((k) => !BODY_FRAME.has(k)),
   };
 }
+
+/** A sealed body's members that place and sign it, rather than say anything. */
+const BODY_FRAME = new Set(["roomId", "key", "version", "author", "proof"]);
 
 const LOWER_CAMEL = /^[a-z][A-Za-z0-9]*$/;
 const UTC_DATE_TIME = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?Z$/;
@@ -276,6 +310,8 @@ export function readingFromCleartext(
     ...(validUntil !== undefined ? { validUntil: validUntil as string } : {}),
     hasFile: cleartext.file !== undefined && cleartext.file !== null,
     bodyVersion: version,
+    members: Object.keys(cleartext),
+    cleartext: true,
   };
   return { state: "read", content };
 }
@@ -382,6 +418,9 @@ export function assembleRoomRecords(inputs: readonly RecordInput[], opts: { now:
   const reactionKeys = new Set<string>();
   /** The record each shown record answers, checked once every key is known. */
   const replies: { key: string; ref: RecordReference; writtenAt: string | undefined }[] = [];
+  /** Every name record read (`memberProfile`): shown nowhere, offered as its author's name. */
+  const nameCandidates: MemberNameCandidate[] = [];
+  const nameRecords: string[] = [];
 
   const shell = (input: RecordInput, shown: ShownAs, t: ReturnType<typeof timing>): RoomRecordView => ({
     key: input.key,
@@ -398,8 +437,25 @@ export function assembleRoomRecords(inputs: readonly RecordInput[], opts: { now:
     const held = input.held !== undefined && input.held.version < input.version ? input.held : undefined;
     const reading = input.reading;
 
+    const storedAt = input.bodyStoredAt ?? input.updatedAt;
+
     // ── A tombstone: the place the reader held, or nowhere ─────────────────
     if (reading.state === "tombstone" || input.status === "retracted") {
+      if (held?.content.kind === MEMBER_PROFILE_KIND || (held === undefined && input.listedKind === MEMBER_PROFILE_KIND)) {
+        // A retracted name: its author has no name from it, and it is shown nowhere.
+        nameRecords.push(input.key);
+        const author = held?.content.author ?? input.createdBy;
+        if (author !== undefined) {
+          nameCandidates.push({
+            author,
+            key: input.key,
+            version: input.version,
+            ...(storedAt !== undefined ? { storedAt } : {}),
+            refused: "retracted",
+          });
+        }
+        continue;
+      }
       if (held === undefined) {
         tombstones.push({ key: input.key, version: input.version });
         continue;
@@ -418,6 +474,18 @@ export function assembleRoomRecords(inputs: readonly RecordInput[], opts: { now:
     if (reading.state === "profile") continue;
 
     if (reading.state === "refused" || reading.state === "unreadable" || reading.state === "placeholder") {
+      // A name record that did not read is still never a note (*Reading one*, rule 1).
+      if (input.listedKind === MEMBER_PROFILE_KIND || held?.content.kind === MEMBER_PROFILE_KIND) {
+        nameRecords.push(input.key);
+        const reason = `a member's name that ${reading.state === "refused" ? "was refused" : "could not be read"}: ${reading.reason}`;
+        ignored.push({ key: input.key, reason });
+        // Rule 2: where the version that decides is refused, its author has no name from it.
+        const author = held?.content.author ?? input.createdBy;
+        if (author !== undefined) {
+          nameCandidates.push({ author, key: input.key, version: input.version, ...(storedAt !== undefined ? { storedAt } : {}), refused: reason });
+        }
+        continue;
+      }
       // A placeholder is ordered by the host's time so replies still anchor to it.
       const host = hostTime(input, now);
       views.set(input.key, {
@@ -439,6 +507,29 @@ export function assembleRoomRecords(inputs: readonly RecordInput[], opts: { now:
     }
     if (held !== undefined && held.content.kind === "reaction" && !sameReference(held.content.inReplyTo, content.inReplyTo)) {
       ignored.push({ key: input.key, reason: "a new version moved the reaction to another record" });
+      continue;
+    }
+
+    // ── A member's name (`memberProfile`): never a note, a message or a reaction ──
+    if (content.kind === MEMBER_PROFILE_KIND) {
+      nameRecords.push(input.key);
+      // Rule 3: a version by anyone but the record's author names nobody.
+      if (prior !== undefined && prior !== content.author) {
+        ignored.push({ key: input.key, reason: "a member's name rewritten by another member: it names nobody" });
+        continue;
+      }
+      const refused = memberProfileRefusal(content);
+      nameCandidates.push({
+        author: content.author,
+        key: input.key,
+        version: input.version,
+        ...(storedAt !== undefined ? { storedAt } : {}),
+        ...(refused !== undefined
+          ? { refused }
+          : !isNameWithdrawal(content.title!)
+            ? { name: content.title! }
+            : {}),
+      });
       continue;
     }
 
@@ -564,5 +655,7 @@ export function assembleRoomRecords(inputs: readonly RecordInput[], opts: { now:
     expired: all.filter((v) => v.expired),
     tombstones,
     ignored,
+    names: namesByAuthor(nameCandidates),
+    nameRecords,
   };
 }

@@ -30,8 +30,9 @@ import type {
   RecordConfidence,
   RecordEvidence,
   RecordEvidenceList,
+  RecordReference,
   RecordValidUntil,
-} from "../specs/rooms/records/put/0.4/payload.js";
+} from "../specs/rooms/records/put/0.5/payload.js";
 import type { RoomProfile } from "../specs/rooms/keys/profile/read/0.1/payload.js";
 
 import type { SigningIdentity } from "../siop/self-issued.js";
@@ -67,10 +68,7 @@ export interface RoomProfileStatement {
  * version the author was answering. A reader resolves it only against records
  * it can already read, and fetches nothing because of it.
  */
-export interface RecordReference {
-  key: string;
-  version?: number;
-}
+export type { RecordReference };
 
 /** A record body before signing or after verification. */
 export interface SealedRecordBody extends RecordLocation {

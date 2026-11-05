@@ -39,7 +39,7 @@ const ACTION = {
   "rooms/info/0.3": "read",
   "rooms/records/list/0.6": "read",
   "rooms/records/get/0.3": "read",
-  "rooms/records/put/0.4": "write",
+  "rooms/records/put/0.5": "write",
   "rooms/blobs/upload/begin/0.2": "write",
   "rooms/blobs/get/0.2": "read",
   "rooms/blobs/chunk/0.1": "read",
@@ -83,7 +83,7 @@ function fakeVta() {
           // A stand-in for the record AEAD: the version is bound in, so a body
           // sealed for one version does not open at another — the property the
           // re-seal loop exists for. The body is signed as its author, the persona.
-          case "rooms/keys/seal/0.2": {
+          case "rooms/keys/seal/0.3": {
             assert.equal(p.signAsPrincipal, true);
             const body = JSON.parse(Buffer.from(p.plaintext, "base64url").toString());
             assert.equal(body.author, PERSONA.did, "the body names the persona as its author");
@@ -164,7 +164,7 @@ function fakeHost(opts = {}) {
       case "rooms/records/list/0.6":
         presented(p, "read");
         return { records: [], headVersion: state.version };
-      case "rooms/records/put/0.4": {
+      case "rooms/records/put/0.5": {
         presented(p, "write");
         // Another member's write lands between this one's seal and its put.
         if (state.racesLeft > 0) {
@@ -338,7 +338,7 @@ test("the same file uploaded twice is stored once", async () => {
 });
 
 // An open room has no storage key: the file is sealed under a key minted for it
-// alone, which the record carries in the clear (`rooms/records/put/0.4`).
+// alone, which the record carries in the clear (`rooms/records/put/0.5`).
 test("an open room's file is sealed under its own key, written at put/0.4 through act/0.11, and comes back", async () => {
   const vta = fakeVta();
   const host = fakeHost({ visibility: "open" });
@@ -351,9 +351,9 @@ test("an open room's file is sealed under its own key, written at put/0.4 throug
     tags: ["public"],
   });
   assert.ok(!vta.asked.includes("rooms/keys/file-key/0.2"), "no key is asked of the VTA");
-  assert.ok(!vta.asked.includes("rooms/keys/seal/0.2"), "nothing is sealed as a record");
+  assert.ok(!vta.asked.includes("rooms/keys/seal/0.3"), "nothing is sealed as a record");
   assert.ok(vta.asked.includes("rooms/keys/act/0.11"), "the record is completed at act/0.11");
-  assert.ok(host.asked.includes("rooms/records/put/0.4"));
+  assert.ok(host.asked.includes("rooms/records/put/0.5"));
   const stored = host.records.get(put.key);
   assert.equal(stored.cleartext.file.epoch, EPOCH, "written at the room's epoch");
   assert.notEqual(stored.cleartext.file.fileKey, FILE_KEY);
@@ -429,7 +429,7 @@ test("an upload that fails part way releases what begin reserved", async () => {
   const host = fakeHost({ failChunk: 1 });
   await assert.rejects(putRoomFile(context(fakeVta(), host), { name: "a.bin", bytes: sample() }), /connection reset/);
   assert.deepEqual(host.aborted, ["u1"]);
-  assert.ok(!host.asked.includes("rooms/records/put/0.4"), "no record names a blob that was never committed");
+  assert.ok(!host.asked.includes("rooms/records/put/0.5"), "no record names a blob that was never committed");
 });
 
 test("a host that commits some other blob is caught before the record is written", async () => {
@@ -438,7 +438,7 @@ test("a host that commits some other blob is caught before the record is written
     putRoomFile(context(fakeVta(), host), { name: "a.txt", bytes: sample(10) }),
     (e) => e instanceof RoomFileError && e.code === "hostMisbehaved",
   );
-  assert.ok(!host.asked.includes("rooms/records/put/0.4"));
+  assert.ok(!host.asked.includes("rooms/records/put/0.5"));
 });
 
 test("a chunk altered by the host is refused, and nothing is released", async () => {

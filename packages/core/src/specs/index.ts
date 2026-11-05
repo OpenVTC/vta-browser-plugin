@@ -166,7 +166,7 @@ export * as RoomsKeysOpen_v0_2 from "./rooms/keys/open/0.2/payload.js";
 export * as RoomsKeysPresent_v0_2 from "./rooms/keys/present/0.2/payload.js";
 export * as RoomsKeysProfileRead_v0_1 from "./rooms/keys/profile/read/0.1/payload.js";
 export * as RoomsKeysRead_v0_2 from "./rooms/keys/read/0.2/payload.js";
-export * as RoomsKeysSeal_v0_2 from "./rooms/keys/seal/0.2/payload.js";
+export * as RoomsKeysSeal_v0_3 from "./rooms/keys/seal/0.3/payload.js";
 export * as RoomsKeysWelcome_v0_1 from "./rooms/keys/welcome/0.1/payload.js";
 export * as RoomsOwnerInvite_v0_1 from "./rooms/owner/invite/0.1/payload.js";
 export * as RoomsOwnerIssueAuthority_v0_2 from "./rooms/owner/issue-authority/0.2/payload.js";
@@ -175,7 +175,7 @@ export * as RoomsOwnerRegister_v0_2 from "./rooms/owner/register/0.2/payload.js"
 export * as RoomsRecordsCurate_v0_1 from "./rooms/records/curate/0.1/payload.js";
 export * as RoomsRecordsGet_v0_3 from "./rooms/records/get/0.3/payload.js";
 export * as RoomsRecordsList_v0_6 from "./rooms/records/list/0.6/payload.js";
-export * as RoomsRecordsPut_v0_4 from "./rooms/records/put/0.4/payload.js";
+export * as RoomsRecordsPut_v0_5 from "./rooms/records/put/0.5/payload.js";
 export * as TaskConsentDecision_v0_2 from "./task-consent/decision/0.2/payload.js";
 export * as TaskConsentGranted_v0_1 from "./task-consent/granted/0.1/payload.js";
 export * as TaskConsentRequest_v0_1 from "./task-consent/request/0.1/payload.js";

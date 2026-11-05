@@ -62,6 +62,7 @@ import { RoomCommunities } from "./rooms-communities.js";
 import { roomDisplayName, useRoomProfiles } from "./rooms-profile.js";
 import { profileNotices, RoomDetail, RoomTile, Segmented, TabStrip } from "./rooms-detail.js";
 import { OpenRoomCard, OpenRoomDetail } from "./rooms-open.js";
+import { useContactPetnames } from "../use-contact-petnames.js";
 
 type Tab = "rooms" | "communities" | "owner" | "new";
 
@@ -238,6 +239,8 @@ export function RoomsPane({
   const [by, setBy] = useState<GroupBy>("host");
   const [introHidden, setIntroHidden] = useState(readDismissed);
   const agentDid = parties.service.did;
+  // The member's own petnames, shown before any name an author gives themselves in a room.
+  const petnames = useContactPetnames(parties, contexts.map((x) => x.id));
 
   const load = useCallback(async () => {
     setError(null);
@@ -472,7 +475,7 @@ export function RoomsPane({
 
       {tab === "rooms" &&
         (openedOpen ? (
-          <OpenRoomDetail key={`${openedOpen.roomId}|${openedOpen.member}`} parties={parties} room={openedOpen} names={names} onBack={() => setOpen(null)} />
+          <OpenRoomDetail key={`${openedOpen.roomId}|${openedOpen.member}`} parties={parties} room={openedOpen} names={names} petnames={petnames} onBack={() => setOpen(null)} />
         ) : opened ? (
           <RoomDetail
             key={opened.roomId}
@@ -482,6 +485,7 @@ export function RoomsPane({
             community={labels[opened.roomId]}
             profile={profiles[opened.roomId]}
             names={names}
+            petnames={petnames}
             onBack={() => setOpen(null)}
             onChanged={() => void load()}
             onHost={(host) => remember(opened.roomId, host, "used")}

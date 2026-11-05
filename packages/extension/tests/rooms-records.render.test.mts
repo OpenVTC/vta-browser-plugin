@@ -584,3 +584,112 @@ test("a record past its validUntil is hidden, and shown on request marked expire
   assert.match(screen.text(), /Old plan/);
   assert.match(screen.text(), /expired/);
 });
+
+// ── Members' names (`memberProfile`, rooms/_shared/0.3, trust-tasks-tf #1035) ──
+
+const PROFILE_READ = "rooms/keys/profile/read/0.1";
+
+/** A room of sealed records, each `[key, fields, signer?]`, read as `room` with the member's `petnames`. */
+async function namedRoom(
+  entries: [string, Fields, typeof AUTHOR?][],
+  opts: { petnames?: Map<string, string>; member?: string; recordMembers?: string[] } = {},
+) {
+  const bodies = Object.fromEntries(
+    await Promise.all(entries.map(async ([key, fields, by]) => [key, await sealed(key, 412, fields, by ?? AUTHOR)])),
+  );
+  const rows = entries.map(([key]) => record(key));
+  const a = agent({
+    [BROWSE]: { roomId: ROOM, records: rows, complete: true, verification: { priorRoots: "agree", count: "agrees", head: head(rows.length) } },
+    [READ]: batch((p: { key: string }) => ({
+      key: p.key,
+      version: 412,
+      status: "active",
+      plaintext: bodies[p.key],
+      verification: { trace: "verified", priorRoots: "agree", head: head(rows.length) },
+    })),
+    [PROFILE_READ]: opts.recordMembers === undefined
+      ? { roomId: ROOM, status: "absent" }
+      : { roomId: ROOM, status: "found", profile: { name: "Deal room", recordMembers: opts.recordMembers } },
+  });
+  const screen = await render(
+    h(RoomRecords, {
+      parties: PARTIES,
+      room: { ...ROOMS_ROOM, ...(opts.member !== undefined ? { member: opts.member } : {}) },
+      ...(opts.petnames ? { petnames: opts.petnames } : {}),
+    } as never),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await screen.type(screen.all("input")[0]!, HOST);
+  await browse(screen);
+  await settled(screen);
+  return { a, screen };
+}
+
+test("names: a member's name record is never drawn as a record, and names its author's records, in quotes", async () => {
+  const { screen } = await namedRoom([
+    ["n", { kind: "memberProfile", title: "Alice" }],
+    ["m", { kind: "message", body: "Ship it?" }],
+  ]);
+  const text = screen.text();
+  assert.equal(screen.all("button[aria-expanded]").length, 1, "only the message is a row");
+  assert.match(text, /Ship it\?/);
+  assert.match(text, /“Alice”/, "the author is shown by the name they gave themselves");
+  assert.match(text, /their own claim, not verified/);
+});
+
+test("names: a reply says whose record it answers, by name", async () => {
+  const { screen } = await namedRoom([
+    ["n", { kind: "memberProfile", title: "Alice" }],
+    ["q", { title: "Venue", body: "Where?" }],
+    ["r", { kind: "message", body: "The hall", inReplyTo: { key: "q" } }, OTHER],
+  ]);
+  assert.match(screen.text(), /In reply to Venue by “Alice”/);
+});
+
+test("names: the member's own petname comes before the name an author gives themselves", async () => {
+  const { screen } = await namedRoom(
+    [
+      ["n", { kind: "memberProfile", title: "Alice" }],
+      ["m", { kind: "message", body: "hello" }],
+    ],
+    { petnames: new Map([[AUTHOR.did, "Mum"]]) },
+  );
+  const text = screen.text();
+  assert.match(text, /Mum/);
+  assert.doesNotMatch(text, /“Alice”/);
+});
+
+test("names: two authors who would read the same are told apart by a fingerprint", async () => {
+  const { screen } = await namedRoom([
+    ["n1", { kind: "memberProfile", title: "Sam" }],
+    ["n2", { kind: "memberProfile", title: "sam" }, OTHER],
+    ["m1", { kind: "message", body: "one" }],
+    ["m2", { kind: "message", body: "two" }, OTHER],
+  ]);
+  const text = screen.text();
+  assert.ok(text.includes(`(…${AUTHOR.did.slice(-8)})`));
+  assert.ok(text.includes(`(…${OTHER.did.slice(-8)})`));
+});
+
+test("names: setting one is refused, and says why, where the room's profile does not list kind and memberProfile", async () => {
+  const { screen } = await namedRoom([["m", { kind: "message", body: "hi" }]], { recordMembers: ["kind"] });
+  await screen.click(screen.button("Set my name in this room"));
+  await settled(screen);
+  const text = screen.text();
+  assert.match(text, /does not take members' names yet/);
+  assert.match(text, /`memberProfile`/);
+  assert.throws(() => screen.button("Save my name"), "no way to write it");
+});
+
+test("names: where the profile permits it, the member is offered their own name, and told it is unverified", async () => {
+  const { screen } = await namedRoom(
+    [["n", { kind: "memberProfile", title: "Alice" }]],
+    { recordMembers: ["kind", "memberProfile"], member: AUTHOR.did },
+  );
+  await screen.click(screen.button("Change my name in this room"));
+  await settled(screen);
+  const text = screen.text();
+  assert.match(text, /nobody\s+verifies it/);
+  assert.ok(screen.button("Save my name"));
+  assert.ok(screen.button("Withdraw my name"));
+});

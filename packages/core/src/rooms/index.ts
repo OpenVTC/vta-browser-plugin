@@ -56,7 +56,7 @@ import {
   RESPONSE_TYPE_URI as KEYS_SEAL_RESPONSE,
   type RoomsKeysSealPayload,
   type RoomsKeysSealResponsePayload,
-} from "../specs/rooms/keys/seal/0.2/payload.js";
+} from "../specs/rooms/keys/seal/0.3/payload.js";
 
 /** Who is calling, and which service is being asked. */
 export interface RoomsCaller {
@@ -393,7 +393,7 @@ export async function roomsKeysSeal(
     { holder, service },
     KEYS_SEAL,
     KEYS_SEAL_RESPONSE,
-    "rooms/keys/seal/0.2",
+    "rooms/keys/seal/0.3",
     { ...rest, ...memberExt(member) } as unknown as RoomsKeysSealPayload,
   );
   return res.sealed;
@@ -827,7 +827,7 @@ import {
   RESPONSE_TYPE_URI as RECORDS_PUT_RESPONSE,
   type RoomsRecordsPutPayload,
   type RoomsRecordsPutResponsePayload,
-} from "../specs/rooms/records/put/0.4/payload.js";
+} from "../specs/rooms/records/put/0.5/payload.js";
 import {
   TYPE_URI as EPOCH_MINT,
   RESPONSE_TYPE_URI as EPOCH_MINT_RESPONSE,
@@ -923,7 +923,7 @@ export async function roomsRecordsPut(
     { holder, service },
     RECORDS_PUT,
     RECORDS_PUT_RESPONSE,
-    "rooms/records/put/0.4",
+    "rooms/records/put/0.5",
     rest as unknown as RoomsRecordsPutPayload,
   );
 }
@@ -1184,3 +1184,7 @@ export * from "./record-body.js";
 // How a reader shows a room's records once they are read and verified: kind,
 // replies, reactions, withdrawals, tombstones, `writtenAt`, `editedAt`, expiry.
 export * from "./record-view.js";
+
+// A member's name in a room (`memberProfile`, rooms/_shared/0.3): the writer's
+// gate and shape, whose name a record is, and how a reader shows an author.
+export * from "./member-name.js";

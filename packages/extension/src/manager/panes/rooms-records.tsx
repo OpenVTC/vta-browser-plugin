@@ -43,10 +43,22 @@
 // records past their `validUntil` hidden. This pane draws what it decides.
 // Every body is drawn as plain text: a message's is never markup, a note's is
 // rendered inert, and nothing in either is a link this pane follows.
+//
+// ## Who wrote it: a petname, a name in this room, or the DID
+//
+// An author is a per-room persona DID. The reading rules take members' names
+// out of the room (`memberProfile`, rooms/_shared/0.3) — never shown as notes or
+// counted — and `authorLabels` decides how each author is shown: the member's
+// own petname for that DID from their contacts first, then the name the author
+// gave themselves in this room, then the DID (or a name its document claims).
+// A room name is the author's claim about themselves, so it is drawn in quotes
+// and never beside a check mark; two authors who would read the same carry a
+// fingerprint of their DIDs.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   assembleRoomRecords,
+  authorLabels,
   contentFromBody,
   readingFromCleartext,
   readSealedVersion,
@@ -76,7 +88,7 @@ import type { Parties } from "../use-vta.js";
 import type { RoomFilesPrepared } from "../../bridge-protocol.js";
 import { prepareRoomFiles, roomFileClaimOf } from "../room-files.js";
 import { GetRoomFile, PutRoomFile, RoomFilesUnavailable } from "./rooms-files.js";
-import { holds, NoteEditor, RecordActions } from "./rooms-record-actions.js";
+import { holds, MemberNameEditor, NoteEditor, RecordActions } from "./rooms-record-actions.js";
 
 const fieldStyle: React.CSSProperties = {
   boxSizing: "border-box",
@@ -122,6 +134,8 @@ interface RecordRow {
   createdAt?: string;
   createdBy?: string;
   bodyStoredAt?: string;
+  /** The record's kind, served on an `open` room's listing (`rooms/records/list/0.6`). */
+  kind?: string;
 }
 
 /**
@@ -374,6 +388,8 @@ async function readOne(
     ...((res.updatedAt ?? row.updatedAt) !== undefined ? { updatedAt: res.updatedAt ?? row.updatedAt } : {}),
     ...((res.createdAt ?? row.createdAt) !== undefined ? { createdAt: res.createdAt ?? row.createdAt } : {}),
     ...((res.createdBy ?? row.createdBy) !== undefined ? { createdBy: res.createdBy ?? row.createdBy } : {}),
+    ...((res.bodyStoredAt ?? row.bodyStoredAt) !== undefined ? { bodyStoredAt: res.bodyStoredAt ?? row.bodyStoredAt } : {}),
+    ...(row.kind !== undefined ? { listedKind: row.kind } : {}),
   };
   const nothing = { text: "", signed: false, verification };
   if (res.error) {
@@ -504,6 +520,7 @@ function RecordItem({
           {view.replyTo.available ? (
             <>
               In reply to <strong style={{ fontWeight: 600 }}>{labelOf(target)}</strong>
+              {target?.content?.author && <> by {authorName(target.content.author)}</>}
               {view.replyTo.changed === "edited" && <> — edited since</>}
             </>
           ) : (
@@ -629,8 +646,9 @@ function RecordItem({
             </div>
           )}
           {opened?.signed && content?.author && (
-            <div style={{ fontSize: t.xs, color: c.ok }}>
-              ✓ Signed by {authorName(content.author)} — the author&rsquo;s signature checks out
+            // The check is the signature's, over the DID: never beside a name the author gave themselves.
+            <div style={{ fontSize: t.xs, color: c.ok, wordBreak: "break-all" }}>
+              ✓ Signed by {content.author} — the author&rsquo;s signature checks out
             </div>
           )}
           {readable && opened && (
@@ -721,11 +739,14 @@ export function RoomRecords({
   room,
   host: knownHost,
   onListed,
+  petnames,
 }: {
   parties: Parties;
   room: RoomPlace;
   host?: string | undefined;
   onListed?: ((host: string) => void) | undefined;
+  /** The member's own petnames, by DID, from their contacts: shown before any name an author gives themselves. */
+  petnames?: ReadonlyMap<string, string> | undefined;
 }) {
   const [hostDid, setHostDid] = useState(knownHost ?? "");
   const [askHost, setAskHost] = useState(!knownHost);
@@ -818,6 +839,8 @@ export function RoomRecords({
             ...(row.updatedAt !== undefined ? { updatedAt: row.updatedAt } : {}),
             ...(row.createdAt !== undefined ? { createdAt: row.createdAt } : {}),
             ...(row.createdBy !== undefined ? { createdBy: row.createdBy } : {}),
+            ...(row.bodyStoredAt !== undefined ? { bodyStoredAt: row.bodyStoredAt } : {}),
+            ...(row.kind !== undefined ? { listedKind: row.kind } : {}),
             reading: { state: "tombstone" },
           };
           return { row, opened: undefined, input };
@@ -851,10 +874,31 @@ export function RoomRecords({
     newestFirst.filter((v) => v.content?.hasFile).slice(0, AUTO_PREVIEW).map((v) => v.key),
   );
   const names = useAgentNames((rows ?? []).map((r) => r.author).concat(visible.map((v) => v.content?.author)));
+  const roomNames = shownRoom?.names;
+  const labels = authorLabels(
+    [
+      ...(rows ?? []).flatMap((r) => (r.author ? [r.author] : [])),
+      ...visible.flatMap((v) => [
+        ...(v.content ? [v.content.author] : []),
+        ...(v.rewrite ? [v.rewrite.by, v.rewrite.original] : []),
+        ...v.reactions.flatMap((r) => r.authors),
+      ]),
+    ],
+    { petnames, roomNames },
+  );
+  // A petname is the member's own; a room name is the author's claim, in quotes;
+  // otherwise the DID, or a name its own document claims.
   const authorName = (did: string) => {
+    const l = labels.get(did);
+    if (l?.source === "petname") return l.text!;
+    if (l?.source === "room") return `“${l.text}”${l.fingerprint ? ` (…${l.fingerprint})` : ""}`;
     const n = names[did];
     return n ? displayAgentName(n) : shortDid(did);
   };
+  const anyRoomName = [...labels.values()].some((l) => l.source === "room");
+  const [naming, setNaming] = useState(false);
+  const ownName = room.member !== undefined ? roomNames?.[room.member]?.name : undefined;
+  const heldNames = Object.entries(roomNames ?? {}).map(([author, r]) => ({ author, key: r.key, version: r.version }));
 
   // Where the room was last found: list it straight away, once — and not again
   // when the host this listing just found comes back down as the known one.
@@ -949,6 +993,12 @@ export function RoomRecords({
               </ul>
             )
           )}
+          {anyRoomName && (
+            <div style={{ fontSize: t.xs, color: c.faint, lineHeight: 1.5 }}>
+              A name in quotes is what that member calls themselves in this room — their own claim, not verified. Your own
+              petnames for people come first.
+            </div>
+          )}
           {(hiddenExpired > 0 || tombstones > 0) && (
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: t.xs, color: c.faint }}>
               {hiddenExpired > 0 && (
@@ -984,10 +1034,25 @@ export function RoomRecords({
               onCancel={() => setWriting(false)}
             />
           )}
+          {naming && (
+            <MemberNameEditor
+              key={`name@${room.roomId}|${room.member ?? ""}`}
+              parties={parties}
+              room={room}
+              host={listedHost}
+              current={ownName}
+              held={heldNames}
+              onDone={() => {
+                setNaming(false);
+                void browse(listedHost);
+              }}
+              onCancel={() => setNaming(false)}
+            />
+          )}
           {prepared && uploading && (
             <PutRoomFile room={room} host={listedHost} prepared={prepared} onPut={() => void browse(listedHost)} />
           )}
-          {!writing && !uploading && (
+          {!writing && !uploading && !naming && (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <Button disabled={holds(room, "write") === false} onClick={() => setWriting(true)}>
                 Write a note
@@ -997,6 +1062,9 @@ export function RoomRecords({
                   Upload a file
                 </Button>
               )}
+              <Button kind="quiet" disabled={holds(room, "write") === false} onClick={() => setNaming(true)}>
+                {ownName !== undefined ? "Change my name in this room" : "Set my name in this room"}
+              </Button>
               {holds(room, "write") === false && (
                 <span style={{ fontSize: t.xs, color: c.faint }}>
                   This identity's credentials for the room do not include write.
