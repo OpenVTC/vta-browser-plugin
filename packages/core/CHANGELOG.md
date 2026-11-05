@@ -30,6 +30,15 @@ For history before this file, see `git log` on `packages/core`.
   `roomsKeysReadMany`, a batch read of up to 32 keys a request
   (`rooms/keys/read/0.2`).
 
+- **A DID document as it stood at an instant** (`@openvtc/pnm-core/did`).
+  `resolveDidDocumentAt(did, at)` resolves a `did:webvh` or `did:scid:vh:1`
+  with `versionTime` after the same host guard as a current resolution; it
+  answers `null` where the DID's history holds no document at `at`
+  (`E_DID_VERSION_NOT_FOUND`, matched on the code) and `undefined` for a method
+  without history. `memoResolveDidDocumentAt()` answers each DID and instant
+  once, for one render or batch: a historical resolution re-fetches and
+  re-verifies the whole log. Requires `@openvtc/vti-didcomm-js` ^0.14.0.
+
 - **`@openvtc/pnm-core/notifications`: the principal's held notifications**
   (VTI-NTF-050 – 056). `notificationsList` / `notificationsListAll`,
   `notificationsShow` (the delivering document as received) and
@@ -80,6 +89,17 @@ For history before this file, see `git log` on `packages/core`.
   `hostPath` names no host has no route.
 
 ### Changed
+
+- **Room record bodies are checked against the author's DID document as of
+  `bodyStoredAt`.** The file engine, and the wallet's records pane and page
+  bridge, pass `resolveDidAt` to `verifyRecordBody`, so for a `did:webvh` or
+  `did:scid:vh:1` author a proof that fails as of the host's `bodyStoredAt` is
+  refused (`signature`), and a proof made before a key rotation still reads.
+  `ResolveDidAt` may answer `null` — the author had no document then — which
+  is refused as `signature`, as is a throw carrying
+  `code: "E_DID_VERSION_NOT_FOUND"`. The placeholder stays where
+  `bodyStoredAt` is absent or the method keeps no history.
+  `RoomFileContext.resolveDidAt` lets a caller share one memo across files.
 
 - Rooms reads move to the versions that carry the host's `createdAt`,
   `createdBy` and `bodyStoredAt`: `rooms/keys/browse/0.4`, `rooms/keys/read/0.2`,

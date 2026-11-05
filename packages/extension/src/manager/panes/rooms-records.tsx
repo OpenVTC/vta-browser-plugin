@@ -56,6 +56,7 @@
 // fingerprint of their DIDs.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { memoResolveDidDocumentAt } from "@openvtc/pnm-core";
 import {
   assembleRoomRecords,
   authorLabels,
@@ -68,6 +69,7 @@ import {
   verifyRecordBody,
   type HeldRecord,
   type ReadManyResult,
+  type ResolveDidAt,
   type RecordInput,
   type RoomRecordsView,
   type RoomRecordView,
@@ -330,7 +332,8 @@ function refusalWords(e: unknown): string {
  * *Reading*). `hostAuthor` is the read's author; `listedAuthor` the listing's
  * for the same version — both are the host's, and on an `attributed` room both
  * must be the signer. `bodyStoredAt` is when the host stored this body: the
- * author's DID document is the one that stood then (*Which DID document*).
+ * author's DID document is the one that stood then (*Which DID document*),
+ * resolved by `resolveDidAt` where the author's method keeps its history.
  */
 async function verifySealed(
   plaintext: string,
@@ -338,6 +341,7 @@ async function verifySealed(
   hostAuthor: string | undefined,
   listedAuthor: string | undefined,
   bodyStoredAt: string | undefined,
+  resolveDidAt: ResolveDidAt,
 ): Promise<VerifiedRecordBody> {
   let bytes: Uint8Array;
   try {
@@ -345,7 +349,10 @@ async function verifySealed(
   } catch {
     throw new RecordBodyError("malformed", "the record body is not base64url");
   }
-  const body = await verifyRecordBody(bytes, at, hostAuthor, bodyStoredAt !== undefined ? { bodyStoredAt } : {});
+  const body = await verifyRecordBody(bytes, at, hostAuthor, {
+    resolveDidAt,
+    ...(bodyStoredAt !== undefined ? { bodyStoredAt } : {}),
+  });
   if (listedAuthor !== undefined && listedAuthor !== body.author) {
     throw new RecordBodyError(
       "authorMismatch",
@@ -373,11 +380,16 @@ function when(iso: string | undefined): string {
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
-/** One read answer, made into what the pane keeps and what the reading rules take. */
+/**
+ * One read answer, made into what the pane keeps and what the reading rules
+ * take. `resolveDidAt` is shared by one listing's reads, so each author's
+ * history is fetched once per instant, not once per record.
+ */
 async function readOne(
   roomId: string,
   row: RecordRow,
   res: ReadManyResult,
+  resolveDidAt: ResolveDidAt,
 ): Promise<{ opened: Opened; input: RecordInput }> {
   const verification = (res.verification as unknown as Verification | undefined) ?? null;
   const version = res.version ?? row.version;
@@ -408,6 +420,7 @@ async function readOne(
         res.author,
         sameVersion ? row.author : undefined,
         res.bodyStoredAt ?? (sameVersion ? row.bodyStoredAt : undefined),
+        resolveDidAt,
       );
       if (verified.roomProfile) return { opened: nothing, input: { ...meta, reading: { state: "profile" } } };
       return {
@@ -828,10 +841,13 @@ export function RoomRecords({
               ...(room.member !== undefined ? { member: room.member } : {}),
             });
       const byKey = new Map(answers.map((a) => [a.key, a]));
+      // One memo for this listing: a historical resolution re-fetches and
+      // re-verifies the author's whole log, and most authors write many records.
+      const resolveDidAt = memoResolveDidDocumentAt();
       const read = await Promise.all(
         listed.map(async (row) => {
           const res = byKey.get(row.key);
-          if (res) return { row, ...(await readOne(room.roomId, row, res)) };
+          if (res) return { row, ...(await readOne(room.roomId, row, res, resolveDidAt)) };
           const input: RecordInput = {
             key: row.key,
             version: row.version,
