@@ -9,7 +9,8 @@
 //   the member (`vta/pcs/voter/read`, `vta/pcs/voter/register`), unblinds the
 //   ticket (`voter/accept`), builds and signs each cast under a key made for
 //   that cast alone (`vta/pcs/vote`, `vta/pcs/vote-encrypted`), and keeps and
-//   checks the receipt (`voter/receipt`).
+//   checks the receipt (`voter/receipt`) — at the cast, and again after close
+//   against the head the community kept (`voter/receipts/list`, VTI-VOT-053).
 // - **The community** answers the reads and issues the ticket, blind. It never
 //   sees a ballot.
 // - **The ballot box** takes the cast over its HTTPS door (VTI-VOT-004) — the
@@ -39,6 +40,17 @@ import {
   type VTAPCSVoterReadPayload,
   type VTAPCSVoterReadResponsePayload,
 } from "../specs/vta/pcs/voter/read/0.6/payload.js";
+import {
+  TYPE_URI as VOTER_READ_TOMBSTONE,
+  RESPONSE_TYPE_URI as VOTER_READ_TOMBSTONE_RESPONSE,
+  type VTAPCSVoterReadPayload as VTAPCSVoterReadTombstonePayload,
+} from "../specs/vta/pcs/voter/read/0.7/payload.js";
+import {
+  TYPE_URI as VOTER_RECEIPTS_LIST,
+  RESPONSE_TYPE_URI as VOTER_RECEIPTS_LIST_RESPONSE,
+  type VTAPCSVoterReceiptsListPayload,
+  type VTAPCSVoterReceiptsListResponsePayload,
+} from "../specs/vta/pcs/voter/receipts/list/0.1/payload.js";
 import {
   TYPE_URI as VOTER_REGISTER,
   RESPONSE_TYPE_URI as VOTER_REGISTER_RESPONSE,
@@ -124,9 +136,11 @@ export interface ReadPresenting {
   memberOf: string;
 }
 
-/** `vta/pcs/voter/read/0.6`: the VTA signs one election read as the member,
+/** `vta/pcs/voter/read`: the VTA signs one election read as the member,
  *  addressed to the community — a `vtc/elections/list/0.5` or
- *  `vtc/elections/show/0.6` request. The wallet sends the document unchanged.
+ *  `vtc/elections/show/0.6` request (read/0.6, which every VTA serves) or,
+ *  once the election's board is deleted, a `vtc/elections/tombstones/show/0.1`
+ *  request (read/0.7, the first to sign one; VTI-BRD-009). The wallet sends the document unchanged.
  *  `presenting`, for a `show` only, has the VTA present the member's
  *  membership credential in it, bound to that document; a community answers
  *  such a read once, so a lost answer is a new read, never a resend. */
@@ -134,11 +148,15 @@ export async function pcsVoterRead(
   sender: TrustTaskSender,
   agent: VoterAgent,
   t: VoterTarget,
-  read: "list" | "show",
+  read: "list" | "show" | "tombstone",
   payload: Record<string, unknown>,
   presenting?: ReadPresenting,
 ): Promise<VTAPCSVoterReadResponsePayload> {
   if (presenting && read !== "show") throw new Error("Only a show presents a membership credential.");
+  if (read === "tombstone") {
+    const p: VTAPCSVoterReadTombstonePayload = { ...t, read, payload };
+    return ask(sender, agent, VOTER_READ_TOMBSTONE, VOTER_READ_TOMBSTONE_RESPONSE, "vta/pcs/voter/read/0.7", p);
+  }
   const p: VTAPCSVoterReadPayload = {
     ...t,
     read,
@@ -221,16 +239,158 @@ export async function pcsCast(
 }
 
 /** `vta/pcs/voter/receipt/0.1`: the VTA keeps the ballot box's receipt and
- *  checks it. */
+ *  checks it — with `evidence`, against a head the community kept: the
+ *  checkpoint's signed document and the cast's inclusion proof, which the
+ *  wallet fetched from the ballot box itself (`fetchInclusion`). */
 export function pcsVoterReceipt(
   sender: TrustTaskSender,
   agent: VoterAgent,
   t: VoterTarget,
   electionId: string,
   receipt: Record<string, unknown>,
+  evidence?: { checkpoint: Record<string, unknown>; inclusion: BoardInclusion },
 ): Promise<VTAPCSVoterReceiptResponsePayload> {
-  const p = { contextId: t.contextId, community: t.community, electionId, receipt } as unknown as VTAPCSVoterReceiptPayload;
+  const p = {
+    contextId: t.contextId,
+    community: t.community,
+    electionId,
+    receipt,
+    ...(evidence ? { checkpoint: evidence.checkpoint, inclusion: evidence.inclusion } : {}),
+  } as unknown as VTAPCSVoterReceiptPayload;
   return ask(sender, agent, VOTER_RECEIPT, VOTER_RECEIPT_RESPONSE, "vta/pcs/voter/receipt/0.1", p);
+}
+
+/** `vta/pcs/voter/receipts/list/0.1`: the receipts the VTA keeps for one
+ *  election, each exactly as the ballot box signed it, and the ballot box. */
+export function pcsVoterReceiptsList(
+  sender: TrustTaskSender,
+  agent: VoterAgent,
+  t: VoterTarget,
+  electionId: string,
+): Promise<VTAPCSVoterReceiptsListResponsePayload> {
+  const p: VTAPCSVoterReceiptsListPayload = { contextId: t.contextId, community: t.community, electionId };
+  return ask(sender, agent, VOTER_RECEIPTS_LIST, VOTER_RECEIPTS_LIST_RESPONSE, "vta/pcs/voter/receipts/list/0.1", p);
+}
+
+// ── Checking a vote after close (VTI-VOT-053) ────────────────────────────────
+
+/** A `voting/board/inclusion/0.1` answer: the RFC 9162 audit path of one leaf
+ *  in a tree of `treeSize`. */
+export interface BoardInclusion {
+  leafIndex: number;
+  treeSize: number;
+  entryHash: string;
+  path: string[];
+}
+
+/** What the community keeps of an election that a receipt is checked against:
+ *  its `vtc/elections/show` answer, or — once the board it was opened on is
+ *  deleted — its `vtc/elections/tombstones/show` answer (VTI-BRD-009). */
+export interface KeptHeads {
+  state?: string;
+  manifest?: { votingClosesAt?: string };
+  checkpoints: { head: { treeSize: number; issuedAt?: string }; document: Record<string, unknown> }[];
+}
+
+/** The head to check receipts against: the newest the community kept, once
+ *  voting has closed. From a `show`, only once the election is `closed` or
+ *  `tallied` and the head is dated at or after the close; from a tombstone,
+ *  its newest — a board is deleted only after its elections ended
+ *  (VTI-BRD-007). Throws, in the member's words, when there is none yet. */
+export function closingCheckpoint(kept: KeptHeads, fromTombstone: boolean): { document: Record<string, unknown>; treeSize: number } {
+  if (!fromTombstone) {
+    if (kept.state === "cancelled") throw new Error("This election was cancelled: no vote in it is counted.");
+    if (kept.state !== "closed" && kept.state !== "tallied") {
+      throw new Error("Voting has not closed yet. Check your vote once it has.");
+    }
+  }
+  const last = kept.checkpoints.at(-1);
+  if (!last) throw new Error("The community has not kept a head of this election's board yet. Try again later.");
+  const closes = kept.manifest?.votingClosesAt;
+  if (!fromTombstone && closes && last.head.issuedAt && Date.parse(last.head.issuedAt) < Date.parse(closes)) {
+    throw new Error("The community has not kept the board's head from the close yet. Try again in a little while.");
+  }
+  return { document: last.document, treeSize: last.head.treeSize };
+}
+
+export interface FetchInclusionOptions {
+  /** The ballot box's DID: the receipt's issuer, and the inclusion answer's. */
+  ballotBox: string;
+  /** `<TrustTaskHTTPS base>/trust-tasks`, from the ballot box's DID document. */
+  endpoint: string;
+  fetch?: typeof fetch;
+  netPolicy?: NetPolicy;
+  timeoutMs?: number;
+}
+
+/**
+ * The inclusion proof of a receipt's cast in a head of `treeSize`, asked of
+ * the ballot box from the wallet's own connection, unsigned: on a private
+ * board the receipt's token is the whole authority, and nothing names the
+ * member (`voting/board/inclusion/0.1`, VTI-VOT-052). Never through the VTA or
+ * the community, which would learn which leaf is the member's. A head too
+ * small to hold the cast has no proof to ask for: the VTA answers it
+ * `notIncluded` with an empty path.
+ */
+export async function fetchInclusion(
+  receipt: Record<string, unknown>,
+  community: string,
+  treeSize: number,
+  opts: FetchInclusionOptions,
+): Promise<BoardInclusion> {
+  const r = (receipt.payload ?? {}) as { electionId?: string; leafIndex?: number; entryHash?: string; receiptToken?: string };
+  const leafIndex = Number(r.leafIndex);
+  const entryHash = String(r.entryHash ?? "");
+  if (leafIndex >= treeSize) return { leafIndex, treeSize, entryHash, path: [] };
+  const request = buildTrustTask(
+    "https://trusttasks.org/spec/voting/board/inclusion/0.1#request",
+    {
+      community,
+      electionId: r.electionId,
+      leafIndex,
+      treeSize,
+      ...(r.receiptToken ? { receiptToken: r.receiptToken } : {}),
+    },
+    { id: `urn:uuid:${globalThis.crypto.randomUUID()}`, recipient: opts.ballotBox },
+  );
+  const policyFetch = guardedFetch(opts.fetch, { label: "ballot box", schemes: ["https:"], ...opts.netPolicy }) as typeof fetch;
+  let res: Response;
+  try {
+    res = await withFetchTimeout(policyFetch, opts.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS)(opts.endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+      credentials: "omit",
+    });
+  } catch (err) {
+    throw new Error(
+      isFetchTimeout(err)
+        ? "The ballot box did not answer in time. Try again later."
+        : `The ballot box could not be reached (${(err as Error).message}). Try again later.`,
+    );
+  }
+  let doc: Record<string, unknown>;
+  try {
+    doc = (await res.json()) as Record<string, unknown>;
+  } catch {
+    throw new Error(`The ballot box answered ${res.status} with no document.`);
+  }
+  if (isTrustTaskErrorType(doc.type as string | undefined)) {
+    const code = String((doc.payload as { code?: unknown } | undefined)?.code ?? "taskFailed");
+    throw new Error(`The ballot box would not show where your vote is on its board (${code}).`);
+  }
+  if (!res.ok) throw new Error(`The ballot box answered ${res.status}.`);
+  if (doc.threadId !== request.id) throw new Error("The ballot box's answer is for another request.");
+  // The path proves itself against the signed head; an unsigned answer is still
+  // checked, and a signed one also attributes a failed path to the ballot box.
+  if (doc.proof) await verifyTrustTaskReply(doc, opts.ballotBox, { proofPurpose: "any" });
+  const p = (doc.payload ?? {}) as Partial<BoardInclusion>;
+  return {
+    leafIndex: Number(p.leafIndex),
+    treeSize: Number(p.treeSize),
+    entryHash: String(p.entryHash ?? ""),
+    path: Array.isArray(p.path) ? p.path.map(String) : [],
+  };
 }
 
 // ── Credential rolls ─────────────────────────────────────────────────────────

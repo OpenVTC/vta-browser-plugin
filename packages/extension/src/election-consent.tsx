@@ -101,6 +101,7 @@ export function ElectionConsent({ consentId, decide }: { consentId: string; deci
   if (view.kind === "tickets") return <TicketsWindow view={view} decide={decide} />;
   if (view.kind === "disclose") return <DiscloseWindow view={view} decide={decide} />;
   if (view.kind === "ballot") return <BallotWindow consentId={consentId} view={view} decide={decide} />;
+  if (view.kind === "check") return <CheckWindow view={view} done={() => decide({ approved: true })} />;
   return <CastWindow view={view} done={() => decide({ approved: true })} />;
 }
 
@@ -860,6 +861,65 @@ function QuestionInput({
     default:
       return <span>This wallet cannot answer this kind of question.</span>;
   }
+}
+
+/** A vote checked after close against the head the community kept
+ *  (VTI-VOT-053). A cast the head omits is said plainly, first and in the
+ *  warning colour: the ballot box admitted it and the community's board does
+ *  not hold it. */
+function CheckWindow({ view, done }: { view: Extract<ElectionConsentView, { kind: "check" }>; done: () => void }) {
+  const o = view.outcome;
+  const missing = o.ok && !o.none ? o.receipts.filter((r) => r.status !== "included") : [];
+  const heading = !o.ok
+    ? `Your vote in ${view.electionTitle} could not be checked`
+    : o.none
+      ? `No vote of yours to check in ${view.electionTitle}`
+      : missing.length > 0
+        ? `Your vote is missing from ${view.electionTitle}'s board`
+        : `Your vote in ${view.electionTitle} is on the board`;
+  return (
+    <div style={{ padding: 20, fontSize: 13, display: "grid", gap: 14 }}>
+      <strong style={{ fontSize: 14 }}>{heading}</strong>
+      {!o.ok ? (
+        <p style={muted} data-testid="election-check-failed">
+          {o.error}
+        </p>
+      ) : o.none ? (
+        <p style={muted} data-testid="election-check-none">
+          Your agent keeps no receipt for this election: no vote was cast through it, or its receipts were cleared 30 days
+          after voting closed.
+        </p>
+      ) : (
+        <>
+          {missing.length > 0 && (
+            <div style={warn} role="alert" data-testid="election-check-missing">
+              The ballot box admitted {missing.length === 1 ? "a vote" : `${missing.length} votes`} of yours (board{" "}
+              {missing.length === 1 ? "entry" : "entries"} {missing.map((r) => r.leafIndex).join(", ")}) that the board{" "}
+              {view.communityName} kept at the close does not hold. Your agent keeps the receipt as evidence: raise it with{" "}
+              {view.communityName}.
+            </div>
+          )}
+          <ul style={{ ...card, margin: 0, paddingLeft: 28, display: "grid", gap: 4 }} data-testid="election-check-receipts">
+            {o.receipts.map((r) => (
+              <li key={r.leafIndex}>
+                Board entry {r.leafIndex}: {r.status === "included" ? "in the board" : <strong>not in the board</strong>}
+              </li>
+            ))}
+          </ul>
+          <p style={muted}>
+            Checked against the board&rsquo;s head as {view.communityName} kept it at the close ({o.treeSize} entries)
+            {o.deleted ? ", from the record it keeps of an election whose board was deleted" : ""}. Where your vote sits came
+            from the ballot box itself; {view.communityName} was not told you checked.
+          </p>
+        </>
+      )}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button autoFocus onClick={done} style={primary}>
+          Done
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function CastWindow({ view, done }: { view: Extract<ElectionConsentView, { kind: "cast" }>; done: () => void }) {

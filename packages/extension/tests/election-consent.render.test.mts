@@ -322,3 +322,42 @@ test("vti_vot_016: the disclose window says the community learns the membership 
   assert.deepEqual(decided, [{ approved: false }]);
   await rendered.unmount();
 });
+
+// ── VTI-VOT-053: a vote checked after close ──────────────────────────────────
+
+const checkView = (outcome: unknown) => ({ kind: "check", communityName: "Acme Guild", electionTitle: "AGM 2027", outcome });
+
+test("vti_vot_053: a vote on the board is said so, with the head it was checked against", async () => {
+  const { rendered, decided } = await mount(
+    checkView({ ok: true, deleted: false, treeSize: 12, receipts: [{ leafIndex: 4, status: "included" }] }),
+  );
+  assert.match(rendered.text(), /Your vote in AGM 2027 is on the board/);
+  assert.match(rendered.text(), /Board entry 4: in the board/);
+  assert.match(rendered.text(), /12 entries/);
+  assert.equal(rendered.all('[data-testid="election-check-missing"]').length, 0);
+  await rendered.click(rendered.button("Done"));
+  assert.deepEqual(decided, [{ approved: true }]);
+  await rendered.unmount();
+});
+
+test("vti_vot_053: a vote the community's head omits is said plainly, first", async () => {
+  const { rendered } = await mount(
+    checkView({ ok: true, deleted: true, treeSize: 3, receipts: [{ leafIndex: 4, status: "notIncluded" }] }),
+  );
+  assert.match(rendered.text(), /Your vote is missing from AGM 2027's board/);
+  const alert = rendered.all('[data-testid="election-check-missing"]');
+  assert.equal(alert.length, 1);
+  assert.match(alert[0]!.textContent ?? "", /board entry 4\) that the board Acme Guild kept at the close does not hold/);
+  assert.match(rendered.text(), /board was deleted/);
+  await rendered.unmount();
+});
+
+test("vti_vot_053: no receipt, or a failure, is said in the window", async () => {
+  const none = await mount(checkView({ ok: true, none: true }));
+  assert.match(none.rendered.text(), /keeps no receipt for this election/);
+  await none.rendered.unmount();
+  const failed = await mount(checkView({ ok: false, error: "Voting has not closed yet. Check your vote once it has." }));
+  assert.match(failed.rendered.text(), /could not be checked/);
+  assert.match(failed.rendered.text(), /Voting has not closed yet/);
+  await failed.rendered.unmount();
+});

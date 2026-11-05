@@ -18,6 +18,12 @@
 //   (`castPrepare`, `castPost`, `castKeep`) so the background can show the
 //   member each step as it happens; the pause is the background's to choose
 //   (`castDelayMs`), and is capped here.
+// - after close, a vote is checked (VTI-VOT-053): the VTA lists the receipts it
+//   keeps (`voter/receipts/list`), the community's head at close comes from
+//   `show` — or from the tombstone once the election's board is deleted
+//   (VTI-BRD-009) — each cast's inclusion proof comes from the ballot box over
+//   this document's own connection, never through the VTA or the community,
+//   and the VTA checks each (`voter/receipt`). Nothing of it reaches the page.
 // - under a credential roll (VTI-VOT-025), the VTA presents the member's
 //   membership credential issued by exactly the roll's `memberOf` — in the
 //   ticket claim, and in a read of an election put to a member party's members
@@ -38,18 +44,22 @@ import { trustTaskBaseFromDocument, trustTaskUrl, type TrustTaskSender } from "@
 import {
   OobRefusedError,
   ballotRefusal,
+  closingCheckpoint,
+  fetchInclusion,
   MAX_CAST_DELAY_MS,
   membershipCredentialFor,
   pcsCast,
   pcsVoterAccept,
   pcsVoterRead,
   pcsVoterReceipt,
+  pcsVoterReceiptsList,
   pcsVoterRegister,
   postCast,
   postCommunityTask,
   rollCredentialOf,
   type ElectionBallot,
   type ElectionShown,
+  type KeptHeads,
   type OobDocument,
   type ReadPresenting,
   type VoterTarget,
@@ -108,7 +118,7 @@ function refusalWords(e: unknown, community: string): Error {
   if (e instanceof OobRefusedError) {
     const local = e.code.slice(e.code.lastIndexOf(":") + 1);
     const said: Record<string, string> = {
-      electionUnknown: `${community} shows you no such election — it may not be open to you.`,
+      electionUnknown: `${community} shows you no such election — it may not be open to you, or no longer keeps it.`,
       indeterminate: `${community} could not check your membership credential just now: its issuer's DID document or status list could not be read. Nothing was recorded. Try again in a little while.`,
       presentationRequired: `${community} needs your membership credential to give you a ticket for this election.`,
       membershipNotProven: `${community} did not accept your membership credential for this election.`,
@@ -186,11 +196,11 @@ async function voterWork(
     const reply = await postCommunityTask<P>(doc as OobDocument, sendOpts, label, "authentication");
     return reply.payload;
   };
-  const read = async <P>(which: "list" | "show", payload: Record<string, unknown>, readAs?: ElectionReadAs): Promise<P> => {
+  const read = async <P>(which: "list" | "show" | "tombstone", payload: Record<string, unknown>, readAs?: ElectionReadAs): Promise<P> => {
     // A presenting read is a fresh document each time: the community accepts a
     // presentation in one document once (show/0.6 item 8).
     const signed = await pcsVoterRead(sender, agent, target, which, payload, await presenting(readAs));
-    return toCommunity<P>(signed.document, `vtc/elections/${which}`);
+    return toCommunity<P>(signed.document, which === "tombstone" ? "vtc/elections/tombstones/show" : `vtc/elections/${which}`);
   };
   const show = (electionId: string, readAs?: ElectionReadAs) => read<ElectionShown>("show", { electionId }, readAs);
   return { sender, agent, membership, noMembership, toCommunity, read, show };
@@ -330,6 +340,42 @@ export async function runElectionsPageOp(
       case "castKeep": {
         const kept = await pcsVoterReceipt(sender, agent, target, op.electionId, op.receipt);
         return { status: kept.status, ...(kept.leafIndex !== undefined ? { leafIndex: kept.leafIndex } : {}) };
+      }
+      case "receiptsKept": {
+        const kept = await pcsVoterReceiptsList(sender, agent, target, op.electionId).catch((e: unknown) => {
+          // No record of the election: the member took no ticket through this
+          // agent, or it has swept the receipts since (30 days after close).
+          if (vtaRefusalCode(e) === "notFound") return null;
+          throw e;
+        });
+        return kept ? { count: kept.receipts.length, ballotBox: kept.ballotBox } : { count: 0 };
+      }
+      case "receiptsCheck": {
+        // The heads the community kept: `show`, and once the board the election
+        // was opened on is deleted, its tombstone (VTI-BRD-009).
+        let heads: KeptHeads;
+        let deleted = false;
+        try {
+          heads = (await show(op.electionId, op.readAs)) as unknown as KeptHeads;
+        } catch (e) {
+          if (!(e instanceof OobRefusedError) || !e.code.endsWith("electionUnknown")) throw e;
+          heads = await read<KeptHeads>("tombstone", { electionId: op.electionId });
+          deleted = true;
+        }
+        const { document: checkpoint, treeSize } = closingCheckpoint(heads, deleted);
+        const kept = await pcsVoterReceiptsList(sender, agent, target, op.electionId);
+        const receipts = [];
+        for (const receipt of kept.receipts as Record<string, unknown>[]) {
+          const inclusion = await fetchInclusion(receipt, target.community, treeSize, {
+            ballotBox: kept.ballotBox,
+            endpoint: op.endpoint,
+            ...(deps.fetch ? { fetch: deps.fetch } : {}),
+          });
+          const checked = await pcsVoterReceipt(sender, agent, target, op.electionId, receipt, { checkpoint, inclusion });
+          receipts.push({ leafIndex: checked.leafIndex, status: checked.status });
+        }
+        const title = deleted ? undefined : (heads as { manifest?: { title?: unknown } }).manifest?.title;
+        return { deleted, treeSize, receipts, ...(typeof title === "string" && title.trim() ? { title } : {}) };
       }
     }
   } catch (e) {

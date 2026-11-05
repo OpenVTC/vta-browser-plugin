@@ -10,6 +10,19 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Added
 
+- **Checking a vote after close** (VTI-VOT-053). `pcsVoterReceiptsList`
+  (`vta/pcs/voter/receipts/list/0.1`) reads the receipts the member's VTA
+  keeps for an election and its ballot box; `fetchInclusion` asks the ballot
+  box, from the wallet's own connection and unsigned, for a cast's
+  `voting/board/inclusion` proof, with the receipt's token, and asks nothing
+  for a head too small to hold the cast; `closingCheckpoint` picks the head
+  the community kept at close from a `show` or a tombstone; and
+  `pcsVoterReceipt` takes that checkpoint and proof as `evidence`.
+  `pcsVoterRead` signs a `tombstone` read
+  (`vtc/elections/tombstones/show/0.1`, VTI-BRD-009) through
+  `vta/pcs/voter/read/0.7`; `list` and `show` stay on 0.6, so an older VTA
+  keeps answering them.
+
 - **The reading rules for a room's records** (`SealedRecordBody` at
   `rooms/_shared/0.2`, trust-tasks-tf #1027). `verifyRecordBody` accepts
   `kind`, `inReplyTo`, `writtenAt` and `editedAt` with the schema's shapes, and

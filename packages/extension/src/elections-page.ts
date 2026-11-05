@@ -22,6 +22,13 @@
 //   ticket held takes the ticket and stops, and a ballot window opened soon
 //   after a ticket says so.
 //
+// - **A vote is checked in the wallet's window, too** (`checkVote`, VTI-VOT-053).
+//   After close the member's VTA lists the receipts it keeps, the wallet asks
+//   the ballot box for each cast's inclusion proof in the head the community
+//   kept at close — read from `show`, or from the tombstone once the election's
+//   board is deleted — and the VTA checks each. The page hears nothing: not the
+//   answer, not whether the member voted, not even a failure.
+//
 // Every call passes these, in this order, before the member's agent is asked
 // anything:
 //
@@ -78,6 +85,7 @@ import type {
   PageTicketView,
   PageTicketsView,
   PageVoteView,
+  PageCheckVoteView,
   RuntimeElectionsPageResponse,
   RuntimeNotifiedElectionResponse,
 } from "./bridge-protocol.js";
@@ -177,6 +185,14 @@ export type ElectionConsentView =
       canRevote: boolean;
     }
   | {
+      /** A vote checked after close against the head the community kept
+       *  (VTI-VOT-053). Never seen by the page. */
+      kind: "check";
+      communityName: string;
+      electionTitle: string;
+      outcome: VoteCheckOutcome;
+    }
+  | {
       /** How a vote went, when its ballot window was closed before the end:
        *  only a failure is shown this way (a vote that went in is remembered,
        *  and the next ballot window says so). Never seen by the page. */
@@ -185,6 +201,22 @@ export type ElectionConsentView =
       electionTitle: string;
       outcome: { ok: true; status: string; leafIndex?: number } | { ok: false; error: string };
     };
+
+/** What checking a vote after close came to. `none`: the member's agent keeps
+ *  no receipt for the election — no vote was cast through it, or it swept the
+ *  receipts (30 days after close). `deleted`: the head came from the
+ *  tombstone of a deleted board. A `notIncluded` receipt is a vote the ballot
+ *  box admitted and the head the community kept omits. */
+export type VoteCheckOutcome =
+  | { ok: true; none: true }
+  | {
+      ok: true;
+      none?: false;
+      deleted: boolean;
+      treeSize: number;
+      receipts: { leafIndex: number; status: string }[];
+    }
+  | { ok: false; error: string };
 
 /** The active VTA connection, as the background reads it. */
 export interface ActiveVta {
@@ -240,7 +272,7 @@ export function electionsPageParamsRefusal(raw: unknown): string | null {
       ? ["op", "hostDid", "member"]
       : p.op === "takeTickets"
         ? ["op", "hostDid", "electionIds", "member"]
-        : p.op === "show" || p.op === "takeTicket" || p.op === "vote"
+        : p.op === "show" || p.op === "takeTicket" || p.op === "vote" || p.op === "checkVote"
           ? ["op", "hostDid", "electionId", "member", "memberOf"]
           : null;
   if (!allowed) return "unknown elections operation";
@@ -413,6 +445,8 @@ export class ElectionsPageGates {
           return { ok: true, result: await this.takeTickets(origin, vta, p.hostDid, who, p.electionIds) };
         case "vote":
           return { ok: true, result: await this.vote(origin, vta, p.hostDid, who, p.electionId, p.memberOf) };
+        case "checkVote":
+          return { ok: true, result: await this.checkVote(vta, p.hostDid, who, p.electionId) };
       }
     } catch (e) {
       return pageFailure(e);
@@ -773,6 +807,51 @@ export class ElectionsPageGates {
       .finally(() => this.casting.delete(work));
     this.casting.add(work);
     return { ticketTaken: false };
+  }
+
+  /**
+   * Check the member's vote after close (VTI-VOT-053), and show the answer in
+   * the wallet's own window. The page is answered the same whatever happened —
+   * even a failure is shown only in the window — so it never learns whether the
+   * member voted. An election read presenting a membership is read so again only
+   * where the member chose that already (`disclosedFor`); nothing new is
+   * presented for a check.
+   */
+  private async checkVote(vta: ActiveVta, hostDid: string, who: Identity, electionId: string): Promise<PageCheckVoteView> {
+    const disclosed = await this.deps.disclosedFor(ticketKey(hostDid, who.did, electionId));
+    let outcome: VoteCheckOutcome;
+    let title = electionId;
+    try {
+      const kept = (await this.offscreen(vta, { op: "receiptsKept", hostDid, member: who.did, electionId })) as {
+        count: number;
+        ballotBox?: string;
+      };
+      if (kept.count === 0 || !kept.ballotBox) {
+        outcome = { ok: true, none: true };
+      } else {
+        const { endpoint } = (await this.offscreen(vta, { op: "ballotBox", ballotBox: kept.ballotBox })) as { endpoint: string };
+        if (!(await this.deps.canReach(endpoint))) {
+          throw new ElectionsPageRefusal(
+            `The wallet may not reach the ballot box at ${new URL(endpoint).host}, so it cannot ask where your vote is on its board. Allow it from the wallet's popup, then check again.`,
+            "hostPermissionRequired",
+          );
+        }
+        const checked = (await this.offscreen(vta, {
+          op: "receiptsCheck",
+          hostDid,
+          member: who.did,
+          electionId,
+          endpoint,
+          ...(disclosed !== undefined ? { readAs: { memberOf: disclosed } } : {}),
+        })) as { deleted: boolean; treeSize: number; receipts: { leafIndex: number; status: string }[]; title?: string };
+        if (checked.title) title = checked.title;
+        outcome = { ok: true, deleted: checked.deleted, treeSize: checked.treeSize, receipts: checked.receipts };
+      }
+    } catch (e) {
+      outcome = { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+    await this.deps.prompt({ kind: "check", communityName: who.communityName, electionTitle: title, outcome });
+    return {};
   }
 
   /**

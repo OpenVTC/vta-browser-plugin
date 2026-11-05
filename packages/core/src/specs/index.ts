@@ -234,7 +234,9 @@ export * as VtaPcsVoteEncrypted_v0_5 from "./vta/pcs/vote-encrypted/0.5/payload.
 export * as VtaPcsVote_v0_4 from "./vta/pcs/vote/0.4/payload.js";
 export * as VtaPcsVoterAccept_v0_1 from "./vta/pcs/voter/accept/0.1/payload.js";
 export * as VtaPcsVoterRead_v0_6 from "./vta/pcs/voter/read/0.6/payload.js";
+export * as VtaPcsVoterRead_v0_7 from "./vta/pcs/voter/read/0.7/payload.js";
 export * as VtaPcsVoterReceipt_v0_1 from "./vta/pcs/voter/receipt/0.1/payload.js";
+export * as VtaPcsVoterReceiptsList_v0_1 from "./vta/pcs/voter/receipts/list/0.1/payload.js";
 export * as VtaPcsVoterRegister_v0_5 from "./vta/pcs/voter/register/0.5/payload.js";
 export * as VtaServicesDisable_v1_1 from "./vta/services/disable/1.1/payload.js";
 export * as VtaServicesDrainCancel_v1_0 from "./vta/services/drain/cancel/1.0/payload.js";

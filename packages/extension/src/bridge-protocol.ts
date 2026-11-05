@@ -2837,7 +2837,8 @@ export type ElectionsPageOp =
   | { op: "show"; hostDid: string; electionId: string; member?: string; memberOf?: string }
   | { op: "takeTicket"; hostDid: string; electionId: string; member?: string; memberOf?: string }
   | { op: "takeTickets"; hostDid: string; electionIds: string[]; member?: string }
-  | { op: "vote"; hostDid: string; electionId: string; member?: string; memberOf?: string };
+  | { op: "vote"; hostDid: string; electionId: string; member?: string; memberOf?: string }
+  | { op: "checkVote"; hostDid: string; electionId: string; member?: string; memberOf?: string };
 
 export interface RuntimeElectionsPageRequest {
   type: typeof RUNTIME_ELECTIONS_PAGE;
@@ -2954,6 +2955,10 @@ export interface PageVoteView {
   ticketTaken: boolean;
 }
 
+/** After `checkVote`: nothing. The check's answer — and whether the member
+ *  voted at all — is shown only in the wallet's own window (VTI-VOT-053). */
+export type PageCheckVoteView = Record<string, never>;
+
 /** An election the member's agent holds a notification of (VTI-NTF-063), as
  *  the page may show it until the member opens it: the community's identifier
  *  for it, the party it is put to, the period the notification states and
@@ -2979,7 +2984,8 @@ export type RuntimeElectionsPageResponse =
         | PageElectionView
         | PageTicketView
         | PageTicketsView
-        | PageVoteView;
+        | PageVoteView
+        | PageCheckVoteView;
     }
   | PageFailure;
 
@@ -3699,6 +3705,13 @@ export type OffscreenElectionsPageOp =
   | { op: "castPost"; castDocument: Record<string, unknown>; ballotBox: string; endpoint: string; delayMs: number }
   /** Last: the VTA keeps and checks the receipt (`vta/pcs/voter/receipt`). */
   | { op: "castKeep"; hostDid: string; member: string; electionId: string; receipt: Record<string, unknown> }
+  /** After close (VTI-VOT-053): how many receipts the member's VTA keeps for
+   *  the election, and the ballot box they are from (`voter/receipts/list`). */
+  | { op: "receiptsKept"; hostDid: string; member: string; electionId: string }
+  /** Then: the head the community kept at close — from `show`, or from the
+   *  tombstone once the election's board is deleted — each receipt's inclusion
+   *  proof from the ballot box at `endpoint`, and the VTA's check of each. */
+  | { op: "receiptsCheck"; hostDid: string; member: string; electionId: string; endpoint: string; readAs?: ElectionReadAs }
   /** The notifications of the kind `election` the member's VTA holds for this
    *  community's elections, in the context of the identity `member` lives in
    *  (`vta/notifications/list`, VTI-NTF-063). */

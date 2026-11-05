@@ -1122,7 +1122,7 @@ async function requestElectionConsent(
   const consentId = crypto.randomUUID();
   await chrome.storage.session.set({ [`${ELECTION_CONSENT_PREFIX}${consentId}`]: view });
   const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=election`;
-  const bounds = await consentWindowBounds(view.kind === "cast" ? 460 : 640);
+  const bounds = await consentWindowBounds(view.kind === "cast" || view.kind === "check" ? 460 : 640);
   openElectionWindows.add(consentId);
   return new Promise((resolve) => {
     let settled = false;

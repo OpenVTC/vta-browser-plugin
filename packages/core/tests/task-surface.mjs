@@ -540,7 +540,10 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // `vta/notifications/{list,show,dismiss,deposit}` and the `notifications/
   // {notify,relay}` a deposit carries (+6) — and `vtc/elections/show`, which
   // this library read all along and the SDK now names (+1).
-  const expected = 242;
+  // 242 → 243, with the snapshot resynced from vta-sdk 0.82.0 (canonical total
+  // 345): `vta/pcs/voter/receipts/list`, the receipts a member's VTA keeps, so
+  // the wallet checks a vote after close (VTI-VOT-053).
+  const expected = 243;
   assert.equal(
     implemented.size,
     expected,

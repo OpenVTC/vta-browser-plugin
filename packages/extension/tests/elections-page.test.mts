@@ -115,6 +115,10 @@ function harness(
     refuse?: Partial<Record<OffscreenElectionsPageOp["op"], { ok: false; error: string; code?: string }>>;
     /** The identities the member uses at the community. */
     members?: { did: string; communityName: string }[];
+    /** How many receipts the member's agent keeps for the election. */
+    kept?: number;
+    /** What checking them against the community's head came to. */
+    checked?: { deleted: boolean; treeSize: number; receipts: { leafIndex: number; status: string }[]; title?: string };
   } = {},
 ) {
   const asked: OffscreenElectionsPageOp[] = [];
@@ -196,6 +200,13 @@ function harness(
           return { ok: true, result: shownNow };
         case "notifiedMembership":
           return { ok: true, result: { held: opts.held ?? true } };
+        case "receiptsKept":
+          return { ok: true, result: opts.kept ? { count: opts.kept, ballotBox: BOX } : { count: 0 } };
+        case "receiptsCheck":
+          return {
+            ok: true,
+            result: opts.checked ?? { deleted: false, treeSize: 9, receipts: [{ leafIndex: 4, status: "included" }], title: "AGM 2027" },
+          };
       }
     },
     async canReach(url) {
@@ -210,7 +221,7 @@ function harness(
         const approved = opts.approve ?? true;
         return approved ? { approved, ballot: "ballot" in opts ? opts.ballot : ballot, window: "w1" } : { approved };
       }
-      return { approved: view.kind === "cast" ? true : (opts.approve ?? true) };
+      return { approved: view.kind === "cast" || view.kind === "check" ? true : (opts.approve ?? true) };
     },
     async progress(window, state) {
       progress.push([window, state]);
@@ -907,4 +918,58 @@ test("page code: one ticket of several that failed carries its code in its entry
   assert.deepEqual((res as { result: { tickets: unknown[] } }).result.tickets, [
     { electionId: "agm-2027", outcome: "failed", error: "Tickets for this election are not being issued now.", code: "notOpen" },
   ]);
+});
+
+// ── VTI-VOT-053: checking a vote after close ─────────────────────────────────
+
+const CHECK = { op: "checkVote", hostDid: HOST, electionId: "agm-2027", member: MEMBER };
+
+test("vti_vot_053: checkVote is a call, taking what vote takes", () => {
+  assert.equal(electionsPageParamsRefusal(CHECK), null);
+  assert.match(electionsPageParamsRefusal({ ...CHECK, receipt: {} })!, /takes no `receipt`/);
+});
+
+test("vti_vot_053: a vote is checked against the community's head, and the answer is the wallet's window's alone", async () => {
+  const h = harness({ kept: 1 });
+  const res = await h.gates.handle(PORTAL, CHECK);
+  assert.deepEqual(res, { ok: true, result: {} });
+  const check = h.asked.find((o) => o.op === "receiptsCheck");
+  assert.deepEqual(check, { op: "receiptsCheck", hostDid: HOST, member: MEMBER, electionId: "agm-2027", endpoint: BOX_DOOR });
+  const view = h.prompts.at(-1) as Extract<ElectionConsentView, { kind: "check" }>;
+  assert.equal(view.kind, "check");
+  assert.equal(view.electionTitle, "AGM 2027");
+  assert.deepEqual(view.outcome, { ok: true, deleted: false, treeSize: 9, receipts: [{ leafIndex: 4, status: "included" }] });
+});
+
+test("vti_vot_053: no receipt, a missing cast and a failure all answer the page the same", async () => {
+  const none = harness({ kept: 0 });
+  assert.deepEqual(await none.gates.handle(PORTAL, CHECK), { ok: true, result: {} });
+  assert.deepEqual((none.prompts.at(-1) as { outcome: unknown }).outcome, { ok: true, none: true });
+  assert.ok(!none.asked.some((o) => o.op === "receiptsCheck"), "nothing is asked of the ballot box");
+
+  const missing = harness({ kept: 1, checked: { deleted: true, treeSize: 3, receipts: [{ leafIndex: 4, status: "notIncluded" }] } });
+  assert.deepEqual(await missing.gates.handle(PORTAL, CHECK), { ok: true, result: {} });
+  const o = (missing.prompts.at(-1) as { outcome: { receipts: { status: string }[]; deleted: boolean } }).outcome;
+  assert.equal(o.receipts[0]!.status, "notIncluded");
+  assert.equal(o.deleted, true);
+
+  const failed = harness({ kept: 1, refuse: { receiptsCheck: { ok: false, error: "Voting has not closed yet." } } });
+  assert.deepEqual(await failed.gates.handle(PORTAL, CHECK), { ok: true, result: {} });
+  assert.deepEqual((failed.prompts.at(-1) as { outcome: unknown }).outcome, { ok: false, error: "Voting has not closed yet." });
+});
+
+test("vti_vot_053: a ballot box out of reach is asked nothing, and the window says to allow it", async () => {
+  const h = harness({ kept: 1, reachBox: false });
+  assert.deepEqual(await h.gates.handle(PORTAL, CHECK), { ok: true, result: {} });
+  assert.ok(!h.asked.some((o) => o.op === "receiptsCheck"));
+  assert.match((h.prompts.at(-1) as { outcome: { error: string } }).outcome.error, /may not reach the ballot box/);
+});
+
+test("vti_vot_053: a membership already presented for the election is presented again to read it; none newly", async () => {
+  const h = harness({ kept: 1, disclosed: PARTY });
+  await h.gates.handle(PORTAL, CHECK);
+  assert.deepEqual((h.asked.find((o) => o.op === "receiptsCheck") as { readAs?: unknown }).readAs, { memberOf: PARTY });
+  const fresh = harness({ kept: 1 });
+  await fresh.gates.handle(PORTAL, { ...CHECK, memberOf: PARTY });
+  assert.equal((fresh.asked.find((o) => o.op === "receiptsCheck") as { readAs?: unknown }).readAs, undefined);
 });

@@ -72,6 +72,12 @@ interface WorldOpts {
   refuse?: { at: number; code: string; retryable?: boolean }[];
   /** The notifications the member's VTA holds (`vta/notifications/*`). */
   held?: Record<string, unknown>[];
+  /** Voting has closed, and the community kept this head after it. */
+  closedAt?: { treeSize: number };
+  /** The election's board was deleted: `show` answers electionUnknown, and the tombstone keeps this head. */
+  tombstone?: { treeSize: number };
+  /** The receipts the member's VTA keeps. */
+  receipts?: Record<string, unknown>[];
 }
 
 function world(opts: WorldOpts = {}) {
@@ -80,13 +86,20 @@ function world(opts: WorldOpts = {}) {
   const toBox: Record<string, unknown>[] = [];
   const slept: number[] = [];
   let cast: Record<string, unknown> | undefined;
+  const head = (treeSize: number) => ({
+    head: { electionId: "agm-2027", treeSize, rootHash: "zRoot", issuedAt: "2026-11-10T00:00:05Z" },
+    document: { type: `${T}voting/board/head/0.1#response`, issuer: box.did, payload: { head: { treeSize } } },
+  });
+  const closed = opts.closedAt
+    ? { ...shown, state: "tallied", manifest: { ...manifest, votingClosesAt: "2026-11-10T00:00:00Z" }, checkpoints: [head(opts.closedAt.treeSize)] }
+    : shown;
   const election = opts.memberOf
     ? {
         ...shown,
         manifest: { ...manifest, roll: { rule: "credential", memberOf: opts.memberOf } },
         disclosure: { rollCredential: { memberOf: opts.memberOf, memberOfKind: "memberParty", presenterDisclosed: true } },
       }
-    : shown;
+    : closed;
 
   const sender = {
     async send(envelope: { type: string; payload: Record<string, unknown> }) {
@@ -127,7 +140,15 @@ function world(opts: WorldOpts = {}) {
           };
           return { castDocument: cast, tag: "zTag" };
         case `${T}vta/pcs/voter/receipt/0.1`:
-          return { electionId: "agm-2027", status: "included", leafIndex: 7 };
+          return {
+            electionId: "agm-2027",
+            status: p.inclusion && (p.inclusion as { path: unknown[] }).path.length === 0 ? "notIncluded" : "included",
+            leafIndex: 7,
+          };
+        case `${T}vta/pcs/voter/read/0.7`:
+          return { document: memberDoc(`${T}vtc/elections/tombstones/show/0.1`, p.payload) };
+        case `${T}vta/pcs/voter/receipts/list/0.1`:
+          return { electionId: "agm-2027", ballotBox: box.did, receipts: opts.receipts ?? [] };
         case `${T}vta/notifications/list/0.1`:
           return { items: opts.held ?? [] };
         case `${T}vta/notifications/show/0.1`: {
@@ -142,6 +163,20 @@ function world(opts: WorldOpts = {}) {
 
   const fetch = async (url: string, init: RequestInit) => {
     const doc = JSON.parse(String(init.body)) as Record<string, unknown>;
+    if (url === BOX_DOOR && String(doc.type).includes("board/inclusion")) {
+      toBox.push(doc);
+      const q = doc.payload as { leafIndex: number; treeSize: number };
+      const r = {
+        id: crypto.randomUUID(),
+        type: `${T}voting/board/inclusion/0.1#response`,
+        issuer: box.did,
+        threadId: doc.id,
+        issuedAt: new Date().toISOString(),
+        payload: { leafIndex: q.leafIndex, treeSize: q.treeSize, entryHash: "zEntry", path: ["zA"] },
+      };
+      await signTrustTask({ envelope: r, signing: box, proofPurpose: "assertionMethod" });
+      return new Response(JSON.stringify(r), { status: 200 });
+    }
     if (url === BOX_DOOR) {
       toBox.push(doc);
       const r = {
@@ -158,7 +193,9 @@ function world(opts: WorldOpts = {}) {
     }
     toCommunity.push(doc);
     const type = String(doc.type);
-    const refusal = opts.refuse?.find((x) => x.at === toCommunity.length - 1);
+    const refusal =
+      opts.refuse?.find((x) => x.at === toCommunity.length - 1) ??
+      (opts.tombstone && type.endsWith("show/0.6") ? { code: "vtc/elections/show:electionUnknown", retryable: false } : undefined);
     if (refusal) {
       const err = {
         id: crypto.randomUUID(),
@@ -171,7 +208,9 @@ function world(opts: WorldOpts = {}) {
       };
       return new Response(JSON.stringify(err), { status: 400 });
     }
-    const payload = type.endsWith("list/0.5")
+    const payload = type.endsWith("tombstones/show/0.1")
+      ? { electionId: "agm-2027", manifestDigest: DIGEST, ballotBox: box.did, checkpoints: [head(opts.tombstone?.treeSize ?? 1)], deletedAt: "2026-11-12T00:00:00Z" }
+      : type.endsWith("list/0.5")
       ? { elections: [{ electionId: "agm-2027", state: "voting", ticketHeld: true }] }
       : type.endsWith("show/0.6")
         ? election
@@ -560,4 +599,44 @@ test("page code: no credential of the roll's party is membershipNotHeld, a chang
     }),
   );
   assert.equal(changed.code, "rollChanged");
+});
+
+// ── VTI-VOT-053: checking a vote after close ─────────────────────────────────
+
+const receiptOf = (leafIndex: number) => ({
+  type: `${T}voting/ballot/cast/0.1#response`,
+  issuer: box.did,
+  payload: { electionId: "agm-2027", leafIndex, entryHash: "zEntry", receiptToken: "zToken" },
+});
+const CHECK = { op: "receiptsCheck", hostDid: VTC, member: MEMBER, electionId: "agm-2027", endpoint: BOX_DOOR } as const;
+
+test("vti_vot_053: each receipt's inclusion comes from the ballot box, and the VTA checks it against the head kept at close", async () => {
+  const w = world({ closedAt: { treeSize: 9 }, receipts: [receiptOf(7)] });
+  const kept = await runElectionsPageOp(w.deps, VTA, { op: "receiptsKept", hostDid: VTC, member: MEMBER, electionId: "agm-2027" });
+  assert.deepEqual(kept, { count: 1, ballotBox: box.did });
+  const got = await runElectionsPageOp(w.deps, VTA, CHECK);
+  assert.deepEqual(got, { deleted: false, treeSize: 9, receipts: [{ leafIndex: 7, status: "included" }] });
+  // The ballot box was asked, unsigned, with the receipt's token; the community only for the show.
+  assert.equal(w.toBox.length, 1);
+  assert.equal(w.toBox[0]!.issuer, undefined);
+  assert.equal((w.toBox[0]!.payload as { receiptToken: string }).receiptToken, "zToken");
+  assert.ok(!w.toCommunity.some((d) => String(d.type).includes("inclusion")));
+  const check = w.vtaAsked.find((a) => a.type === `${T}vta/pcs/voter/receipt/0.1`)!;
+  assert.deepEqual(check.payload.receipt, receiptOf(7));
+  assert.equal((check.payload.checkpoint as { type: string }).type, `${T}voting/board/head/0.1#response`);
+  assert.deepEqual(check.payload.inclusion, { leafIndex: 7, treeSize: 9, entryHash: "zEntry", path: ["zA"] });
+});
+
+test("vti_vot_053 / vti_brd_009: once the board is deleted, the head comes from the tombstone; a head too small omits the cast", async () => {
+  const w = world({ tombstone: { treeSize: 5 }, receipts: [receiptOf(7)] });
+  const got = await runElectionsPageOp(w.deps, VTA, CHECK);
+  assert.deepEqual(got, { deleted: true, treeSize: 5, receipts: [{ leafIndex: 7, status: "notIncluded" }] });
+  assert.ok(w.vtaAsked.some((a) => a.type === `${T}vta/pcs/voter/read/0.7` && a.payload.read === "tombstone"));
+  assert.equal(w.toBox.length, 0, "no inclusion is asked for a leaf past the head");
+});
+
+test("vti_vot_053: before close nothing is asked of the ballot box", async () => {
+  const w = world({ receipts: [receiptOf(7)] });
+  await assert.rejects(runElectionsPageOp(w.deps, VTA, CHECK), /not closed/);
+  assert.equal(w.toBox.length, 0);
 });
