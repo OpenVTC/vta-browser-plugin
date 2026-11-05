@@ -40,8 +40,10 @@ import {
   putRoomFileFromConsole,
   ROOM_FILE_MAX_BYTES,
   safeFileName,
+  writeTarget,
   type GetResult,
   type RoomFileClaim,
+  type WritingPlace,
 } from "../room-files.js";
 import {
   imageBlob,
@@ -107,7 +109,7 @@ export function PutRoomFile({
   prepared,
   onPut,
 }: {
-  room: RoomPlace;
+  room: WritingPlace;
   host: string;
   prepared: RoomFilesPrepared;
   onPut: () => void;
@@ -136,7 +138,7 @@ export function PutRoomFile({
       try {
         if (!(await allowed)) throw new Error(REFUSED_HOST);
         const res = await putRoomFileFromConsole(
-          { roomId: room.roomId, hostDid: host, ...(room.member !== undefined ? { member: room.member } : {}) },
+          writeTarget(room, host),
           file,
           title.trim() ? { title: title.trim() } : {},
           { signal: ctl.signal, onProgress: (p) => setLine(describeProgress(p)) },
@@ -332,7 +334,7 @@ export function GetRoomFile({
           if (!(await allowed)) throw new Error(REFUSED_HOST);
           const fetchIt = () =>
             getRoomFileIntoConsole(
-              { roomId: room.roomId, hostDid: host, ...(room.member !== undefined ? { member: room.member } : {}) },
+              writeTarget(room, host),
               recordKey,
               {
                 signal: ctl.signal,

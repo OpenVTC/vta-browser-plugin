@@ -306,7 +306,8 @@ test("the background worker never closes a console's transfer port", async () =>
 // ── notes and curation, offscreen ───────────────────────────────────────────
 
 /** Serve a port against a fake agent and host; the host's room is `visibility`. */
-function servedRoom(visibility: "private" | "open") {
+function servedRoom(visibility: "private" | "open", opts: { head?: number; recordMembers?: string[] } = {}) {
+  const head = opts.head ?? 4;
   const pair = portPair();
   const host: { type: string; payload: Record<string, unknown>; issuer: string }[] = [];
   const sealed: unknown[] = [];
@@ -318,6 +319,11 @@ function servedRoom(visibility: "private" | "open") {
           if (envelope.type.includes("rooms/keys/seal/")) {
             sealed.push(envelope.payload);
             return { sealed: { ciphertext: "c", nonce: "n", epoch: 1 } };
+          }
+          if (envelope.type.includes("rooms/keys/profile/read/")) {
+            return opts.recordMembers === undefined
+              ? { roomId: TARGET.roomId, status: "absent" }
+              : { roomId: TARGET.roomId, status: "found", profile: { name: "R", recordMembers: opts.recordMembers } };
           }
           const doc = structuredClone(envelope.payload.document) as Record<string, unknown> & { payload: Record<string, unknown> };
           doc.issuer = "did:webvh:QmMe:people.example";
@@ -334,9 +340,9 @@ function servedRoom(visibility: "private" | "open") {
         async sendCompleted(doc: { type: string; payload: Record<string, unknown>; issuer: string }) {
           host.push(doc);
           if (doc.type.includes("rooms/info/")) return { roomId: TARGET.roomId, visibility, epoch: 1 };
-          if (doc.type.includes("rooms/records/list/")) return { roomId: TARGET.roomId, records: [], headVersion: 4 };
-          if (doc.type.includes("rooms/records/put/")) return { key: doc.payload.key, version: 5 };
-          if (doc.type.includes("rooms/records/curate/")) return { key: doc.payload.key, version: 5, status: doc.payload.status };
+          if (doc.type.includes("rooms/records/list/")) return { roomId: TARGET.roomId, records: [], headVersion: head };
+          if (doc.type.includes("rooms/records/put/")) return { key: doc.payload.key, version: head + 1 };
+          if (doc.type.includes("rooms/records/curate/")) return { key: doc.payload.key, version: head + 1, status: doc.payload.status };
           throw new Error(`unexpected ${doc.type}`);
         },
       } as never,
@@ -389,3 +395,51 @@ test("a curation reaches the host as the member, and its standing comes back", a
   assert.equal(sent.issuer, "did:webvh:QmMe:people.example");
   assert.equal(sent.payload.reason, "wrong room");
 });
+
+// ── the member's name, near the room's head (trust-tasks-tf #1038) ──────────
+
+const ME = "did:webvh:QmMe:people.example";
+const sealedBody = (p: unknown) =>
+  JSON.parse(new TextDecoder().decode(base64urlDecode((p as { plaintext: string }).plaintext))) as Record<string, unknown>;
+function base64urlDecode(s: string): Uint8Array {
+  return Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+}
+
+test("a note that lands more than 500 versions past the member's name writes the name again, unchanged", async () => {
+  const { pair, host, sealed } = servedRoom("private", { head: 700, recordMembers: ["kind", "memberProfile", "writtenAt", "editedAt"] });
+  const ownName = { key: "mine", version: 100, name: "Me", writtenAt: "2026-09-01T00:00:00Z" };
+  pair.console.postMessage({ kind: "note", ...NOTE_OPEN, ownName, title: "Decision", body: "Friday" });
+  const out = await reply(pair, "noted");
+  assert.equal(out.kind, "noted", JSON.stringify(out));
+  const puts = host.filter((d) => d.type.includes("rooms/records/put/"));
+  assert.equal(puts.length, 2, "the note, then the name");
+  assert.equal(puts[1]!.payload.key, "mine");
+  assert.equal(puts[1]!.payload.expectedVersion, 100, "over the version the console read");
+  const name = sealedBody(sealed[1]);
+  assert.equal(name.kind, "memberProfile");
+  assert.equal(name.title, "Me");
+  assert.equal(name.author, ME);
+  assert.equal(name.writtenAt, "2026-09-01T00:00:00Z", "writtenAt kept");
+  assert.equal("editedAt" in name, false, "no new editedAt");
+});
+
+test("a write within 500 versions of the member's name writes nothing more", async () => {
+  const { pair, host } = servedRoom("private", { head: 700, recordMembers: ["kind", "memberProfile"] });
+  pair.console.postMessage({ kind: "note", ...NOTE_OPEN, ownName: { key: "mine", version: 300, name: "Me" }, title: "T" });
+  assert.equal((await reply(pair, "noted")).kind, "noted");
+  assert.equal(host.filter((d) => d.type.includes("rooms/records/put/")).length, 1);
+});
+
+test("a curation far past the name writes it again too; one the room no longer takes names for does not", async () => {
+  const open = servedRoom("open", { head: 900, recordMembers: ["kind", "memberProfile"] });
+  open.pair.console.postMessage({ kind: "curate", ...NOTE_OPEN, ownName: { key: "mine", version: 2, name: "Me" }, key: "n1", status: "deprecated", expectedVersion: 900 });
+  assert.equal((await reply(open.pair, "curated")).kind, "curated");
+  const [put] = open.host.filter((d) => d.type.includes("rooms/records/put/"));
+  assert.deepEqual(put!.payload.cleartext, { kind: "memberProfile", title: "Me", body: "" });
+
+  const closed = servedRoom("open", { head: 900, recordMembers: ["kind"] });
+  closed.pair.console.postMessage({ kind: "curate", ...NOTE_OPEN, ownName: { key: "mine", version: 2, name: "Me" }, key: "n1", status: "deprecated", expectedVersion: 900 });
+  assert.equal((await reply(closed.pair, "curated")).kind, "curated", "the curation stands");
+  assert.equal(closed.host.filter((d) => d.type.includes("rooms/records/put/")).length, 0);
+});
+

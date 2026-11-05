@@ -146,6 +146,7 @@
     "tasks:sync": "node scripts/sync-task-surface.mjs",
     "tasks:generate": "trust-tasks-gen-ts --lock trust-tasks.lock --out src/specs",
     "acl:sync": "node scripts/sync-acl-capabilities.mjs",
+    "confusables:sync": "node scripts/sync-confusables.mjs",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {

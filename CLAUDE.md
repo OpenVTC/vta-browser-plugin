@@ -951,9 +951,9 @@ have it; a reason is required. Editing needs `write`, retracting `curate`, which
 **Members' names are records, read by their own rules** (`memberProfile`,
 `rooms/_shared/0.3`, trust-tasks-tf #1035; `rooms/member-name.ts`).
 `assembleRoomRecords` takes them out of every conversation, library and count
-and returns `names` by author: the version of that author's own name record the
+and returns `names` by author: the version of that author's name records the
 host stored most recently (`bodyStoredAt`, else `updatedAt`), none where it is
-empty, retracted or refused, and none from a rewrite by anyone else. A name
+empty, retracted or refused. A name
 applies to its author in that room only. The pane shows the member's own
 contact petname first (`useContactPetnames`), then the room name — in quotes,
 never beside a check mark, with a DID fingerprint where two would read the same
@@ -964,16 +964,53 @@ refuses before anything is sealed or sent unless `recordMembers` lists both
 clear at `rooms/records/put/0.5`, over the member's own record where one is
 held.
 
-**`rooms/watch` / `rooms/changed` are not wired, and that is a finding**
-(trust-tasks-tf #1036). A watch's `address` must be a DID whose document
-advertises a transport the host speaks and through which the wallet receives;
-the wallet's sessions are the holder's `did:key` (no service), the approver and
-the onboarding ephemeral — the same gap as notification deposit below. And the
-watch request itself is signed by the client with its own key after
-`rooms/keys/present`, which a member's path here must not do (the host would
-take the wallet's key as the member). The VTA accepts `rooms/changed` addressed
-to its own DID and keeps nothing of it. Until the VTA holds a watch address for
-its member and tells the wallet, the records pane lists on demand, as before.
+**The #1038 amendments.** Rule 2 is the whole rule for an author with several
+name records: the most recently stored current version wins, ties to the greater
+version, never the first a reader met. A version one member wrote over another's
+record is the writer's own claim (never the original author's), weighed like
+any of theirs. Names that would read the same after NFC and case folding, **or
+whose UTS #39 skeletons are equal**, carry a fingerprint (`rooms/confusables.ts`,
+over Unicode's own `confusables.txt`, generated whole by
+`scripts/sync-confusables.mjs` and pinned by its SHA-256). Before a name is
+found an author is the member's petname or a shortened DID — never a name from
+the DID document, a directory or another room. And a write from the console
+that lands more than 500 versions past the member's name record writes the name
+again (`rewriteMemberNameAsMember`: same key, same name, `writtenAt` kept, no new
+`editedAt`); the portal's writes do not, since the wallet holds no copy of the
+room's records there.
+
+**An open room learns of changes through the member's VTA** (`rooms/keys/watch/0.1`,
+`rooms/keys/changed/0.1`, trust-tasks-tf #1040; `@openvtc/pnm-core/rooms`'s
+`watch.ts`, the console's `manager/room-watch.ts`). The wallet cannot arm
+`rooms/watch` itself — it may not present as the member, and its sessions have
+no address a host can reach (trust-tasks-tf #1036) — so it asks its VTA, which
+arms each room as the member at an address of its own and passes the host's
+signal on as `rooms/keys/changed`, through the mediator where the wallet already
+collects from it, like `task-consent/granted`. The offscreen document accepts
+one only from its own VTA as the transport proved it, and only when the payload
+is the closed schema's (`parseRoomsKeysChanged`), and hands it to the console's
+pages (`RUNTIME_ROOMS_KEYS_CHANGED`), which take it only from `offscreen.html`
+and only for a watch they armed (`RoomWatcher.accept`); anything else is dropped
+silently. Each open records pane holds its room's watch: armed after the first
+read at the version read, gathered into one request per VTA, member and host (64
+rooms at most), re-armed only after the read a signal causes, and cancelled when
+the pane closes. A signal is answered by listing from the watermark and
+batch-reading what changed (a `lastPrune` past the watermark rebuilds from a
+full listing). Unread is the reader's decision after reading
+(`unreadMessages`): a message, not the member's own, current, whose host
+`createdAt` (else `updatedAt`) is after the member's read marker
+(`room-read:<vtaDid>|<member>|<roomId>` in `chrome.storage.local`, never sent).
+The pane shows the count, and a hidden console raises one notification whose
+words are fixed (`UNREAD_NOTIFICATION`) — no room, author or text. Polling stays
+as the fallback: every minute while no watch covers the room (the VTA refused,
+does not serve the task, or the room was refused — quietly), every ten minutes
+while one does.
+
+**What breaks it:** showing anything because a signal arrived rather than
+because reading found it; putting a room, an author or message text in an OS
+notification; re-arming without reading, or on every poll; accepting a signal
+from a content script (it carries the extension's id) or for a watch not armed;
+or arming as the wallet's own key at a host (`rooms/keys/act` with an address).
 
 **Archive and restore are offered; pin is not.** Every curation moves the
 record to a new version (vti-rooms `curate_record`), and a sealed body is bound

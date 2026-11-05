@@ -67,7 +67,12 @@ import {
   roomsKeysBrowse,
   roomsKeysReadMany,
   verifyRecordBody,
+  latestMessageTime,
+  unreadMessages,
+  watchCovers,
   type HeldRecord,
+  type OwnMemberName,
+  type RoomWatchState,
   type ReadManyResult,
   type ResolveDidAt,
   type RecordInput,
@@ -78,17 +83,26 @@ import {
 import { base64url } from "@openvtc/vti-didcomm-js";
 import type { RoomPlace } from "../room-groups.js";
 import { Button, Note, Pill } from "../../ui.js";
-import { displayAgentName } from "../../agent-name.js";
-import { useAgentNames } from "../../use-agent-names.js";
 import { shortDid } from "../room-words.js";
 import { untitledLabel } from "../room-record-text.js";
 import { didHost } from "../../did-display.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
+import {
+  getReadMarker,
+  holdRoomWatch,
+  notifyUnread,
+  POLL_UNWATCHED_MS,
+  POLL_WATCHED_MS,
+  readMarkerKey,
+  setReadMarker,
+  unrefTimer,
+  type RoomWatchHold,
+} from "../room-watch.js";
 import { Loading, LoadError } from "../table.js";
 import type { Parties } from "../use-vta.js";
 import type { RoomFilesPrepared } from "../../bridge-protocol.js";
-import { prepareRoomFiles, roomFileClaimOf } from "../room-files.js";
+import { prepareRoomFiles, roomFileClaimOf, type WritingPlace } from "../room-files.js";
 import { GetRoomFile, PutRoomFile, RoomFilesUnavailable } from "./rooms-files.js";
 import { holds, MemberNameEditor, NoteEditor, RecordActions } from "./rooms-record-actions.js";
 
@@ -477,7 +491,7 @@ function RecordItem({
   authorName,
   onChanged,
 }: {
-  room: RoomPlace;
+  room: WritingPlace;
   host: string;
   row: RecordRow;
   view: RoomRecordView;
@@ -729,6 +743,12 @@ function RecordItem({
   );
 }
 
+/** How the pane learns of changes, in a few words: through the agent's watch, or by checking. */
+function watchWords(s: RoomWatchState | undefined): string {
+  if (watchCovers(s)) return "New records are signalled through your agent.";
+  return `Checked for new records every ${Math.round(POLL_UNWATCHED_MS / 1000)} seconds.`;
+}
+
 /** How many of the newest file records preview themselves as the list arrives. */
 export const AUTO_PREVIEW = 5;
 
@@ -786,6 +806,110 @@ export function RoomRecords({
   // A listing can be overtaken by the next one before its reads land.
   const generation = useRef(0);
 
+  /**
+   * What this pane holds of the room, by key: the listed row, what the reading
+   * rules take, and what was opened. A full listing replaces them; a refresh
+   * from the watermark merges what changed into them.
+   */
+  const rowsRef = useRef(new Map<string, RecordRow>());
+  const inputsRef = useRef(new Map<string, RecordInput>());
+  const openedRef = useRef(new Map<string, Opened>());
+  /** The highest version listed: where a refresh lists from, and what a watch is armed at. */
+  const watermark = useRef<number | undefined>(undefined);
+  const hostRef = useRef("");
+  const viewRef = useRef<RoomRecordsView | null>(null);
+
+  // ── Unread, by the member's own read marker ──────────────────────────────
+  const markerKey = room.member !== undefined ? readMarkerKey(parties.service.did, room.member, room.roomId) : undefined;
+  const marker = useRef<number | undefined>(undefined);
+  const markerRead = useRef<Promise<void> | null>(null);
+  const [unread, setUnread] = useState(0);
+  const unreadRef = useRef(0);
+
+  // ── The watch on this room, through the member's own VTA ──────────────────
+  const watch = useRef<RoomWatchHold | null>(null);
+  const [watchState, setWatchState] = useState<RoomWatchState | undefined>(undefined);
+
+  /** Read the listed rows' bodies, in batches, and verify each before anything of it is kept. */
+  const readRows = useCallback(
+    async (host: string, listed: RecordRow[]) => {
+      const toRead = listed.filter((r) => r.status !== "retracted");
+      const answers =
+        toRead.length === 0
+          ? []
+          : await roomsKeysReadMany(managerSender, {
+              ...parties,
+              roomId: room.roomId,
+              host,
+              keys: toRead.map((r) => r.key),
+              ...(room.member !== undefined ? { member: room.member } : {}),
+            });
+      const byKey = new Map(answers.map((a) => [a.key, a]));
+      // One memo for this listing: a historical resolution re-fetches and
+      // re-verifies the author's whole log, and most authors write many records.
+      const resolveDidAt = memoResolveDidDocumentAt();
+      return Promise.all(
+        listed.map(async (row) => {
+          const res = byKey.get(row.key);
+          if (res) return { row, ...(await readOne(room.roomId, row, res, resolveDidAt)) };
+          const input: RecordInput = {
+            key: row.key,
+            version: row.version,
+            ...(row.status !== undefined ? { status: row.status } : {}),
+            ...(row.updatedAt !== undefined ? { updatedAt: row.updatedAt } : {}),
+            ...(row.createdAt !== undefined ? { createdAt: row.createdAt } : {}),
+            ...(row.createdBy !== undefined ? { createdBy: row.createdBy } : {}),
+            ...(row.bodyStoredAt !== undefined ? { bodyStoredAt: row.bodyStoredAt } : {}),
+            ...(row.kind !== undefined ? { listedKind: row.kind } : {}),
+            reading: { state: "tombstone" },
+          };
+          return { row, opened: undefined as Opened | undefined, input };
+        }),
+      );
+    },
+    [parties, room],
+  );
+
+  /**
+   * Show what the pane holds, by the reading rules; then say what is unread
+   * (`rooms/changed/0.1`, *What a reader does with a signal*, step 4) and
+   * re-arm the room's watch, which is only ever done after a read.
+   */
+  const show = useCallback(() => {
+    const all = [...inputsRef.current.values()].map((input) => {
+      const before = held.current.get(input.key);
+      return before !== undefined ? { ...input, held: before } : input;
+    });
+    const view = assembleRoomRecords(all, { now: Date.now() });
+    viewRef.current = view;
+    setRows([...rowsRef.current.values()]);
+    setShownRoom(view);
+    setOpened(new Map(openedRef.current));
+    for (const input of all) {
+      if (input.reading.state === "read") held.current.set(input.key, { version: input.version, content: input.reading.content });
+    }
+
+    const latest = latestMessageTime(view, all);
+    const seen = typeof document === "undefined" || document.visibilityState !== "hidden";
+    if (marker.current === undefined || seen) {
+      // The member is looking (or this is the room's first reading here): what is shown is read.
+      if (latest !== undefined && (marker.current === undefined || latest > marker.current)) {
+        marker.current = latest;
+        if (markerKey !== undefined) void setReadMarker(markerKey, latest);
+      }
+      unreadRef.current = 0;
+      setUnread(0);
+    } else {
+      const own = new Set(room.member !== undefined ? [room.member] : []);
+      const n = unreadMessages(view, all, { readMarker: marker.current, own }).length;
+      // Alert only on what reading found, and with nothing of it: no room, no author, no words.
+      if (n > unreadRef.current) notifyUnread();
+      unreadRef.current = n;
+      setUnread(n);
+    }
+    watch.current?.afterRead(watermark.current);
+  }, [markerKey, room.member]);
+
   const started = useRef(false);
   const browse = useCallback(async (asked: string) => {
     const host = asked.trim();
@@ -798,11 +922,17 @@ export function RoomRecords({
     setShownRoom(null);
     setOpened(new Map());
     setListedHost(host);
+    hostRef.current = host;
     setPrepared(null);
     setFilesError(null);
     void prepareRoomFiles(host).then(setPrepared, (e: unknown) =>
       setFilesError(e instanceof Error ? e.message : String(e)),
     );
+    if (markerKey !== undefined && markerRead.current === null) {
+      markerRead.current = getReadMarker(markerKey).then((m) => {
+        if (marker.current === undefined) marker.current = m;
+      });
+    }
     let listed: RecordRow[];
     try {
       const res = await roomsKeysBrowse(managerSender, {
@@ -829,54 +959,137 @@ export function RoomRecords({
     // Read every record that has a body; a tombstone has none to read.
     setReading(true);
     try {
-      const toRead = listed.filter((r) => r.status !== "retracted");
-      const answers =
-        toRead.length === 0
-          ? []
-          : await roomsKeysReadMany(managerSender, {
-              ...parties,
-              roomId: room.roomId,
-              host,
-              keys: toRead.map((r) => r.key),
-              ...(room.member !== undefined ? { member: room.member } : {}),
-            });
-      const byKey = new Map(answers.map((a) => [a.key, a]));
-      // One memo for this listing: a historical resolution re-fetches and
-      // re-verifies the author's whole log, and most authors write many records.
-      const resolveDidAt = memoResolveDidDocumentAt();
-      const read = await Promise.all(
-        listed.map(async (row) => {
-          const res = byKey.get(row.key);
-          if (res) return { row, ...(await readOne(room.roomId, row, res, resolveDidAt)) };
-          const input: RecordInput = {
-            key: row.key,
-            version: row.version,
-            ...(row.status !== undefined ? { status: row.status } : {}),
-            ...(row.updatedAt !== undefined ? { updatedAt: row.updatedAt } : {}),
-            ...(row.createdAt !== undefined ? { createdAt: row.createdAt } : {}),
-            ...(row.createdBy !== undefined ? { createdBy: row.createdBy } : {}),
-            ...(row.bodyStoredAt !== undefined ? { bodyStoredAt: row.bodyStoredAt } : {}),
-            ...(row.kind !== undefined ? { listedKind: row.kind } : {}),
-            reading: { state: "tombstone" },
-          };
-          return { row, opened: undefined, input };
-        }),
-      );
+      const read = await readRows(host, listed);
+      await markerRead.current;
       if (mine !== generation.current) return;
-      const inputs = read.map(({ input }) => {
-        const before = held.current.get(input.key);
-        return before !== undefined ? { ...input, held: before } : input;
-      });
-      setShownRoom(assembleRoomRecords(inputs, { now: Date.now() }));
-      setOpened(new Map(read.flatMap(({ row, opened: o }) => (o ? [[row.key, o] as const] : []))));
-      for (const input of inputs) {
-        if (input.reading.state === "read") held.current.set(input.key, { version: input.version, content: input.reading.content });
-      }
+      rowsRef.current = new Map(listed.map((r) => [r.key, r]));
+      inputsRef.current = new Map(read.map(({ input }) => [input.key, input]));
+      openedRef.current = new Map(read.flatMap(({ row, opened: o }) => (o ? [[row.key, o] as const] : [])));
+      watermark.current = listed.reduce<number | undefined>((m, r) => (m === undefined || r.version > m ? r.version : m), undefined) ?? 0;
+      show();
     } catch (e) {
       if (mine === generation.current) setError(e instanceof Error ? e.message : String(e));
     }
     if (mine === generation.current) setReading(false);
-  }, [parties, room, onListed]);
+  }, [parties, room, onListed, readRows, show, markerKey]);
+
+  /**
+   * Read what changed since the watermark — after a signal, or on a poll — and
+   * merge it into what the pane holds: list from the watermark through the
+   * agent, batch-read the changed records, and show the room again. A prune
+   * past the watermark means the copy is rebuilt from a full listing
+   * (`lastPrune`, *After a prune*).
+   */
+  const refreshing = useRef<Promise<void> | null>(null);
+  const again = useRef(false);
+  const refresh = useCallback(async (): Promise<void> => {
+    if (refreshing.current) {
+      again.current = true;
+      return refreshing.current;
+    }
+    const run = async () => {
+      const host = hostRef.current;
+      const since = watermark.current;
+      if (!host || since === undefined) return;
+      const mine = generation.current;
+      try {
+        const res = await roomsKeysBrowse(managerSender, {
+          ...parties,
+          roomId: room.roomId,
+          host,
+          sinceVersion: since,
+          ...(room.member !== undefined ? { member: room.member } : {}),
+        });
+        if (mine !== generation.current) return;
+        if (res.lastPrune !== undefined && res.lastPrune.version > since) {
+          await browse(host);
+          return;
+        }
+        const listed = (res.records ?? []) as unknown as RecordRow[];
+        setVerification(res.verification as unknown as Verification);
+        setComplete(res.complete);
+        const read = listed.length === 0 ? [] : await readRows(host, listed);
+        if (mine !== generation.current) return;
+        for (const { row, input, opened: o } of read) {
+          rowsRef.current.set(row.key, row);
+          inputsRef.current.set(input.key, input);
+          if (o) openedRef.current.set(row.key, o);
+          else openedRef.current.delete(row.key);
+          if (watermark.current === undefined || row.version > watermark.current) watermark.current = row.version;
+        }
+        show();
+      } catch (e) {
+        // A refresh that fails leaves what is shown as it was; the next poll or signal tries again.
+        console.warn("[pnm rooms] could not refresh", room.roomId, e);
+      }
+    };
+    refreshing.current = (async () => {
+      try {
+        do {
+          again.current = false;
+          await run();
+        } while (again.current);
+      } finally {
+        refreshing.current = null;
+      }
+    })();
+    return refreshing.current;
+  }, [parties, room, readRows, show, browse]);
+
+  // Handlers the watch and the timers call reach the current ones.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+
+  // Hold the room's watch while this pane is open, at the host it lists from;
+  // closing the pane, or listing elsewhere, releases it — which cancels it.
+  useEffect(() => {
+    if (!listedHost || room.member === undefined) return;
+    const hold = holdRoomWatch(parties, { member: room.member, host: listedHost, roomId: room.roomId }, (latestVersion) => {
+      // A signal at or below what was read: nothing to read, re-arm (step 1).
+      const w = watermark.current;
+      if (w !== undefined && latestVersion <= w) hold.afterRead(w);
+      else void refreshRef.current();
+    });
+    watch.current = hold;
+    setWatchState(hold.state());
+    const off = hold.onState((s) => {
+      setWatchState(s);
+      // A watch that lapsed unsignalled is re-armed after the next read: read now.
+      if (s?.state === "lapsed") void refreshRef.current();
+    });
+    if (watermark.current !== undefined) hold.afterRead(watermark.current);
+    return () => {
+      off();
+      hold.release();
+      if (watch.current === hold) watch.current = null;
+    };
+  }, [parties, room.roomId, room.member, listedHost]);
+
+  // Polling stays: the fallback where no watch covers the room (none served,
+  // refused, or not yet armed), and a slow safety net where one does.
+  const covered = watchCovers(watchState);
+  useEffect(() => {
+    if (!listedHost) return;
+    const t = unrefTimer(setInterval(() => void refreshRef.current(), covered ? POLL_WATCHED_MS : POLL_UNWATCHED_MS));
+    return () => clearInterval(t);
+  }, [listedHost, covered]);
+
+  // When the member comes back to the console, what is on screen has been seen.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "hidden" || unreadRef.current === 0) return;
+      const view = viewRef.current;
+      const latest = view ? latestMessageTime(view, [...inputsRef.current.values()]) : undefined;
+      if (latest !== undefined && (marker.current === undefined || latest > marker.current)) {
+        marker.current = latest;
+        if (markerKey !== undefined) void setReadMarker(markerKey, latest);
+      }
+      unreadRef.current = 0;
+      setUnread(0);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [markerKey]);
 
   const [uploading, setUploading] = useState(false);
   const [writing, setWriting] = useState(false);
@@ -889,7 +1102,6 @@ export function RoomRecords({
   const previewFirst = new Set(
     newestFirst.filter((v) => v.content?.hasFile).slice(0, AUTO_PREVIEW).map((v) => v.key),
   );
-  const names = useAgentNames((rows ?? []).map((r) => r.author).concat(visible.map((v) => v.content?.author)));
   const roomNames = shownRoom?.names;
   const labels = authorLabels(
     [
@@ -903,18 +1115,33 @@ export function RoomRecords({
     { petnames, roomNames },
   );
   // A petname is the member's own; a room name is the author's claim, in quotes;
-  // otherwise the DID, or a name its own document claims.
+  // otherwise the DID, shortened. Never a name from anywhere else — not one its
+  // DID document claims, nor one from a directory or another room — before the
+  // room's own records give one (*Before a name is found*, trust-tasks-tf #1038).
   const authorName = (did: string) => {
     const l = labels.get(did);
     if (l?.source === "petname") return l.text!;
     if (l?.source === "room") return `“${l.text}”${l.fingerprint ? ` (…${l.fingerprint})` : ""}`;
-    const n = names[did];
-    return n ? displayAgentName(n) : shortDid(did);
+    return shortDid(did);
   };
   const anyRoomName = [...labels.values()].some((l) => l.source === "room");
   const [naming, setNaming] = useState(false);
-  const ownName = room.member !== undefined ? roomNames?.[room.member]?.name : undefined;
+  const ownRecord = room.member !== undefined ? roomNames?.[room.member] : undefined;
+  const ownName = ownRecord?.name;
   const heldNames = Object.entries(roomNames ?? {}).map(([author, r]) => ({ author, key: r.key, version: r.version }));
+  // What a write near the head writes again: the member's own name as rule 2 gives it here.
+  const ownNameRecord: OwnMemberName | undefined =
+    ownRecord?.name !== undefined
+      ? {
+          key: ownRecord.key,
+          version: ownRecord.version,
+          name: ownRecord.name,
+          ...(ownRecord.writtenAt !== undefined ? { writtenAt: ownRecord.writtenAt } : {}),
+          ...(ownRecord.editedAt !== undefined ? { editedAt: ownRecord.editedAt } : {}),
+        }
+      : undefined;
+
+  const place: WritingPlace = { ...room, ...(ownNameRecord !== undefined ? { ownName: ownNameRecord } : {}) };
 
   // Where the room was last found: list it straight away, once — and not again
   // when the host this listing just found comes back down as the known one.
@@ -957,6 +1184,8 @@ export function RoomRecords({
           <Button kind="quiet" disabled={busy || reading} onClick={() => void browse(listedHost || hostDid)}>
             {busy ? "Listing…" : "Refresh"}
           </Button>
+          {unread > 0 && <Pill tone="accent">{unread === 1 ? "1 new message" : `${unread} new messages`}</Pill>}
+          <span style={{ fontSize: t.xs, color: c.faint }}>{watchWords(watchState)}</span>
         </div>
       )}
 
@@ -993,7 +1222,7 @@ export function RoomRecords({
                     <RecordItem
                       // Keyed by version too: an edited record is a new one to show.
                       key={`${v.key}@${v.version}`}
-                      room={room}
+                      room={place}
                       host={listedHost}
                       row={row}
                       view={v}
@@ -1041,7 +1270,7 @@ export function RoomRecords({
           {writing && (
             <NoteEditor
               key={`new@${room.roomId}|${room.member ?? ""}`}
-              room={room}
+              room={place}
               host={listedHost}
               onDone={() => {
                 setWriting(false);
@@ -1066,7 +1295,7 @@ export function RoomRecords({
             />
           )}
           {prepared && uploading && (
-            <PutRoomFile room={room} host={listedHost} prepared={prepared} onPut={() => void browse(listedHost)} />
+            <PutRoomFile room={place} host={listedHost} prepared={prepared} onPut={() => void browse(listedHost)} />
           )}
           {!writing && !uploading && !naming && (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>

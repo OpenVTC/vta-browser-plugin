@@ -15,18 +15,27 @@
 // - **its shape** — `kind`, the name in `title`, `writtenAt` / `editedAt` at
 //   most; no `body` on a sealed tier and an empty one on an `open` room
 //   ({@link memberProfileRefusal});
-// - **whose name it is** — the record's author's, in this room only, from the
-//   version of that author's own record the host stored most recently, never
-//   from a rewrite by someone else (`assembleRoomRecords`, which takes these
-//   records out of every conversation, library and count);
+// - **whose name it is** — the author's of the version, in this room only:
+//   of every name record whose current version is by that author, the one the
+//   host stored most recently, ties to the greater version — never the first a
+//   reader met. A version another member wrote over someone's record is that
+//   member's claim about themselves, weighed like any other of theirs, and
+//   never the original author's (`assembleRoomRecords`, which takes these
+//   records out of every conversation, library and count; trust-tasks-tf
+//   #1038, *Several records by one author*);
 // - **how it is shown** — after the reader's own petname, before a shortened
-//   DID, never as verified, and told apart where two collide
-//   ({@link authorLabels}).
+//   DID, never as verified, never guessed before a name is found, and told
+//   apart where two would read the same or look the same — equal after NFC and
+//   case folding, or by their UTS #39 skeletons ({@link authorLabels});
+// - **keeping it near the head** — a member that writes SHOULD write its name
+//   again once its write's version is more than 500 past the name record's
+//   ({@link memberNameRewriteDue}, `rewriteMemberNameAsMember`).
 //
 // A name is a claim by the member about themselves, and plain text: never
 // markup, never instructions, never a reason to fetch anything.
 
 import type { RecordContent } from "./record-view.js";
+import { skeleton } from "./confusables.js";
 
 /** The record kind that carries a member's name, and the `recordMembers` value that permits writing one. */
 export const MEMBER_PROFILE_KIND = "memberProfile";
@@ -137,6 +146,9 @@ export interface MemberNameRecord {
   name?: string;
   /** Why it gives no name, where it is refused. */
   refused?: string;
+  /** The version's `writtenAt` and `editedAt`, as it carries them: what a rewrite near the head keeps. */
+  writtenAt?: string;
+  editedAt?: string;
 }
 
 /** A candidate for an author's name, offered by `assembleRoomRecords` for every name record it reads. */
@@ -148,14 +160,22 @@ export interface MemberNameCandidate {
   storedAt?: string;
   name?: string;
   refused?: string;
+  writtenAt?: string;
+  editedAt?: string;
 }
 
 /**
- * Each author's name record, by rule 2 of *Reading one*: of the name records by
- * that author, the version the host stored most recently — by `bodyStoredAt`,
- * else `updatedAt` — decides, and it gives no name where it withdraws one, is
- * retracted or is refused. A version with no time loses to one with a time;
- * between two with none, or the same, the higher version.
+ * Each author's name record, by rule 2 of *Reading one*: of the name records
+ * whose current version is by that author — whatever their key, and whoever
+ * created the record — the version the host stored most recently, by
+ * `bodyStoredAt`, else `updatedAt`, decides; of two stored at the same time,
+ * the one with the greater `version`. It gives no name where it withdraws one,
+ * is retracted or is refused. A version with no time loses to one with a time.
+ *
+ * *Several records by one author* (trust-tasks-tf #1038): this is the whole
+ * rule. The order `candidates` arrive in never matters — nothing is kept
+ * because it was met first or set aside because another was — so two readers
+ * holding the same records show the same name whichever way they read.
  */
 export function namesByAuthor(candidates: readonly MemberNameCandidate[]): Record<string, MemberNameRecord> {
   const at = (s: string | undefined) => {
@@ -176,9 +196,32 @@ export function namesByAuthor(candidates: readonly MemberNameCandidate[]): Recor
       version: c.version,
       ...(c.name !== undefined ? { name: c.name } : {}),
       ...(c.refused !== undefined ? { refused: c.refused } : {}),
+      ...(c.writtenAt !== undefined ? { writtenAt: c.writtenAt } : {}),
+      ...(c.editedAt !== undefined ? { editedAt: c.editedAt } : {}),
     };
   }
   return out;
+}
+
+// ── Writing it again near the head ───────────────────────────────────────────
+
+/**
+ * How far, in versions, a member's write may run past its name record before
+ * it writes the name again: the largest page `rooms/records/list/0.6` returns.
+ * *Near the room's head* (trust-tasks-tf #1038).
+ */
+export const MEMBER_NAME_REWRITE_DISTANCE = 500;
+
+/**
+ * Whether a write the host assigned `writeVersion` should be followed by the
+ * member writing its name again: it exceeds the name record's current
+ * `version` by more than {@link MEMBER_NAME_REWRITE_DISTANCE}. Never for a
+ * member whose name is withdrawn, refused or retracted (`name` absent): such
+ * a member writes nothing.
+ */
+export function memberNameRewriteDue(own: Pick<MemberNameRecord, "version" | "name"> | undefined, writeVersion: number): boolean {
+  if (own === undefined || own.name === undefined) return false;
+  return writeVersion - own.version > MEMBER_NAME_REWRITE_DISTANCE;
 }
 
 // ── Showing a name ───────────────────────────────────────────────────────────
@@ -199,6 +242,15 @@ export function inertName(name: string): string {
 /** What two names are compared by: NFC, then case folded. */
 export function nameFoldKey(name: string): string {
   return inertName(name).normalize("NFC").toLowerCase().normalize("NFC");
+}
+
+/**
+ * What two names are compared by for look-alikes: the UTS #39 `skeleton()` of
+ * the name after NFC and case folding (*Showing a name*). For comparing only —
+ * never shown, and never a name.
+ */
+export function nameSkeletonKey(name: string): string {
+  return skeleton(nameFoldKey(name));
 }
 
 /** A short fingerprint of a DID, to tell apart two authors shown by the same name: the last eight characters of its identifier. */
@@ -224,8 +276,11 @@ export interface AuthorLabel {
 /**
  * How to show each of `dids` (*Showing a name*): the reader's own petname for
  * the DID where it keeps one; else the author's name in this room; else the
- * DID. Two authors whose room names are the same after NFC and case folding —
- * or a room name equal to the reader's petname for another DID — each carry a
+ * DID — shortened by the surface, and never a name from anywhere else (*Before
+ * a name is found*: not a directory's, a DID document's or a credential's, nor
+ * one from another room). Two authors whose room names are the same after NFC
+ * and case folding, or whose UTS #39 skeletons are equal — or a room name that
+ * is either of those to the reader's petname for another DID — each carry a
  * fingerprint, so that neither can pass for the other.
  */
 export function authorLabels(
@@ -250,17 +305,18 @@ export function authorLabels(
     const room = raw !== undefined ? inertName(raw) : "";
     out.set(did, room !== "" ? { source: "room", text: room } : { source: "did" });
   }
-  // Who else answers to a name: every room-named author, and every petname's DID.
+  // Who else answers to a name, or to one that looks the same: every room-named
+  // author, and every petname's DID — by the folded name and by its skeleton.
   const holders = new Map<string, Set<string>>();
+  const keysOf = (name: string) => [`=${nameFoldKey(name)}`, `~${nameSkeletonKey(name)}`];
   const claim = (name: string, did: string) => {
-    const k = nameFoldKey(name);
-    holders.set(k, (holders.get(k) ?? new Set()).add(did));
+    for (const k of keysOf(name)) holders.set(k, (holders.get(k) ?? new Set()).add(did));
   };
   for (const [did, label] of out) if (label.source === "room") claim(label.text!, did);
   for (const [did, name] of petnames) if (inertName(name) !== "") claim(name, did);
   for (const [did, label] of out) {
     if (label.source !== "room") continue;
-    if ((holders.get(nameFoldKey(label.text!))?.size ?? 0) > 1) label.fingerprint = didFingerprint(did);
+    if (keysOf(label.text!).some((k) => (holders.get(k)?.size ?? 0) > 1)) label.fingerprint = didFingerprint(did);
   }
   return out;
 }

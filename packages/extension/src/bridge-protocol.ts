@@ -370,6 +370,25 @@ export interface RuntimeEmitWalletEvent {
   detail?: Record<string, unknown>;
 }
 
+/**
+ * offscreen → the console's pages: a room watched through the wallet's own VTA
+ * moved (`rooms/keys/changed/0.1`). The offscreen document has checked that the
+ * transport proved the sender to be that VTA and that the payload is the
+ * schema's; whether a watch was armed for it is the console's question
+ * (`RoomWatcher.accept`), and a signal nobody armed is dropped there. Content
+ * free: a room, a member, a host and a version — a reason to read, nothing more.
+ * A listener takes it only from the offscreen document itself (`sender.url`),
+ * since a content script carries this extension's id too.
+ */
+export const RUNTIME_ROOMS_KEYS_CHANGED = "vta-wallet/rooms-keys-changed" as const;
+
+export interface RuntimeRoomsKeysChanged {
+  type: typeof RUNTIME_ROOMS_KEYS_CHANGED;
+  /** The VTA the signal came from: the one the watch was armed through. */
+  vtaDid: string;
+  signal: { roomId: string; member: string; host: string; latestVersion: number };
+}
+
 /** offscreen → background: raise a browser notification. An offscreen
  *  document gets `chrome.runtime` and no other extension API, so it cannot
  *  call `chrome.notifications` itself. Not page-facing: the background accepts
@@ -3749,6 +3768,14 @@ interface RoomFilesTarget {
   /** The member (persona DID) to act as. Required where the VTA holds more
    *  than one member of the room: it refuses rather than choose. */
   member?: string;
+  /**
+   * The member's own name record as the console read it (rule 2 of
+   * `MemberProfileRecord`, rooms/_shared/0.3): after a write whose version runs
+   * more than 500 past it, the offscreen document writes the name again
+   * (*Near the room's head*, trust-tasks-tf #1038). Absent where the console
+   * holds none, or the name is withdrawn.
+   */
+  ownName?: { key: string; version: number; name: string; writtenAt?: string; editedAt?: string };
 }
 
 /** console → offscreen, once, as the port's first message. */
