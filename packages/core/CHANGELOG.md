@@ -20,8 +20,9 @@ For history before this file, see `git log` on `packages/core`.
   `pcsVoterReceipt` takes that checkpoint and proof as `evidence`.
   `pcsVoterRead` signs a `tombstone` read
   (`vtc/elections/tombstones/show/0.1`, VTI-BRD-009) through
-  `vta/pcs/voter/read/0.7`; `list` and `show` stay on 0.6, so an older VTA
-  keeps answering them.
+  `vta/pcs/voter/read/0.7`, which every read now uses: the lock pins one
+  version of a task, so `list` and `show` move from 0.6 too, and the wallet
+  needs a VTA that serves read 0.7. `voting/board/inclusion/0.1` is pinned.
 
 - **The reading rules for a room's records** (`SealedRecordBody` at
   `rooms/_shared/0.2`, trust-tasks-tf #1027). `verifyRecordBody` accepts

@@ -106,7 +106,8 @@ function world(opts: WorldOpts = {}) {
       vtaAsked.push(envelope);
       const p = envelope.payload;
       switch (envelope.type) {
-        case `${T}vta/pcs/voter/read/0.6`:
+        case `${T}vta/pcs/voter/read/0.7`:
+          if (p.read === "tombstone") return { document: memberDoc(`${T}vtc/elections/tombstones/show/0.1`, p.payload) };
           return {
             document: memberDoc(
               p.read === "list" ? `${T}vtc/elections/list/0.5` : `${T}vtc/elections/show/0.6`,
@@ -145,8 +146,6 @@ function world(opts: WorldOpts = {}) {
             status: p.inclusion && (p.inclusion as { path: unknown[] }).path.length === 0 ? "notIncluded" : "included",
             leafIndex: 7,
           };
-        case `${T}vta/pcs/voter/read/0.7`:
-          return { document: memberDoc(`${T}vtc/elections/tombstones/show/0.1`, p.payload) };
         case `${T}vta/pcs/voter/receipts/list/0.1`:
           return { electionId: "agm-2027", ballotBox: box.did, receipts: opts.receipts ?? [] };
         case `${T}vta/notifications/list/0.1`:
@@ -262,7 +261,7 @@ test("a ticket: register as the member, the community issues it, the VTA accepts
   assert.deepEqual(got, { taken: true });
   assert.deepEqual(
     w.vtaAsked.map((a) => a.type.slice(T.length)),
-    ["vta/pcs/voter/read/0.6", "vta/pcs/voter/register/0.5", "vta/pcs/voter/accept/0.1"],
+    ["vta/pcs/voter/read/0.7", "vta/pcs/voter/register/0.5", "vta/pcs/voter/accept/0.1"],
   );
   assert.equal(w.toCommunity[1]!.type, `${T}vtc/elections/tickets/issue/0.3`);
   assert.deepEqual(w.vtaAsked[2]!.payload.response, { electionId: "agm-2027", label: "voter/agm-2027", preCredential: "zPre" });
@@ -410,7 +409,7 @@ test("a member holding no credential from the roll's party is told so, and nothi
 test("vti_vot_015: a read asked to present for a party carries the credential that party issued, with memberOf", async () => {
   const w = world({ memberOf: PARTY, vault: [VMC] });
   await runElectionsPageOp(w.deps, VTA, { op: "show", hostDid: VTC, member: MEMBER, electionId: "agm-2027", readAs: { memberOf: PARTY } });
-  const read = w.vtaAsked.find((a) => a.type === `${T}vta/pcs/voter/read/0.6`)!;
+  const read = w.vtaAsked.find((a) => a.type === `${T}vta/pcs/voter/read/0.7`)!;
   assert.equal(read.payload.membershipCredential, "cred-party");
   assert.equal(read.payload.memberOf, PARTY);
   assert.ok((w.toCommunity[0]!.payload as { presentation?: unknown }).presentation);
@@ -419,7 +418,7 @@ test("vti_vot_015: a read asked to present for a party carries the credential th
 test("a read that presents nothing names no credential", async () => {
   const w = world({ memberOf: PARTY, vault: [VMC] });
   await runElectionsPageOp(w.deps, VTA, { op: "show", hostDid: VTC, member: MEMBER, electionId: "agm-2027" });
-  const read = w.vtaAsked.find((a) => a.type === `${T}vta/pcs/voter/read/0.6`)!;
+  const read = w.vtaAsked.find((a) => a.type === `${T}vta/pcs/voter/read/0.7`)!;
   assert.equal("membershipCredential" in read.payload, false);
   assert.equal("memberOf" in read.payload, false);
   assert.equal(w.vtaAsked.some((a) => a.type === `${T}vault/credentials/query/0.1`), false, "the vault is not even looked at");
@@ -513,7 +512,7 @@ test("vti_ntf_063: a notified election is read as the DID it was addressed to, i
   const w = world({ held: [heldElection()], memberOf: PARTY, vault: [VMC] });
   await runElectionsPageOp(w.deps, VTA, { op: "notifiedShow", contextId: "vtc-party", recordId: "hn-0123456789abcdef" });
   await runElectionsPageOp(w.deps, VTA, { op: "notifiedShow", contextId: "vtc-party", recordId: "hn-0123456789abcdef", present: true });
-  const reads = w.vtaAsked.filter((a) => a.type === `${T}vta/pcs/voter/read/0.6`);
+  const reads = w.vtaAsked.filter((a) => a.type === `${T}vta/pcs/voter/read/0.7`);
   assert.equal(reads.length, 2);
   assert.equal(reads[0]!.payload.member, NOTE_MEMBER);
   assert.equal(reads[0]!.payload.contextId, "vtc-party");

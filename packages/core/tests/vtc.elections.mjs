@@ -67,10 +67,10 @@ test("a read is asked of the member's VTA as the member, never sent to the commu
   const s = recordingSender({ document: { id: "x" } });
   await pcsVoterRead(s, { holder: WALLET, service: VTA }, TARGET, "show", { electionId: "agm-2027" });
   const { envelope, opts } = s.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/read/0.6");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/read/0.7");
   assert.equal(envelope.recipient, VTA.did);
   assert.deepEqual(envelope.payload, { ...TARGET, read: "show", payload: { electionId: "agm-2027" } });
-  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vta/pcs/voter/read/0.6#response");
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vta/pcs/voter/read/0.7#response");
 });
 
 test("the ticket request names the member, so the VTA returns it signed as them", async () => {
@@ -305,13 +305,13 @@ test("vti_vot_053: the head checked against is the newest, from the close on", (
   assert.throws(() => closingCheckpoint({ checkpoints: [] }, true), /not kept a head/);
 });
 
-test("vti_vot_053: a tombstone read goes as voter/read 0.7; list and show stay on 0.6", async () => {
+test("vti_vot_053: every read, a tombstone read included, goes as voter/read 0.7", async () => {
   const sender = recordingSender({ document: {} });
   await pcsVoterRead(sender, { holder: WALLET, service: VTA }, TARGET, "tombstone", { electionId: "agm-2027" });
   await pcsVoterRead(sender, { holder: WALLET, service: VTA }, TARGET, "show", { electionId: "agm-2027" });
   assert.equal(sender.sent[0].envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/read/0.7");
   assert.equal(sender.sent[0].envelope.payload.read, "tombstone");
-  assert.equal(sender.sent[1].envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/read/0.6");
+  assert.equal(sender.sent[1].envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/read/0.7");
   await assert.rejects(
     pcsVoterRead(sender, { holder: WALLET, service: VTA }, TARGET, "tombstone", {}, { membershipCredential: "h", memberOf: COMMUNITY }),
     /Only a show/,

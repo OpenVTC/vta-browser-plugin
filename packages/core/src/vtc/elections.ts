@@ -39,11 +39,6 @@ import {
   RESPONSE_TYPE_URI as VOTER_READ_RESPONSE,
   type VTAPCSVoterReadPayload,
   type VTAPCSVoterReadResponsePayload,
-} from "../specs/vta/pcs/voter/read/0.6/payload.js";
-import {
-  TYPE_URI as VOTER_READ_TOMBSTONE,
-  RESPONSE_TYPE_URI as VOTER_READ_TOMBSTONE_RESPONSE,
-  type VTAPCSVoterReadPayload as VTAPCSVoterReadTombstonePayload,
 } from "../specs/vta/pcs/voter/read/0.7/payload.js";
 import {
   TYPE_URI as VOTER_RECEIPTS_LIST,
@@ -126,7 +121,7 @@ function ask<P, R>(
   return sender.send<R>(envelope, { expectedResponseType: responseType, operationLabel: label });
 }
 
-/** What a read presents (`vta/pcs/voter/read/0.6`, VTI-VOT-015): the vault
+/** What a read presents (`vta/pcs/voter/read/0.7`, VTI-VOT-015): the vault
  *  handle of the membership credential the member chose to show, and the DID
  *  they were told the election's credential roll names. The VTA presents it
  *  only where that credential's issuer is exactly `memberOf`, and refuses
@@ -138,9 +133,9 @@ export interface ReadPresenting {
 
 /** `vta/pcs/voter/read`: the VTA signs one election read as the member,
  *  addressed to the community — a `vtc/elections/list/0.5` or
- *  `vtc/elections/show/0.6` request (read/0.6, which every VTA serves) or,
- *  once the election's board is deleted, a `vtc/elections/tombstones/show/0.1`
- *  request (read/0.7, the first to sign one; VTI-BRD-009). The wallet sends the document unchanged.
+ *  `vtc/elections/show/0.6` request or, once the election's board is deleted,
+ *  a `vtc/elections/tombstones/show/0.1` request (VTI-BRD-009) — read/0.7,
+ *  the first to sign a tombstone read. The wallet sends the document unchanged.
  *  `presenting`, for a `show` only, has the VTA present the member's
  *  membership credential in it, bound to that document; a community answers
  *  such a read once, so a lost answer is a new read, never a resend. */
@@ -153,17 +148,13 @@ export async function pcsVoterRead(
   presenting?: ReadPresenting,
 ): Promise<VTAPCSVoterReadResponsePayload> {
   if (presenting && read !== "show") throw new Error("Only a show presents a membership credential.");
-  if (read === "tombstone") {
-    const p: VTAPCSVoterReadTombstonePayload = { ...t, read, payload };
-    return ask(sender, agent, VOTER_READ_TOMBSTONE, VOTER_READ_TOMBSTONE_RESPONSE, "vta/pcs/voter/read/0.7", p);
-  }
   const p: VTAPCSVoterReadPayload = {
     ...t,
     read,
     payload,
     ...(presenting ? { membershipCredential: presenting.membershipCredential, memberOf: presenting.memberOf } : {}),
   };
-  return ask(sender, agent, VOTER_READ, VOTER_READ_RESPONSE, "vta/pcs/voter/read/0.6", p);
+  return ask(sender, agent, VOTER_READ, VOTER_READ_RESPONSE, "vta/pcs/voter/read/0.7", p);
 }
 
 /** `vta/pcs/voter/register/0.5`: the blinded ticket request, and — because

@@ -601,7 +601,7 @@ test("a page cannot drive the voter engine or the community's elections through 
   for (const t of [
     "https://trusttasks.org/spec/vta/pcs/vote/0.4",
     "https://trusttasks.org/spec/vta/pcs/voter/register/0.5",
-    "https://trusttasks.org/spec/vta/pcs/voter/read/0.6",
+    "https://trusttasks.org/spec/vta/pcs/voter/read/0.7",
     "https://trusttasks.org/spec/vtc/elections/tickets/issue/0.3",
     "https://trusttasks.org/spec/vtc/elections/show/0.6",
   ]) {
