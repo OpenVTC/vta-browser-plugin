@@ -37,6 +37,8 @@ import {
   type RuntimeRoomFilesPrepareResponse,
 } from "../bridge-protocol.js";
 import { sendToBackground } from "../send-message.js";
+import type { OwnMemberName } from "@openvtc/pnm-core/rooms";
+import type { RoomPlace } from "./room-groups.js";
 
 /**
  * The largest file the wallet seals in one piece. Core's `ROOM_FILE_MAX_BYTES`,
@@ -72,6 +74,21 @@ export interface RoomFileTarget {
   hostDid: string;
   /** The member (persona DID) to act as: the row's, from `rooms/keys/list`. */
   member?: string;
+  /** The member's own name record, written again after a write that runs 500 versions past it. */
+  ownName?: OwnMemberName;
+}
+
+/** A place the console writes to: a room place, with the member's own name record where the console read one. */
+export type WritingPlace = RoomPlace & { ownName?: OwnMemberName | undefined };
+
+/** The target of a write to `room` at `host`, as the member, carrying the member's own name record. */
+export function writeTarget(room: WritingPlace, host: string): RoomFileTarget {
+  return {
+    roomId: room.roomId,
+    hostDid: host,
+    ...(room.member !== undefined ? { member: room.member } : {}),
+    ...(room.ownName !== undefined ? { ownName: room.ownName } : {}),
+  };
 }
 
 /**
@@ -210,6 +227,7 @@ export async function putRoomFileFromConsole(
     roomId: target.roomId,
     hostDid: target.hostDid,
     ...(target.member !== undefined ? { member: target.member } : {}),
+    ...(target.ownName !== undefined ? { ownName: target.ownName } : {}),
     name,
     size: file.size,
     ...(file.type ? { mediaType: file.type } : {}),
@@ -284,6 +302,7 @@ async function targetOf(target: RoomFileTarget, opts: TransferOptions) {
     roomId: target.roomId,
     hostDid: target.hostDid,
     ...(target.member !== undefined ? { member: target.member } : {}),
+    ...(target.ownName !== undefined ? { ownName: target.ownName } : {}),
   };
 }
 

@@ -37,8 +37,10 @@ import type { SendOpts, TaskParty, TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 import { roomsKeysProfileRead } from "./profile.js";
 import {
+  isNameWithdrawal,
   MEMBER_PROFILE_KIND,
   memberNameRefusal,
+  memberNameRewriteDue,
   memberNameWriteRefusal,
 } from "./member-name.js";
 
@@ -587,6 +589,63 @@ export async function writeMemberNameAsMember(
           mine !== undefined ? { replaces: mine.version } : {},
         );
   return { principal, key, version };
+}
+
+/** The member's own name record, as rule 2 gives it from the records its client holds: what a rewrite near the head writes again. */
+export interface OwnMemberName {
+  key: string;
+  version: number;
+  /** The name rule 2 gives. A withdrawn (or refused, or retracted) name is never written again. */
+  name: string;
+  /** The version's own `writtenAt` and `editedAt`, kept unchanged by the rewrite. */
+  writtenAt?: string;
+  editedAt?: string;
+}
+
+/**
+ * After a write the host assigned `writeVersion`, write the member's name again
+ * where it has fallen more than `MEMBER_NAME_REWRITE_DISTANCE` (500) versions
+ * behind (*Near the room's head*, rooms/_shared/0.3 `MemberProfileRecord`,
+ * trust-tasks-tf #1038), so a reader that opens only recent pages still finds
+ * it. Answers the new version, or `undefined` when nothing was due.
+ *
+ * **Writing it again** is a new version of the same record — the same key, the
+ * name rule 2 gives (`own`, from the records the client holds, never a name a
+ * device remembers), `writtenAt` kept unchanged and no new `editedAt` (an
+ * earlier one stays as it is), since the name has not changed. It `replaces`
+ * the version read, so a concurrent change on another device wins and this
+ * writes nothing. The writer's gate applies as to any name: a room whose
+ * profile no longer lists `kind` and `memberProfile` gets nothing.
+ */
+export async function rewriteMemberNameAsMember(
+  room: PersonaRoom,
+  own: OwnMemberName | undefined,
+  writeVersion: number,
+): Promise<number | undefined> {
+  if (own === undefined || !memberNameRewriteDue(own, writeVersion)) return undefined;
+  if (isNameWithdrawal(own.name) || memberNameRefusal(own.name) !== undefined) return undefined;
+  const listed = await roomRecordMembersAsMember(room);
+  if (memberNameWriteRefusal(listed) !== undefined) return undefined;
+  const { principal, info } = await roomInfoAsMember(room);
+  const times = {
+    ...(own.writtenAt !== undefined ? { writtenAt: own.writtenAt } : {}),
+    ...(own.editedAt !== undefined ? { editedAt: own.editedAt } : {}),
+  };
+  return info.visibility === "open"
+    ? putCleartextAsMember(room, {
+        key: own.key,
+        kind: MEMBER_PROFILE_KIND,
+        title: own.name,
+        body: "",
+        ...times,
+        replaces: own.version,
+      })
+    : writeSealedAsMember(
+        room,
+        { roomId: room.roomId, key: own.key, author: principal, kind: MEMBER_PROFILE_KIND, title: own.name, ...times },
+        undefined,
+        { replaces: own.version },
+      );
 }
 
 /** An opaque record key, as a sealed tier requires: 16 random bytes. */

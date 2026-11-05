@@ -540,7 +540,10 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // `vta/notifications/{list,show,dismiss,deposit}` and the `notifications/
   // {notify,relay}` a deposit carries (+6) — and `vtc/elections/show`, which
   // this library read all along and the SDK now names (+1).
-  const expected = 242;
+  // 242 → 244, with the snapshot resynced from vta-sdk 0.83.0 (canonical total
+  // 347): watching rooms through the member's VTA (rooms/watch.ts) —
+  // `rooms/keys/watch` and the `rooms/keys/changed` it signals with.
+  const expected = 244;
   assert.equal(
     implemented.size,
     expected,

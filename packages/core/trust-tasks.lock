@@ -933,6 +933,12 @@ type_uri = "https://trusttasks.org/spec/rooms/keys/chain/0.2"
 digest = "sha256:9dfdfccd20513f25de448dc363e3edb4eda035d6e854015fb472c90ec664695d"
 
 [[task]]
+slug = "rooms/keys/changed"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/rooms/keys/changed/0.1"
+digest = "sha256:24741473019bbc75007f2581a0ed4e349b5574728d85b11e20207e6799483f51"
+
+[[task]]
 slug = "rooms/keys/file-key"
 version = "0.2"
 type_uri = "https://trusttasks.org/spec/rooms/keys/file-key/0.2"
@@ -985,6 +991,12 @@ slug = "rooms/keys/seal"
 version = "0.3"
 type_uri = "https://trusttasks.org/spec/rooms/keys/seal/0.3"
 digest = "sha256:51c040522e644204b435e52a30e3e6f44444103b9cccaf695ca975c4ab2edd34"
+
+[[task]]
+slug = "rooms/keys/watch"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/rooms/keys/watch/0.1"
+digest = "sha256:035ac34e7bc81e665c540a8a1594eb61ddba5e5ac8c3f4fbf4b68cc97547f38b"
 
 [[task]]
 slug = "rooms/keys/welcome"
