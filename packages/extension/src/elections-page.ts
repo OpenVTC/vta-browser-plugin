@@ -81,6 +81,7 @@ import type {
   RuntimeElectionsPageResponse,
   RuntimeNotifiedElectionResponse,
 } from "./bridge-protocol.js";
+import { PageRefusal, forwardedCode, pageErrorCode, pageFailure, type PageErrorCode } from "./page-error.js";
 
 /** `chrome.storage.session` key prefix for an election window's view. */
 export const ELECTION_CONSENT_PREFIX = "election-consent:";
@@ -192,7 +193,7 @@ export interface ActiveVta {
 }
 
 export interface ElectionsPageDeps {
-  active(): Promise<{ ok: true; vta: ActiveVta } | { ok: false; error: string }>;
+  active(): Promise<{ ok: true; vta: ActiveVta } | { ok: false; error: string; code?: PageErrorCode }>;
   offscreen(vta: ActiveVta, op: OffscreenElectionsPageOp): Promise<OffscreenElectionsPageResponse>;
   /** Whether the wallet holds a host permission for `url`'s origin. */
   canReach(url: string): Promise<boolean>;
@@ -357,14 +358,8 @@ export function ticketKey(hostDid: string, member: string, electionId: string): 
 /** How long a community's resolved portal is trusted before it is resolved again. */
 const PORTAL_CACHE_MS = 5 * 60 * 1000;
 
-class ElectionsPageRefusal extends Error {
-  constructor(
-    message: string,
-    readonly code?: string,
-  ) {
-    super(message);
-  }
-}
+/** A refusal of this channel, always with its page code (`page-error.ts`). */
+class ElectionsPageRefusal extends PageRefusal {}
 
 /** An election as read, and how it was read: `readAs` when the read presented
  *  the member's membership credential, so the reads that follow do too. */
@@ -387,7 +382,7 @@ export class ElectionsPageGates {
 
   private async offscreen(vta: ActiveVta, op: OffscreenElectionsPageOp): Promise<unknown> {
     const res = await this.deps.offscreen(vta, op);
-    if (!res.ok) throw new ElectionsPageRefusal(res.error, res.code);
+    if (!res.ok) throw new ElectionsPageRefusal(res.error, forwardedCode(res.code));
     return res.result;
   }
 
@@ -404,7 +399,7 @@ export class ElectionsPageGates {
   async handle(origin: string, raw: unknown): Promise<RuntimeElectionsPageResponse> {
     try {
       const malformed = electionsPageParamsRefusal(raw);
-      if (malformed) return { ok: false, error: malformed };
+      if (malformed) return { ok: false, error: malformed, code: "invalidCall" };
       const p = raw as ElectionsPageOp;
       const { vta, who } = await this.gate(origin, p);
       switch (p.op) {
@@ -420,25 +415,27 @@ export class ElectionsPageGates {
           return { ok: true, result: await this.vote(origin, vta, p.hostDid, who, p.electionId, p.memberOf) };
       }
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      return pageFailure(e);
     }
   }
 
   /** Gates 2 and 3: the page is the portal, and the identity is the wallet's. */
   private async gate(origin: string, p: ElectionsPageOp): Promise<{ vta: ActiveVta; who: Identity }> {
     const active = await this.deps.active();
-    if (!active.ok) throw new ElectionsPageRefusal(active.error);
+    if (!active.ok) throw new ElectionsPageRefusal(active.error, active.code ?? "notConnected");
     const vta = active.vta;
     const { portalOrigin, endpoint } = await this.portal(vta, p.hostDid);
     if (origin !== portalOrigin) {
       throw new ElectionsPageRefusal(
         `${origin} is not ${p.hostDid}'s portal: its DID document names ${portalOrigin}. ` +
           `A page can reach a member's elections only from the portal the community's own DID document names.`,
+        "originNotPermitted",
       );
     }
     if (!(await this.deps.canReach(endpoint))) {
       throw new ElectionsPageRefusal(
         `The wallet may not reach ${new URL(endpoint).origin} yet. Allow it from the wallet's popup, then try again.`,
+        "hostPermissionRequired",
       );
     }
     const members = ((await this.offscreen(vta, { op: "members", hostDid: p.hostDid })) as Identity[]).filter(
@@ -447,15 +444,16 @@ export class ElectionsPageGates {
     let who: Identity | undefined;
     if (p.member !== undefined) {
       who = members.find((m) => m.did === p.member);
-      if (!who) throw new ElectionsPageRefusal("The wallet holds no such identity for this community.");
+      if (!who) throw new ElectionsPageRefusal("The wallet holds no such identity for this community.", "identityUnknown");
     } else if (members.length === 1) {
       who = members[0]!;
     } else {
-      throw new ElectionsPageRefusal(
-        members.length === 0
-          ? "The wallet holds no identity you use at this community."
-          : "You use more than one identity at this community: sign in with the one to vote as.",
-      );
+      throw members.length === 0
+        ? new ElectionsPageRefusal("The wallet holds no identity you use at this community.", "identityUnknown")
+        : new ElectionsPageRefusal(
+            "You use more than one identity at this community: sign in with the one to vote as.",
+            "identityAmbiguous",
+          );
     }
     return { vta, who };
   }
@@ -550,7 +548,9 @@ export class ElectionsPageGates {
       electionId,
       memberOf,
     });
-    if (!decided.approved) throw new ElectionsPageRefusal("You chose not to show your membership, so the election was not read.");
+    if (!decided.approved) {
+      throw new ElectionsPageRefusal("You chose not to show your membership, so the election was not read.", "declined");
+    }
     const shown = (await this.offscreen(vta, { op: "show", hostDid, member: who.did, electionId, readAs: readAs(memberOf) })) as ElectionShown;
     // The community has now learnt the membership: later reads of this
     // election present it without asking again.
@@ -591,7 +591,7 @@ export class ElectionsPageGates {
       fromVote,
       ...(presents ? { presents } : {}),
     });
-    if (!decided.approved) throw new ElectionsPageRefusal("You did not take a ticket.");
+    if (!decided.approved) throw new ElectionsPageRefusal("You did not take a ticket.", "declined");
     const got = (await this.offscreen(vta, {
       op: "takeTicket",
       hostDid,
@@ -638,7 +638,7 @@ export class ElectionsPageGates {
           electionId,
           e instanceof ElectionsPageRefusal && e.code === "electionUnknown"
             ? { electionId, outcome: "unavailable" }
-            : { electionId, outcome: "failed", error: e instanceof Error ? e.message : String(e) },
+            : { electionId, outcome: "failed", error: e instanceof Error ? e.message : String(e), code: pageErrorCode(e) },
         );
         continue;
       }
@@ -662,7 +662,7 @@ export class ElectionsPageGates {
         member: who.did,
         elections: pending.map((p) => ({ election: pageElectionViewOf(p.shown), ...(p.presents ? { presents: p.presents } : {}) })),
       });
-      if (!decided.approved) throw new ElectionsPageRefusal("You did not take your tickets.");
+      if (!decided.approved) throw new ElectionsPageRefusal("You did not take your tickets.", "declined");
       const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
       const spacing = this.deps.ticketSpacingMs ?? defaultTicketSpacingMs;
       for (const [i, p] of pending.entries()) {
@@ -679,7 +679,12 @@ export class ElectionsPageGates {
           if (got.taken) await this.deps.rememberTicket(ticketKey(hostDid, who.did, p.electionId), this.deps.now());
           outcome.set(p.electionId, { electionId: p.electionId, outcome: got.taken ? "taken" : "held" });
         } catch (e) {
-          outcome.set(p.electionId, { electionId: p.electionId, outcome: "failed", error: e instanceof Error ? e.message : String(e) });
+          outcome.set(p.electionId, {
+            electionId: p.electionId,
+            outcome: "failed",
+            error: e instanceof Error ? e.message : String(e),
+            code: pageErrorCode(e),
+          });
         }
       }
     }
@@ -724,7 +729,8 @@ export class ElectionsPageGates {
         memberOf = await this.notifiedAudience(vta, hostDid, who, electionId);
       }
       if (memberOf === undefined && (await this.deps.disclosedFor(key)) === undefined) {
-        throw new ElectionsPageRefusal("No such election is open to you at this community.");
+        // The community's own answer, by its list: the code it would give.
+        throw new ElectionsPageRefusal("No such election is open to you at this community.", "electionUnknown");
       }
       if ((await this.deps.ticketTakenAt(key)) === undefined) {
         const took = await this.takeTicket(origin, vta, hostDid, who, electionId, true, memberOf);
@@ -785,7 +791,7 @@ export class ElectionsPageGates {
   async openNotified(params: { contextId: string; recordId: string; present?: boolean }): Promise<RuntimeNotifiedElectionResponse> {
     try {
       const active = await this.deps.active();
-      if (!active.ok) throw new ElectionsPageRefusal(active.error);
+      if (!active.ok) throw new ElectionsPageRefusal(active.error, active.code ?? "notConnected");
       const vta = active.vta;
       const ref = { contextId: params.contextId, recordId: params.recordId };
       const target = (await this.offscreen(vta, { op: "notifiedTarget", ...ref })) as NotifiedElection & { endpoint: string };
@@ -816,11 +822,7 @@ export class ElectionsPageGates {
       const { held } = (await this.offscreen(vta, { op: "notifiedMembership", ...ref })) as { held: boolean };
       return { ok: true, result: { kind: "needsPresent", audience: target.audience, held, ...base, member: target.addressee } };
     } catch (e) {
-      return {
-        ok: false,
-        error: e instanceof Error ? e.message : String(e),
-        ...(e instanceof ElectionsPageRefusal && e.code ? { code: e.code } : {}),
-      };
+      return pageFailure(e);
     }
   }
 
@@ -847,10 +849,11 @@ export class ElectionsPageGates {
     try {
       await report({ phase: "running", step });
       const refused = ballotRefusal(shown.manifest, shown.manifestDigest, ballot);
-      if (refused) throw new ElectionsPageRefusal(refused);
+      if (refused) throw new ElectionsPageRefusal(refused, "invalidCall");
       if (!(await this.deps.canReach(endpoint))) {
         throw new ElectionsPageRefusal(
           `The wallet may not reach the ballot box at ${host}, so nothing was sent. Vote again and allow it when asked.`,
+          "hostPermissionRequired",
         );
       }
 
@@ -871,6 +874,7 @@ export class ElectionsPageGates {
       if (prepared.endpoint !== endpoint && !(await this.deps.canReach(prepared.endpoint))) {
         throw new ElectionsPageRefusal(
           `The ballot box now names another door (${new URL(prepared.endpoint).host}), which the wallet may not reach. Vote again.`,
+          "hostPermissionRequired",
         );
       }
 

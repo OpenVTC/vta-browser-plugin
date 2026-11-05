@@ -204,6 +204,7 @@ test("a page that is not the community's portal gets nothing, and no prompt", as
   const h = harness();
   const res = await h.gates.handle("https://evil.example", { op: "choose", hostDid: HOST });
   assert.equal(res.ok, false);
+  assert.equal((res as { code?: string }).code, "originNotPermitted");
   assert.equal(h.prompts.length, 0);
   assert.ok(!h.asked.some((a) => a.op === "held"), "the member's rooms were not even listed");
 });
@@ -385,6 +386,7 @@ test("list never prompts, and reads need a share", async () => {
   assert.deepEqual(list, { ok: true, result: { rooms: [] } });
   const read = await h.gates.handle(PORTAL, { op: "read", hostDid: HOST, roomId: ROOM, key: "k" });
   assert.equal(read.ok, false);
+  assert.equal((read as { code?: string }).code, "notShared");
   assert.ok(!h.asked.some((a) => a.op === "read"));
 
   h.answer = { approved: true, selectedRooms: [as(ROOM)] };
@@ -402,7 +404,7 @@ test("every note is confirmed, showing who signs and what is written", async () 
 
   h.answer = { approved: false };
   const denied = await h.gates.handle(PORTAL, { op: "putNote", hostDid: HOST, roomId: ROOM, title: "Pricing", body: "Hold." });
-  assert.deepEqual(denied, { ok: false, error: "the member declined to add this note" });
+  assert.deepEqual(denied, { ok: false, error: "the member declined to add this note", code: "declined" });
   assert.ok(!h.asked.some((a) => a.op === "putNote"), "nothing was written");
   const view = h.prompts.at(-1) as RoomWriteConsentView;
   assert.equal(view.kind, "write");
@@ -475,18 +477,22 @@ test("a download that fails releases nothing to the page", async () => {
   page.receive({ kind: "get", hostDid: HOST, roomId: ROOM, key: "k" });
   await settle();
   h.inner[0]!.receive({ kind: "provisional", data: "AAAA" });
-  h.inner[0]!.receive({ kind: "failed", error: "chunk 1 does not match the manifest" });
-  assert.deepEqual(page.posted.map((m) => (m as { kind: string }).kind), ["failed"]);
+  h.inner[0]!.receive({ kind: "failed", error: "chunk 1 does not match the manifest", code: "hostMisbehaved" });
+  assert.deepEqual(page.posted, [{ kind: "failed", error: "chunk 1 does not match the manifest", code: "hostMisbehaved" }]);
 });
 
 test("a file from a room not shared, or another origin, is refused before the offscreen document is asked", async () => {
   const h = await sharedHarness();
-  for (const [origin, roomId] of [["https://evil.example", ROOM], [PORTAL, OTHER_ROOM]] as const) {
+  for (const [origin, roomId, code] of [
+    ["https://evil.example", ROOM, "originNotPermitted"],
+    [PORTAL, OTHER_ROOM, "notShared"],
+  ] as const) {
     const page = new FakePort();
     h.gates.servePort(page, origin);
     page.receive({ kind: "get", hostDid: HOST, roomId, key: "k" });
     await settle();
     assert.equal((page.posted[0] as { kind: string }).kind, "failed");
+    assert.equal((page.posted[0] as { code?: string }).code, code);
   }
   assert.equal(h.inner.length, 0);
 });
@@ -519,6 +525,18 @@ test("a declined upload opens no transfer, and data sent early is refused", asyn
   await settle();
   assert.equal(h.inner.length, 0);
   assert.equal((page.posted[0] as { kind: string }).kind, "failed");
+  // The early data is what is refused first: bytes before the wallet is ready.
+  assert.equal((page.posted[0] as { code?: string }).code, "invalidCall");
+});
+
+test("a declined upload is declined", async () => {
+  const h = await sharedHarness();
+  h.answer = { approved: false };
+  const page = new FakePort();
+  h.gates.servePort(page, PORTAL);
+  page.receive({ kind: "put", hostDid: HOST, roomId: ROOM, name: "a", size: 1 });
+  await settle();
+  assert.deepEqual(page.posted, [{ kind: "failed", error: "the member declined to add this file", code: "declined" }]);
 });
 
 // ── What a record looks like to a page ──────────────────────────────────────

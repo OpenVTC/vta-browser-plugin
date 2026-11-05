@@ -343,6 +343,7 @@ import {
   type RuntimeSignInStepResponse,
   type OffscreenSignInStepRequest,
 } from "./bridge-protocol.js";
+import { pageFailure } from "./page-error.js";
 import { failureLogFields } from "./sign-in-failure.js";
 
 /** Consent-gated requests awaiting their one exempt replay. In-memory by
@@ -913,7 +914,7 @@ const roomOffers = new RoomOffers({
       ...(vta.restBaseUrl ? { restBaseUrl: vta.restBaseUrl } : {}),
       params,
     })) as OffscreenRoomOffersResponse | undefined;
-    return reply ?? { ok: false, error: "the offscreen document did not answer" };
+    return reply ?? { ok: false, error: "the offscreen document did not answer", code: "walletUnavailable" };
   },
   canReach: (url) => hasOriginPermission(url),
   prompt: requestRoomConsent,
@@ -933,7 +934,7 @@ const roomPageGates = new RoomPageGates({
   offers: roomOffers,
   async active() {
     const active = await readActiveConnection();
-    if (!active.ok) return { ok: false, error: active.error };
+    if (!active.ok) return { ok: false, error: active.error, code: "notConnected" };
     return {
       ok: true,
       vta: { vtaDid: active.conn.vtaDid, ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}) },
@@ -948,7 +949,7 @@ const roomPageGates = new RoomPageGates({
       ...(vta.restBaseUrl ? { restBaseUrl: vta.restBaseUrl } : {}),
       params,
     })) as OffscreenRoomsPageResponse | undefined;
-    return reply ?? { ok: false, error: "the offscreen document did not answer" };
+    return reply ?? { ok: false, error: "the offscreen document did not answer", code: "walletUnavailable" };
   },
   canReach: (url) => hasOriginPermission(url),
   async loadGrants(origin, vtaDid) {
@@ -1011,7 +1012,7 @@ async function requestDirectoryConsent(
 const directoryPageGates = new DirectoryPageGates({
   async active() {
     const active = await readActiveConnection();
-    if (!active.ok) return { ok: false, error: active.error };
+    if (!active.ok) return { ok: false, error: active.error, code: "notConnected" };
     return {
       ok: true,
       vta: { vtaDid: active.conn.vtaDid, ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}) },
@@ -1026,7 +1027,7 @@ const directoryPageGates = new DirectoryPageGates({
       ...(vta.restBaseUrl ? { restBaseUrl: vta.restBaseUrl } : {}),
       params,
     })) as OffscreenDirectoryPageResponse | undefined;
-    return reply ?? { ok: false, error: "the offscreen document did not answer" };
+    return reply ?? { ok: false, error: "the offscreen document did not answer", code: "walletUnavailable" };
   },
   canReach: (url) => hasOriginPermission(url),
   prompt: requestDirectoryConsent,
@@ -1073,7 +1074,7 @@ async function requestGitConsent(view: GitConsentView): Promise<{ approved: bool
 const gitPageGates = new GitPageGates({
   async active() {
     const active = await readActiveConnection();
-    if (!active.ok) return { ok: false, error: active.error };
+    if (!active.ok) return { ok: false, error: active.error, code: "notConnected" };
     return {
       ok: true,
       vta: { vtaDid: active.conn.vtaDid, ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}) },
@@ -1088,7 +1089,7 @@ const gitPageGates = new GitPageGates({
       ...(vta.restBaseUrl ? { restBaseUrl: vta.restBaseUrl } : {}),
       params,
     })) as OffscreenGitPageResponse | undefined;
-    return reply ?? { ok: false, error: "the offscreen document did not answer" };
+    return reply ?? { ok: false, error: "the offscreen document did not answer", code: "walletUnavailable" };
   },
   canReach: (url) => hasOriginPermission(url),
   prompt: requestGitConsent,
@@ -1167,7 +1168,7 @@ const ELECTION_DISCLOSED_PREFIX = "election-disclosed:";
 const electionsPageGates = new ElectionsPageGates({
   async active() {
     const active = await readActiveConnection();
-    if (!active.ok) return { ok: false, error: active.error };
+    if (!active.ok) return { ok: false, error: active.error, code: "notConnected" };
     return {
       ok: true,
       vta: { vtaDid: active.conn.vtaDid, ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}) },
@@ -1182,7 +1183,7 @@ const electionsPageGates = new ElectionsPageGates({
       ...(vta.restBaseUrl ? { restBaseUrl: vta.restBaseUrl } : {}),
       params,
     })) as OffscreenElectionsPageResponse | undefined;
-    return reply ?? { ok: false, error: "the offscreen document did not answer" };
+    return reply ?? { ok: false, error: "the offscreen document did not answer", code: "walletUnavailable" };
   },
   canReach: (url) => hasOriginPermission(url),
   prompt: requestElectionConsent,
@@ -3982,7 +3983,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.warn(
         `[background] rejecting page-facing ${msgType} with no browser-attested origin`,
       );
-      sendResponse({ ok: false, error: "no attested origin" });
+      sendResponse({ ok: false, error: "no attested origin", code: "originNotPermitted" });
       return false;
     }
     (message as { origin?: string }).origin = attested;
@@ -4038,7 +4039,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     directoryPageGates
       .handle(req.origin, req.params)
       .then(sendResponse)
-      .catch((e: unknown) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+      .catch((e: unknown) => sendResponse(pageFailure(e)));
     return true; // async sendResponse
   }
 
@@ -4048,7 +4049,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     gitPageGates
       .handle(req.origin, req.params)
       .then(sendResponse)
-      .catch((e: unknown) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+      .catch((e: unknown) => sendResponse(pageFailure(e)));
     return true; // async sendResponse
   }
 
@@ -4058,7 +4059,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     electionsPageGates
       .handle(req.origin, req.params)
       .then(sendResponse)
-      .catch((e: unknown) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+      .catch((e: unknown) => sendResponse(pageFailure(e)));
     return true; // async sendResponse
   }
 
@@ -4068,7 +4069,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     roomPageGates
       .handle(req.origin, req.params)
       .then(sendResponse)
-      .catch((e: unknown) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+      .catch((e: unknown) => sendResponse(pageFailure(e)));
     return true; // async sendResponse
   }
 

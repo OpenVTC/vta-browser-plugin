@@ -109,6 +109,12 @@ function harness(
     reachCommunity?: boolean;
     /** Elections whose ticket request the community refuses. */
     ticketFails?: string[];
+    /** The active connection, when there is none. */
+    inactive?: { ok: false; error: string; code?: string };
+    /** An offscreen operation that fails, as the offscreen document answers it. */
+    refuse?: Partial<Record<OffscreenElectionsPageOp["op"], { ok: false; error: string; code?: string }>>;
+    /** The identities the member uses at the community. */
+    members?: { did: string; communityName: string }[];
   } = {},
 ) {
   const asked: OffscreenElectionsPageOp[] = [];
@@ -129,15 +135,17 @@ function harness(
   }
   const deps: ElectionsPageDeps = {
     async active() {
-      return { ok: true, vta: VTA };
+      return opts.inactive ?? { ok: true, vta: VTA };
     },
     async offscreen(_vta, op) {
       asked.push(op);
+      const refused = opts.refuse?.[op.op];
+      if (refused) return refused;
       switch (op.op) {
         case "portal":
           return { ok: true, result: { portalOrigin: PORTAL, endpoint: ENDPOINT } };
         case "members":
-          return { ok: true, result: [{ did: MEMBER, communityName: "Acme Guild" }] };
+          return { ok: true, result: opts.members ?? [{ did: MEMBER, communityName: "Acme Guild" }] };
         case "ballotBox":
           return { ok: true, result: { endpoint: BOX_DOOR } };
         case "list":
@@ -777,4 +785,126 @@ test("the page learns nothing from takeTickets that list would not tell it", asy
   for (const k of ["manifest", "ballot", "receipt", "voted", "presentation", "credential"]) {
     assert.equal(text.includes(k), false, `${k} stays with the wallet`);
   }
+});
+
+// ── The code every refusal carries to the page (docs/page-bridge-errors.md) ──
+//
+// A portal tells one refusal from another by `code`, never by the message,
+// which the wallet rewords freely. Each gate's refusal names its own.
+
+const OTHER_MEMBER = "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
+const failure = (res: unknown) => res as { ok: false; error: string; code: string };
+
+test("page code: a malformed call is invalidCall, and nothing is asked", async () => {
+  const h = harness();
+  const res = failure(await h.gates.handle(PORTAL, { op: "cast", hostDid: HOST }));
+  assert.equal(res.code, "invalidCall");
+  assert.equal(h.asked.length, 0);
+});
+
+test("page code: no agent connection is notConnected", async () => {
+  const h = harness({ inactive: { ok: false, error: "no active VTA connection — connect first" } });
+  const res = failure(await h.gates.handle(PORTAL, { op: "list", hostDid: HOST }));
+  assert.deepEqual(res, { ok: false, error: "no active VTA connection — connect first", code: "notConnected" });
+});
+
+test("page code: a page that is not the portal is originNotPermitted; an endpoint not allowed, hostPermissionRequired", async () => {
+  assert.equal(failure(await harness().gates.handle("https://evil.example", { op: "list", hostDid: HOST })).code, "originNotPermitted");
+  const unreachable = failure(await harness({ reachCommunity: false }).gates.handle(PORTAL, { op: "list", hostDid: HOST }));
+  assert.equal(unreachable.code, "hostPermissionRequired");
+});
+
+test("page code: an identity the wallet does not hold is identityUnknown; two and none named, identityAmbiguous", async () => {
+  const unknown = failure(await harness().gates.handle(PORTAL, { op: "list", hostDid: HOST, member: OTHER_MEMBER }));
+  assert.equal(unknown.code, "identityUnknown");
+  const none = failure(await harness({ members: [] }).gates.handle(PORTAL, { op: "list", hostDid: HOST }));
+  assert.equal(none.code, "identityUnknown");
+  const two = harness({
+    members: [
+      { did: MEMBER, communityName: "Acme Guild" },
+      { did: OTHER_MEMBER, communityName: "Acme Guild" },
+    ],
+  });
+  assert.equal(failure(await two.gates.handle(PORTAL, { op: "list", hostDid: HOST })).code, "identityAmbiguous");
+});
+
+test("page code: every no in the wallet's window is declined", async () => {
+  const ticket = failure(await harness({ approve: false }).gates.handle(PORTAL, { op: "takeTicket", hostDid: HOST, electionId: "agm-2027" }));
+  assert.equal(ticket.code, "declined");
+
+  const tickets = failure(
+    await harness({ approve: false, ticketHeld: false }).gates.handle(PORTAL, { op: "takeTickets", hostDid: HOST, electionIds: ["agm-2027"] }),
+  );
+  assert.equal(tickets.code, "declined");
+
+  const party = "did:webvh:QmParty:party.example";
+  const shown = failure(
+    await harness({ approve: false, unknownUnlessPresenting: true }).gates.handle(PORTAL, {
+      op: "show",
+      hostDid: HOST,
+      electionId: "agm-2027",
+      memberOf: party,
+    }),
+  );
+  assert.equal(shown.code, "declined");
+  assert.match(shown.error, /chose not to show your membership/, "the message is unchanged");
+});
+
+test("page code: a vote the member declines in the ballot window is not an error at all", async () => {
+  const res = await harness({ approve: false }).gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" });
+  assert.deepEqual(res, { ok: true, result: { ticketTaken: false } });
+});
+
+test("page code: the community's electionUnknown reaches the page by that name, as does the wallet's reading of its list", async () => {
+  const shown = failure(
+    await harness({ unknownUnlessPresenting: true }).gates.handle(PORTAL, { op: "show", hostDid: HOST, electionId: "agm-2027" }),
+  );
+  assert.equal(shown.code, "electionUnknown");
+  const voted = failure(
+    await harness({ listed: false }).gates.handle(PORTAL, { op: "vote", hostDid: HOST, electionId: "agm-2027" }),
+  );
+  assert.equal(voted.code, "electionUnknown");
+});
+
+test("page code: no credential of the party an election is put to is membershipNotHeld", async () => {
+  const res = failure(
+    await harness({ unknownUnlessPresenting: true, held: false }).gates.handle(PORTAL, {
+      op: "show",
+      hostDid: HOST,
+      electionId: "agm-2027",
+      memberOf: "did:webvh:QmParty:party.example",
+    }),
+  );
+  assert.equal(res.code, "membershipNotHeld");
+});
+
+test("page code: a Trust Task code and a wallet code from the offscreen document are carried as they came", async () => {
+  const indeterminate = harness({
+    refuse: { show: { ok: false, error: "Acme Guild could not check your membership credential just now.", code: "indeterminate" } },
+  });
+  const res = failure(await indeterminate.gates.handle(PORTAL, { op: "show", hostDid: HOST, electionId: "agm-2027" }));
+  assert.deepEqual(res, { ok: false, error: "Acme Guild could not check your membership credential just now.", code: "indeterminate" });
+
+  const locked = harness({ refuse: { members: { ok: false, error: "wallet is locked: unlock via popup before retrying", code: "walletLocked" } } });
+  assert.equal(failure(await locked.gates.handle(PORTAL, { op: "list", hostDid: HOST })).code, "walletLocked");
+
+  const gone = harness({ refuse: { portal: { ok: false, error: "the offscreen document did not answer", code: "walletUnavailable" } } });
+  assert.equal(failure(await gone.gates.handle(PORTAL, { op: "list", hostDid: HOST })).code, "walletUnavailable");
+});
+
+test("page code: a code that is not one name never reaches the page", async () => {
+  for (const code of ["e.p.msg.forbidden", "<img src=x>", "a credential: eyJhbGciOi", undefined]) {
+    const h = harness({ refuse: { show: { ok: false, error: "refused", ...(code !== undefined ? { code } : {}) } } });
+    const res = failure(await h.gates.handle(PORTAL, { op: "show", hostDid: HOST, electionId: "agm-2027" }));
+    assert.equal(res.code, "unclassified", String(code));
+  }
+});
+
+test("page code: one ticket of several that failed carries its code in its entry", async () => {
+  const h = harness({ ticketHeld: false, refuse: { takeTicket: { ok: false, error: "Tickets for this election are not being issued now.", code: "notOpen" } } });
+  const res = await h.gates.handle(PORTAL, { op: "takeTickets", hostDid: HOST, electionIds: ["agm-2027"] });
+  assert.equal(res.ok, true);
+  assert.deepEqual((res as { result: { tickets: unknown[] } }).result.tickets, [
+    { electionId: "agm-2027", outcome: "failed", error: "Tickets for this election are not being issued now.", code: "notOpen" },
+  ]);
 });

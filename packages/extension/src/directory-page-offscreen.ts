@@ -67,6 +67,7 @@ import type {
   PageVerifiedFieldsView,
   PreparedPresent,
 } from "./bridge-protocol.js";
+import { PageRefusal, trustTaskLocalCode } from "./page-error.js";
 
 /** A `didSelfIssued` vault entry, as much of one as this needs. */
 export interface DirectoryIdentity {
@@ -156,7 +157,7 @@ function refusalWords(e: unknown, community: string): Error {
     signatureInvalid: `${community} couldn't verify your signature on the card. Nothing was published.`,
     notMember: `${community} doesn't count you as an active member.`,
   };
-  return new Error(said[local] ?? `${community} didn't publish your card (${e.code}).`);
+  return new PageRefusal(said[local] ?? `${community} didn't publish your card (${e.code}).`, trustTaskLocalCode(e.code) ?? "unclassified");
 }
 
 /** The trust-task-error code and details an agent or community refusal carries. */
@@ -181,7 +182,7 @@ function presentRefusalWords(e: unknown): Error {
     "vault/credentials/present:claimNotHeld": "That credential doesn't carry what these fields ask for.",
     "vault/credentials/present:formatUnsupported": "Your agent can't present a credential of that kind here.",
   };
-  if (code && said[code]) return new Error(said[code]);
+  if (code && said[code]) return new PageRefusal(said[code], trustTaskLocalCode(code) ?? "unclassified");
   return e instanceof Error ? e : new Error(String(e));
 }
 
@@ -197,7 +198,7 @@ function cardPresentRefusalWords(e: unknown, community: string): Error {
     issuerNotAccepted: `${community} doesn't accept that credential's issuer for one of those fields.`,
     claimMissing: `The credential doesn't show what one of those fields reads.`,
   };
-  return new Error(said[local] ?? `${community} didn't add the credential to your card (${e.code}).`);
+  return new PageRefusal(said[local] ?? `${community} didn't add the credential to your card (${e.code}).`, trustTaskLocalCode(e.code) ?? "unclassified");
 }
 
 /** Run one directory operation. Throws with a message fit for the page. */
@@ -216,7 +217,7 @@ export async function runDirectoryPageOp(
   if (op.op === "members") return entries.map((e) => e.principalDid as string);
 
   const entry = entries.find((e) => e.principalDid === op.member);
-  if (!entry) throw new Error("The wallet holds no such identity for this community.");
+  if (!entry) throw new PageRefusal("The wallet holds no such identity for this community.", "identityUnknown");
   const name = entry.label?.trim() || "This community";
   if (op.op === "communityName") return name;
   if (op.op === "marks" || op.op === "mark" || op.op === "putList" || op.op === "deleteList") {
@@ -256,7 +257,7 @@ export async function runDirectoryPageOp(
       throw refusalWords(e, name);
     }
     const asked = credentialAskFor(fields, op.fields);
-    if (!asked.ok) throw new Error(asked.error);
+    if (!asked.ok) throw new PageRefusal(asked.error, "invalidCall");
     const { ask } = asked;
     // Only credentials the agent would present as the member: the community
     // accepts a presentation only from its member, so one bound to another
@@ -279,10 +280,11 @@ export async function runDirectoryPageOp(
         ...(c.validUntil ? { validUntil: c.validUntil } : {}),
       }));
     if (candidates.length === 0) {
-      throw new Error(
+      throw new PageRefusal(
         ask.issuers
           ? `Your wallet holds no ${ask.credentialType} from an issuer ${name} accepts for ${ask.fields.map((f) => f.label).join(", ")}.`
           : `Your wallet holds no ${ask.credentialType} to verify ${ask.fields.map((f) => f.label).join(", ")} with.`,
+        "credentialNotHeld",
       );
     }
     const prepared: PreparedPresent = { communityName: name, fields: ask.fields, claims: ask.claims, candidates };
@@ -408,7 +410,10 @@ async function runMarksOp(
 ): Promise<PageMarksView | PageEntryMark | PageMarkList | { deleted: boolean }> {
   const contextId = await (deps.contextOf ?? (async () => null))(vta.vtaDid, vta.restBaseUrl, op.member);
   if (!contextId) {
-    throw new Error("Your agent doesn't hold the identity you use at this community, so it has nowhere to keep your marks.");
+    throw new PageRefusal(
+      "Your agent doesn't hold the identity you use at this community, so it has nowhere to keep your marks.",
+      "identityUnknown",
+    );
   }
   const { sender, holder, service } = await deps.agent(vta.vtaDid, vta.restBaseUrl);
   const caller = { holder, service, contextId };

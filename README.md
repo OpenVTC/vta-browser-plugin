@@ -542,6 +542,19 @@ goes to the link host's page for people with no wallet.
 Put them behind an "Using an older wallet?" link; a removal date will be set
 later.
 
+### When a portal's call is refused: `code`, not `message`
+
+Every `window.vtaWallet.*` call — `elections`, `rooms` (files included),
+`directory`, `git` and the top-level methods — rejects with a
+`VtaWalletError`: the wallet's `message`, for the member, and a stable,
+machine-readable `code`. The code is the Trust Task error code's local name
+when the community or the member's agent refused (`electionUnknown`,
+`indeterminate`, `permissionDenied`), or one of the wallet's own
+(`declined`, `walletLocked`, `originNotPermitted`, `timedOut`, …). A page
+switches on `code`; the message is reworded freely. The codes, what each means
+and what a code may never carry are in
+[docs/page-bridge-errors.md](docs/page-bridge-errors.md).
+
 ### The wallet writes nothing into your browser
 
 A sign-in produces a signed `id_token` the site verifies for itself by

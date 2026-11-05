@@ -39,6 +39,7 @@ import type {
   PageGitUnlinkView,
   RuntimeGitPageResponse,
 } from "./bridge-protocol.js";
+import { PageRefusal, forwardedCode, pageFailure, type PageErrorCode } from "./page-error.js";
 
 /** `chrome.storage.session` key prefix for a git prompt's view. */
 export const GIT_CONSENT_PREFIX = "git-consent:";
@@ -75,7 +76,7 @@ export interface ActiveVta {
 }
 
 export interface GitPageDeps {
-  active(): Promise<{ ok: true; vta: ActiveVta } | { ok: false; error: string }>;
+  active(): Promise<{ ok: true; vta: ActiveVta } | { ok: false; error: string; code?: PageErrorCode }>;
   offscreen(vta: ActiveVta, op: OffscreenGitPageOp): Promise<OffscreenGitPageResponse>;
   /** Whether the wallet holds a host permission for `url`'s origin. */
   canReach(url: string): Promise<boolean>;
@@ -126,7 +127,8 @@ export function portalRefusal(origin: string, hostDid: string, portalOrigin: str
 /** How long a community's resolved portal is trusted before it is resolved again. */
 const PORTAL_CACHE_MS = 5 * 60 * 1000;
 
-class GitPageRefusal extends Error {}
+/** A refusal of this channel, always with its page code (`page-error.ts`). */
+class GitPageRefusal extends PageRefusal {}
 
 interface Identity {
   did: string;
@@ -140,7 +142,7 @@ export class GitPageGates {
 
   private async offscreen(vta: ActiveVta, op: OffscreenGitPageOp): Promise<unknown> {
     const res = await this.deps.offscreen(vta, op);
-    if (!res.ok) throw new GitPageRefusal(res.error);
+    if (!res.ok) throw new GitPageRefusal(res.error, forwardedCode(res.code));
     return res.result;
   }
 
@@ -157,28 +159,29 @@ export class GitPageGates {
   async handle(origin: string, raw: unknown): Promise<RuntimeGitPageResponse> {
     try {
       const malformed = gitPageParamsRefusal(raw);
-      if (malformed) return { ok: false, error: malformed };
+      if (malformed) return { ok: false, error: malformed, code: "invalidCall" };
       const p = raw as GitPageOp;
       return {
         ok: true,
         result: p.op === "linkAccount" ? await this.link(origin, p) : await this.unlink(origin, p),
       };
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      return pageFailure(e);
     }
   }
 
   /** Gates 2 and 3: the page is the portal, and the identity is the wallet's. */
   private async gate(origin: string, p: GitPageOp): Promise<{ vta: ActiveVta; who: Identity }> {
     const active = await this.deps.active();
-    if (!active.ok) throw new GitPageRefusal(active.error);
+    if (!active.ok) throw new GitPageRefusal(active.error, active.code ?? "notConnected");
     const vta = active.vta;
     const { portalOrigin, endpoint } = await this.portal(vta, p.hostDid);
     const refusal = portalRefusal(origin, p.hostDid, portalOrigin);
-    if (refusal) throw new GitPageRefusal(refusal);
+    if (refusal) throw new GitPageRefusal(refusal, "originNotPermitted");
     if (!(await this.deps.canReach(endpoint))) {
       throw new GitPageRefusal(
         `The wallet may not reach ${new URL(endpoint).origin} yet. Allow it from the wallet's popup, then try again.`,
+        "hostPermissionRequired",
       );
     }
     const members = ((await this.offscreen(vta, { op: "members", hostDid: p.hostDid })) as Identity[]).filter(
@@ -187,15 +190,13 @@ export class GitPageGates {
     let who: Identity | undefined;
     if (p.member !== undefined) {
       who = members.find((m) => m.did === p.member);
-      if (!who) throw new GitPageRefusal("The wallet holds no such identity for this community.");
+      if (!who) throw new GitPageRefusal("The wallet holds no such identity for this community.", "identityUnknown");
     } else if (members.length === 1) {
       who = members[0]!;
     } else {
-      throw new GitPageRefusal(
-        members.length === 0
-          ? "The wallet holds no identity you use at this community."
-          : "You use more than one identity at this community: sign in with the one to link.",
-      );
+      throw members.length === 0
+        ? new GitPageRefusal("The wallet holds no identity you use at this community.", "identityUnknown")
+        : new GitPageRefusal("You use more than one identity at this community: sign in with the one to link.", "identityAmbiguous");
     }
     return { vta, who };
   }
@@ -211,7 +212,7 @@ export class GitPageGates {
       member: who.did,
       forge: p.forge,
     });
-    if (!decided.approved) throw new GitPageRefusal("You did not link an account.");
+    if (!decided.approved) throw new GitPageRefusal("You did not link an account.", "declined");
 
     const started = (await this.offscreen(vta, {
       op: "link",
@@ -246,7 +247,7 @@ export class GitPageGates {
       forge: p.forge,
       ...(p.accountId !== undefined ? { accountId: p.accountId } : {}),
     });
-    if (!decided.approved) throw new GitPageRefusal("You did not unlink the account.");
+    if (!decided.approved) throw new GitPageRefusal("You did not unlink the account.", "declined");
     return (await this.offscreen(vta, {
       op: "unlink",
       hostDid: p.hostDid,

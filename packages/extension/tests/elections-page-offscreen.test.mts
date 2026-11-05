@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import { generateSigningIdentity, signTrustTask } from "@openvtc/pnm-core";
 
 import { runElectionsPageOp, type ElectionsPageDeps } from "../src/elections-page-offscreen.ts";
+import { pageFailure } from "../src/page-error.ts";
 
 const VTC = "did:webvh:QmCommunity:acme.example";
 const PORTAL = "https://members.acme.example";
@@ -491,4 +492,72 @@ test("a withdrawn election notification is not opened", async () => {
     /withdrew/,
   );
   assert.equal(w.toCommunity.length, 0);
+});
+
+// ── The code each refusal carries to the background (docs/page-bridge-errors.md) ──
+//
+// What the offscreen document sends is `pageFailure(e)`: the message as the
+// member reads it, and the code read off the error while its class is known.
+
+async function failureOf(run: Promise<unknown>) {
+  try {
+    await run;
+  } catch (e) {
+    return pageFailure(e);
+  }
+  throw new Error("expected the operation to be refused");
+}
+
+test("page code: the community's electionUnknown and indeterminate keep their codes across the hop", async () => {
+  const unknown = await failureOf(
+    runElectionsPageOp(world({ refuse: [{ at: 0, code: "vtc/elections/show:electionUnknown" }] }).deps, VTA, {
+      op: "show",
+      hostDid: VTC,
+      member: MEMBER,
+      electionId: "agm-2027",
+    }),
+  );
+  assert.equal(unknown.code, "electionUnknown");
+  assert.match(unknown.error, /shows you no such election/, "the message is the member's words, unchanged");
+
+  const refuse = [1, 2, 3, 4].map((at) => ({ at, code: "indeterminate", retryable: true }));
+  const indeterminate = await failureOf(
+    runElectionsPageOp(world({ memberOf: PARTY, vault: [VMC], refuse }).deps, VTA, {
+      op: "takeTicket",
+      hostDid: VTC,
+      member: MEMBER,
+      electionId: "agm-2027",
+      presentFor: PARTY,
+    }),
+  );
+  assert.equal(indeterminate.code, "indeterminate");
+});
+
+test("page code: an identity the wallet does not hold is identityUnknown", async () => {
+  const f = await failureOf(
+    runElectionsPageOp(world().deps, VTA, { op: "list", hostDid: VTC, member: "did:webvh:QmEve:eve.example" }),
+  );
+  assert.deepEqual(f, { ok: false, error: "The wallet holds no such identity for this community.", code: "identityUnknown" });
+});
+
+test("page code: no credential of the roll's party is membershipNotHeld, a changed roll rollChanged", async () => {
+  const notHeld = await failureOf(
+    runElectionsPageOp(world({ memberOf: PARTY, vault: [{ ...VMC, issuerDid: "did:webvh:QmElse:else.example" }] }).deps, VTA, {
+      op: "takeTicket",
+      hostDid: VTC,
+      member: MEMBER,
+      electionId: "agm-2027",
+      presentFor: PARTY,
+    }),
+  );
+  assert.equal(notHeld.code, "membershipNotHeld");
+  const changed = await failureOf(
+    runElectionsPageOp(world({ memberOf: PARTY, vault: [VMC] }).deps, VTA, {
+      op: "takeTicket",
+      hostDid: VTC,
+      member: MEMBER,
+      electionId: "agm-2027",
+    }),
+  );
+  assert.equal(changed.code, "rollChanged");
 });

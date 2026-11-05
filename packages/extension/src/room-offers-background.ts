@@ -97,7 +97,7 @@ export class RoomOffers {
 
   private async vta(): Promise<OffersVta> {
     const active = await this.deps.active();
-    if (!active.ok) throw new RoomOffersRefusal(active.error);
+    if (!active.ok) throw new RoomOffersRefusal(active.error, "notConnected");
     return active.vta;
   }
 
@@ -234,7 +234,7 @@ export class RoomOffers {
     if (!members) {
       const sources = (await this.offscreen(vta, { op: "sources" })) as OfferSource[];
       if (req.member === undefined || !isOfferSource(sources, req.communityDid, req.member)) {
-        throw new RoomOffersRefusal(`${req.member ?? "(no identity)"} is not an identity you sign in to ${req.communityDid} with`);
+        throw new RoomOffersRefusal(`${req.member ?? "(no identity)"} is not an identity you sign in to ${req.communityDid} with`, "identityUnknown");
       }
       members = [req.member];
     }
@@ -275,11 +275,11 @@ export class RoomOffers {
       return this.accept({ ...req, vta, members });
     }
     const picked = pickOffer(offers, req.roomId, req.member);
-    if (!picked.ok) throw new RoomOffersRefusal(picked.error, "noOffer");
+    if (!picked.ok) throw new RoomOffersRefusal(picked.error, "offerNotListed");
     const offer = picked.offer;
 
     const k = `${this.key(vta, offer.communityDid, offer.member)}|${offer.roomId}`;
-    if (this.accepting.has(k)) throw new RoomOffersRefusal("this offer is being accepted already", "busy");
+    if (this.accepting.has(k)) throw new RoomOffersRefusal("this offer is being accepted already", "offerInProgress");
     this.accepting.add(k);
     try {
       const decision = await this.deps.prompt({

@@ -83,7 +83,8 @@ export interface ElectionsPageDeps {
 }
 
 /** A refusal in the person's words, with the refusing party's code (its local
- *  name) for the background to switch on. */
+ *  name) for the background to switch on — or a wallet code
+ *  (`page-error.ts`) for what this document decided. Carried to the page. */
 export class ElectionsWorkError extends Error {
   constructor(
     message: string,
@@ -129,7 +130,7 @@ function refusalWords(e: unknown, community: string): Error {
   };
   if (vta && vtaSaid[vta]) return new ElectionsWorkError(vtaSaid[vta]!, vta);
   if (/memberNotHeld/.test(text)) {
-    return new Error("Your agent holds no key of the identity you signed in with that you may act as.");
+    return new ElectionsWorkError("Your agent holds no key of the identity you signed in with that you may act as.", "memberNotHeld");
   }
   return e instanceof Error ? e : new Error(text);
 }
@@ -253,10 +254,12 @@ export async function runElectionsPageOp(
   }
 
   const entry = entries.find((e) => e.principalDid === op.member);
-  if (!entry) throw new Error("The wallet holds no such identity for this community.");
+  if (!entry) throw new ElectionsWorkError("The wallet holds no such identity for this community.", "identityUnknown");
   const name = entry.label?.trim() || "This community";
   const contextId = await deps.contextOf(vta.vtaDid, vta.restBaseUrl, op.member);
-  if (!contextId) throw new Error("Your agent does not list the identity you signed in with, so it cannot vote as it.");
+  if (!contextId) {
+    throw new ElectionsWorkError("Your agent does not list the identity you signed in with, so it cannot vote as it.", "identityUnknown");
+  }
   const target: VoterTarget = { contextId, community: op.hostDid, member: op.member };
 
   if (op.op === "notified") {

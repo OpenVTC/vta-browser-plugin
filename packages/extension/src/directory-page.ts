@@ -51,6 +51,7 @@ import type {
   PagePublishedCardView,
   RuntimeDirectoryPageResponse,
 } from "./bridge-protocol.js";
+import { PageRefusal, forwardedCode, pageFailure, type PageErrorCode } from "./page-error.js";
 
 /** `chrome.storage.session` key prefix for a publish prompt's view. */
 export const DIRECTORY_CONSENT_PREFIX = "directory-consent:";
@@ -135,7 +136,7 @@ export interface ActiveVta {
 }
 
 export interface DirectoryPageDeps {
-  active(): Promise<{ ok: true; vta: ActiveVta } | { ok: false; error: string }>;
+  active(): Promise<{ ok: true; vta: ActiveVta } | { ok: false; error: string; code?: PageErrorCode }>;
   offscreen(vta: ActiveVta, op: OffscreenDirectoryPageOp): Promise<OffscreenDirectoryPageResponse>;
   /** Whether the wallet holds a host permission for `url`'s origin. */
   canReach(url: string): Promise<boolean>;
@@ -244,7 +245,8 @@ export function portalRefusal(origin: string, hostDid: string, portalOrigin: str
 /** How long a community's resolved portal is trusted before it is resolved again. */
 const PORTAL_CACHE_MS = 5 * 60 * 1000;
 
-class DirectoryPageRefusal extends Error {}
+/** A refusal of this channel, always with its page code (`page-error.ts`). */
+class DirectoryPageRefusal extends PageRefusal {}
 
 export class DirectoryPageGates {
   private readonly portals = new Map<string, { portalOrigin: string; endpoint: string; at: number }>();
@@ -253,7 +255,7 @@ export class DirectoryPageGates {
 
   private async offscreen(vta: ActiveVta, op: OffscreenDirectoryPageOp): Promise<unknown> {
     const res = await this.deps.offscreen(vta, op);
-    if (!res.ok) throw new DirectoryPageRefusal(res.error);
+    if (!res.ok) throw new DirectoryPageRefusal(res.error, forwardedCode(res.code));
     return res.result;
   }
 
@@ -270,13 +272,13 @@ export class DirectoryPageGates {
   async handle(origin: string, raw: unknown): Promise<RuntimeDirectoryPageResponse> {
     try {
       const malformed = directoryPageParamsRefusal(raw);
-      if (malformed) return { ok: false, error: malformed };
+      if (malformed) return { ok: false, error: malformed, code: "invalidCall" };
       const p = raw as DirectoryPageOp;
       if (p.op === "publishCard") return { ok: true, result: await this.publishCard(origin, p) };
       if (p.op === "presentCredential") return { ok: true, result: await this.presentCredential(origin, p) };
       return { ok: true, result: (await this.marks(origin, p)) as PageMarksView };
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      return pageFailure(e);
     }
   }
 
@@ -288,14 +290,15 @@ export class DirectoryPageGates {
   ): Promise<{ vta: ActiveVta; member: string; portalOrigin: string }> {
     // Gate 2.
     const active = await this.deps.active();
-    if (!active.ok) throw new DirectoryPageRefusal(active.error);
+    if (!active.ok) throw new DirectoryPageRefusal(active.error, active.code ?? "notConnected");
     const vta = active.vta;
     const { portalOrigin, endpoint } = await this.portal(vta, p.hostDid);
     const refusal = portalRefusal(origin, p.hostDid, portalOrigin);
-    if (refusal) throw new DirectoryPageRefusal(refusal);
+    if (refusal) throw new DirectoryPageRefusal(refusal, "originNotPermitted");
     if (!(await this.deps.canReach(endpoint))) {
       throw new DirectoryPageRefusal(
         `The wallet may not reach ${new URL(endpoint).origin} yet. Allow it from the wallet's popup, then try again.`,
+        "hostPermissionRequired",
       );
     }
 
@@ -306,17 +309,15 @@ export class DirectoryPageGates {
     let member: string;
     if (p.member !== undefined) {
       if (!members.includes(p.member)) {
-        throw new DirectoryPageRefusal("The wallet holds no such identity for this community.");
+        throw new DirectoryPageRefusal("The wallet holds no such identity for this community.", "identityUnknown");
       }
       member = p.member;
     } else if (members.length === 1) {
       member = members[0]!;
     } else {
-      throw new DirectoryPageRefusal(
-        members.length === 0
-          ? "The wallet holds no identity you use at this community."
-          : "You use more than one identity at this community: sign in with the one you are using here.",
-      );
+      throw members.length === 0
+        ? new DirectoryPageRefusal("The wallet holds no identity you use at this community.", "identityUnknown")
+        : new DirectoryPageRefusal("You use more than one identity at this community: sign in with the one you are using here.", "identityAmbiguous");
     }
     return { vta, member, portalOrigin };
   }
@@ -334,7 +335,7 @@ export class DirectoryPageGates {
       const name = typeof named === "string" && named ? named : "This community";
       const decided = await this.deps.prompt({ kind: "marksAccess", origin, hostDid: p.hostDid, communityName: name });
       if (!decided.approved) {
-        throw new DirectoryPageRefusal("You did not let this community's portal show your marks.");
+        throw new DirectoryPageRefusal("You did not let this community's portal show your marks.", "declined");
       }
       await this.deps.saveMarksGrant({
         hostDid: p.hostDid,
@@ -393,7 +394,7 @@ export class DirectoryPageGates {
       values: prepared.said.values,
       closing: prepared.said.closing,
     });
-    if (!decided.approved) throw new DirectoryPageRefusal("You did not publish your card.");
+    if (!decided.approved) throw new DirectoryPageRefusal("You did not publish your card.", "declined");
 
     // Copied member by member: the card `prepare` built, nothing the page sent.
     return (await this.offscreen(vta, {
@@ -431,7 +432,7 @@ export class DirectoryPageGates {
       candidates: prepared.candidates,
     });
     const chosen = prepared.candidates.find((c) => c.id === decided.selectedCredential);
-    if (!decided.approved || !chosen) throw new DirectoryPageRefusal("You did not present a credential.");
+    if (!decided.approved || !chosen) throw new DirectoryPageRefusal("You did not present a credential.", "declined");
 
     const present = (claims: string[]) =>
       this.offscreen(vta, {
@@ -454,10 +455,13 @@ export class DirectoryPageGates {
         undisclosed,
         claims: prepared.claims,
       });
-      if (!again.approved) throw new DirectoryPageRefusal("You did not present the credential.");
+      if (!again.approved) throw new DirectoryPageRefusal("You did not present the credential.", "declined");
       answer = await present([...prepared.claims, ...undisclosed.filter((c) => !prepared.claims.includes(c))]);
       if ("undisclosed" in answer) {
-        throw new DirectoryPageRefusal("The credential still discloses more than you agreed to. Nothing was presented.");
+        throw new DirectoryPageRefusal(
+          "The credential still discloses more than you agreed to. Nothing was presented.",
+          "disclosureExceeded",
+        );
       }
     }
     return answer;

@@ -219,7 +219,8 @@ import { installRoomFilesPort, isNoTrustTaskService, resolveRoomHostEndpoint } f
 import { runRoomsPageOp } from "./room-page-offscreen.js";
 import { runDirectoryPageOp } from "./directory-page-offscreen.js";
 import { runGitPageOp } from "./git-page-offscreen.js";
-import { ElectionsWorkError, runElectionsPageOp } from "./elections-page-offscreen.js";
+import { runElectionsPageOp } from "./elections-page-offscreen.js";
+import { pageFailure } from "./page-error.js";
 import { OfferOpError, runRoomOffersOp } from "./room-offers-offscreen.js";
 import {
   OFFSCREEN_ROOM_OFFERS,
@@ -706,13 +707,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       req.params,
     )
       .then((result) => sendResponse({ ok: true, result } satisfies OffscreenElectionsPageResponse))
-      .catch((e: unknown) =>
-        sendResponse({
-          ok: false,
-          error: e instanceof Error ? e.message : String(e),
-          ...(e instanceof ElectionsWorkError && e.code ? { code: e.code } : {}),
-        } satisfies OffscreenElectionsPageResponse),
-      );
+      // The error's code rides along, read off the error here — the one place
+      // its class is still known (`page-error.ts`).
+      .catch((e: unknown) => sendResponse(pageFailure(e) satisfies OffscreenElectionsPageResponse));
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_GIT_PAGE) {
@@ -735,9 +732,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       req.params,
     )
       .then((result) => sendResponse({ ok: true, result } satisfies OffscreenGitPageResponse))
-      .catch((e: unknown) =>
-        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) } satisfies OffscreenGitPageResponse),
-      );
+      .catch((e: unknown) => sendResponse(pageFailure(e) satisfies OffscreenGitPageResponse));
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_DIRECTORY_PAGE) {
@@ -772,12 +767,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       req.params,
     )
       .then((result) => sendResponse({ ok: true, result } satisfies OffscreenDirectoryPageResponse))
-      .catch((e: unknown) =>
-        sendResponse({
-          ok: false,
-          error: e instanceof Error ? e.message : String(e),
-        } satisfies OffscreenDirectoryPageResponse),
-      );
+      .catch((e: unknown) => sendResponse(pageFailure(e) satisfies OffscreenDirectoryPageResponse));
     return true; // async sendResponse
   }
   if (msg.type === OFFSCREEN_ROOMS_PAGE) {
@@ -804,9 +794,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       req.params,
     )
       .then((result) => sendResponse({ ok: true, result } satisfies OffscreenRoomsPageResponse))
-      .catch((e: unknown) =>
-        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) } satisfies OffscreenRoomsPageResponse),
-      );
+      .catch((e: unknown) => sendResponse(pageFailure(e) satisfies OffscreenRoomsPageResponse));
     return true; // async sendResponse
   }
 

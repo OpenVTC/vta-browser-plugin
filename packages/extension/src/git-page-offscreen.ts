@@ -24,6 +24,7 @@ import {
 } from "@openvtc/pnm-core/vtc";
 
 import type { OffscreenGitPageOp } from "./bridge-protocol.js";
+import { PageRefusal, trustTaskLocalCode } from "./page-error.js";
 import { identitiesAt, resolveCommunity, type DirectoryPageDeps } from "./directory-page-offscreen.js";
 
 /** The same as the directory's: the member's agent, their identities, and the
@@ -39,7 +40,7 @@ function refusalWords(e: unknown, community: string, forge: string): Error {
     notLinked: `No account is linked on ${forge} — or it changed since the page read it. Reload and try again.`,
     permissionDenied: `${community} doesn't count you as an active member.`,
   };
-  return new Error(said[local] ?? `${community} refused (${e.code}).`);
+  return new PageRefusal(said[local] ?? `${community} refused (${e.code}).`, trustTaskLocalCode(e.code) ?? "unclassified");
 }
 
 /** Run one git operation. Throws with a message fit for the page. */
@@ -60,7 +61,7 @@ export async function runGitPageOp(
   }
 
   const entry = entries.find((e) => e.principalDid === op.member);
-  if (!entry) throw new Error("The wallet holds no such identity for this community.");
+  if (!entry) throw new PageRefusal("The wallet holds no such identity for this community.", "identityUnknown");
   const name = entry.label?.trim() || "This community";
   const verified = await community(op.hostDid);
   const sendOpts = {

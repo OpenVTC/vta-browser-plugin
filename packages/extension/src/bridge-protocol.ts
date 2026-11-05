@@ -13,6 +13,8 @@
 
 import type { AdminScope } from "@openvtc/pnm-core";
 
+import type { PageErrorCode, PageFailure } from "./page-error.js";
+
 /** `source` on messages the injected provider posts toward the content script. */
 export const INPAGE_SOURCE = "vta-wallet/inpage" as const;
 /** `source` on messages the content script posts back toward the provider. */
@@ -293,10 +295,11 @@ export interface InpageRequest {
 }
 
 /** content → provider (content world → page world). `result` is untyped
- *  wire data — each provider method casts to its own result type. */
+ *  wire data — each provider method casts to its own result type. A failure
+ *  always carries a `code` (`page-error.ts`, docs/page-bridge-errors.md). */
 export type ContentResponse =
   | { source: typeof CONTENT_SOURCE; id: string; ok: true; result: unknown }
-  | { source: typeof CONTENT_SOURCE; id: string; ok: false; error: string };
+  | { source: typeof CONTENT_SOURCE; id: string; ok: false; error: string; code: PageErrorCode };
 
 /** Wallet lifecycle event names broadcast from background → content
  *  script → page-world provider → dispatched as `vtawallet:<kind>`
@@ -605,7 +608,7 @@ export type RuntimeApproverStatementResponse =
 /** background → content (sendResponse). */
 export type RuntimeLoginResponse =
   | { ok: true; result: LoginResult }
-  | { ok: false; error: string };
+  | { ok: false; error: string; code?: PageErrorCode };
 
 /** background → content for an `apiGet` (sendResponse). */
 export type RuntimeApiGetResponse =
@@ -2470,7 +2473,7 @@ export interface RuntimeRoomsPageRequest {
   params: RoomsPageOp;
 }
 
-export type RuntimeRoomsPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
+export type RuntimeRoomsPageResponse = { ok: true; result: unknown } | PageFailure;
 
 /** A room the member shared with this page's origin. */
 export interface PageRoomView {
@@ -2650,7 +2653,7 @@ export type RoomFilesPageMessage =
     }
   | { kind: "data"; data: string /* base64url */ }
   | { kind: "done" }
-  | { kind: "failed"; error: string };
+  | { kind: "failed"; error: string; code: PageErrorCode };
 
 // ─── A member's directory card for a page: `window.vtaWallet.directory` ──────
 //
@@ -2761,7 +2764,7 @@ export type RuntimeDirectoryPageResponse =
         | { deleted: boolean }
         | PageVerifiedFieldsView;
     }
-  | { ok: false; error: string };
+  | PageFailure;
 
 // ─── A member's forge account for a page: `window.vtaWallet.git` ────────────
 //
@@ -2802,7 +2805,7 @@ export interface PageGitUnlinkView {
 
 export type RuntimeGitPageResponse =
   | { ok: true; result: PageGitLinkView | PageGitUnlinkView }
-  | { ok: false; error: string };
+  | PageFailure;
 
 // ─── A member's elections for a page: `window.vtaWallet.elections` ─────────
 //
@@ -2934,7 +2937,9 @@ export interface PageTicketView {
 export interface PageBatchTicket {
   electionId: string;
   outcome: "taken" | "held" | "unavailable" | "notEligible" | "failed";
+  /** With `failed`: the message, and its code as a rejection would carry it. */
   error?: string;
+  code?: PageErrorCode;
 }
 
 /** After `takeTickets`: each election asked for, in the order asked. */
@@ -2976,7 +2981,7 @@ export type RuntimeElectionsPageResponse =
         | PageTicketsView
         | PageVoteView;
     }
-  | { ok: false; error: string };
+  | PageFailure;
 
 /** console → background: open an election the member holds a notification of,
  *  from the wallet's own notifications view (VTI-NTF-063). Only the record is
@@ -3565,7 +3570,7 @@ export interface OffscreenRoomsPageRequest {
   params: OffscreenRoomsPageOp;
 }
 
-export type OffscreenRoomsPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
+export type OffscreenRoomsPageResponse = { ok: true; result: unknown } | { ok: false; error: string; code?: string };
 
 /** background → offscreen: the directory work behind a page's call, after the
  *  background checked the page is the community's portal. */
@@ -3632,7 +3637,7 @@ export interface OffscreenDirectoryPageRequest {
   params: OffscreenDirectoryPageOp;
 }
 
-export type OffscreenDirectoryPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
+export type OffscreenDirectoryPageResponse = { ok: true; result: unknown } | { ok: false; error: string; code?: string };
 
 /** background → offscreen: the git work behind a page's call, after the
  *  background checked the page is the community's portal and the person
@@ -3657,7 +3662,7 @@ export interface OffscreenGitPageRequest {
   params: OffscreenGitPageOp;
 }
 
-export type OffscreenGitPageResponse = { ok: true; result: unknown } | { ok: false; error: string };
+export type OffscreenGitPageResponse = { ok: true; result: unknown } | { ok: false; error: string; code?: string };
 
 /** background → offscreen: the elections work behind a page's call, after the
  *  background checked the page is the community's portal (and, for a ticket or
