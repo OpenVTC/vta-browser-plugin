@@ -17,7 +17,10 @@ import {
   memberNameRefusal,
   memberNameWriteRefusal,
   readingFromCleartext,
+  MEMBER_NAME_REWRITE_DISTANCE,
+  memberNameRewriteDue,
   RecordWriteRefused,
+  rewriteMemberNameAsMember,
   writeMemberNameAsMember,
 } from "../dist/rooms/index.js";
 
@@ -123,11 +126,10 @@ test("rule 2: a name record whose deciding version did not verify leaves its aut
   assert.equal(view.names[ALICE].key, "b");
 });
 
-test("rule 3: a version written by someone other than the record's creator names neither of them", () => {
+test("rule 3: a version written over another member's record never names that member — it is the rewriter's claim", () => {
   const view = assemble([nameRec("n", "Mallory", BOB, { createdBy: ALICE })]);
   assert.equal(view.names[ALICE], undefined, "never the original author");
-  assert.equal(view.names[BOB], undefined, "and not the rewriter either: the version is no name");
-  assert.ok(view.ignored.some((i) => i.key === "n" && /rewritten/.test(i.reason)));
+  assert.equal(view.names[BOB].name, "Mallory", "the rewriter's own claim about themselves (trust-tasks-tf #1038)");
   assert.deepEqual(view.records, [], "and it is still no note");
 });
 
@@ -135,7 +137,45 @@ test("rule 3: against the version the reader held, where the host records no cre
   const held = { version: 1, content: nameRec("n", "Alice").reading.content };
   const view = assemble([nameRec("n", "Mallory", BOB, { version: 2, held })]);
   assert.equal(view.names[ALICE], undefined);
-  assert.equal(view.names[BOB], undefined);
+  assert.equal(view.names[BOB].name, "Mallory");
+});
+
+// ── Several records by one author (trust-tasks-tf #1038) ─────────────────────
+
+test("several records: a rewrite of someone else's record is weighed by when it was stored, like the author's own", () => {
+  const own = nameRec("bobs", "Bob", BOB, { bodyStoredAt: "2026-11-05T10:00:00Z" });
+  const later = nameRec("alices", "Robert", BOB, { createdBy: ALICE, version: 4, bodyStoredAt: "2026-11-05T11:00:00Z" });
+  const earlier = nameRec("alices", "Robert", BOB, { createdBy: ALICE, version: 4, bodyStoredAt: "2026-11-05T09:00:00Z" });
+  assert.equal(assemble([own, later]).names[BOB].name, "Robert", "stored after the own record: it gives the name");
+  assert.equal(assemble([own, earlier]).names[BOB].name, "Bob", "stored before: the own record gives the name");
+});
+
+test("several records: the name does not depend on the order the records were met", () => {
+  const a = nameRec("one", "First", ALICE, { version: 2, bodyStoredAt: "2026-11-05T08:00:00Z" });
+  const b = nameRec("two", "Second", ALICE, { version: 9, bodyStoredAt: "2026-11-05T10:00:00Z" });
+  const c = nameRec("three", "Third", ALICE, { version: 5, bodyStoredAt: "2026-11-05T09:00:00Z" });
+  const orders = [[a, b, c], [c, b, a], [b, a, c], [c, a, b]];
+  for (const order of orders) {
+    const got = assemble(order).names[ALICE];
+    assert.equal(got.name, "Second", "the most recently stored, never the first met");
+    assert.equal(got.key, "two");
+  }
+});
+
+test("rule 2 tie-break: of two versions stored at the same time, the greater version wins, whichever comes first", () => {
+  const at = "2026-11-05T10:00:00Z";
+  const low = nameRec("x", "Lower", ALICE, { version: 3, bodyStoredAt: at });
+  const high = nameRec("y", "Higher", ALICE, { version: 7, bodyStoredAt: at });
+  assert.equal(assemble([low, high]).names[ALICE].name, "Higher");
+  assert.equal(assemble([high, low]).names[ALICE].name, "Higher");
+});
+
+test("rule 2: the deciding version's writtenAt and editedAt are kept for a rewrite near the head", () => {
+  const view = assemble([
+    nameRec("n", "Alice", ALICE, { version: 3 }, { writtenAt: "2026-10-01T00:00:00Z", editedAt: "2026-10-02T00:00:00Z", members: ["kind", "title", "writtenAt", "editedAt"] }),
+  ]);
+  assert.equal(view.names[ALICE].writtenAt, "2026-10-01T00:00:00Z");
+  assert.equal(view.names[ALICE].editedAt, "2026-10-02T00:00:00Z");
 });
 
 // ── Rule 4: only the record's author, only this room ─────────────────────────
@@ -199,6 +239,43 @@ test("showing: two authors whose names match after NFC and case folding are told
   assert.ok(labels.get(BOB).fingerprint);
   assert.notEqual(labels.get(ALICE).fingerprint, labels.get(BOB).fingerprint);
   assert.equal(labels.get(CAROL).fingerprint, undefined, "a name nobody else holds needs no fingerprint");
+});
+
+test("showing: two names that look the same — equal UTS #39 skeletons — are told apart", () => {
+  // A Cyrillic а (U+0430) for a Latin a, and "rn" for "m".
+  const roomNames = {
+    [ALICE]: { key: "a", version: 1, name: "Alice" },
+    [BOB]: { key: "b", version: 1, name: "\u0410lice" },
+    [CAROL]: { key: "c", version: 1, name: "Pam" },
+  };
+  const labels = authorLabels([ALICE, BOB, CAROL], { roomNames });
+  assert.ok(labels.get(ALICE).fingerprint, "the Latin one carries a fingerprint");
+  assert.ok(labels.get(BOB).fingerprint, "and the Cyrillic one");
+  assert.notEqual(labels.get(ALICE).fingerprint, labels.get(BOB).fingerprint);
+  assert.equal(labels.get(BOB).text, "\u0410lice", "the name shown is the name, never its skeleton");
+  assert.equal(labels.get(CAROL).fingerprint, undefined, "a name nobody else's looks like carries none");
+
+  const rn = authorLabels([ALICE, BOB], { roomNames: { [ALICE]: { key: "a", version: 1, name: "Pam" }, [BOB]: { key: "b", version: 1, name: "Parn" } } });
+  assert.ok(rn.get(ALICE).fingerprint && rn.get(BOB).fingerprint, "\"rn\" reads as \"m\"");
+});
+
+test("showing: a room name that looks like the reader's petname for another DID is told apart", () => {
+  const labels = authorLabels([ALICE, BOB], {
+    petnames: new Map([[ALICE, "Alice"]]),
+    roomNames: { [BOB]: { key: "b", version: 1, name: "\u0410lice" } },
+  });
+  assert.ok(labels.get(BOB).fingerprint);
+});
+
+test("before a name is found: an author is the petname, else the DID — never a guessed name", () => {
+  // Bob's name record has not been read yet (an older page): he is his DID.
+  const view = assemble([message("m", "hi", BOB)]);
+  const labels = authorLabels([BOB], { roomNames: view.names });
+  assert.deepEqual(labels.get(BOB), { source: "did" });
+  // A name from another room is not a name here.
+  const elsewhere = assemble([nameRec("n", "Bob", BOB)]).names;
+  assert.deepEqual(authorLabels([BOB], { roomNames: view.names }).get(BOB), { source: "did" });
+  assert.equal(elsewhere[BOB].name, "Bob");
 });
 
 test("showing: a room name equal to the reader's petname for another DID is told apart", () => {
@@ -324,3 +401,58 @@ test("writer: on an open room the cleartext of rooms/records/put/0.5 — kind, t
   assert.deepEqual(put.payload.cleartext, { kind: "memberProfile", title: "Alice", body: "" });
   assert.deepEqual(r.sealed, [], "nothing is sealed on an open room");
 });
+
+// ── Near the room's head (trust-tasks-tf #1038) ──────────────────────────────
+
+test("near the head: a write more than 500 versions past the name record is due for a rewrite; 500 is not", () => {
+  assert.equal(MEMBER_NAME_REWRITE_DISTANCE, 500);
+  const own = { key: "mine", version: 100, name: "Alice" };
+  assert.equal(memberNameRewriteDue(own, 600), false, "exactly 500 past");
+  assert.equal(memberNameRewriteDue(own, 601), true);
+  assert.equal(memberNameRewriteDue({ key: "mine", version: 100 }, 9000), false, "a withdrawn name is never written again");
+  assert.equal(memberNameRewriteDue(undefined, 9000), false, "no name record held: nothing to write");
+});
+
+test("near the head: the rewrite is the same record, the same name, writtenAt kept and no new editedAt", async () => {
+  const r = room({ recordMembers: ["kind", "memberProfile", "writtenAt", "editedAt"], head: 700 });
+  const own = { key: "mine", version: 120, name: "Alice", writtenAt: "2026-09-01T00:00:00Z" };
+  const version = await rewriteMemberNameAsMember(r.room, own, 701);
+  assert.equal(typeof version, "number");
+  const [body] = r.sealed;
+  assert.equal(body.key, "mine", "the same key");
+  assert.equal(body.title, "Alice", "the name rule 2 gives");
+  assert.equal(body.kind, "memberProfile");
+  assert.equal(body.writtenAt, "2026-09-01T00:00:00Z", "writtenAt unchanged");
+  assert.equal(body.editedAt, undefined, "no new editedAt: the name has not changed");
+  assert.equal(puts(r.sent)[0].payload.expectedVersion, 120, "over the version read, so a newer change on another device wins");
+});
+
+test("near the head: an earlier editedAt stays as it is", async () => {
+  const r = room({ recordMembers: ["kind", "memberProfile", "writtenAt", "editedAt"], head: 900 });
+  await rewriteMemberNameAsMember(r.room, { key: "mine", version: 10, name: "Al", writtenAt: "2026-09-01T00:00:00Z", editedAt: "2026-09-02T00:00:00Z" }, 900);
+  assert.equal(r.sealed[0].editedAt, "2026-09-02T00:00:00Z");
+});
+
+test("near the head: on an open room the rewrite is cleartext with an empty body, replacing the version read", async () => {
+  const r = room({ recordMembers: ["kind", "memberProfile"], visibility: "open", head: 800 });
+  await rewriteMemberNameAsMember(r.room, { key: "mine", version: 200, name: "Alice" }, 801);
+  const [put] = puts(r.sent);
+  assert.deepEqual(put.payload.cleartext, { kind: "memberProfile", title: "Alice", body: "" });
+  assert.equal(put.payload.key, "mine");
+  assert.equal(put.payload.expectedVersion, 200);
+});
+
+test("near the head: nothing is written when the write is within 500, the name is withdrawn, or the room no longer takes names", async () => {
+  const near = room({ recordMembers: ["kind", "memberProfile"] });
+  assert.equal(await rewriteMemberNameAsMember(near.room, { key: "mine", version: 100, name: "Alice" }, 600), undefined);
+  assert.deepEqual(near.vtaAsked, [], "not even the profile is read");
+
+  const withdrawn = room({ recordMembers: ["kind", "memberProfile"] });
+  assert.equal(await rewriteMemberNameAsMember(withdrawn.room, { key: "mine", version: 1, name: "  " }, 900), undefined);
+  assert.deepEqual(withdrawn.sent, []);
+
+  const closed = room({ recordMembers: ["kind"] });
+  assert.equal(await rewriteMemberNameAsMember(closed.room, { key: "mine", version: 1, name: "Alice" }, 900), undefined);
+  assert.deepEqual(puts(closed.sent), [], "the writer's gate holds for a rewrite too");
+});
+

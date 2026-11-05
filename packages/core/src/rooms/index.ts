@@ -1188,3 +1188,10 @@ export * from "./record-view.js";
 // A member's name in a room (`memberProfile`, rooms/_shared/0.3): the writer's
 // gate and shape, whose name a record is, and how a reader shows an author.
 export * from "./member-name.js";
+
+// Watching rooms through the member's own VTA (`rooms/keys/watch/0.1`,
+// `rooms/keys/changed/0.1`; trust-tasks-tf #1040), and what is unread after a read.
+export * from "./watch.js";
+
+// UTS #39 `skeleton()`, over Unicode's own confusables data.
+export { confusable, skeleton, CONFUSABLES_VERSION } from "./confusables.js";

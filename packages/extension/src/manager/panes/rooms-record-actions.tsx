@@ -39,7 +39,7 @@ import {
 import type { RoomPlace } from "../room-groups.js";
 import { Button, Note } from "../../ui.js";
 import { c, t } from "../../theme.js";
-import { curateRoomRecord, writeRoomMemberName, writeRoomNote } from "../room-files.js";
+import { curateRoomRecord, writeRoomMemberName, writeRoomNote, writeTarget, type WritingPlace } from "../room-files.js";
 import { managerSender } from "../sender.js";
 import type { Parties } from "../use-vta.js";
 
@@ -68,7 +68,7 @@ export function NoteEditor({
   onDone,
   onCancel,
 }: {
-  room: RoomPlace;
+  room: WritingPlace;
   host: string;
   existing?: { key: string; version: number; title?: string; body?: string };
   onDone: () => void;
@@ -84,7 +84,7 @@ export function NoteEditor({
     setError(null);
     try {
       await writeRoomNote(
-        { roomId: room.roomId, hostDid: host, ...(room.member !== undefined ? { member: room.member } : {}) },
+        writeTarget(room, host),
         {
           title: title.trim(),
           ...(body.trim() ? { body } : {}),
@@ -205,7 +205,7 @@ export function MemberNameEditor({
     setError(null);
     try {
       await writeRoomMemberName(
-        { roomId: room.roomId, hostDid: host, ...(room.member !== undefined ? { member: room.member } : {}) },
+        writeTarget(room, host),
         { name: value, held },
       );
       onDone();
@@ -277,7 +277,7 @@ export function RecordActions({
   onEdit,
   onChanged,
 }: {
-  room: RoomPlace;
+  room: WritingPlace;
   host: string;
   recordKey: string;
   version: number;
@@ -302,7 +302,7 @@ export function RecordActions({
     setError(null);
     try {
       await curateRoomRecord(
-        { roomId: room.roomId, hostDid: host, ...(room.member !== undefined ? { member: room.member } : {}) },
+        writeTarget(room, host),
         { key: recordKey, expectedVersion: version, ...params },
       );
       setConfirming(false);

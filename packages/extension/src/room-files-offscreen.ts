@@ -32,6 +32,7 @@ import {
   curateRecordAsMember,
   opaqueRecordKey,
   putCleartextAsMember,
+  rewriteMemberNameAsMember,
   roomInfoAsMember,
   writeMemberNameAsMember,
   writeSealedAsMember,
@@ -262,6 +263,7 @@ async function run(
         ...(open.reason !== undefined ? { reason: open.reason } : {}),
         ...(open.expectedVersion !== undefined ? { expectedVersion: open.expectedVersion } : {}),
       });
+      await nameNearTheHead(room, open.ownName, out.version);
       return {
         kind: "curated",
         key: out.key,
@@ -293,6 +295,7 @@ async function run(
             undefined,
             open.replaces !== undefined ? { replaces: open.replaces } : {},
           );
+    await nameNearTheHead(room, open.ownName, version);
     return { kind: "noted", key, version, author: principal };
   }
   const ctx: RoomFileContext = {
@@ -320,6 +323,17 @@ async function run(
       ...(open.tags !== undefined ? { tags: open.tags } : {}),
       ...(open.padme !== undefined ? { padme: open.padme } : {}),
     });
+    await nameNearTheHead(
+      {
+        roomId: open.roomId,
+        holder: { did: signing.did },
+        vta: { did: open.vtaDid, sender: vtaSender },
+        host: { did: open.hostDid, sender: host.completed },
+        ...(open.member !== undefined ? { member: open.member } : {}),
+      },
+      open.ownName,
+      put.version,
+    );
     return { kind: "put", ...put };
   }
   const got = await getRoomFile(ctx, open.key, (provisional) =>
@@ -339,4 +353,24 @@ async function run(
     ...(got.description !== undefined ? { description: got.description } : {}),
     ...(got.tags !== undefined ? { tags: got.tags } : {}),
   };
+}
+
+/**
+ * After a write the host assigned `version`, write the member's name again where
+ * it has fallen more than 500 versions behind (*Near the room's head*,
+ * rooms/_shared/0.3 `MemberProfileRecord`, trust-tasks-tf #1038), from the name
+ * record the console read (`ownName`). A SHOULD, done once on this write: its
+ * failure — a concurrent change on another device, a profile that no longer
+ * takes names — leaves the write that was asked for done, and is only logged.
+ */
+async function nameNearTheHead(
+  room: PersonaRoom,
+  own: RoomFilesOpen["ownName"],
+  version: number,
+): Promise<void> {
+  try {
+    await rewriteMemberNameAsMember(room, own, version);
+  } catch (err) {
+    console.warn("[pnm rooms] could not write the member's name again near the room's head:", err);
+  }
 }

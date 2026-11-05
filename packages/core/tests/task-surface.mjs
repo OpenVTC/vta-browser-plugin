@@ -540,10 +540,13 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // `vta/notifications/{list,show,dismiss,deposit}` and the `notifications/
   // {notify,relay}` a deposit carries (+6) — and `vtc/elections/show`, which
   // this library read all along and the SDK now names (+1).
-  // 242 → 243, with the snapshot resynced from vta-sdk 0.82.0 (canonical total
-  // 345): `vta/pcs/voter/receipts/list`, the receipts a member's VTA keeps, so
-  // the wallet checks a vote after close (VTI-VOT-053).
-  const expected = 243;
+  // 242 → 244, with the snapshot resynced from vta-sdk 0.83.0 (canonical total
+  // 347): watching rooms through the member's VTA (rooms/watch.ts) —
+  // `rooms/keys/watch` and the `rooms/keys/changed` it signals with.
+  // 244 → 245, resynced from vta-sdk on main: `vta/pcs/voter/receipts/list`,
+  // the receipts a member's VTA keeps, so the wallet checks a vote after close
+  // (VTI-VOT-053).
+  const expected = 245;
   assert.equal(
     implemented.size,
     expected,

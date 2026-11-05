@@ -96,6 +96,7 @@ import {
   DISCLOSURE_APPROVE_RESPONSE_TYPE,
 } from "@openvtc/pnm-core/persona";
 import { webvhDidCreate, webvhServerList } from "@openvtc/pnm-core/webvh";
+import { parseRoomsKeysChanged } from "@openvtc/pnm-core/rooms";
 import { base64url } from "@openvtc/vti-didcomm-js";
 import { grantCommand } from "./grant-command.js";
 import { forgetInbox, getSettings, inboxFor, inboxToAdopt, setInbox } from "./config.js";
@@ -171,6 +172,8 @@ import {
   CONSENT_KEEPALIVE_PORT,
   RUNTIME_STEP_UP_CONSENT,
   RUNTIME_EMIT_WALLET_EVENT,
+  RUNTIME_ROOMS_KEYS_CHANGED,
+  type RuntimeRoomsKeysChanged,
   RUNTIME_NOTIFY,
   type RuntimeNotifyRequest,
   type OffscreenDidcommLoginRequest,
@@ -4414,6 +4417,30 @@ async function dispatchInbound(
       event: "consentgranted",
       detail: { payloadDigest: granted.payloadDigest },
     });
+    return;
+  }
+
+  // A room watched through this VTA moved (`rooms/keys/changed/0.1`). Accepted
+  // only from our own VTA as the transport proved it, and only when the payload
+  // is the closed schema's; the console that armed the watch decides whether it
+  // is one it armed, and reads the room if so. One-way and content-free, so
+  // nothing is answered, kept or shown on the strength of it here.
+  const changed = parseRoomsKeysChanged(message, vtaDid, senderDid);
+  if (changed) {
+    const out: RuntimeRoomsKeysChanged = {
+      type: RUNTIME_ROOMS_KEYS_CHANGED,
+      vtaDid,
+      signal: {
+        roomId: changed.roomId,
+        member: changed.member,
+        host: changed.host,
+        latestVersion: changed.latestVersion,
+      },
+    };
+    // No console open is the common case: the signal is then dropped, and the
+    // next reading of the room recovers anything it said (rooms/keys/changed/0.1
+    // producer item 4: a lost signal costs nothing reading cannot recover).
+    chrome.runtime.sendMessage(out).catch(() => undefined);
     return;
   }
 

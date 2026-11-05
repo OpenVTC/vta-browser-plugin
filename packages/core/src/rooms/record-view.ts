@@ -513,17 +513,18 @@ export function assembleRoomRecords(inputs: readonly RecordInput[], opts: { now:
     // ── A member's name (`memberProfile`): never a note, a message or a reaction ──
     if (content.kind === MEMBER_PROFILE_KIND) {
       nameRecords.push(input.key);
-      // Rule 3: a version by anyone but the record's author names nobody.
-      if (prior !== undefined && prior !== content.author) {
-        ignored.push({ key: input.key, reason: "a member's name rewritten by another member: it names nobody" });
-        continue;
-      }
+      // Rule 3: a version by anyone but the record's earlier author never names
+      // that author. It is its own author's claim about themselves, weighed by
+      // rule 2 like any other of theirs (*Several records by one author*,
+      // trust-tasks-tf #1038) — so it is offered below as `content.author`'s.
       const refused = memberProfileRefusal(content);
       nameCandidates.push({
         author: content.author,
         key: input.key,
         version: input.version,
         ...(storedAt !== undefined ? { storedAt } : {}),
+        ...(content.writtenAt !== undefined ? { writtenAt: content.writtenAt } : {}),
+        ...(content.editedAt !== undefined ? { editedAt: content.editedAt } : {}),
         ...(refused !== undefined
           ? { refused }
           : !isNameWithdrawal(content.title!)
