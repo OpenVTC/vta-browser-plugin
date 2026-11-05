@@ -630,12 +630,47 @@ test("a record whose author's DID does not resolve reaches the page as a placeho
     ROOM,
     "k",
     { key: "k", version: 2, plaintext: Buffer.from(JSON.stringify(doc)).toString("base64url"), verification: {} },
-    async () => {
-      throw new Error("not found");
+    {
+      resolveDid: async () => {
+        throw new Error("not found");
+      },
     },
   );
   assert.equal(view.authorUnverified, true);
   assert.equal(view.body, undefined);
+});
+
+test("a sealed record is checked against its author's document as of bodyStoredAt", async () => {
+  const author = "did:webvh:QmAuthor:people.example.org";
+  const then = signingIdentityFromSecret(new Uint8Array(32).fill(5));
+  const now = signingIdentityFromSecret(new Uint8Array(32).fill(6));
+  const documentWith = (key: { kid: string }) => ({
+    id: author,
+    verificationMethod: [{ id: `${author}#key-1`, type: "Multikey", controller: author, publicKeyMultibase: key.kid.split("#")[1] }],
+    assertionMethod: [`${author}#key-1`],
+  });
+  const doc = { roomId: ROOM, key: "k", version: 2, author, body: "Before the rotation" };
+  const { signTrustTask } = await import("@openvtc/pnm-core/trust-tasks");
+  await signTrustTask({ envelope: doc, signing: { ...then, did: author, kid: `${author}#key-1` }, proofPurpose: "assertionMethod" });
+  const read = {
+    key: "k", version: 2, bodyStoredAt: "2026-10-01T00:00:00Z", verification: {},
+    plaintext: Buffer.from(JSON.stringify(doc)).toString("base64url"),
+  };
+  const asked: Array<[string, string]> = [];
+  const view = await readView(ROOM, "k", read, {
+    resolveDid: async () => documentWith(now),
+    resolveDidAt: async (did, at) => {
+      asked.push([did, at]);
+      return documentWith(then);
+    },
+  });
+  assert.equal(view.body, "Before the rotation");
+  assert.deepEqual(asked, [[author, "2026-10-01T00:00:00Z"]]);
+  // History that says the author had no document then is a refusal, not a placeholder.
+  await assert.rejects(
+    readView(ROOM, "k", read, { resolveDid: async () => documentWith(then), resolveDidAt: async () => null }),
+    /signature does not hold/,
+  );
 });
 
 test("liveGrants drops other communities", () => {

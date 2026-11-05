@@ -15,7 +15,7 @@
 // persona (`@openvtc/pnm-core/rooms`'s `actAndSend`); the VTA's own reads
 // (`rooms/keys/{browse,read}`) go out as the persona too.
 
-import { CONTACT_METHODS, type TrustTaskSender } from "@openvtc/pnm-core";
+import { CONTACT_METHODS, resolveDidDocumentAt, type TrustTaskSender } from "@openvtc/pnm-core";
 import { resolveCommunityDocument, selectSignInServices, verifyDomainLinkage } from "@openvtc/pnm-core/vtc";
 import {
   communityRoomMemberships,
@@ -33,7 +33,7 @@ import {
   writeSealedAsMember,
   type PersonaRoom,
 } from "@openvtc/pnm-core/rooms";
-import { RecordBodyError, RoomHostChannel, verifyRecordBody } from "@openvtc/pnm-core/rooms/files";
+import { RecordBodyError, RoomHostChannel, verifyRecordBody, type ResolveDidAt } from "@openvtc/pnm-core/rooms/files";
 import { base64url } from "@openvtc/vti-didcomm-js";
 
 import { admittedOpenRooms, membersAt } from "./room-page-policy.js";
@@ -317,9 +317,11 @@ function hasExpired(validUntil: unknown, now: number): validUntil is string {
  * as it stood at the host's `bodyStoredAt`, for this room, key and the version
  * it was sealed at (`readSealedVersion`), and (on `attributed`) by the author
  * the host recorded — before any of it is put in the view. A body that fails is
- * refused; one whose author cannot be verified (*Which DID document*, *An author
- * whose DID does not resolve*) is the placeholder `authorUnverified`, with
- * nothing of it. A record past its `validUntil` is `expired`, with nothing of it
+ * refused, and so is one whose proof fails against the author's document as of
+ * `bodyStoredAt` where the method keeps that history (`resolveDidDocumentAt`).
+ * One whose author cannot be verified (*Which DID document*: no `bodyStoredAt`,
+ * or a method without history; *An author whose DID does not resolve*) is the
+ * placeholder `authorUnverified`, with nothing of it. A record past its `validUntil` is `expired`, with nothing of it
  * either: a page building a listing shows it only when asked to.
  */
 export async function readView(
@@ -339,7 +341,12 @@ export async function readView(
     verification?: unknown;
     ext?: unknown;
   },
-  resolveDid?: (did: string) => Promise<Record<string, unknown>>,
+  resolvers: {
+    /** The author's current document. Defaults to the wallet's resolver. */
+    resolveDid?: (did: string) => Promise<Record<string, unknown>>;
+    /** The author's document as of `bodyStoredAt`. Defaults to `resolveDidDocumentAt`. */
+    resolveDidAt?: ResolveDidAt;
+  } = {},
   now: number = Date.now(),
 ): Promise<PageRecordView> {
   if (read.key !== key) throw new Error(`the agent answered for record ${String(read.key)}, not ${key}`);
@@ -364,7 +371,8 @@ export async function readView(
         { roomId, key, version: readSealedVersion({ version: read.version, ext: read.ext }) },
         read.author,
         {
-          ...(resolveDid ? { resolveDid } : {}),
+          ...(resolvers.resolveDid ? { resolveDid: resolvers.resolveDid } : {}),
+          resolveDidAt: resolvers.resolveDidAt ?? ((did, at) => resolveDidDocumentAt(did, at)),
           ...(read.bodyStoredAt !== undefined ? { bodyStoredAt: read.bodyStoredAt } : {}),
         },
       );

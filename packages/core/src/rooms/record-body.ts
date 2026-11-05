@@ -39,6 +39,7 @@ import type { SigningIdentity } from "../siop/self-issued.js";
 import { signTrustTask } from "../trust-tasks/sign.js";
 import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
 import { resolveDidDocument } from "../didcomm/index.js";
+import { isDidVersionNotFound } from "../did/resolve-at.js";
 import { stripScidSrc } from "@openvtc/vti-didcomm-js";
 
 /** Where a record was written or read: what the body's signature has to name. */
@@ -180,6 +181,11 @@ const DATE_TIME = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2
  *   document, where the reader could not resolve the document as it stood at
  *   the host's `bodyStoredAt`: a forgery and a key rotated away since cannot be
  *   told apart (*Which DID document*).
+ *
+ * Where the author's history *can* be read, a proof that fails as of
+ * `bodyStoredAt` is `signature`, and so is an author whose history says it
+ * had no document then (`E_DID_VERSION_NOT_FOUND`): a body cannot have been
+ * signed by a DID before the DID existed.
  */
 export type RecordBodyErrorKind =
   | "malformed"
@@ -415,11 +421,18 @@ export type VerifiedRecordBody = Readonly<SealedRecordBody> & { readonly [verifi
 
 /**
  * How a reader may resolve the author's DID document **as it stood at an
- * instant** — `did:webvh` with `versionTime`, for a method that keeps its
- * history. Returns `undefined` where it cannot (a method without history),
- * and throws where the DID does not resolve.
+ * instant** — `did:webvh` / `did:scid:vh:1` with `versionTime`, for a method
+ * that keeps its history (`resolveDidDocumentAt`, `@openvtc/pnm-core/did`).
+ *
+ * - a document: the one in force at the instant;
+ * - `null`: the history says no document existed then — the instant precedes
+ *   the DID's first entry. Refused as `signature`, never a placeholder;
+ * - `undefined`: the method keeps no history, so the current document is used.
+ *
+ * Throws where the DID does not resolve. A throw carrying
+ * `code: "E_DID_VERSION_NOT_FOUND"` is read as `null`.
  */
-export type ResolveDidAt = (did: string, at: string) => Promise<Record<string, unknown> | undefined>;
+export type ResolveDidAt = (did: string, at: string) => Promise<Record<string, unknown> | null | undefined>;
 
 /** What {@link verifyRecordBody} may be told beyond the record's location. */
 export interface VerifyRecordBodyOptions {
@@ -475,7 +488,9 @@ function proofShapeFault(proof: unknown): string | undefined {
  *
  * **Which DID document** (rule 2): the author's, as it stood at the host's
  * `bodyStoredAt` for this version. Where `opts.resolveDidAt` can resolve it as
- * of then, a proof that fails against it is refused. Where it cannot — a method
+ * of then, a proof that fails against it is refused, and so is an author whose
+ * history says it had no document then (`null`, or a throw with
+ * `code: "E_DID_VERSION_NOT_FOUND"`). Where it cannot — a method
  * without history, no `bodyStoredAt`, or no such resolver — the current
  * document is used, and a proof that fails there is a forgery or a key rotated
  * away since, which a reader cannot tell apart: it throws
@@ -526,18 +541,31 @@ export async function verifyRecordBody(
   let asOf = fixed;
   let doc: Record<string, unknown> | undefined;
   if (!controller.startsWith("did:key:")) {
+    let notYet = false;
     try {
       if (opts.bodyStoredAt !== undefined && opts.resolveDidAt !== undefined) {
-        doc = await opts.resolveDidAt(controller, opts.bodyStoredAt);
-        if (doc !== undefined) asOf = true;
+        let then: Record<string, unknown> | null | undefined;
+        try {
+          then = await opts.resolveDidAt(controller, opts.bodyStoredAt);
+        } catch (e) {
+          if (!isDidVersionNotFound(e)) throw e;
+          then = null;
+        }
+        if (then === null) notYet = true;
+        else if (then !== undefined) {
+          doc = then;
+          asOf = true;
+        }
       }
-      doc ??= await (opts.resolveDid ?? resolveDidDocument)(controller);
+      if (!notYet) doc ??= await (opts.resolveDid ?? resolveDidDocument)(controller);
     } catch (e) {
       throw new RecordBodyError(
         "authorUnresolvable",
         `the record's author ${author} does not resolve to a DID document: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
+    // History read, and it holds no document of the author's at that instant.
+    if (notYet) refuseSignature(`${author} had no DID document when the host stored the body (${opts.bodyStoredAt})`);
   }
   const resolved = doc;
   const proof = await verifyTrustTaskProof(document, {

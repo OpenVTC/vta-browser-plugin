@@ -18,6 +18,8 @@ import {
 import * as files from "../dist/rooms/files.js";
 import { signingIdentityFromSecret } from "../dist/siop/index.js";
 import { signTrustTask } from "../dist/trust-tasks/sign.js";
+import { memoResolveDidDocumentAt } from "../dist/did/index.js";
+import { DidVersionNotFoundError } from "@openvtc/vti-didcomm-js";
 
 const ROOM = "did:webvh:QmRoom:rooms.example";
 const SIGNER = signingIdentityFromSecret(new Uint8Array(32).fill(4));
@@ -317,4 +319,107 @@ test("a proof made with another DID's key is refused before anything is resolved
     (e) => e instanceof RecordBodyError && e.kind === "signature",
   );
   assert.equal(resolved, false);
+});
+
+// ── An author's history, through `resolveDidDocumentAt` ─────────────────────
+//
+// The author's log as `@openvtc/vti-didcomm-js` reads it with `versionTime`:
+// created with KEY_THEN, rotated to KEY_NOW. The reader resolves through the
+// wallet's own `resolveDidDocumentAt` (host guard, `versionTime`, the library's
+// `E_DID_VERSION_NOT_FOUND` read by its code) and one memo per batch.
+
+const HISTORIC = "did:webvh:QmHistoric:people.example.org";
+const CREATED = "2026-09-01T00:00:00Z";
+const ROTATED = "2026-10-15T00:00:00Z";
+const BEFORE_ROTATION = "2026-10-01T00:00:00Z";
+const historicSigner = (key) => ({ ...key, did: HISTORIC, kid: `${HISTORIC}#key-1` });
+const historicDocument = (key) => ({ ...documentWith(key), id: HISTORIC,
+  verificationMethod: [{ id: `${HISTORIC}#key-1`, type: "Multikey", controller: HISTORIC, publicKeyMultibase: key.kid.split("#")[1] }],
+  assertionMethod: [`${HISTORIC}#key-1`] });
+const LOG = [
+  { versionTime: CREATED, key: KEY_THEN },
+  { versionTime: ROTATED, key: KEY_NOW },
+];
+
+/** The library's answer as of a time: the last entry in force, else `DidVersionNotFoundError`. */
+function historyResolver() {
+  const asked = [];
+  const resolve = async (did, { versionTime }) => {
+    asked.push([did, versionTime]);
+    const inForce = LOG.filter((e) => Date.parse(e.versionTime) <= Date.parse(versionTime)).at(-1);
+    if (!inForce) throw new DidVersionNotFoundError(`${did} has no version at ${versionTime}`, { did, versionTime, created: CREATED });
+    return { didDocument: historicDocument(inForce.key) };
+  };
+  return { asked, resolveDidAt: memoResolveDidDocumentAt({ resolve }) };
+}
+const currentDocument = async () => historicDocument(KEY_NOW);
+
+test("a key rotated away since: a proof made before the rotation verifies as of its bodyStoredAt", async () => {
+  const { resolveDidAt } = historyResolver();
+  const bytes = await signedBy(historicSigner(KEY_THEN));
+  const verified = await verifyRecordBody(bytes, AT, undefined, {
+    bodyStoredAt: BEFORE_ROTATION,
+    resolveDidAt,
+    resolveDid: currentDocument,
+  });
+  assert.equal(verified.author, HISTORIC);
+  // The same body stored after the rotation is not the author's.
+  await assert.rejects(
+    verifyRecordBody(bytes, AT, undefined, { bodyStoredAt: ROTATED, resolveDidAt: historyResolver().resolveDidAt, resolveDid: currentDocument }),
+    (e) => e instanceof RecordBodyError && e.kind === "signature" && !e.placeholder,
+  );
+});
+
+test("a proof made with a key not yet active at bodyStoredAt is refused, though the current document lists it", async () => {
+  const { resolveDidAt } = historyResolver();
+  const bytes = await signedBy(historicSigner(KEY_NOW));
+  await assert.rejects(
+    verifyRecordBody(bytes, AT, undefined, { bodyStoredAt: BEFORE_ROTATION, resolveDidAt, resolveDid: currentDocument }),
+    (e) => e instanceof RecordBodyError && e.kind === "signature" && !e.placeholder,
+  );
+});
+
+test("a bodyStoredAt before the author's DID existed is refused, not a placeholder", async () => {
+  const { resolveDidAt } = historyResolver();
+  let resolvedNow = false;
+  await assert.rejects(
+    verifyRecordBody(await signedBy(historicSigner(KEY_THEN)), AT, undefined, {
+      bodyStoredAt: "2026-08-01T00:00:00Z",
+      resolveDidAt,
+      resolveDid: async () => {
+        resolvedNow = true;
+        return historicDocument(KEY_THEN);
+      },
+    }),
+    (e) => e instanceof RecordBodyError && e.kind === "signature" && !e.placeholder,
+  );
+  assert.equal(resolvedNow, false, "the current document cannot excuse a body older than the DID");
+
+  // A resolveDidAt that throws the library's code, rather than answering null, is read the same way.
+  const coded = Object.assign(new Error("whatever it says"), { code: "E_DID_VERSION_NOT_FOUND" });
+  await assert.rejects(
+    verifyRecordBody(await signedBy(historicSigner(KEY_THEN)), AT, undefined, {
+      bodyStoredAt: "2026-08-01T00:00:00Z",
+      resolveDidAt: async () => Promise.reject(coded),
+    }),
+    (e) => e instanceof RecordBodyError && e.kind === "signature" && !e.placeholder,
+  );
+  // Matched on the code, never the words: the same words without it are a resolution failure.
+  await assert.rejects(
+    verifyRecordBody(await signedBy(historicSigner(KEY_THEN)), AT, undefined, {
+      bodyStoredAt: "2026-08-01T00:00:00Z",
+      resolveDidAt: async () => Promise.reject(new Error("E_DID_VERSION_NOT_FOUND")),
+    }),
+    (e) => e instanceof RecordBodyError && e.kind === "authorUnresolvable" && e.placeholder,
+  );
+});
+
+test("one batch resolves each author's history once per instant", async () => {
+  const { asked, resolveDidAt } = historyResolver();
+  const bodies = await Promise.all(["a", "b", "c"].map((body) => signedBy(historicSigner(KEY_THEN), { body })));
+  const read = await Promise.all(
+    bodies.map((bytes) => verifyRecordBody(bytes, AT, undefined, { bodyStoredAt: BEFORE_ROTATION, resolveDidAt })),
+  );
+  assert.deepEqual(read.map((b) => b.body), ["a", "b", "c"]);
+  assert.deepEqual(asked, [[HISTORIC, BEFORE_ROTATION]]);
 });

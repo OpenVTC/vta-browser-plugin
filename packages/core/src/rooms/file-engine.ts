@@ -46,6 +46,7 @@
 
 import { base64url } from "@openvtc/vti-didcomm-js";
 
+import { resolveDidDocumentAt } from "../did/resolve-at.js";
 import { generateSigningIdentity, type SigningIdentity } from "../siop/self-issued.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import { roomsKeysOpenAt, roomsKeysRead, sealedAt } from "./index.js";
@@ -67,6 +68,7 @@ import {
   sameDigest,
   verifyRecordBody,
   type FileManifest,
+  type ResolveDidAt,
 } from "./files.js";
 
 import {
@@ -143,6 +145,13 @@ export interface RoomFileContext extends PersonaRoom {
   onProgress?: (p: RoomFileProgress) => void;
   /** Checked between steps; an abort mid-upload releases what `begin` reserved. */
   signal?: AbortSignal;
+  /**
+   * Resolve a record author's DID document as it stood at the host's
+   * `bodyStoredAt`, which the body's proof is checked against. Defaults to
+   * `resolveDidDocumentAt`; a caller reading several files may pass one memo
+   * (`memoResolveDidDocumentAt`) for all of them.
+   */
+  resolveDidAt?: ResolveDidAt;
 }
 
 export type RoomFileStage =
@@ -674,7 +683,10 @@ async function sealedFile(
     base64url.decode(plaintext),
     { roomId: ctx.roomId, key, version: openedAt },
     record.author,
-    record.bodyStoredAt !== undefined ? { bodyStoredAt: record.bodyStoredAt } : {},
+    {
+      resolveDidAt: ctx.resolveDidAt ?? ((did, at) => resolveDidDocumentAt(did, at)),
+      ...(record.bodyStoredAt !== undefined ? { bodyStoredAt: record.bodyStoredAt } : {}),
+    },
   );
   const file = verified.file;
   if (!file) throw new RoomFileError("noFile", "the record carries no file");
