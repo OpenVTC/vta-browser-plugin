@@ -8,8 +8,9 @@
  */
 export const EXTENDS_BY_TYPE_URI: Readonly<Record<string, string>> = Object.freeze({
   "https://trusttasks.org/spec/rooms/keys/act/0.11": "0.10",
+  "https://trusttasks.org/spec/rooms/keys/seal/0.3": "0.2",
   "https://trusttasks.org/spec/rooms/records/get/0.3": "0.2",
-  "https://trusttasks.org/spec/rooms/records/put/0.4": "0.3",
+  "https://trusttasks.org/spec/rooms/records/put/0.5": "0.4",
   "https://trusttasks.org/spec/vta/webvh/dids/update/1.1": "1.0",
   "https://trusttasks.org/spec/vtc/elections/list/0.5": "0.4",
   "https://trusttasks.org/spec/vtc/elections/show/0.6": "0.5",

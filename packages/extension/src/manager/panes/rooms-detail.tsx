@@ -204,6 +204,7 @@ export function RoomDetail({
   community,
   profile,
   names,
+  petnames,
   onBack,
   onChanged,
   onHost,
@@ -217,6 +218,8 @@ export function RoomDetail({
   community: string | undefined;
   profile: RoomProfileView | undefined;
   names: Readonly<Record<string, AgentName>>;
+  /** The member's own petnames, by DID. */
+  petnames?: ReadonlyMap<string, string> | undefined;
   onBack: () => void;
   /** The agent's listing changed (a label saved, history fetched): read it again. */
   onChanged: () => void;
@@ -370,7 +373,7 @@ export function RoomDetail({
               </button>
             </Note>
           )}
-          <RoomRecords key={heldRoomKey(place)} parties={parties} room={place} host={host?.host} onListed={onHost} />
+          <RoomRecords key={heldRoomKey(place)} parties={parties} room={place} host={host?.host} onListed={onHost} petnames={petnames} />
         </div>
       )}
 

@@ -763,6 +763,10 @@ export type RecordConfidence = number;
  */
 export type RecordCount = number;
 /**
+ * The instant the author made the edit that produced this version, RFC 3339 in UTC (`Z`). Set by the writer of every version after the first, and absent on the first, so that a reader seeing a record for the first time can tell whether it was ever edited — which `version` cannot say, since curation moves it too. Signed with the body on the sealed tiers. A reader shows a record carrying it as edited, and treats an implausible one as `SealedRecordBody` (*Edits*) says. Governed by `RoomProfile.recordMembers` like `writtenAt`. No host enforces or reads it.
+ */
+export type RecordEditedAt = string;
+/**
  * One thing a record cites in its support, discriminated by `kind`.
  *
  *   - `record` names a record of a room by its key, and optionally the version cited and the room. Absent `roomId` means the record's own room.
@@ -820,6 +824,10 @@ export type RecordTrace = {
  * The instant after which the record's author no longer stands behind it as current. OPTIONAL; absent means the record does not expire. A reader hides a record whose `validUntil` has passed from default listings, search and recall, and shows it only on explicit request (`SealedRecordBody`, **Expiry**). No host enforces it.
  */
 export type RecordValidUntil = string;
+/**
+ * The instant the author wrote the record, RFC 3339 in UTC (`Z`). Set by the author and kept unchanged when the record is rewritten; an edit is marked by `editedAt`. OPTIONAL on a note; a `message` or `reaction` SHOULD carry it. The author's claim, not an attested time: a reader orders messages by it, compares it with the host's `createdAt`, and treats an implausible or backdated one as `SealedRecordBody` (*When it was written*) says. No host enforces or reads it.
+ */
+export type RecordWrittenAt = string;
 /**
  * What it takes to let a value LEAVE. Distinct from `Sensitivity`, which governs showing it to the holder.
  *
@@ -2686,6 +2694,8 @@ export interface FieldVisibility {
  * - check that the decrypted length equals the padded length, that every padding byte is zero, and, after removing the padding, that the plaintext matches `digest`.
  *
  * A reader **MUST** refuse a file that fails any check, and **MUST NOT** present it with a warning instead. A reader that streams **MUST NOT** treat the plaintext as received — save it under its final name, render it, or hand it to another component — until the digest has verified; it writes to a temporary destination and discards that destination on a mismatch.
+ *
+ * **An image's size and preview.** `width`, `height` and `preview` are OPTIONAL and advisory: they let a reader lay out an image, and show something, before it fetches and decrypts the blob. A reader that fetches the file checks them against the bytes — the decoded image's dimensions, and that the file is an image at all — and on a mismatch uses the bytes and discards them; it MUST NOT treat any of them as evidence about the file. On `attributed` and `private` rooms they are inside the sealed, signed body like the rest of the manifest, so the host learns nothing from them; on an `open` room they are in the clear, as everything there is, and a writer carries them only with `rooms/records/put/0.5` or later. A writer uses them only once the room's profile lists them in `recordMembers` (`RoomProfile`), as with the other members a reader that predates them refuses.
  */
 export interface FileManifest {
   /**
@@ -2725,6 +2735,27 @@ export interface FileManifest {
    * The file key itself, 32 bytes base64url without padding: present on an `open` room only, where there is no storage key to derive it from. Minted by the uploader from a cryptographically secure random source for this one file and never reused. MUST be absent on `attributed` and `private` rooms, where the key is derived and never stored.
    */
   fileKey?: string;
+  /**
+   * The image's width in pixels, as the uploader read it. Advisory. A writer sets `width` and `height` together or neither; a reader ignores one without the other. A reader checks it against the decoded image.
+   */
+  width?: number;
+  /**
+   * The image's height in pixels, as the uploader read it. Advisory. A writer sets `width` and `height` together or neither; a reader ignores one without the other. A reader checks it against the decoded image.
+   */
+  height?: number;
+  /**
+   * A small image standing in for the file until it is fetched: at most 8192 bytes before encoding, enough for a blurred thumbnail and small enough not to swell the record every listing reader opens. A reader renders it only as a raster image it decodes itself — never as SVG or any other type that can carry active content, never as a link, never fetching anything — and replaces it with the file once fetched. It is the uploader's rendering of the file, not a digest of it: a reader MUST NOT present it as the file's contents.
+   */
+  preview?: {
+    /**
+     * The preview's own media type. Raster types only.
+     */
+    mediaType: "image/jpeg" | "image/png" | "image/webp";
+    /**
+     * The preview's bytes, base64url without padding: at most 8192 bytes decoded.
+     */
+    data: string;
+  };
 }
 /**
  * A person's account on one forge. `id` is authoritative; `login` is for display only, because logins can be renamed and re-registered.
@@ -3916,6 +3947,19 @@ export interface RecordPrune {
    * How many records were removed, tombstones included. A prune that removed nothing leaves no mark.
    */
   removed: number;
+}
+/**
+ * Names another record of the same room: the record a reply answers or a reaction responds to. Never a record of another room — a citation that crosses rooms is `RecordEvidenceRecord`. A reader resolves it only against records it can already list or read in this room, and MUST NOT fetch anything else because of it. It MUST NOT name a record of kind `reaction`.
+ */
+export interface RecordReference {
+  /**
+   * The record's key, as in `rooms/records/put`. Opaque on the sealed tiers, like every key there.
+   */
+  key: string;
+  /**
+   * The version of the record the author was answering. OPTIONAL. A reader SHOULD say that the target has changed since only when its content has, never because its version moved: curation moves a record's version without touching its content (`SealedRecordBody`, *Whether the target has changed*).
+   */
+  version?: number;
 }
 /**
  * How long a room keeps its records, by age: the room's **record retention**. Records older than it states become **eligible** to be removed by `rooms/records/prune`; nothing is removed until a holder of `admin` asks for a prune, and nothing a prune removes can be brought back.

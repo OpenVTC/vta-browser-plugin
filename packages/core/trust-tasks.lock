@@ -982,9 +982,9 @@ digest = "sha256:eea45b67397c0d8c7c1765e70c25db1ae82f8431d2a95a7e487ebc385c4fea3
 
 [[task]]
 slug = "rooms/keys/seal"
-version = "0.2"
-type_uri = "https://trusttasks.org/spec/rooms/keys/seal/0.2"
-digest = "sha256:f86e719737461bc86e26c0e069ce044559944dbba626a9b6454c5bdf8b3b8754"
+version = "0.3"
+type_uri = "https://trusttasks.org/spec/rooms/keys/seal/0.3"
+digest = "sha256:51c040522e644204b435e52a30e3e6f44444103b9cccaf695ca975c4ab2edd34"
 
 [[task]]
 slug = "rooms/keys/welcome"
@@ -1036,9 +1036,9 @@ digest = "sha256:ff174f85e82cbdbdf0acdcf99179576cb5dc11b723d4b73f631c3fc916ab7a2
 
 [[task]]
 slug = "rooms/records/put"
-version = "0.4"
-type_uri = "https://trusttasks.org/spec/rooms/records/put/0.4"
-digest = "sha256:d33fd2a46cdac61912a196ab24c52cda8214e0ac783379157bfadc017457e4f3"
+version = "0.5"
+type_uri = "https://trusttasks.org/spec/rooms/records/put/0.5"
+digest = "sha256:2dc4b78362195351a21ed12aa48e63980d97d552be2d72de3b354d86ea4308c8"
 
 [[task]]
 slug = "task-consent/decision"

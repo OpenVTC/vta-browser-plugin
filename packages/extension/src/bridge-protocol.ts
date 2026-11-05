@@ -3766,6 +3766,14 @@ export type RoomFilesOpen =
    * the host refuses the write if anything has replaced it since.
    */
   | (RoomFilesTarget & { kind: "note"; key?: string; replaces?: number; title: string; body?: string })
+  /**
+   * Write the member's own name in the room (`memberProfile`, rooms/_shared/0.3),
+   * empty to withdraw it. `held`: the name records the console read, by author —
+   * the member's own, if among them, is written over rather than doubled. The
+   * offscreen document reads the room's profile and refuses unless it lists
+   * `kind` and `memberProfile`.
+   */
+  | (RoomFilesTarget & { kind: "name"; name: string; held?: { author: string; key: string; version: number }[] })
   /** Change a record's standing: retract, demote, restore, pin. */
   | (RoomFilesTarget & {
       kind: "curate";
@@ -3801,6 +3809,8 @@ export type RoomFilesMessage =
     }
   /** A note written or replaced, as the member. */
   | { kind: "noted"; key: string; version: number; author: string }
+  /** The member's name written (or withdrawn), as the member. */
+  | { kind: "named"; key: string; version: number; author: string }
   /** A record's new standing, as the host recorded it. */
   | { kind: "curated"; key: string; version: number; status: "active" | "deprecated" | "retracted"; pinned?: boolean }
   | { kind: "failed"; error: string; code?: string };

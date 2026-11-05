@@ -11,9 +11,9 @@
 //          32 random bytes minted here → seal locally → upload begin/0.2
 //          (proxied, naming the upload key) → chunks / commit under the upload key
 //        → sealed: the VTA signs the record body as the member and seals it
-//          (rooms/keys/seal/0.2) → records/put/0.4 naming the blob, re-sealing
+//          (rooms/keys/seal/0.3) → records/put/0.5 naming the blob, re-sealing
 //          for the version the host actually assigned.
-//          open: records/put/0.4 (through rooms/keys/act/0.11), the manifest and
+//          open: records/put/0.5 (through rooms/keys/act/0.11), the manifest and
 //          its key in `cleartext.file`, naming exactly that blob.
 //   get  records/get/0.3 → sealed: rooms/keys/open → verify the body; open:
 //        the manifest in `cleartext.file`, its key held to the tier
@@ -307,7 +307,7 @@ export async function putRoomFile(ctx: RoomFileContext, file: RoomFileInput): Pr
   const fileId = randomId(32);
   // A sealed room's file key is derived from its storage key, by the VTA. An
   // open room has none: the key is minted here for this file alone, at the
-  // room's current epoch, and the record carries it (`rooms/records/put/0.4`
+  // room's current epoch, and the record carries it (`rooms/records/put/0.5`
   // Producer item 7).
   const fileKey = open
     ? { key: randomId(32), epoch: info.epoch }
@@ -508,7 +508,7 @@ export async function getRoomFile(
     { roomId: ctx.roomId, key },
   );
   // An open room's record describes its file in the clear, key included
-  // (`rooms/records/put/0.4`); a sealed room's, inside the body its author signed.
+  // (`rooms/records/put/0.5`); a sealed room's, inside the body its author signed.
   const described = openFile(record) ?? (await sealedFile(ctx, key, record));
   const { file, carriedKey } = described;
   // The manifest is the author's; whether the record still names its blob is

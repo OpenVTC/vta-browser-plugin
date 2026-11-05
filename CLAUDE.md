@@ -935,6 +935,33 @@ have it; a reason is required. Editing needs `write`, retracting `curate`, which
 `write` does not imply; an action the place's agent says it lacks
 (`HeldRoom.actions`) is shown as such, not offered.
 
+**Members' names are records, read by their own rules** (`memberProfile`,
+`rooms/_shared/0.3`, trust-tasks-tf #1035; `rooms/member-name.ts`).
+`assembleRoomRecords` takes them out of every conversation, library and count
+and returns `names` by author: the version of that author's own name record the
+host stored most recently (`bodyStoredAt`, else `updatedAt`), none where it is
+empty, retracted or refused, and none from a rewrite by anyone else. A name
+applies to its author in that room only. The pane shows the member's own
+contact petname first (`useContactPetnames`), then the room name — in quotes,
+never beside a check mark, with a DID fingerprint where two would read the same
+(`authorLabels`) — then the DID. Writing one (`writeMemberNameAsMember`, the
+`name` open on the room-files port) reads the room's profile as the member and
+refuses before anything is sealed or sent unless `recordMembers` lists both
+`kind` and `memberProfile`; it seals at `rooms/keys/seal/0.3` and puts in the
+clear at `rooms/records/put/0.5`, over the member's own record where one is
+held.
+
+**`rooms/watch` / `rooms/changed` are not wired, and that is a finding**
+(trust-tasks-tf #1036). A watch's `address` must be a DID whose document
+advertises a transport the host speaks and through which the wallet receives;
+the wallet's sessions are the holder's `did:key` (no service), the approver and
+the onboarding ephemeral — the same gap as notification deposit below. And the
+watch request itself is signed by the client with its own key after
+`rooms/keys/present`, which a member's path here must not do (the host would
+take the wallet's key as the member). The VTA accepts `rooms/changed` addressed
+to its own DID and keeps nothing of it. Until the VTA holds a watch address for
+its member and tells the wallet, the records pane lists on demand, as before.
+
 **Archive and restore are offered; pin is not.** Every curation moves the
 record to a new version (vti-rooms `curate_record`), and a sealed body is bound
 to the version it was sealed at (`RecordLocation`) — so the host keeps that
