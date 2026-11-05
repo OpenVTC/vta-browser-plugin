@@ -197,6 +197,7 @@ export * as VaultProxyLogin_v0_2 from "./vault/proxy-login/0.2/payload.js";
 export * as VaultRelease_v0_2 from "./vault/release/0.2/payload.js";
 export * as VaultSignTrustTask_v0_2 from "./vault/sign-trust-task/0.2/payload.js";
 export * as VaultUpsert_v0_4 from "./vault/upsert/0.4/payload.js";
+export * as VotingBoardInclusion_v0_1 from "./voting/board/inclusion/0.1/payload.js";
 export * as VtaAppStateDelete_v1_0 from "./vta/app-state/delete/1.0/payload.js";
 export * as VtaAppStateGetMany_v1_0 from "./vta/app-state/get-many/1.0/payload.js";
 export * as VtaAppStateGet_v1_0 from "./vta/app-state/get/1.0/payload.js";
@@ -235,8 +236,9 @@ export * as VtaPasskeyVmsRevoke_v0_1 from "./vta/passkey-vms/revoke/0.1/payload.
 export * as VtaPcsVoteEncrypted_v0_5 from "./vta/pcs/vote-encrypted/0.5/payload.js";
 export * as VtaPcsVote_v0_4 from "./vta/pcs/vote/0.4/payload.js";
 export * as VtaPcsVoterAccept_v0_1 from "./vta/pcs/voter/accept/0.1/payload.js";
-export * as VtaPcsVoterRead_v0_6 from "./vta/pcs/voter/read/0.6/payload.js";
+export * as VtaPcsVoterRead_v0_7 from "./vta/pcs/voter/read/0.7/payload.js";
 export * as VtaPcsVoterReceipt_v0_1 from "./vta/pcs/voter/receipt/0.1/payload.js";
+export * as VtaPcsVoterReceiptsList_v0_1 from "./vta/pcs/voter/receipts/list/0.1/payload.js";
 export * as VtaPcsVoterRegister_v0_5 from "./vta/pcs/voter/register/0.5/payload.js";
 export * as VtaServicesDisable_v1_1 from "./vta/services/disable/1.1/payload.js";
 export * as VtaServicesDrainCancel_v1_0 from "./vta/services/drain/cancel/1.0/payload.js";

@@ -11,6 +11,10 @@ import {
   ballotOf,
   ballotRefusal,
   castDelayMs,
+  closingCheckpoint,
+  fetchInclusion,
+  pcsVoterReceipt,
+  pcsVoterReceiptsList,
   pcsCast,
   pcsVoterRead,
   pcsVoterRegister,
@@ -63,10 +67,10 @@ test("a read is asked of the member's VTA as the member, never sent to the commu
   const s = recordingSender({ document: { id: "x" } });
   await pcsVoterRead(s, { holder: WALLET, service: VTA }, TARGET, "show", { electionId: "agm-2027" });
   const { envelope, opts } = s.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/read/0.6");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/read/0.7");
   assert.equal(envelope.recipient, VTA.did);
   assert.deepEqual(envelope.payload, { ...TARGET, read: "show", payload: { electionId: "agm-2027" } });
-  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vta/pcs/voter/read/0.6#response");
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/vta/pcs/voter/read/0.7#response");
 });
 
 test("the ticket request names the member, so the VTA returns it signed as them", async () => {
@@ -282,4 +286,96 @@ test("vti_vot_090: the member is told whose credential counts, and that presenti
   );
   assert.match(rollCredentialWarning({ memberOf: PARTY, memberOfKind: "thisCommunity" }, "Acme"), /a member of it\.$/);
   assert.match(readPresentationWarning(PARTY, "Acme"), /before you have seen what the election asks/);
+});
+
+// ── VTI-VOT-053: checking a vote after close ─────────────────────────────────
+
+const cp = (at, size = 9) => ({ head: { treeSize: size, issuedAt: at }, document: { at } });
+
+test("vti_vot_053: the head checked against is the newest, from the close on", () => {
+  const kept = { state: "voting", manifest: { votingClosesAt: "2026-11-10T00:00:00Z" }, checkpoints: [cp("2026-11-09T00:00:00Z")] };
+  assert.throws(() => closingCheckpoint(kept, false), /not closed/);
+  kept.state = "closed";
+  assert.throws(() => closingCheckpoint(kept, false), /from the close/);
+  kept.checkpoints.push(cp("2026-11-10T00:00:05Z", 12));
+  assert.deepEqual(closingCheckpoint(kept, false), { document: { at: "2026-11-10T00:00:05Z" }, treeSize: 12 });
+  assert.throws(() => closingCheckpoint({ ...kept, state: "cancelled" }, false), /cancelled/);
+  // A tombstone has no state or manifest: its newest head.
+  assert.deepEqual(closingCheckpoint({ checkpoints: [cp("a", 3), cp("b", 4)] }, true), { document: { at: "b" }, treeSize: 4 });
+  assert.throws(() => closingCheckpoint({ checkpoints: [] }, true), /not kept a head/);
+});
+
+test("vti_vot_053: every read, a tombstone read included, goes as voter/read 0.7", async () => {
+  const sender = recordingSender({ document: {} });
+  await pcsVoterRead(sender, { holder: WALLET, service: VTA }, TARGET, "tombstone", { electionId: "agm-2027" });
+  await pcsVoterRead(sender, { holder: WALLET, service: VTA }, TARGET, "show", { electionId: "agm-2027" });
+  assert.equal(sender.sent[0].envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/read/0.7");
+  assert.equal(sender.sent[0].envelope.payload.read, "tombstone");
+  assert.equal(sender.sent[1].envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/read/0.7");
+  await assert.rejects(
+    pcsVoterRead(sender, { holder: WALLET, service: VTA }, TARGET, "tombstone", {}, { membershipCredential: "h", memberOf: COMMUNITY }),
+    /Only a show/,
+  );
+});
+
+test("vti_vot_053: the receipts and the evidence go to the member's VTA, the receipt unchanged", async () => {
+  const sender = recordingSender({ electionId: "agm-2027", ballotBox: BOX.did, receipts: [] });
+  await pcsVoterReceiptsList(sender, { holder: WALLET, service: VTA }, TARGET, "agm-2027");
+  assert.equal(sender.sent[0].envelope.type, "https://trusttasks.org/spec/vta/pcs/voter/receipts/list/0.1");
+  assert.deepEqual(sender.sent[0].envelope.payload, { contextId: TARGET.contextId, community: COMMUNITY, electionId: "agm-2027" });
+  const r = { type: "receipt", payload: { leafIndex: 3 } };
+  const inclusion = { leafIndex: 3, treeSize: 9, entryHash: "zE", path: ["zP"] };
+  await pcsVoterReceipt(sender, { holder: WALLET, service: VTA }, TARGET, "agm-2027", r, { checkpoint: { at: 1 }, inclusion });
+  assert.deepEqual(sender.sent[1].envelope.payload.receipt, r);
+  assert.deepEqual(sender.sent[1].envelope.payload.checkpoint, { at: 1 });
+  assert.deepEqual(sender.sent[1].envelope.payload.inclusion, inclusion);
+});
+
+const kept = { payload: { electionId: "agm-2027", leafIndex: 3, entryHash: "zEntry", receiptToken: "zToken" } };
+
+test("vti_vot_053: the inclusion proof is asked of the ballot box, unsigned, with the receipt's token", async () => {
+  const seen = [];
+  const fetch = async (url, init) => {
+    seen.push({ url, init });
+    const req = JSON.parse(init.body);
+    const reply = {
+      id: crypto.randomUUID(),
+      type: "https://trusttasks.org/spec/voting/board/inclusion/0.1#response",
+      issuer: BOX.did,
+      threadId: req.id,
+      issuedAt: new Date().toISOString(),
+      payload: { leafIndex: 3, treeSize: 9, entryHash: "zEntry", path: ["zA", "zB"] },
+    };
+    await signTrustTask({ envelope: reply, signing: BOX, proofPurpose: "assertionMethod" });
+    return new Response(JSON.stringify(reply), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const got = await fetchInclusion(kept, COMMUNITY, 9, { ballotBox: BOX.did, endpoint: ENDPOINT, fetch });
+  assert.deepEqual(got, { leafIndex: 3, treeSize: 9, entryHash: "zEntry", path: ["zA", "zB"] });
+  const req = JSON.parse(seen[0].init.body);
+  assert.equal(seen[0].url, ENDPOINT);
+  assert.equal(seen[0].init.credentials, "omit");
+  assert.equal(req.issuer, undefined, "nothing names the member");
+  assert.equal(req.proof, undefined);
+  assert.deepEqual(req.payload, { community: COMMUNITY, electionId: "agm-2027", leafIndex: 3, treeSize: 9, receiptToken: "zToken" });
+});
+
+test("vti_vot_053: a head too small to hold the cast is not asked about; a refusal or a stray answer is an error", async () => {
+  let asked = 0;
+  const never = async () => {
+    asked++;
+    throw new Error("asked");
+  };
+  assert.deepEqual(await fetchInclusion(kept, COMMUNITY, 3, { ballotBox: BOX.did, endpoint: ENDPOINT, fetch: never }), {
+    leafIndex: 3,
+    treeSize: 3,
+    entryHash: "zEntry",
+    path: [],
+  });
+  assert.equal(asked, 0);
+  const err = { type: "https://trusttasks.org/spec/trust-task-error/0.1", payload: { code: "voting/board/inclusion:electionUnknown" } };
+  await assert.rejects(fetchInclusion(kept, COMMUNITY, 9, { ballotBox: BOX.did, endpoint: ENDPOINT, fetch: answering(404, err) }), /would not show/);
+  await assert.rejects(
+    fetchInclusion(kept, COMMUNITY, 9, { ballotBox: BOX.did, endpoint: ENDPOINT, fetch: answering(200, { threadId: "other", payload: {} }) }),
+    /another request/,
+  );
 });

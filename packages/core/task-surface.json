@@ -1838,9 +1838,21 @@
       ]
     },
     {
+      "uri": "https://trusttasks.org/spec/vta/pcs/voter/read/0.7",
+      "consts": [
+        "TASK_VTA_PCS_VOTER_READ_0_7"
+      ]
+    },
+    {
       "uri": "https://trusttasks.org/spec/vta/pcs/voter/receipt/0.1",
       "consts": [
         "TASK_VTA_PCS_VOTER_RECEIPT_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/pcs/voter/receipts/list/0.1",
+      "consts": [
+        "TASK_VTA_PCS_VOTER_RECEIPTS_LIST_0_1"
       ]
     },
     {

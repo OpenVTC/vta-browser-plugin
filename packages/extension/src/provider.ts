@@ -44,6 +44,7 @@ import type {
   PageTicketView,
   PageTicketsView,
   PageVoteView,
+  PageCheckVoteView,
   PageGitUnlinkView,
   PagePublishedCardView,
   PageRoomView,
@@ -251,6 +252,11 @@ export interface VtaWalletElections {
    *  instead and stops (`ticketTaken: true`) — vote later. Resolves when the
    *  wallet's window closes, whatever the member did there. */
   vote(p: { hostDid: string; electionId: string; member?: string; memberOf?: string }): Promise<PageVoteView>;
+  /** After voting closes, ask the wallet to check the member's vote against the
+   *  board the community kept at close (VTI-VOT-053). The answer is shown in
+   *  the wallet's own window; this resolves when it closes, telling the page
+   *  nothing — not even whether the member voted. */
+  checkVote(p: { hostDid: string; electionId: string; member?: string; memberOf?: string }): Promise<PageCheckVoteView>;
 }
 
 /** `window.vtaWallet.git`. */
@@ -768,6 +774,14 @@ if (!window.vtaWallet) {
       vote: (p) =>
         call<PageVoteView>("elections", {
           op: "vote",
+          hostDid: p.hostDid,
+          electionId: p.electionId,
+          ...(p.member !== undefined ? { member: p.member } : {}),
+          ...(p.memberOf !== undefined ? { memberOf: p.memberOf } : {}),
+        }),
+      checkVote: (p) =>
+        call<PageCheckVoteView>("elections", {
+          op: "checkVote",
           hostDid: p.hostDid,
           electionId: p.electionId,
           ...(p.member !== undefined ? { member: p.member } : {}),
