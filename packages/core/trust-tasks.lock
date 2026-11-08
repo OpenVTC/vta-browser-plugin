@@ -147,6 +147,12 @@ type_uri = "https://trusttasks.org/spec/auth/step-up/approver/attest/0.1"
 digest = "sha256:9ad1dde405b9db723c790a741cb797af997fff412e62f4617bea8919a706ca9e"
 
 [[task]]
+slug = "auth/step-up/requests/show"
+version = "0.1"
+type_uri = "https://trusttasks.org/spec/auth/step-up/requests/show/0.1"
+digest = "sha256:ba32f26c8b5ae1fad912f468e63f7ea3789497ec6fae746b9f6a19c7701d6fd8"
+
+[[task]]
 slug = "auth/step-up/start"
 version = "0.2"
 type_uri = "https://trusttasks.org/spec/auth/step-up/start/0.2"

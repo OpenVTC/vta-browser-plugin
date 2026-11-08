@@ -3944,3 +3944,47 @@ export interface OffscreenRoomOffersRequest {
 }
 
 export type OffscreenRoomOffersResponse = { ok: true; result: unknown } | { ok: false; error: string; code?: string };
+
+// ─── A step-up handed to the person by a trigger link (VTI-LNK-125 – 131) ───
+//
+//   popup / content script ──RUNTIME_STEP_UP_LINK / RUNTIME_TRIGGER_LINK──▶ background
+//       The person pasted a `step-up` link into the popup, or clicked one on a
+//       page. The background re-parses it and runs the flow; nothing is
+//       answered to a page.
+//
+//   background ──OFFSCREEN_STEP_UP_FLOW──▶ offscreen
+//       `read`: the offscreen document reads the step-up from the community
+//       and checks it (`step-up-flows.ts`). The background then raises the
+//       approver prompt with what was read, and on approval has the approver
+//       sign (`OFFSCREEN_STEP_UP_APPROVER`, `sign-step-up`). `answer`: the
+//       approve-response the person's agent signs as the subject, sent to the
+//       community. `end`: the person declined; forget the flow.
+
+/** popup → background: a `step-up` link the person pasted. */
+export const RUNTIME_STEP_UP_LINK = "vta-wallet/step-up-link" as const;
+
+export interface RuntimeStepUpLinkRequest {
+  type: typeof RUNTIME_STEP_UP_LINK;
+  link: string;
+}
+
+/** What the person is told: opened (the popup's answer: the flow runs on and
+ *  its outcome is a notice), approved, declined, or why not, in the words
+ *  VTI-LNK-021 gives each outcome. */
+export type RuntimeStepUpLinkResponse =
+  | { ok: true; result: { outcome: "opened" | "approved" | "declined" } }
+  | { ok: false; error: string };
+
+export const OFFSCREEN_STEP_UP_FLOW = "offscreen/step-up-flow" as const;
+
+export type OffscreenStepUpFlowOp =
+  | { op: "read"; link: string; vtaDid: string; restBaseUrl?: string }
+  | { op: "answer"; flowId: string; statement: Record<string, unknown> }
+  | { op: "end"; flowId: string };
+
+export type OffscreenStepUpFlowRequest = {
+  target: typeof OFFSCREEN_TARGET;
+  type: typeof OFFSCREEN_STEP_UP_FLOW;
+} & OffscreenStepUpFlowOp;
+
+export type OffscreenStepUpFlowResponse = { ok: true; result: unknown } | { ok: false; error: string };

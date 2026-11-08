@@ -246,6 +246,9 @@ import {
 } from "./bridge-protocol.js";
 import {
   OFFSCREEN_SIGN_IN_STEP,
+  OFFSCREEN_STEP_UP_FLOW,
+  type OffscreenStepUpFlowRequest,
+  type OffscreenStepUpFlowResponse,
   OFFSCREEN_SIGN_IN_PAGE_NUMBER,
   OFFSCREEN_UV_SETTINGS,
   type OffscreenSignInPageNumberRequest,
@@ -256,6 +259,7 @@ import {
   type UvSettingsAgent,
 } from "./bridge-protocol.js";
 import { SignInFlows, type SignInVaultEntry } from "./sign-in-flows.js";
+import { StepUpFlows } from "./step-up-flows.js";
 import {
   approvers as uvApproversAt,
   enrolPhone,
@@ -363,6 +367,20 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (msg?.target !== OFFSCREEN_TARGET) return false; // not for us
   if (msg.type === OFFSCREEN_DIDCOMM_LOGIN) {
     doDidcommLogin(message as OffscreenDidcommLoginRequest)
+      .then(sendResponse)
+      .catch((e: unknown) =>
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    return true; // async sendResponse
+  }
+  if (msg.type === OFFSCREEN_STEP_UP_FLOW) {
+    // Only the background drives a step-up flow; a content script reaching
+    // this listener directly is refused.
+    if (!isExtensionContextSender(sender)) {
+      sendResponse({ ok: false, error: "step-up flows are the wallet's own" } satisfies OffscreenStepUpFlowResponse);
+      return false;
+    }
+    doStepUpFlow(message as OffscreenStepUpFlowRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -1660,6 +1678,47 @@ async function listSelfIssued(vtaDid: string, restBaseUrl?: string): Promise<Sig
   });
 }
 
+/** `vault/sign-trust-task` as the principal of one vault entry: what a
+ *  community reads the member from (a join request, a step-up answer). */
+async function signTaskAsEntry(
+  vtaDid: string,
+  restBaseUrl: string | undefined,
+  entryId: string,
+  unsigned: unknown,
+): Promise<unknown> {
+  const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
+  const { signedEnvelope } = await vaultSignTrustTask(session, {
+    holder,
+    service,
+    entryId,
+    unsignedEnvelope: unsigned as unknown as TrustTaskEnvelope,
+  });
+  return signedEnvelope;
+}
+
+// A step-up handed to the person by a `step-up` trigger link (VTI-LNK-125 –
+// 131). The approver prompt and signature are the background's and
+// `OFFSCREEN_STEP_UP_APPROVER`'s; this reads the step-up and sends the answer.
+const stepUpFlows = new StepUpFlows({
+  now: () => Date.now(),
+  vta: (vtaDid, restBaseUrl) => ({
+    listIdentities: () => listSelfIssued(vtaDid, restBaseUrl),
+    signTask: (entryId, unsigned) => signTaskAsEntry(vtaDid, restBaseUrl, entryId, unsigned),
+  }),
+});
+
+async function doStepUpFlow(req: OffscreenStepUpFlowRequest): Promise<OffscreenStepUpFlowResponse> {
+  switch (req.op) {
+    case "read":
+      return { ok: true, result: await stepUpFlows.read(req.link, req.vtaDid, req.restBaseUrl) };
+    case "answer":
+      return { ok: true, result: await stepUpFlows.answer(req.flowId, req.statement) };
+    case "end":
+      stepUpFlows.end(req.flowId);
+      return { ok: true, result: null };
+  }
+}
+
 const signInFlows = new SignInFlows({
   now: () => Date.now(),
   // A ceiling the member grants; the community ends the session at the
@@ -1696,16 +1755,7 @@ const signInFlows = new SignInFlows({
     },
     // A join request, signed as the persona the person chose: the community
     // takes the applicant from this signature.
-    signTask: async (entryId, unsigned) => {
-      const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-      const { signedEnvelope } = await vaultSignTrustTask(session, {
-        holder,
-        service,
-        entryId,
-        unsignedEnvelope: unsigned as unknown as TrustTaskEnvelope,
-      });
-      return signedEnvelope;
-    },
+    signTask: (entryId, unsigned) => signTaskAsEntry(vtaDid, restBaseUrl, entryId, unsigned),
     // Only the label changes: the entry is written back with its own id,
     // version, context, targets and kind, and no secret, so the VTA keeps the
     // one it holds.

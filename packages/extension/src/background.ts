@@ -323,9 +323,16 @@ import {
 import { vetEgressUrl } from "./proxy-url.js";
 import { ConsentReplayLedger, replayKey } from "./consent-replay.js";
 import { deliverConsentResult, openConsentWindow, type ConsentDecision } from "./consent-window.js";
-import { parseTriggerLink } from "@openvtc/pnm-core/links";
+import { parseTriggerLink, outcomeOf, triggerLinkMessage } from "@openvtc/pnm-core/links";
 import { isTriggerLinkShaped } from "./trigger-link-click.js";
+import type { StepUpReadResult, StepUpAnswerResult } from "./step-up-flows.js";
 import {
+  RUNTIME_STEP_UP_LINK,
+  OFFSCREEN_STEP_UP_FLOW,
+  type RuntimeStepUpLinkRequest,
+  type RuntimeStepUpLinkResponse,
+  type OffscreenStepUpFlowOp,
+  type OffscreenStepUpFlowResponse,
   RUNTIME_TRIGGER_LINK,
   RUNTIME_TRIGGER_LINK_NUMBER,
   RUNTIME_SIGN_IN_STEP,
@@ -3759,6 +3766,12 @@ async function handleTriggerLink(msg: RuntimeTriggerLinkRequest, tabId: number |
     if (tabId !== undefined) await chrome.tabs.update(tabId, { url: link }).catch(() => undefined);
     return;
   }
+  // A step-up handed to the person (VTI-LNK-125 – 131) is not a sign-in: no
+  // window of its own, the approver prompt, and the outcome as a notice.
+  if (parsed.ok && parsed.link.flow?.spec.name === "step-up") {
+    void runStepUpLink(link).then(notifyStepUpOutcome);
+    return;
+  }
   const flowId = crypto.randomUUID();
   const record: SignInFlowRecord = {
     link: msg.link,
@@ -3777,6 +3790,132 @@ async function handleTriggerLink(msg: RuntimeTriggerLinkRequest, tabId: number |
     tag: "[pnm sign-in]",
     what: "sign-in window",
   });
+}
+
+// ─── A step-up handed to the person by a trigger link (VTI-LNK-125 – 131) ───
+//
+// The person opened a `step-up` link: pasted into the popup, or clicked on a
+// page. The offscreen document reads the step-up from the community and checks
+// it (`step-up-flows.ts`); the approver prompt shows the operation the
+// community returned and the identity from the wallet's own records; on
+// approval the approver signs, and the person's agent sends the answer as the
+// subject straight to the community. The party that made the link never sees
+// any of it. Nothing of the link is logged.
+
+async function stepUpFlowOp(
+  op: OffscreenStepUpFlowOp,
+): Promise<OffscreenStepUpFlowResponse> {
+  await ensureOffscreenDocument();
+  const reply = (await chrome.runtime.sendMessage({
+    target: OFFSCREEN_TARGET,
+    type: OFFSCREEN_STEP_UP_FLOW,
+    ...op,
+  })) as OffscreenStepUpFlowResponse | undefined;
+  return reply ?? { ok: false, error: "the offscreen document did not answer" };
+}
+
+/** The words the person is shown for a reason the flow stopped with: only the
+ *  outcome's message (VTI-LNK-021). */
+function stepUpReasonMessage(reason: Parameters<typeof outcomeOf>[0]): string {
+  return triggerLinkMessage(outcomeOf(reason)) ?? "This code can't be used.";
+}
+
+async function runStepUpLink(link: string): Promise<RuntimeStepUpLinkResponse> {
+  const parsed = parseTriggerLink(link, { now: Math.floor(Date.now() / 1000) });
+  if (!parsed.ok) return { ok: false, error: stepUpReasonMessage(parsed.reason) };
+  if (parsed.link.flow?.spec.name !== "step-up") return { ok: false, error: "This is not a step-up code." };
+  const active = await readActiveConnection();
+  if (!active.ok) return { ok: false, error: active.error };
+
+  const read = await stepUpFlowOp({
+    op: "read",
+    link,
+    vtaDid: active.conn.vtaDid,
+    ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}),
+  });
+  if (!read.ok) return { ok: false, error: read.error };
+  const shown = read.result as StepUpReadResult;
+  if (!shown.ok) {
+    console.warn("[pnm step-up] read refused", { reason: shown.reason });
+    return { ok: false, error: stepUpReasonMessage(shown.reason) };
+  }
+  const v = shown.view;
+  const end = () => stepUpFlowOp({ op: "end", flowId: v.flowId });
+
+  // Every check `approveStepUp` makes, before the person sees anything: an
+  // approver for this community, offered by the request, and `boundTo` the
+  // digest of the operation shown. The offscreen makes them again by the key.
+  const params = { audience: v.vtcDid, request: v.request, operation: v.operation };
+  const check = await stepUpApproverOp({ op: "check-step-up", params });
+  if (!check.ok) {
+    await end();
+    return { ok: false, error: check.error };
+  }
+  const consent = await requestApproverConsent({
+    kind: "stepUp",
+    origin: v.portalOrigin,
+    audience: v.vtcDid,
+    approverDid: String(check.result.approverDid),
+    subject: v.request.subject,
+    reason: typeof v.request.reason === "string" ? v.request.reason : "",
+    operation: v.operation,
+    challenge: v.request.challenge,
+    boundTo: String(check.result.boundTo),
+    via: { kind: "link", identityLabel: v.identityLabel },
+  });
+  if (!consent.approved) {
+    await end();
+    return { ok: true, result: { outcome: "declined" } };
+  }
+  const signed = await stepUpApproverOp({
+    op: "sign-step-up",
+    params,
+    prfOutputB64u: consent.prfOutputB64u!,
+  });
+  if (!signed.ok) {
+    await end();
+    return { ok: false, error: signed.error };
+  }
+  const answered = await stepUpFlowOp({
+    op: "answer",
+    flowId: v.flowId,
+    statement: signed.result.statement as Record<string, unknown>,
+  });
+  if (!answered.ok) return { ok: false, error: answered.error };
+  const result = answered.result as StepUpAnswerResult;
+  if (!result.ok) {
+    console.warn("[pnm step-up] answer refused", { reason: result.reason, code: result.code });
+    return {
+      ok: false,
+      error:
+        result.reason === "refused"
+          ? "The community did not accept the approval. Ask for the step-up again."
+          : stepUpReasonMessage(result.reason),
+    };
+  }
+  return { ok: true, result: { outcome: "approved" } };
+}
+
+/** A step-up link clicked on a page has no window to answer into; its outcome
+ *  is a notice. */
+function notifyStepUpOutcome(res: RuntimeStepUpLinkResponse): void {
+  if (res.ok && res.result.outcome === "opened") return;
+  const declined = res.ok && res.result.outcome === "declined";
+  const message = res.ok
+    ? declined
+      ? "You declined. Nothing was approved."
+      : "Approved. The same request can now be sent again."
+    : res.error;
+  chrome.notifications.create(
+    {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icon-128.png"),
+      title: res.ok && !declined ? "Step-up approved" : "Step-up not approved",
+      message,
+      priority: 2,
+    },
+    () => void chrome.runtime.lastError,
+  );
 }
 
 /**
@@ -4441,6 +4580,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
       );
     return true; // async sendResponse
+  }
+
+  if ((message as { type?: string })?.type === RUNTIME_STEP_UP_LINK) {
+    // The popup only: a pasted link is the person's own act (VTI-LNK-056). A
+    // page cannot reach this type — it is not in the content script's table.
+    if (!isExtensionPageSender(sender)) {
+      sendResponse({ ok: false, error: "step-up links are opened from the wallet itself" });
+      return false;
+    }
+    const link = String((message as RuntimeStepUpLinkRequest).link ?? "").trim();
+    // The popup closes when the approver prompt takes focus, so it is answered
+    // at once: whether the text is a step-up link. The outcome is a notice.
+    const parsed = parseTriggerLink(link, { now: Math.floor(Date.now() / 1000) });
+    if (!parsed.ok) {
+      sendResponse({ ok: false, error: stepUpReasonMessage(parsed.reason) } satisfies RuntimeStepUpLinkResponse);
+      return false;
+    }
+    if (parsed.link.flow?.spec.name !== "step-up") {
+      sendResponse({ ok: false, error: "This is not a step-up code." } satisfies RuntimeStepUpLinkResponse);
+      return false;
+    }
+    sendResponse({ ok: true, result: { outcome: "opened" } } satisfies RuntimeStepUpLinkResponse);
+    void runStepUpLink(link)
+      .catch((e: unknown): RuntimeStepUpLinkResponse => ({
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      }))
+      .then(notifyStepUpOutcome);
+    return false;
   }
 
   if ((message as { type?: string })?.type === RUNTIME_APPROVE_STEP_UP) {

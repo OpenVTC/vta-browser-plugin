@@ -19,6 +19,9 @@ import {
 } from "./store.js";
 import {
   RUNTIME_CREATE_CONTEXT,
+  RUNTIME_STEP_UP_LINK,
+  type RuntimeStepUpLinkRequest,
+  type RuntimeStepUpLinkResponse,
   RUNTIME_DERIVE_SIGNING_KEY_ID,
   RUNTIME_HOLDER_STATE,
   RUNTIME_LIST_CONTEXTS,
@@ -270,6 +273,46 @@ function VtaSwitcher({
   );
 }
 
+/**
+ * A `step-up` link someone acting for you — your assistant, say — gave you
+ * (VTI-LNK-125 – 131). Pasting it here is your own act (VTI-LNK-056); the
+ * wallet reads the step-up from the community itself and shows you what will
+ * be done before anything is approved. The outcome arrives as a notice, since
+ * this popup closes when the approver prompt opens.
+ */
+function OpenStepUpLink(): React.JSX.Element {
+  const [link, setLink] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  async function open(): Promise<void> {
+    setError(null);
+    const res = (await chrome.runtime.sendMessage({
+      type: RUNTIME_STEP_UP_LINK,
+      link,
+    } satisfies RuntimeStepUpLinkRequest)) as RuntimeStepUpLinkResponse | undefined;
+    if (!res) setError("The wallet did not answer.");
+    else if (!res.ok) setError(res.error);
+    else setLink("");
+  }
+  return (
+    <div style={{ display: "grid", gap: 4, marginTop: 8 }}>
+      <div style={{ fontSize: 12, color: "var(--w-muted)" }}>Approve a step-up link</div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          value={link}
+          onChange={(e) => setLink(e.target.value)}
+          placeholder="https://link.trustoverip.org/t#…"
+          aria-label="Step-up link"
+          style={{ flex: 1, fontSize: 12 }}
+        />
+        <button onClick={() => void open()} disabled={link.trim().length === 0}>
+          Open
+        </button>
+      </div>
+      {error ? <small style={{ color: "var(--w-danger)" }}>{error}</small> : null}
+    </div>
+  );
+}
+
 function truncateDid(did: string): string {
   if (did.length <= 36) return did;
   return `${did.slice(0, 20)}…${did.slice(-12)}`;
@@ -458,6 +501,8 @@ function ConnectedView({
           This adds no admin code to the popup bundle — it opens a URL. The
           CI guard that keeps `pnm-core/admin` out of every wallet surface
           is unaffected, and still passes. */}
+      <OpenStepUpLink />
+
       <button
         onClick={() => void chrome.tabs.create({ url: chrome.runtime.getURL("manager.html") })}
         style={{ marginTop: 8 }}

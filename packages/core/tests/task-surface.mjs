@@ -82,6 +82,14 @@ const NOT_IN_SDK = [
       "counterparty, so vta-sdk carries no constant for them.",
   },
   {
+    prefix: "https://trusttasks.org/spec/auth/step-up/requests/show/",
+    why:
+      "A step-up handed to the person by a trigger link (vtc/step-up-handoff.ts, " +
+      "VTI-LNK-129): the wallet reads the step-up from the community's VTC with a key " +
+      "made for the read. The VTC, not the VTA, is the counterparty, so vta-sdk carries " +
+      "no constant for it.",
+  },
+  {
     prefix: "https://trusttasks.org/spec/vtc/join-requests/submit/0.3",
     why:
       "Joining a community from a trigger link (vtc/join.ts): the member's VTA signs it " +

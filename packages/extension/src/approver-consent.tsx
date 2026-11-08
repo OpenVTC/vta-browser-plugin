@@ -153,17 +153,35 @@ export function ApproverConsent({
         <div>
           <div style={label}>Community</div>
           <Did value={request.audience} />
-          <div style={{ fontSize: 11, color: "var(--w-muted)", marginTop: 4 }}>
-            Asked from <strong>{originHost(request.origin)}</strong>, which you signed in to this
-            community from.
-          </div>
+          {request.via?.kind === "link" ? (
+            <div style={{ fontSize: 11, color: "var(--w-muted)", marginTop: 4 }}>
+              Its portal is <strong>{originHost(request.origin)}</strong>. You opened a step-up
+              link: someone acting for you there, such as your assistant, asked for this.
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: "var(--w-muted)", marginTop: 4 }}>
+              Asked from <strong>{originHost(request.origin)}</strong>, which you signed in to this
+              community from.
+            </div>
+          )}
         </div>
+
+        {request.via?.kind === "link" ? (
+          <div>
+            <div style={label}>As</div>
+            <div style={card}>{request.via.identityLabel}</div>
+          </div>
+        ) : null}
 
         {request.kind === "stepUp" && request.operation ? (
           <>
             {request.reason ? (
               <div>
-                <div style={label}>The community's reason (not verified by the wallet)</div>
+                <div style={label}>
+                  {request.via?.kind === "link"
+                    ? "The community's reason (signed by the community)"
+                    : "The community's reason (not verified by the wallet)"}
+                </div>
                 <div style={{ ...card, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                   {request.reason}
                 </div>
