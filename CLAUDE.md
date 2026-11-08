@@ -1886,6 +1886,42 @@ silently — `loadStepUpApprover` refuses it); letting `attestApprover` sign a
 what the human saw". `core/tests/store.step-up-approver.mjs`
 and `extension/tests/approver-policy.test.mts` pin these.
 
+## A step-up link: the community's request, the person's answer (VTI-LNK-125 – 131)
+
+Someone acting for the person with a key they delegated — their assistant over
+`vtc-mcp`, say — can redeem a VTC step-up but never make one. The community
+refuses it with a single-use handle beside the inline request, and the
+assistant shows the person a `step-up` link. The person pastes it into the
+popup (`OpenStepUpLink`, `RUNTIME_STEP_UP_LINK`, extension pages only) or
+clicks it on a page (`handleTriggerLink` routes `step-up` away from the
+sign-in window). `background.ts::runStepUpLink` drives it:
+
+1. `OFFSCREEN_STEP_UP_FLOW` `read` (`step-up-flows.ts`): only a community the
+   wallet holds a `didSelfIssued` identity at (`isEntryFor`), or nothing is
+   sent (`not-in-records`); its DID document resolved and verified;
+   `auth/step-up/requests/show/0.1` from a fresh key with the handle
+   (`core/vtc/step-up-handoff.ts`); the returned `request` must be an
+   approve-request the community signed, to its subject, unexpired, and bound
+   to the returned operation (`binding-mismatch`); the subject must be one of
+   the wallet's identities there (`not-the-subject`). `notFound` is
+   `step-up-gone` (outcome `expired`).
+2. The same `check-step-up`, approver prompt (`via: { kind: "link" }`: the
+   identity from the wallet's own record, the reason labelled as signed by the
+   community) and `sign-step-up` as `approveStepUp`. There is no page and no
+   origin pin: the audience is the community the read came from.
+3. `answer`: the approve-response, signed by the agent as the subject
+   (`signTaskAsEntry`, purpose from `proofPurposeForDocumentType`), posted to
+   the community. Never back to whoever made the link.
+
+The outcome is a notification, since the popup closes when the prompt opens.
+
+**What breaks it:** showing anything from the link or the link's producer as
+what is being approved; reading a step-up for a community not in the records;
+skipping the binding recompute; answering through anything but the
+community's own endpoint; or letting a page send `RUNTIME_STEP_UP_LINK`.
+`core/tests/vtc.step-up-handoff.mjs` and `extension/tests/step-up-flows.test.mts`
+pin these.
+
 ## Repo mechanics worth knowing before you start
 
 - **Task modules are generated here, from `packages/core/trust-tasks.lock`.**

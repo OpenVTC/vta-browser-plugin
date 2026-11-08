@@ -58,7 +58,16 @@ export type TriggerLinkReason =
   | "domain-not-linked"
   // Local to this reader, outcome `invalid`: the community's verified document
   // lists no usable `SignInPortal` service (VTI-LNK-102 names no reason).
-  | "no-portal-service";
+  | "no-portal-service"
+  // `step-up` (VTI-LNK-128 – 130), outcome `invalid`: the contact is not a
+  // service in the reader's records; its step-up names a subject the reader
+  // holds no identity for there; or its binding is not the operation's.
+  | "not-in-records"
+  | "not-the-subject"
+  | "binding-mismatch"
+  // `step-up` (VTI-LNK-129), outcome `expired`: the community answered the
+  // handle `notFound` — spent, expired, or its step-up already settled.
+  | "step-up-gone";
 
 /** What the person can do about it (VTI-LNK-021). */
 export type TriggerLinkOutcome = "update" | "expired" | "unreachable" | "pass-on" | "invalid";
@@ -72,6 +81,7 @@ export function outcomeOf(reason: TriggerLinkReason): TriggerLinkOutcome {
     case "unsupported-version":
       return "update";
     case "expired":
+    case "step-up-gone":
       return "expired";
     case "no-common-transport":
       return "unreachable";
@@ -384,11 +394,29 @@ export const SIGN_IN_FLOW: TriggerLinkFlowSpec = {
   allowsContact: isServiceContact,
 };
 
+/**
+ * `step-up` 0.1, draft (VTI-LNK-125 to 131). The contact is the service that
+ * refused an operation, and the reader acts only for one already in its own
+ * records (VTI-LNK-128): the contact rule does not apply, because the service
+ * qualified when the person added it. So every contact parses, and one that is
+ * not in the records — a `did:key` among them — is `not-in-records` once the
+ * flow looks, before anything is sent.
+ */
+export const STEP_UP_FLOW: TriggerLinkFlowSpec = {
+  name: "step-up",
+  base: `${FLOW_REGISTRY_BASE}step-up`,
+  major: 0,
+  minors: [1],
+  draft: true,
+  requiresExp: true,
+  allowsContact: () => true,
+};
+
 /** The flows this plugin implements, as a reader. `vta-claim` is deliberately
  *  absent: this wallet does not claim VTAs from a Farm, so such a link is
  *  `unknown-flow` (outcome `update`). A reader that adds it uses
  *  {@link isServiceContact} as its `allowsContact` (VTI-LNK-112). */
-export const READER_FLOWS: readonly TriggerLinkFlowSpec[] = [SIGN_IN_FLOW];
+export const READER_FLOWS: readonly TriggerLinkFlowSpec[] = [SIGN_IN_FLOW, STEP_UP_FLOW];
 
 // ── Results ──────────────────────────────────────────────────────────────────
 

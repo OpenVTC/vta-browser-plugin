@@ -445,7 +445,7 @@ test("step 8: an absolute flow on another host is wrong-host", () => {
 });
 
 test("step 8: an unknown flow is unknown-flow (update)", () => {
-  refused(read(withFragment(fields({ _type: "/vti/flow/step-up/0.1" }))), "unknown-flow", "update");
+  refused(read(withFragment(fields({ _type: "/vti/flow/device-enrol/0.1" }))), "unknown-flow", "update");
 });
 
 test("step 8: a MAJOR or (draft) MINOR the reader does not implement is unsupported-version", () => {

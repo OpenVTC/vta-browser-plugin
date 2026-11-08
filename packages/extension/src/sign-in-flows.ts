@@ -373,7 +373,7 @@ export function communityContextId(host: string, n = 1): string {
 }
 
 /** Whether `e` is a sign-in entry for the community `vtcDid`. */
-function isEntryFor(e: SignInVaultEntry, vtcDid: string): boolean {
+export function isEntryFor(e: SignInVaultEntry, vtcDid: string): boolean {
   return (
     e.secretKind === "didSelfIssued" &&
     typeof e.principalDid === "string" &&

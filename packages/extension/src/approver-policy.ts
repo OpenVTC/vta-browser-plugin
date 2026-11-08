@@ -389,6 +389,12 @@ export interface ApproverConsentRequest {
   /** decision only: the VTC's summary of the action, unverified. */
   summary?: string;
   actionId?: string;
+  /** stepUp only: the step-up came through a `step-up` trigger link
+   *  (VTI-LNK-130), not from a page. The request and its `reason` were then
+   *  signed by the community itself, and `identityLabel` is the wallet's own
+   *  record of the identity the operation acts as. `origin` is the portal the
+   *  community's verified document names. */
+  via?: { kind: "link"; identityLabel: string };
 }
 
 /** The string the gesture's WebAuthn challenge is derived from: the ceremony's
