@@ -150,7 +150,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@cfworker/json-schema": "^4.1.1",
+    "@cfworker/json-schema": "^4.1.4",
     "@noble/curves": "^2.4.0",
     "@openvtc/trust-tasks": "^0.28.1",
     "@openvtc/vti-didcomm-js": "^0.14.0",
