@@ -451,9 +451,15 @@ test("a proof counts for a purpose only when the signer lists the key under it",
   assert.equal(assertionOnly.verified, false);
   assert.match(assertionOnly.reason, /not listed under authentication/);
 
-  // Without a required purpose nothing about relationships is asked, as before.
+  // Without a required purpose the key is still read from the relationship
+  // the proof claims (Data Integrity): an `authentication` proof by a key
+  // listed only under `assertionMethod` is no proof at all, so a did:webs with
+  // key roles cannot have its attestation key pass as its operational one.
   const any = await verifyTrustTaskProof(envelope, { resolveDid: docFor({ assertionMethod: [vm] }) });
-  assert.equal(any.verified, true, any.reason);
+  assert.equal(any.verified, false);
+  assert.match(any.reason, /not listed under authentication/);
+  const listed = await verifyTrustTaskProof(envelope, { resolveDid: docFor({ authentication: [vm] }) });
+  assert.equal(listed.verified, true, listed.reason);
 });
 
 test("a reply is evidence only under authentication, unless the channel says otherwise", async () => {

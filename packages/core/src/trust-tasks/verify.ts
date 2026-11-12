@@ -8,14 +8,15 @@
 // Same canonicalization (JCS / RFC 8785) and signing input as `sign.ts`:
 // SHA-256(JCS(proofConfig-minus-proofValue)) || SHA-256(JCS(doc-minus-proof)),
 // verified with Ed25519 against the key the proof's `verificationMethod`
-// resolves to.
+// resolves to — read from the signer's DID document under the relationship
+// the proof is for, in either encoding (`publicKeyMultibase`, or a did:webs
+// `JsonWebKey`'s `publicKeyJwk`; VTI-KEY-003), through `did/vm-key.ts`.
 
 import { ed25519 } from "@noble/curves/ed25519.js";
-import { didKey, multibase, sameReference, stripScidSrc } from "@openvtc/vti-didcomm-js";
+import { didKey, sameReference, stripScidSrc } from "@openvtc/vti-didcomm-js";
+import { ED25519, isVerificationRelationship, selectKey, type VerificationRelationship } from "../did/vm-key.js";
 import { resolveDidDocument } from "../didcomm/index.js";
 import { base58btcDecode, jcsCanonicalize, sha256 } from "./canonical.js";
-
-const ED25519_PUB = multibase.MULTICODEC.ED25519_PUB;
 
 /** A Data Integrity proof as produced by {@link signTrustTask}. */
 interface DataIntegrityProof {
@@ -40,10 +41,14 @@ export interface VerifyTrustTaskProofResult {
 
 export interface VerifyTrustTaskProofOptions {
   /** The proof purpose the caller requires (e.g. `"assertionMethod"`). When
-   *  set, a proof with a different `proofPurpose` fails verification, **and so
-   *  does one whose `verificationMethod` the signer's DID document does not
-   *  list under that relationship**. A proof that says `authentication` is an
-   *  authentication by the DID only when its controller put the key there. */
+   *  set, a proof with a different `proofPurpose` fails verification.
+   *
+   *  Either way, the key is read only from the relationship the proof is for
+   *  (this purpose, or the `proofPurpose` the proof states when none is
+   *  required), so a proof whose `verificationMethod` the signer's DID document
+   *  does not list there fails. A proof that says `authentication` is an
+   *  authentication by the DID only when its controller put the key there — and
+   *  a did:webs with key roles puts different keys under each relationship. */
   expectedProofPurpose?: "assertionMethod" | "authentication";
   /** Resolve a DID to its DID document. Defaults to the wallet's built-in
    *  resolver ({@link resolveDidDocument}, covers did:key / did:peer / did:webvh).
@@ -79,28 +84,42 @@ export async function verifyTrustTaskProof(
     return { verified: false, reason: "missing/invalid proofValue (expected multibase 'z')" };
   }
 
+  // The relationship the key must be listed under: the purpose the caller
+  // requires, or failing that the one the proof claims (Data Integrity: a
+  // verification method is used only for a purpose its controller authorised).
+  const relationship = opts.expectedProofPurpose ?? proof.proofPurpose;
+  if (!isVerificationRelationship(relationship)) {
+    return { verified: false, reason: `unsupported proofPurpose: ${String(proof.proofPurpose)}` };
+  }
+
   // Resolved through the DID URL the proof names — for a did:scid, with the
   // `src` a verifier that has not seen it needs — and attributed to its
   // identity, the DID without that `src` (VTI-KEY-163).
   const controller = vm.slice(0, vm.indexOf("#"));
   const signer = stripScidSrc(controller);
 
-  let publicKey: Uint8Array;
   let didDocument: Record<string, unknown>;
   try {
-    ({ key: publicKey, doc: didDocument } = await resolveEd25519Key(vm, controller, opts.resolveDid));
+    didDocument = controller.startsWith("did:key:")
+      ? (didKey.resolve(controller).didDocument as Record<string, unknown>)
+      : await (opts.resolveDid ?? resolveDidDocument)(controller);
   } catch (e) {
     return { verified: false, signer, reason: `verificationMethod resolution failed: ${e instanceof Error ? e.message : String(e)}` };
   }
-  // The resolver finds a key under any relationship, so the relationship the
-  // proof claims is checked here: the VTA, the VTC and the did-hosting RP check
-  // it the same way (VTI #1740, affinidi-webvh-service #213).
-  if (opts.expectedProofPurpose && !listsMethodUnder(didDocument, vm, opts.expectedProofPurpose)) {
+  // The VTA, the VTC and the did-hosting RP check the relationship the same
+  // way (VTI #1740, affinidi-webvh-service #213).
+  if (!listsMethodUnder(didDocument, vm, relationship)) {
     return {
       verified: false,
       signer,
-      reason: `${vm} is not listed under ${opts.expectedProofPurpose} in the DID document of ${controller}`,
+      reason: `${vm} is not listed under ${relationship} in the DID document of ${controller}`,
     };
+  }
+  let publicKey: Uint8Array;
+  try {
+    ({ publicKey } = selectKey(didDocument, controller, relationship, { kid: vm, curves: [ED25519] }));
+  } catch (e) {
+    return { verified: false, signer, reason: `verificationMethod resolution failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 
   // Reconstruct the signing input exactly as sign.ts built it: the proofConfig
@@ -134,7 +153,7 @@ export async function verifyTrustTaskProof(
 export function listsMethodUnder(
   doc: Record<string, unknown>,
   vm: string,
-  relationship: "assertionMethod" | "authentication",
+  relationship: VerificationRelationship,
 ): boolean {
   const hash = vm.indexOf("#");
   const fragment = hash >= 0 ? vm.slice(hash) : undefined;
@@ -147,28 +166,4 @@ export function listsMethodUnder(
       ? names(entry)
       : typeof entry === "object" && entry !== null && names((entry as { id?: unknown }).id),
   );
-}
-
-/** Resolve a `verificationMethod` DID URL to its Ed25519 public-key bytes, and
- *  return the DID document it was read from. */
-async function resolveEd25519Key(
-  vm: string,
-  controller: string,
-  resolveDid?: (did: string) => Promise<Record<string, unknown>>,
-): Promise<{ key: Uint8Array; doc: Record<string, unknown> }> {
-  const doc = controller.startsWith("did:key:")
-    ? (didKey.resolve(controller).didDocument as Record<string, unknown>)
-    : await (resolveDid ?? resolveDidDocument)(controller);
-
-  const methods = (doc.verificationMethod as { id: string; publicKeyMultibase?: string }[] | undefined) ?? [];
-  const method =
-    methods.find((m) => sameReference(m.id, vm)) ?? methods.find((m) => m.id.endsWith(vm.slice(vm.indexOf("#"))));
-  if (!method?.publicKeyMultibase) {
-    throw new Error(`verificationMethod ${vm} not found or missing publicKeyMultibase`);
-  }
-  const { codec, key } = multibase.decodeMultikey(method.publicKeyMultibase);
-  if (codec[0] !== ED25519_PUB[0] || codec[1] !== ED25519_PUB[1]) {
-    throw new Error("verificationMethod key is not Ed25519");
-  }
-  return { key, doc };
 }

@@ -18,6 +18,14 @@
 //     walks the webvh log + verifies every Data Integrity proof,
 //     so a successful resolve is a real attestation.
 //
+//   - **did:webs**: resolved over the network from the AID's KERI event
+//     stream (VTI-KEY-003). Its verification methods are `JsonWebKey`s with
+//     ids `<did>#<CESR key>`, and with key roles (VTI-KEY-173) its
+//     `verificationMethod[]` also holds key-agreement keys (P-256, X25519)
+//     that are no signing key at all — so a did:webs offers only what it
+//     lists under `authentication` / `assertionMethod`, never "any
+//     verification method".
+//
 // Selection: when the resolved DID document has a single
 // `authentication` (or `assertionMethod`) entry, return its id and
 // `candidates.length === 1` so the popup can auto-fill the field.
@@ -30,7 +38,7 @@
 
 import { resolve as vtiResolve, scidSrc } from "@openvtc/vti-didcomm-js";
 
-import { assertResolvableScidHost, assertResolvableWebvhHost } from "./egress-guard.js";
+import { assertResolvableScidHost, assertResolvableWebsHost, assertResolvableWebvhHost } from "./egress-guard.js";
 import { didMethod, type ResolveDidOptions } from "./verify.js";
 
 export interface DeriveSigningKeyIdResult {
@@ -69,11 +77,12 @@ export async function deriveSigningKeyId(
   if (method === "unknown") {
     return { did, candidates: [], error: "Unrecognised DID method" };
   }
-  // did:peer, did:webvh, did:scid: full resolution. did:peer is offline; webvh
-  // hits the network and verifies the log — at a host the DID's author
-  // chose, so the host is judged first.
+  // did:peer, did:webvh, did:webs, did:scid: full resolution. did:peer is
+  // offline; webvh and webs hit the network and verify the log — at a host
+  // the DID's author chose, so the host is judged first.
   try {
     if (method === "webvh") assertResolvableWebvhHost(did);
+    if (method === "webs") assertResolvableWebsHost(did);
     if (method === "scid" && scidSrc(did)) assertResolvableScidHost(did);
     const resolve = opts.resolveDid ?? ((d: string) => vtiResolve(d, {}));
     const resolution = (await resolve(did)) as {
@@ -95,12 +104,14 @@ export async function deriveSigningKeyId(
     }
     // Prefer `authentication` (the signing-purpose-correct list for
     // SIOP-style id_tokens). Fall back to `assertionMethod` if absent.
-    // Final fallback: enumerate `verificationMethod` ids — better to
-    // give the operator something than nothing.
+    // Final fallback, except for a did:webs: enumerate
+    // `verificationMethod` ids — better to give the operator something
+    // than nothing. A did:webs lists its key-agreement keys there too,
+    // and offering one as a signing key is worse than offering nothing.
     const candidates =
       collectVmIds(doc.authentication) ||
       collectVmIds(doc.assertionMethod) ||
-      collectVmIds(doc.verificationMethod) ||
+      (method === "webs" ? null : collectVmIds(doc.verificationMethod)) ||
       [];
     if (candidates.length === 0) {
       return { did, candidates: [], error: "DID document has no usable verification methods" };

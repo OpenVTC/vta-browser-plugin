@@ -18,12 +18,18 @@
 // its `src` names (`did:scid:vh:1:<scid>?src=example.com/alice`). Its identity
 // is the bare DID: the resolved document's `id` is `did:scid:vh:1:<scid>`, and
 // a bare DID resolves only through a source the resolver already verified.
+//
+// did:webs (`did:webs:<host>[:<path>]:<AID>`) is a method every party must
+// resolve (VTI-KEY-003): its document is the one the AID's KERI event stream
+// (`keri.cesr`, from the host the DID names) establishes, so a successful
+// resolve is likewise cryptographic. Its host is judged before anything is
+// fetched, as a did:webvh's is.
 
 import { resolve as vtiResolve, scidSrc } from "@openvtc/vti-didcomm-js";
 
-import { assertResolvableScidHost, assertResolvableWebvhHost } from "./egress-guard.js";
+import { assertResolvableScidHost, assertResolvableWebsHost, assertResolvableWebvhHost } from "./egress-guard.js";
 
-export type DidMethod = "webvh" | "scid" | "peer" | "key" | "unknown";
+export type DidMethod = "webvh" | "webs" | "scid" | "peer" | "key" | "unknown";
 
 export interface VerifyDidResult {
   /** Canonical DID under verification. */
@@ -31,13 +37,15 @@ export interface VerifyDidResult {
   /** Parsed DID method. `unknown` if the input is not a recognisable DID. */
   method: DidMethod;
   /** True if resolution succeeded. For did:webvh this implies the SCID + log
-   *  hash chain + every Data Integrity proof verified. For did:peer/did:key
+   *  hash chain + every Data Integrity proof verified; for did:webs, the AID's
+   *  key event log. For did:peer/did:key
    *  it implies the identifier was structurally valid. */
   resolved: boolean;
   /** For did:webvh — the host the DID identifies (extracted from the DID,
    *  not the resolved document, so the operator sees what the wallet asked
-   *  for). The DID is `did:webvh:<scid>:<host>[:<path>...]`. For a did:scid
-   *  DID URL, the host its `src` names; a bare did:scid names none. */
+   *  for). The DID is `did:webvh:<scid>:<host>[:<path>...]`. For a did:webs,
+   *  likewise the host it names (`did:webs:<host>[:<path>...]:<AID>`). For a
+   *  did:scid DID URL, the host its `src` names; a bare did:scid names none. */
   domain?: string;
   /** Human-readable error if resolution failed. */
   error?: string;
@@ -63,6 +71,7 @@ export interface VerifyDidResult {
  */
 export function didMethod(did: string): DidMethod {
   if (did.startsWith("did:webvh:")) return "webvh";
+  if (did.startsWith("did:webs:")) return "webs";
   if (did.startsWith("did:scid:")) return "scid";
   if (did.startsWith("did:peer:")) return "peer";
   if (did.startsWith("did:key:")) return "key";
@@ -84,6 +93,18 @@ export function didWebvhDomain(did: string): string | undefined {
   const parts = did.split(":");
   // ["did", "webvh", "<scid>", "<host>", ...path]
   return parts[3];
+}
+
+/**
+ * The host portion of a `did:webs:<host>[:<path>...]:<AID>`, as written (a
+ * port stays percent-encoded on it, as on a did:webvh host). `undefined` for
+ * any other DID.
+ */
+export function didWebsDomain(did: string): string | undefined {
+  if (!did.startsWith("did:webs:")) return undefined;
+  // ["did", "webs", "<host>", ...path, "<AID>"]
+  const parts = did.split(":");
+  return parts.length >= 4 ? parts[2] : undefined;
 }
 
 /**
@@ -122,7 +143,14 @@ export async function verifyDid(
   opts: ResolveDidOptions = {},
 ): Promise<VerifyDidResult> {
   const method = didMethod(did);
-  const domain = method === "webvh" ? didWebvhDomain(did) : method === "scid" ? didScidDomain(did) : undefined;
+  const domain =
+    method === "webvh"
+      ? didWebvhDomain(did)
+      : method === "webs"
+        ? didWebsDomain(did)
+        : method === "scid"
+          ? didScidDomain(did)
+          : undefined;
   const base: VerifyDidResult = {
     did,
     method,
@@ -134,6 +162,7 @@ export async function verifyDid(
   }
   try {
     if (method === "webvh") assertResolvableWebvhHost(did);
+    if (method === "webs") assertResolvableWebsHost(did);
     // A bare did:scid fetches from a source the resolver vetted when it
     // learned it; a DID URL names its host here.
     if (method === "scid" && scidSrc(did)) assertResolvableScidHost(did);

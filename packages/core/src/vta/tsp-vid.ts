@@ -4,22 +4,26 @@
 //
 // TSP VIDs are DIDs, so this reuses the plugin's DID resolver. The X25519 key
 // is the DID's key-agreement VM (same one DIDComm authcrypts to). The Ed25519
-// key is the DID's authentication/assertion VM.
+// key is the DID's `authentication` key: a TSP VID's keys are the DID's
+// existing "Ed25519 (auth) + X25519 (keyAgreement)" pair
+// (verifiable-trust-infrastructure `docs/05-design-notes/tsp-enablement.md`,
+// D5), and the VTA's operational key — the one it signs as itself with — is
+// the key it lists there (VTI-KEY-106).
 //
-// The key-format conversions (OKP JWK -> raw, Multikey -> raw) are universal
-// and unit-tested. The DID-document VM *selection* is a reasonable heuristic
-// that needs validation against a live TSP-enabled VTA's DID document.
+// The key is read through `did/vm-key.ts`, by relationship: never "any Ed25519
+// key" in `verificationMethod[]`, never by a fragment suffix, and failing
+// closed on a method it cannot read. A did:webs with key roles (VTI-KEY-173)
+// lists a different Ed25519 key under `assertionMethod` (attestation) than
+// under `authentication` (operational), so a fallback would verify TSP frames
+// against the wrong key.
 
 import { base58 } from "@scure/base";
 
+import { ED25519, publicKeyOf, selectKey } from "../did/vm-key.js";
 import { resolveDidDocument, resolveKeyAgreement } from "../didcomm/index.js";
 import { base64urlToBytes } from "../util/base64url.js";
 import { VtaClientError } from "./errors.js";
 import type { TspRemoteEndpoint } from "./tsp-channel.js";
-
-// Multicodec codes (unsigned-varint) for the raw public-key Multikey forms.
-const MULTICODEC_ED25519_PUB = 0xed;
-const MULTICODEC_X25519_PUB = 0xec;
 
 /** Decode a leading unsigned-varint; returns the value + bytes consumed. */
 function decodeVarint(bytes: Uint8Array): { value: number; length: number } {
@@ -47,9 +51,11 @@ export function rawFromMultikey(multibase: string): { codec: number; key: Uint8A
   return { codec, key: decoded.slice(length) };
 }
 
-/** Extract the raw 32-byte public key of an OKP JWK, checking the curve. */
+/** Extract the raw 32-byte public key of an OKP **public** JWK, checking the
+ *  curve. A JWK carrying `d` is refused: a public key's place is no place for
+ *  a secret. */
 export function rawFromOkpJwk(
-  jwk: { kty?: string; crv?: string; x?: string },
+  jwk: { kty?: string; crv?: string; x?: string; d?: string },
   expectedCrv: "X25519" | "Ed25519",
 ): Uint8Array {
   if (jwk.kty !== "OKP" || jwk.crv !== expectedCrv || !jwk.x) {
@@ -58,6 +64,9 @@ export function rawFromOkpJwk(
       `tsp-vid: expected OKP ${expectedCrv} JWK, got kty=${jwk.kty} crv=${jwk.crv}`,
     );
   }
+  if (jwk.d !== undefined) {
+    throw new VtaClientError("e.client.parse", `tsp-vid: the ${expectedCrv} JWK carries private key material`);
+  }
   const raw = base64urlToBytes(jwk.x);
   if (raw.length !== 32) {
     throw new VtaClientError("e.client.parse", `tsp-vid: ${expectedCrv} key is ${raw.length} bytes, want 32`);
@@ -65,73 +74,36 @@ export function rawFromOkpJwk(
   return raw;
 }
 
-/** Extract a raw 32-byte Ed25519 public key from a DID-document verification
- *  method (either `publicKeyMultibase` Multikey or `publicKeyJwk` OKP). */
-export function ed25519FromVerificationMethod(vm: {
-  publicKeyMultibase?: string;
-  publicKeyJwk?: { kty?: string; crv?: string; x?: string };
-}): Uint8Array {
-  if (vm.publicKeyMultibase) {
-    const { codec, key } = rawFromMultikey(vm.publicKeyMultibase);
-    if (codec !== MULTICODEC_ED25519_PUB) {
-      throw new VtaClientError("e.client.parse", `tsp-vid: VM is not Ed25519 (multicodec 0x${codec.toString(16)})`);
-    }
-    if (key.length !== 32) {
-      throw new VtaClientError("e.client.parse", `tsp-vid: Ed25519 key is ${key.length} bytes, want 32`);
-    }
-    return key;
+/** The raw 32-byte Ed25519 public key of a DID-document verification method:
+ *  a `Multikey` / `Ed25519VerificationKey2020` (`publicKeyMultibase`) or a
+ *  `JsonWebKey` / `JsonWebKey2020` (`publicKeyJwk`). Fails closed on a missing
+ *  or unknown `type`, an encoding the type does not carry, a revoked method, a
+ *  JWK with `d`, or any curve but Ed25519. */
+export function ed25519FromVerificationMethod(vm: unknown): Uint8Array {
+  let key;
+  try {
+    key = publicKeyOf(vm);
+  } catch (e) {
+    throw new VtaClientError("e.client.parse", `tsp-vid: ${e instanceof Error ? e.message : String(e)}`);
   }
-  if (vm.publicKeyJwk) return rawFromOkpJwk(vm.publicKeyJwk, "Ed25519");
-  throw new VtaClientError("e.client.parse", "tsp-vid: VM has no publicKeyMultibase or publicKeyJwk");
+  if (key.crv !== ED25519) {
+    throw new VtaClientError("e.client.parse", `tsp-vid: the verification method is ${key.crv}, not Ed25519`);
+  }
+  return key.publicKey;
 }
 
-// Minimal DID-document shape we read.
-interface DidVerificationMethod {
-  id?: string;
-  type?: string;
-  publicKeyMultibase?: string;
-  publicKeyJwk?: { kty?: string; crv?: string; x?: string };
-}
-interface DidDocument {
-  verificationMethod?: DidVerificationMethod[];
-  authentication?: Array<string | DidVerificationMethod>;
-  assertionMethod?: Array<string | DidVerificationMethod>;
+/** The VID's Ed25519 signing key: the first readable Ed25519 key its DID
+ *  document lists under `authentication`. Nothing else is a substitute. */
+function findEd25519(vid: string, doc: unknown): Uint8Array {
+  try {
+    return selectKey(doc, vid, "authentication", { curves: [ED25519], label: "tsp-vid" }).publicKey;
+  } catch (e) {
+    throw new VtaClientError("e.client.parse", e instanceof Error ? e.message : String(e));
+  }
 }
 
-/** Resolve a verification-method reference (a `#fragment` id or an inline VM)
- *  against the doc's `verificationMethod` array. */
-function derefVm(
-  ref: string | DidVerificationMethod,
-  vms: DidVerificationMethod[],
-): DidVerificationMethod | undefined {
-  if (typeof ref !== "string") return ref;
-  return vms.find((v) => v.id === ref || v.id?.endsWith(ref));
-}
-
-/** Find the DID's Ed25519 signing key: prefer an `authentication` VM, then
- *  `assertionMethod`, then any Ed25519 verification method. */
-function findEd25519(doc: DidDocument): Uint8Array {
-  const vms = doc.verificationMethod ?? [];
-  for (const list of [doc.authentication, doc.assertionMethod]) {
-    for (const ref of list ?? []) {
-      const vm = derefVm(ref, vms);
-      if (!vm) continue;
-      try {
-        return ed25519FromVerificationMethod(vm);
-      } catch {
-        // not Ed25519 — keep looking
-      }
-    }
-  }
-  for (const vm of vms) {
-    try {
-      return ed25519FromVerificationMethod(vm);
-    } catch {
-      // keep looking
-    }
-  }
-  throw new VtaClientError("e.client.parse", "tsp-vid: DID document has no Ed25519 verification method");
-}
+// Minimal DID-document shape we read; the key reading itself is `vm-key`'s.
+type DidDocument = Record<string, unknown>;
 
 /**
  * Assemble a {@link TspRemoteEndpoint} from already-resolved pieces: the DID,
@@ -145,7 +117,7 @@ export function tspEndpointFromResolved(
   return {
     vid,
     encryptionPublicKey: rawFromOkpJwk(keyAgreementPublicJwk, "X25519"),
-    signingPublicKey: findEd25519(didDocument),
+    signingPublicKey: findEd25519(vid, didDocument),
   };
 }
 
