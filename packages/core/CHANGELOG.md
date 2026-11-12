@@ -8,6 +8,16 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+### Changed
+
+- **`@openvtc/vti-didcomm-js` 0.16** (from 0.14). The default resolver
+  resolves did:webs (vti-didcomm-js #38), and DIDComm/TSP key agreement picks
+  the X25519 `keyAgreement` key past a P-256 one (#39). `did/vm-key.ts` now
+  delegates to the library's `verification-method` export rather than
+  carrying its own port of it (R4.1). did:webvh verification moves to
+  `didwebvh-ts` 3, which refuses a did:webvh whose host is `localhost`: a
+  local webvh server needs a fully qualified host name.
+
 ### Added
 
 - **Checking a vote after close** (VTI-VOT-053). `pcsVoterReceiptsList`
