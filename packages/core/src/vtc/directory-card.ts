@@ -36,6 +36,7 @@ import {
   TYPE_URI as KEYS_SIGN_DOCUMENT,
   RESPONSE_TYPE_URI as KEYS_SIGN_DOCUMENT_RESPONSE,
 } from "../specs/keys/sign-document/0.1/payload.js";
+import { ED25519, selectKey } from "../did/vm-key.js";
 import type { TrustTaskSender } from "../vta/channel.js";
 import { buildTrustTask } from "../vta/trust-task.js";
 import { decodeMultibase } from "../trust-tasks/digest.js";
@@ -307,7 +308,14 @@ function keyBytes(multibase: string): string | null {
 }
 
 /** The Ed25519 keys `memberDoc` lists under `assertionMethod`, as hex. A
- *  `did:key` lists its one key under every relationship. */
+ *  `did:key` lists its one key under every relationship.
+ *
+ *  Each entry is read through `did/vm-key.ts`, in either encoding — a did:webs
+ *  lists `JsonWebKey` methods (VTI-KEY-003) — and only under
+ *  `assertionMethod`: a did:webs with key roles lists its attestation key there
+ *  and a different, operational key under `authentication` (VTI-KEY-173). An
+ *  entry that cannot be read (unknown type, revoked, a JWK with `d`, another
+ *  curve) contributes nothing. */
 export function assertionKeys(memberDid: string, memberDoc: Record<string, unknown> | null): Set<string> {
   const out = new Set<string>();
   if (memberDid.startsWith("did:key:")) {
@@ -316,29 +324,17 @@ export function assertionKeys(memberDid: string, memberDoc: Record<string, unkno
     return out;
   }
   if (!memberDoc) return out;
-  const absolute = (id: string) => (id.startsWith("#") ? `${memberDid}${id}` : id);
-  const methods = new Map<string, string>();
-  const add = (vm: unknown) => {
-    const m = vm as { id?: unknown; publicKeyMultibase?: unknown };
-    if (typeof m?.id === "string" && typeof m.publicKeyMultibase === "string") {
-      const k = keyBytes(m.publicKeyMultibase);
-      if (k) methods.set(absolute(m.id), k);
-    }
-  };
-  const vms = memberDoc.verificationMethod;
-  if (Array.isArray(vms)) vms.forEach(add);
-  const assertion = memberDoc.assertionMethod;
-  if (Array.isArray(assertion)) {
-    for (const entry of assertion) {
-      if (typeof entry === "string") {
-        const k = methods.get(absolute(entry));
-        if (k) out.add(k);
-      } else {
-        add(entry);
-        const id = (entry as { id?: unknown })?.id;
-        const k = typeof id === "string" ? methods.get(absolute(id)) : undefined;
-        if (k) out.add(k);
-      }
+  const entries = memberDoc.assertionMethod;
+  if (!Array.isArray(entries)) return out;
+  for (const entry of entries) {
+    const ref = typeof entry === "string" ? entry : (entry as { id?: unknown } | null)?.id;
+    if (typeof ref !== "string") continue;
+    const kid = ref.startsWith("#") ? `${memberDid}${ref}` : ref;
+    try {
+      const { publicKey } = selectKey(memberDoc, memberDid, "assertionMethod", { kid, curves: [ED25519] });
+      out.add(Array.from(publicKey, (b) => b.toString(16).padStart(2, "0")).join(""));
+    } catch {
+      // not a readable Ed25519 assertion key — it names no key the agent can sign as
     }
   }
   return out;

@@ -43,19 +43,42 @@ test("rawFromMultikey decodes the multicodec + raw key (round-trips encodeMultik
   assert.throws(() => rawFromMultikey("Qnot-base58btc")); // no 'z' prefix
 });
 
-test("ed25519FromVerificationMethod reads Multikey and JWK forms", () => {
+test("ed25519FromVerificationMethod reads Multikey and JWK forms, by type", () => {
   const pub = ed25519.getPublicKey(ed25519.utils.randomSecretKey());
+  const mk = encodeMultikey(ED25519_PUB, pub);
+  assert.deepEqual(ed25519FromVerificationMethod({ id: "#a", type: "Multikey", publicKeyMultibase: mk }), pub);
   assert.deepEqual(
-    ed25519FromVerificationMethod({ publicKeyMultibase: encodeMultikey(ED25519_PUB, pub) }),
+    ed25519FromVerificationMethod({ id: "#a", type: "Ed25519VerificationKey2020", publicKeyMultibase: mk }),
     pub,
   );
-  assert.deepEqual(ed25519FromVerificationMethod({ publicKeyJwk: okpJwk("Ed25519", pub) }), pub);
+  for (const type of ["JsonWebKey", "JsonWebKey2020"]) {
+    assert.deepEqual(ed25519FromVerificationMethod({ id: "#a", type, publicKeyJwk: okpJwk("Ed25519", pub) }), pub);
+  }
 
   // A non-Ed25519 Multikey (X25519) must be rejected.
   const xpub = x25519.getPublicKey(x25519.utils.randomSecretKey());
   assert.throws(() =>
-    ed25519FromVerificationMethod({ publicKeyMultibase: encodeMultikey(X25519_PUB, xpub) }),
+    ed25519FromVerificationMethod({ id: "#x", type: "Multikey", publicKeyMultibase: encodeMultikey(X25519_PUB, xpub) }),
   );
+  // Fail closed: no type, an unknown type, the encoding the type does not
+  // carry, both encodings, a JWK with `d`, a revoked method.
+  const fails = [
+    { publicKeyMultibase: mk },
+    { type: "EcdsaSecp256k1VerificationKey2019", publicKeyMultibase: mk },
+    { type: "JsonWebKey", publicKeyMultibase: mk },
+    { type: "Multikey", publicKeyJwk: okpJwk("Ed25519", pub) },
+    { type: "Multikey", publicKeyMultibase: mk, publicKeyJwk: okpJwk("Ed25519", pub) },
+    { type: "JsonWebKey", publicKeyJwk: { ...okpJwk("Ed25519", pub), d: b64url(new Uint8Array(32)) } },
+    { type: "Multikey", publicKeyMultibase: mk, revoked: "2026-01-01T00:00:00Z" },
+  ];
+  for (const vm of fails) {
+    assert.throws(() => ed25519FromVerificationMethod({ id: "#a", ...vm }), JSON.stringify(vm));
+  }
+});
+
+test("rawFromOkpJwk refuses a JWK carrying private material", () => {
+  const xpub = x25519.getPublicKey(x25519.utils.randomSecretKey());
+  assert.throws(() => rawFromOkpJwk({ ...okpJwk("X25519", xpub), d: b64url(new Uint8Array(32)) }, "X25519"));
 });
 
 test("tspEndpointFromResolved: X25519 from JWK + Ed25519 via authentication VM", () => {
@@ -77,23 +100,61 @@ test("tspEndpointFromResolved: X25519 from JWK + Ed25519 via authentication VM",
   assert.deepEqual(ep.signingPublicKey, edPub);
 });
 
-test("tspEndpointFromResolved: falls back to any Ed25519 VM when no auth ref", () => {
+test("tspEndpointFromResolved: no authentication key means no endpoint — never any Ed25519 VM", () => {
   const edPub = ed25519.getPublicKey(ed25519.utils.randomSecretKey());
   const xPub = x25519.getPublicKey(x25519.utils.randomSecretKey());
-  const doc = {
-    verificationMethod: [
-      { id: "#x", type: "Multikey", publicKeyMultibase: encodeMultikey(X25519_PUB, xPub) },
-      { id: "#e", type: "Multikey", publicKeyMultibase: encodeMultikey(ED25519_PUB, edPub) },
-    ],
-  };
-  const ep = tspEndpointFromResolved("did:key:z", okpJwk("X25519", xPub), doc);
-  assert.deepEqual(ep.signingPublicKey, edPub);
+  const did = "did:web:vta.example";
+  const vms = [
+    { id: "#x", type: "Multikey", publicKeyMultibase: encodeMultikey(X25519_PUB, xPub) },
+    { id: "#e", type: "Multikey", publicKeyMultibase: encodeMultikey(ED25519_PUB, edPub) },
+  ];
+  // An Ed25519 key under no relationship, or only under assertionMethod, is
+  // not the VID's signing key.
+  assert.throws(() => tspEndpointFromResolved(did, okpJwk("X25519", xPub), { verificationMethod: vms }));
+  assert.throws(() =>
+    tspEndpointFromResolved(did, okpJwk("X25519", xPub), { verificationMethod: vms, assertionMethod: ["#e"] }),
+  );
+  // The same key under authentication, relative or absolute, is.
+  for (const ref of ["#e", `${did}#e`]) {
+    const ep = tspEndpointFromResolved(did, okpJwk("X25519", xPub), { verificationMethod: vms, authentication: [ref] });
+    assert.deepEqual(ep.signingPublicKey, edPub);
+  }
+});
+
+test("tspEndpointFromResolved dereferences an id exactly, never by fragment suffix", () => {
+  const edPub = ed25519.getPublicKey(ed25519.utils.randomSecretKey());
+  const xPub = x25519.getPublicKey(x25519.utils.randomSecretKey());
+  const did = "did:web:vta.example";
+  // `#e` must not match another DID's `#e`, nor `#key-e`.
+  for (const id of ["did:web:other.example#e", `${did}#key-e`]) {
+    const doc = {
+      verificationMethod: [{ id, type: "Multikey", publicKeyMultibase: encodeMultikey(ED25519_PUB, edPub) }],
+      authentication: ["#e"],
+    };
+    assert.throws(() => tspEndpointFromResolved(did, okpJwk("X25519", xPub), doc), id);
+  }
+});
+
+test("tspEndpointFromResolved fails closed on an authentication key it cannot read", () => {
+  const edPub = ed25519.getPublicKey(ed25519.utils.randomSecretKey());
+  const xPub = x25519.getPublicKey(x25519.utils.randomSecretKey());
+  const did = "did:web:vta.example";
+  const mk = encodeMultikey(ED25519_PUB, edPub);
+  for (const vm of [
+    { publicKeyMultibase: mk },
+    { type: "Multikey", publicKeyMultibase: mk, revoked: "2026-01-01T00:00:00Z" },
+    { type: "JsonWebKey", publicKeyJwk: { ...okpJwk("Ed25519", edPub), d: b64url(new Uint8Array(32)) } },
+  ]) {
+    const doc = { verificationMethod: [{ id: `${did}#e`, ...vm }], authentication: ["#e"] };
+    assert.throws(() => tspEndpointFromResolved(did, okpJwk("X25519", xPub), doc), JSON.stringify(vm));
+  }
 });
 
 test("tspEndpointFromResolved throws when no Ed25519 key is present", () => {
   const xPub = x25519.getPublicKey(x25519.utils.randomSecretKey());
   const doc = {
     verificationMethod: [{ id: "#x", type: "Multikey", publicKeyMultibase: encodeMultikey(X25519_PUB, xPub) }],
+    authentication: ["#x"],
   };
   assert.throws(() => tspEndpointFromResolved("did:web:x", okpJwk("X25519", xPub), doc));
 });

@@ -21,8 +21,8 @@
 
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { p256 } from "@noble/curves/nist.js";
-import { multibase } from "@openvtc/vti-didcomm-js";
 
+import { ED25519, P256, selectKey } from "../did/vm-key.js";
 import { base64urlToBytes } from "../util/base64url.js";
 import { withFetchTimeout, isFetchTimeout } from "../http/timeout-fetch.js";
 import { listsMethodUnder, verifyTrustTaskProof } from "../trust-tasks/verify.js";
@@ -315,7 +315,7 @@ async function checkJwt(jwt: string, want: DomainLinkageExpectations): Promise<v
   if (typeof kid !== "string" || kid.length === 0) fail("a JWT with no kid");
   const vm = (kid as string).startsWith("#") ? `${want.did}${kid as string}` : (kid as string);
   if (!vm.startsWith(`${want.did}#`)) fail("a key of another DID");
-  const key = assertionKey(want.didDocument, vm);
+  const key = assertionKey(want.didDocument, want.did, vm);
   if ((alg === "EdDSA") !== (key.curve === "Ed25519")) fail("the alg does not match the key");
   let sig: Uint8Array;
   try {
@@ -342,52 +342,22 @@ interface PublicKey {
   bytes: Uint8Array;
 }
 
-/** The public key of `vm`, which must be listed under `assertionMethod`. */
-function assertionKey(doc: Record<string, unknown>, vm: string): PublicKey {
+/** The public key of `vm`, which must be listed under `assertionMethod`.
+ *
+ *  Read through `did/vm-key.ts`: either encoding (`publicKeyMultibase`, or a
+ *  did:webs `JsonWebKey`'s `publicKeyJwk`; VTI-KEY-003), and refused for an
+ *  unknown or missing type, a revoked method, a JWK carrying `d`, or a curve
+ *  other than Ed25519 or P-256. */
+function assertionKey(doc: Record<string, unknown>, did: string, vm: string): PublicKey {
   if (!listsMethodUnder(doc, vm, "assertionMethod")) fail("a key not under assertionMethod");
-  const fragment = vm.slice(vm.indexOf("#"));
-  const names = (m: unknown) => {
-    const id = (m as { id?: unknown } | null)?.id;
-    return id === vm || id === fragment;
-  };
-  const embedded = Array.isArray(doc.assertionMethod)
-    ? doc.assertionMethod.find((m) => m && typeof m === "object" && names(m))
-    : undefined;
-  const listed = Array.isArray(doc.verificationMethod) ? doc.verificationMethod.find(names) : undefined;
-  const method = (embedded ?? listed) as
-    | { publicKeyMultibase?: unknown; publicKeyJwk?: { kty?: unknown; crv?: unknown; x?: unknown; y?: unknown } }
-    | undefined;
-  if (!method) return fail("a key the document does not have");
+  let key;
   try {
-    if (typeof method.publicKeyMultibase === "string") {
-      const { codec, key } = multibase.decodeMultikey(method.publicKeyMultibase);
-      const is = (c: Uint8Array) => codec.length === c.length && codec.every((b, i) => b === c[i]);
-      if (is(multibase.MULTICODEC.ED25519_PUB) && key.length === 32) return { curve: "Ed25519", bytes: key };
-      if (is(multibase.MULTICODEC.P256_PUB)) return { curve: "P-256", bytes: key };
-      return fail("an unsupported key type");
-    }
-    const jwk = method.publicKeyJwk;
-    if (jwk && typeof jwk === "object") {
-      if (jwk.kty === "OKP" && jwk.crv === "Ed25519" && typeof jwk.x === "string") {
-        const x = base64urlToBytes(jwk.x);
-        if (x.length === 32) return { curve: "Ed25519", bytes: x };
-      }
-      if (jwk.kty === "EC" && jwk.crv === "P-256" && typeof jwk.x === "string" && typeof jwk.y === "string") {
-        const x = base64urlToBytes(jwk.x);
-        const y = base64urlToBytes(jwk.y);
-        if (x.length === 32 && y.length === 32) {
-          const bytes = new Uint8Array(65);
-          bytes[0] = 0x04;
-          bytes.set(x, 1);
-          bytes.set(y, 33);
-          return { curve: "P-256", bytes };
-        }
-      }
-    }
-  } catch (err) {
-    if (err instanceof LinkageError) throw err;
-    return fail("a malformed key");
+    key = selectKey(doc, did, "assertionMethod", { kid: vm });
+  } catch (e) {
+    return fail(`an unusable key (${e instanceof Error ? e.message : String(e)})`);
   }
+  if (key.crv === ED25519) return { curve: "Ed25519", bytes: key.publicKey };
+  if (key.crv === P256) return { curve: "P-256", bytes: key.publicKey };
   return fail("an unsupported key type");
 }
 

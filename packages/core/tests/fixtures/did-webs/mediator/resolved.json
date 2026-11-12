@@ -1,0 +1,65 @@
+{
+  "id": "did:webs:mediator.example.com:EOTLDI3hP4_7x_QNCwCCbZ_jhqVuBToi_RBwRhXDaebP",
+  "alsoKnownAs": [
+    "did:web:mediator.example.com:EOTLDI3hP4_7x_QNCwCCbZ_jhqVuBToi_RBwRhXDaebP",
+    "did:keri:EOTLDI3hP4_7x_QNCwCCbZ_jhqVuBToi_RBwRhXDaebP"
+  ],
+  "verificationMethod": [
+    {
+      "id": "did:webs:mediator.example.com:EOTLDI3hP4_7x_QNCwCCbZ_jhqVuBToi_RBwRhXDaebP#DJhzYCh_3AXEzNNGyUHONmb5IowV4N5St5UMYUMxJvmP",
+      "type": "JsonWebKey",
+      "controller": "did:webs:mediator.example.com:EOTLDI3hP4_7x_QNCwCCbZ_jhqVuBToi_RBwRhXDaebP",
+      "publicKeyJwk": {
+        "crv": "Ed25519",
+        "kid": "DJhzYCh_3AXEzNNGyUHONmb5IowV4N5St5UMYUMxJvmP",
+        "kty": "OKP",
+        "x": "mHNgKH_cBcTM00bJQc42ZvkijBXg3lK3lQxhQzEm-Y8"
+      }
+    },
+    {
+      "id": "did:webs:mediator.example.com:EOTLDI3hP4_7x_QNCwCCbZ_jhqVuBToi_RBwRhXDaebP#CHoaTnCb8IWsSUq6BGm5se2gqx94sWqrt5_-2pBiPoUi",
+      "type": "JsonWebKey",
+      "controller": "did:webs:mediator.example.com:EOTLDI3hP4_7x_QNCwCCbZ_jhqVuBToi_RBwRhXDaebP",
+      "publicKeyJwk": {
+        "crv": "X25519",
+        "kid": "CHoaTnCb8IWsSUq6BGm5se2gqx94sWqrt5_-2pBiPoUi",
+        "kty": "OKP",
+        "x": "ehpOcJvwhaxJSroEabmx7aCrH3ixaqu3n_7akGI-hSI"
+      }
+    }
+  ],
+  "authentication": [
+    "did:webs:mediator.example.com:EOTLDI3hP4_7x_QNCwCCbZ_jhqVuBToi_RBwRhXDaebP#DJhzYCh_3AXEzNNGyUHONmb5IowV4N5St5UMYUMxJvmP"
+  ],
+  "assertionMethod": [
+    "did:webs:mediator.example.com:EOTLDI3hP4_7x_QNCwCCbZ_jhqVuBToi_RBwRhXDaebP#DJhzYCh_3AXEzNNGyUHONmb5IowV4N5St5UMYUMxJvmP"
+  ],
+  "keyAgreement": [
+    "did:webs:mediator.example.com:EOTLDI3hP4_7x_QNCwCCbZ_jhqVuBToi_RBwRhXDaebP#CHoaTnCb8IWsSUq6BGm5se2gqx94sWqrt5_-2pBiPoUi"
+  ],
+  "service": [
+    {
+      "id": "did:webs:mediator.example.com:EOTLDI3hP4_7x_QNCwCCbZ_jhqVuBToi_RBwRhXDaebP#didcomm",
+      "type": [
+        "DIDCommMessaging"
+      ],
+      "serviceEndpoint": [
+        {
+          "accept": [
+            "didcomm/v2"
+          ],
+          "routingKeys": [],
+          "uri": "https://mediator.example.com"
+        },
+        {
+          "accept": [
+            "didcomm/v2"
+          ],
+          "routingKeys": [],
+          "uri": "wss://mediator.example.com/ws"
+        }
+      ]
+    }
+  ],
+  "controller": "did:webs:mediator.example.com:EOTLDI3hP4_7x_QNCwCCbZ_jhqVuBToi_RBwRhXDaebP"
+}

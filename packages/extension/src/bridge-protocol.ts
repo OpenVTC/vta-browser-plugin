@@ -679,7 +679,7 @@ export interface RuntimeVerifyRpDidRequest {
  *  depend on `@openvtc/pnm-core` types directly. */
 export interface VerifyRpDidResult {
   did: string;
-  method: "webvh" | "scid" | "peer" | "key" | "unknown";
+  method: "webvh" | "webs" | "scid" | "peer" | "key" | "unknown";
   resolved: boolean;
   domain?: string;
   error?: string;

@@ -104,6 +104,29 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Changed
 
+- **DID-document keys are read by verification relationship, in either
+  encoding, so a did:webs party works (VTI-KEY-003).** A did:webs publishes
+  `JsonWebKey` methods (`publicKeyJwk`, ids `<did>#<CESR key>`), and a VTA with
+  key roles (VTI-KEY-173) lists a different key under each relationship. One
+  reader, `did/vm-key.ts` (`publicKeyOf`, `selectKey`, `x25519KeyAgreement`, a
+  port of vti-didcomm-js #39's `verification-method` to be replaced by it on
+  the bump), now serves every site, and fails closed on an unknown or missing
+  `type`, an encoding the type does not carry, both encodings, an unsupported
+  curve, a JWK carrying `d`, or a revoked method.
+  - `verifyTrustTaskProof` reads the key from the relationship the proof is
+    for — the required purpose, or the proof's own `proofPurpose` when none is
+    required, so an unrequired-purpose proof by a key not listed there no
+    longer verifies — and never matches an id by fragment suffix.
+  - The TSP VID signing key (`tspEndpointFromResolved`) is the DID's
+    `authentication` key only (TSP enablement D5): no "any Ed25519 method"
+    fallback, ids dereferenced exactly. `ed25519FromVerificationMethod`
+    requires a `type`; `rawFromOkpJwk` refuses a JWK with `d`.
+  - `assertionKeys` (directory card) and Domain Linkage Credential checks read
+    `assertionMethod` the same way; an unreadable key is `an unusable key (…)`.
+  - `didMethod` knows `webs` (`didWebsDomain`, `assertResolvableWebsHost`:
+    the host is judged before anything is fetched), and `deriveSigningKeyId`
+    never offers a did:webs's bare `verificationMethod[]` ids.
+
 - **Room record bodies are checked against the author's DID document as of
   `bodyStoredAt`.** The file engine, and the wallet's records pane and page
   bridge, pass `resolveDidAt` to `verifyRecordBody`, so for a `did:webvh` or

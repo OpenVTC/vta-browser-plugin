@@ -1,4 +1,4 @@
-// Host guard for did:webvh resolution.
+// Host guard for did:webvh (and did:webs) resolution.
 //
 // A did:webvh names the host its log is fetched from, and the wallet resolves
 // DIDs it did not choose: the consent prompt resolves whatever `rpDid` a page
@@ -37,7 +37,7 @@
 
 import { didScid } from "@openvtc/vti-didcomm-js";
 
-import { didWebvhDomain } from "./verify.js";
+import { didWebsDomain, didWebvhDomain } from "./verify.js";
 
 /** Stable `code` carried by every {@link BlockedEndpointError}. Match on this,
  *  never on the message (R3.7). */
@@ -91,7 +91,21 @@ export function isBlockedEndpointError(err: unknown): err is Error & {
  *   `"private_name"` for a local-only name.
  */
 export function assertResolvableWebvhHost(did: string): void {
-  const raw = didWebvhDomain(did);
+  assertResolvableHost(didWebvhDomain(did));
+}
+
+/**
+ * {@link assertResolvableWebvhHost} for a `did:webs:<host>[:<path>]:<AID>`:
+ * its `keri.cesr` and `did.json` are fetched from the host it names, so that
+ * host is judged the same way (VTI-KEY-003).
+ *
+ * @throws {BlockedEndpointError}
+ */
+export function assertResolvableWebsHost(did: string): void {
+  assertResolvableHost(didWebsDomain(did));
+}
+
+function assertResolvableHost(raw: string | undefined): void {
   const invalid = () =>
     new BlockedEndpointError(
       `the DID's host ${JSON.stringify(raw ?? "")} is not a valid host name, so it was not contacted`,
