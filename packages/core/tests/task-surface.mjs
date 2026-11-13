@@ -118,12 +118,6 @@ const NOT_IN_SDK = [
       "in did-hosting, so vta-sdk carries the approve-*response* half only.",
   },
   {
-    prefix: "https://trusttasks.org/spec/auth/step-up/start/",
-    why:
-      "Served by the did-hosting control plane, the relying party a session is stepped " +
-      "up at (rp-login/step-up.ts). The VTA is not the counterparty.",
-  },
-  {
     prefix: "https://trusttasks.org/spec/auth/step-up/approver/attest/",
     why:
       "A step-up approver's statement, issued by the wallet's per-audience approver and " +

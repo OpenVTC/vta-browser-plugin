@@ -241,7 +241,7 @@ export function pageSignRefusal(envelope: unknown, ownAgentDid: string): string 
     return `${type} is addressed to the holder's own agent. A page asks the agent through requestTask, where the agent's policy applies; the wallet does not sign documents to it on a page's behalf.`;
   }
   if (type.startsWith(APPROVAL_PREFIX)) {
-    return `${type} cannot be signed for a page. A step-up approval is built only by the wallet's step-up flow (stepUpVta), which verifies the relying party's request and asks the holder first.`;
+    return `${type} cannot be signed for a page. A step-up approval is built only by the wallet's step-up flow (approveSessionStepUp), which verifies the relying party's request and asks the holder first.`;
   }
   if (type.startsWith(AUTHENTICATE_PREFIX)) {
     return `${type} cannot be signed for a page. A sign-in, and any session key it binds, goes through login(), whose prompt tells the holder what the site will be able to do.`;
@@ -253,17 +253,19 @@ export function pageSignRefusal(envelope: unknown, ownAgentDid: string): string 
 //
 // `pageSignRefusal` requires a recipient, but any recipient: a page the user
 // approved could still get a signature addressed to a *different* relying
-// party, and present it there as the holder's own request. `stepUpVta` had the
-// same gap — the page named the base URL and RP DID, so an approved page could
+// party, and present it there as the holder's own request. A step-up has the
+// same shape — the page names the RP DID, so an approved page could otherwise
 // steer an aal2 approval at a party the human never signed in to from it.
 //
 // The binding already exists. A login pins the browser-attested origin to the
-// RP DID the human approved (`origin-pin.ts`, M5), and a REST login pins the
-// base URL it went to beside it. Both page paths are held to that pin:
+// RP DID the human approved (`origin-pin.ts`, M5). Both page paths are held to
+// that pin:
 //
 // - `signTrustTask` signs only a document whose `recipient` is the pinned RP
 //   DID for the requesting origin.
-// - `stepUpVta` runs only against the pinned RP DID and the pinned base URL.
+// - `approveSessionStepUp` answers only an approve-request for the pinned RP
+//   DID (and the offscreen then checks the request is signed by it). The
+//   wallet sends nothing anywhere for a step-up, so no base URL is involved.
 // - No pin means no signature and no step-up. Neither path pins on first use:
 //   the only place a pin is seeded is a login the human approved, so the rule
 //   stays login's rule — the human confirms the origin ↔ RP pairing once, on the
@@ -327,33 +329,23 @@ export function pageSignBindingRefusal(
 }
 
 /**
- * Why the page at `origin` may not start a step-up against `params`, or `null`
- * when it may. `pin` is `readOriginPin(origin)`.
+ * Why the page at `origin` may not have a session step-up approved for
+ * `rpDid`, or `null` when it may. `pin` is `readOriginPin(origin)`.
  */
 export function pageStepUpBindingRefusal(
   origin: string,
   pin: PageRpPin | undefined,
-  params: { rpDid: string; baseUrl: string },
+  rpDid: unknown,
 ): string | null {
+  if (typeof rpDid !== "string" || !rpDid.startsWith("did:")) {
+    return "A step-up approval needs the relying party's DID as rpDid.";
+  }
   if (!pin) return unpinned(origin, "step up a session");
-  if (params.rpDid !== pin.rpDid) {
+  if (rpDid !== pin.rpDid) {
     return (
-      `Step-up names the relying party ${params.rpDid}, but ${origin} is pinned to ` +
+      `Step-up names the relying party ${rpDid}, but ${origin} is pinned to ` +
       `${pin.rpDid}. A page can only step up its session at the relying party it was ` +
       `signed in to.`
-    );
-  }
-  if (!pin.baseUrl) {
-    return (
-      `${origin} has no relying-party base URL pinned: its sign-in named none. Sign in ` +
-      `from this site with login() so the base URL step-up will use is shown and confirmed.`
-    );
-  }
-  const requested = normalizeBaseUrl(params.baseUrl);
-  if (requested !== pin.baseUrl) {
-    return (
-      `Step-up names the base URL ${params.baseUrl}, but ${origin} is pinned to ` +
-      `${pin.baseUrl}. A page can only step up against the base URL it signed in with.`
     );
   }
   return null;

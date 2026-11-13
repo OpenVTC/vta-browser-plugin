@@ -21,13 +21,14 @@ export const INPAGE_SOURCE = "vta-wallet/inpage" as const;
 export const CONTENT_SOURCE = "vta-wallet/content" as const;
 
 /** RP-callable wallet methods. `login` = REST SIOPv2; `loginDidcomm` =
- *  DIDComm authcrypt-sender auth; `stepUpVta` = VTA-approval step-up;
+ *  DIDComm authcrypt-sender auth; `approveSessionStepUp` = sign the holder's
+ *  approval of an RP's session step-up;
  *  `apiGet` = authenticated GET proxied through the wallet (avoids the
  *  page's cross-origin CORS block). */
 export type BridgeMethod =
   | "login"
   | "loginDidcomm"
-  | "stepUpVta"
+  | "approveSessionStepUp"
   | "apiGet"
   | "apiPost"
   | "mediatorStatus"
@@ -88,24 +89,29 @@ export interface DidcommLoginParams {
   scope?: string[];
 }
 
-/** Parameters for `window.vtaWallet.stepUpVta(...)`: raise an existing RP
- *  session to `aal2`. The wallet sends `auth/step-up/start/0.2`, verifies the
- *  RP's signed reply and the approve-request inside it, asks the human, sends
- *  a signed `approve-response/0.7`, and renews the session with
- *  `auth/refresh/0.2` — all to `{baseUrl}/trust-tasks`. The holder that signs
- *  is the active connection's; the page does not choose it. */
-export interface StepUpVtaParams {
-  /** The RP's Trust Task base (the same one used for the base login). */
-  baseUrl: string;
-  /** The RP's DID — every document is addressed to it, and every reply and the
-   *  approve-request must be signed by it. */
+/** Parameters for `window.vtaWallet.approveSessionStepUp(...)`: approve the
+ *  step-up of an existing RP session to `aal2`. The page opens the step-up
+ *  itself (`auth/step-up/start/0.2`, signed by the session key its login
+ *  bound) and passes what the RP answered: its signed `approve-request/0.5`,
+ *  a single-use challenge bound to that session and its subject. The wallet
+ *  verifies it, asks the human, and returns its signed
+ *  `approve-response/0.7`; the page sends that and renews the session itself.
+ *  The wallet is given no session token and contacts no one. The holder that
+ *  signs is the active connection's; the page does not choose it. */
+export interface ApproveSessionStepUpParams {
+  /** The RP's DID — the approve-request must be signed by it, the
+   *  approve-response is addressed to it, and the page's origin must be
+   *  pinned to it. */
   rpDid: string;
-  /** The session's current access token. */
-  accessToken: string;
-  /** The session's refresh token, spent on the renewal once it is elevated. */
-  refreshToken: string;
-  /** The session to elevate. The approve-request must be bound to it. */
-  sessionId: string;
+  /** The RP's signed `approve-request/0.5`, as the page received it. */
+  approveRequest: Record<string, unknown>;
+}
+
+/** Result of `approveSessionStepUp`: the signed approve-response, for the
+ *  page to send to the RP. */
+export interface ApproveSessionStepUpResult {
+  approveResponse: Record<string, unknown>;
+  holderDid: string;
 }
 
 /** Parameters for `window.vtaWallet.apiGet(...)` — an authenticated GET the
@@ -287,7 +293,7 @@ export interface InpageRequest {
   params:
     | LoginParams
     | DidcommLoginParams
-    | StepUpVtaParams
+    | ApproveSessionStepUpParams
     | ApiGetParams
     | ApiPostParams
     | ProxyLoginParams
@@ -404,7 +410,7 @@ export interface RuntimeNotifyRequest {
 
 export const RUNTIME_LOGIN = "vta-wallet/login" as const;
 export const RUNTIME_LOGIN_DIDCOMM = "vta-wallet/login-didcomm" as const;
-export const RUNTIME_STEP_UP_VTA = "vta-wallet/step-up-vta" as const;
+export const RUNTIME_APPROVE_SESSION_STEP_UP = "vta-wallet/approve-session-step-up" as const;
 export const RUNTIME_API_GET = "vta-wallet/api-get" as const;
 export const RUNTIME_API_POST = "vta-wallet/api-post" as const;
 export const RUNTIME_MEDIATOR_STATUS = "vta-wallet/mediator-status" as const;
@@ -499,12 +505,12 @@ export const RUNTIME_TASK_CONSENT = "vta-wallet/task-consent" as const;
  *  keeps it alive across a decision that waits on a human. */
 export const CONSENT_KEEPALIVE_PORT = "pnm/consent-keepalive" as const;
 /** offscreen → background: a step-up approve-request has VERIFIED and the
- *  human must now decide. Fired mid-flow — after the offscreen fetched the RP
- *  `start` response and `verifyStepUpApproveRequest` passed, before anything
- *  is signed — so the prompt can render the `reason` from *inside* the signed
+ *  human must now decide. Fired mid-flow — after `verifyStepUpApproveRequest`
+ *  passed on the approve-request the page handed in, before anything is
+ *  signed — so the prompt can render the `reason` from *inside* the signed
  *  document (spec: "consumers MUST verify the proof BEFORE surfacing the
  *  reason"). Reply via sendResponse is a [`RuntimeStepUpConsentResponse`];
- *  anything but `approved: true` means nothing is signed or sent. */
+ *  anything but `approved: true` means nothing is signed. */
 export const RUNTIME_STEP_UP_CONSENT = "vta-wallet/step-up-consent" as const;
 /** confirm popup → background → offscreen: resolve + verify an RP DID so the
  *  consent prompt can render a verification badge. Reply via sendResponse is a
@@ -540,12 +546,17 @@ export interface RuntimeLoginDidcommRequest {
   origin: string;
 }
 
-/** content → background: perform a VTA-approval step-up for the calling page. */
-export interface RuntimeStepUpVtaRequest {
-  type: typeof RUNTIME_STEP_UP_VTA;
-  params: StepUpVtaParams;
+/** content → background: approve a session step-up for the calling page. */
+export interface RuntimeApproveSessionStepUpRequest {
+  type: typeof RUNTIME_APPROVE_SESSION_STEP_UP;
+  params: ApproveSessionStepUpParams;
   origin: string;
 }
+
+/** background → content for an `approveSessionStepUp` (sendResponse). */
+export type RuntimeApproveSessionStepUpResponse =
+  | { ok: true; result: ApproveSessionStepUpResult }
+  | { ok: false; error: string; code?: PageErrorCode };
 
 /** content → background: an authenticated GET proxied through the wallet. */
 export interface RuntimeApiGetRequest {
@@ -1661,7 +1672,7 @@ export interface RuntimeVaultListPageRequest {
 
 export const OFFSCREEN_TARGET = "offscreen" as const;
 export const OFFSCREEN_DIDCOMM_LOGIN = "offscreen/didcomm-login" as const;
-export const OFFSCREEN_STEP_UP_VTA = "offscreen/step-up-vta" as const;
+export const OFFSCREEN_APPROVE_SESSION_STEP_UP = "offscreen/approve-session-step-up" as const;
 /** background → offscreen: flush the WebAuthn-PRF derived key
  *  cache in the offscreen JS context. Fire-and-forget. */
 export const OFFSCREEN_LOCK_WALLET = "offscreen/lock-wallet" as const;
@@ -2039,10 +2050,6 @@ export interface OffscreenRestLoginRequest {
   restBaseUrl?: string;
 }
 
-/** background → offscreen: run a VTA-approval step-up. Reply is a
- *  [`RuntimeLoginResponse`] via `sendResponse`. Mid-flow the offscreen calls
- *  back with a [`RuntimeStepUpConsentRequest`] once the approve-request has
- *  verified — the background raises the consent prompt then, not before. */
 /** background → offscreen: obtain the fresh approval a `release: stepUp`
  *  disclosure needs.
  *
@@ -2052,7 +2059,7 @@ export interface OffscreenRestLoginRequest {
  *  `import()` in `background.js` is the one thing CI asserts is absent, because
  *  a service worker cannot load one. So the verify and the signing both happen
  *  here and the background contributes the only thing it uniquely can: a
- *  window for the human. Exactly the shape `OFFSCREEN_STEP_UP_VTA` already has.
+ *  window for the human. Exactly the shape `OFFSCREEN_APPROVE_SESSION_STEP_UP` already has.
  *
  *  Reply is an [`OffscreenDisclosureStepUpResponse`]. */
 export const OFFSCREEN_DISCLOSURE_STEP_UP = "pnm/offscreen-disclosure-step-up" as const;
@@ -2106,13 +2113,18 @@ export interface RuntimeDisclosureStepUpConsentResponse {
   approved: boolean;
 }
 
-export interface OffscreenStepUpVtaRequest {
+/** background → offscreen: approve a session step-up. Reply is a
+ *  [`RuntimeApproveSessionStepUpResponse`] via `sendResponse`. Mid-flow the
+ *  offscreen calls back with a [`RuntimeStepUpConsentRequest`] once the
+ *  approve-request has verified — the background raises the consent prompt
+ *  then, not before. */
+export interface OffscreenApproveSessionStepUpRequest {
   target: typeof OFFSCREEN_TARGET;
-  type: typeof OFFSCREEN_STEP_UP_VTA;
+  type: typeof OFFSCREEN_APPROVE_SESSION_STEP_UP;
   /** The active connection's VTA — whose holder signs. Set by the background,
    *  never by the page. */
   vtaDid: string;
-  params: StepUpVtaParams;
+  params: ApproveSessionStepUpParams;
   /** The RP page's origin — threaded through so the mid-flow consent prompt
    *  can show it (and honour per-origin trust). Display only, never auth. */
   origin: string;
@@ -2124,13 +2136,11 @@ export interface OffscreenStepUpVtaRequest {
  *  inside the signature — never from the unsigned start-response copy. */
 export interface RuntimeStepUpConsentRequest {
   type: typeof RUNTIME_STEP_UP_CONSENT;
-  /** The RP page's origin, echoed from the [`OffscreenStepUpVtaRequest`]. */
+  /** The RP page's origin, echoed from the [`OffscreenApproveSessionStepUpRequest`]. */
   origin: string;
-  /** The RP DID (== the approve-request's proven issuer). */
+  /** The RP DID (== the approve-request's proven issuer), re-checked against
+   *  the origin's pin before the prompt is raised. */
   rpDid: string;
-  /** The RP's Trust Task base the flow is running against, re-checked
-   *  against the origin's pin before the prompt is raised. */
-  baseUrl: string;
   /** The holder DID that will sign the approve-response. */
   holderDid: string;
   /** The RP's reason from inside the verified document. Absent when the
@@ -3039,7 +3049,7 @@ export type RuntimeNotifiedElectionResponse =
 export const PAGE_FACING_RUNTIME_TYPES = [
   RUNTIME_LOGIN,
   RUNTIME_LOGIN_DIDCOMM,
-  RUNTIME_STEP_UP_VTA,
+  RUNTIME_APPROVE_SESSION_STEP_UP,
   RUNTIME_API_GET,
   RUNTIME_API_POST,
   RUNTIME_MEDIATOR_STATUS,

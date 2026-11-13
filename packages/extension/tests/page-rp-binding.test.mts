@@ -1,12 +1,11 @@
 // A page may use the holder key only toward the relying party its origin is
 // pinned to.
 //
-// `signTrustTask` and `stepUpVta` both take the relying party from the page.
-// Without a binding, a page the user approved could have a document signed for
-// a different RP, or steer a step-up approval at one. The binding is login's
-// origin → RP DID pin (plus the REST login's base URL): these pin that the
-// refusals key off it, that the lookup is by exact origin, and that nothing but
-// an approved login seeds it.
+// `signTrustTask` and `approveSessionStepUp` both take the relying party from
+// the page. Without a binding, a page the user approved could have a document
+// signed for a different RP, or steer a step-up approval at one. The binding is
+// login's origin → RP DID pin: these pin that the refusals key off it, that the
+// lookup is by exact origin, and that nothing but an approved login seeds it.
 //
 // `chrome` is installed before the dynamic import because `origin-pin.ts`
 // reaches `chrome.storage.local`.
@@ -92,69 +91,45 @@ test("a subdomain, lookalike, or another scheme or port has no pin of its own", 
     assert.equal(pin, undefined, origin);
     assert.match(pageSignBindingRefusal(origin, pin, RP)!, /no relying party pinned/, origin);
     assert.match(
-      pageStepUpBindingRefusal(origin, pin, { rpDid: RP, baseUrl: BASE })!,
+      pageStepUpBindingRefusal(origin, pin, RP)!,
       /no relying party pinned/,
       origin,
     );
   }
 });
 
-// ── stepUpVta ───────────────────────────────────────────────────────────────
+// ── approveSessionStepUp ────────────────────────────────────────────────────
 
-test("step-up at the pinned RP DID and base URL is allowed", async () => {
+test("a step-up approval for the pinned RP DID is allowed", async () => {
   await pinned();
-  const pin = await readOriginPin(ORIGIN);
-  assert.equal(pageStepUpBindingRefusal(ORIGIN, pin, { rpDid: RP, baseUrl: BASE }), null);
-  // Same base, spelled with a trailing slash and an upper-case host.
-  assert.equal(
-    pageStepUpBindingRefusal(ORIGIN, pin, { rpDid: RP, baseUrl: "https://API.rp.example/v1/" }),
-    null,
-  );
+  assert.equal(pageStepUpBindingRefusal(ORIGIN, await readOriginPin(ORIGIN), RP), null);
 });
 
-test("step-up naming another RP DID is refused", async () => {
+test("a step-up approval naming another RP DID is refused", async () => {
   await pinned();
-  const why = pageStepUpBindingRefusal(ORIGIN, await readOriginPin(ORIGIN), {
-    rpDid: OTHER_RP,
-    baseUrl: BASE,
-  });
+  const why = pageStepUpBindingRefusal(ORIGIN, await readOriginPin(ORIGIN), OTHER_RP);
   assert.ok(why!.includes(OTHER_RP) && why!.includes(RP), why!);
 });
 
-test("step-up against another base URL is refused", async () => {
-  await pinned();
-  const pin = await readOriginPin(ORIGIN);
-  for (const baseUrl of [
-    "https://attacker.example/v1",
-    "https://api.rp.example/v2",
-    "https://api.rp.example.attacker.com/v1",
-    "http://api.rp.example/v1",
-    "https://user@api.rp.example/v1",
-    "https://api.rp.example/v1?x=1",
-    "not a url",
-  ]) {
-    const why = pageStepUpBindingRefusal(ORIGIN, pin, { rpDid: RP, baseUrl });
-    assert.match(why ?? "", /pinned to/, baseUrl);
-  }
+test("a step-up approval needs no base URL: the wallet contacts no one for it", async () => {
+  reset();
+  await pinOrigin(ORIGIN, RP); // a DIDComm login, which names no base URL
+  assert.equal(pageStepUpBindingRefusal(ORIGIN, await readOriginPin(ORIGIN), RP), null);
 });
 
-test("step-up is refused when the pin was seeded by a login that named no base URL", async () => {
-  reset();
-  await pinOrigin(ORIGIN, RP); // a DIDComm login
-  const why = pageStepUpBindingRefusal(ORIGIN, await readOriginPin(ORIGIN), {
-    rpDid: RP,
-    baseUrl: BASE,
-  });
-  assert.match(why!, /no relying-party base URL pinned/);
+test("a step-up approval with no RP DID is refused", async () => {
+  await pinned();
+  const pin = await readOriginPin(ORIGIN);
+  for (const rpDid of [undefined, "", 42, "https://rp.example"]) {
+    assert.match(pageStepUpBindingRefusal(ORIGIN, pin, rpDid) ?? "", /needs the relying party's DID/);
+  }
 });
 
 test("an origin with no pin cannot step up", async () => {
   reset();
-  const why = pageStepUpBindingRefusal(ORIGIN, await readOriginPin(ORIGIN), {
-    rpDid: RP,
-    baseUrl: BASE,
-  });
+  const why = pageStepUpBindingRefusal(ORIGIN, await readOriginPin(ORIGIN), RP);
   assert.match(why!, /no relying party pinned/);
+  assert.equal(await readOriginPin(ORIGIN), undefined);
 });
 
 // ── How login maintains the pin ─────────────────────────────────────────────

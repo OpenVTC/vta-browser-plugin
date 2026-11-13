@@ -23,7 +23,8 @@ import type {
   ProxyLoginParams,
   SignTrustTaskParams,
   SignTrustTaskResult,
-  StepUpVtaParams,
+  ApproveSessionStepUpParams,
+  ApproveSessionStepUpResult,
   VaultListParams,
   VaultListResultView,
   VaultProxyLoginResultView,
@@ -102,10 +103,13 @@ interface VtaWallet {
    *  click. Offer this method only behind an "Using an older wallet?" link. A
    *  removal date will be set later. */
   loginDidcomm(params: DidcommLoginParams): Promise<LoginResult>;
-  /** Elevate an existing `aal1` session to `aal2` via VTA approval. Same
-   *  result shape as `login`. Refused unless `rpDid` and `baseUrl` are the
-   *  ones this origin's approved `login()` pinned. */
-  stepUpVta(params: StepUpVtaParams): Promise<LoginResult>;
+  /** Approve the step-up of an existing `aal1` session to `aal2`. The page
+   *  opens the step-up itself, with its own session key, and passes the RP's
+   *  signed `approve-request` it got back; the wallet verifies it, asks the
+   *  human, and returns its signed `approve-response` for the page to send.
+   *  The wallet is given no session token. Refused unless `rpDid` is the one
+   *  this origin's approved `login()` pinned. */
+  approveSessionStepUp(params: ApproveSessionStepUpParams): Promise<ApproveSessionStepUpResult>;
   /** Perform an authenticated GET via the wallet (not subject to the
    *  page's cross-origin CORS). Returns the status + parsed body. */
   apiGet(params: ApiGetParams): Promise<ApiGetResult>;
@@ -468,7 +472,7 @@ function call<T>(
   params:
     | LoginParams
     | DidcommLoginParams
-    | StepUpVtaParams
+    | ApproveSessionStepUpParams
     | ApiGetParams
     | ApiPostParams
     | SignTrustTaskParams
@@ -635,7 +639,8 @@ if (!window.vtaWallet) {
   window.vtaWallet = {
     login: (params) => legacy("login", () => call<LoginResult>("login", params)),
     loginDidcomm: (params) => legacy("loginDidcomm", () => call<LoginResult>("loginDidcomm", params)),
-    stepUpVta: (params) => call<LoginResult>("stepUpVta", params),
+    approveSessionStepUp: (params) =>
+      call<ApproveSessionStepUpResult>("approveSessionStepUp", params),
     apiGet: (params) => call<ApiGetResult>("apiGet", params),
     apiPost: (params) => call<ApiGetResult>("apiPost", params),
     mediatorStatus: () => call<MediatorStatusResult>("mediatorStatus", {}),

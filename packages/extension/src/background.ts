@@ -119,7 +119,7 @@ import {
   OFFSCREEN_ONBOARD_PREPARE,
   OFFSCREEN_SIGN_TRUST_TASK,
   OFFSCREEN_START_INBOUND,
-  OFFSCREEN_STEP_UP_VTA,
+  OFFSCREEN_APPROVE_SESSION_STEP_UP,
   OFFSCREEN_TARGET,
   OFFSCREEN_VAULT_DELETE,
   OFFSCREEN_VAULT_LIST,
@@ -232,7 +232,7 @@ import {
   type RuntimeDisclosureStepUpConsentResponse,
   type RelayTaskFailure,
   type DiscloseResult,
-  RUNTIME_STEP_UP_VTA,
+  RUNTIME_APPROVE_SESSION_STEP_UP,
   RUNTIME_APPROVER_STATE,
   RUNTIME_RESOLVE_AGENT_NAME,
   RUNTIME_VERIFY_RP_DID,
@@ -243,7 +243,7 @@ import {
   type RuntimeRunDiagnosticsResponse,
   type OffscreenDidcommLoginRequest,
   type OffscreenSetWakeResponse,
-  type OffscreenStepUpVtaRequest,
+  type OffscreenApproveSessionStepUpRequest,
   type RuntimeApiGetRequest,
   type RuntimeApiGetResponse,
   type RuntimeApiPostRequest,
@@ -283,7 +283,8 @@ import {
   type RuntimeSignTrustTaskResponse,
   type RuntimeStepUpConsentRequest,
   type RuntimeStepUpConsentResponse,
-  type RuntimeStepUpVtaRequest,
+  type RuntimeApproveSessionStepUpRequest,
+  type RuntimeApproveSessionStepUpResponse,
   type RuntimeVaultDeleteRequest,
   type RuntimeVaultDeleteResponse,
   type RuntimeVaultListRequest,
@@ -1553,7 +1554,7 @@ async function handleDisclose(req: RuntimeDiscloseRequest): Promise<RuntimeDiscl
  * `import()` in `background.js` is the one thing CI asserts is absent, because a
  * service worker cannot load one — so the verify and the signing live where
  * they can, and this side contributes the only thing it uniquely can, a window
- * for the human. `doStepUpVta` has exactly this shape for the same reason.
+ * for the human. `doApproveSessionStepUp` has exactly this shape for the same reason.
  */
 async function runDisclosureStepUp(
   active: { vtaDid: string; restBaseUrl?: string },
@@ -1798,8 +1799,8 @@ async function handleLogin(req: RuntimeLoginRequest): Promise<RuntimeLoginRespon
   // for a *different* rpDid get a louder consent prompt so the
   // operator can spot a redirect-to-attacker-RP attempt.
   //
-  // The base URL is pinned beside the rpDid, because it is where `stepUpVta`
-  // from this origin may later go. A changed base URL is treated like a
+  // The base URL is pinned beside the rpDid, because it is where the REST
+  // login from this origin went. A changed base URL is treated like a
   // changed rpDid: always prompted, loudly, even for a remembered site.
   const pin: OriginPinStatus = req.origin
     ? await checkOriginPin(req.origin, req.params.rpDid, req.params.baseUrl)
@@ -1996,48 +1997,49 @@ async function handleLoginDidcomm(
   return result;
 }
 
-async function handleStepUpVta(
-  req: RuntimeStepUpVtaRequest,
-): Promise<RuntimeLoginResponse> {
+async function handleApproveSessionStepUp(
+  req: RuntimeApproveSessionStepUpRequest,
+): Promise<RuntimeApproveSessionStepUpResponse> {
   // Fast-fail without spinning up the offscreen document. Display-only DID
   // lookup — see handleLoginDidcomm for the background-vs-offscreen rationale.
   const holderDid = await readActiveHolderDid();
   if (!holderDid) return { ok: false, error: "no active VTA connection — connect first" };
 
   // NO consent prompt here. The step-up prompt fires mid-flow instead: the
-  // offscreen sends `auth/step-up/start`, verifies the RP's signed reply and
-  // the approve-request in it (proof + enrolled-executor signer + issuer ==
-  // rpDid + bound to this session), and
-  // only then asks back via RUNTIME_STEP_UP_CONSENT — so the prompt can show
-  // the human the VERIFIED `reason` from inside the signature. Prompting
-  // before the fetch (the old shape) showed origin/rpDid only and left the
-  // signed reason unread, which defeated the point of signing it (the spec's
-  // rule is verify-BEFORE-surfacing, not verify-instead-of-surfacing).
-  // Nothing is signed or sent unless that prompt approves.
+  // offscreen verifies the approve-request the page handed in (proof +
+  // enrolled-executor signer + issuer == rpDid + addressed to and naming this
+  // holder), and only then asks back via RUNTIME_STEP_UP_CONSENT — so the
+  // prompt can show the human the VERIFIED `reason` from inside the
+  // signature (the spec's rule is verify-BEFORE-surfacing). Nothing is signed
+  // unless that prompt approves.
   //
-  // The signer is the active connection's holder — the identity the base login
-  // used — never one the page names.
+  // The page opened the step-up with its own session key and sends the
+  // decision itself; the wallet is given no session token and contacts no
+  // one. The signer is the active connection's holder — the identity the base
+  // login used — never one the page names.
   //
-  // Refused before anything is sent or prompted: the page may only step up at
-  // the RP DID and base URL its origin is pinned to by an approved login. See
-  // `pageStepUpBindingRefusal`.
+  // Refused before anything is verified or prompted: the page may only have a
+  // step-up approved for the RP DID its origin is pinned to by an approved
+  // login. See `pageStepUpBindingRefusal`.
   const bindingRefusal = pageStepUpBindingRefusal(
     req.origin,
     await readOriginPin(req.origin),
-    req.params,
+    req.params?.rpDid,
   );
   if (bindingRefusal) return { ok: false, error: bindingRefusal };
   const active = await readActiveConnection();
   if (!active.ok) return { ok: false, error: active.error };
   await ensureOffscreenDocument();
-  const offscreenRequest: OffscreenStepUpVtaRequest = {
+  const offscreenRequest: OffscreenApproveSessionStepUpRequest = {
     target: OFFSCREEN_TARGET,
-    type: OFFSCREEN_STEP_UP_VTA,
+    type: OFFSCREEN_APPROVE_SESSION_STEP_UP,
     vtaDid: active.conn.vtaDid,
     params: req.params,
     origin: req.origin,
   };
-  return (await chrome.runtime.sendMessage(offscreenRequest)) as RuntimeLoginResponse;
+  return (await chrome.runtime.sendMessage(
+    offscreenRequest,
+  )) as RuntimeApproveSessionStepUpResponse;
 }
 
 /** Longest RP-authored reason the consent prompt will carry. Anything past
@@ -2076,7 +2078,7 @@ async function handleStepUpConsent(
   // for the prompt, and a pin that changed underneath the flow is a denial,
   // never a prompt for a pairing the human has not confirmed.
   const pin = await readOriginPin(req.origin);
-  if (pageStepUpBindingRefusal(req.origin, pin, { rpDid: req.rpDid, baseUrl: req.baseUrl })) {
+  if (pageStepUpBindingRefusal(req.origin, pin, req.rpDid)) {
     return { approved: false };
   }
   const approved = await gatedConsent({
@@ -4792,8 +4794,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
 
-  if ((message as { type?: string })?.type === RUNTIME_STEP_UP_VTA) {
-    handleStepUpVta(message as RuntimeStepUpVtaRequest)
+  if ((message as { type?: string })?.type === RUNTIME_APPROVE_SESSION_STEP_UP) {
+    handleApproveSessionStepUp(message as RuntimeApproveSessionStepUpRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),

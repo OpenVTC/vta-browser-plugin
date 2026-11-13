@@ -32,7 +32,7 @@ const INPAGE_SOURCE = "vta-wallet/inpage";
 const CONTENT_SOURCE = "vta-wallet/content";
 const RUNTIME_LOGIN = "vta-wallet/login";
 const RUNTIME_LOGIN_DIDCOMM = "vta-wallet/login-didcomm";
-const RUNTIME_STEP_UP_VTA = "vta-wallet/step-up-vta";
+const RUNTIME_APPROVE_SESSION_STEP_UP = "vta-wallet/approve-session-step-up";
 const RUNTIME_API_GET = "vta-wallet/api-get";
 const RUNTIME_API_POST = "vta-wallet/api-post";
 const RUNTIME_MEDIATOR_STATUS = "vta-wallet/mediator-status";
@@ -78,7 +78,7 @@ injectProvider();
 const RUNTIME_TYPE_BY_METHOD: Record<BridgeMethod, string> = {
   login: RUNTIME_LOGIN,
   loginDidcomm: RUNTIME_LOGIN_DIDCOMM,
-  stepUpVta: RUNTIME_STEP_UP_VTA,
+  approveSessionStepUp: RUNTIME_APPROVE_SESSION_STEP_UP,
   apiGet: RUNTIME_API_GET,
   apiPost: RUNTIME_API_POST,
   mediatorStatus: RUNTIME_MEDIATOR_STATUS,
