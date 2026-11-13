@@ -10,6 +10,24 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Changed
 
+- **BREAKING: a relying-party session step-up no longer takes the session's
+  tokens.** `stepUpVtaStart`, `stepUpVtaFinish` and `performStepUpVta`, which
+  took the session's access and refresh tokens, sent `auth/step-up/start`,
+  the approve-response and `auth/refresh` to the RP, and returned new tokens,
+  are replaced by `verifyRpStepUpRequest` and `performRpStepUp`. The page now
+  opens the step-up itself with the session key its login bound, and hands
+  the wallet only the RP's signed `approve-request/0.5`; `performRpStepUp`
+  verifies it (signed by the RP, addressed to and naming the holder, not
+  lapsed), asks for consent on the verified reason, and returns the signed
+  `approve-response/0.7`. The page sends it and renews the session with its
+  own session key. The wallet makes no request to the RP. In the extension,
+  `window.vtaWallet.stepUpVta` is replaced by
+  `approveSessionStepUp({ rpDid, approveRequest })`, which resolves with
+  `{ approveResponse, holderDid }` and is refused unless `rpDid` is the one
+  the page's origin is pinned to. The pin no longer needs a base URL for a
+  step-up, since the wallet contacts no one for it. Matches the did-hosting
+  console's step-up (affinidi-webvh-service#445).
+
 - **`@openvtc/vti-didcomm-js` 0.16** (from 0.14). The default resolver
   resolves did:webs (vti-didcomm-js #38), and DIDComm/TSP key agreement picks
   the X25519 `keyAgreement` key past a P-256 one (#39). `did/vm-key.ts` now

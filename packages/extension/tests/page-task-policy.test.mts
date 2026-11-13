@@ -179,7 +179,7 @@ test("a page cannot have the wallet sign a step-up approval", () => {
   ]) {
     const why = pageSignRefusal({ type: t, recipient: RP }, AGENT);
     assert.notEqual(why, null, t);
-    assert.match(why, /stepUpVta/);
+    assert.match(why, /approveSessionStepUp/);
   }
 });
 

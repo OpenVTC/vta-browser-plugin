@@ -273,23 +273,18 @@
       });
 
       // ── Step-up · VTA approval ──
+      // The wallet no longer runs the whole step-up: the page opens it with
+      // the session key its login bound (`auth/step-up/start/0.2`), hands the
+      // wallet only the RP's signed approve-request, sends the signed
+      // approve-response the wallet returns, and renews the session with its
+      // own session key. This demo holds no session key, so it cannot open
+      // one; the did-hosting console is the reference caller.
       $("su-go").addEventListener("click", () => {
-        if (!baseSession) { resetLog("su"); log("su", "no base session — log in via REST or DIDComm first", "err"); return; }
-        const { rpDid, baseUrl, accessToken, refreshToken, sessionId } = baseSession;
-        return run("su", "su-go",
-          () => window.vtaWallet.stepUpVta({ baseUrl, rpDid, accessToken, refreshToken, sessionId }),
-          [
-            "wallet.stepUpVta({ baseUrl, rpDid, accessToken, refreshToken, sessionId })",
-            "auth/step-up/start/0.1 → signed approve-request/0.3 (verified)",
-            "approve-response/0.5 (signed by you) → elevated",
-            "auth/refresh/0.1 → aal2 tokens",
-          ],
-          (r) => {
-            // Replace the stashed base session with the elevated one so the
-            // sensitive-op check uses the aal2 token.
-            baseSession = { ...baseSession, accessToken: r.accessToken, refreshToken: r.refreshToken };
-          },
-        );
+        resetLog("su");
+        log("su", "page: auth/step-up/start/0.2 (signed by the page's session key) → the RP's signed approve-request/0.5");
+        log("su", "wallet.approveSessionStepUp({ rpDid, approveRequest }) → signed approve-response/0.7");
+        log("su", "page: sends the approve-response → elevated; auth/refresh/0.2 (session key) → aal2 tokens");
+        log("su", "This demo has no session key to open a step-up with — use the did-hosting console.", "err");
       });
 
       // ── Call a sensitive op (gated on aal2) ──

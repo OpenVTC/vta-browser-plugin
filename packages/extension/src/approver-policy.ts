@@ -44,7 +44,7 @@ export const APPROVE_RESPONSE = APPROVER_RESPONSE_TYPE;
 /** Any version of approve-response. Used only to *route* a document claiming
  *  `approverSigned` evidence to `approverResponseRefusal`, which then refuses a
  *  version other than {@link APPROVE_RESPONSE} by name — instead of letting it
- *  fall through to `pageSignRefusal`, whose reason (use `stepUpVta`) is wrong
+ *  fall through to `pageSignRefusal`, whose reason (use `approveSessionStepUp`) is wrong
  *  for this caller. */
 const APPROVE_RESPONSE_FAMILY = "https://trusttasks.org/spec/auth/step-up/approve-response/";
 

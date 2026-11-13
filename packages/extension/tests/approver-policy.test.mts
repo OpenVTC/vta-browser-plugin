@@ -98,14 +98,14 @@ test("the approve-response carrying the statement just issued is signable, as th
 
 test("an approver-signed approve-response at another version is routed here and refused by name", () => {
   // The defect #412 fixed: a version the wallet did not pin fell through to
-  // pageSignRefusal, which told the console to use stepUpVta. Routing on the
+  // pageSignRefusal, which told the console to use the session step-up. Routing on the
   // evidence keeps the next version bump from failing the same way.
   const other = envelope({ type: "https://trusttasks.org/spec/auth/step-up/approve-response/0.6" });
   assert.equal(isApproverSignedResponse(other), true);
   const why = approverResponseRefusal(other, issued(), ORIGIN, SUBJECT) ?? "";
   assert.match(why, /approve-response\/0\.6/);
   assert.ok(why.includes(APPROVE_RESPONSE), "names the version the wallet signs");
-  assert.doesNotMatch(why, /stepUpVta/);
+  assert.doesNotMatch(why, /approveSessionStepUp/);
 });
 
 test("only an approve-response claiming approverSigned evidence takes the approver route", () => {

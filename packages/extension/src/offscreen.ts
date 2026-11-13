@@ -21,7 +21,7 @@ import {
   claimInboundDocument,
   type MediatorConnection,
   MediatorSessionBridge,
-  performStepUpVta,
+  performRpStepUp,
   resolveKeyAgreement,
   parseTaskConsentRequest,
   putPendingInbound,
@@ -154,7 +154,7 @@ import {
   OFFSCREEN_STEP_UP_APPROVER,
   type OffscreenStepUpApproverRequest,
   OFFSCREEN_START_INBOUND,
-  OFFSCREEN_STEP_UP_VTA,
+  OFFSCREEN_APPROVE_SESSION_STEP_UP,
   OFFSCREEN_DISCLOSURE_STEP_UP,
   RUNTIME_DISCLOSURE_STEP_UP_CONSENT,
   type OffscreenDisclosureStepUpRequest,
@@ -185,7 +185,8 @@ import {
   type OffscreenUnlockPrfRequest,
   type OffscreenSetWakeRequest,
   type OffscreenSignTrustTaskRequest,
-  type OffscreenStepUpVtaRequest,
+  type OffscreenApproveSessionStepUpRequest,
+  type RuntimeApproveSessionStepUpResponse,
   type RuntimeStepUpConsentRequest,
   type RuntimeStepUpConsentResponse,
   type OffscreenVaultDeleteRequest,
@@ -436,8 +437,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       );
     return true; // async sendResponse
   }
-  if (msg.type === OFFSCREEN_STEP_UP_VTA) {
-    doStepUpVta(message as OffscreenStepUpVtaRequest)
+  if (msg.type === OFFSCREEN_APPROVE_SESSION_STEP_UP) {
+    doApproveSessionStepUp(message as OffscreenApproveSessionStepUpRequest)
       .then(sendResponse)
       .catch((e: unknown) =>
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }),
@@ -4801,7 +4802,7 @@ async function doDidcommLogin(
 /**
  * Obtain the fresh approval a `release: stepUp` disclosure needs.
  *
- * The same enforced order as `doStepUpVta`: **verify, then show, then sign.**
+ * The same enforced order as `doApproveSessionStepUp`: **verify, then show, then sign.**
  * Everything the human reads is taken from *inside* the agent's signature, per
  * the spec's "consumers MUST verify the proof BEFORE surfacing the reason" —
  * and here the reason is the list of facts about to leave, so the rule matters
@@ -4863,32 +4864,30 @@ async function doDisclosureStepUp(
   return { ok: true };
 }
 
-async function doStepUpVta(
-  req: OffscreenStepUpVtaRequest,
-): Promise<RuntimeLoginResponse> {
+async function doApproveSessionStepUp(
+  req: OffscreenApproveSessionStepUpRequest,
+): Promise<RuntimeApproveSessionStepUpResponse> {
   // Same IndexedDB-backed holder the popup/background use, so the DID is
   // identical to the base-login path being elevated.
   const sw = createStopwatch();
   const { signing } = await loadHolder(req.vtaDid);
   sw.mark("load holder");
 
-  // The flow itself — start → verify → consent → sign → finish → refresh, in that
-  // enforced order — lives in core (`performStepUpVta`), where it is unit
-  // tested. This function contributes only what core cannot know: the holder
-  // identity, the enrolled-executor set, and how to reach a human. The
-  // consent prompt fires HERE, mid-flow, via the background (only it can open
-  // windows): after `verifyStepUpApproveRequest` has passed — so the `reason`
-  // the human reads comes from inside the verified signature, per the spec's
-  // "consumers MUST verify the proof BEFORE surfacing the reason" — and
-  // before anything is signed. A refused approve-request (unsigned reply, bad
-  // proof, non-enrolled signer, issuer ≠ rpDid, another session) returns before the
-  // consent callback runs, so no prompt is ever raised for it; a declined
-  // prompt sends nothing, and the RP's challenge lapses on its TTL.
-  const outcome = await performStepUpVta({
-    baseUrl: req.params.baseUrl,
-    accessToken: req.params.accessToken,
-    refreshToken: req.params.refreshToken,
-    sessionId: req.params.sessionId,
+  // The flow itself — verify → consent → sign, in that enforced order — lives
+  // in core (`performRpStepUp`), where it is unit tested. This function
+  // contributes only what core cannot know: the holder identity, the
+  // enrolled-executor set, and how to reach a human. The consent prompt fires
+  // HERE, mid-flow, via the background (only it can open windows): after
+  // `verifyStepUpApproveRequest` has passed on the approve-request the page
+  // handed in — so the `reason` the human reads comes from inside the verified
+  // signature, per the spec's "consumers MUST verify the proof BEFORE
+  // surfacing the reason" — and before anything is signed. A refused
+  // approve-request (bad proof, non-enrolled signer, issuer ≠ rpDid, another
+  // holder) returns before the consent callback runs, so no prompt is ever
+  // raised for it; a declined prompt signs nothing, and the RP's challenge
+  // lapses on its TTL. The page sends the signed approve-response itself.
+  const outcome = await performRpStepUp({
+    approveRequest: req.params.approveRequest,
     signing,
     rpDid: req.params.rpDid,
     enrolledExecutorDids: await enrolledExecutorDids(req.vtaDid),
@@ -4898,7 +4897,6 @@ async function doStepUpVta(
         type: RUNTIME_STEP_UP_CONSENT,
         origin: req.origin,
         rpDid: req.params.rpDid,
-        baseUrl: req.params.baseUrl,
         holderDid: signing.did,
         ...(ctx.reason !== undefined ? { reason: ctx.reason } : {}),
       };
@@ -4917,11 +4915,8 @@ async function doStepUpVta(
   return {
     ok: true,
     result: {
-      accessToken: outcome.tokens.accessToken,
-      refreshToken: outcome.tokens.refreshToken,
-      sessionId: outcome.tokens.sessionId,
+      approveResponse: outcome.approveResponse as unknown as Record<string, unknown>,
       holderDid: signing.did,
-      timings: sw.marks,
     },
   };
 }

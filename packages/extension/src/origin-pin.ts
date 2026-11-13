@@ -14,8 +14,8 @@
  *
  * The pin is also what bounds the page's *other* uses of the holder
  * key. `signTrustTask` signs only documents addressed to the pinned
- * `rpDid`, and `stepUpVta` runs only against the pinned `rpDid` and
- * the `baseUrl` the REST login was approved for — see
+ * `rpDid`, and `approveSessionStepUp` answers only an approve-request for
+ * the pinned `rpDid` — see
  * `pageSignBindingRefusal` / `pageStepUpBindingRefusal` in
  * `page-task-policy.ts`. Neither of those paths ever writes a pin: the
  * only place one is seeded is a login the human approved.
@@ -65,7 +65,7 @@ export interface OriginPinStatus {
   /**
    * `true` when a base URL is pinned AND the current login names a
    * *different* one. Treated like an RP change: always re-prompt, loudly,
-   * because the pinned base URL is where `stepUpVta` is allowed to go.
+   * because the pinned base URL is where the approved REST login went.
    */
   baseUrlChanged: boolean;
 }
