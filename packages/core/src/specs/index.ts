@@ -3,13 +3,13 @@
 import { declareExtends as declareExtendsInRuntime } from "@openvtc/trust-tasks/runtime";
 import { EXTENDS_BY_TYPE_URI } from "./_extends.js";
 
-export * as AclChangeRole_v0_2 from "./acl/change-role/0.2/payload.js";
-export * as AclGrant_v0_2 from "./acl/grant/0.2/payload.js";
-export * as AclList_v0_3 from "./acl/list/0.3/payload.js";
-export * as AclRevoke_v0_2 from "./acl/revoke/0.2/payload.js";
-export * as AclShow_v0_2 from "./acl/show/0.2/payload.js";
+export * as AclChangeRole_v0_3 from "./acl/change-role/0.3/payload.js";
+export * as AclGrant_v0_3 from "./acl/grant/0.3/payload.js";
+export * as AclList_v0_4 from "./acl/list/0.4/payload.js";
+export * as AclRevoke_v0_3 from "./acl/revoke/0.3/payload.js";
+export * as AclShow_v0_3 from "./acl/show/0.3/payload.js";
 export * as AclSwapKey_v0_1 from "./acl/swap-key/0.1/payload.js";
-export * as AclUpdate_v0_2 from "./acl/update/0.2/payload.js";
+export * as AclUpdate_v0_3 from "./acl/update/0.3/payload.js";
 export * as AuditList_v0_2 from "./audit/list/0.2/payload.js";
 export * as AuthAuthenticate_v0_3 from "./auth/authenticate/0.3/payload.js";
 export * as AuthChallenge_v0_1 from "./auth/challenge/0.1/payload.js";

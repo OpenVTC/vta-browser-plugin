@@ -52,11 +52,11 @@ test("grant sends the entry nested, under the canonical type", async () => {
   const result = await aclGrant(channel, { holder: HOLDER, service: SERVICE, entry });
 
   const { envelope, opts } = channel.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/acl/grant/0.2");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/acl/grant/0.3");
   assert.equal(envelope.issuer, HOLDER.did);
   assert.equal(envelope.recipient, SERVICE.did);
   assert.deepEqual(envelope.payload, { entry });
-  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/acl/grant/0.2#response");
+  assert.equal(opts.expectedResponseType, "https://trusttasks.org/spec/acl/grant/0.3#response");
   assert.deepEqual(result, entry);
 });
 
@@ -84,7 +84,7 @@ test("list sends only the filters that were set, in camelCase", async () => {
     subjectPrefix: "did:key:",
     limit: 50,
   });
-  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/acl/list/0.3");
+  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/acl/list/0.4");
   assert.deepEqual(channel.sent[0].envelope.payload, {
     role: "admin",
     subjectPrefix: "did:key:",
@@ -167,7 +167,7 @@ test("revoke states what it takes away — the whole entry, or the act scope", a
     subject: "did:key:zS",
     revocation: { kind: "entry" },
   });
-  assert.equal(whole.sent[0].envelope.type, "https://trusttasks.org/spec/acl/revoke/0.2");
+  assert.equal(whole.sent[0].envelope.type, "https://trusttasks.org/spec/acl/revoke/0.3");
   assert.deepEqual(whole.sent[0].envelope.payload, {
     subject: "did:key:zS",
     revocation: { kind: "entry" },
@@ -197,7 +197,7 @@ test("change-role sends both roles, so the agent can compare-and-swap", async ()
     fromRole: "admin",
     toRole: "auditor",
   });
-  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/acl/change-role/0.2");
+  assert.equal(channel.sent[0].envelope.type, "https://trusttasks.org/spec/acl/change-role/0.3");
   assert.deepEqual(channel.sent[0].envelope.payload, {
     subject: "did:key:zS",
     fromRole: "admin",

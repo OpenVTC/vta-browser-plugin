@@ -3,7 +3,7 @@
  * Source: https://trusttasks.org/spec/auth/oob/prove/0.3 (registry bundle)
  */
 
-import type { Ext, OobKey, Origin, Purpose, Requester, RequestId, SameNetwork, Service, SigningScope, TaskFamily } from "../../../../_shared/components.js";
+import type { Ext, OobKey, Origin, Purpose_AuthOobV0_1 as Purpose, Requester, RequestId, SameNetwork, Service, SigningScope, TaskFamily } from "../../../../_shared/components.js";
 
 
 /**

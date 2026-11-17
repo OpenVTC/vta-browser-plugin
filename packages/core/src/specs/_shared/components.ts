@@ -61,7 +61,7 @@ export type CapabilityScope = CapabilityScopeCeiling | CapabilityScopeNone | Cap
 /**
  * Opaque identifier of one administrative power in the maintainer's capability registry — lowercase dot-separated segments (e.g. `keys.sign`, `vtc.roles.assign`, `git.repo.manage`). A consumer MUST NOT treat a capability it does not recognise as granted.
  */
-export type Capability_AclV0_2 = string;
+export type Capability_AclV0_3 = string;
 /**
  * Fine-grained capability flag scoped to the device's allowed contexts. See SPEC.md for the full semantics of each. Capability values are additive: a consumer MUST ignore a value it does not recognise rather than reject the binding, and MUST NOT treat an unrecognised value as conferring anything.
  */
@@ -722,9 +722,21 @@ export type Provenance =
       derivedAt: string;
     };
 /**
+ * An explicit purpose scope. Exactly one of two shapes, discriminated by `scope`: `any`, or `listed` with a NON-EMPTY list of purposes. The empty list is invalid, not a third shape.
+ */
+export type PurposeScope = PurposeScopeAny | PurposeScopeListed;
+/**
+ * What content is used for: a lowerCamelCase name registered in the VTI specification's purpose registry (Appendix H) — `personalisation`, `taskExecution`, `analytics`, `modelTraining` at the time of writing — or an absolute IRI naming a purpose defined elsewhere, such as a purpose of the W3C Data Privacy Vocabulary (`https://w3id.org/dpv#ServicePersonalisation`). Compared by exact string equality: a consumer MUST NOT treat a purpose it does not recognise as equal to any other, and grants only a request naming exactly a listed purpose (VTI-ACL-109). A registered name is never an IRI, because it contains no `:`.
+ */
+export type Purpose_AclV0_3 = Purpose_AclV0_31 & Purpose_AclV0_32;
+export type Purpose_AclV0_31 = {
+  [k: string]: unknown | undefined;
+};
+export type Purpose_AclV0_32 = string;
+/**
  * What the request is for. A CLOSED list: each purpose has a fixed row in CONVENTIONS.md §3 stating what is revealed at each step, what the grant contains, what redeem returns and the window lengths. Version 0.1 defines `login` only. `stepUp` and `deviceEnrol` are reserved names; adding one is a new version of this component and of every task that references it, never an in-place edit.
  */
-export type Purpose = "login";
+export type Purpose_AuthOobV0_1 = "login";
 /**
  * A device's platform push channel — the body the device registers with its push GATEWAY (push wake-up binding, https://trusttasks.org/binding/push/0.1; modeled on Aries RFC 0699/0734). The gateway holds this token and returns an opaque WakeHandle in exchange; the token is held by the gateway ONLY, never by the mediator or the maintainer/VTA. The gateway uses it to send a contentless wake-up when an authorized trigger asks — the push payload never carries Trust Task content. Tagged union over the discriminator `platform`.
  */
@@ -1209,7 +1221,7 @@ export interface AclEntry_AclV0_1 {
  *
  * The act axis and the approve axis are independent and a consumer MUST resolve them separately: `act` + `capabilities` (+ `keys`) answer "may this subject do X"; `approve` + `approveCapabilities` answer "may this subject ratify someone else doing X". Neither implies the other. An entry with `act: {scope: none}` and an approve scope other than none is a least-privilege approver — able to satisfy an approval and unable to initiate any change.
  */
-export interface AclEntry_AclV0_2 {
+export interface AclEntry_AclV0_3 {
   /**
    * VID of the party in the ACL. Compared by exact string equality (SPEC.md §4.8); producers SHOULD emit canonical form.
    */
@@ -1242,6 +1254,10 @@ export interface AclEntry_AclV0_2 {
    * REQUIRED explicit key scope: which keys this subject may invoke the maintainer's signing oracle on. Exactly one of `{"scope": "all"}` (every key the entry's act scope reaches), `{"scope": "none"}` (no keys), or `{"scope": "listed", "keys": [...]}` with at least one key identifier. INTERSECTS WITH `act` — it can only narrow, never widen: a listed key that lies outside the entry's act scope remains unreachable, exactly as if it were not listed. There is no implicit form: an entry without `keys`, or with an empty `keys` list, is malformed and MUST be refused. A maintainer that operates no signing oracle states `{"scope": "none"}`. Replaces 0.1's `allowedKeys`, whose absence meant every key.
    */
   keys: KeyScope;
+  /**
+   * REQUIRED explicit purpose scope: what this subject may use content it reads for — the purpose a request for a purpose-bound operation (a read of content held for the principal, or a refusal that carries such content) names, and the maintainer records in that operation's audit record. Exactly one of `{"scope": "any"}` (any purpose EXCEPT `modelTraining`) or `{"scope": "listed", "purposes": [...]}` with at least one Purpose. There is no implicit form: an entry without `purposes`, or with an empty list, is malformed and MUST be refused, never read as `any`. A maintainer that adopts this version writes `any` on every entry that predates it before serving a purpose-bound operation under it (VTI-ACL-101). Delegated purposes are a subset of the granter's: a granter stating `any` MAY delegate a list; a granter stating a list MUST NOT delegate `any`, and no granter delegates `modelTraining` unless its own entry names it (acl/grant `purposeOutsideDelegator`). A maintainer MAY refuse by policy to grant a purpose, naming it, when the entry is written (acl/grant `purposeRefused`), never by writing the entry without it. A purpose is a declaration, not a proof: the maintainer cannot see what the subject does with content, and holds it to what it declared.
+   */
+  purposes: PurposeScope;
   /**
    * Optional human-readable label. Confers nothing.
    */
@@ -1648,7 +1664,7 @@ export interface BoardHead {
  * A capability held by an entry, optionally qualified by a resource, optionally marked additive. A qualified grant confers nothing without a live entry for the same subject, and is bounded as delegated authority is.
  */
 export interface CapabilityGrant {
-  capability: Capability_AclV0_2;
+  capability: Capability_AclV0_3;
   /**
    * Optional qualifier. Absent covers every resource of the capability's kind.
    */
@@ -1662,7 +1678,7 @@ export interface CapabilityGrant {
  * A capability, optionally qualified by a resource. Used where a capability is named but not granted — a role's ceiling, a role's approve ceiling, an entry's approvable capabilities. An unqualified reference covers every resource of the capability's kind.
  */
 export interface CapabilityRef {
-  capability: Capability_AclV0_2;
+  capability: Capability_AclV0_3;
   /**
    * Optional qualifier. Absent covers every resource of the capability's kind.
    */
@@ -3598,6 +3614,25 @@ export interface PublicKeyCredentialRequestOptions {
  */
 export interface PublishedCard {
   [k: string]: unknown | undefined;
+}
+/**
+ * Any purpose except `modelTraining` (training, fine-tuning or evaluating a machine-learning model on the content), which `any` never grants (VTI-ACL-105).
+ */
+export interface PurposeScopeAny {
+  scope: "any";
+}
+/**
+ * Exactly the listed purposes. A request naming any other purpose is refused.
+ */
+export interface PurposeScopeListed {
+  scope: "listed";
+  /**
+   * Non-empty set of purposes. An empty array is invalid (it is not `any`).
+   *
+   * @minItems 1
+   * @maxItems 32
+   */
+  purposes: [Purpose_AclV0_3, ...Purpose_AclV0_3[]];
 }
 export interface Apns {
   platform: "apns";

@@ -224,7 +224,7 @@ test("acl/update sends a key scope only when one is stated", async () => {
       ...(keys !== undefined ? { keys } : {}),
     });
     const { type, payload } = channel.sent[0].envelope;
-    assert.equal(type, "https://trusttasks.org/spec/acl/update/0.2");
+    assert.equal(type, "https://trusttasks.org/spec/acl/update/0.3");
     if (expected === undefined) assert.equal("keys" in payload, false);
     else assert.deepEqual(payload.keys, expected);
   }

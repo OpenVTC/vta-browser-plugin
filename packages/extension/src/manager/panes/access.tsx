@@ -580,6 +580,24 @@ function EditEntry({
 }
 
 /**
+ * The purpose scope a grant form's answer names, or `null` while it names
+ * none: no choice made, or "only these" with nothing listed (an empty list is
+ * malformed, not `any`). Purposes are split on commas and whitespace — each is
+ * a registered purpose name or an absolute IRI, neither of which holds either.
+ */
+export function purposesFrom(
+  mode: "" | "any" | "listed",
+  listed: string,
+): AclEntry["purposes"] | null {
+  if (mode === "any") return { scope: "any" };
+  if (mode !== "listed") return null;
+  const purposes = [...new Set(listed.split(/[\s,]+/).filter(Boolean))];
+  return purposes.length
+    ? ({ scope: "listed", purposes } as unknown as AclEntry["purposes"])
+    : null;
+}
+
+/**
  * What a new grant may do where it reaches: make changes itself (`act`), or
  * only ratify changes someone else makes (`approve`).
  */
@@ -605,6 +623,10 @@ export function grantEntry(p: {
   role: string;
   contextId: ContextSelection;
   reach: GrantReach;
+  /** What the subject may use content it reads for (AclEntry 0.3, REQUIRED,
+   *  VTI-ACL-100 – 110). Always the operator's answer: there is no default,
+   *  because `any` would widen every grant nobody thought about. */
+  purposes: AclEntry["purposes"];
 }): AclEntry {
   const where: AclEntry["act"] = p.contextId
     ? { scope: "contexts", contexts: [p.contextId] }
@@ -618,6 +640,7 @@ export function grantEntry(p: {
         approveCapabilities: { scope: "ceiling" },
         keys: { scope: "none" },
         capabilities: { scope: "none" },
+        purposes: p.purposes,
       }
     : {
         subject: p.subject,
@@ -626,6 +649,7 @@ export function grantEntry(p: {
         approve: { scope: "none" },
         keys: { scope: "all" },
         capabilities: { scope: "ceiling" },
+        purposes: p.purposes,
       };
 }
 
@@ -645,6 +669,9 @@ function GrantAccess({
   const [label, setLabel] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [reach, setReach] = useState<GrantReach>("act");
+  const [purposeMode, setPurposeMode] = useState<"" | "any" | "listed">("");
+  const [purposeList, setPurposeList] = useState("");
+  const purposes = purposesFrom(purposeMode, purposeList);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<ConsentRequiredError | null>(null);
@@ -657,8 +684,9 @@ function GrantAccess({
     setBusy(true);
     setError(null);
     setPending(null);
+    if (!purposes) return;
     const entry: AclEntry = {
-      ...grantEntry({ subject: subject.trim(), role: role.trim(), contextId, reach }),
+      ...grantEntry({ subject: subject.trim(), role: role.trim(), contextId, reach, purposes }),
       ...(label.trim() ? { label: label.trim() } : {}),
       // A date input gives a local day; the wire wants an instant.
       ...(expiresAt ? { expiresAt: new Date(`${expiresAt}T23:59:59`).toISOString() } : {}),
@@ -676,9 +704,11 @@ function GrantAccess({
       setLabel("");
       setExpiresAt("");
       setReach("act");
+      setPurposeMode("");
+      setPurposeList("");
       onGranted();
     }
-  }, [parties, subject, role, label, expiresAt, contextId, reach, onGranted]);
+  }, [parties, subject, role, label, expiresAt, contextId, reach, purposes, onGranted]);
 
   return (
     <Panel
@@ -749,6 +779,43 @@ function GrantAccess({
           </label>
         </fieldset>
 
+        <fieldset style={{ border: 0, padding: 0, margin: 0, display: "grid", gap: 4 }}>
+          <legend style={{ fontSize: t.xs, color: c.muted, padding: 0, marginBottom: 4 }}>
+            WHAT IT MAY USE WHAT IT READS FOR
+          </legend>
+          <label style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+            <input
+              type="radio"
+              name="grant-purposes"
+              checked={purposeMode === "any"}
+              onChange={() => setPurposeMode("any")}
+            />
+            <span>Any purpose — except training a model, which is only ever granted by name</span>
+          </label>
+          <label style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+            <input
+              type="radio"
+              name="grant-purposes"
+              checked={purposeMode === "listed"}
+              onChange={() => setPurposeMode("listed")}
+            />
+            <span>Only these purposes</span>
+          </label>
+          {purposeMode === "listed" && (
+            <input
+              style={{ ...fieldStyle, fontFamily: font.mono }}
+              value={purposeList}
+              onChange={(e) => setPurposeList(e.target.value)}
+              placeholder="purpose names or IRIs, separated by commas"
+              aria-label="Purposes"
+            />
+          )}
+          <span style={{ fontSize: t.xs, color: c.faint }}>
+            Your agent records the purpose every read is made for, and holds the subject to what is
+            granted here. It cannot see what the subject does with what it reads.
+          </span>
+        </fieldset>
+
         {!expiresAt && (
           <Note tone="warn">
             With no expiry this is a standing grant — it lasts until someone revokes it. An expiry
@@ -767,7 +834,7 @@ function GrantAccess({
         <div>
           <Button
             kind="primary"
-            disabled={busy || !subject.trim() || !role.trim() || Boolean(denied)}
+            disabled={busy || !subject.trim() || !role.trim() || !purposes || Boolean(denied)}
             {...(denied ? { title: denied } : {})}
             onClick={() => void submit()}
           >
@@ -881,7 +948,7 @@ export function AccessPane({
       aclList(managerSender, {
         ...parties,
         // `actingIn` is the question this pane asks — who may act here — and
-        // it has to be said: `acl/list/0.3` refuses a context with no
+        // it has to be said: `acl/list/0.4` refuses a context with no
         // direction rather than guess one.
         ...(contextId ? { context: contextId, direction: "actingIn" as const } : {}),
       }),
@@ -926,6 +993,22 @@ export function AccessPane({
       key: "capabilities",
       header: "Can do",
       render: (e) => <Capabilities entry={e} />,
+    },
+    {
+      key: "purposes",
+      header: "Uses reads for",
+      // Never redacted, and never read as `any` when absent: a narrowed entry
+      // shown as wider than it is would be the worse error.
+      render: (e) =>
+        e.purposes?.scope === "any" ? (
+          <span style={{ color: c.muted }}>any purpose</span>
+        ) : e.purposes?.scope === "listed" ? (
+          <span style={{ fontFamily: font.mono, fontSize: t.xs }}>
+            {(e.purposes as { purposes: string[] }).purposes.join(", ")}
+          </span>
+        ) : (
+          <span style={{ color: c.faint }}>not stated</span>
+        ),
     },
     { key: "expires", header: "Expires", render: (e) => <Expiry entry={e} /> },
     {

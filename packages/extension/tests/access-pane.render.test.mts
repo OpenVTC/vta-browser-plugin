@@ -13,11 +13,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { agent, h, render, PARTIES } from "./harness/dom.mjs";
-import { AccessPane, aclEditToSend, grantEntry, partitionByContext } from "../src/manager/panes/access.js";
+import {
+  AccessPane,
+  aclEditToSend,
+  grantEntry,
+  partitionByContext,
+  purposesFrom,
+} from "../src/manager/panes/access.js";
 
-const LIST = "acl/list/0.3";
-const UPDATE = "acl/update/0.2";
-const GRANT = "acl/grant/0.2";
+const ANY = { scope: "any" } as const;
+
+const LIST = "acl/list/0.4";
+const UPDATE = "acl/update/0.3";
+const GRANT = "acl/grant/0.3";
 
 /** Every 0.2 entry states its act, key and capability scopes. */
 const REACH = { keys: { scope: "all" }, capabilities: { scope: "ceiling" } };
@@ -102,7 +110,7 @@ test("a selected context separates what was granted in it from what reaches it",
   assert.ok(text.indexOf("zGlobal") > text.indexOf("From outside"));
 });
 
-test("a selected context is asked for actingIn — acl/list/0.3 has no default direction", async () => {
+test("a selected context is asked for actingIn — acl/list/0.4 has no default direction", async () => {
   const { a } = await mount([SCOPED], "browser-plugin");
   assert.deepEqual(a.of(LIST)[0]!.payload, { context: "browser-plugin", direction: "actingIn" });
 });
@@ -181,7 +189,7 @@ test("clearing an expiry warns that it becomes a standing grant", async () => {
 
 test("an act grant reaches the selected context and approves nothing", () => {
   assert.deepEqual(
-    grantEntry({ subject: "did:key:zA", role: "initiator", contextId: "demo", reach: "act" }),
+    grantEntry({ subject: "did:key:zA", role: "initiator", contextId: "demo", reach: "act", purposes: ANY }),
     {
       subject: "did:key:zA",
       role: "initiator",
@@ -189,13 +197,14 @@ test("an act grant reaches the selected context and approves nothing", () => {
       approve: { scope: "none" },
       keys: { scope: "all" },
       capabilities: { scope: "ceiling" },
+      purposes: ANY,
     },
   );
 });
 
 test("an approve-only grant acts nowhere and approves where act would have reached", () => {
   assert.deepEqual(
-    grantEntry({ subject: "did:key:zA", role: "reader", contextId: null, reach: "approve" }),
+    grantEntry({ subject: "did:key:zA", role: "reader", contextId: null, reach: "approve", purposes: ANY }),
     {
       subject: "did:key:zA",
       role: "reader",
@@ -204,9 +213,10 @@ test("an approve-only grant acts nowhere and approves where act would have reach
       approveCapabilities: { scope: "ceiling" },
       keys: { scope: "none" },
       capabilities: { scope: "none" },
+      purposes: ANY,
     },
   );
-  const scoped = grantEntry({ subject: "s", role: "r", contextId: "demo", reach: "approve" });
+  const scoped = grantEntry({ subject: "s", role: "r", contextId: "demo", reach: "approve", purposes: ANY });
   assert.deepEqual(scoped.approve, { scope: "contexts", contexts: ["demo"] });
 });
 
@@ -223,6 +233,7 @@ test("choosing approve only sends an entry that acts nowhere", async () => {
     .querySelector("input")!;
   await screen.click(approveOnly);
   assert.match(screen.text(), /able to approve changes at this agent within that context/);
+  await screen.click(radioLabelled(screen, /^Any purpose/));
   await screen.click(screen.button("Grant access"));
   await screen.settle();
   const sent = a.of(GRANT);
@@ -231,4 +242,47 @@ test("choosing approve only sends an entry that acts nowhere", async () => {
   assert.deepEqual(entry.act, { scope: "none" });
   assert.deepEqual(entry.approve, { scope: "contexts", contexts: ["demo"] });
   assert.deepEqual(entry.capabilities, { scope: "none" });
+  assert.deepEqual(entry.purposes, { scope: "any" });
+});
+
+// ── Purposes (AclEntry 0.3) ──────────────────────────────────────────────
+//
+// REQUIRED on every entry, and the form has no default: `any` chosen for the
+// operator would widen every grant nobody thought about.
+
+function radioLabelled(screen: { all: (s: string) => Element[] }, re: RegExp): HTMLInputElement {
+  return screen
+    .all("label")
+    .find((l) => re.test(l.textContent ?? ""))!
+    .querySelector("input") as HTMLInputElement;
+}
+
+test("no grant is sent until its purposes are answered", async () => {
+  const { a, screen } = await mount([], "demo");
+  const field = (placeholder: string) =>
+    screen.all("input").find((i) => i.getAttribute("placeholder")?.startsWith(placeholder))!;
+  await screen.type(field("did:key"), "did:key:zSubject");
+  const [role] = screen.all("label").filter((l) => /^ROLE/.test(l.textContent ?? ""));
+  await screen.type(role!.querySelector("input")!, "reader");
+  assert.equal((screen.button("Grant access") as HTMLButtonElement).disabled, true);
+
+  // "Only these" with nothing listed is not an answer: an empty list is malformed.
+  await screen.click(radioLabelled(screen, /^Only these purposes/));
+  assert.equal((screen.button("Grant access") as HTMLButtonElement).disabled, true);
+
+  await screen.type(field("purpose names"), "support, https://example.org/purpose/audit");
+  await screen.click(screen.button("Grant access"));
+  await screen.settle();
+  const entry = (a.of(GRANT)[0]!.payload as { entry: Record<string, unknown> }).entry;
+  assert.deepEqual(entry.purposes, {
+    scope: "listed",
+    purposes: ["support", "https://example.org/purpose/audit"],
+  });
+});
+
+test("purposesFrom reads no answer as none, never as any", () => {
+  assert.equal(purposesFrom("", "support"), null);
+  assert.equal(purposesFrom("listed", " , "), null);
+  assert.deepEqual(purposesFrom("any", ""), { scope: "any" });
+  assert.deepEqual(purposesFrom("listed", "a, a b"), { scope: "listed", purposes: ["a", "b"] });
 });
