@@ -47,7 +47,7 @@
 
 import { useEffect, useState } from "react";
 import { useConnectionStore, type Connection } from "./store.js";
-import { didWebvhDomain, type AdminScope } from "@openvtc/pnm-core";
+import { didHost, type AdminScope } from "@openvtc/pnm-core";
 import {
   looksLikeAgentName,
   parseAgentName,
@@ -123,6 +123,16 @@ export function OnboardView({
   // wallet always gets it. See `grant-command.ts`.
   const [personaHolder, setPersonaHolder] = useState(false);
   const [prep, setPrep] = useState<OnboardPrepareResult | null>(null);
+  /** The agent's REST base URL, while this wallet has no grant for its origin. */
+  const [restOrigin, setRestOrigin] = useState<string | null>(null);
+
+  /** Ask for the agent's REST origin. The request is the first await, so the
+   *  click's user gesture is still live (host-permissions.ts). */
+  async function grantRestOrigin() {
+    if (!restOrigin) return;
+    const granted = await requestOriginPermission(restOrigin);
+    if (granted) setRestOrigin(null);
+  }
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // The agent's own contexts, read as the granted ephemeral after `prepare`.
@@ -190,7 +200,7 @@ export function OnboardView({
       await chrome.storage.session.remove(PENDING_ONBOARD_DID_KEY);
 
       setVtaDid(pendingDid);
-      const host = didWebvhDomain(pendingDid);
+      const host = didHost(pendingDid);
       // Only auto-continue when the grant actually landed. If the operator
       // declined, leave the restored DID in the box and say nothing — they
       // are looking at the form they were on, and re-clicking Prepare will
@@ -237,8 +247,12 @@ export function OnboardView({
       // optional permission rather than an install-time `<all_urls>` grant.
       //
       // vta-service applies an origin-allowlist CORS layer, so without the
-      // grant every REST call is blocked by the browser. Non-webvh DIDs
-      // (did:peer VTAs reached over DIDComm) have no host and need none.
+      // grant every REST call is blocked by the browser. Every method that
+      // names a host is asked for here — did:webvh, did:webs, did:scid with a
+      // `src` (`didHost`); one that names none (did:peer) needs none. The
+      // agent's REST endpoint can still be on another host than its DID's —
+      // a did:webs published on a shared hosting server always is — which
+      // `restOrigin` below asks for once `prepare` has read the document.
       // One field takes either form. The spec is explicit that application
       // code should never make the user answer "is this a DID or a name?" —
       // classification is a local string test with no network.
@@ -248,7 +262,7 @@ export function OnboardView({
       // reads a cross-origin redirect's Location, and reaching a VTA is a
       // CORS-allowlisted request. Requested before any other await so the
       // click's user gesture is still live.
-      const grantHost = asName ? asName.authority : didWebvhDomain(typed);
+      const grantHost = asName ? asName.authority : didHost(typed);
       if (grantHost && !(await requestOriginPermission(grantHost))) {
         setStatus(
           `The wallet needs access to ${displayHostFor(grantHost)} to look this up. ` +
@@ -279,7 +293,7 @@ export function OnboardView({
         }
       }
 
-      const vtaHost = didWebvhDomain(did);
+      const vtaHost = didHost(did);
       if (vtaHost && vtaHost !== grantHost) {
         // A name can resolve to a DID on a different host than the name's own
         // (`names.example/@alice` → `did:webvh:…:agent.example`), so the DID's
@@ -305,6 +319,11 @@ export function OnboardView({
       })) as RuntimeOnboardPrepareResponse;
       if (!res.ok) throw new Error(res.error);
       setPrep(res.result);
+      // The REST endpoint the agent's document names, if this wallet may not
+      // reach it yet. Asked for with its own click: the one that started this
+      // was spent by the awaits above, and a permission prompt needs a live one.
+      const rest = res.result.restBaseUrl;
+      setRestOrigin(rest && !(await hasOriginPermission(rest)) ? rest : null);
       // The ephemeral now exists but is not yet granted, so this will fail
       // until the operator runs the command. Asked again from the grant
       // screen's Refresh, which is where the answer is actually needed.
@@ -770,12 +789,30 @@ export function OnboardView({
             the grant does not exist yet — so Copy holds the primary style and
             this stays quiet. Once copied, it takes over. Two primaries would
             have meant neither read as the next thing to do. */}
+        {restOrigin && (
+          <div style={{ display: "grid", gap: 6 }}>
+            <small>
+              This agent&apos;s REST endpoint is on{" "}
+              <code style={mono}>{displayHostFor(restOrigin)}</code>, which the wallet can&apos;t
+              reach yet.{" "}
+              {prep.tspMediatorDid || prep.mediatorDid
+                ? "It's the fallback when the agent's relay doesn't answer, so allow it unless you never want REST."
+                : "It's the only way this agent can be reached, so the wallet needs it to connect."}
+            </small>
+            <button onClick={() => void grantRestOrigin()} style={button("primary")}>
+              Allow access to {displayHostFor(restOrigin)}
+            </button>
+          </div>
+        )}
         <button
           onClick={() => void connect()}
           disabled={
             busy ||
             !effectiveContext ||
-            (needsMediator && fallbackMediator.trim() === "")
+            (needsMediator && fallbackMediator.trim() === "") ||
+            // REST-only and not yet reachable: connecting could only fail, as
+            // a CORS refusal the browser does not explain.
+            Boolean(restOrigin && !prep.tspMediatorDid && !prep.mediatorDid)
           }
           style={{
             ...button(commandCopied ? "primary" : "default"),

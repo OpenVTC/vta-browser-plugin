@@ -23,7 +23,7 @@ import { test } from "node:test";
 import { h, render } from "./harness/dom.mjs";
 
 /** A `did:key` agent, so nothing in the flow asks for a host permission —
- *  `didWebvhDomain` finds no host and `prepare` skips the grant prompt. Using
+ *  `didHost` finds no host and `prepare` skips the grant prompt. Using
  *  a `did:webvh` here would put a Chrome permission dialog in the middle of
  *  every case below. */
 const AGENT = "did:key:z6MkjExampleAgentIdentifierUsedOnlyInThisTest";
@@ -47,8 +47,14 @@ function stubChrome(opts: {
   contexts?: Array<{ id: string; name: string }>;
   contextsError?: string;
   connect?: (req: Sent) => Record<string, unknown>;
+  /** Merged into `prepare`'s answer — the transports the agent advertises. */
+  prepare?: Record<string, unknown>;
+  /** Origin patterns the wallet already holds a grant for. */
+  granted?: string[];
 }) {
   const sent: Sent[] = [];
+  const granted = new Set(opts.granted ?? []);
+  const requested: string[] = [];
   const chrome = {
     runtime: {
       onMessage: { addListener() {}, removeListener() {} },
@@ -56,7 +62,10 @@ function stubChrome(opts: {
         sent.push(message);
         switch (message.type) {
           case "vta-wallet/onboard-prepare":
-            return { ok: true, result: { ephemeralDid: EPH, command: `pnm acl create --did ${EPH}` } };
+            return {
+              ok: true,
+              result: { ephemeralDid: EPH, command: `pnm acl create --did ${EPH}`, ...(opts.prepare ?? {}) },
+            };
           case "vta-wallet/onboard-contexts":
             return opts.contextsError
               ? { ok: false, error: opts.contextsError }
@@ -82,9 +91,23 @@ function stubChrome(opts: {
       local: { get: (_k: string, cb: (i: Record<string, unknown>) => void) => cb({}), set: (_v: unknown, cb: () => void) => cb(), remove: (_k: string, cb: () => void) => cb() },
       session: { get: async () => ({}), remove: async () => {} },
     },
-    permissions: { contains: async () => true, request: async () => true },
+    permissions: opts.granted
+      ? {
+          contains: async ({ origins }: { origins: string[] }) => origins.every((o) => granted.has(o)),
+          request: async ({ origins }: { origins: string[] }) => {
+            requested.push(...origins);
+            for (const o of origins) granted.add(o);
+            return true;
+          },
+        }
+      : { contains: async () => true, request: async () => true },
   };
-  return { chrome, sent, last: (type: string) => [...sent].reverse().find((m) => m.type === type) };
+  return {
+    chrome,
+    sent,
+    requested,
+    last: (type: string) => [...sent].reverse().find((m) => m.type === type),
+  };
 }
 
 async function mount(stub: ReturnType<typeof stubChrome>, props: Record<string, unknown> = { standalone: true }) {
@@ -295,3 +318,62 @@ test("adding another agent stores it before the encrypt prompt, not after", asyn
   assert.equal(cancelled, 1, "leaving the prompt closes the add-another panel");
   await view.unmount();
 });
+
+// ── Host grants for an agent that is not a did:webvh ─────────────────────
+//
+// The view asked `didWebvhDomain` which host to request, and a did:webs agent
+// has none by that reading: no grant was asked for, and onboarding over REST
+// met an unexplained CORS refusal. And a did:webs is published on a shared
+// hosting server, so its REST endpoint is never on its DID's host anyway.
+
+const WEBS_AGENT = "did:webs:webvh.storm.ws:nodes:EJdeTq8v1SPknlbBkCXjSphLhP_N2D_9-IvFzBCYPxh5";
+
+async function continueWith(view: Awaited<ReturnType<typeof mount>>, did: string) {
+  await view.type(field(view, "Agent address"), did);
+  await view.click(view.button("Continue"));
+  await view.settle();
+}
+
+test("a did:webs agent's host is asked for, as a did:webvh's always was", async () => {
+  const stub = stubChrome({ granted: [] });
+  const view = await mount(stub);
+  await view.type(field(view, "Home context"), "alpha");
+  await continueWith(view, WEBS_AGENT);
+  assert.deepEqual(stub.requested, ["https://webvh.storm.ws/*"]);
+  await view.unmount();
+});
+
+test("a REST endpoint on another host is offered its own grant, beside a relay", async () => {
+  const stub = stubChrome({
+    granted: ["https://webvh.storm.ws/*"],
+    prepare: { restBaseUrl: "https://vta.storm.ws/api", tspMediatorDid: "did:webvh:Qm:mediator.example" },
+  });
+  const view = await mount(stub);
+  await view.type(field(view, "Home context"), "alpha");
+  await continueWith(view, WEBS_AGENT);
+  assert.match(view.text(), /REST endpoint is on vta\.storm\.ws/);
+  // There is a relay, so connecting does not wait on it.
+  assert.equal((view.button("I've run it — Connect") as HTMLButtonElement).disabled, false);
+  await view.click(view.button("Allow access to vta.storm.ws"));
+  await view.settle();
+  assert.equal(stub.requested.at(-1), "https://vta.storm.ws/*");
+  assert.doesNotMatch(view.text(), /can't reach yet/);
+  await view.unmount();
+});
+
+test("an agent reachable only over REST cannot be connected until its origin is allowed", async () => {
+  const stub = stubChrome({
+    granted: ["https://webvh.storm.ws/*"],
+    prepare: { restBaseUrl: "https://vta.storm.ws/api" },
+  });
+  const view = await mount(stub);
+  await view.type(field(view, "Home context"), "alpha");
+  await continueWith(view, WEBS_AGENT);
+  assert.match(view.text(), /the only way this agent can be reached/);
+  assert.equal((view.button("I've run it — Connect") as HTMLButtonElement).disabled, true);
+  await view.click(view.button("Allow access to vta.storm.ws"));
+  await view.settle();
+  assert.equal((view.button("I've run it — Connect") as HTMLButtonElement).disabled, false);
+  await view.unmount();
+});
+

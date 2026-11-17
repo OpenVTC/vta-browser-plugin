@@ -26,7 +26,7 @@ import {
   hasOriginPermission,
   requestOriginPermission,
 } from "./host-permissions.js";
-import { didWebvhDomain } from "@openvtc/pnm-core";
+import { didHost } from "@openvtc/pnm-core";
 import {
   activeTransport,
   isObserved,
@@ -149,7 +149,13 @@ export function SetupPane() {
     void load();
   }, [load, connection?.vtaDid]);
 
-  const agentHost = connection ? didWebvhDomain(connection.vtaDid) : undefined;
+  // What the wallet actually fetches from: the REST endpoint the agent's
+  // document names, else the host its DID names. The DID's host alone was
+  // wrong twice over — for a did:webs it was not read at all, and for any
+  // agent published on a shared hosting server it is not where REST lives.
+  const agentHost = connection
+    ? (connection.restBaseUrl ?? didHost(connection.vtaDid))
+    : undefined;
 
   const checkReach = useCallback(async () => {
     if (!agentHost) {
