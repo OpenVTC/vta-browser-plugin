@@ -89,6 +89,14 @@ test("an agent advertising no relay is absent, not present-and-empty", () => {
   assert.deepEqual(parseAgentMediatorDids(raw), { [VTA_B]: OTHER });
 });
 
+test("a TSP-only agent's relay is its TSP mediator; DIDComm's wins beside it", () => {
+  const raw = envelope({
+    activeVtaDid: VTA_A,
+    vtas: { [VTA_A]: { tspMediatorDid: AGENT }, [VTA_B]: { mediatorDid: OTHER, tspMediatorDid: AGENT } },
+  });
+  assert.deepEqual(parseAgentMediatorDids(raw), { [VTA_A]: AGENT, [VTA_B]: OTHER });
+});
+
 test("unreadable or absent storage yields nothing rather than guessing", () => {
   assert.deepEqual(parseAgentMediatorDids(undefined), {});
   assert.deepEqual(parseAgentMediatorDids("not json"), {});

@@ -403,6 +403,7 @@ export function OnboardView({
         agentScope: res.result.adminScope,
         ...(prep?.restBaseUrl ? { restBaseUrl: prep.restBaseUrl } : {}),
         ...(prep?.mediatorDid ? { mediatorDid: prep.mediatorDid } : {}),
+        ...(prep?.tspMediatorDid ? { tspMediatorDid: prep.tspMediatorDid } : {}),
         connectedAt: Date.now(),
       };
       // Commit NOW, before anything else is shown. By this point the agent
@@ -647,7 +648,13 @@ export function OnboardView({
         )}
         <small>
           Transport:{" "}
-          {prep.mediatorDid ? "DIDComm (authcrypt)" : prep.restBaseUrl ? "REST" : "none"}
+          {prep.tspMediatorDid
+            ? "TSP"
+            : prep.mediatorDid
+              ? "DIDComm (authcrypt)"
+              : prep.restBaseUrl
+                ? "REST"
+                : "none"}
         </small>
         {needsMediator && (
           <div

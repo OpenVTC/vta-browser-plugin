@@ -92,7 +92,7 @@ export function parseAllVtaDids(raw: unknown): string[] {
   }
 }
 
-/** Every onboarded agent's advertised DIDComm mediator, keyed by agent DID.
+/** Every onboarded agent's advertised relay — DIDComm's, else TSP's — keyed by agent DID.
  *
  *  Onboarding records each agent's advertised relay on its `Connection`
  *  (`store.ts`) and, since the fix that removed the hardcoded default, in the
@@ -114,12 +114,19 @@ export function parseAgentMediatorDids(raw: unknown): Record<string, string> {
   if (typeof raw !== "string") return {};
   try {
     const parsed = JSON.parse(raw) as {
-      state?: { connections?: { vtas?: Record<string, { mediatorDid?: unknown }> } };
+      state?: {
+        connections?: { vtas?: Record<string, { mediatorDid?: unknown; tspMediatorDid?: unknown }> };
+      };
     };
     const out: Record<string, string> = {};
     for (const [vtaDid, entry] of Object.entries(parsed.state?.connections?.vtas ?? {})) {
-      if (typeof entry?.mediatorDid === "string" && entry.mediatorDid) {
-        out[vtaDid] = entry.mediatorDid;
+      // DIDComm's relay, else TSP's: a TSP-only agent pushes through the
+      // mediator its `TSPTransport` names (`agentRelayMediator`).
+      for (const relay of [entry?.mediatorDid, entry?.tspMediatorDid]) {
+        if (typeof relay === "string" && relay) {
+          out[vtaDid] = relay;
+          break;
+        }
       }
     }
     return out;

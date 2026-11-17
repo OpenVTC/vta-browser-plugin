@@ -41,6 +41,7 @@ import {
   type ParsedTaskConsentRequest,
   resolveMediatorEndpoint,
   resolveVtaServices,
+  agentRelayMediator,
   withFetchTimeout,
   type VtaServices,
   resolveVtaTspEndpoint,
@@ -1334,10 +1335,10 @@ async function runDiagnostics(vtaDid: string): Promise<DiagnosticsReport> {
         "wallet — its consent requests and approvals will never arrive.",
       remediation:
         "Reconnect to this agent to adopt its relay automatically, or set one under " +
-        "Setup → Message routing. If the agent advertises no DIDComm mediator, it " +
+        "Setup → Message routing. If the agent advertises no mediator at all, it " +
         "cannot push to a wallet at all and one must be configured by hand.",
     });
-  } else if (services.didcomm && inbox !== services.didcomm.mediatorDid) {
+  } else if (agentRelayMediator(services) && inbox !== agentRelayMediator(services)) {
     // Reachable when an operator pinned a relay by hand. Worth saying plainly:
     // the wallet publishes its inbox to nobody (a `did:key` holder carries no
     // service endpoint), so an agent pushes through the relay IT knows. A
@@ -1349,7 +1350,7 @@ async function runDiagnostics(vtaDid: string): Promise<DiagnosticsReport> {
       status: "warn",
       detail:
         `This wallet listens for this agent at ${inbox}, but the agent advertises ` +
-        `${services.didcomm.mediatorDid}. Nothing tells it to use the first, so its ` +
+        `${agentRelayMediator(services)}. Nothing tells it to use the first, so its ` +
         "messages are handed to the second and never picked up.",
       remediation:
         "Clear the manual relay under Setup → Message routing so the wallet follows " +
@@ -2749,8 +2750,11 @@ async function doOnboardPrepare(
   personaHolder: boolean,
 ): Promise<OnboardPrepareResult> {
   const services = await resolveVtaServices(vtaDid);
-  if (!services.didcomm && !services.rest) {
-    throw new Error(`${vtaDid} advertises no #vta-didcomm or #vta-rest service`);
+  // Any transport `doOnboardConnect` can provision over will do — TSP
+  // included, which is the only one a did:webs VTA may advertise. Refusing a
+  // TSP-only agent here made the TSP path in connect unreachable.
+  if (!services.tsp && !services.didcomm && !services.rest) {
+    throw new Error(`${vtaDid} advertises no usable transport (TSPTransport, DIDCommMessaging or VTARest)`);
   }
   const eph = generateSigningIdentity();
   const store = new IndexedDBKVStore();
@@ -2773,6 +2777,7 @@ async function doOnboardPrepare(
       personaHolder,
     }),
     ...(services.didcomm ? { mediatorDid: services.didcomm.mediatorDid } : {}),
+    ...(services.tsp ? { tspMediatorDid: services.tsp.mediatorDid } : {}),
     ...(services.rest ? { restBaseUrl: services.rest.baseUrl } : {}),
   };
 }
@@ -2965,12 +2970,15 @@ async function doOnboardConnect(params: OnboardConnectParams): Promise<OnboardCo
   // because a person chose it and `followAgentInbox` must not later find the
   // agent still advertising nothing and treat the pin as stale.
   //
-  // An agent advertising neither leaves no entry, which is the honest state:
-  // it cannot push to this wallet, and the self-test says so rather than
-  // naming a relay nobody was asked about.
-  const advertisedInbox = services.didcomm?.mediatorDid;
+  // A TSP-only agent pushes through the mediator its `TSPTransport` names,
+  // and the inbox session there carries TSP frames beside DIDComm ones, so
+  // that mediator is its inbox (`agentRelayMediator`). An agent advertising
+  // no mediator at all leaves no entry, which is the honest state: it cannot
+  // push to this wallet, and the self-test says so rather than naming a relay
+  // nobody was asked about.
+  const advertisedInbox = agentRelayMediator(services);
   if (advertisedInbox) {
-    const source = advertised.didcomm ? "agent" : "operator";
+    const source = agentRelayMediator(advertised) === advertisedInbox ? "agent" : "operator";
     await setInbox(pending.vtaDid, { did: advertisedInbox, source });
     console.info("[pnm onboard] inbox for", pending.vtaDid, "=", advertisedInbox, `(${source})`);
   }
@@ -3609,7 +3617,7 @@ async function doMediatorOp(op: MediatorOp): Promise<MediatorOpResult> {
     }
     case "locate": {
       const services = await resolveVtaServices(op.did);
-      const mediatorDid = services.didcomm?.mediatorDid ?? services.tsp?.mediatorDid;
+      const mediatorDid = agentRelayMediator(services);
       return { did: op.did, ...(mediatorDid ? { mediatorDid } : {}) };
     }
     case "relays": {
