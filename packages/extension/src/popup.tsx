@@ -861,7 +861,7 @@ function Popup() {
       return;
     }
     const fresh = res.result;
-    setVtaNoTransports(!fresh.restBaseUrl && !fresh.mediatorDid);
+    setVtaNoTransports(!fresh.restBaseUrl && !fresh.mediatorDid && !fresh.tspMediatorDid);
 
     // Drift check — only re-set the store when values actually
     // changed, to avoid spurious re-renders + storage writes.
@@ -900,9 +900,10 @@ function Popup() {
       </strong>
       <small style={{ color: "var(--w-danger)" }}>
         <code style={mono}>{connection.vtaDid}</code>
-        <DidQrButton value={connection.vtaDid} /> currently advertises neither{" "}
-        <code>#vta-rest</code> nor <code>#vta-didcomm</code>. Wallet operations will fail until
-        the VTA re-enables at least one transport (<code>vta services {`{rest,didcomm}`} enable</code>).
+        <DidQrButton value={connection.vtaDid} /> currently advertises none of{" "}
+        <code>#vta-rest</code>, <code>#vta-didcomm</code> or <code>#vta-tsp</code>. Wallet
+        operations will fail until the VTA re-enables at least one transport
+        (<code>vta services {`{rest,didcomm,tsp}`} enable</code>).
       </small>
     </div>
   );
