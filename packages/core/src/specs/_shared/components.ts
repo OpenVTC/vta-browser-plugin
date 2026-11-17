@@ -177,6 +177,14 @@ export type DeviceAttestation =
  */
 export type Did = string;
 /**
+ * The DID class an identity was created in (VTI specification, DID classes, VTI-KEY-190 – 193), fixed for its life. `relationship`: an identifier for one relationship, one community or one trust context. `persona`: a person's own identity. `service`: the durable identity of a node or a service.
+ */
+export type DidClass = "relationship" | "persona" | "service";
+/**
+ * The DID method an identity uses, as the method profile that governs it is named: `webvh` for a did:webvh identity, `scid:vh` for the did:scid:vh:1 form of one, `webs` for did:webs. Deliberately a pattern and not an enumeration: a method is added by publishing its profile under method-profiles/, never by changing this schema. A VTA MUST refuse a method it holds no profile for, or whose profile declares it ineligible, with `vta/dids:methodNotEligible`.
+ */
+export type DidMethodName = string;
+/**
  * A cryptographic digest as a multibase-encoded multihash — the encoding the W3C Verifiable Credentials Data Model 2.0 defines for `digestMultibase`, and the one `did:webvh` uses for its SCID and entry hashes.
  *
  * Multihash carries the hash algorithm in-band, so the value is self-describing and the wire format survives an algorithm change without a schema revision; multibase does the same for the base encoding, so a verifier never infers base58 from base64url by context. A bare hex string or a `sha-256:`-style prefix hard-codes one algorithm into the wire contract and is non-conforming here.
@@ -339,6 +347,10 @@ export type HeadVersion = number;
  * Who may ask the community to introduce them to this member. `anyone`: any active member who can find the entry. `groups`: only members who share a community group with them. `connections`: only members holding an attributed, in-force verified relationship with them. `off`: nobody. A refused introduction is never reported to its sender.
  */
 export type Introductions = "anyone" | "groups" | "connections" | "off";
+/**
+ * A service DID's key assurance level (VTI-KEY-194; CONVENTIONS.md §3.4). `1` — single key: no `keyRoles`, one key signs everything. `2` — role-separated: `keyRoles`, with the `attestation` and `update` keys held by the VTA, which may derive them and back them up. `3` — recoverable: level 2 with those keys generated and in no backup, a recovery key held by a recovery custodian outside the VTA, and a witness enforcing it. Declared in the document's `keyAssurance` member.
+ */
+export type KeyAssuranceLevel = 1 | 2 | 3;
 /**
  * Where the private key came from. `derived` means the maintainer generated it from a seed it holds and can reproduce it from `derivationPath`; `imported` means it arrived from outside and exists only as stored material; `internal` means the maintainer generated it from a CSPRNG and it is reproducible from nothing at all. The distinction is operationally load-bearing: a `derived` key survives a seed restore, an `imported` one is lost unless it was backed up separately, and an `internal` one cannot be recovered by any means once the maintainer's storage is gone. This member is also the only way a consumer can confirm that a `keys/create` request for an `internal` key was honoured rather than silently downgraded to a derived one — see that specification's `internal` member.
  */
@@ -2150,6 +2162,74 @@ export interface DidRecord {
   ext?: Ext;
 }
 /**
+ * One identity the VTA holds, as every method has it, with what only its method has under `methodDetails`. CONVENTIONS.md §20.3.
+ */
+export interface DidSummary {
+  /**
+   * The identity, in the form it is presented in. A did:scid:vh:1 identity is presented in its did:scid form or its did:webvh form, and the other is in `alsoKnownAs`.
+   */
+  did: string;
+  /**
+   * The method profile that governs the identity: `webvh`, `scid:vh`, `webs`, `key`.
+   */
+  method: DidMethodName;
+  /**
+   * The context the identity belongs to. Absent for an identity in no context, which only an unrestricted caller sees.
+   */
+  contextId?: string;
+  /**
+   * The DID class the identity was created in. Absent where none was recorded; a VTA never infers one.
+   */
+  class?: DidClass;
+  /**
+   * The identity's key assurance level. `1` for every identity that is not a key-role identity.
+   */
+  level: KeyAssuranceLevel;
+  /**
+   * Whether the identity is its context's own DID.
+   */
+  primary: boolean;
+  /**
+   * Whether the identity has been ended. It still resolves, as deactivated.
+   */
+  deactivated: boolean;
+  /**
+   * The VTA's id for the hosting server the identity is published through. Absent where it is published through none: a serverless did:webvh, a did:key.
+   */
+  serverId?: string;
+  /**
+   * The VTA's own label for the identity. Not published.
+   */
+  label?: string;
+  /**
+   * The VTA's id for the key the identity currently signs with — what a caller names to have the VTA sign as it. Absent where it has none.
+   */
+  signingKeyId?: string;
+  /**
+   * The VTA's id for the identity's current key agreement key. Absent where it has none.
+   */
+  keyAgreementKeyId?: string;
+  /**
+   * Other identifiers the identity is published as: a did:scid identity's other form, a did:webs identity's did:web and did:keri forms. Empty where there are none.
+   */
+  alsoKnownAs: string[];
+  /**
+   * When the VTA created or adopted the identity.
+   */
+  createdAt: string;
+  /**
+   * When the VTA last changed its record of the identity.
+   */
+  updatedAt: string;
+  /**
+   * What only the identity's method has, as one member named by its `method`, defined by that method profile's Summary details (CONVENTIONS.md §18). Absent where the profile defines none. A consumer ignores a member it does not recognise.
+   */
+  methodDetails?: {
+    [k: string]: {} | undefined;
+  };
+  ext?: Ext;
+}
+/**
  * Authored template shape: a DID document with `{TOKEN}` placeholders plus the variable contract the VTA's renderer enforces.
  */
 export interface DidTemplate {
@@ -3097,6 +3177,32 @@ export interface MessageMeta {
    * When the message was first handed to the recipient. Present only when deliveryState is `delivered`.
    */
   deliveredAt?: string;
+}
+/**
+ * One DID method a VTA holds a profile for, as it supports it now. CONVENTIONS.md §20.4.
+ */
+export interface MethodInfo {
+  /**
+   * The method's profile name.
+   */
+  method: DidMethodName;
+  /**
+   * Whether `vta/dids/list` summarises the method's identities (CONVENTIONS.md §20.1).
+   */
+  listed: boolean;
+  /**
+   * Whether the VTA will create an identity of this method now: its build supports the method and its configuration has it switched on.
+   */
+  creatable: boolean;
+  /**
+   * The DID classes a creation may state now. Empty where the method's creation states none, or where it is not `creatable`.
+   */
+  classes: DidClass[];
+  /**
+   * The Trust Task type URIs the VTA serves for the method's identities, beyond this family's.
+   */
+  operations: string[];
+  ext?: Ext;
 }
 /**
  * One observed step in the life of one message at the mediator. Carries metadata only — never a message body.

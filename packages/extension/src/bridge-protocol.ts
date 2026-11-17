@@ -1181,6 +1181,9 @@ export interface RuntimeListDidsRequest {
 export interface DidRecordView {
   did: string;
   contextId: string;
+  /** The VTA's id for the key it signs with as this DID (`vta/dids/list`'s
+   *  `signingKeyId`), when it has one. */
+  signingKeyId?: string;
 }
 
 export type RuntimeListDidsResponse =

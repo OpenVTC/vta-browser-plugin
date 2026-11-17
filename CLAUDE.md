@@ -1519,6 +1519,32 @@ types from `@openvtc/pnm-core/rooms` instead); returning the key, or anything
 derived from it, over the port; letting a pane read pieces before `got`; or
 widening the guard's exception to `manager.js`.
 
+## DIDs are listed method-neutrally
+
+"Which DIDs does this agent hold" has one answer whatever the method, and it is
+asked once: `vta/dids/list/0.1` (`didsList`, core `vta/dids.ts`), with
+`vta/dids/get/0.1` and `vta/dids/methods/list/0.1` beside it. Each identity is
+a `DidSummary` — did:webvh, did:scid, did:webs and the did:key identities the
+agent minted alike — with what only its method has under `methodDetails`. The
+per-method lists (`vta/webvh/dids/list`, `vta/webs/dids/list`) are retired.
+
+This replaced every surface asking `vta/webvh/dids/list`, which is correct for
+the question it answers and wrong for the one being asked: against an agent
+whose identities were all did:webs, the vault's persona picker, the console's
+DIDs pane and `pnm did-mgmt dids list` each reported none. A per-method list
+would have needed every caller to learn every method; this one does not.
+
+`signingKeyId` on a summary is the **agent's** key id, which is what a
+did-self-issued entry names. Prefer it to resolving the document: for a
+did:webs a verification-method id is not the agent's key id. What an identity
+*does* — create, update, rotate, its log or KEL, delete — stays with its
+method's own tasks; the console drives the webvh family's and shows the rest.
+
+**What breaks it:** asking a per-method family a "which DIDs" question again;
+treating a missing `methodDetails` member as an error rather than a method this
+build predates; or reading `contextId` as always present (a did:key in no
+context has none).
+
 ## Advertisement is not availability
 
 A VTA's DID document says what it *offers*. `buildVtaSession` skips a channel

@@ -17,10 +17,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agent, h, render, PARTIES } from "./harness/dom.mjs";
+import { agent, h, render, PARTIES, asSummary } from "./harness/dom.mjs";
 import { DidsPane } from "../src/manager/panes/dids.js";
 
-const LIST = "vta/webvh/dids/list/1.0";
+const LIST = "vta/dids/list/0.1";
 const REALIGN = "vta/webvh/dids/realign-keys/1.0";
 const SERVERS = "vta/webvh/servers/list/1.0";
 
@@ -55,7 +55,7 @@ const TWO_MOVES = [
 
 const mount = async (answers: Record<string, unknown>) => {
   const a = agent({
-    [LIST]: { dids: [didRecord], total: 1 },
+    [LIST]: { dids: [didRecord].map(asSummary) },
     [SERVERS]: { servers: [] },
     ...answers,
   });

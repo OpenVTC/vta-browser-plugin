@@ -207,11 +207,11 @@ export * as VtaAppStatePutMany_v1_1 from "./vta/app-state/put-many/1.1/payload.j
 export * as VtaAppStatePut_v1_1 from "./vta/app-state/put/1.1/payload.js";
 export * as VtaBackupAbort_v1_0 from "./vta/backup/abort/1.0/payload.js";
 export * as VtaContextsCreate_v1_0 from "./vta/contexts/create/1.0/payload.js";
-export * as VtaContextsDelete_v1_1 from "./vta/contexts/delete/1.1/payload.js";
+export * as VtaContextsDelete_v1_2 from "./vta/contexts/delete/1.2/payload.js";
 export * as VtaContextsGet_v1_0 from "./vta/contexts/get/1.0/payload.js";
 export * as VtaContextsList_v1_0 from "./vta/contexts/list/1.0/payload.js";
-export * as VtaContextsPreviewDelete_v1_0 from "./vta/contexts/preview-delete/1.0/payload.js";
-export * as VtaContextsUpdateDid_v1_1 from "./vta/contexts/update-did/1.1/payload.js";
+export * as VtaContextsPreviewDelete_v2_0 from "./vta/contexts/preview-delete/2.0/payload.js";
+export * as VtaContextsUpdateDid_v1_2 from "./vta/contexts/update-did/1.2/payload.js";
 export * as VtaContextsUpdate_v1_0 from "./vta/contexts/update/1.0/payload.js";
 export * as VtaCredentialsIssue_v0_2 from "./vta/credentials/issue/0.2/payload.js";
 export * as VtaCredentialsList_v0_2 from "./vta/credentials/list/0.2/payload.js";
@@ -222,6 +222,9 @@ export * as VtaDidTemplatesGet_v3_1 from "./vta/did-templates/get/3.1/payload.js
 export * as VtaDidTemplatesList_v3_1 from "./vta/did-templates/list/3.1/payload.js";
 export * as VtaDidTemplatesRender_v2_0 from "./vta/did-templates/render/2.0/payload.js";
 export * as VtaDidTemplatesUpdate_v3_1 from "./vta/did-templates/update/3.1/payload.js";
+export * as VtaDidsGet_v0_1 from "./vta/dids/get/0.1/payload.js";
+export * as VtaDidsList_v0_1 from "./vta/dids/list/0.1/payload.js";
+export * as VtaDidsMethodsList_v0_1 from "./vta/dids/methods/list/0.1/payload.js";
 export * as VtaManagementReloadServices_v1_0 from "./vta/management/reload-services/1.0/payload.js";
 export * as VtaMemoryDelete_v0_1 from "./vta/memory/delete/0.1/payload.js";
 export * as VtaMemoryList_v0_1 from "./vta/memory/list/0.1/payload.js";
@@ -258,7 +261,6 @@ export * as VtaWebvhAgentNameSet_v1_0 from "./vta/webvh/agent-name/set/1.0/paylo
 export * as VtaWebvhDidsCreate_v1_2 from "./vta/webvh/dids/create/1.2/payload.js";
 export * as VtaWebvhDidsDelete_v1_0 from "./vta/webvh/dids/delete/1.0/payload.js";
 export * as VtaWebvhDidsGet_v1_0 from "./vta/webvh/dids/get/1.0/payload.js";
-export * as VtaWebvhDidsList_v1_0 from "./vta/webvh/dids/list/1.0/payload.js";
 export * as VtaWebvhDidsRealignKeys_v1_0 from "./vta/webvh/dids/realign-keys/1.0/payload.js";
 export * as VtaWebvhDidsRegisterWithServer_v1_0 from "./vta/webvh/dids/register-with-server/1.0/payload.js";
 export * as VtaWebvhDidsRotateKeys_v1_0 from "./vta/webvh/dids/rotate-keys/1.0/payload.js";

@@ -95,8 +95,9 @@
 
 import { useCallback, useEffect, useId, useState } from "react";
 import { roomsOwnerRegister } from "@openvtc/pnm-core/rooms";
-import { webvhDidCreate, webvhDidList, webvhServerList } from "@openvtc/pnm-core/webvh";
-import type { WebvhDidRecord, WebvhServerRecord } from "@openvtc/pnm-core/webvh";
+import { webvhDidCreate, webvhServerList } from "@openvtc/pnm-core/webvh";
+import { didsList, type DidSummary } from "@openvtc/pnm-core";
+import type { WebvhServerRecord } from "@openvtc/pnm-core/webvh";
 import { keysList, servicesList } from "@openvtc/pnm-core/admin";
 import { contextsUpdateDid, type ContextRecord } from "@openvtc/pnm-core";
 import { Button, Did, Note, Panel } from "../../ui.js";
@@ -326,7 +327,9 @@ export function CreateRoom({
   const [serversError, setServersError] = useState<string | null>(null);
   const [mediators, setMediators] = useState<AgentMediator[] | null>(null);
   const [mediatorsError, setMediatorsError] = useState<string | null>(null);
-  const [dids, setDids] = useState<WebvhDidRecord[] | null>(null);
+  // Every method's identities in the context, not only did:webvh: a room may
+  // be hosted as, or registered with, a did:webs or a did:key too.
+  const [dids, setDids] = useState<DidSummary[] | null>(null);
   const [didsError, setDidsError] = useState<string | null>(null);
   const [keys, setKeys] = useState<KeyRecord[] | null>(null);
   const [keysError, setKeysError] = useState<string | null>(null);
@@ -387,11 +390,11 @@ export function CreateRoom({
     setKeysError(null);
     void (async () => {
       const [d, k] = await Promise.allSettled([
-        webvhDidList(managerSender, { ...parties, contextId }),
+        didsList(managerSender, { ...parties, contextId }),
         keysList(managerSender, { ...parties, contextId, status: "active" }),
       ]);
       if (!live) return;
-      if (d.status === "fulfilled") setDids(d.value.dids ?? []);
+      if (d.status === "fulfilled") setDids(d.value);
       else setDidsError(message(d.reason));
       if (k.status === "fulfilled") setKeys(k.value.keys);
       else setKeysError(message(k.reason));
@@ -449,8 +452,18 @@ export function CreateRoom({
   const roomChoices = (dids ?? []).filter(
     (d) => d.did !== contextDid && d.did !== hostDid && d.did !== parties.service.did,
   );
-  const signingKeysOf = (did: string) =>
-    (keys ?? []).filter((k) => k.keyId.startsWith(`${did}#`) && k.status === "active" && k.keyType !== "x25519");
+  // The key the agent says it signs with as the DID, and any others named
+  // under the DID's own id — a did:webs key's id carries no `did#` prefix, so
+  // the prefix alone found none for one.
+  const signingKeysOf = (did: string) => {
+    const named = dids?.find((d) => d.did === did)?.signingKeyId;
+    return (keys ?? []).filter(
+      (k) =>
+        (k.keyId === named || k.keyId.startsWith(`${did}#`)) &&
+        k.status === "active" &&
+        k.keyType !== "x25519",
+    );
+  };
 
   const identity: RoomIdentity | null =
     source === "existing" && existing.did.trim() && existing.signingKeyId.trim()

@@ -28,11 +28,11 @@ test("delete sends force explicitly, defaulting to false", async () => {
   const result = await contextDelete(channel, { holder: HOLDER, service: SERVICE, id: "demo" });
 
   const { envelope, opts } = channel.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/contexts/delete/1.1");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/contexts/delete/1.2");
   assert.deepEqual(envelope.payload, { id: "demo", force: false });
   assert.equal(
     opts.expectedResponseType,
-    "https://trusttasks.org/spec/vta/contexts/delete/1.1#response",
+    "https://trusttasks.org/spec/vta/contexts/delete/1.2#response",
   );
   assert.deepEqual(result, { id: "demo", deleted: true, daemonCleanupErrors: [] });
 });
@@ -66,7 +66,7 @@ test("preview reads every list under the spelling the spec declares", async () =
   const channel = recorder({
     id: "demo",
     keys: ["key-1"],
-    webvhDids: ["did:webvh:QmX:h"],
+    dids: ["did:webvh:QmX:h", "did:webs:h:p:EAid"],
     subContexts: ["demo/sub"],
     aclEntriesRemoved: ["did:key:zGone"],
     aclEntriesUpdated: ["did:key:zNarrowed"],
@@ -75,13 +75,13 @@ test("preview reads every list under the spelling the spec declares", async () =
   const result = await contextPreviewDelete(channel, { holder: HOLDER, service: SERVICE, id: "demo" });
   assert.equal(
     channel.sent[0].opts.expectedResponseType,
-    "https://trusttasks.org/spec/vta/contexts/preview-delete/1.0#response",
+    "https://trusttasks.org/spec/vta/contexts/preview-delete/2.0#response",
   );
   assert.deepEqual(result, {
     id: "demo",
     subContexts: ["demo/sub"],
     keys: ["key-1"],
-    webvhDids: ["did:webvh:QmX:h"],
+    dids: ["did:webvh:QmX:h", "did:webs:h:p:EAid"],
     aclEntriesRemoved: ["did:key:zGone"],
     aclEntriesUpdated: ["did:key:zNarrowed"],
     didTemplates: ["persona"],
@@ -89,9 +89,9 @@ test("preview reads every list under the spelling the spec declares", async () =
 });
 
 test("a snake_case list is not read: the spec declares none", async () => {
-  const channel = recorder({ id: "demo", keys: [], webvhDids: [], webvh_dids: ["did:webvh:QmX:h"] });
+  const channel = recorder({ id: "demo", keys: [], dids: [], webvh_dids: ["did:webvh:QmX:h"] });
   const result = await contextPreviewDelete(channel, { holder: HOLDER, service: SERVICE, id: "demo" });
-  assert.deepEqual(result.webvhDids, []);
+  assert.deepEqual(result.dids, []);
 });
 
 test("preview defaults every list when the context holds nothing", async () => {
@@ -101,7 +101,7 @@ test("preview defaults every list when the context holds nothing", async () => {
     id: "demo",
     subContexts: [],
     keys: [],
-    webvhDids: [],
+    dids: [],
     aclEntriesRemoved: [],
     aclEntriesUpdated: [],
     didTemplates: [],

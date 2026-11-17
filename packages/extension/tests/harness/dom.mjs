@@ -291,3 +291,44 @@ export const PARTIES = {
 
 /** `whoAmI`'s answer for a caller the agent treats as an unscoped holder. */
 export const UNSCOPED_HOLDER = { session: { id: "s", subject: "did:key:zHolder" }, roles: ["admin"], scopes: [], capabilities: ["persona-holder"] };
+
+/**
+ * A `vta/dids/list/0.1` summary for a DID fixture — a full webvh record or
+ * just `{ did, contextId }` — so a test that used to answer the retired
+ * `vta/webvh/dids/list` keeps its fixture and answers the method-neutral
+ * listing. The method is read from the DID, as the agent's engines read it.
+ */
+export function asSummary(r) {
+  const method = r.did.startsWith("did:webs:")
+    ? "webs"
+    : r.did.startsWith("did:key:")
+      ? "key"
+      : r.did.startsWith("did:scid:")
+        ? "scid:vh"
+        : "webvh";
+  const at = r.createdAt ?? "2026-11-17T10:00:00Z";
+  const s = {
+    did: r.did,
+    method,
+    ...(r.contextId ? { contextId: r.contextId } : {}),
+    level: 1,
+    primary: false,
+    deactivated: false,
+    alsoKnownAs: [],
+    createdAt: at,
+    updatedAt: r.updatedAt ?? at,
+    ...(r.serverId && r.serverId !== "serverless" ? { serverId: r.serverId } : {}),
+  };
+  if (method === "webvh" && r.scid) {
+    s.methodDetails = {
+      webvh: {
+        scid: r.scid,
+        ...(r.mnemonic ? { mnemonic: r.mnemonic } : {}),
+        portable: r.portable === true,
+        logEntryCount: r.logEntryCount ?? 1,
+        preRotationCount: r.preRotationCount ?? 0,
+      },
+    };
+  }
+  return s;
+}

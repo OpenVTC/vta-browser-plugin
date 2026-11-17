@@ -22,7 +22,7 @@ test("changing a face keeps the end its binding already had", async () => {
   const a = agent({
     "persona/binding/get/1.0": { contextId: "conf", personaDid: "did:key:zP", bound: true, profileId: "p1", label: "Ada", until, claimCount: 1 },
     "persona/binding/list/1.0": { personas: [] },
-    "vta/webvh/dids/list/1.0": { dids: [] },
+    "vta/dids/list/0.1": { dids: [] },
     "vta/webvh/servers/list/1.0": { servers: [] },
     "persona/binding/set/1.0": { contextId: "conf", personaDid: "did:key:zP", version: 4, boundAt: "2026-09-07T10:00:00Z" },
   });

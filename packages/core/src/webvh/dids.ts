@@ -29,12 +29,6 @@ import {
   type WebvhDidRecord,
 } from "../specs/vta/webvh/dids/get/1.0/payload.js";
 import {
-  TYPE_URI as DIDS_LIST,
-  RESPONSE_TYPE_URI as DIDS_LIST_RESPONSE,
-  type Payload as DidsListPayload,
-  type Response as DidsListResponse,
-} from "../specs/vta/webvh/dids/list/1.0/payload.js";
-import {
   TYPE_URI as DIDS_REALIGN_KEYS,
   RESPONSE_TYPE_URI as DIDS_REALIGN_KEYS_RESPONSE,
   type Payload as DidsRealignKeysPayload,
@@ -292,26 +286,6 @@ export async function webvhDidGet(
   };
   return send(sender, params, DIDS_GET, DIDS_GET_RESPONSE,
     "vta/webvh/dids/get/1.0", payload);
-}
-
-export interface WebvhDidListParams extends WebvhCall {
-  /** Only DIDs in this context. */
-  contextId?: string;
-  /** Only DIDs published through this hosting server. */
-  serverId?: string;
-}
-
-/** List the agent's webvh DIDs, optionally filtered. */
-export async function webvhDidList(
-  sender: TrustTaskSender,
-  params: WebvhDidListParams,
-): Promise<DidsListResponse> {
-  const payload: DidsListPayload = {
-    ...(params.contextId ? { contextId: params.contextId } : {}),
-    ...(params.serverId ? { serverId: params.serverId } : {}),
-  };
-  return send(sender, params, DIDS_LIST, DIDS_LIST_RESPONSE,
-    "vta/webvh/dids/list/1.0", payload);
 }
 
 /**

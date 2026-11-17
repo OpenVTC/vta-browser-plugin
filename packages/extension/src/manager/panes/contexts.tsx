@@ -21,10 +21,10 @@ import { Button, Did, Empty, Note, Panel } from "../../ui.js";
 import { LoadError } from "../table.js";
 import { c, t, font } from "../../theme.js";
 import { managerSender } from "../sender.js";
-// `webvhDidList`, not `vtaListDids`. The latter is typed on `Identity` —
-// it wants key material — and this console deliberately holds none; that
-// type is the guard, not an inconvenience (see CLAUDE.md on `TaskParty`).
-import { webvhDidList } from "@openvtc/pnm-core/webvh";
+// `didsList` (`vta/dids/list`): every identity the context holds, whatever its
+// method, so a context whose DID is a did:webs or a did:key is offered it.
+// Typed on `TaskParty` — this console holds no key material.
+import { didsList } from "@openvtc/pnm-core";
 import { useAsync } from "../use-async.js";
 import { ConsentRequiredError } from "../carrier.js";
 import { Destructive, ConsentCeremony, runMutation } from "../destructive.js";
@@ -321,7 +321,7 @@ function DeleteContext({
         needsForce={(p) =>
           p.subContexts.length > 0 ||
           p.keys.length > 0 ||
-          p.webvhDids.length > 0 ||
+          p.dids.length > 0 ||
           p.aclEntriesRemoved.length > 0 ||
           p.aclEntriesUpdated.length > 0 ||
           p.didTemplates.length > 0
@@ -331,7 +331,7 @@ function DeleteContext({
           const nothing =
             p.subContexts.length === 0 &&
             p.keys.length === 0 &&
-            p.webvhDids.length === 0 &&
+            p.dids.length === 0 &&
             p.aclEntriesRemoved.length === 0 &&
             p.aclEntriesUpdated.length === 0 &&
             p.didTemplates.length === 0;
@@ -366,10 +366,10 @@ function DeleteContext({
                     ))}
                   </Destroyed>
                   <Destroyed
-                    count={p.webvhDids.length}
-                    caption={`${plural(p.webvhDids.length, "DID")} destroyed, and withdrawn from its hosting server:`}
+                    count={p.dids.length}
+                    caption={`${plural(p.dids.length, "DID")} ended, and withdrawn from wherever it is hosted:`}
                   >
-                    {p.webvhDids.map((d) => (
+                    {p.dids.map((d) => (
                       <li key={d}>
                         <Did value={d} size={t.xs} />
                       </li>
@@ -452,7 +452,7 @@ function ContextDid({
   const [did, setDid] = useState(record.did ?? "");
 
   const dids = useAsync(
-    () => webvhDidList(managerSender, { ...parties, contextId: record.id }),
+    () => didsList(managerSender, { ...parties, contextId: record.id }),
     [parties.holder.did, parties.service.did, record.id],
   );
 
@@ -461,7 +461,7 @@ function ContextDid({
   // a deliberate change.
   const options = Array.from(
     new Set([
-      ...(dids.data?.dids ?? []).map((d) => d.did),
+      ...(dids.data ?? []).map((d) => d.did),
       ...(record.did ? [record.did] : []),
     ]),
   );

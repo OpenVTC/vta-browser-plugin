@@ -15,10 +15,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agent, h, render, PARTIES } from "./harness/dom.mjs";
+import { agent, h, render, PARTIES, asSummary } from "./harness/dom.mjs";
 import { DidsPane } from "../src/manager/panes/dids.js";
 
-const LIST = "vta/webvh/dids/list/1.0";
+const LIST = "vta/dids/list/0.1";
 const GET = "vta/webvh/dids/get/1.0";
 const SERVERS = "vta/webvh/servers/list/1.0";
 const TEMPLATES = "vta/did-templates/list/3.1";
@@ -59,7 +59,7 @@ const LOG = [line(), line({ versionId: "2-QmNext" })].join("\n");
 
 const mount = async (answers: Record<string, unknown> = {}) => {
   const a = agent({
-    [LIST]: { dids: [record], total: 1 },
+    [LIST]: { dids: [record].map(asSummary) },
     [SERVERS]: { servers: [] },
     [TEMPLATES]: { templates: [] },
     [SERVICES]: [],

@@ -14,7 +14,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agent, h, render, PARTIES } from "./harness/dom.mjs";
+import { agent, h, render, PARTIES, asSummary } from "./harness/dom.mjs";
 import { CreateRoom } from "../src/manager/panes/rooms-create.js";
 
 
@@ -25,10 +25,10 @@ const chooseContext = async (screen: { all: (s: string) => Element[]; click: (el
 };
 const SERVERS = "vta/webvh/servers/list/1.0";
 const SERVICES = "vta/services/list/1.1";
-const DIDS_LIST = "vta/webvh/dids/list/1.0";
+const DIDS_LIST = "vta/dids/list/0.1";
 const KEYS_LIST = "keys/list/0.2";
 const DIDS_CREATE = "vta/webvh/dids/create/1.2";
-const UPDATE_DID = "vta/contexts/update-did/1.1";
+const UPDATE_DID = "vta/contexts/update-did/1.2";
 // `rooms/owner/register`, not `rooms/create`: the console cannot address a host,
 // so the registration is asked of the agent, which can make the call.
 const REGISTER = "rooms/owner/register/0.2";
@@ -275,7 +275,7 @@ test("another DID in the context can be made the host, with one write", async ()
   const contexts = [{ id: "openvtc", name: "OpenVTC", did: MINTED.did, basePath: "/openvtc", createdAt: AT }];
   const { a, screen } = await mount(
     {
-      [DIDS_LIST]: { dids: [didRecord(MINTED.did), didRecord(OLD_HOST)] },
+      [DIDS_LIST]: { dids: [didRecord(MINTED.did), didRecord(OLD_HOST)].map(asSummary) },
       [UPDATE_DID]: { id: "openvtc", name: "OpenVTC", did: OLD_HOST, basePath: "/openvtc", createdAt: AT },
       [DIDS_CREATE]: MINTED,
       [REGISTER]: REGISTERED,
@@ -427,7 +427,7 @@ const ROOM_KEYS = [
 
 test("an existing room is picked from the context, and its one signing key filled in", async () => {
   const { a, screen } = await mount({
-    [DIDS_LIST]: { dids: [didRecord(HOST_DID), didRecord(MINTED.did)] },
+    [DIDS_LIST]: { dids: [didRecord(HOST_DID), didRecord(MINTED.did)].map(asSummary) },
     [KEYS_LIST]: { keys: ROOM_KEYS },
     [REGISTER]: REGISTERED,
   });
@@ -449,7 +449,7 @@ test("an existing room is picked from the context, and its one signing key fille
 
 test("with several signing keys, none is chosen for the operator", async () => {
   const { screen } = await mount({
-    [DIDS_LIST]: { dids: [didRecord(MINTED.did)] },
+    [DIDS_LIST]: { dids: [didRecord(MINTED.did)].map(asSummary) },
     [KEYS_LIST]: { keys: [keyRecord(`${MINTED.did}#key-0`), keyRecord(`${MINTED.did}#key-2`)] },
   });
   await chooseContext(screen, "openvtc");

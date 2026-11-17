@@ -13,7 +13,6 @@ import assert from "node:assert/strict";
 import {
   webvhDidCreate,
   webvhDidGet,
-  webvhDidList,
   webvhDidDelete,
   webvhDidUpdate,
   webvhServerList,
@@ -143,18 +142,6 @@ test("get only asks for the log when told to", async () => {
   const ch2 = recorder({ record: {}, log: "…" });
   await webvhDidGet(ch2, { ...CALL, did: "did:webvh:QmA:h.example", includeLog: true });
   assert.equal(ch2.sent[0].envelope.payload.includeLog, true);
-});
-
-test("list with no filters sends an empty payload, not nulls", async () => {
-  const ch = recorder({ dids: [] });
-  await webvhDidList(ch, CALL);
-  assert.deepEqual(ch.sent[0].envelope.payload, {});
-});
-
-test("list passes both filters through", async () => {
-  const ch = recorder({ dids: [] });
-  await webvhDidList(ch, { ...CALL, contextId: "personal", serverId: "prod" });
-  assert.deepEqual(ch.sent[0].envelope.payload, { contextId: "personal", serverId: "prod" });
 });
 
 test("delete names the right task", async () => {

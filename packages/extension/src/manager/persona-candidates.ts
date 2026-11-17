@@ -8,15 +8,16 @@
 // picker labelled "the identifier this context knows you by" is worse than not
 // offering a list at all.
 //
-// The agent already filters (`list_dids_webvh` drops anything whose
+// The agent already filters (`vta/dids/list` drops anything whose
 // `context_id` differs). This filters again anyway, and the difference between
 // "the agent promises" and "this list cannot contain one" is a test — which is
 // the whole reason the rule is here rather than inline in the component.
 
-/** A published identifier, as `vta/webvh/dids/list` returns it. */
+/** An identifier the agent holds, as `vta/dids/list` summarises it — any
+ *  method. One in no context is never a candidate for a context. */
 export interface PublishedDid {
   did: string;
-  contextId: string;
+  contextId?: string | undefined;
 }
 
 /** A persona `persona/binding/list` already knows about in this context. */

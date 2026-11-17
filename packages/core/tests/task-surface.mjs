@@ -548,7 +548,11 @@ test("coverage against the agent's surface is recorded, not discovered", () => {
   // 244 → 245, resynced from vta-sdk on main: `vta/pcs/voter/receipts/list`,
   // the receipts a member's VTA keeps, so the wallet checks a vote after close
   // (VTI-VOT-053).
-  const expected = 245;
+  // 245 → 247, resynced from vta-sdk 0.90.0 with VTI's method-neutral DIDs:
+  // `vta/dids/{list,get,methods/list}` (vta/dids.ts, +3), and the retired
+  // `vta/webvh/dids/list` no longer spoken (−1) — every "which DIDs" question
+  // asked once, whatever the method.
+  const expected = 247;
   assert.equal(
     implemented.size,
     expected,

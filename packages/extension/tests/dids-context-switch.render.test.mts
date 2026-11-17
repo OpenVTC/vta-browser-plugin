@@ -9,10 +9,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agent, h, render, PARTIES } from "./harness/dom.mjs";
+import { agent, h, render, PARTIES, asSummary } from "./harness/dom.mjs";
 import { DidsPane } from "../src/manager/panes/dids.js";
 
-const LIST = "vta/webvh/dids/list/1.0";
+const LIST = "vta/dids/list/0.1";
 const SERVERS = "vta/webvh/servers/list/1.0";
 
 const record = (contextId: string, name: string) => ({
@@ -31,8 +31,7 @@ const record = (contextId: string, name: string) => ({
 const gatedAgent = (held: string) => {
   const a = agent({
     [LIST]: (p: { contextId?: string }) => ({
-      dids: [record(p.contextId ?? "", p.contextId === "alpha" ? "alphadid" : "betadid")],
-      total: 1,
+      dids: [record(p.contextId ?? "", p.contextId === "alpha" ? "alphadid" : "betadid")].map(asSummary),
     }),
     [SERVERS]: { servers: [] },
   });
@@ -66,7 +65,7 @@ test("switching context clears the previous context's DIDs while the new list lo
 });
 
 test("a failed listing for the new context does not resurrect the old one as stale", async () => {
-  const a = agent({ [LIST]: { dids: [record("alpha", "alphadid")], total: 1 }, [SERVERS]: { servers: [] } });
+  const a = agent({ [LIST]: { dids: [record("alpha", "alphadid")].map(asSummary) }, [SERVERS]: { servers: [] } });
   const sendMessage = async (m: { params?: { type?: string; payload?: { contextId?: string } } }) => {
     if (m.params?.type?.endsWith(LIST) && m.params.payload?.contextId === "beta") {
       throw new Error("agent unreachable");
@@ -78,5 +77,34 @@ test("a failed listing for the new context does not resurrect the old one as sta
   await screen.rerender(pane("beta"));
   await screen.settle();
   assert.doesNotMatch(screen.text(), /alphadid/);
+  await screen.unmount();
+});
+
+test("a did:webs, a did:key and a did:webvh are one table, told apart by method", async () => {
+  // A KERI-enabled agent's identities are did:webs, which the webvh listing
+  // does not hold; this pane used to say "No DIDs you can reach" over them.
+  const a = agent({
+    [LIST]: {
+      dids: [
+        {
+          ...asSummary({ did: "did:webs:host.example:nodes:EKeriNode", contextId: "vta" }),
+          primary: true,
+          methodDetails: { webs: { aid: "EKeriNode", sequenceNumber: 0 } },
+        },
+        asSummary({ did: "did:key:z6MkHolder", contextId: "vta" }),
+        asSummary(record("vta", "webvhone")),
+      ],
+    },
+    [SERVERS]: { servers: [] },
+  });
+  const screen = await render(pane("vta"), { chrome: { runtime: { sendMessage: a.sendMessage } } });
+  await screen.settle();
+  const text = screen.text();
+  assert.match(text, /EKeriNode/);
+  assert.match(text, /webvhone/);
+  assert.match(text, /context DID/);
+  for (const m of ["webs", "key", "webvh"]) assert.match(text, new RegExp(`\\b${m}\\b`));
+  // Only the did:webvh row offers the webvh family's actions.
+  assert.equal(screen.all("button").filter((b) => b.textContent === "Delete").length, 1);
   await screen.unmount();
 });

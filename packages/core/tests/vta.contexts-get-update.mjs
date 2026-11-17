@@ -81,7 +81,7 @@ test("update-did is its own task, not update with a did field", async () => {
   await contextsUpdateDid(ch, { ...CALL, id: "personal", did: "did:webvh:QmA:h.example" });
 
   const { envelope } = ch.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/contexts/update-did/1.1");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/contexts/update-did/1.2");
   assert.deepEqual(envelope.payload, { id: "personal", did: "did:webvh:QmA:h.example" });
 });
 
@@ -92,7 +92,7 @@ test("clearing a context's DID sends did: null, not an omission or an empty stri
   await contextsUpdateDid(ch, { ...CALL, id: "personal", did: null });
 
   const { envelope } = ch.sent[0];
-  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/contexts/update-did/1.1");
+  assert.equal(envelope.type, "https://trusttasks.org/spec/vta/contexts/update-did/1.2");
   assert.ok("did" in envelope.payload, "the did member was omitted");
   assert.deepEqual(envelope.payload, { id: "personal", did: null });
 });

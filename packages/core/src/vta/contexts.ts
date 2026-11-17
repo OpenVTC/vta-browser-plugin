@@ -39,7 +39,7 @@ import {
 import {
   TYPE_URI as TASK_CONTEXTS_UPDATE_DID,
   RESPONSE_TYPE_URI as TASK_CONTEXTS_UPDATE_DID_RESPONSE,
-} from "../specs/vta/contexts/update-did/1.1/payload.js";
+} from "../specs/vta/contexts/update-did/1.2/payload.js";
 
 /** One context record, as the registry declares it. Re-exported so callers
  *  need not know which task's binding it happens to live under. */
@@ -249,7 +249,7 @@ export async function contextsUpdateDid(
   );
   const payload = await sender.send<Record<string, unknown>>(envelope, {
     expectedResponseType: TASK_CONTEXTS_UPDATE_DID_RESPONSE,
-    operationLabel: "vta/contexts/update-did/1.1",
+    operationLabel: "vta/contexts/update-did/1.2",
   });
   return asContextRecord(payload);
 }
