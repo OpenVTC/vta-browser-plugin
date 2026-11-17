@@ -181,7 +181,10 @@ export function SetupPane() {
 
 
   const connected = Boolean(connection);
-  const agentMediator = connection?.mediatorDid;
+  // The relay the agent reaches this wallet through: DIDComm's, else TSP's
+  // (`agentRelayMediator`'s rule). Reading DIDComm's alone told a TSP-only
+  // agent's holder it was "reached over REST" with no mediator.
+  const agentMediator = connection?.mediatorDid ?? connection?.tspMediatorDid;
   // Both the agent and its mediator get looked up: the mediator is a hosted
   // identity too and usually claims its own name (`…/@mediator`).
   const agentNames = useAgentNames([connection?.vtaDid, agentMediator, savedInbox || undefined]);
@@ -333,7 +336,9 @@ export function SetupPane() {
                 </>
               ) : (
                 <div style={{ fontSize: t.sm, color: c.muted }}>
-                  Reached over REST — this agent publishes no mediator.
+                  {connection?.restBaseUrl
+                    ? "Reached over REST — this agent publishes no mediator."
+                    : "This agent publishes no mediator and no REST endpoint."}
                 </div>
               )
             ) : (
