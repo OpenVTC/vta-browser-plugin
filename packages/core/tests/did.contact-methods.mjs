@@ -1,7 +1,7 @@
 // The contact-method registry (VTI-LNK-102 / 112, dtgwg-vti-spec #58).
 //
-// Pinned: did:webvh, did:web and did:scid (with `src`) are registered, all
-// host-named; a bare did:scid names no host and has no route; a
+// Pinned: did:webvh, did:web, did:scid (with `src`) and did:webs are
+// registered, all host-named; a bare did:scid names no host and has no route; a
 // method with no registered resolver is unsupported-vid; did:key and did:peer
 // stay from-not-allowed; and a domain-linked method is added by registering it
 // and nothing else — the parser, the contact rule and resolution all follow.
@@ -30,6 +30,8 @@ import { resolveCommunityDocument } from "../dist/vtc/index.js";
 
 const WEBVH = "did:webvh:QmPEQVM1JPTyrvEgBcDXwjK4TeyLGSX1PxjgyeAisPviUx:members.example.org";
 const SCID = "did:scid:vh:1:QmXa7Rk2ZpLwT9vNc4HbYe1Jd8sMfU3qGo6PtVnEyKiBhW";
+// A community's did:webs, shaped as the SEDI VTC's: host, a path, the AID.
+const WEBS = "did:webs:members.example.org:sedi-vtc:EN7G2PZkzjb3TTWBrG3-oE5-A71XwLeX4et38jeh0C-a";
 const ID = "Hk2pQ9xV4mT7rW1sZ8yN3A";
 const EXP = 1791460920;
 const link = (from) =>
@@ -48,8 +50,10 @@ const testMethod = (resolved = []) => ({
   },
 });
 
-test("registry: did:webvh, did:web and did:scid have a route, all host-named", () => {
-  assert.deepEqual(CONTACT_METHODS.kinds(), ["did:webvh", "did:web", "did:scid", "did:key", "did:peer"]);
+test("registry: did:webvh, did:web, did:scid and did:webs have a route, all host-named", () => {
+  assert.deepEqual(CONTACT_METHODS.kinds(), ["did:webvh", "did:web", "did:scid", "did:webs", "did:key", "did:peer"]);
+  assert.equal(CONTACT_METHODS.routeOf(WEBS), "host-named");
+  assert.equal(typeof CONTACT_METHODS.policyFor("did:webs").resolve, "function");
   assert.equal(CONTACT_METHODS.routeOf(`${SCID}?src=members.example.org`), "host-named");
   assert.equal(CONTACT_METHODS.routeOf(SCID), undefined, "a bare did:scid names no host");
   assert.equal(CONTACT_METHODS.routeOf(WEBVH), "host-named");
@@ -70,7 +74,7 @@ test("registry: did:webvh and did:web are accepted by the parser through the reg
 });
 
 test("registry: an unregistered method is unsupported-vid (update)", () => {
-  for (const from of ["did:example:abc", "did:webs:example.org", "did:ion:abc"]) {
+  for (const from of ["did:example:abc", "did:ion:abc"]) {
     const r = read(from, CONTACT_METHODS);
     assert.equal(r.ok, false);
     assert.equal(r.reason, "unsupported-vid", from);
@@ -224,3 +228,63 @@ test("did:scid: a malformed src or a second query parameter is bad-from", () => 
     assert.equal(read(from, CONTACT_METHODS).reason, "bad-from", from);
   }
 });
+
+// ── did:webs (VTI-LNK-119 route A; VTI-LNK-052 verifies its KERI key event log) ──
+//
+// Reported live: a SEDI VTC whose DID is a did:webs issued a sign-in link, and
+// the wallet answered "This code needs a newer version of the app." — the
+// `unsupported-vid` it must give for a method it has no resolver for. It has
+// one: @openvtc/vti-didcomm-js verifies the key event log and derives the
+// document from it.
+
+test("did:webs: accepted, route A, shown as its host and path, not its AID", () => {
+  const r = read(WEBS, CONTACT_METHODS);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.link.from.kind, "did:webs");
+  assert.equal(contactRoute(r.link.from, CONTACT_METHODS), "host-named");
+  assert.equal(SIGN_IN_FLOW.allowsContact(r.link.from, CONTACT_METHODS), true);
+  assert.equal(contactDomainLabel(r.link.from, CONTACT_METHODS), "members.example.org/sedi-vtc");
+  assert.equal(contactIdentity(r.link.from), WEBS);
+});
+
+test("did:webs resolves through the resolver and is held to its own id", async () => {
+  const asked = [];
+  const ok = await resolveCommunityDocument(WEBS, {
+    resolveDid: async (did) => (asked.push(did), { didDocument: { id: WEBS } }),
+  });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.route, "host-named");
+  assert.deepEqual(asked, [WEBS]);
+  const other = await resolveCommunityDocument(WEBS, {
+    resolveDid: async () => ({ didDocument: { id: `${WEBS}x` } }),
+  });
+  assert.deepEqual(other, { ok: false, reason: "did-document-unverified" });
+});
+
+test("did:webs whose key event log does not verify is did-document-unverified", async () => {
+  const r = await resolveCommunityDocument(WEBS, {
+    resolveDid: async () => {
+      throw new Error("E_DID_WEBS: an event's signature does not verify");
+    },
+  });
+  assert.deepEqual(r, { ok: false, reason: "did-document-unverified" });
+});
+
+test("did:webs on localhost%3A8000: refused at resolution by the host rules, nothing fetched", async () => {
+  const local = "did:webs:localhost%3A8000:people:EN7G2PZkzjb3TTWBrG3-oE5-A71XwLeX4et38jeh0C-a";
+  const r = read(local, CONTACT_METHODS);
+  assert.equal(r.ok, true, "the link parses; the host rules apply at resolution");
+  const res = await resolveCommunityDocument(r.link.from.value, {
+    resolveDid: async () => assert.fail("must not resolve"),
+  });
+  assert.deepEqual(res, { ok: false, reason: "did-document-unverified" });
+});
+
+test("did:webs with no AID after its host is bad-from", () => {
+  for (const from of ["did:webs:example.org", "did:webs:example.org::EAid"]) {
+    const r = read(from, CONTACT_METHODS);
+    assert.equal(r.ok, false, from);
+    assert.equal(r.reason, "bad-from", from);
+  }
+});
+

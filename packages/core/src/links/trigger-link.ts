@@ -234,6 +234,24 @@ export const WEB_CONTACT_POLICY: ContactMethodPolicy = {
 };
 
 /**
+ * `did:webs:<host>[%3A<port>][:<path>…]:<AID>`. Route A: the identifier names
+ * the host its key event log and document are fetched from (VTI-LNK-119), and
+ * resolution verifies the KERI key event log (VTI-LNK-052). The AID is the
+ * last segment, so a well-formed one has a host and an AID at least.
+ */
+export const WEBS_CONTACT_POLICY: ContactMethodPolicy = {
+  kind: "did:webs",
+  route: "host-named",
+  listsServices: true,
+  verified: true,
+  wellFormed: (did) => {
+    const parts = did.split(":");
+    return parts.length >= 4 && parts.slice(2).every((p) => p !== "");
+  },
+  hostPath: (did) => decodeSegments(did.split(":").slice(2, -1)),
+};
+
+/**
  * The `src` of a `did:scid` DID URL whose only query parameter is `src`
  * (`did:scid:vh:1:<scid>?src=dids.example.org/farm-auth`), or `undefined`.
  * Mirrors `scidSrc` in `@openvtc/vti-didcomm-js`, inlined because this module
@@ -299,12 +317,13 @@ export const PEER_CONTACT_POLICY: ContactMethodPolicy = {
 };
 
 /** The contact methods this reader classifies before any registry is
- *  consulted: route A for `did:webvh`, `did:web` and `did:scid` (with `src`),
- *  and the two methods it knows can never qualify. */
+ *  consulted: route A for `did:webvh`, `did:web`, `did:scid` (with `src`) and
+ *  `did:webs`, and the two methods it knows can never qualify. */
 export const BUILTIN_CONTACT_POLICIES: readonly ContactMethodPolicy[] = [
   WEBVH_CONTACT_POLICY,
   WEB_CONTACT_POLICY,
   SCID_CONTACT_POLICY,
+  WEBS_CONTACT_POLICY,
   KEY_CONTACT_POLICY,
   PEER_CONTACT_POLICY,
 ];

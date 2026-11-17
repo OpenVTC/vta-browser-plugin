@@ -223,7 +223,12 @@ test("VTI-LNK-102: the contact rule is an allow-list by capability", () => {
     .filter(([, c]) => c.namesHost && c.listsServices && c.verified)
     .map(([kind]) => kind)
     .sort();
-  assert.deepEqual(allowed, ["did:scid", "did:web", "did:webvh"]);
+  assert.deepEqual(allowed, ["did:scid", "did:web", "did:webs", "did:webvh"]);
+  // did:webs names its host first and its AID last (VTI-LNK-119).
+  assert.equal(
+    isHostNamedServiceContact({ kind: "did:webs", value: "did:webs:example.org:sedi:EAid" }),
+    true,
+  );
   // did:scid names its host in `src`; a bare one names none and has no route.
   assert.equal(isHostNamedServiceContact({ kind: "did:scid", value: "did:scid:vh:1:Qm?src=example.org" }), true);
   assert.equal(isHostNamedServiceContact({ kind: "did:scid", value: "did:scid:vh:1:Qm" }), false);
