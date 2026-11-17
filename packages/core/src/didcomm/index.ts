@@ -456,6 +456,23 @@ export interface VtaServices {
   tsp?: { mediatorDid: string };
 }
 
+/**
+ * The mediator through which this agent reaches a wallet: the relay its
+ * `DIDCommMessaging` service names, else the one its `TSPTransport` service
+ * names. An inbox on that mediator receives both protocols — the session
+ * multiplexes TSP and DIDComm frames on one socket — so a TSP-only agent has
+ * an inbox exactly as a DIDComm one does.
+ */
+export function agentRelayMediator(services: VtaServices): string | undefined {
+  return services.didcomm?.mediatorDid ?? services.tsp?.mediatorDid;
+}
+
+/** Whether a service's `type` — a string or a set of strings (DID Core
+ *  §5.4) — includes `type`. */
+function hasServiceType(svc: { type?: unknown }, type: string): boolean {
+  return Array.isArray(svc.type) ? svc.type.includes(type) : svc.type === type;
+}
+
 /** Pull a mediator DID from a service endpoint, tolerating the
  *  `[{ uri }]` / `{ uri }` / bare-string encodings. */
 function mediatorDidFromEndpoint(ep: unknown): string | undefined {
@@ -487,7 +504,7 @@ export async function resolveDidDocument(did: string): Promise<Record<string, un
 
 export async function resolveVtaServices(did: string): Promise<VtaServices> {
   const resolution = (await vtiResolve(did, {})) as {
-    didDocument?: { service?: Array<{ id?: string; type?: string; serviceEndpoint?: unknown }> };
+    didDocument?: { service?: Array<{ id?: string; type?: string | string[]; serviceEndpoint?: unknown }> };
   };
   const services = resolution.didDocument?.service ?? [];
   const out: VtaServices = {};
@@ -495,14 +512,14 @@ export async function resolveVtaServices(did: string): Promise<VtaServices> {
   for (const svc of services) {
     const fragment = (svc.id ?? "").split("#")[1];
 
-    if (fragment === "vta-rest" || svc.type === "VTARest") {
+    if (fragment === "vta-rest" || hasServiceType(svc, "VTARest")) {
       // `#vta-rest` serviceEndpoint is a plain URL string.
       if (typeof svc.serviceEndpoint === "string") {
         out.rest = { baseUrl: svc.serviceEndpoint };
       }
     }
 
-    if (fragment === "vta-didcomm" || svc.type === "DIDCommMessaging") {
+    if (fragment === "vta-didcomm" || hasServiceType(svc, "DIDCommMessaging")) {
       // `#vta-didcomm` serviceEndpoint is `[{ uri: <mediator-did>, ... }]`;
       // tolerate the object and bare-string encodings too.
       const mediatorDid = mediatorDidFromEndpoint(svc.serviceEndpoint);
@@ -514,7 +531,7 @@ export async function resolveVtaServices(did: string): Promise<VtaServices> {
 
     // TSP is matched on `type` alone — the `#key-id` fragment is fungible. The
     // endpoint is the mediator DID the VTA is a local TSP account on.
-    if (svc.type === "TSPTransport") {
+    if (hasServiceType(svc, "TSPTransport")) {
       const mediatorDid = mediatorDidFromEndpoint(svc.serviceEndpoint);
       if (mediatorDid && !out.tsp) out.tsp = { mediatorDid };
     }

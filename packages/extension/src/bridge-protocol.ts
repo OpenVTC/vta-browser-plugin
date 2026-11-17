@@ -778,6 +778,8 @@ export interface OnboardPrepareResult {
   command: string;
   /** The VTA's mediator DID, if it advertises DIDComm. */
   mediatorDid?: string;
+  /** The mediator the VTA is a TSP account on, if it advertises TSP. */
+  tspMediatorDid?: string;
   /** The VTA's REST base URL, if it advertises REST. */
   restBaseUrl?: string;
 }

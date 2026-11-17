@@ -2355,7 +2355,9 @@ async function followAgentInbox(): Promise<void> {
         vtaDid,
       });
       if (!resp.ok) throw new Error(resp.error);
-      live = resp.result.mediatorDid;
+      // The relay it pushes through: DIDComm's, else TSP's (the inbox session
+      // carries both) — `agentRelayMediator`'s rule, on the refresh shape.
+      live = resp.result.mediatorDid ?? resp.result.tspMediatorDid;
     } catch (e) {
       // A DID document we could not read says nothing about where the relay
       // is, so it must not be read as "it moved to nowhere". Keep what we have
@@ -2369,7 +2371,7 @@ async function followAgentInbox(): Promise<void> {
       console.warn(
         "[pnm inbound]",
         vtaDid,
-        "advertises no DIDComm relay — nothing can be pushed to this wallet through it.",
+        "advertises no relay (DIDComm or TSP) — nothing can be pushed to this wallet through it.",
       );
       continue;
     }
