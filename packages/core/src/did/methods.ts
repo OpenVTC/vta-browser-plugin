@@ -25,6 +25,7 @@ import { resolve as vtiResolve, stripScidSrc } from "@openvtc/vti-didcomm-js";
 import {
   BUILTIN_CONTACT_POLICIES,
   SCID_CONTACT_POLICY,
+  WEBS_CONTACT_POLICY,
   WEBVH_CONTACT_POLICY,
   WEB_CONTACT_POLICY,
   meetsHostRules,
@@ -33,7 +34,11 @@ import {
   type ContactMethodTable,
   type ContactRoute,
 } from "../links/trigger-link.js";
-import { assertResolvableScidHost, assertResolvableWebvhHost } from "./egress-guard.js";
+import {
+  assertResolvableScidHost,
+  assertResolvableWebsHost,
+  assertResolvableWebvhHost,
+} from "./egress-guard.js";
 import type { ResolveDidOptions } from "./verify.js";
 
 /** A verified DID document, or why there is none. */
@@ -106,6 +111,18 @@ export function didIdentity(did: string): string {
   return stripScidSrc(did);
 }
 
+/** `did:webs`, route A. Its host is judged like a did:webvh's before anything
+ *  is fetched, and the resolver verifies the KERI key event log and builds the
+ *  document from it — never from the published `did.json` alone — which is
+ *  what VTI-LNK-052 asks of a did:webs contact. */
+export const WEBS_CONTACT_METHOD: ContactMethod = {
+  ...WEBS_CONTACT_POLICY,
+  resolve: async (did, opts) => {
+    assertResolvableWebsHost(did);
+    return resolveThroughResolver(did, opts);
+  },
+};
+
 /** `did:web`, route A. */
 export const WEB_CONTACT_METHOD: ContactMethod = {
   ...WEB_CONTACT_POLICY,
@@ -162,14 +179,15 @@ export class ContactMethodRegistry implements ContactMethodTable {
   }
 }
 
-/** A fresh registry holding the built-in methods: `did:webvh`, `did:web` and
- *  `did:scid` (route A, with resolvers), and the policies of `did:key` and `did:peer`,
+/** A fresh registry holding the built-in methods: `did:webvh`, `did:web`,
+ *  `did:scid` and `did:webs` (route A, with resolvers), and the policies of `did:key` and `did:peer`,
  *  which no route qualifies. */
 export function defaultContactMethods(): ContactMethodRegistry {
   const resolvers: ReadonlyMap<string, ContactMethod> = new Map([
     [WEBVH_CONTACT_METHOD.kind, WEBVH_CONTACT_METHOD],
     [WEB_CONTACT_METHOD.kind, WEB_CONTACT_METHOD],
     [SCID_CONTACT_METHOD.kind, SCID_CONTACT_METHOD],
+    [WEBS_CONTACT_METHOD.kind, WEBS_CONTACT_METHOD],
   ]);
   return new ContactMethodRegistry(BUILTIN_CONTACT_POLICIES.map((p) => resolvers.get(p.kind) ?? p));
 }
