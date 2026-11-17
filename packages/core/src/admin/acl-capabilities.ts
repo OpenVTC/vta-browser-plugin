@@ -37,7 +37,7 @@
 import type {
   CapabilityGrant,
   CapabilityScope,
-} from "../specs/acl/grant/0.2/payload.js";
+} from "../specs/acl/grant/0.3/payload.js";
 
 /**
  * The capabilities this build knows how to name.

@@ -3,7 +3,7 @@
  * Source: https://trusttasks.org/spec/auth/oob/claim/0.2 (registry bundle)
  */
 
-import type { Ext, Origin, Purpose, RequestId, Service } from "../../../../_shared/components.js";
+import type { Ext, Origin, Purpose_AuthOobV0_1 as Purpose, RequestId, Service } from "../../../../_shared/components.js";
 
 
 /**

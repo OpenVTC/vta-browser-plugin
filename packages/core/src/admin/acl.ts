@@ -19,45 +19,45 @@ import { collectPages } from "../util/pages.js";
 import {
   TYPE_URI as ACL_GRANT,
   RESPONSE_TYPE_URI as ACL_GRANT_RESPONSE,
-  type ACLGrant02Payload,
-  type ACLGrant02ResponsePayload,
+  type ACLGrant03Payload,
+  type ACLGrant03ResponsePayload,
   type AclEntry,
   type AuthorityScope,
   type CapabilityScope,
   type ApproveCapabilityScope,
   type CapabilityGrant,
   type KeyScope,
-} from "../specs/acl/grant/0.2/payload.js";
+} from "../specs/acl/grant/0.3/payload.js";
 import {
   TYPE_URI as ACL_LIST,
   RESPONSE_TYPE_URI as ACL_LIST_RESPONSE,
-  type ACLList03Payload,
-  type ACLList03ResponsePayload,
-} from "../specs/acl/list/0.3/payload.js";
+  type ACLList04Payload,
+  type ACLList04ResponsePayload,
+} from "../specs/acl/list/0.4/payload.js";
 import {
   TYPE_URI as ACL_SHOW,
   RESPONSE_TYPE_URI as ACL_SHOW_RESPONSE,
-  type ACLShow02ResponsePayload,
-} from "../specs/acl/show/0.2/payload.js";
+  type ACLShow03ResponsePayload,
+} from "../specs/acl/show/0.3/payload.js";
 import {
   TYPE_URI as ACL_REVOKE,
   RESPONSE_TYPE_URI as ACL_REVOKE_RESPONSE,
-  type ACLRevoke02Payload,
-  type ACLRevoke02ResponsePayload,
+  type ACLRevoke03Payload,
+  type ACLRevoke03ResponsePayload,
   type Revocation,
-} from "../specs/acl/revoke/0.2/payload.js";
+} from "../specs/acl/revoke/0.3/payload.js";
 import {
   TYPE_URI as ACL_UPDATE,
   RESPONSE_TYPE_URI as ACL_UPDATE_RESPONSE,
-  type ACLUpdate02Payload,
-  type ACLUpdate02ResponsePayload,
-} from "../specs/acl/update/0.2/payload.js";
+  type ACLUpdate03Payload,
+  type ACLUpdate03ResponsePayload,
+} from "../specs/acl/update/0.3/payload.js";
 import {
   TYPE_URI as ACL_CHANGE_ROLE,
   RESPONSE_TYPE_URI as ACL_CHANGE_ROLE_RESPONSE,
-  type ACLChangeRole02Payload,
-  type ACLChangeRole02ResponsePayload,
-} from "../specs/acl/change-role/0.2/payload.js";
+  type ACLChangeRole03Payload,
+  type ACLChangeRole03ResponsePayload,
+} from "../specs/acl/change-role/0.3/payload.js";
 
 /**
  * One access-control entry, as AclEntry 0.2 defines it.
@@ -123,7 +123,7 @@ export async function aclGrant(
   // Spread the entry rather than rebuilding it field by field: a hand-rebuilt
   // entry is where a "skip if empty" creeps in, and every scope member here is
   // REQUIRED and explicit — dropping one is a refusal, not a default.
-  const payload: ACLGrant02Payload = {
+  const payload: ACLGrant03Payload = {
     entry: params.entry,
     ...(params.reason ? { reason: params.reason } : {}),
   };
@@ -131,9 +131,9 @@ export async function aclGrant(
     issuer: params.holder.did,
     recipient: params.service.did,
   });
-  const res = await sender.send<ACLGrant02ResponsePayload>(envelope, {
+  const res = await sender.send<ACLGrant03ResponsePayload>(envelope, {
     expectedResponseType: ACL_GRANT_RESPONSE,
-    operationLabel: "acl/grant/0.2",
+    operationLabel: "acl/grant/0.3",
   });
   return res.entry;
 }
@@ -149,7 +149,7 @@ export async function aclGrant(
  * - `subtree` — entries granted at or beneath it, never an unrestricted one;
  * - `any` — either.
  */
-export type AclListDirection = NonNullable<ACLList03Payload["direction"]>;
+export type AclListDirection = NonNullable<ACLList04Payload["direction"]>;
 
 /**
  * The context filter and its direction travel together or not at all — the
@@ -194,7 +194,7 @@ export async function aclList(
 ): Promise<AclListResult> {
   const redacted = new Set<string>();
   const entries = await collectPages("acl/list", async (cursor) => {
-    const payload: ACLList03Payload = {
+    const payload: ACLList04Payload = {
       ...(params.role ? { role: params.role } : {}),
       ...(params.context !== undefined
         ? { context: params.context, direction: params.direction }
@@ -208,9 +208,9 @@ export async function aclList(
       issuer: params.holder.did,
       recipient: params.service.did,
     });
-    const res = await sender.send<ACLList03ResponsePayload>(envelope, {
+    const res = await sender.send<ACLList04ResponsePayload>(envelope, {
       expectedResponseType: ACL_LIST_RESPONSE,
-      operationLabel: "acl/list/0.3",
+      operationLabel: "acl/list/0.4",
     });
     for (const f of res.redactedFields ?? []) redacted.add(f);
     return { items: res.entries ?? [], nextCursor: res.nextCursor };
@@ -244,9 +244,9 @@ export async function aclShow(
     { subject: params.subject },
     { issuer: params.holder.did, recipient: params.service.did },
   );
-  const res = await sender.send<ACLShow02ResponsePayload>(envelope, {
+  const res = await sender.send<ACLShow03ResponsePayload>(envelope, {
     expectedResponseType: ACL_SHOW_RESPONSE,
-    operationLabel: "acl/show/0.2",
+    operationLabel: "acl/show/0.3",
   });
   return { entry: res.entry ?? null, redactedFields: res.redactedFields ?? [] };
 }
@@ -272,8 +272,8 @@ export interface AclRevokeParams extends AclCallerParams {
 export async function aclRevoke(
   sender: TrustTaskSender,
   params: AclRevokeParams,
-): Promise<ACLRevoke02ResponsePayload> {
-  const payload: ACLRevoke02Payload = {
+): Promise<ACLRevoke03ResponsePayload> {
+  const payload: ACLRevoke03Payload = {
     subject: params.subject,
     revocation: params.revocation,
     ...(params.reason ? { reason: params.reason } : {}),
@@ -282,9 +282,9 @@ export async function aclRevoke(
     issuer: params.holder.did,
     recipient: params.service.did,
   });
-  return sender.send<ACLRevoke02ResponsePayload>(envelope, {
+  return sender.send<ACLRevoke03ResponsePayload>(envelope, {
     expectedResponseType: ACL_REVOKE_RESPONSE,
-    operationLabel: "acl/revoke/0.2",
+    operationLabel: "acl/revoke/0.3",
   });
 }
 
@@ -311,8 +311,8 @@ export interface AclChangeRoleParams extends AclCallerParams {
 export async function aclChangeRole(
   sender: TrustTaskSender,
   params: AclChangeRoleParams,
-): Promise<ACLChangeRole02ResponsePayload> {
-  const payload: ACLChangeRole02Payload = {
+): Promise<ACLChangeRole03ResponsePayload> {
+  const payload: ACLChangeRole03Payload = {
     subject: params.subject,
     fromRole: params.fromRole,
     toRole: params.toRole,
@@ -322,9 +322,9 @@ export async function aclChangeRole(
     issuer: params.holder.did,
     recipient: params.service.did,
   });
-  return sender.send<ACLChangeRole02ResponsePayload>(envelope, {
+  return sender.send<ACLChangeRole03ResponsePayload>(envelope, {
     expectedResponseType: ACL_CHANGE_ROLE_RESPONSE,
-    operationLabel: "acl/change-role/0.2",
+    operationLabel: "acl/change-role/0.3",
   });
 }
 
@@ -383,7 +383,7 @@ export interface AclUpdateParams extends AclCallerParams {
   expiresAt?: string | null;
   /** Replacement per-entry step-up. Additive only: it may raise the assurance
    *  required of this subject above the system floor, never lower it. */
-  stepUp?: ACLUpdate02Payload["stepUp"];
+  stepUp?: ACLUpdate03Payload["stepUp"];
   /** Rationale, recorded with the change. */
   reason?: string;
 }
@@ -403,7 +403,7 @@ export async function aclUpdate(
   // `!== undefined` throughout, never truthiness. `null` is a live instruction
   // on two of these members, and a `params.x ? …` guard drops exactly the
   // values that mean the most.
-  const payload: ACLUpdate02Payload = {
+  const payload: ACLUpdate03Payload = {
     subject: params.subject,
     ...(params.label !== undefined ? { label: params.label } : {}),
     ...(params.act !== undefined ? { act: params.act } : {}),
@@ -421,9 +421,9 @@ export async function aclUpdate(
     issuer: params.holder.did,
     recipient: params.service.did,
   });
-  const res = await sender.send<ACLUpdate02ResponsePayload>(envelope, {
+  const res = await sender.send<ACLUpdate03ResponsePayload>(envelope, {
     expectedResponseType: ACL_UPDATE_RESPONSE,
-    operationLabel: "acl/update/0.2",
+    operationLabel: "acl/update/0.3",
   });
   return res.entry;
 }
