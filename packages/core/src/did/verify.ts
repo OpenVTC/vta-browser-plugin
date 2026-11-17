@@ -96,6 +96,32 @@ export function didWebvhDomain(did: string): string | undefined {
 }
 
 /**
+ * The host a DID names, whatever its method: a `did:webvh`'s, a `did:webs`'s
+ * (its first segment), or a `did:scid:vh:1` DID URL's `src` host. As written —
+ * a port stays percent-encoded, as {@link didWebvhDomain} leaves it.
+ * `undefined` for a DID that names no host (`did:key`, `did:peer`, a bare
+ * `did:scid`).
+ *
+ * For the questions that do not depend on the method — which host a grant is
+ * for, which host to show — so that a caller does not ask the did:webvh
+ * helper and silently get nothing back for every other method.
+ */
+export function didHost(did: string): string | undefined {
+  const webvh = didWebvhDomain(did);
+  if (webvh !== undefined) return webvh;
+  const webs = didWebsDomain(did);
+  if (webs !== undefined) return webs;
+  if (did.startsWith("did:scid:")) {
+    const q = did.indexOf("?");
+    const query = q < 0 ? "" : did.slice(q + 1).split("#")[0]!;
+    if (!query.startsWith("src=") || query.includes("&")) return undefined;
+    const host = query.slice(4).replace(/^https?:\/\//, "").split("/")[0];
+    return host || undefined;
+  }
+  return undefined;
+}
+
+/**
  * The host portion of a `did:webs:<host>[:<path>...]:<AID>`, as written (a
  * port stays percent-encoded on it, as on a did:webvh host). `undefined` for
  * any other DID.
