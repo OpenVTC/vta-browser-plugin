@@ -1,23 +1,30 @@
-// DIDs — the `did:webvh` identifiers a context publishes.
+// DIDs — every identifier a context holds, of every method, in one table.
 //
-// Scoped to the selected context like Keys, and for the same reason:
-// `webvhDidList` takes a `contextId`, so a changed selection asks the agent a
+// One listing (`vta/dids/list`), because "which DIDs does this agent hold" has
+// one answer whatever the method. The pane used to ask `vta/webvh/dids/list`
+// alone, and an agent whose identities were all did:webs drew "No DIDs you can
+// reach" over every one of them. The Method column says what each is; opening a
+// row shows what that method has — a did:webvh's log and its webvh actions, a
+// did:webs's key event log facts, a did:key's key — because what an identity
+// *does* differs by method even where what it *is* does not.
+//
+// Scoped to the selected context like Keys, and for the same reason: the
+// listing takes a `contextId`, so a changed selection asks the agent a
 // different question rather than filtering an answer it already gave.
 //
-// A DID here is a *published* identifier: its log lives on a hosting server and
-// anyone can resolve it. That is why deletion is treated as the sharpest action
-// in this console — see the confirm copy.
+// A published DID is resolvable by anyone. That is why deletion is treated as
+// the sharpest action in this console — see the confirm copy.
 //
-// A row opens into `did-detail.tsx`, which fetches the log. It is fetched on
-// open rather than with the listing because `includeLog` is opt-in at the agent
-// for a reason: the log is the DID's whole history and can be large, and a
-// listing that pulled every one would be the whole history of every identifier
-// to draw a table.
+// A did:webvh row opens into `did-detail.tsx`, which fetches the log. It is
+// fetched on open rather than with the listing because `includeLog` is opt-in
+// at the agent for a reason: the log is the DID's whole history and can be
+// large, and a listing that pulled every one would be the whole history of
+// every identifier to draw a table.
 
 import { useState } from "react";
+import { didsList, type DidSummary } from "@openvtc/pnm-core";
 import {
   webvhDidDelete,
-  webvhDidList,
   webvhDidRealignKeys,
   type WebvhDidRecord,
 } from "@openvtc/pnm-core/webvh";
@@ -131,6 +138,61 @@ function RealignPreview({ plan }: { plan: RealignPlan }) {
   );
 }
 
+/** The webvh family's record for a did:webvh or did:scid:vh identity, from its
+ *  summary — the handle those tasks take is the log's did:webvh, which a
+ *  did:scid identity carries in `alsoKnownAs`. `null` for any other method. */
+export function webvhRecordOf(d: DidSummary): WebvhDidRecord | null {
+  if (d.method !== "webvh" && d.method !== "scid:vh") return null;
+  const details = (d.methodDetails?.[d.method] ?? {}) as Record<string, unknown>;
+  const webvh =
+    d.method === "webvh" ? d.did : (d.alsoKnownAs.find((a) => a.startsWith("did:webvh:")) ?? d.did);
+  return {
+    did: webvh,
+    serverId: d.serverId ?? "serverless",
+    mnemonic: typeof details.mnemonic === "string" ? details.mnemonic : "",
+    scid: typeof details.scid === "string" ? details.scid : "",
+    contextId: d.contextId ?? "",
+    portable: details.portable === true,
+    logEntryCount: typeof details.logEntryCount === "number" ? details.logEntryCount : 0,
+    preRotationCount: typeof details.preRotationCount === "number" ? details.preRotationCount : 0,
+    nextFragmentId: 0,
+    createdAt: d.createdAt,
+    updatedAt: d.updatedAt,
+  } as WebvhDidRecord;
+}
+
+/** What a did:webs or did:key row opens into: the summary, read-only. Their
+ *  writes are their own families' tasks, which this console does not drive. */
+function SummaryDetail({ d }: { d: DidSummary }) {
+  const details = (d.methodDetails?.[d.method] ?? {}) as Record<string, unknown>;
+  const rows: Array<[string, string]> = [
+    ["Method", d.method],
+    ...(d.class ? ([["Class", d.class]] as Array<[string, string]>) : []),
+    ["Context DID", d.primary ? "yes" : "no"],
+    ...(d.signingKeyId ? ([["Signing key", d.signingKeyId]] as Array<[string, string]>) : []),
+    ...(d.keyAgreementKeyId
+      ? ([["Key agreement", d.keyAgreementKeyId]] as Array<[string, string]>)
+      : []),
+    ...d.alsoKnownAs.map((a) => ["Also known as", a] as [string, string]),
+    ...Object.entries(details).map(([k, v]) => [k, String(v)] as [string, string]),
+  ];
+  return (
+    <div style={{ display: "grid", gap: 4, fontSize: t.sm }}>
+      {d.deactivated && (
+        <span style={{ color: c.muted }}>
+          Ended: it still resolves, as deactivated, and signs nothing.
+        </span>
+      )}
+      {rows.map(([k, v], i) => (
+        <div key={`${k}-${i}`} style={{ display: "flex", gap: 12, minWidth: 0 }}>
+          <span style={{ color: c.muted, minWidth: 120 }}>{k}</span>
+          <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>{v}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function DidsPane({
   parties,
   authority,
@@ -146,8 +208,9 @@ export function DidsPane({
 }) {
   const list = useAsync(
     () =>
-      webvhDidList(managerSender, {
+      didsList(managerSender, {
         ...parties,
+        includeDeactivated: true,
         ...(contextId ? { contextId } : {}),
       }),
     [parties.holder.did, parties.service.did, contextId],
@@ -165,27 +228,27 @@ export function DidsPane({
     ? "Publishing an entry to a DID's log needs the admin role at this agent."
     : null;
 
-  const columns: Column<WebvhDidRecord>[] = [
-    // A floor on the identifier column. A `did:webvh` has no natural break
-    // points, so when something else in the row demands width — a long refusal
-    // from the agent, say — the browser squeezes this one and the DID wraps
-    // every few characters, which is unreadable exactly when you most need to
-    // tell two of them apart.
+  const columns: Column<DidSummary>[] = [
+    // A floor on the identifier column. A DID has no natural break points, so
+    // when something else in the row demands width — a long refusal from the
+    // agent, say — the browser squeezes this one and the DID wraps every few
+    // characters, which is unreadable exactly when you most need to tell two of
+    // them apart.
     {
       key: "did",
       header: "DID",
       width: "26ch",
-      // The identifier is the control. An operator wanting to read a DID's
-      // history clicks the DID — a separate "View" button beside it would be a
-      // second thing to find for the gesture they already tried.
+      // The identifier is the control. An operator wanting to look inside a DID
+      // clicks the DID — a separate "View" button beside it would be a second
+      // thing to find for the gesture they already tried.
       render: (d) => (
         // The QR button sits beside the opening button, not inside it: a
-        // button inside a button is invalid, and would open the log too.
+        // button inside a button is invalid, and would open the row too.
         <span style={{ display: "inline-flex", alignItems: "flex-start", minWidth: 0 }}>
         <button
           onClick={() => setOpened(opened === d.did ? null : d.did)}
           aria-expanded={opened === d.did}
-          title={opened === d.did ? "Close" : "Open this DID and read its log"}
+          title={opened === d.did ? "Close" : "Open this DID"}
           style={{
             border: "none",
             background: "transparent",
@@ -202,29 +265,27 @@ export function DidsPane({
       ),
     },
     {
+      key: "method",
+      header: "Method",
+      render: (d) => (
+        <span style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+          <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{d.method}</span>
+          {d.primary && <Pill tone="accent">context DID</Pill>}
+          {d.deactivated && <Pill tone="off">ended</Pill>}
+        </span>
+      ),
+    },
+    {
       key: "context",
       header: "Context",
-      render: (d) => <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{d.contextId}</span>,
+      render: (d) => (
+        <span style={{ fontFamily: font.mono, fontSize: t.xs }}>{d.contextId ?? "—"}</span>
+      ),
     },
     {
       key: "server",
       header: "Server",
-      render: (d) => <span style={{ color: c.muted }}>{d.serverId}</span>,
-    },
-    {
-      key: "portable",
-      header: "Portable",
-      render: (d) => (d.portable ? <Pill tone="accent">portable</Pill> : <span style={{ color: c.faint }}>—</span>),
-    },
-    {
-      key: "log",
-      header: "Log entries",
-      render: (d) => (
-        <span style={{ color: c.muted }}>
-          {d.logEntryCount}
-          {opened === d.did ? "" : " ·\u00a0read"}
-        </span>
-      ),
+      render: (d) => <span style={{ color: c.muted }}>{d.serverId ?? "—"}</span>,
     },
     {
       key: "created",
@@ -238,35 +299,41 @@ export function DidsPane({
     {
       key: "actions",
       header: "",
-      render: (d) => (
-        <div style={{ display: "grid", gap: 8, minWidth: 190 }}>
-          <RealignKeys parties={parties} did={d.did} disabledReason={denied} onDone={list.reload} />
-          <Destructive<WebvhDidRecord>
-            label="Delete"
-            disabledReason={denied}
-            preview={async () => d}
-            forceLabel="Delete anyway"
-            renderPreview={(p) => (
-              <>
-                <strong>Deleting this DID cannot be undone.</strong>
-                <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
-                  {p.did}
-                </span>
-                <span>
-                  Its {p.logEntryCount} log{p.logEntryCount === 1 ? " entry" : " entries"} and the
-                  keys behind them go with it. Anyone still resolving this DID — a relying party
-                  holding a credential you issued, an ACL entry naming it — stops being able to
-                  verify anything signed by it.
-                </span>
-              </>
-            )}
-            commit={async () => {
-              await webvhDidDelete(managerSender, { ...parties, did: d.did });
-            }}
-            onDone={list.reload}
-          />
-        </div>
-      ),
+      render: (d) => {
+        const record = webvhRecordOf(d);
+        // Only the webvh family's actions are driven from here; another
+        // method's writes are its own tasks.
+        if (!record) return null;
+        return (
+          <div style={{ display: "grid", gap: 8, minWidth: 190 }}>
+            <RealignKeys parties={parties} did={record.did} disabledReason={denied} onDone={list.reload} />
+            <Destructive<WebvhDidRecord>
+              label="Delete"
+              disabledReason={denied}
+              preview={async () => record}
+              forceLabel="Delete anyway"
+              renderPreview={(p) => (
+                <>
+                  <strong>Deleting this DID cannot be undone.</strong>
+                  <span style={{ fontFamily: font.mono, fontSize: t.xs, wordBreak: "break-all" }}>
+                    {d.did}
+                  </span>
+                  <span>
+                    Its {p.logEntryCount} log{p.logEntryCount === 1 ? " entry" : " entries"} and the
+                    keys behind them go with it. Anyone still resolving this DID — a relying party
+                    holding a credential you issued, an ACL entry naming it — stops being able to
+                    verify anything signed by it.
+                  </span>
+                </>
+              )}
+              commit={async () => {
+                await webvhDidDelete(managerSender, { ...parties, did: record.did });
+              }}
+              onDone={list.reload}
+            />
+          </div>
+        );
+      },
     },
   ];
 
@@ -274,30 +341,35 @@ export function DidsPane({
     <div style={{ display: "grid", gap: 16, alignContent: "start" }}>
       <Panel
         title={contextHeading ? `DIDs in ${contextHeading}` : "DIDs in every context you can reach"}
-        description="Published did:webvh identifiers. Each one's log is served by a hosting
-          server and resolvable by anyone — these are the identities others see."
+        description="Every identifier your agent holds the keys to, whatever its method — did:webvh,
+          did:scid, did:webs, did:key. Published ones are resolvable by anyone: these are the
+          identities others see."
       >
         {list.error && <LoadError what="DIDs" error={list.error} />}
         {list.loading && !list.data && <Loading what="DIDs" />}
         {list.data && (
           <Table
             columns={columns}
-            rows={list.data.dids}
+            rows={list.data}
             rowKey={(d) => d.did}
-            expanded={(d) =>
-              opened === d.did ? (
+            expanded={(d) => {
+              if (opened !== d.did) return null;
+              const record = webvhRecordOf(d);
+              return record ? (
                 <DidDetail
                   parties={parties}
-                  record={d}
+                  record={record}
                   disabledReason={updateDenied}
                   onChanged={list.reload}
                 />
-              ) : null
-            }
+              ) : (
+                <SummaryDetail d={d} />
+              );
+            }}
             empty={
               contextId
-                ? `No DIDs in ${contextId}. Identifiers published from this context appear here.`
-                : "No DIDs you can reach. Published identifiers you administer appear here."
+                ? `No DIDs in ${contextId}. Identifiers created in this context appear here.`
+                : "No DIDs you can reach. Identifiers you administer appear here."
             }
           />
         )}

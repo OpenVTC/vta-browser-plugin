@@ -5,7 +5,7 @@ import {
   vaultList,
   vaultDelete,
   vaultSignTrustTask,
-  vtaListDids,
+  didsList,
   setDeviceWake,
   contextsList,
   contextsCreate,
@@ -79,16 +79,15 @@ test("vaultSignTrustTask forwards the unsigned envelope and returns signedEnvelo
   assert.deepEqual(res, { signedEnvelope });
 });
 
-test("vtaListDids scopes by context and unwraps dids[]", async () => {
-  const ch = captureChannel({ dids: [{ did: "did:webvh:a", contextId: "work" }] });
-  const res = await vtaListDids(ch, { holder, service, contextId: "work" });
-  assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/vta/webvh/dids/list/1.0");
-  // camelCase both ways: the schema names `contextId` and sets
-  // additionalProperties:false, so `context_id` was malformed rather than an
-  // accepted synonym — and the agent emits the canonical spelling too, so the
-  // read path no longer folds.
+test("didsList scopes by context, asks every method, and unwraps dids[]", async () => {
+  const summary = { did: "did:webs:h.example:p:EAid", method: "webs", contextId: "work" };
+  const ch = captureChannel({ dids: [summary] });
+  const res = await didsList(ch, { holder, service, contextId: "work" });
+  assert.equal(ch.sent[0].envelope.type, "https://trusttasks.org/spec/vta/dids/list/0.1");
+  // camelCase, per the schema (`additionalProperties: false`), and no method
+  // filter unless one is asked for: the question is "every identity".
   assert.deepEqual(ch.sent[0].envelope.payload, { contextId: "work" });
-  assert.deepEqual(res, [{ did: "did:webvh:a", contextId: "work" }]);
+  assert.deepEqual(res, [summary]);
 });
 
 test("contextsList sends contexts/list/1.0 with empty payload and unwraps contexts[]", async () => {

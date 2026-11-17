@@ -46,7 +46,8 @@ import {
   putLocalProfile,
   setLocalBinding,
 } from "@openvtc/pnm-core/persona";
-import { webvhDidCreate, webvhDidList, webvhServerList } from "@openvtc/pnm-core/webvh";
+import { didsList } from "@openvtc/pnm-core";
+import { webvhDidCreate, webvhServerList } from "@openvtc/pnm-core/webvh";
 import type { ContextRecord } from "@openvtc/pnm-core";
 import { Button, Note, Panel, Pill } from "../../ui.js";
 import { c, t, font } from "../../theme.js";
@@ -1707,7 +1708,7 @@ export function DisclosureHistoryPanel({
  */
 function useDidSuggestions(parties: Parties, contextId: string) {
   const published = useAsync(
-    async () => (contextId ? webvhDidList(managerSender, { ...parties, contextId }) : null),
+    async () => (contextId ? didsList(managerSender, { ...parties, contextId }) : null),
     [parties.holder.did, parties.service.did, contextId],
   );
   const known = useAsync(
@@ -1719,7 +1720,7 @@ function useDidSuggestions(parties: Parties, contextId: string) {
   // different claims, and only the second has a test. See
   // `persona-candidates.ts`.
   const suggestions = useMemo(
-    () => personaCandidates(contextId, published.data?.dids ?? [], known.data?.personas ?? []),
+    () => personaCandidates(contextId, published.data ?? [], known.data?.personas ?? []),
     [contextId, published.data, known.data],
   );
   const reload = useCallback(() => {

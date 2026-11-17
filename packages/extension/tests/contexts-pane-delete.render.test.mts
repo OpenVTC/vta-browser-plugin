@@ -19,12 +19,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agent, h, render, PARTIES } from "./harness/dom.mjs";
+import { agent, h, render, PARTIES, asSummary } from "./harness/dom.mjs";
 import { ContextsPane } from "../src/manager/panes/contexts.js";
 
-const PREVIEW = "vta/contexts/preview-delete/1.0";
-const DELETE = "vta/contexts/delete/1.1";
-const LIST_DIDS = "vta/webvh/dids/list/1.0";
+const PREVIEW = "vta/contexts/preview-delete/2.0";
+const DELETE = "vta/contexts/delete/1.2";
+const LIST_DIDS = "vta/dids/list/0.1";
 
 const ctx = (id: string) => ({
   id,
@@ -43,7 +43,7 @@ const SUBTREE = ["acme/eng/ci", "acme/eng"];
 
 const mount = async (preview: Record<string, unknown>, records = RECORDS) => {
   const a = agent({
-    [PREVIEW]: { id: "acme", keys: [], webvhDids: [], subContexts: SUBTREE, ...preview },
+    [PREVIEW]: { id: "acme", keys: [], dids: [], subContexts: SUBTREE, ...preview },
     [DELETE]: { id: "acme", deleted: true },
     [LIST_DIDS]: { dids: [] },
   });

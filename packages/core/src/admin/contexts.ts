@@ -16,12 +16,12 @@ import {
   TYPE_URI as TASK_CONTEXTS_DELETE,
   RESPONSE_TYPE_URI as TASK_CONTEXTS_DELETE_RESPONSE,
   type VTAContextsDeleteResponsePayload,
-} from "../specs/vta/contexts/delete/1.1/payload.js";
+} from "../specs/vta/contexts/delete/1.2/payload.js";
 import {
   TYPE_URI as TASK_CONTEXTS_PREVIEW_DELETE,
   RESPONSE_TYPE_URI as TASK_CONTEXTS_PREVIEW_DELETE_RESPONSE,
   type VTAContextsPreviewDeleteResponsePayload,
-} from "../specs/vta/contexts/preview-delete/1.0/payload.js";
+} from "../specs/vta/contexts/preview-delete/2.0/payload.js";
 
 export interface ContextDeleteParams {
   holder: TaskParty;
@@ -31,8 +31,9 @@ export interface ContextDeleteParams {
   /** Delete even when the context still holds keys or DIDs. Default false. */
   force?: boolean;
   /**
-   * Finish the deletion even where a `did:webvh` DID's published log could not
-   * be confirmed removed from its host. Default false, and the default is the
+   * Finish the deletion even where what deleting a DID needs on its host — a
+   * did:webvh log removed, a did:webs deactivated and its slot removed — could
+   * not be confirmed. Default false, and the default is the
    * point: the agent then refuses with `vta/contexts/delete:hostCleanupFailed`
    * and deletes nothing, so the operator can wait for the host and retry.
    * With it, every DID left resolving is named in `daemonCleanupErrors`.
@@ -57,7 +58,11 @@ export interface ContextDeletePreview {
    *  deletion acts on. Empty for a leaf. */
   subContexts: string[];
   keys: string[];
-  webvhDids: string[];
+  /** Every identity the deletion deletes, of every method — a did:webvh whose
+   *  log stops being served, a did:webs whose key event log is ended, a
+   *  did:key forgotten (`preview-delete/2.0`; 1.0's `webvhDids` left did:webs
+   *  out of the confirmation while the deletion took it). */
+  dids: string[];
   /** Subjects whose ACL entry disappears entirely — this context (or the
    *  subtree with it) was the only scope they held. */
   aclEntriesRemoved: string[];
@@ -95,13 +100,13 @@ export async function contextPreviewDelete(
   );
   const payload = await sender.send<VTAContextsPreviewDeleteResponsePayload>(envelope, {
     expectedResponseType: TASK_CONTEXTS_PREVIEW_DELETE_RESPONSE,
-    operationLabel: "vta/contexts/preview-delete/1.0",
+    operationLabel: "vta/contexts/preview-delete/2.0",
   });
   return {
     id: payload.id,
     subContexts: payload.subContexts ?? [],
     keys: payload.keys ?? [],
-    webvhDids: payload.webvhDids ?? [],
+    dids: payload.dids ?? [],
     aclEntriesRemoved: payload.aclEntriesRemoved ?? [],
     aclEntriesUpdated: payload.aclEntriesUpdated ?? [],
     didTemplates: payload.didTemplates ?? [],
@@ -124,7 +129,7 @@ export async function contextDelete(
   );
   const payload = await sender.send<VTAContextsDeleteResponsePayload>(envelope, {
     expectedResponseType: TASK_CONTEXTS_DELETE_RESPONSE,
-    operationLabel: "vta/contexts/delete/1.1",
+    operationLabel: "vta/contexts/delete/1.2",
   });
   return {
     id: payload.id,

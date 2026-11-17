@@ -9,10 +9,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agent, h, render, PARTIES } from "./harness/dom.mjs";
+import { agent, h, render, PARTIES, asSummary } from "./harness/dom.mjs";
 import { DidsPane } from "../src/manager/panes/dids.js";
 
-const LIST = "vta/webvh/dids/list/1.0";
+const LIST = "vta/dids/list/0.1";
 const GET = "vta/webvh/dids/get/1.0";
 const UPDATE = "vta/webvh/dids/update/1.1";
 const SERVERS = "vta/webvh/servers/list/1.0";
@@ -74,7 +74,7 @@ const mount = async ({
   update?: Reply;
 } = {}) => {
   const a = agent({
-    [LIST]: { dids: [rec], total: 1 },
+    [LIST]: { dids: [rec].map(asSummary) },
     [SERVERS]: { servers: [] },
     [TEMPLATES]: { templates: [] },
     [SERVICES]: [],

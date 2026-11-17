@@ -519,7 +519,16 @@ function AddEntryForm({
   const [kidDeriveError, setKidDeriveError] = useState<string | null>(null);
   const [kidDeriving, setKidDeriving] = useState(false);
 
-  async function deriveSigningKidFor(did: string) {
+  async function deriveSigningKidFor(did: string, known?: string) {
+    // The agent said which key it signs with as this DID: use that. Resolving
+    // the document only yields verification-method ids, which for a did:webs
+    // are not the agent's key ids, so the guess is the fallback, not the rule.
+    if (known) {
+      setKidDeriveError(null);
+      setKidCandidates([known]);
+      setSigningKeyId(known);
+      return;
+    }
     setKidDeriving(true);
     setKidDeriveError(null);
     setKidCandidates([]);
@@ -586,7 +595,7 @@ function AddEntryForm({
         if (res.result.dids.length === 1) {
           const only = res.result.dids[0]!.did;
           setPrincipalDid(only);
-          void deriveSigningKidFor(only);
+          void deriveSigningKidFor(only, res.result.dids[0]!.signingKeyId);
         }
       } finally {
         if (!cancelled) setPersonaDidsLoading(false);
@@ -827,7 +836,7 @@ function AddEntryForm({
             <input
               value={rpDid}
               onChange={(e) => setRpDid(e.target.value)}
-              placeholder="did:webvh:…"
+              placeholder="did:…"
               style={mono}
             />
           </label>
@@ -847,7 +856,12 @@ function AddEntryForm({
                   setSigningKeyId("");
                   setKidCandidates([]);
                   setKidDeriveError(null);
-                  if (did) void deriveSigningKidFor(did);
+                  if (did) {
+                    void deriveSigningKidFor(
+                      did,
+                      personaDids.find((d) => d.did === did)?.signingKeyId,
+                    );
+                  }
                 }}
                 style={mono}
               >
@@ -877,7 +891,7 @@ function AddEntryForm({
             <input
               value={signingKeyId}
               onChange={(e) => setSigningKeyId(e.target.value)}
-              placeholder="did:webvh:…#key-0"
+              placeholder="did:…#key-0"
               style={mono}
             />
             {kidDeriving && (

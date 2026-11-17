@@ -7,7 +7,7 @@ export * from "./contexts.js";
 export * from "./didcomm.js";
 export * from "./endpoint.js";
 export * from "./errors.js";
-export * from "./list-dids.js";
+export * from "./dids.js";
 export * from "./mediation.js";
 export * from "./mediator-client.js";
 export * from "./pickup.js";

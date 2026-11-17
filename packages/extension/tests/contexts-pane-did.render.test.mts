@@ -9,11 +9,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agent, h, render, PARTIES } from "./harness/dom.mjs";
+import { agent, h, render, PARTIES, asSummary } from "./harness/dom.mjs";
 import { ContextsPane } from "../src/manager/panes/contexts.js";
 
-const UPDATE_DID = "vta/contexts/update-did/1.1";
-const LIST_DIDS = "vta/webvh/dids/list/1.0";
+const UPDATE_DID = "vta/contexts/update-did/1.2";
+const LIST_DIDS = "vta/dids/list/0.1";
 
 const DID_A = "did:webvh:QmA:host.example:vtc";
 const DID_B = "did:webvh:QmB:host.example:vtc-2";
@@ -29,7 +29,7 @@ const ctx = (did?: string) => ({
 
 const mount = async (did?: string) => {
   const a = agent({
-    [LIST_DIDS]: { dids: [{ did: DID_A }, { did: DID_B }] },
+    [LIST_DIDS]: { dids: [{ did: DID_A }, { did: DID_B }].map(asSummary) },
     [UPDATE_DID]: ctx(),
   });
   const screen = await render(

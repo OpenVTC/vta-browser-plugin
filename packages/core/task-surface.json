@@ -1505,9 +1505,9 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/contexts/delete/1.1",
+      "uri": "https://trusttasks.org/spec/vta/contexts/delete/1.2",
       "consts": [
-        "TASK_CONTEXTS_DELETE_1_1"
+        "TASK_CONTEXTS_DELETE_1_2"
       ]
     },
     {
@@ -1523,9 +1523,9 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/contexts/preview-delete/1.0",
+      "uri": "https://trusttasks.org/spec/vta/contexts/preview-delete/2.0",
       "consts": [
-        "TASK_CONTEXTS_PREVIEW_DELETE_1_0"
+        "TASK_CONTEXTS_PREVIEW_DELETE_2_0"
       ]
     },
     {
@@ -1535,9 +1535,9 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/contexts/update-did/1.1",
+      "uri": "https://trusttasks.org/spec/vta/contexts/update-did/1.2",
       "consts": [
-        "TASK_CONTEXTS_UPDATE_DID_1_1"
+        "TASK_CONTEXTS_UPDATE_DID_1_2"
       ]
     },
     {
@@ -1598,6 +1598,24 @@
       "uri": "https://trusttasks.org/spec/vta/did-templates/update/3.1",
       "consts": [
         "TASK_DID_TEMPLATES_UPDATE_3_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/dids/get/0.1",
+      "consts": [
+        "TASK_VTA_DIDS_GET_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/dids/list/0.1",
+      "consts": [
+        "TASK_VTA_DIDS_LIST_0_1"
+      ]
+    },
+    {
+      "uri": "https://trusttasks.org/spec/vta/dids/methods/list/0.1",
+      "consts": [
+        "TASK_VTA_DIDS_METHODS_LIST_0_1"
       ]
     },
     {
@@ -2099,12 +2117,6 @@
       ]
     },
     {
-      "uri": "https://trusttasks.org/spec/vta/webs/dids/list/0.1",
-      "consts": [
-        "TASK_VTA_WEBS_DIDS_LIST_0_1"
-      ]
-    },
-    {
       "uri": "https://trusttasks.org/spec/vta/webs/dids/rotate-keys/0.1",
       "consts": [
         "TASK_VTA_WEBS_DIDS_ROTATE_KEYS_0_1"
@@ -2168,12 +2180,6 @@
       "uri": "https://trusttasks.org/spec/vta/webvh/dids/get/1.0",
       "consts": [
         "TASK_WEBVH_DIDS_GET_1_0"
-      ]
-    },
-    {
-      "uri": "https://trusttasks.org/spec/vta/webvh/dids/list/1.0",
-      "consts": [
-        "TASK_WEBVH_DIDS_LIST_1_0"
       ]
     },
     {

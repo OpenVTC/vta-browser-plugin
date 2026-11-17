@@ -77,7 +77,7 @@ import {
   vaultUpsert,
   contextsCreate,
   contextsList,
-  vtaListDids,
+  didsList,
   VtaSession,
   verifyDid,
   buildTrustTask,
@@ -722,7 +722,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         // here lives in at their agent.
         async contextOf(vtaDid, restBaseUrl, did) {
           const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-          const dids = await vtaListDids(session, { holder, service });
+          const dids = await didsList(session, { holder, service });
           return dids.find((d) => d.did === did)?.contextId ?? null;
         },
       },
@@ -782,7 +782,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         // here lives in at their agent.
         async contextOf(vtaDid, restBaseUrl, did) {
           const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-          const dids = await vtaListDids(session, { holder, service });
+          const dids = await didsList(session, { holder, service });
           return dids.find((d) => d.did === did)?.contextId ?? null;
         },
       },
@@ -1730,8 +1730,8 @@ const signInFlows = new SignInFlows({
     listIdentities: () => listSelfIssued(vtaDid, restBaseUrl),
     listPersonas: async () => {
       const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-      const dids = await vtaListDids(session, { holder, service });
-      return dids.map((d) => ({ did: d.did, contextId: d.contextId }));
+      const dids = await didsList(session, { holder, service });
+      return dids.flatMap((d) => (d.contextId ? [{ did: d.did, contextId: d.contextId }] : []));
     },
     // The legacy first-use prompt's entry, made the same way (`bindProfile`),
     // so `proxyLogin` at the same origin and this sign-in find the one entry.
@@ -1740,7 +1740,8 @@ const signInFlows = new SignInFlows({
         {
           listDids: async () => {
             const { session, holder, service } = await getVtaSession(vtaDid, restBaseUrl);
-            return vtaListDids(session, { holder, service });
+            const dids = await didsList(session, { holder, service });
+            return dids.flatMap((d) => (d.contextId ? [{ did: d.did, contextId: d.contextId }] : []));
           },
           deriveSigningKeyIds: (d) => deriveSigningKeyId(d),
           upsert: async (body) => {
@@ -1803,7 +1804,7 @@ const signInFlows = new SignInFlows({
           description: `Your identity at ${name}, set up when you asked to join it`,
         });
       }
-      const [existing] = await vtaListDids(session, { holder, service, contextId });
+      const [existing] = await didsList(session, { holder, service, contextId });
       if (existing) return { did: existing.did, contextId };
       // No method named: the agent's configured form (webvh or did:scid) is
       // the one a community should see. The DIDComm entry is how the community
@@ -3184,14 +3185,22 @@ async function doListDids(req: {
   vtaDid: string;
   restBaseUrl: string;
   contextId?: string;
-}): Promise<{ dids: Array<{ did: string; contextId: string }> }> {
+}): Promise<{ dids: Array<{ did: string; contextId: string; signingKeyId?: string }> }> {
   const { session, holder, service } = await getVtaSession(req.vtaDid, req.restBaseUrl);
-  const dids = await vtaListDids(session, {
+  const dids = await didsList(session, {
     holder,
     service,
     ...(req.contextId ? { contextId: req.contextId } : {}),
   });
-  return { dids: dids.map((d) => ({ did: d.did, contextId: d.contextId })) };
+  // The VTA says which key it signs with as each DID, so the vault form need
+  // not resolve the document to guess (`signingKeyId`).
+  return {
+    dids: dids.flatMap((d) =>
+      d.contextId
+        ? [{ did: d.did, contextId: d.contextId, ...(d.signingKeyId ? { signingKeyId: d.signingKeyId } : {}) }]
+        : [],
+    ),
+  };
 }
 
 /** Create a new context at the connected VTA. Requires the wallet's

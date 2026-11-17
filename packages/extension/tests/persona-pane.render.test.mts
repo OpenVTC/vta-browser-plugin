@@ -191,7 +191,7 @@ test("a context that publishes no identifier offers to make one", async () => {
   // The dead end: an empty box, a `did:webvh:…` placeholder, and a pointer to
   // another pane. There was nothing to pick and no way forward.
   const a = agent({
-    "vta/webvh/dids/list/1.0": { dids: [] },
+    "vta/dids/list/0.1": { dids: [] },
     "persona/binding/list/1.0": { personas: [] },
     "vta/webvh/servers/list/1.0": { servers: [{ id: "srv1", did: "did:web:host.example", label: "storm.ws" }] },
   });
@@ -218,7 +218,7 @@ test("a context that publishes identifiers offers them as a list", async () => {
   // The pair. Without it, "offers to create" passes against a form that always
   // offers to create and never lists anything.
   const a = agent({
-    "vta/webvh/dids/list/1.0": { dids: [{ did: "did:webvh:QmA:host:alpha", contextId: "vta" }] },
+    "vta/dids/list/0.1": { dids: [{ did: "did:webvh:QmA:host:alpha", contextId: "vta" }] },
     "persona/binding/list/1.0": { personas: [] },
     "vta/webvh/servers/list/1.0": { servers: [] },
   });
@@ -241,12 +241,39 @@ test("a context that publishes identifiers offers them as a list", async () => {
   await ui.unmount();
 });
 
+test("a context whose identifier is a did:webs offers it", async () => {
+  // Reported live against a KERI-enabled agent: its DIDs are did:webs, which
+  // the webvh listing does not hold, so the picker said there was nothing to
+  // choose from.
+  const a = agent({
+    "vta/dids/list/0.1": { dids: [{ did: "did:webs:host:people:EKeriAlpha", method: "webs", contextId: "vta" }] },
+    "persona/binding/list/1.0": { personas: [] },
+    "vta/webvh/servers/list/1.0": { servers: [] },
+  });
+  const ui = await render(
+    h(BindingForm, {
+      parties: PARTIES,
+      authority: HOLDER,
+      contextId: "vta",
+      contextLabel: "Verifiable Trust Agent",
+      profiles: [face("p1", "Developer", ["f1"])],
+      onDone: () => {},
+    }),
+    { chrome: { runtime: { sendMessage: a.sendMessage } } },
+  );
+  await ui.settle();
+
+  const options = ui.all("select option").map((o) => o.textContent ?? "");
+  assert.ok(options.some((o) => o.includes("EKeriAlpha")), `the did:webs DID should be an option: ${options.join(" | ")}`);
+  await ui.unmount();
+});
+
 test("the picker offers no identifier belonging to another context", async () => {
   // Reported live: switching contexts, the list carried other contexts' DIDs.
   // A binding is context-scoped, so offering one from elsewhere invites the
   // holder to be known in one place by a name another place already knows.
   const a = agent({
-    "vta/webvh/dids/list/1.0": {
+    "vta/dids/list/0.1": {
       dids: [
         { did: "did:webvh:QmA:host:mine", contextId: "vta" },
         { did: "did:webvh:QmB:host:elsewhere", contextId: "openvtc" },
@@ -1475,7 +1502,7 @@ test("changing a face keeps the name the context was given, and sends it", async
   // would go from "Ada at the co-op" to no name at all because someone swapped
   // which face is worn.
   const a = agent({
-    "vta/webvh/dids/list/1.0": { dids: [] },
+    "vta/dids/list/0.1": { dids: [] },
     "persona/binding/list/1.0": {
       personas: [{ personaDid: "did:key:zP", bound: true, claimCount: 1, label: "Ada at the co-op" }],
     },
