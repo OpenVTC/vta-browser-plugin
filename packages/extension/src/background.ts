@@ -603,7 +603,10 @@ async function ensurePushWake(): Promise<void> {
       restBaseUrl: active.conn.restBaseUrl,
       wakeHandle: handle,
       pushPlatform: "webpush",
-      ...(raw?.mediatorDid ? { suggestedTriggers: [raw.mediatorDid] } : {}),
+      // The agent's relay: DIDComm's, else TSP's (`agentRelayMediator`'s rule).
+      ...((raw?.mediatorDid ?? raw?.tspMediatorDid)
+        ? { suggestedTriggers: [(raw?.mediatorDid ?? raw?.tspMediatorDid) as string] }
+        : {}),
     })) as OffscreenSetWakeResponse;
 
     if (resp?.ok) {
@@ -3265,13 +3268,14 @@ async function readActiveConnection(): Promise<
   if (!connection) {
     return { ok: false, error: "no active VTA connection — connect first" };
   }
-  // A usable transport is REST *or* DIDComm — vault/context/dids tasks run over
-  // whichever the VTA advertises, and the offscreen VtaSession prefers DIDComm.
-  // (Previously this required #vta-rest, which wrongly blocked DIDComm-only VTAs.)
-  if (!connection.restBaseUrl && !connection.mediatorDid) {
+  // A usable transport is TSP, DIDComm or REST — vault/context/dids tasks run
+  // over whichever the VTA advertises (`buildVtaSession`). Requiring REST
+  // blocked DIDComm-only VTAs; requiring REST or DIDComm blocked a did:webs VTA
+  // that advertises TSP alone.
+  if (!connection.restBaseUrl && !connection.mediatorDid && !connection.tspMediatorDid) {
     return {
       ok: false,
-      error: "active VTA advertises no usable transport (#vta-rest or #vta-didcomm)",
+      error: "active VTA advertises no usable transport (TSPTransport, DIDCommMessaging or VTARest)",
     };
   }
   return { ok: true, conn: { vtaDid: connection.vtaDid, restBaseUrl: connection.restBaseUrl ?? "" } };
@@ -3289,7 +3293,7 @@ async function readActiveConnection(): Promise<
  *  first run after upgrade, so background doesn't need a separate
  *  fallback. */
 async function readActiveConnectionRaw(): Promise<
-  { vtaDid: string; restBaseUrl?: string; mediatorDid?: string } | null
+  { vtaDid: string; restBaseUrl?: string; mediatorDid?: string; tspMediatorDid?: string } | null
 > {
   const stored = await chrome.storage.local.get("pnm-connection/v3");
   const raw = stored["pnm-connection/v3"];
@@ -3304,6 +3308,7 @@ async function readActiveConnectionRaw(): Promise<
                 vtaDid: string;
                 restBaseUrl?: string;
                 mediatorDid?: string;
+                tspMediatorDid?: string;
               };
             };
           };
@@ -3323,6 +3328,7 @@ async function readActiveConnectionRaw(): Promise<
     vtaDid: entry.vtaDid,
     ...(entry.restBaseUrl ? { restBaseUrl: entry.restBaseUrl } : {}),
     ...(entry.mediatorDid ? { mediatorDid: entry.mediatorDid } : {}),
+    ...(entry.tspMediatorDid ? { tspMediatorDid: entry.tspMediatorDid } : {}),
   };
 }
 
