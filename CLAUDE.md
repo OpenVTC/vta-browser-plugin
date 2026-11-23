@@ -1918,7 +1918,7 @@ Someone acting for the person with a key they delegated — their assistant over
 `vtc-mcp`, say — can redeem a VTC step-up but never make one. The community
 refuses it with a single-use handle beside the inline request, and the
 assistant shows the person a `step-up` link. The person pastes it into the
-popup (`OpenStepUpLink`, `RUNTIME_STEP_UP_LINK`, extension pages only) or
+popup (`OpenPastedLink`, `RUNTIME_PASTED_LINK`, extension pages only) or
 clicks it on a page (`handleTriggerLink` routes `step-up` away from the
 sign-in window). `background.ts::runStepUpLink` drives it:
 
@@ -1944,9 +1944,42 @@ The outcome is a notification, since the popup closes when the prompt opens.
 **What breaks it:** showing anything from the link or the link's producer as
 what is being approved; reading a step-up for a community not in the records;
 skipping the binding recompute; answering through anything but the
-community's own endpoint; or letting a page send `RUNTIME_STEP_UP_LINK`.
+community's own endpoint; or letting a page send `RUNTIME_PASTED_LINK`.
 `core/tests/vtc.step-up-handoff.mjs` and `extension/tests/step-up-flows.test.mts`
 pin these.
+
+## A pasted sign-in code: the assistant's key, the person's number (VTI-LNK-105 – 107)
+
+An assistant over `vtc-mcp` signs its own key in as the person with
+`vtc_sign_in`: it opens an `auth/oob` request and hands the person a
+`sign-in` link. It has no page on the community's portal, so the link can
+never be clicked there, and a click anywhere else is `wrong-origin`. The
+popup's paste box (`OpenPastedLink`, `RUNTIME_PASTED_LINK`) therefore takes a
+`sign-in` link as well as a `step-up` one, and `openPastedSignIn` opens the
+sign-in window with a flow record carrying **`pasted: true` and no origin**.
+
+VTI-LNK-105 binds a reader that *recorded* an activation origin; a paste has
+none, which is the footing of a code scanned with a camera. What stands in for
+the page is what the spec gives a scan:
+
+- **Nothing is skipped.** The confirm screen is shown even for one identity,
+  with a note that the code was pasted (`pasted` on the `confirm` result):
+  there was no click on the portal to take as the go-ahead (VTI-LNK-106).
+- **The person types the number.** The flow never waits for, or takes, a
+  page's number (`pageNumber` drops it; `handleTriggerLinkNumber` skips a
+  pasted record), so the number the assistant shows is entered by hand and
+  checked by the community (VTI-LNK-107).
+- **Only a community already in the records.** A pasted code for a site the
+  wallet does not know is `not-member`: joining and adopting a DID host start
+  on the site's own page, where the origin can be checked.
+- **No origin is pinned** for a pasted sign-in (`pinSignInOrigin`).
+
+**What breaks it:** inferring "pasted" from a missing `origin` (a click whose
+origin went missing must stay `wrong-origin` — `pasted` is an explicit flag
+set only by the popup path); letting a pasted flow auto-continue or read a
+page number; offering a join from a pasted code; or letting a page send
+`RUNTIME_PASTED_LINK`. `extension/tests/sign-in-flows.test.mts` and
+`sign-in-view.render.test.mts` pin these.
 
 ## Repo mechanics worth knowing before you start
 

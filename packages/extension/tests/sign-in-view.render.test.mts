@@ -204,6 +204,26 @@ test("one identity, but the page was pinned to another community: the screen is 
   await screen.unmount();
 });
 
+test("one identity, but the code was pasted: the screen is shown, says so, and waits for the person", async () => {
+  const { steps, send } = script({
+    ...RESULTS,
+    prepare: {
+      ...(RESULTS.prepare as Extract<SignInStepResult, { kind: "confirm" }>),
+      identities: [{ entryId: "e1", did: "did:web:alice.example", label: "Alice" }],
+      pasted: true,
+    },
+  });
+  const screen = await render(
+    h(SignInView, { flowId: "f", send, uv: ENROLLED_UV, close: () => {} }),
+  );
+  await screen.settle();
+  assert.deepEqual(steps, [{ step: "prepare" }], "no claim goes out on its own");
+  assert.ok(screen.container.querySelector('[data-testid="continue"]'), "the person continues, or not");
+  assert.ok(screen.container.querySelector('[data-testid="pasted"]'));
+  assert.match(screen.text(), /You pasted this code/);
+  await screen.unmount();
+});
+
 test("one identity that was already a member: the screen says so, and waits for the person", async () => {
   const { steps, send } = script({
     ...RESULTS,

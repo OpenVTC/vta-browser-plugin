@@ -572,6 +572,66 @@ test("a link clicked on a page that is not the portal is wrong-origin, and nothi
   assert.equal((await step(w, { step: "claim", entryId: "e-alice" })).kind, "failed", "no flow to claim on");
 });
 
+test("a click whose origin went missing is still wrong-origin: only `pasted` waives the page (VTI-LNK-105)", async () => {
+  const w = world();
+  const r = await step(w, { step: "prepare", link: LINK });
+  assert.equal(r.kind, "refused");
+  assert.equal((r as { detail: { reason: string } }).detail.reason, "wrong-origin");
+  assert.equal(w.sent.length, 0);
+});
+
+// ── A code pasted into the popup: no page, no origin, the person types the number ──
+
+test("a pasted code: the screen is kept and says so, and nothing is sent before Continue", async () => {
+  const w = world();
+  const confirm = await step(w, { step: "prepare", link: LINK, pasted: true });
+  assert.deepEqual(confirm, {
+    kind: "confirm",
+    communityName: "Example Community",
+    portalOrigin: PORTAL,
+    identities: [{ entryId: "e-alice", did: ALICE, label: "Example Community" }],
+    pasted: true,
+  });
+  assert.equal(w.sent.length, 0);
+});
+
+test("a pasted code never takes a number from a page: the person types it, at once (VTI-LNK-107)", async () => {
+  // A long page-number wait would stall the claim if the flow waited for one.
+  const w = world({ pageNumberWaitMs: 60_000 });
+  await step(w, { step: "prepare", link: LINK, pasted: true });
+  w.flows.pageNumber("f1", "05");
+  const enter = await step(w, { step: "claim", entryId: "e-alice" });
+  assert.equal(enter.kind, "enter-number");
+  assert.equal(w.sent.length, 1, "only the claim");
+  const review = await step(w, { step: "prove", enteredNumber: "47" });
+  assert.equal(review.kind, "review");
+  assert.equal(identifyNumber(w), "47", "the typed number, not the page's");
+  await step(w, { step: "grant-digest" });
+  const done = await step(w, { step: "respond", decision: "approve", prfOutputB64u: PRF_B64U });
+  assert.deepEqual(done, { kind: "done", decision: "approve", status: "approved" });
+  const grant = (w.sent[2]!.doc as { payload: { grant: { payload: Record<string, unknown> } } }).payload.grant.payload;
+  assert.equal(grant.origin, PORTAL, "the grant still names the verified portal origin");
+});
+
+test("a pasted code that carries an origin is not a paste: wrong-origin, nothing sent", async () => {
+  const w = world();
+  const r = await step(w, { step: "prepare", link: LINK, pasted: true, origin: "https://evil.example" });
+  assert.equal(r.kind, "refused");
+  assert.equal((r as { detail: { reason: string } }).detail.reason, "wrong-origin");
+  assert.equal(w.sent.length, 0);
+});
+
+test("a pasted code for a site not in the records: not-member, no offer, nothing sent", async () => {
+  for (const doc of [communityDoc, hostingDoc]) {
+    const w = world({ known: entries.filter((e) => e.id !== "e-alice"), doc });
+    const r = await step(w, { step: "prepare", link: LINK, pasted: true });
+    assert.deepEqual(r, { kind: "not-member", contactLabel: "members.example.org", portalOrigin: PORTAL });
+    assert.equal(w.sent.length, 0);
+    assert.equal(w.vtaCalls.some((c) => c.what === "personas" || c.what === "bind"), false);
+    assert.equal((await step(w, { step: "join-manifest" })).kind, "failed", "nothing to join");
+  }
+});
+
 test("refusals about the service's DID document carry what was wrong, and the message stays the outcome's", async () => {
   const cases: Array<[Record<string, unknown>, Record<string, unknown>, string]> = [
     [
