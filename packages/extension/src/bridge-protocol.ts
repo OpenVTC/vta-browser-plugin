@@ -3206,6 +3206,10 @@ export type OffscreenSignInStepRequest = {
   /** Present on `prepare` only, from the background's own record. */
   link?: string;
   origin?: string;
+  /** Present on `prepare` only: the person pasted the code into the wallet,
+   *  so there is no page and `origin` is absent by design (VTI-LNK-105 has
+   *  nothing to compare). Never inferred from a missing `origin`. */
+  pasted?: true;
   /** Present on `prepare` only, when `origin` is pinned to a relying party
    *  (`origin-pin.ts`, M5): that DID. The flow names it on the confirm screen
    *  when the link's community is a different one, so a changed pairing gets
@@ -3337,6 +3341,9 @@ export type SignInStepResult =
        *  the window does not skip the screen, and offers `join-new` beside
        *  signing in. */
       joinOffered?: true;
+      /** The code was pasted into the wallet, not clicked on the portal: the
+       *  window does not skip the screen, and says so. */
+      pasted?: true;
     }
   /** After the claim: type the number. `nameMismatch` is the community's own
    *  name for itself when it differs from this wallet's record (VTI-LNK-104).
@@ -3962,10 +3969,12 @@ export type OffscreenRoomOffersResponse = { ok: true; result: unknown } | { ok: 
 
 // ─── A step-up handed to the person by a trigger link (VTI-LNK-125 – 131) ───
 //
-//   popup / content script ──RUNTIME_STEP_UP_LINK / RUNTIME_TRIGGER_LINK──▶ background
+//   popup / content script ──RUNTIME_PASTED_LINK / RUNTIME_TRIGGER_LINK──▶ background
 //       The person pasted a `step-up` link into the popup, or clicked one on a
 //       page. The background re-parses it and runs the flow; nothing is
-//       answered to a page.
+//       answered to a page. (The popup's box also takes a `sign-in` link,
+//       which opens the sign-in window with no page origin: see
+//       `sign-in-flows.ts`.)
 //
 //   background ──OFFSCREEN_STEP_UP_FLOW──▶ offscreen
 //       `read`: the offscreen document reads the step-up from the community
@@ -3975,11 +3984,14 @@ export type OffscreenRoomOffersResponse = { ok: true; result: unknown } | { ok: 
 //       approve-response the person's agent signs as the subject, sent to the
 //       community. `end`: the person declined; forget the flow.
 
-/** popup → background: a `step-up` link the person pasted. */
-export const RUNTIME_STEP_UP_LINK = "vta-wallet/step-up-link" as const;
+/** popup → background: a trigger link the person pasted — a `step-up` link,
+ *  or a `sign-in` link an assistant opened for its own key (`vtc-mcp`'s
+ *  `vtc_sign_in`). Extension pages only: pasting is the person's own act
+ *  (VTI-LNK-056), and a page has no business claiming it. */
+export const RUNTIME_PASTED_LINK = "vta-wallet/pasted-link" as const;
 
-export interface RuntimeStepUpLinkRequest {
-  type: typeof RUNTIME_STEP_UP_LINK;
+export interface RuntimePastedLinkRequest {
+  type: typeof RUNTIME_PASTED_LINK;
   link: string;
 }
 

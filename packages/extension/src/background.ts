@@ -328,9 +328,9 @@ import { parseTriggerLink, outcomeOf, triggerLinkMessage } from "@openvtc/pnm-co
 import { isTriggerLinkShaped } from "./trigger-link-click.js";
 import type { StepUpReadResult, StepUpAnswerResult } from "./step-up-flows.js";
 import {
-  RUNTIME_STEP_UP_LINK,
+  RUNTIME_PASTED_LINK,
   OFFSCREEN_STEP_UP_FLOW,
-  type RuntimeStepUpLinkRequest,
+  type RuntimePastedLinkRequest,
   type RuntimeStepUpLinkResponse,
   type OffscreenStepUpFlowOp,
   type OffscreenStepUpFlowResponse,
@@ -3757,7 +3757,10 @@ const SIGN_IN_FLOW_PREFIX = "sign-in-flow:";
 
 interface SignInFlowRecord {
   link: string;
-  origin: string;
+  /** The browser-attested origin of the page the code was clicked on. Absent
+   *  only for a pasted code, which says so with `pasted`. */
+  origin?: string;
+  pasted?: true;
   intent?: "join";
 }
 
@@ -3782,12 +3785,26 @@ async function handleTriggerLink(msg: RuntimeTriggerLinkRequest, tabId: number |
     void runStepUpLink(link).then(notifyStepUpOutcome);
     return;
   }
-  const flowId = crypto.randomUUID();
-  const record: SignInFlowRecord = {
+  await openSignInWindow({
     link: msg.link,
     origin: msg.origin,
     ...(msg.intent === "join" ? { intent: "join" as const } : {}),
-  };
+  });
+}
+
+/**
+ * A `sign-in` code the person pasted into the popup. There is no page, so no
+ * origin is recorded and the flow is told it was pasted (`sign-in-flows.ts`):
+ * a community already in the wallet's records only, no screen skipped, the
+ * number typed by the person. This is how the key of an assistant that has no
+ * page on the portal (`vtc-mcp`'s `vtc_sign_in`) is signed in.
+ */
+async function openPastedSignIn(link: string): Promise<void> {
+  await openSignInWindow({ link, pasted: true });
+}
+
+async function openSignInWindow(record: SignInFlowRecord): Promise<void> {
+  const flowId = crypto.randomUUID();
   await chrome.storage.session.set({ [`${SIGN_IN_FLOW_PREFIX}${flowId}`]: record });
   const url = `${chrome.runtime.getURL("confirm.html")}?kind=sign-in&flow=${flowId}`;
   const bounds = await consentWindowBounds(660, 560);
@@ -3942,7 +3959,8 @@ async function handleTriggerLinkNumber(msg: RuntimeTriggerLinkNumberRequest): Pr
   for (const [key, value] of Object.entries(all)) {
     if (!key.startsWith(SIGN_IN_FLOW_PREFIX)) continue;
     const record = value as SignInFlowRecord;
-    if (record.origin !== msg.origin) continue;
+    // A pasted code was shown on no page.
+    if (record.pasted || record.origin === undefined || record.origin !== msg.origin) continue;
     // Expiry is the flow's to judge; only the id is read here.
     const parsed = parseTriggerLink(record.link, { now: 0 });
     if (!parsed.ok || parsed.link.id !== msg.requestId) continue;
@@ -4016,8 +4034,9 @@ async function handleSignInStep(msg: RuntimeSignInStepRequest): Promise<RuntimeS
     ...(msg.step === "prepare"
       ? {
           link: record.link,
-          origin: record.origin,
-          ...(await signInPinnedDid(record.origin)),
+          ...(record.pasted
+            ? { pasted: true as const }
+            : { origin: record.origin, ...(await signInPinnedDid(record.origin)) }),
           ...(record.intent ? { intent: record.intent } : {}),
         }
       : {}),
@@ -4065,7 +4084,8 @@ async function signInPinnedDid(origin: string | undefined): Promise<{ pinnedDid?
  * link that lapsed while the person approved still names the community.
  */
 async function pinSignInOrigin(record: SignInFlowRecord): Promise<void> {
-  if (!record.origin) return;
+  // A pasted code signed in no page, so there is no origin to pin.
+  if (record.pasted || !record.origin) return;
   const parsed = parseTriggerLink(record.link, { now: 0 });
   if (!parsed.ok) return;
   await pinOrigin(record.origin, parsed.link.from.value);
@@ -4592,23 +4612,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
 
-  if ((message as { type?: string })?.type === RUNTIME_STEP_UP_LINK) {
+  if ((message as { type?: string })?.type === RUNTIME_PASTED_LINK) {
     // The popup only: a pasted link is the person's own act (VTI-LNK-056). A
     // page cannot reach this type — it is not in the content script's table.
     if (!isExtensionPageSender(sender)) {
-      sendResponse({ ok: false, error: "step-up links are opened from the wallet itself" });
+      sendResponse({ ok: false, error: "pasted links are opened from the wallet itself" });
       return false;
     }
-    const link = String((message as RuntimeStepUpLinkRequest).link ?? "").trim();
-    // The popup closes when the approver prompt takes focus, so it is answered
-    // at once: whether the text is a step-up link. The outcome is a notice.
+    const link = String((message as RuntimePastedLinkRequest).link ?? "").trim();
+    // The popup closes when the next window takes focus, so it is answered at
+    // once: whether the text is a code the wallet opens. The outcome is a
+    // notice (step-up) or the sign-in window itself.
     const parsed = parseTriggerLink(link, { now: Math.floor(Date.now() / 1000) });
     if (!parsed.ok) {
       sendResponse({ ok: false, error: stepUpReasonMessage(parsed.reason) } satisfies RuntimeStepUpLinkResponse);
       return false;
     }
+    if (parsed.link.flow?.spec.name === "sign-in") {
+      void readActiveConnection().then(async (active) => {
+        if (!active.ok) {
+          sendResponse({ ok: false, error: active.error } satisfies RuntimeStepUpLinkResponse);
+          return;
+        }
+        sendResponse({ ok: true, result: { outcome: "opened" } } satisfies RuntimeStepUpLinkResponse);
+        await openPastedSignIn(link);
+      });
+      return true; // async sendResponse
+    }
     if (parsed.link.flow?.spec.name !== "step-up") {
-      sendResponse({ ok: false, error: "This is not a step-up code." } satisfies RuntimeStepUpLinkResponse);
+      sendResponse({ ok: false, error: "This is not a sign-in or step-up code." } satisfies RuntimeStepUpLinkResponse);
       return false;
     }
     sendResponse({ ok: true, result: { outcome: "opened" } } satisfies RuntimeStepUpLinkResponse);

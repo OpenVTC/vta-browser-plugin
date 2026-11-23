@@ -11,6 +11,13 @@
 //            (VTI-LNK-101; nothing is sent to one that is not) → resolve and
 //            verify its DID document → the clicked page's origin must be the
 //            portal's (VTI-LNK-105) → "Sign in to <name> at <origin>?"
+//            A code pasted into the popup has no page and no origin
+//            (`pasted`): it is taken only for a community already in the
+//            wallet's records, the screen is never skipped, and the person
+//            types the number (VTI-LNK-106, 107) — the same footing as a
+//            code scanned with a camera. This is how someone signs in the
+//            key of an assistant (`vtc-mcp`'s `vtc_sign_in`), which has no
+//            page on the portal.
 //   join     only for a site the wallet does not know (see below).
 //   linkage  only for a domain-linked contact (a DID that names no host,
 //            dtgwg-vti-spec #58): after Continue, before the claim, the
@@ -450,6 +457,11 @@ interface Flow {
   newIdentity?: SignInNewIdentityView;
   kA?: SigningIdentity;
   entry?: SignInIdentityView;
+  /** The person pasted the code into the wallet: there is no page, so no
+   *  origin was recorded (VTI-LNK-105 has nothing to compare), no number is
+   *  read from one (VTI-LNK-107), and nothing is taken as their go-ahead
+   *  (VTI-LNK-106). They type the number. */
+  pasted?: true;
   /** The number the portal shows for this request, read from the page the
    *  person clicked the code on (C11), and whoever is waiting for it. */
   pageNumber?: string;
@@ -547,6 +559,7 @@ export class SignInFlows {
       restBaseUrl?: string;
       link?: string;
       origin?: string;
+      pasted?: true;
       pinnedDid?: string;
       intent?: "join";
     } & SignInStep,
@@ -560,6 +573,7 @@ export class SignInFlows {
         req.restBaseUrl,
         req.pinnedDid,
         req.intent,
+        req.pasted,
       );
     const flow = this.flows.get(req.flowId);
     if (!flow || flow.phase === "ended") {
@@ -610,6 +624,8 @@ export class SignInFlows {
     if (!/^[0-9]{2}$/.test(matchNumber)) return;
     const flow = this.flows.get(flowId);
     if (!flow || (flow.phase !== "prepared" && flow.phase !== "claimed")) return;
+    // A pasted code was shown on no page; a number from one is not its.
+    if (flow.pasted) return;
     flow.pageNumber ??= matchNumber;
     flow.pageNumberWaiter?.(flow.pageNumber);
   }
@@ -649,6 +665,7 @@ export class SignInFlows {
     restBaseUrl: string | undefined,
     pinnedDid: string | undefined,
     intent?: "join",
+    pasted?: true,
   ): Promise<SignInStepResult> {
     if (this.flows.has(flowId))
       return {
@@ -716,8 +733,20 @@ export class SignInFlows {
       });
     }
 
-    // C3 step 4: the page the link was clicked on must be the portal.
-    if (!origin || !originMatchesPortal(origin, selected.services.portalOrigin))
+    // C3 step 4: the page the link was clicked on must be the portal
+    // (VTI-LNK-105). A pasted code has no page: the background recorded no
+    // origin for it, and says so with `pasted` rather than by leaving `origin`
+    // out, so a click whose origin went missing is still refused. What stands
+    // in for the page is the number the person types (VTI-LNK-106, 107), as
+    // for a code scanned with a camera.
+    if (pasted) {
+      if (origin !== undefined) return refused("wrong-origin", {
+        reason: "wrong-origin",
+        did: vtcDid,
+        pageOrigin: origin,
+        portalOrigin: selected.services.portalOrigin,
+      });
+    } else if (!origin || !originMatchesPortal(origin, selected.services.portalOrigin))
       return refused("wrong-origin", {
         reason: "wrong-origin",
         did: vtcDid,
@@ -726,6 +755,17 @@ export class SignInFlows {
       });
 
     const kind = siteKindOf(resolved.doc);
+    // A pasted code signs in to a community the wallet already holds an
+    // identity at, and to nothing else: joining or adopting a site starts on
+    // that site's own page, where its origin can be checked.
+    if (pasted && identities.length === 0) {
+      const contactLabel = contactDomainLabel(link.from, methods);
+      return {
+        kind: "not-member",
+        ...(contactLabel ? { contactLabel } : {}),
+        portalOrigin: selected.services.portalOrigin,
+      };
+    }
     if (identities.length === 0) {
       const { portalOrigin } = selected.services;
       if (kind === "community") {
@@ -799,6 +839,7 @@ export class SignInFlows {
       kind,
       route: resolved.route,
       ...(joinOffered ? { joinOffered, entries } : {}),
+      ...(pasted ? { pasted } : {}),
     });
     return {
       kind: "confirm",
@@ -806,6 +847,9 @@ export class SignInFlows {
       portalOrigin: selected.services.portalOrigin,
       identities,
       ...(joinOffered ? { joinOffered: true as const } : {}),
+      // No page click to take as the go-ahead: the window does not skip
+      // this screen, and says where the code came from.
+      ...(pasted ? { pasted: true as const } : {}),
       // The page was signed in to another community before (M5). The pairing
       // was verified above all the same — the document names this origin as
       // its portal — but the person decides whether that is the community they
@@ -1242,7 +1286,7 @@ export class SignInFlows {
     // with it is the person's own number — the page they clicked on, held to
     // the portal origin at the click — and the community checks it as typed.
     // A name mismatch is a warning the person must read, so it always asks.
-    if (theirs === undefined) {
+    if (theirs === undefined && !flow.pasted) {
       const fromPage = await this.waitForPageNumber(flow);
       if (fromPage !== undefined && flow.phase === "claimed") return await this.prove(flow, fromPage);
     }
@@ -1292,6 +1336,7 @@ export class SignInFlows {
     }
     flow.communityName = name;
     flow.entry = { ...flow.entry, label: name };
+    if (flow.pasted) return screen();
     const fromPage = await this.waitForPageNumber(flow);
     if (fromPage !== undefined && flow.phase === "claimed") return await this.prove(flow, fromPage);
     return screen();

@@ -26,7 +26,9 @@
 // of identities; screen 2 for a portal that does not publish its number, or a
 // community name that differs from the wallet's record. In between the window
 // says "Signing in to <community>…". Screen 3 — where the request comes from —
-// is never skipped.
+// is never skipped. A code pasted into the popup skips nothing: there was no
+// click on the portal to stand for the go-ahead, and no page to read the
+// number from, so screens 1 and 2 are always shown.
 //
 // A refused link shows only the VTI-LNK-021 message for its outcome. When the
 // cause is the contact's DID document or the page (never a link field), a
@@ -783,12 +785,15 @@ export function SignInView({
         // was the person's go-ahead, so the claim goes out without a Continue
         // (contract C3 step 6, as amended). With more than one, they pick. A
         // page that signed in to a different community before is shown either
-        // way: the warning is the point of the screen then (M5).
+        // way: the warning is the point of the screen then (M5). A pasted
+        // code had no click to stand for the go-ahead (VTI-LNK-106), so its
+        // screen always stays.
         const only =
           res.result.identities.length === 1 &&
           !res.result.changedFromDid &&
           !res.result.alreadyMember &&
-          !res.result.joinOffered
+          !res.result.joinOffered &&
+          !res.result.pasted
             ? res.result.identities[0]!
             : undefined;
         if (only) {
@@ -1586,6 +1591,16 @@ export function SignInView({
               >
                 Join with a new identity
               </button>
+            </div>
+          )}
+          {screen.pasted && (
+            <div role="status" data-testid="pasted">
+              <Note tone="accent">
+                You pasted this code, so the wallet can't see the page it came
+                from. Continue only if you started this sign-in yourself — for
+                example, by asking your assistant to sign in as you. You'll type
+                the number your assistant shows you.
+              </Note>
             </div>
           )}
           {screen.alreadyMember && (
