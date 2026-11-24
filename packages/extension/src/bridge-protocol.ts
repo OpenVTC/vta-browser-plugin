@@ -2485,6 +2485,9 @@ export type RoomsPageOp =
   | { op: "info"; hostDid: string; roomId: string }
   | { op: "browse"; hostDid: string; roomId: string; prefix?: string; sinceVersion?: number }
   | { op: "read"; hostDid: string; roomId: string; key: string }
+  /** The room as a reader shows it: every record listed, read, verified and
+   *  put through the reading rules (`assembleRoomRecords`). Never prompts. */
+  | { op: "conversation"; hostDid: string; roomId: string }
   /** This community's offers of its rooms to the identities the member uses here. Never prompts. */
   | { op: "offers"; hostDid: string }
   /** Ask to accept one: the member decides in the wallet's own window. `member`
@@ -2643,6 +2646,56 @@ export interface PageRecordView {
   authorUnverified?: true;
   /** False on an `open` room, where the host stores and can alter cleartext. */
   sealed: boolean;
+  verification: unknown;
+}
+
+/**
+ * One record of `rooms.conversation`, as the reading rules show it
+ * (`RoomRecordView`, `@openvtc/pnm-core/rooms`). Only a `note` and a `message`
+ * carry content; every other `shown` carries none of the record. Every text
+ * member is another member's words: plain text on a message, markdown rendered
+ * inert on a note, and never a link the page follows unasked.
+ */
+export interface PageConversationRecord {
+  key: string;
+  version: number;
+  status?: string;
+  shown: "note" | "message" | "withdrawn" | "retracted" | "placeholder" | "refused" | "unreadable";
+  /** The verified signer (sealed), or the host's record of the writer (`open`). */
+  author?: string;
+  title?: string;
+  description?: string;
+  body?: string;
+  tags?: string[];
+  /** The record carries a file: what the page shows of it. Fetched with `getFile`. */
+  file?: { name: string; mediaType?: string; size: number };
+  /** When it was written, as far as the reading rules let it be said: `at` the
+   *  author's claim where plausible; `implausible` with no time; `arrivedLate`
+   *  when the claim is more than 24 hours before the room received it. */
+  written: { at?: string; implausible?: true; arrivedLate?: { claimed: string; received: string } };
+  /** The instant it is ordered by (ISO), and which one that is. */
+  orderAt: string;
+  orderedBy: "writtenAt" | "createdAt" | "updatedAt" | "readAt";
+  /** This version is an edit; `at` absent when the claim is implausible. */
+  edited?: { at?: string };
+  /** The record this one answers; `available: false` when it cannot be shown. */
+  replyTo?: { key: string; version?: number; available: boolean; changed?: "edited" };
+  /** Reactions to it, each value counted once per author. */
+  reactions: { value: string; count: number; authors: string[] }[];
+  /** A version by someone other than the record's earlier author: never shown as theirs. */
+  rewrite?: { by: string; original: string };
+  /** Why it is refused, unreadable or a placeholder. */
+  reason?: string;
+}
+
+/** `rooms.conversation`: the room's records, oldest first, and its members' own names. */
+export interface PageConversationView {
+  records: PageConversationRecord[];
+  /** Each author's name in this room, by DID, as they gave it themselves (`memberProfile`). Their claim, not a verified name. */
+  names: Record<string, string>;
+  /** False when the listing stopped at a page bound: older records are missing. */
+  complete: boolean;
+  /** The member's VTA's account of the listing. A verdict, never a failure. */
   verification: unknown;
 }
 
@@ -3598,6 +3651,7 @@ export type OffscreenRoomsPageOp =
   | { op: "info"; hostDid: string; roomId: string; member: string }
   | { op: "browse"; hostDid: string; roomId: string; member: string; prefix?: string; sinceVersion?: number }
   | { op: "read"; hostDid: string; roomId: string; member: string; key: string }
+  | { op: "conversation"; hostDid: string; roomId: string; member: string }
   | {
       op: "putNote";
       hostDid: string;

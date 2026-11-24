@@ -38,6 +38,13 @@ For history before this file, see `git log` on `packages/core`.
 
 ### Added
 
+- **`recordInputFromRead`** (`@openvtc/pnm-core/rooms`): one listed record and
+  its `rooms/keys/read` answer made into what `assembleRoomRecords` takes — a
+  sealed body verified against its author's document at `bodyStoredAt`, the
+  place it was sealed for and the author the host listed; an open room's
+  cleartext checked; a failed read `unreadable`; no body a tombstone. The
+  wallet's console and the member-portal `rooms.conversation` now share it.
+
 - **Checking a vote after close** (VTI-VOT-053). `pcsVoterReceiptsList`
   (`vta/pcs/voter/receipts/list/0.1`) reads the receipts the member's VTA
   keeps for an election and its ballot box; `fetchInclusion` asks the ballot

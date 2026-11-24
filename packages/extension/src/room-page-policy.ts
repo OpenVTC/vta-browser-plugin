@@ -346,7 +346,7 @@ function tags(v: unknown): string | null {
   return null;
 }
 
-const OPS = new Set(["list", "choose", "forget", "info", "browse", "read", "putNote", "offers", "acceptOffer"]);
+const OPS = new Set(["list", "choose", "forget", "info", "browse", "read", "conversation", "putNote", "offers", "acceptOffer"]);
 
 /** Why a page's room call is malformed, or `null` when it is well formed. Checked before anything else. */
 export function roomsPageParamsRefusal(raw: unknown): string | null {

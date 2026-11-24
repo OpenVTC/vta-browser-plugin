@@ -1047,15 +1047,18 @@ without checking it is the request that was built (`roomsKeysAct` does).
 
 ## A portal page uses rooms through the wallet's own methods (P7b)
 
-`window.vtaWallet.rooms.{list, choose, forget, info, browse, read, putNote,
-getFile, putFile}` is how a community's member portal shows a member their rooms
+`window.vtaWallet.rooms.{list, choose, forget, info, browse, read, conversation,
+putNote, getFile, putFile}` is how a community's member portal shows a member their rooms
 (VTI `data-rooms-files.md` §8.5). It does **not** loosen "a page is not a
 member": `requestTask` and `signTrustTask` still refuse the whole `rooms/`
 family. The methods fix the verb, run the flow in the extension, and return
 views the wallet built (`PageRoomView`, `PageRecordView`, … in
 `bridge-protocol.ts`) — never a task reply, a presentation, a signed document
 or a key. The gates are `room-page-background.ts` (`RoomPageGates`), the rules
-`room-page-policy.ts`, the work `room-page-offscreen.ts`.
+`room-page-policy.ts`, the work `room-page-offscreen.ts`. `conversation` hands a
+page the room as the reading rules show it (`assembleRoomRecords`), read and
+verified by `recordInputFromRead` — the console's own path, so a portal and the
+console never disagree about who said what.
 
 **Four gates, in order, before the offscreen document does anything.** (1) The
 call is well formed. (2) The page is the community's portal: every call names

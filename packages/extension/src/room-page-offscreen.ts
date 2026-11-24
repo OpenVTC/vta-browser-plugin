@@ -15,7 +15,7 @@
 // persona (`@openvtc/pnm-core/rooms`'s `actAndSend`); the VTA's own reads
 // (`rooms/keys/{browse,read}`) go out as the persona too.
 
-import { CONTACT_METHODS, resolveDidDocumentAt, type TrustTaskSender } from "@openvtc/pnm-core";
+import { CONTACT_METHODS, memoResolveDidDocumentAt, resolveDidDocumentAt, type TrustTaskSender } from "@openvtc/pnm-core";
 import { resolveCommunityDocument, selectSignInServices, verifyDomainLinkage } from "@openvtc/pnm-core/vtc";
 import {
   communityRoomMemberships,
@@ -24,9 +24,15 @@ import {
   roomInfoAsMember,
   roomNamesFromOffers,
   type CommunityRoomName,
+  assembleRoomRecords,
+  recordInputFromRead,
   roomsKeysBrowse,
   roomsKeysList,
   roomsKeysRead,
+  roomsKeysReadMany,
+  type ListedRecord,
+  type ReadManyResult,
+  type RoomRecordView,
   readSealedVersion,
   roomProfileView,
   roomsKeysProfileRead,
@@ -39,6 +45,8 @@ import { base64url } from "@openvtc/vti-didcomm-js";
 import { admittedOpenRooms, membersAt } from "./room-page-policy.js";
 import type {
   OffscreenRoomsPageOp,
+  PageConversationRecord,
+  PageConversationView,
   PageListingView,
   PageRecordSummary,
   PageRecordView,
@@ -231,6 +239,18 @@ export async function runRoomsPageOp(
         verification: listing.verification,
       } satisfies PageListingView;
     }
+    case "conversation": {
+      const at = { ...parties, roomId: op.roomId, host: op.hostDid, member: op.member };
+      const listing = await roomsKeysBrowse(sender, at);
+      const rows = (listing.records ?? []) as unknown as ListedRecord[];
+      const toRead = rows.filter((r) => r.status !== "retracted").map((r) => r.key);
+      const answers = toRead.length === 0 ? [] : await roomsKeysReadMany(sender, { ...at, keys: toRead });
+      return {
+        ...(await conversationView(op.roomId, rows, answers, memoResolveDidDocumentAt(), now())),
+        complete: listing.complete === true,
+        verification: listing.verification,
+      } satisfies PageConversationView;
+    }
     case "read":
       return readView(
         op.roomId,
@@ -265,6 +285,70 @@ export async function runRoomsPageOp(
       return { key, version };
     }
   }
+}
+
+/**
+ * A room's listing and its batch read, as the reading rules show it: each
+ * record verified (`recordInputFromRead` — the wallet console's own path), then
+ * `assembleRoomRecords`. Records past their `validUntil` are left out, as a
+ * default listing leaves them; members' names travel apart from the records,
+ * and a name record is never one of them.
+ */
+export async function conversationView(
+  roomId: string,
+  rows: readonly ListedRecord[],
+  answers: readonly ReadManyResult[],
+  resolveDidAt: ResolveDidAt,
+  now: number,
+): Promise<Pick<PageConversationView, "records" | "names">> {
+  const byKey = new Map(answers.map((a) => [a.key, a]));
+  const files = new Map<string, NonNullable<PageConversationRecord["file"]>>();
+  const inputs = await Promise.all(
+    rows.map(async (row) => {
+      const { input, body, cleartext } = await recordInputFromRead(roomId, row, byKey.get(row.key), resolveDidAt);
+      const f = body?.file ?? (cleartext?.file && typeof cleartext.file === "object" ? (cleartext.file as Record<string, unknown>) : undefined);
+      // What the page shows of a file — never an open room's `fileKey`.
+      if (f && typeof f.name === "string" && typeof f.size === "number" && Number.isSafeInteger(f.size) && f.size >= 0) {
+        files.set(row.key, { name: f.name, size: f.size, ...(typeof f.mediaType === "string" ? { mediaType: f.mediaType } : {}) });
+      }
+      return input;
+    }),
+  );
+  const view = assembleRoomRecords(inputs, { now });
+  const names: Record<string, string> = {};
+  for (const [author, record] of Object.entries(view.names)) {
+    if (record.name !== undefined) names[author] = record.name;
+  }
+  return { records: view.records.map((r) => conversationRecord(r, files.get(r.key))), names };
+}
+
+function conversationRecord(r: RoomRecordView, file: PageConversationRecord["file"]): PageConversationRecord {
+  const c = r.content;
+  const shows = r.shown === "note" || r.shown === "message";
+  return {
+    key: r.key,
+    version: r.version,
+    ...(r.status !== undefined ? { status: r.status } : {}),
+    shown: r.shown,
+    ...(c && shows ? { author: c.author } : {}),
+    ...(c?.title !== undefined && shows ? { title: c.title } : {}),
+    ...(c?.description !== undefined && shows ? { description: c.description } : {}),
+    ...(c?.body !== undefined && shows ? { body: c.body } : {}),
+    ...(c?.tags !== undefined && shows ? { tags: [...c.tags] } : {}),
+    ...(file !== undefined && shows ? { file } : {}),
+    written: {
+      ...(r.written.at !== undefined ? { at: r.written.at } : {}),
+      ...(r.written.implausible ? { implausible: true as const } : {}),
+      ...(r.written.arrivedLate !== undefined ? { arrivedLate: { ...r.written.arrivedLate } } : {}),
+    },
+    orderAt: new Date(r.orderAt).toISOString(),
+    orderedBy: r.orderedBy,
+    ...(r.edited !== undefined ? { edited: { ...r.edited } } : {}),
+    ...(r.replyTo !== undefined ? { replyTo: { ...r.replyTo } } : {}),
+    reactions: r.reactions.map((x) => ({ value: x.value, count: x.count, authors: [...x.authors] })),
+    ...(r.rewrite !== undefined ? { rewrite: { ...r.rewrite } } : {}),
+    ...(r.reason !== undefined ? { reason: r.reason } : {}),
+  };
 }
 
 /** A listing row, member by member: nothing the host sent beyond these. */
