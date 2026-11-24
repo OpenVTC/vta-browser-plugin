@@ -40,7 +40,7 @@ import {
   type RoomShareConsentView,
   type RoomWriteConsentView,
 } from "../src/room-page-policy.ts";
-import { readView, runRoomsPageOp } from "../src/room-page-offscreen.ts";
+import { conversationView, readView, runRoomsPageOp } from "../src/room-page-offscreen.ts";
 import { signRecordBody } from "@openvtc/pnm-core/rooms/files";
 import type { RoomProfileSummary } from "../src/bridge-protocol.ts";
 import { signingIdentityFromSecret } from "@openvtc/pnm-core";
@@ -388,6 +388,9 @@ test("list never prompts, and reads need a share", async () => {
   assert.equal(read.ok, false);
   assert.equal((read as { code?: string }).code, "notShared");
   assert.ok(!h.asked.some((a) => a.op === "read"));
+  const chat = await h.gates.handle(PORTAL, { op: "conversation", hostDid: HOST, roomId: ROOM });
+  assert.equal((chat as { code?: string }).code, "notShared", "a conversation needs a share like a read");
+  assert.ok(!h.asked.some((a) => a.op === "conversation"));
 
   h.answer = { approved: true, selectedRooms: [as(ROOM)] };
   await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST });
@@ -582,6 +585,81 @@ test("an open room's file reaches the page as its name, size and type — never 
   assert.ok(!JSON.stringify(view).includes("K".repeat(43)), "the key stays with the wallet");
 });
 
+// ── A room as a conversation (`rooms.conversation`) ────────────────────────
+//
+// The reading rules' view, built by the same path the wallet's console reads a
+// room with: who said what, in which order, under whose own name.
+
+test("a conversation: messages and notes by kind, in writtenAt order, under members' own names", async () => {
+  const alice = signingIdentityFromSecret(new Uint8Array(32).fill(4));
+  const sealed = async (key: string, body: Record<string, unknown>) => ({
+    key,
+    version: 1,
+    status: "active",
+    updatedAt: "2026-11-17T23:54:30Z",
+    createdAt: "2026-11-17T23:54:30Z",
+    author: alice.did,
+    plaintext: Buffer.from(await signRecordBody({ roomId: ROOM, key, version: 1, author: alice.did, ...body }, alice)).toString("base64url"),
+    verification: {},
+  });
+  const answers = [
+    await sealed("hi", { kind: "message", body: "Hi", writtenAt: "2026-11-17T23:54:00Z" }),
+    await sealed("q", { body: "Do you have correlation off?", writtenAt: "2026-11-17T23:54:10Z" }),
+    await sealed("note", { title: "test1", body: "the note", writtenAt: "2026-11-24T17:18:00Z" }),
+    await sealed("name", { kind: "memberProfile", title: "Alberto Leon" }),
+    await sealed("thumb", { kind: "reaction", body: "👍", inReplyTo: { key: "hi" }, writtenAt: "2026-11-17T23:55:00Z" }),
+    { key: "forged", error: { code: "x", message: "the agent could not open it" } },
+  ];
+  // The listing in key order: the reading rules, not the listing, put them in order.
+  const rows = answers
+    .map((a) => ({ key: a.key, version: 1, status: "active", updatedAt: "2026-11-17T23:54:30Z" }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+  const view = await conversationView(ROOM, rows, answers as never, async () => undefined, Date.parse("2026-11-24T18:00:00Z"));
+
+  assert.deepEqual(view.names, { [alice.did]: "Alberto Leon" });
+  const shown = view.records.map((r) => [r.key, r.shown]);
+  assert.deepEqual(shown, [
+    ["hi", "message"],
+    ["q", "message"],
+    // One that did not open keeps its place by the host's time, with nothing of it.
+    ["forged", "unreadable"],
+    ["note", "note"],
+  ], "the name and the reaction are records of no row; an untitled record without a kind is a message");
+  const hi = view.records.find((r) => r.key === "hi")!;
+  assert.equal(hi.body, "Hi");
+  assert.equal(hi.author, alice.did);
+  assert.equal(hi.written.at, "2026-11-17T23:54:00Z");
+  assert.deepEqual(hi.reactions, [{ value: "👍", count: 1, authors: [alice.did] }]);
+  assert.equal(view.records.find((r) => r.key === "note")!.title, "test1");
+  const forged = view.records.find((r) => r.key === "forged")!;
+  assert.equal(forged.body, undefined);
+  assert.equal(forged.author, undefined, "nothing of a record that did not open");
+});
+
+test("a conversation refuses a body its author did not sign for this place, and shows an open room's file without its key", async () => {
+  const alice = signingIdentityFromSecret(new Uint8Array(32).fill(4));
+  const relocated = Buffer.from(
+    await signRecordBody({ roomId: ROOM, key: "elsewhere", version: 1, author: alice.did, kind: "message", body: "moved" }, alice),
+  ).toString("base64url");
+  const answers = [
+    { key: "k", version: 1, status: "active", updatedAt: "2026-11-24T10:00:00Z", author: alice.did, plaintext: relocated, verification: {} },
+    {
+      key: "f", version: 1, status: "active", updatedAt: "2026-11-24T11:00:00Z", author: MEMBER, verification: {},
+      cleartext: { title: "Brochure", body: "", file: { name: "b.pdf", size: 42, blobRef: "zBlob", fileKey: "K".repeat(43) } },
+    },
+  ];
+  const rows = answers.map((a) => ({ key: a.key, version: 1, status: "active", updatedAt: a.updatedAt }));
+  const view = await conversationView(ROOM, rows, answers as never, async () => undefined, Date.parse("2026-11-24T18:00:00Z"));
+  const k = view.records.find((r) => r.key === "k")!;
+  assert.equal(k.shown, "refused");
+  assert.equal(k.body, undefined);
+  const f = view.records.find((r) => r.key === "f")!;
+  assert.equal(f.shown, "note");
+  assert.equal(f.author, MEMBER);
+  assert.deepEqual(f.file, { name: "b.pdf", size: 42 });
+  assert.ok(!JSON.stringify(view).includes("K".repeat(43)), "the key stays with the wallet");
+});
+
 // trust-tasks-tf #1027: what a record is and where it sits reach the page; a
 // record past its `validUntil`, or whose author cannot be verified, reaches it
 // with nothing of its content.
@@ -724,9 +802,15 @@ test("a share names its member, and every request for the page carries it", asyn
   await h.gates.handle(PORTAL, { op: "info", hostDid: HOST, roomId: ROOM });
   await h.gates.handle(PORTAL, { op: "browse", hostDid: HOST, roomId: ROOM });
   await h.gates.handle(PORTAL, { op: "read", hostDid: HOST, roomId: ROOM, key: "k" });
+  await h.gates.handle(PORTAL, { op: "conversation", hostDid: HOST, roomId: ROOM, member: "did:key:zSomeoneElse", extra: 1 });
   h.answer = { approved: true };
   await h.gates.handle(PORTAL, { op: "putNote", hostDid: HOST, roomId: ROOM, title: "t" });
-  for (const op of ["info", "browse", "read", "putNote"]) {
+  assert.deepEqual(
+    h.asked.find((a) => a.op === "conversation"),
+    { op: "conversation", hostDid: HOST, roomId: ROOM, member: MEMBER },
+    "the share's member, never the page's, and nothing else the page added",
+  );
+  for (const op of ["info", "browse", "read", "conversation", "putNote"]) {
     const asked = h.asked.filter((a) => a.op === op);
     assert.ok(asked.length > 0, op);
     assert.ok(asked.every((a) => a.member === MEMBER), `${op} names the member`);

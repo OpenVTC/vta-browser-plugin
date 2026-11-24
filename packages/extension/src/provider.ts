@@ -51,6 +51,7 @@ import type {
   PageRoomView,
   PageRoomInfoView,
   PageListingView,
+  PageConversationView,
   PageRecordView,
   RoomFilesPageMessage,
 } from "./bridge-protocol.js";
@@ -355,6 +356,11 @@ export interface VtaWalletRooms {
     epoch?: number;
     resumed: boolean;
   }>;
+  /** The room as a reader shows it — its records listed, read, verified and put
+   *  through the reading rules: notes and messages, replies, reactions,
+   *  withdrawals, `writtenAt` ordering, edits, and members' own names. Oldest
+   *  first. Never prompts. */
+  conversation(params: { hostDid: string; roomId: string }): Promise<PageConversationView>;
   /** Write a note as the member, after they confirm it. */
   putNote(params: {
     hostDid: string;
@@ -667,6 +673,7 @@ if (!window.vtaWallet) {
       info: (p) => call("rooms", { op: "info", hostDid: p.hostDid, roomId: p.roomId }),
       browse: (p) => call("rooms", { ...p, op: "browse" }),
       read: (p) => call("rooms", { op: "read", hostDid: p.hostDid, roomId: p.roomId, key: p.key }),
+      conversation: (p) => call("rooms", { op: "conversation", hostDid: p.hostDid, roomId: p.roomId }),
       putNote: (p) => call("rooms", { ...p, op: "putNote" }),
       offers: (p) => call("rooms", { op: "offers", hostDid: p.hostDid }),
       acceptOffer: (p) =>

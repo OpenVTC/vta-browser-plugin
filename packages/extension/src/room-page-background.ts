@@ -232,7 +232,8 @@ export class RoomPageGates {
       }
       case "info":
       case "browse":
-      case "read": {
+      case "read":
+      case "conversation": {
         const { vta } = await this.atPortal(origin, p.hostDid, { needReach: true });
         const member = await this.granted(origin, p.hostDid, vta, p.roomId);
         // Rebuilt member by member: nothing the page added rides along.
@@ -243,7 +244,9 @@ export class RoomPageGates {
             ? { op: "info", ...at }
             : p.op === "read"
               ? { op: "read", ...at, key: p.key }
-              : {
+              : p.op === "conversation"
+                ? { op: "conversation", ...at }
+                : {
                   op: "browse",
                   ...at,
                   ...(p.prefix !== undefined ? { prefix: p.prefix } : {}),

@@ -60,13 +60,10 @@ import { memoResolveDidDocumentAt } from "@openvtc/pnm-core";
 import {
   assembleRoomRecords,
   authorLabels,
-  contentFromBody,
-  readingFromCleartext,
-  readSealedVersion,
+  recordInputFromRead,
   RecordBodyError,
   roomsKeysBrowse,
   roomsKeysReadMany,
-  verifyRecordBody,
   latestMessageTime,
   unreadMessages,
   watchCovers,
@@ -78,7 +75,6 @@ import {
   type RecordInput,
   type RoomRecordsView,
   type RoomRecordView,
-  type VerifiedRecordBody,
 } from "@openvtc/pnm-core/rooms";
 import { base64url } from "@openvtc/vti-didcomm-js";
 import type { RoomPlace } from "../room-groups.js";
@@ -342,41 +338,6 @@ function refusalWords(e: unknown): string {
 }
 
 /**
- * Verify a sealed body before anything in it is read (`SealedRecordBody`,
- * *Reading*). `hostAuthor` is the read's author; `listedAuthor` the listing's
- * for the same version — both are the host's, and on an `attributed` room both
- * must be the signer. `bodyStoredAt` is when the host stored this body: the
- * author's DID document is the one that stood then (*Which DID document*),
- * resolved by `resolveDidAt` where the author's method keeps its history.
- */
-async function verifySealed(
-  plaintext: string,
-  at: { roomId: string; key: string; version: number },
-  hostAuthor: string | undefined,
-  listedAuthor: string | undefined,
-  bodyStoredAt: string | undefined,
-  resolveDidAt: ResolveDidAt,
-): Promise<VerifiedRecordBody> {
-  let bytes: Uint8Array;
-  try {
-    bytes = base64url.decode(plaintext);
-  } catch {
-    throw new RecordBodyError("malformed", "the record body is not base64url");
-  }
-  const body = await verifyRecordBody(bytes, at, hostAuthor, {
-    resolveDidAt,
-    ...(bodyStoredAt !== undefined ? { bodyStoredAt } : {}),
-  });
-  if (listedAuthor !== undefined && listedAuthor !== body.author) {
-    throw new RecordBodyError(
-      "authorMismatch",
-      `the record body is signed by ${body.author}, but the host listed ${listedAuthor} as its author`,
-    );
-  }
-  return body;
-}
-
-/**
  * An open room's cleartext with its file's `fileKey` left out. The key is in the
  * record by design — the host and every member may open the file — but nobody
  * needs to read it, and what is shown here is copied and screenshotted.
@@ -406,56 +367,14 @@ async function readOne(
   resolveDidAt: ResolveDidAt,
 ): Promise<{ opened: Opened; input: RecordInput }> {
   const verification = (res.verification as unknown as Verification | undefined) ?? null;
-  const version = res.version ?? row.version;
-  const meta = {
-    key: row.key,
-    version,
-    ...((res.status ?? row.status) !== undefined ? { status: res.status ?? row.status } : {}),
-    ...((res.updatedAt ?? row.updatedAt) !== undefined ? { updatedAt: res.updatedAt ?? row.updatedAt } : {}),
-    ...((res.createdAt ?? row.createdAt) !== undefined ? { createdAt: res.createdAt ?? row.createdAt } : {}),
-    ...((res.createdBy ?? row.createdBy) !== undefined ? { createdBy: res.createdBy ?? row.createdBy } : {}),
-    ...((res.bodyStoredAt ?? row.bodyStoredAt) !== undefined ? { bodyStoredAt: res.bodyStoredAt ?? row.bodyStoredAt } : {}),
-    ...(row.kind !== undefined ? { listedKind: row.kind } : {}),
-  };
-  const nothing = { text: "", signed: false, verification };
-  if (res.error) {
-    const why = res.error.message ?? res.error.code;
-    return { opened: nothing, input: { ...meta, reading: { state: "unreadable", reason: why } } };
+  const { input, body, cleartext } = await recordInputFromRead(roomId, row, res, resolveDidAt, refusalWords);
+  if (body !== undefined && !body.roomProfile && res.plaintext !== undefined) {
+    return { opened: { text: new TextDecoder().decode(base64url.decode(res.plaintext)), signed: true, verification }, input };
   }
-  // The listing's word, used only for the version it listed.
-  const sameVersion = version === row.version;
-  const hostAuthor = res.author ?? (sameVersion ? row.author : undefined);
-  if (res.plaintext !== undefined) {
-    // Sealed: nothing of the body before its author's signature holds.
-    try {
-      const verified = await verifySealed(
-        res.plaintext,
-        { roomId, key: row.key, version: readSealedVersion({ version, ...(res.ext !== undefined ? { ext: res.ext } : {}) }) },
-        res.author,
-        sameVersion ? row.author : undefined,
-        res.bodyStoredAt ?? (sameVersion ? row.bodyStoredAt : undefined),
-        resolveDidAt,
-      );
-      if (verified.roomProfile) return { opened: nothing, input: { ...meta, reading: { state: "profile" } } };
-      return {
-        opened: { text: new TextDecoder().decode(base64url.decode(res.plaintext)), signed: true, verification },
-        input: { ...meta, reading: { state: "read", content: contentFromBody(verified) } },
-      };
-    } catch (e) {
-      const reason = refusalWords(e);
-      const state = e instanceof RecordBodyError && e.placeholder ? "placeholder" : "refused";
-      return { opened: nothing, input: { ...meta, reading: { state, reason } } };
-    }
+  if (cleartext !== undefined) {
+    return { opened: { text: JSON.stringify(withoutFileKey(cleartext), null, 2), signed: false, verification }, input };
   }
-  if (res.cleartext) {
-    const reading = readingFromCleartext(res.cleartext, hostAuthor ?? meta.createdBy ?? "", version);
-    return {
-      opened: { text: JSON.stringify(withoutFileKey(res.cleartext), null, 2), signed: false, verification },
-      input: { ...meta, reading },
-    };
-  }
-  // A retracted record has no body, and that is an answer rather than a failure.
-  return { opened: nothing, input: { ...meta, reading: { state: "tombstone" } } };
+  return { opened: { text: "", signed: false, verification }, input };
 }
 
 /** What a reply line calls the record it answers. */

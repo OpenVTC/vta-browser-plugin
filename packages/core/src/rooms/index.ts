@@ -85,6 +85,9 @@ async function call<Res>(
 
 import { ROOMS_MEMBER_EXT, memberExt } from "./member.js";
 export { ROOMS_MEMBER_EXT, memberExt };
+import { base64url } from "@openvtc/vti-didcomm-js";
+import { RecordBodyError, verifyRecordBody, type ResolveDidAt, type VerifiedRecordBody } from "./record-body.js";
+import { contentFromBody, readingFromCleartext, type RecordInput } from "./record-view.js";
 
 export type { PersonalLabel };
 
@@ -693,6 +696,105 @@ export async function roomsKeysReadMany(
     pending = next;
   }
   return params.keys.map((key) => answers.get(key)!);
+}
+
+/** One row of a room's listing (`rooms/keys/browse/0.4`, `RecordMetadataV3`), as {@link recordInputFromRead} reads it. */
+export interface ListedRecord {
+  key: string;
+  version: number;
+  status?: string;
+  updatedAt?: string;
+  author?: string;
+  createdAt?: string;
+  createdBy?: string;
+  bodyStoredAt?: string;
+  /** Served on an `open` room's listing only. */
+  kind?: string;
+}
+
+/**
+ * One listed record and its read answer, made into what the reading rules take
+ * (`assembleRoomRecords`) — the one place a surface turns a read into a
+ * {@link RecordInput}, so the wallet's console and a community's portal show a
+ * room alike.
+ *
+ * A sealed body is verified before anything of it is read (`SealedRecordBody`,
+ * *Reading*): the author's proof against their DID document as it stood at
+ * `bodyStoredAt` (`resolveDidAt`, shared by one listing's reads), the room, key
+ * and the version it was sealed at, and — where the host named one, on the read
+ * or the listing for the same version — that the signer is that author. A body
+ * that fails is `refused`, or a `placeholder` where its author cannot be
+ * verified; `reasonOf` words why (default: the error's message). An open room's
+ * cleartext is checked by `readingFromCleartext`. No answer, or a retracted
+ * record, is a tombstone; a failed read is `unreadable`.
+ *
+ * `body` is the verified sealed body, `cleartext` the open room's, for a
+ * surface that shows more of a record than the reading rules carry (its file).
+ */
+export async function recordInputFromRead(
+  roomId: string,
+  row: ListedRecord,
+  res: ReadManyResult | undefined,
+  resolveDidAt: ResolveDidAt,
+  reasonOf: (e: unknown) => string = (e) => (e instanceof Error ? e.message : String(e)),
+): Promise<{ input: RecordInput; body?: VerifiedRecordBody; cleartext?: Record<string, unknown> }> {
+  const version = res?.version ?? row.version;
+  const status = res?.status ?? row.status;
+  const updatedAt = res?.updatedAt ?? row.updatedAt;
+  const createdAt = res?.createdAt ?? row.createdAt;
+  const createdBy = res?.createdBy ?? row.createdBy;
+  const bodyStoredAt = res?.bodyStoredAt ?? row.bodyStoredAt;
+  const meta = {
+    key: row.key,
+    version,
+    ...(status !== undefined ? { status } : {}),
+    ...(updatedAt !== undefined ? { updatedAt } : {}),
+    ...(createdAt !== undefined ? { createdAt } : {}),
+    ...(createdBy !== undefined ? { createdBy } : {}),
+    ...(bodyStoredAt !== undefined ? { bodyStoredAt } : {}),
+    ...(row.kind !== undefined ? { listedKind: row.kind } : {}),
+  };
+  if (res === undefined) return { input: { ...meta, reading: { state: "tombstone" } } };
+  if (res.error) {
+    return { input: { ...meta, reading: { state: "unreadable", reason: res.error.message ?? res.error.code } } };
+  }
+  // The listing's word, used only for the version it listed.
+  const sameVersion = version === row.version;
+  const hostAuthor = res.author ?? (sameVersion ? row.author : undefined);
+  if (res.plaintext !== undefined) {
+    try {
+      let bytes: Uint8Array;
+      try {
+        bytes = base64url.decode(res.plaintext);
+      } catch {
+        throw new RecordBodyError("malformed", "the record body is not base64url");
+      }
+      const body = await verifyRecordBody(
+        bytes,
+        { roomId, key: row.key, version: readSealedVersion({ version, ...(res.ext !== undefined ? { ext: res.ext } : {}) }) },
+        res.author,
+        { resolveDidAt, ...(bodyStoredAt !== undefined ? { bodyStoredAt } : {}) },
+      );
+      const listedAuthor = sameVersion ? row.author : undefined;
+      if (listedAuthor !== undefined && listedAuthor !== body.author) {
+        throw new RecordBodyError(
+          "authorMismatch",
+          `the record body is signed by ${body.author}, but the host listed ${listedAuthor} as its author`,
+        );
+      }
+      if (body.roomProfile) return { input: { ...meta, reading: { state: "profile" } }, body };
+      return { input: { ...meta, reading: { state: "read", content: contentFromBody(body) } }, body };
+    } catch (e) {
+      const state = e instanceof RecordBodyError && e.placeholder ? "placeholder" : "refused";
+      return { input: { ...meta, reading: { state, reason: reasonOf(e) } } };
+    }
+  }
+  if (res.cleartext) {
+    const reading = readingFromCleartext(res.cleartext, hostAuthor ?? createdBy ?? "", version);
+    return { input: { ...meta, reading }, cleartext: res.cleartext };
+  }
+  // A retracted record has no body, and that is an answer rather than a failure.
+  return { input: { ...meta, reading: { state: "tombstone" } } };
 }
 
 /**
