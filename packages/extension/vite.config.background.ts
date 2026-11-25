@@ -21,7 +21,7 @@ export default defineConfig({
     // top-level-await plugin's destructuring to vite's default targets.
     target: "es2022",
     rollupOptions: {
-      input: { background: resolve(__dirname, "src/background.ts") },
+      input: { background: resolve(import.meta.dirname, "src/background.ts") },
       output: {
         entryFileNames: "background.js",
         codeSplitting: false,

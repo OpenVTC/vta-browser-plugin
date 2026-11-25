@@ -39,17 +39,16 @@
 // the agent (`tests/harness/dom.mjs`), rather than this file inventing a module
 // graph the real build never has.
 
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 
-// Required rather than imported: esbuild is CJS, and the sync transform is what
-// keeps this hook simple — no service to start on a loader thread.
+// Required rather than imported: esbuild is CJS, and its sync transform is what
+// lets these be synchronous `registerHooks` hooks — no service to start.
 const esbuild = createRequire(import.meta.url)("esbuild");
 
 /** `./x.js` → `./x.tsx` → `./x.ts`, when the `.js` is not on disk. */
-export async function resolve(specifier, context, nextResolve) {
+export function resolve(specifier, context, nextResolve) {
   if (specifier.endsWith(".js") && (specifier.startsWith(".") || specifier.startsWith("/"))) {
     const base = context.parentURL ?? pathToFileURL(`${process.cwd()}/`).href;
     const asJs = new URL(specifier, base);
@@ -69,12 +68,12 @@ export async function resolve(specifier, context, nextResolve) {
   return nextResolve(specifier, context);
 }
 
-export async function load(url, context, nextLoad) {
+export function load(url, context, nextLoad) {
   const isTsx = url.endsWith(".tsx");
   const isTs = url.endsWith(".ts") && !url.includes("/node_modules/");
   if (!isTsx && !isTs) return nextLoad(url, context);
   const path = fileURLToPath(url);
-  const source = await readFile(path, "utf8");
+  const source = readFileSync(path, "utf8");
   const { code } = esbuild.transformSync(source, {
     loader: isTsx ? "tsx" : "ts",
     // The automatic runtime, matching `tsconfig.base.json`'s `jsx: react-jsx`,

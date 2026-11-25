@@ -21,7 +21,7 @@ export default defineConfig({
     emptyOutDir: false,
     target: "es2022",
     rollupOptions: {
-      input: { content: resolve(__dirname, "src/content.ts") },
+      input: { content: resolve(import.meta.dirname, "src/content.ts") },
       output: {
         entryFileNames: "content.js",
         format: "iife",

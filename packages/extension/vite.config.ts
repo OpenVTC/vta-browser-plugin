@@ -26,7 +26,7 @@ function emitManifest() {
     writeBundle() {
       const manifest = buildManifest({ includeKey: true });
       writeFileSync(
-        resolve(__dirname, "dist/manifest.json"),
+        resolve(import.meta.dirname, "dist/manifest.json"),
         `${JSON.stringify(manifest, null, 2)}\n`,
       );
     },
@@ -62,11 +62,11 @@ export default defineConfig({
     modulePreload: false,
     rollupOptions: {
       input: {
-        popup: resolve(__dirname, "popup.html"),
-        options: resolve(__dirname, "options.html"),
-        confirm: resolve(__dirname, "confirm.html"),
-        offscreen: resolve(__dirname, "offscreen.html"),
-        provider: resolve(__dirname, "src/provider.ts"),
+        popup: resolve(import.meta.dirname, "popup.html"),
+        options: resolve(import.meta.dirname, "options.html"),
+        confirm: resolve(import.meta.dirname, "confirm.html"),
+        offscreen: resolve(import.meta.dirname, "offscreen.html"),
+        provider: resolve(import.meta.dirname, "src/provider.ts"),
       },
       output: {
         // Fixed names for the files the manifest references by path.
