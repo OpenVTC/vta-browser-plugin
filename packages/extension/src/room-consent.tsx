@@ -219,10 +219,12 @@ function Share({
 
 function Write({ view, decide }: { view: RoomWriteConsentView; decide: (approved: boolean) => void }) {
   const isFile = "file" in view.what;
+  const isMessage = "message" in view.what;
+  const thing = isFile ? "file" : isMessage ? "message" : "note";
   return (
     <>
       <strong style={{ fontSize: 14 }}>
-        Add {isFile ? "a file" : "a note"} to this room as you?
+        {isMessage ? "Send this message to the room as you?" : `Add a ${thing} to this room as you?`}
       </strong>
       <div style={{ color: "var(--w-muted)", lineHeight: 1.45 }}>
         {originHost(view.origin)} asks to write to a room, signed as you. Every member of the room will read it as
@@ -230,7 +232,7 @@ function Write({ view, decide }: { view: RoomWriteConsentView; decide: (approved
       </div>
       {view.visibility === "open" && (
         <div role="note" style={{ color: "var(--w-muted)", lineHeight: 1.45 }}>
-          This room is <b>open</b>: {isFile ? "the file's record, and the key that opens it, are" : "the note is"}{" "}
+          This room is <b>open</b>: {isFile ? "the file's record, and the key that opens it, are" : `the ${thing} is`}{" "}
           stored in the clear, so the room's host can read {isFile ? "the file" : "it"} as well as its members.
         </div>
       )}
@@ -258,6 +260,13 @@ function Write({ view, decide }: { view: RoomWriteConsentView; decide: (approved
               {view.what.mediaType ? ` · ${view.what.mediaType}` : ""}
               {view.what.title ? <div>Title: {view.what.title}</div> : null}
             </>
+          ) : "message" in view.what ? (
+            <>
+              {view.what.excerpt}
+              <div style={{ fontSize: 11, color: "var(--w-muted)", marginTop: 6 }}>
+                {view.what.bodyChars} characters
+              </div>
+            </>
           ) : (
             <>
               <b>{view.what.title}</b>
@@ -273,7 +282,7 @@ function Write({ view, decide }: { view: RoomWriteConsentView; decide: (approved
         <button autoFocus onClick={() => decide(false)} style={{ padding: "8px 16px", fontSize: 13 }}>
           Deny
         </button>
-        <Primary onClick={() => decide(true)}>Add {isFile ? "file" : "note"}</Primary>
+        <Primary onClick={() => decide(true)}>{isMessage ? "Send message" : `Add ${thing}`}</Primary>
       </div>
     </>
   );

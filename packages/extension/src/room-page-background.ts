@@ -307,6 +307,27 @@ export class RoomPageGates {
           ...(p.tags !== undefined ? { tags: p.tags } : {}),
         });
       }
+      case "putMessage": {
+        const { vta } = await this.atPortal(origin, p.hostDid, { needReach: true });
+        const member = await this.granted(origin, p.hostDid, vta, p.roomId);
+        const info = (await this.offscreen(vta, {
+          op: "info",
+          hostDid: p.hostDid,
+          roomId: p.roomId,
+          member,
+        })) as PageRoomInfoView;
+        const decision = await this.deps.prompt({
+          kind: "write",
+          origin,
+          hostDid: p.hostDid,
+          roomId: p.roomId,
+          member: info.member,
+          visibility: info.visibility,
+          what: { message: true, excerpt: excerpt(p.body), bodyChars: [...p.body].length },
+        });
+        if (!decision.approved) throw new RoomPageRefusal("the member declined to send this message", "declined");
+        return this.offscreen(vta, { op: "putMessage", hostDid: p.hostDid, roomId: p.roomId, member, body: p.body });
+      }
     }
   }
 

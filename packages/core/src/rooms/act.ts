@@ -591,6 +591,41 @@ export async function writeMemberNameAsMember(
   return { principal, key, version };
 }
 
+/**
+ * Write a chat message, as the member: a new record whose text is `body`, and
+ * no `title`.
+ *
+ * Where the room's profile lists `kind`, the record says `kind: "message"`, which
+ * every reader shows as a message; where it lists `writtenAt`, the record carries
+ * when it was written. A room listing neither still takes the message as an
+ * untitled record, which a reader keeping a conversation shows as one
+ * (*Untitled records*, `shownKind`) — never as a note with a made-up title.
+ * Sealed and signed by the VTA as the member on `attributed` and `private`, in the
+ * clear on `open` — as the room says, never assumed. Create-only.
+ */
+export async function writeMessageAsMember(
+  room: PersonaRoom,
+  params: { body: string; now?: () => Date },
+): Promise<{ principal: string; key: string; version: number }> {
+  if (params.body.trim() === "") throw new RecordWriteRefused("Not written: a message needs some text.");
+  const listed = (await roomRecordMembersAsMember(room)) ?? [];
+  const now = (params.now ?? (() => new Date()))().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const shape = {
+    ...(listed.includes("kind") ? { kind: MESSAGE_KIND } : {}),
+    ...(listed.includes("writtenAt") ? { writtenAt: now } : {}),
+  };
+  const { principal, info } = await roomInfoAsMember(room);
+  const key = opaqueRecordKey();
+  const version =
+    info.visibility === "open"
+      ? await putCleartextAsMember(room, { key, body: params.body, ...shape })
+      : await writeSealedAsMember(room, { roomId: room.roomId, key, author: principal, body: params.body, ...shape });
+  return { principal, key, version };
+}
+
+/** `RecordKind` for a chat message. */
+export const MESSAGE_KIND = "message";
+
 /** The member's own name record, as rule 2 gives it from the records its client holds: what a rewrite near the head writes again. */
 export interface OwnMemberName {
   key: string;

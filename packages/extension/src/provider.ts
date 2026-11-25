@@ -370,6 +370,10 @@ export interface VtaWalletRooms {
     description?: string;
     tags?: string[];
   }): Promise<{ key: string; version: number }>;
+  /** Write a chat message as the member — text, no title — after they confirm it.
+   *  It reads as a message in every reader (`kind: "message"` where the room
+   *  takes it, else an untitled record). */
+  putMessage(params: { hostDid: string; roomId: string; body: string }): Promise<{ key: string; version: number }>;
   /** A record's file, once the whole of it has verified against its author's digest. */
   getFile(params: {
     hostDid: string;
@@ -675,6 +679,7 @@ if (!window.vtaWallet) {
       read: (p) => call("rooms", { op: "read", hostDid: p.hostDid, roomId: p.roomId, key: p.key }),
       conversation: (p) => call("rooms", { op: "conversation", hostDid: p.hostDid, roomId: p.roomId }),
       putNote: (p) => call("rooms", { ...p, op: "putNote" }),
+      putMessage: (p) => call("rooms", { op: "putMessage", hostDid: p.hostDid, roomId: p.roomId, body: p.body }),
       offers: (p) => call("rooms", { op: "offers", hostDid: p.hostDid }),
       acceptOffer: (p) =>
         call("rooms", {

@@ -1048,7 +1048,7 @@ without checking it is the request that was built (`roomsKeysAct` does).
 ## A portal page uses rooms through the wallet's own methods (P7b)
 
 `window.vtaWallet.rooms.{list, choose, forget, info, browse, read, conversation,
-putNote, getFile, putFile}` is how a community's member portal shows a member their rooms
+putNote, putMessage, getFile, putFile}` is how a community's member portal shows a member their rooms
 (VTI `data-rooms-files.md` §8.5). It does **not** loosen "a page is not a
 member": `requestTask` and `signTrustTask` still refuse the whole `rooms/`
 family. The methods fix the verb, run the flow in the extension, and return
@@ -1097,6 +1097,15 @@ page's `putNote` on an open room writes `rooms/records/put/0.4` with
 `cleartext` (`putCleartextAsMember`, completed as the member by `rooms/keys/act`
 like every host request) — there is no group to seal under — after the same
 confirmation, which says the note will be readable by the room's host.
+
+**A page sends a chat message with `putMessage`, never a note without a
+title.** `writeMessageAsMember` writes the text with no `title`, plus
+`kind: "message"` and `writtenAt` where the room's profile lists them — so
+every reader shows it as a message, and a room listing neither still shows the
+untitled record as one (*Untitled records*, `shownKind`). It is confirmed in the
+wallet's window like a note, worded as a message. Keep `putNote`'s title
+required: a note and a message are different records, and a page choosing
+between them says which.
 
 **An open room's file carries its own key.** With no storage key to derive from, `putRoomFile` mints
 32 random bytes for the file, seals the blob exactly as on a sealed tier, and

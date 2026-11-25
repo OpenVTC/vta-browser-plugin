@@ -2501,7 +2501,9 @@ export type RoomsPageOp =
       body?: string;
       description?: string;
       tags?: string[];
-    };
+    }
+  /** A chat message: text and no title (`writeMessageAsMember`). Confirmed like a note. */
+  | { op: "putMessage"; hostDid: string; roomId: string; body: string };
 
 export interface RuntimeRoomsPageRequest {
   type: typeof RUNTIME_ROOMS_PAGE;
@@ -3661,7 +3663,8 @@ export type OffscreenRoomsPageOp =
       body?: string;
       description?: string;
       tags?: string[];
-    };
+    }
+  | { op: "putMessage"; hostDid: string; roomId: string; member: string; body: string };
 
 export interface OffscreenRoomsPageRequest {
   target: typeof OFFSCREEN_TARGET;

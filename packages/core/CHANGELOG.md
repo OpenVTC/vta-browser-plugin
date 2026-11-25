@@ -8,6 +8,14 @@ For history before this file, see `git log` on `packages/core`.
 
 ## [Unreleased]
 
+### Added
+
+- **`writeMessageAsMember`** writes a chat message to a room as the member:
+  the text with no `title`, plus `kind: "message"` and `writtenAt` where the
+  room's profile lists them (`MESSAGE_KIND`). A room listing neither takes it
+  as an untitled record, which readers show as a message. Sealed on
+  `attributed` / `private`, in the clear on `open`; create-only.
+
 ### Changed
 
 - **BREAKING: a relying-party session step-up no longer takes the session's
