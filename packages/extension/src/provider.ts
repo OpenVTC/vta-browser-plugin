@@ -54,6 +54,8 @@ import type {
   PageConversationView,
   PageRecordView,
   RoomFilesPageMessage,
+  PageRoomWatchState,
+  RoomWatchPageEvent,
 } from "./bridge-protocol.js";
 import type { PageOfferView } from "./room-offers-policy.js";
 import type { PageErrorCode } from "./page-error.js";
@@ -372,8 +374,39 @@ export interface VtaWalletRooms {
   }): Promise<{ key: string; version: number }>;
   /** Write a chat message as the member — text, no title — after they confirm it.
    *  It reads as a message in every reader (`kind: "message"` where the room
-   *  takes it, else an untitled record). */
-  putMessage(params: { hostDid: string; roomId: string; body: string }): Promise<{ key: string; version: number }>;
+   *  takes it, else an untitled record). `replyTo` names the record it answers;
+   *  the wallet shows the member what that is, and refuses with
+   *  `recordMembersNotListed` — writing nothing — where the room takes no replies. */
+  putMessage(params: {
+    hostDid: string;
+    roomId: string;
+    body: string;
+    replyTo?: { key: string; version?: number };
+  }): Promise<{ key: string; version: number }>;
+  /** React to a record with `value` (one emoji or a short word: no line break,
+   *  at most 64 characters), after the member confirms it. Refused with
+   *  `recordMembersNotListed` where the room takes no reactions. */
+  react(params: { hostDid: string; roomId: string; key: string; version?: number; value: string }): Promise<{
+    key: string;
+    version: number;
+  }>;
+  /** Take back the member's own reaction `value` on a record, after they confirm
+   *  it. `withdrawn` counts the reaction records taken back: 0 when they had none there. */
+  unreact(params: { hostDid: string; roomId: string; key: string; value: string }): Promise<{ withdrawn: number }>;
+  /**
+   * Be told when a shared room changes, instead of reading it on a timer. The
+   * wallet asks the member's agent to watch the room, and `onEvent` hears:
+   * `changed` (the room moved past what was read — read it again, then call
+   * `read(version)`), `state` (where the watch stands: while it is `refused` or
+   * `unavailable`, fall back to reading on a timer), `failed` (with a
+   * `VtaWalletError`'s `code`: `notShared`, `originNotPermitted`, …) and
+   * `closed` (the watch ended: `stop`, the wallet restarted, or a failure —
+   * watch again to resume). Nothing of what changed is ever sent.
+   */
+  watch(
+    params: { hostDid: string; roomId: string; sinceVersion?: number },
+    onEvent: (e: RoomWatchEvent) => void,
+  ): RoomWatchHandle;
   /** A record's file, once the whole of it has verified against its author's digest. */
   getFile(params: {
     hostDid: string;
@@ -400,6 +433,21 @@ export interface VtaWalletRooms {
     tags?: string[];
     onProgress?: (p: RoomTransferProgress) => void;
   }): Promise<{ key: string; version: number; size: number }>;
+}
+
+/** What a page's room watch hears (`rooms.watch`). */
+export type RoomWatchEvent =
+  | { type: "changed"; latestVersion: number }
+  | { type: "state"; state: PageRoomWatchState }
+  | { type: "failed"; error: VtaWalletError }
+  | { type: "closed" };
+
+/** A page's hold on one room's watch. */
+export interface RoomWatchHandle {
+  /** Say the room was read to `version` (the highest record version read): a watch that fired or lapsed is armed again from there. */
+  read(version?: number): void;
+  /** End the watch. The wallet cancels it at the member's agent. */
+  stop(): void;
 }
 
 declare global {
@@ -464,6 +512,12 @@ window.addEventListener("message", (event: MessageEvent) => {
     return;
   }
 
+  if ("kind" in data && (data as { kind?: unknown }).kind === "roomWatch") {
+    const frame = data as unknown as { id: string; msg: RoomWatchPageEvent | { kind: "closed" } };
+    watches.get(frame.id)?.(frame.msg);
+    return;
+  }
+
   // Otherwise it's a request/response — fulfil the pending promise.
   if (!("id" in data)) return;
   const entry = pending.get(data.id);
@@ -519,6 +573,74 @@ function legacy<T>(method: "login" | "loginDidcomm" | "proxyLogin", run: () => P
     );
   }
   return run();
+}
+
+// ── Room watches ─────────────────────────────────────────────────────────────
+//
+// One id per watch; the content script opens one port per id. The page pings
+// the port while it watches, which keeps the wallet's background awake to pass
+// the signal on; it carries nothing.
+
+const watches = new Map<string, (msg: RoomWatchPageEvent | { kind: "closed" }) => void>();
+const WATCH_PING_MS = 20_000;
+
+function postWatchFrame(id: string, msg: unknown): void {
+  window.postMessage({ source: INPAGE_SOURCE, kind: "roomWatch", id, msg }, window.origin);
+}
+
+function watchRoom(
+  params: Parameters<VtaWalletRooms["watch"]>[0],
+  onEvent: Parameters<VtaWalletRooms["watch"]>[1],
+): RoomWatchHandle {
+  const id = crypto.randomUUID();
+  let ended = false;
+  const emit = (e: RoomWatchEvent) => {
+    try {
+      onEvent(e);
+    } catch {
+      // The page's handler threw: its problem, not the watch's.
+    }
+  };
+  const end = () => {
+    if (ended) return;
+    ended = true;
+    clearInterval(ping);
+    watches.delete(id);
+  };
+  watches.set(id, (msg) => {
+    switch (msg.kind) {
+      case "changed":
+        emit({ type: "changed", latestVersion: msg.latestVersion });
+        return;
+      case "state":
+        emit({ type: "state", state: msg.state });
+        return;
+      case "failed":
+        emit({ type: "failed", error: walletError(msg.error, msg.code) });
+        return;
+      case "closed":
+        end();
+        emit({ type: "closed" });
+        return;
+    }
+  });
+  const ping = setInterval(() => postWatchFrame(id, { kind: "ping" }), WATCH_PING_MS);
+  postWatchFrame(id, {
+    kind: "watch",
+    hostDid: params.hostDid,
+    roomId: params.roomId,
+    ...(params.sinceVersion !== undefined ? { sinceVersion: params.sinceVersion } : {}),
+  });
+  return {
+    read: (version) => {
+      if (!ended) postWatchFrame(id, { kind: "read", ...(version !== undefined ? { version } : {}) });
+    },
+    stop: () => {
+      if (ended) return;
+      postWatchFrame(id, { kind: "stop" });
+      end();
+    },
+  };
 }
 
 // ── Room-file transfers ──────────────────────────────────────────────────────
@@ -679,7 +801,25 @@ if (!window.vtaWallet) {
       read: (p) => call("rooms", { op: "read", hostDid: p.hostDid, roomId: p.roomId, key: p.key }),
       conversation: (p) => call("rooms", { op: "conversation", hostDid: p.hostDid, roomId: p.roomId }),
       putNote: (p) => call("rooms", { ...p, op: "putNote" }),
-      putMessage: (p) => call("rooms", { op: "putMessage", hostDid: p.hostDid, roomId: p.roomId, body: p.body }),
+      putMessage: (p) =>
+        call("rooms", {
+          op: "putMessage",
+          hostDid: p.hostDid,
+          roomId: p.roomId,
+          body: p.body,
+          ...(p.replyTo !== undefined ? { replyTo: p.replyTo } : {}),
+        }),
+      react: (p) =>
+        call("rooms", {
+          op: "react",
+          hostDid: p.hostDid,
+          roomId: p.roomId,
+          key: p.key,
+          ...(p.version !== undefined ? { version: p.version } : {}),
+          value: p.value,
+        }),
+      unreact: (p) => call("rooms", { op: "unreact", hostDid: p.hostDid, roomId: p.roomId, key: p.key, value: p.value }),
+      watch: watchRoom,
       offers: (p) => call("rooms", { op: "offers", hostDid: p.hostDid }),
       acceptOffer: (p) =>
         call("rooms", {

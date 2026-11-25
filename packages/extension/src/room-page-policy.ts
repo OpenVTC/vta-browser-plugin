@@ -41,6 +41,7 @@
 // wallet builds (`PageRoomView` and friends in `bridge-protocol.ts`).
 
 import type { RoomsPageOp, RoomFilesPageOpen } from "./bridge-protocol.js";
+import { reactionValue } from "@openvtc/pnm-core/rooms";
 
 /** How long a share lasts before the member is asked again. */
 export const ROOM_GRANT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -346,7 +347,43 @@ function tags(v: unknown): string | null {
   return null;
 }
 
-const OPS = new Set(["list", "choose", "forget", "info", "browse", "read", "conversation", "putNote", "putMessage", "offers", "acceptOffer"]);
+const OPS = new Set([
+  "list",
+  "choose",
+  "forget",
+  "info",
+  "browse",
+  "read",
+  "conversation",
+  "putNote",
+  "putMessage",
+  "react",
+  "unreact",
+  "offers",
+  "acceptOffer",
+]);
+
+/** A reaction's value, as a page may send it: the reading rules' own test (*A reaction's value*). */
+function reaction(v: unknown): string | null {
+  if (typeof v !== "string") return "value must be a string";
+  const r = reactionValue(v);
+  if (r.kind === "empty") return "value is required";
+  if (r.kind === "invalid") return `value: ${r.reason}`;
+  return null;
+}
+
+function version(v: unknown, what: string): string | null {
+  return v === undefined || (Number.isSafeInteger(v) && (v as number) >= 1) ? null : `${what} must be a whole number of at least 1`;
+}
+
+/** A record reference a page names: a key, and a version where it gives one. */
+function reference(v: unknown, what: string): string | null {
+  if (v === undefined) return null;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return `${what} must be { key, version? }`;
+  const r = v as Record<string, unknown>;
+  if (Object.keys(r).some((k) => k !== "key" && k !== "version")) return `${what} must be { key, version? }`;
+  return text(r.key, `${what}.key`, MAX_KEY, true) ?? version(r.version, `${what}.version`);
+}
 
 /** Why a page's room call is malformed, or `null` when it is well formed. Checked before anything else. */
 export function roomsPageParamsRefusal(raw: unknown): string | null {
@@ -378,10 +415,31 @@ export function roomsPageParamsRefusal(raw: unknown): string | null {
         tags(op.tags)
       );
     case "putMessage":
-      return text(op.body, "body", MAX_BODY, true);
+      return text(op.body, "body", MAX_BODY, true) ?? reference(op.replyTo, "replyTo");
+    case "react":
+      return text(op.key, "key", MAX_KEY, true) ?? version(op.version, "version") ?? reaction(op.value);
+    case "unreact":
+      return text(op.key, "key", MAX_KEY, true) ?? reaction(op.value);
     default:
       return null;
   }
+}
+
+/** Why a page's watch is malformed, or `null` when it is well formed: `{ kind: "watch", hostDid, roomId, sinceVersion? }`. */
+export function roomWatchPageOpenRefusal(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "a watch starts with watch";
+  const o = raw as Record<string, unknown>;
+  if (o.kind !== "watch") return "a watch starts with watch";
+  if (Object.keys(o).some((k) => !["kind", "hostDid", "roomId", "sinceVersion"].includes(k))) {
+    return "a watch names hostDid, roomId and sinceVersion only";
+  }
+  return (
+    did(o.hostDid, "hostDid") ??
+    did(o.roomId, "roomId") ??
+    (o.sinceVersion !== undefined && !(Number.isSafeInteger(o.sinceVersion) && (o.sinceVersion as number) >= 0)
+      ? "sinceVersion must be a whole number"
+      : null)
+  );
 }
 
 /** Why a page's file transfer is malformed, or `null` when it is well formed. */
@@ -454,8 +512,28 @@ export interface RoomWriteConsentView {
   visibility: string;
   what:
     | { note: true; title: string; excerpt: string; bodyChars: number }
-    | { message: true; excerpt: string; bodyChars: number }
+    | {
+        message: true;
+        excerpt: string;
+        bodyChars: number;
+        /** The record the message answers, as the wallet read it — never the page's word. */
+        replyingTo?: RecordGlimpse;
+      }
+    /** A reaction, or (`withdraw`) taking one back, on the record the wallet read. */
+    | { reaction: true; value: string; withdraw?: true; on: RecordGlimpse }
     | { file: true; name: string; size: number; mediaType?: string; title?: string };
+}
+
+/** Another record, as a write prompt names it: who wrote it and how it starts. Read by the wallet. */
+export interface RecordGlimpse {
+  author?: string;
+  excerpt: string;
+}
+
+/** A record the wallet read, as a prompt names it: its title, else the start of its text, else its file. */
+export function glimpseOf(r: { author?: string; title?: string; body?: string; file?: { name: string } }): RecordGlimpse {
+  const text = (r.title || r.body || r.file?.name || "").replace(/\s+/g, " ").trim();
+  return { ...(r.author !== undefined ? { author: r.author } : {}), excerpt: excerpt(text, 120) };
 }
 
 /** The first `n` characters of a note's body, for the write prompt. */

@@ -55,6 +55,8 @@ const RUNTIME_DIRECTORY_PAGE = "vta-wallet/directory-page";
 const RUNTIME_GIT_PAGE = "vta-wallet/git-page";
 const RUNTIME_ELECTIONS_PAGE = "vta-wallet/elections-page";
 const ROOM_FILES_PAGE_PORT = "vta-wallet/room-files-page";
+/** `ROOM_WATCH_PAGE_PORT` in bridge-protocol.ts, inlined for the same reason. */
+const ROOM_WATCH_PAGE_PORT = "vta-wallet/room-watch-page";
 
 // ─── 1. Inject the provider into the page world. ───
 // The content script runs in an isolated world, so assigning
@@ -115,6 +117,10 @@ window.addEventListener("message", (event: MessageEvent) => {
   if (!req || req.source !== INPAGE_SOURCE) return;
   if ((req as unknown as { kind?: unknown }).kind === "roomFile") {
     relayRoomFile(req as unknown as RoomFileFrame);
+    return;
+  }
+  if ((req as unknown as { kind?: unknown }).kind === "roomWatch") {
+    relayRoomWatch(req as unknown as RoomFileFrame);
     return;
   }
 
@@ -207,6 +213,45 @@ function relayRoomFile(frame: RoomFileFrame): void {
     port.onDisconnect.addListener(() => {
       void chrome.runtime.lastError;
       roomFilePorts.delete(frame.id);
+      back({ kind: "closed" });
+    });
+  }
+  port.postMessage(frame.msg);
+}
+
+// ─── 2c. Room watches: one port per watch, page ⇄ background. ───
+//
+// `window.vtaWallet.rooms.watch` (P7b). The page's frames carry a watch id and
+// one message (`RoomWatchPageMessage`); each watch gets its own port to the
+// background, which checks the page's portal and share on the port's
+// browser-attested origin, never on a frame. What comes back — the watch's
+// state, and that the room changed — is posted to the page as it arrives.
+// Closing the port (the page's `stop`, or the tab going away) cancels the watch.
+const roomWatchPorts = new Map<string, chrome.runtime.Port>();
+
+function relayRoomWatch(frame: RoomFileFrame): void {
+  if (typeof frame.id !== "string" || !frame.msg || typeof frame.msg !== "object") return;
+  const back = (msg: unknown) =>
+    window.postMessage({ source: CONTENT_SOURCE, kind: "roomWatch", id: frame.id, msg }, window.origin);
+  let port = roomWatchPorts.get(frame.id);
+  if (frame.msg.kind === "stop") {
+    port?.disconnect();
+    roomWatchPorts.delete(frame.id);
+    return;
+  }
+  if (!port) {
+    try {
+      port = chrome.runtime.connect({ name: ROOM_WATCH_PAGE_PORT });
+    } catch (e) {
+      back({ kind: "failed", error: e instanceof Error ? e.message : String(e), code: "walletUnavailable" });
+      back({ kind: "closed" });
+      return;
+    }
+    roomWatchPorts.set(frame.id, port);
+    port.onMessage.addListener((m: unknown) => back(m));
+    port.onDisconnect.addListener(() => {
+      void chrome.runtime.lastError;
+      roomWatchPorts.delete(frame.id);
       back({ kind: "closed" });
     });
   }

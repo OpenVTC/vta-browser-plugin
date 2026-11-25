@@ -43,6 +43,7 @@ import {
   memberNameRewriteDue,
   memberNameWriteRefusal,
 } from "./member-name.js";
+import { reactionValue } from "./record-view.js";
 
 import {
   TYPE_URI as KEYS_ACT,
@@ -71,6 +72,7 @@ import {
   TYPE_URI as RECORDS_PUT,
   RESPONSE_TYPE_URI as RECORDS_PUT_RESPONSE,
   type RoomsRecordsPutResponsePayload,
+  type RecordReference,
 } from "../specs/rooms/records/put/0.5/payload.js";
 import {
   TYPE_URI as RECORDS_CURATE,
@@ -329,6 +331,8 @@ export interface UnsignedRecordBody {
   writtenAt?: string;
   /** When the author edited it (`RecordEditedAt`). Written only where the room's profile lists `editedAt`. */
   editedAt?: string;
+  /** The record this one answers or, on a reaction, responds to (`RecordReference`). Written only where the room's profile lists `inReplyTo`. */
+  inReplyTo?: RecordReference;
 }
 
 /** Thrown when a record landed at a version it was not sealed for, every time. */
@@ -415,10 +419,11 @@ export async function putCleartextAsMember(
     body?: string;
     description?: string;
     tags?: string[];
-    /** `kind`, `writtenAt` and `editedAt` (`rooms/records/put/0.5`): only where the room's profile lists them. */
+    /** `kind`, `writtenAt`, `editedAt` and `inReplyTo` (`rooms/records/put/0.5`): only where the room's profile lists them. */
     kind?: string;
     writtenAt?: string;
     editedAt?: string;
+    inReplyTo?: RecordReference;
     replaces?: number;
     file?: { manifest: Record<string, unknown>; blobRef: string };
   },
@@ -428,6 +433,7 @@ export async function putCleartextAsMember(
   if (params.title !== undefined) cleartext.title = params.title;
   if (params.writtenAt !== undefined) cleartext.writtenAt = params.writtenAt;
   if (params.editedAt !== undefined) cleartext.editedAt = params.editedAt;
+  if (params.inReplyTo !== undefined) cleartext.inReplyTo = { ...params.inReplyTo };
   if (params.description !== undefined) cleartext.description = params.description;
   if (params.tags !== undefined) cleartext.tags = params.tags;
   const payload: Record<string, unknown> = {
@@ -503,6 +509,7 @@ function wireBody(body: UnsignedRecordBody & { version: number }): Record<string
   if (body.file !== undefined) out.file = body.file;
   if (body.writtenAt !== undefined) out.writtenAt = body.writtenAt;
   if (body.editedAt !== undefined) out.editedAt = body.editedAt;
+  if (body.inReplyTo !== undefined) out.inReplyTo = { ...body.inReplyTo };
   return out;
 }
 
@@ -522,10 +529,34 @@ export async function roomRecordMembersAsMember(room: PersonaRoom): Promise<stri
 
 /** Thrown when a write is refused before anything is sent: the room's profile does not permit it, or the value is not one the schema allows. */
 export class RecordWriteRefused extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** Set when a page can act on the refusal: `recordMembersNotListed` — the room's profile does not list a member the write needs. */
+    readonly code?: "recordMembersNotListed",
+  ) {
     super(message);
     this.name = "RecordWriteRefused";
   }
+}
+
+/**
+ * Why a write needing `needed` record members is refused in a room whose
+ * profile lists `listed`, or `undefined` when it lists them all. A writer MUST
+ * NOT write a member the room's current profile does not list
+ * (`SealedRecordBody`, *When a writer may use these members*): a reply or a
+ * reaction is refused, never written without what makes it one.
+ */
+export function recordMembersRefusal(
+  listed: readonly string[] | undefined,
+  needed: readonly string[],
+  what: string,
+): RecordWriteRefused | undefined {
+  const missing = needed.filter((m) => !(listed ?? []).includes(m));
+  if (missing.length === 0) return undefined;
+  return new RecordWriteRefused(
+    `Not written: this room does not take ${what} — its profile does not list ${missing.join(" and ")} in its record members.`,
+    "recordMembersNotListed",
+  );
 }
 
 /** A name record a member already holds in the room: the one a new name is written over. */
@@ -605,14 +636,19 @@ export async function writeMemberNameAsMember(
  */
 export async function writeMessageAsMember(
   room: PersonaRoom,
-  params: { body: string; now?: () => Date },
+  params: { body: string; replyTo?: RecordReference; now?: () => Date },
 ): Promise<{ principal: string; key: string; version: number }> {
   if (params.body.trim() === "") throw new RecordWriteRefused("Not written: a message needs some text.");
   const listed = (await roomRecordMembersAsMember(room)) ?? [];
+  if (params.replyTo !== undefined) {
+    const refused = recordMembersRefusal(listed, ["inReplyTo"], "replies");
+    if (refused) throw refused;
+  }
   const now = (params.now ?? (() => new Date()))().toISOString().replace(/\.\d{3}Z$/, "Z");
   const shape = {
     ...(listed.includes("kind") ? { kind: MESSAGE_KIND } : {}),
     ...(listed.includes("writtenAt") ? { writtenAt: now } : {}),
+    ...(params.replyTo !== undefined ? { inReplyTo: replyReference(params.replyTo) } : {}),
   };
   const { principal, info } = await roomInfoAsMember(room);
   const key = opaqueRecordKey();
@@ -625,6 +661,94 @@ export async function writeMessageAsMember(
 
 /** `RecordKind` for a chat message. */
 export const MESSAGE_KIND = "message";
+
+/** `RecordKind` for a reaction. */
+export const REACTION_KIND = "reaction";
+
+/** A reference as written: the key, and the version only when one was given. */
+function replyReference(r: RecordReference): RecordReference {
+  return { key: r.key, ...(r.version !== undefined ? { version: r.version } : {}) };
+}
+
+/**
+ * React to a record, as the member: a new record of kind `reaction` whose
+ * `body` is the value and whose `inReplyTo` names the record (*Reactions*,
+ * `SealedRecordBody`) — the shape {@link assembleRoomRecords} counts, once per
+ * author, value and target.
+ *
+ * **Refused before anything is sent** unless the room's profile lists `kind`
+ * and `inReplyTo` (a reader that predates them would show the reaction as a
+ * message), and unless `value` is a reaction's value: not empty, no line break,
+ * at most 64 code points once normalised. `writtenAt` where the profile lists
+ * it. Sealed and signed by the VTA as the member on `attributed` and `private`,
+ * in the clear on `open`. Create-only.
+ */
+export async function writeReactionAsMember(
+  room: PersonaRoom,
+  params: { target: RecordReference; value: string; now?: () => Date },
+): Promise<{ principal: string; key: string; version: number }> {
+  const value = reactionValue(params.value);
+  if (value.kind === "empty") throw new RecordWriteRefused("Not written: a reaction needs a value.");
+  if (value.kind === "invalid") throw new RecordWriteRefused(`Not written: the reaction's ${value.reason.replace(/^its /, "")}.`);
+  const listed = await roomRecordMembersAsMember(room);
+  const refused = recordMembersRefusal(listed, ["kind", "inReplyTo"], "reactions");
+  if (refused) throw refused;
+  const now = (params.now ?? (() => new Date()))().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const shape = {
+    kind: REACTION_KIND,
+    inReplyTo: replyReference(params.target),
+    ...(listed!.includes("writtenAt") ? { writtenAt: now } : {}),
+  };
+  const { principal, info } = await roomInfoAsMember(room);
+  const key = opaqueRecordKey();
+  const version =
+    info.visibility === "open"
+      ? await putCleartextAsMember(room, { key, body: params.value, ...shape })
+      : await writeSealedAsMember(room, { roomId: room.roomId, key, author: principal, body: params.value, ...shape });
+  return { principal, key, version };
+}
+
+/** The member's own reaction record, as the reading of the room found it: the one a withdrawal is written over. */
+export interface HeldReaction {
+  key: string;
+  version: number;
+  /** The record it reacts to: a withdrawal keeps it (*What a new version keeps*). */
+  target: RecordReference;
+}
+
+/**
+ * Withdraw the member's own reaction: a new version of the same record, still
+ * of kind `reaction` and naming the same record, with an empty `body` — which
+ * only the reaction's own author may write to withdraw it (*Withdrawing a
+ * reaction*). It `replaces` the version read, so a concurrent change wins and
+ * this writes nothing over it. `editedAt` where the profile lists it.
+ */
+export async function withdrawReactionAsMember(
+  room: PersonaRoom,
+  held: HeldReaction,
+  params: { now?: () => Date } = {},
+): Promise<{ principal: string; key: string; version: number }> {
+  const listed = await roomRecordMembersAsMember(room);
+  const refused = recordMembersRefusal(listed, ["kind", "inReplyTo"], "reactions");
+  if (refused) throw refused;
+  const now = (params.now ?? (() => new Date()))().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const shape = {
+    kind: REACTION_KIND,
+    inReplyTo: replyReference(held.target),
+    ...(listed!.includes("editedAt") ? { editedAt: now } : {}),
+  };
+  const { principal, info } = await roomInfoAsMember(room);
+  const version =
+    info.visibility === "open"
+      ? await putCleartextAsMember(room, { key: held.key, body: "", ...shape, replaces: held.version })
+      : await writeSealedAsMember(
+          room,
+          { roomId: room.roomId, key: held.key, author: principal, body: "", ...shape },
+          undefined,
+          { replaces: held.version },
+        );
+  return { principal, key: held.key, version };
+}
 
 /** The member's own name record, as rule 2 gives it from the records its client holds: what a rewrite near the head writes again. */
 export interface OwnMemberName {

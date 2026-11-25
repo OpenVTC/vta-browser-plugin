@@ -183,6 +183,9 @@ import {
   type RuntimeRoomOffersRequest,
   type RuntimeRoomOffersResponse,
   ROOM_FILES_PAGE_PORT,
+  ROOM_WATCH_PAGE_PORT,
+  RUNTIME_ROOMS_KEYS_CHANGED,
+  type RuntimeRoomsKeysChanged,
   OFFSCREEN_ROOMS_PAGE,
   type OffscreenRoomsPageResponse,
   type RuntimeRoomsPageRequest,
@@ -1242,6 +1245,30 @@ chrome.runtime.onConnect.addListener((port) => {
     return;
   }
   roomPageGates.servePort(port as unknown as PortLike, origin);
+});
+
+// One page's watch on one room (`rooms.watch`). The origin is the port's
+// browser-attested one; a port from an extension page is not a page's and is refused.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== ROOM_WATCH_PAGE_PORT) return;
+  const origin = port.sender ? attestedOrigin(port.sender) : undefined;
+  if (!origin || !port.sender?.tab || isExtensionPageSender(port.sender)) {
+    port.disconnect();
+    return;
+  }
+  roomPageGates.serveWatchPort(port as unknown as PortLike, origin);
+});
+
+// A watched room moved (`rooms/keys/changed/0.1`), as the offscreen document
+// received it from the member's VTA. Taken only from the offscreen document
+// itself — a content script carries this extension's id too — and passed on
+// only to a page that armed that watch. Never answered.
+chrome.runtime.onMessage.addListener((message, sender) => {
+  const m = message as Partial<RuntimeRoomsKeysChanged> | undefined;
+  if (m?.type !== RUNTIME_ROOMS_KEYS_CHANGED || typeof m.vtaDid !== "string" || !m.signal) return false;
+  if (sender.tab !== undefined || sender.url !== chrome.runtime.getURL("offscreen.html")) return false;
+  roomPageGates.deliverRoomSignal(m.vtaDid, m.signal);
+  return false;
 });
 
 chrome.runtime.onConnect.addListener((port) => {

@@ -63,6 +63,11 @@ export const WALLET_ERROR_CODES = {
   offerNotListed: "The community lists no such room offer to the member.",
   /** Rooms: this offer is being accepted already, from another surface. */
   offerInProgress: "The offer is being accepted already.",
+  /** Rooms: the room's profile does not list the record members this write
+   *  needs — `inReplyTo` for a reply, `kind` and `inReplyTo` for a reaction — so
+   *  nothing was written. Someone holding `curate` or `admin` in the room turns
+   *  them on. Offer the plain write (a message without the reply) instead. */
+  recordMembersNotListed: "The room does not take this kind of record yet.",
   /** The member holds no membership credential issued by the party an election
    *  is put to, so they are not a member of that party here. */
   membershipNotHeld: "The member holds no membership credential of that party.",

@@ -1048,7 +1048,7 @@ without checking it is the request that was built (`roomsKeysAct` does).
 ## A portal page uses rooms through the wallet's own methods (P7b)
 
 `window.vtaWallet.rooms.{list, choose, forget, info, browse, read, conversation,
-putNote, putMessage, getFile, putFile}` is how a community's member portal shows a member their rooms
+putNote, putMessage, react, unreact, watch, getFile, putFile}` is how a community's member portal shows a member their rooms
 (VTI `data-rooms-files.md` §8.5). It does **not** loosen "a page is not a
 member": `requestTask` and `signTrustTask` still refuse the whole `rooms/`
 family. The methods fix the verb, run the flow in the extension, and return
@@ -1106,6 +1106,36 @@ untitled record as one (*Untitled records*, `shownKind`). It is confirmed in the
 wallet's window like a note, worded as a message. Keep `putNote`'s title
 required: a note and a message are different records, and a page choosing
 between them says which.
+
+**A page replies and reacts through the wallet, and only where the room takes
+it.** `putMessage({ replyTo })` writes `inReplyTo`; `react` writes a record of
+kind `reaction` (the value as `body`, naming the record — exactly what
+`assembleRoomRecords` counts); `unreact` writes an empty version over each of
+the member's own live reactions with that value on that record
+(`ownReactions`), which only their author may. Before the member is asked, the
+background reads the room's profile as the member (`recordMembers`) and
+refuses with `recordMembersNotListed` where it does not list what the write
+needs — a reply is never sent without `inReplyTo`, a reaction never as a
+message. The confirm window shows the record answered or reacted to **as the
+wallet read it** (`rooms/keys/read`, `glimpseOf`), never anything the page
+said about it. Each reaction is confirmed like any write: no "remember".
+
+**A page learns a shared room moved over a port, never a broadcast.**
+`rooms.watch` opens one `ROOM_WATCH_PAGE_PORT` per watch (the content script
+relays `roomWatch` frames as it relays `roomFile` ones). The background checks
+the port's browser-attested origin and the share exactly as for a call, holds
+the watch in its own `RoomWatcher` (one per background, so two tabs share a
+room's watch), arms it through the member's VTA (`rooms/keys/watch/0.1`, the
+offscreen `watch` op) after each read the page reports, and passes the room's
+`rooms/keys/changed` — taken only from the offscreen document — to the ports
+that armed it, as `{ kind: "changed", latestVersion }` and nothing more, after
+checking the share is still live. Closing the port (`stop`, the tab going)
+releases it; the last release cancels it at the VTA. The page pings the port
+every 20 s, which keeps the worker alive while it watches; a worker restart
+closes the port, and the page watches again. **What breaks it:** sending a
+room's signal through `RUNTIME_BROADCAST_EVENT` (it reaches every tab of every
+origin); passing a signal for a watch no page armed, or after the share went;
+re-arming on a signal rather than after the page's read.
 
 **An open room's file carries its own key.** With no storage key to derive from, `putRoomFile` mints
 32 random bytes for the file, seals the blob exactly as on a sealed tier, and

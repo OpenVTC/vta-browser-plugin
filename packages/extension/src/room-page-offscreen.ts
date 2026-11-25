@@ -36,8 +36,14 @@ import {
   readSealedVersion,
   roomProfileView,
   roomsKeysProfileRead,
+  ownReactions,
+  roomRecordMembersAsMember,
+  roomsKeysWatch,
+  withdrawReactionAsMember,
   writeMessageAsMember,
+  writeReactionAsMember,
   writeSealedAsMember,
+  type RecordInput,
   type PersonaRoom,
 } from "@openvtc/pnm-core/rooms";
 import { RecordBodyError, RoomHostChannel, verifyRecordBody, type ResolveDidAt } from "@openvtc/pnm-core/rooms/files";
@@ -286,9 +292,56 @@ export async function runRoomsPageOp(
       return { key, version };
     }
     case "putMessage": {
-      const { key, version } = await writeMessageAsMember(await room(op.roomId, op.member), { body: op.body });
+      const { key, version } = await writeMessageAsMember(await room(op.roomId, op.member), {
+        body: op.body,
+        ...(op.replyTo !== undefined ? { replyTo: op.replyTo } : {}),
+      });
       return { key, version };
     }
+    case "recordMembers":
+      return (await roomRecordMembersAsMember(await room(op.roomId, op.member))) ?? [];
+    case "react": {
+      const { key, version } = await writeReactionAsMember(await room(op.roomId, op.member), {
+        target: op.target,
+        value: op.value,
+      });
+      return { key, version };
+    }
+    case "unreact": {
+      // The member's own reactions with this value on that record, as the room
+      // reads now — each one counts until withdrawn, so each is withdrawn.
+      const r = await room(op.roomId, op.member);
+      const { principal } = await roomInfoAsMember(r);
+      const at = { ...parties, roomId: op.roomId, host: op.hostDid, member: op.member };
+      const inputs = await readInputs(at, op.roomId);
+      const mine = ownReactions(inputs, { author: principal, target: op.target, value: op.value });
+      for (const held of mine) await withdrawReactionAsMember(r, held);
+      return { withdrawn: mine.length };
+    }
+    case "watch": {
+      return roomsKeysWatch(sender, {
+        ...parties,
+        member: op.member,
+        host: op.hostDid,
+        rooms: op.rooms,
+        ...(op.leaseSeconds !== undefined ? { leaseSeconds: op.leaseSeconds } : {}),
+        ...(op.cancel ? { cancel: true as const } : {}),
+      });
+    }
+  }
+
+  /** Every record of the room, listed, read and verified as the reading rules take them. */
+  async function readInputs(
+    at: { holder: { did: string }; service: { did: string }; roomId: string; host: string; member: string },
+    roomId: string,
+  ): Promise<RecordInput[]> {
+    const listing = await roomsKeysBrowse(sender, at);
+    const rows = (listing.records ?? []) as unknown as ListedRecord[];
+    const toRead = rows.filter((r) => r.status !== "retracted").map((r) => r.key);
+    const answers = toRead.length === 0 ? [] : await roomsKeysReadMany(sender, { ...at, keys: toRead });
+    const byKey = new Map(answers.map((a) => [a.key, a]));
+    const resolve = memoResolveDidDocumentAt();
+    return Promise.all(rows.map(async (row) => (await recordInputFromRead(roomId, row, byKey.get(row.key), resolve)).input));
   }
 }
 
