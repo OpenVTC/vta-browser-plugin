@@ -74,6 +74,9 @@ test("a page call is checked for shape before anything else", () => {
     roomsPageParamsRefusal({ op: "putNote", hostDid: HOST, roomId: ROOM, title: "t", tags: new Array(33).fill("x") })!,
     /at most 32/,
   );
+  assert.equal(roomsPageParamsRefusal({ op: "putMessage", hostDid: HOST, roomId: ROOM, body: "hi" }), null);
+  assert.match(roomsPageParamsRefusal({ op: "putMessage", hostDid: HOST, roomId: ROOM, body: " \n" })!, /body is required/);
+  assert.match(roomsPageParamsRefusal({ op: "putMessage", hostDid: HOST, roomId: ROOM })!, /body is required/);
   assert.match(roomFilesPageOpenRefusal({ kind: "put", hostDid: HOST, roomId: ROOM, name: "a", size: 65 * 1024 * 1024 })!, /more than/);
   assert.equal(roomFilesPageOpenRefusal({ kind: "get", hostDid: HOST, roomId: ROOM, key: "k" }), null);
 });
@@ -418,6 +421,86 @@ test("every note is confirmed, showing who signs and what is written", async () 
   const ok = await h.gates.handle(PORTAL, { op: "putNote", hostDid: HOST, roomId: ROOM, title: "Pricing", body: "Hold." });
   assert.ok(ok.ok);
   assert.ok(h.asked.some((a) => a.op === "putNote"));
+});
+
+test("every message is confirmed as a message, and nothing is written until it is", async () => {
+  const h = harness();
+  h.answer = { approved: true, selectedRooms: [as(ROOM)] };
+  await h.gates.handle(PORTAL, { op: "choose", hostDid: HOST });
+
+  h.answer = { approved: false };
+  const denied = await h.gates.handle(PORTAL, { op: "putMessage", hostDid: HOST, roomId: ROOM, body: "Lunch at one?" });
+  assert.deepEqual(denied, { ok: false, error: "the member declined to send this message", code: "declined" });
+  assert.ok(!h.asked.some((a) => a.op === "putMessage"), "nothing was written");
+  const view = h.prompts.at(-1) as RoomWriteConsentView;
+  assert.equal(view.kind, "write");
+  assert.equal(view.member, MEMBER);
+  assert.deepEqual(view.what, { message: true, excerpt: "Lunch at one?", bodyChars: 13 });
+
+  h.answer = { approved: true };
+  const ok = await h.gates.handle(PORTAL, { op: "putMessage", hostDid: HOST, roomId: ROOM, body: "Lunch at one?" });
+  assert.ok(ok.ok);
+  assert.ok(h.asked.some((a) => a.op === "putMessage"));
+});
+
+test("a message sent before the room is shared is refused, and nothing is asked", async () => {
+  const h = harness();
+  const res = await h.gates.handle(PORTAL, { op: "putMessage", hostDid: HOST, roomId: ROOM, body: "hi" });
+  assert.equal((res as { code?: string }).code, "notShared");
+  assert.ok(!h.prompts.some((p) => (p as { kind?: string }).kind === "write"), "no write prompt");
+  assert.ok(!h.asked.some((a) => a.op === "putMessage"));
+});
+
+test("the offscreen message for an open room is a message in the clear: kind and writtenAt where the room takes them, no title", async () => {
+  for (const [recordMembers, expected] of [
+    [["kind", "writtenAt"], ["body", "kind", "writtenAt"]],
+    [undefined, ["body"]],
+  ] as const) {
+    const sent: Record<string, unknown>[] = [];
+    const out = await runRoomsPageOp(
+      {
+        agent: async () => ({
+          holderDid: "did:key:zWallet",
+          sender: {
+            async send<Res>(envelope: { type: string; payload: { document: Record<string, unknown> } }) {
+              if (envelope.type.includes("rooms/keys/profile/read/")) {
+                return (recordMembers === undefined
+                  ? { roomId: OPEN_ROOM, status: "absent" }
+                  : { roomId: OPEN_ROOM, status: "found", profile: { name: "R", recordMembers } }) as Res;
+              }
+              if (!envelope.type.includes("rooms/keys/act/")) throw new Error(`unexpected ${envelope.type}`);
+              const doc = structuredClone(envelope.payload.document);
+              doc.proof = { type: "DataIntegrityProof" };
+              return { principal: doc.issuer, document: doc } as Res;
+            },
+          } as never,
+        }),
+        portal: async () => ({ portalOrigin: PORTAL, endpoint: `${PORTAL}/v1/trust-tasks` }),
+        completed: () => ({
+          async sendCompleted<Res>(doc: Record<string, unknown>) {
+            sent.push(doc);
+            const type = String(doc.type);
+            const payload = doc.payload as { roomId: string; key?: string };
+            if (type.includes("rooms/info/")) {
+              return { roomId: payload.roomId, visibility: "open", epoch: 1, limits: {}, usage: {} } as Res;
+            }
+            if (type.includes("rooms/records/put/")) return { key: payload.key, version: 4 } as Res;
+            throw new Error(`unexpected ${type}`);
+          },
+        }),
+      },
+      { vtaDid: VTA },
+      { op: "putMessage", hostDid: HOST, roomId: OPEN_ROOM, member: MEMBER, body: "Lunch at one?" },
+    );
+    const put = sent.find((d) => String(d.type).includes("rooms/records/put/"))!;
+    assert.ok(put, "a put reached the community");
+    assert.equal(put.issuer, MEMBER, "as the member");
+    const cleartext = (put.payload as { cleartext: Record<string, unknown> }).cleartext;
+    assert.deepEqual(Object.keys(cleartext).sort(), [...expected]);
+    assert.equal(cleartext.body, "Lunch at one?");
+    if (recordMembers) assert.equal(cleartext.kind, "message");
+    assert.deepEqual(out, { key: (put.payload as { key: string }).key, version: 4 });
+  }
 });
 
 // ── Files ───────────────────────────────────────────────────────────────────
@@ -805,12 +888,18 @@ test("a share names its member, and every request for the page carries it", asyn
   await h.gates.handle(PORTAL, { op: "conversation", hostDid: HOST, roomId: ROOM, member: "did:key:zSomeoneElse", extra: 1 });
   h.answer = { approved: true };
   await h.gates.handle(PORTAL, { op: "putNote", hostDid: HOST, roomId: ROOM, title: "t" });
+  await h.gates.handle(PORTAL, { op: "putMessage", hostDid: HOST, roomId: ROOM, body: "hi", member: "did:key:zSomeoneElse" });
   assert.deepEqual(
     h.asked.find((a) => a.op === "conversation"),
     { op: "conversation", hostDid: HOST, roomId: ROOM, member: MEMBER },
     "the share's member, never the page's, and nothing else the page added",
   );
-  for (const op of ["info", "browse", "read", "conversation", "putNote"]) {
+  assert.deepEqual(
+    h.asked.find((a) => a.op === "putMessage"),
+    { op: "putMessage", hostDid: HOST, roomId: ROOM, member: MEMBER, body: "hi" },
+    "a message is written as the share's member, with nothing the page added",
+  );
+  for (const op of ["info", "browse", "read", "conversation", "putNote", "putMessage"]) {
     const asked = h.asked.filter((a) => a.op === op);
     assert.ok(asked.length > 0, op);
     assert.ok(asked.every((a) => a.member === MEMBER), `${op} names the member`);

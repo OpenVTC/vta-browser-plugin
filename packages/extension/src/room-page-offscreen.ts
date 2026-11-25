@@ -36,6 +36,7 @@ import {
   readSealedVersion,
   roomProfileView,
   roomsKeysProfileRead,
+  writeMessageAsMember,
   writeSealedAsMember,
   type PersonaRoom,
 } from "@openvtc/pnm-core/rooms";
@@ -282,6 +283,10 @@ export async function runRoomsPageOp(
         ...(op.description !== undefined ? { description: op.description } : {}),
         ...(op.tags !== undefined ? { tags: op.tags } : {}),
       });
+      return { key, version };
+    }
+    case "putMessage": {
+      const { key, version } = await writeMessageAsMember(await room(op.roomId, op.member), { body: op.body });
       return { key, version };
     }
   }

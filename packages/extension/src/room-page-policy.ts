@@ -346,7 +346,7 @@ function tags(v: unknown): string | null {
   return null;
 }
 
-const OPS = new Set(["list", "choose", "forget", "info", "browse", "read", "conversation", "putNote", "offers", "acceptOffer"]);
+const OPS = new Set(["list", "choose", "forget", "info", "browse", "read", "conversation", "putNote", "putMessage", "offers", "acceptOffer"]);
 
 /** Why a page's room call is malformed, or `null` when it is well formed. Checked before anything else. */
 export function roomsPageParamsRefusal(raw: unknown): string | null {
@@ -377,6 +377,8 @@ export function roomsPageParamsRefusal(raw: unknown): string | null {
         text(op.description, "description", MAX_DESCRIPTION) ??
         tags(op.tags)
       );
+    case "putMessage":
+      return text(op.body, "body", MAX_BODY, true);
     default:
       return null;
   }
@@ -452,6 +454,7 @@ export interface RoomWriteConsentView {
   visibility: string;
   what:
     | { note: true; title: string; excerpt: string; bodyChars: number }
+    | { message: true; excerpt: string; bodyChars: number }
     | { file: true; name: string; size: number; mediaType?: string; title?: string };
 }
 

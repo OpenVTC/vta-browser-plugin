@@ -22,6 +22,8 @@ import {
   RecordWriteRefused,
   rewriteMemberNameAsMember,
   writeMemberNameAsMember,
+  writeMessageAsMember,
+  shownKind,
 } from "../dist/rooms/index.js";
 
 const ALICE = "did:webvh:QmAlice:people.example:alice-room";
@@ -456,3 +458,42 @@ test("near the head: nothing is written when the write is within 500, the name i
   assert.deepEqual(puts(closed.sent), [], "the writer's gate holds for a rewrite too");
 });
 
+
+// ── A chat message (writeMessageAsMember) ──────────────────────────────────
+
+test("message writer: on a sealed tier the body is kind message, the text and writtenAt, no title, signed as the member", async () => {
+  const r = room({ recordMembers: ["kind", "writtenAt"] });
+  const out = await writeMessageAsMember(r.room, { body: "Lunch at one?", now: () => new Date("2026-11-25T12:00:00.456Z") });
+  assert.equal(out.principal, ALICE);
+  const [body] = r.sealed;
+  assert.deepEqual(Object.keys(body).sort(), ["author", "body", "key", "kind", "roomId", "version", "writtenAt"]);
+  assert.equal(body.kind, "message");
+  assert.equal(body.body, "Lunch at one?");
+  assert.equal(body.writtenAt, "2026-11-25T12:00:00Z");
+  assert.equal(body.author, ALICE);
+  assert.equal(puts(r.sent)[0].payload.expectedVersion, 0, "create-only");
+  assert.equal(shownKind(body), "message");
+});
+
+test("message writer: a room whose profile lists neither still takes it, untitled, which readers show as a message", async () => {
+  const r = room({ recordMembers: undefined });
+  await writeMessageAsMember(r.room, { body: "hi" });
+  const [body] = r.sealed;
+  assert.deepEqual(Object.keys(body).sort(), ["author", "body", "key", "roomId", "version"]);
+  assert.equal(shownKind(body), "message");
+});
+
+test("message writer: on an open room the cleartext is the message, in the clear, never sealed", async () => {
+  const r = room({ recordMembers: ["kind"], visibility: "open" });
+  await writeMessageAsMember(r.room, { body: "hi" });
+  const [put] = puts(r.sent);
+  assert.deepEqual(put.payload.cleartext, { kind: "message", body: "hi" });
+  assert.deepEqual(r.sealed, []);
+});
+
+test("message writer: an empty message is refused before anything is asked", async () => {
+  const r = room({ recordMembers: ["kind"] });
+  await assert.rejects(writeMessageAsMember(r.room, { body: "  \n" }), RecordWriteRefused);
+  assert.deepEqual(r.vtaAsked, []);
+  assert.deepEqual(r.sent, []);
+});
