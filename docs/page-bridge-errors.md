@@ -86,6 +86,7 @@ source; a test fails if this table and that list differ.
 | `notShared` | A room the page asked about is not shared with it, or its share ran out: ask the member to share it again (`rooms.choose`). |
 | `offerNotListed` | Rooms: the community lists no such offer to the member now. |
 | `offerInProgress` | Rooms: this offer is being accepted already, from another surface. |
+| `recordMembersNotListed` | Rooms: the room's profile does not list the record members this write needs — `inReplyTo` for a reply, `kind` and `inReplyTo` for a reaction — so nothing was written. Someone holding `curate` or `admin` in the room turns them on. Offer the plain write (a message without the reply) instead. |
 | `membershipNotHeld` | Elections: the member holds no membership credential issued by the party the election is put to, so they are not a member of that party here. |
 | `credentialNotHeld` | Directory: the member's wallet holds no credential the fields can be filled from. |
 | `disclosureExceeded` | Directory: the credential would disclose more than the member agreed to in the wallet's window; nothing was presented. |

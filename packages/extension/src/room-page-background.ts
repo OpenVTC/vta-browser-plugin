@@ -22,6 +22,7 @@
 import type {
   OffscreenRoomsPageOp,
   OffscreenRoomsPageResponse,
+  PageRecordView,
   PageRoomInfoView,
   PageRoomView,
   RoomFilesMessage,
@@ -30,17 +31,22 @@ import type {
   RoomFilesPageOpen,
   RoomProfileSummary,
   RoomsPageOp,
+  RoomWatchPageEvent,
+  RuntimeRoomsKeysChanged,
   RuntimeRoomsPageResponse,
 } from "./bridge-protocol.js";
+import { RoomWatcher, roomWatchId, type RoomWatchKey, type RoomWatchBatch } from "@openvtc/pnm-core/rooms";
 import { PageRefusal, forwardedCode, pageFailure, type PageErrorCode } from "./page-error.js";
 import {
   excerpt,
+  glimpseOf,
   liveGrants,
   mergeRoomNames,
   storedRoomState,
   type RoomOwnerState,
   portalRefusal,
   roomFilesPageOpenRefusal,
+  roomWatchPageOpenRefusal,
   roomGrant,
   roomsPageParamsRefusal,
   selectedShares,
@@ -50,6 +56,7 @@ import {
   withoutGrant,
   type RememberedRoomName,
   type RoomGrant,
+  type RecordGlimpse,
   type RoomShareConsentView,
   type RoomWriteConsentView,
 } from "./room-page-policy.js";
@@ -96,6 +103,8 @@ export interface RoomPageBackgroundDeps {
   /** The room names remembered for one community under one VTA (`roomNamesKey`). Absent: none kept. */
   loadRoomNames?(vtaDid: string, hostDid: string): Promise<unknown>;
   saveRoomNames?(vtaDid: string, hostDid: string, names: Record<string, RememberedRoomName>): Promise<void>;
+  /** Timers for the watches pages hold, injectable for tests. Default `setTimeout`. */
+  setTimer?(fn: () => void, ms: number): unknown;
 }
 
 /** A room's name, as a page or the share prompt is shown it. */
@@ -154,6 +163,17 @@ export class RoomPageGates {
    */
   private readonly profiles = new Map<string, { at: number; summary: RoomProfileSummary | null }>();
 
+  /**
+   * The rooms pages are watching, armed through the member's VTA. One watcher
+   * for the background: two tabs on one room share its watch, and the last to
+   * close cancels it.
+   */
+  private watcher: RoomWatcher | undefined;
+  /** The VTA each watched room is armed through, by `vtaDid`. */
+  private readonly watchVtas = new Map<string, ActiveVta>();
+  /** Each page port's signal handler, by watch id. */
+  private readonly watchers = new Map<string, Set<(latestVersion: number) => void>>();
+
   constructor(private readonly deps: RoomPageBackgroundDeps) {}
 
   /** `hostDid`'s portal and endpoint, resolved through the offscreen document and cached briefly. */
@@ -195,6 +215,37 @@ export class RoomPageGates {
     const r = roomGrant(grants, { origin, hostDid, vtaDid: vta.vtaDid }, roomId, this.deps.now());
     if (!r.ok) throw new RoomPageRefusal(r.error, "notShared");
     return r.grant.member;
+  }
+
+  /**
+   * Refuse, before the member is asked anything, a write the room's profile
+   * does not take: a writer MUST NOT use a record member the room's current
+   * profile does not list (`SealedRecordBody`).
+   */
+  private async needsRecordMembers(
+    vta: ActiveVta,
+    at: { hostDid: string; roomId: string; member: string },
+    needed: readonly string[],
+    what: string,
+  ): Promise<void> {
+    const listed = (await this.offscreen(vta, { op: "recordMembers", ...at })) as string[];
+    const missing = needed.filter((m) => !listed.includes(m));
+    if (missing.length > 0) {
+      throw new RoomPageRefusal(
+        `This room does not take ${what}: its profile does not list ${missing.join(" and ")} in its record members.`,
+        "recordMembersNotListed",
+      );
+    }
+  }
+
+  /** The record at `key`, read by the wallet as the member, as a prompt names it. */
+  private async glimpse(
+    vta: ActiveVta,
+    at: { hostDid: string; roomId: string; member: string },
+    key: string,
+  ): Promise<RecordGlimpse> {
+    const read = (await this.offscreen(vta, { op: "read", ...at, key })) as PageRecordView;
+    return glimpseOf(read);
   }
 
   private async offscreen(vta: ActiveVta, op: OffscreenRoomsPageOp): Promise<unknown> {
@@ -310,12 +361,12 @@ export class RoomPageGates {
       case "putMessage": {
         const { vta } = await this.atPortal(origin, p.hostDid, { needReach: true });
         const member = await this.granted(origin, p.hostDid, vta, p.roomId);
-        const info = (await this.offscreen(vta, {
-          op: "info",
-          hostDid: p.hostDid,
-          roomId: p.roomId,
-          member,
-        })) as PageRoomInfoView;
+        const at = { hostDid: p.hostDid, roomId: p.roomId, member };
+        // A reply is refused before the member is asked where the room takes none:
+        // never sent without what makes it one.
+        if (p.replyTo !== undefined) await this.needsRecordMembers(vta, at, ["inReplyTo"], "replies");
+        const info = (await this.offscreen(vta, { op: "info", ...at })) as PageRoomInfoView;
+        const replyingTo = p.replyTo !== undefined ? await this.glimpse(vta, at, p.replyTo.key) : undefined;
         const decision = await this.deps.prompt({
           kind: "write",
           origin,
@@ -323,10 +374,55 @@ export class RoomPageGates {
           roomId: p.roomId,
           member: info.member,
           visibility: info.visibility,
-          what: { message: true, excerpt: excerpt(p.body), bodyChars: [...p.body].length },
+          what: {
+            message: true,
+            excerpt: excerpt(p.body),
+            bodyChars: [...p.body].length,
+            ...(replyingTo !== undefined ? { replyingTo } : {}),
+          },
         });
         if (!decision.approved) throw new RoomPageRefusal("the member declined to send this message", "declined");
-        return this.offscreen(vta, { op: "putMessage", hostDid: p.hostDid, roomId: p.roomId, member, body: p.body });
+        return this.offscreen(vta, {
+          op: "putMessage",
+          ...at,
+          body: p.body,
+          ...(p.replyTo !== undefined
+            ? { replyTo: { key: p.replyTo.key, ...(p.replyTo.version !== undefined ? { version: p.replyTo.version } : {}) } }
+            : {}),
+        });
+      }
+      case "react":
+      case "unreact": {
+        const { vta } = await this.atPortal(origin, p.hostDid, { needReach: true });
+        const member = await this.granted(origin, p.hostDid, vta, p.roomId);
+        const at = { hostDid: p.hostDid, roomId: p.roomId, member };
+        await this.needsRecordMembers(vta, at, ["kind", "inReplyTo"], "reactions");
+        const info = (await this.offscreen(vta, { op: "info", ...at })) as PageRoomInfoView;
+        const on = await this.glimpse(vta, at, p.key);
+        const withdraw = p.op === "unreact";
+        const decision = await this.deps.prompt({
+          kind: "write",
+          origin,
+          hostDid: p.hostDid,
+          roomId: p.roomId,
+          member: info.member,
+          visibility: info.visibility,
+          what: { reaction: true, value: p.value, on, ...(withdraw ? { withdraw: true as const } : {}) },
+        });
+        if (!decision.approved) {
+          throw new RoomPageRefusal(
+            withdraw ? "the member declined to take back this reaction" : "the member declined to react",
+            "declined",
+          );
+        }
+        return withdraw
+          ? this.offscreen(vta, { op: "unreact", ...at, target: p.key, value: p.value })
+          : this.offscreen(vta, {
+              op: "react",
+              ...at,
+              target: { key: p.key, ...(p.version !== undefined ? { version: p.version } : {}) },
+              value: p.value,
+            });
       }
     }
   }
@@ -554,6 +650,155 @@ export class RoomPageGates {
   }
 
   // ── Files ─────────────────────────────────────────────────────────────────
+
+  // ── Change signals ──────────────────────────────────────────────────────────
+
+  private roomWatcher(): RoomWatcher {
+    this.watcher ??= new RoomWatcher({
+      send: async (batch: RoomWatchBatch) => {
+        const vta = this.watchVtas.get(batch.vtaDid);
+        if (!vta) throw new Error("no agent for this watch");
+        return (await this.offscreen(vta, {
+          op: "watch",
+          hostDid: batch.host,
+          member: batch.member,
+          rooms: batch.rooms,
+          ...(batch.leaseSeconds !== undefined ? { leaseSeconds: batch.leaseSeconds } : {}),
+          ...(batch.cancel ? { cancel: true as const } : {}),
+        })) as Awaited<ReturnType<ConstructorParameters<typeof RoomWatcher>[0]["send"]>>;
+      },
+      ...(this.deps.setTimer ? { setTimer: this.deps.setTimer } : {}),
+      now: () => this.deps.now(),
+    });
+    return this.watcher;
+  }
+
+  /**
+   * A room's signal, as the offscreen document received it from the member's
+   * VTA (`RUNTIME_ROOMS_KEYS_CHANGED`; the caller checks it came from the
+   * offscreen document). Handed to the pages watching that room only when a
+   * page armed it; anything else is dropped. Answers whether one took it.
+   */
+  deliverRoomSignal(vtaDid: string, signal: RuntimeRoomsKeysChanged["signal"]): boolean {
+    const key = this.watcher?.accept(vtaDid, signal);
+    if (!key) return false;
+    for (const fn of this.watchers.get(roomWatchId(key)) ?? []) fn(signal.latestVersion);
+    return true;
+  }
+
+  /**
+   * Serve one page's watch on `page`, a port from a content script at `origin`
+   * (browser-attested). The first message names the room; the page must be the
+   * community's portal and the room shared with it, as for every room call.
+   * Then: the watch is armed through the member's VTA after each read the page
+   * reports, the room's signal is passed on — that it moved, and to which
+   * version, nothing else — and the watch is cancelled when the port closes.
+   * The share is checked again before every signal is passed on.
+   */
+  serveWatchPort(page: PortLike, origin: string): void {
+    let open = true;
+    let held: { key: RoomWatchKey; release: () => void } | undefined;
+    const post = (m: RoomWatchPageEvent) => {
+      if (!open) return;
+      try {
+        page.postMessage(m);
+      } catch {
+        close();
+      }
+    };
+    const close = () => {
+      if (!open) return;
+      open = false;
+      held?.release();
+      held = undefined;
+    };
+    const fail = (e: unknown) => {
+      post({ kind: "failed", ...failedOf(e) });
+      close();
+      try {
+        page.disconnect();
+      } catch {
+        // Already gone.
+      }
+    };
+    page.onDisconnect.addListener(close);
+
+    let started = false;
+    page.onMessage.addListener((raw: unknown) => {
+      if (!open) return;
+      if (!started) {
+        started = true;
+        void this.startWatch(origin, raw, post, fail).then((h) => {
+          if (!h) return;
+          if (open) held = h;
+          else h.release();
+        });
+        return;
+      }
+      const m = raw as { kind?: unknown; version?: unknown };
+      if (m?.kind === "ping") return;
+      if (m?.kind === "read" && (m.version === undefined || (Number.isSafeInteger(m.version) && (m.version as number) >= 0))) {
+        if (held) this.roomWatcher().afterRead(held.key, m.version as number | undefined);
+        return;
+      }
+      fail(new RoomPageRefusal("a watch takes read and ping after it starts", "invalidCall"));
+    });
+  }
+
+  private async startWatch(
+    origin: string,
+    raw: unknown,
+    post: (m: RoomWatchPageEvent) => void,
+    fail: (e: unknown) => void,
+  ): Promise<{ key: RoomWatchKey; release: () => void } | undefined> {
+    const malformed = roomWatchPageOpenRefusal(raw);
+    if (malformed) {
+      fail(new RoomPageRefusal(malformed, "invalidCall"));
+      return undefined;
+    }
+    const o = raw as { hostDid: string; roomId: string; sinceVersion?: number };
+    let vta: ActiveVta;
+    let member: string;
+    try {
+      // The VTA arms the watch at the host, not the wallet: no host permission is needed.
+      ({ vta } = await this.atPortal(origin, o.hostDid, { needReach: false }));
+      member = await this.granted(origin, o.hostDid, vta, o.roomId);
+    } catch (e) {
+      fail(e);
+      return undefined;
+    }
+    const watcher = this.roomWatcher();
+    const key: RoomWatchKey = { vtaDid: vta.vtaDid, member, host: o.hostDid, roomId: o.roomId };
+    const id = roomWatchId(key);
+    this.watchVtas.set(vta.vtaDid, vta);
+    const onSignal = (latestVersion: number) => {
+      // The share may have been forgotten or run out since the watch began.
+      void this.granted(origin, o.hostDid, vta, o.roomId).then(
+        () => post({ kind: "changed", latestVersion }),
+        (e: unknown) => fail(e),
+      );
+    };
+    const set = this.watchers.get(id) ?? new Set();
+    set.add(onSignal);
+    this.watchers.set(id, set);
+    const unsubscribe = watcher.subscribe((changed, state) => {
+      if (changed === id && state) post({ kind: "state", state: state.state });
+    });
+    watcher.hold(key);
+    watcher.afterRead(key, o.sinceVersion);
+    let released = false;
+    return {
+      key,
+      release: () => {
+        if (released) return;
+        released = true;
+        unsubscribe();
+        set.delete(onSignal);
+        if (set.size === 0) this.watchers.delete(id);
+        watcher.release(key);
+      },
+    };
+  }
 
   /**
    * Serve one page file transfer on `page`, a port from a content script at

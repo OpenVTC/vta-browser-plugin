@@ -2502,8 +2502,18 @@ export type RoomsPageOp =
       description?: string;
       tags?: string[];
     }
-  /** A chat message: text and no title (`writeMessageAsMember`). Confirmed like a note. */
-  | { op: "putMessage"; hostDid: string; roomId: string; body: string };
+  /** A chat message: text and no title (`writeMessageAsMember`). Confirmed like a note.
+   *  `replyTo` names the record it answers: written as `inReplyTo` only where the
+   *  room's profile lists it, else refused (`recordMembersNotListed`) — never sent
+   *  without it. The wallet shows the member what is being answered. */
+  | { op: "putMessage"; hostDid: string; roomId: string; body: string; replyTo?: { key: string; version?: number } }
+  /** React to a record with `value` (an emoji, at most 64 code points): a record of
+   *  kind `reaction` naming it (`writeReactionAsMember`). Confirmed in the wallet;
+   *  refused (`recordMembersNotListed`) where the profile lists no `kind` and `inReplyTo`. */
+  | { op: "react"; hostDid: string; roomId: string; key: string; version?: number; value: string }
+  /** Withdraw the member's own reaction `value` on a record (`withdrawReactionAsMember`).
+   *  Confirmed in the wallet. Answers `{ withdrawn: 0 }` when they have none there. */
+  | { op: "unreact"; hostDid: string; roomId: string; key: string; value: string };
 
 export interface RuntimeRoomsPageRequest {
   type: typeof RUNTIME_ROOMS_PAGE;
@@ -2703,6 +2713,33 @@ export interface PageConversationView {
 
 /** page ⇄ background: one file transfer, over a port the content script opens. */
 export const ROOM_FILES_PAGE_PORT = "vta-wallet/room-files-page" as const;
+
+/**
+ * page ⇄ background: one room's change signal, over a port the content script
+ * opens (`rooms.watch`). The background checks the port's browser-attested
+ * origin and the member's share, arms a watch on the room through the member's
+ * VTA (`rooms/keys/watch/0.1`), and relays the room's `rooms/keys/changed`
+ * signal — content-free: that the room moved, and to which version — until the
+ * port closes, when the watch is cancelled.
+ */
+export const ROOM_WATCH_PAGE_PORT = "vta-wallet/room-watch-page" as const;
+
+/** page → background. `watch` first, once; then `read` after each read of the room, and `ping` to keep the port. */
+export type RoomWatchPageMessage =
+  | { kind: "watch"; hostDid: string; roomId: string; sinceVersion?: number }
+  /** The page read the room to `version`: a watch that fired or lapsed is armed again from there. */
+  | { kind: "read"; version?: number }
+  | { kind: "ping" };
+
+/** Where a page's watch stands (`RoomWatchState`, by name only). */
+export type PageRoomWatchState = "arming" | "armed" | "fired" | "refused" | "unavailable" | "lapsed";
+
+/** background → page. */
+export type RoomWatchPageEvent =
+  | { kind: "state"; state: PageRoomWatchState }
+  /** The room moved past what the page read: read it again, then say `read`. Nothing of what changed. */
+  | { kind: "changed"; latestVersion: number }
+  | { kind: "failed"; error: string; code: PageErrorCode };
 
 /** page → background, once, as the port's first message. */
 export type RoomFilesPageOpen =
@@ -3664,7 +3701,35 @@ export type OffscreenRoomsPageOp =
       description?: string;
       tags?: string[];
     }
-  | { op: "putMessage"; hostDid: string; roomId: string; member: string; body: string };
+  | {
+      op: "putMessage";
+      hostDid: string;
+      roomId: string;
+      member: string;
+      body: string;
+      replyTo?: { key: string; version?: number };
+    }
+  /** The room's `recordMembers`, as its current profile lists them, read as the member. `[]`: none. */
+  | { op: "recordMembers"; hostDid: string; roomId: string; member: string }
+  | {
+      op: "react";
+      hostDid: string;
+      roomId: string;
+      member: string;
+      target: { key: string; version?: number };
+      value: string;
+    }
+  /** Withdraw every reaction of the member's with `value` on `target`, as the room reads now. */
+  | { op: "unreact"; hostDid: string; roomId: string; member: string; target: string; value: string }
+  /** Arm or cancel watches on rooms through the member's VTA (`rooms/keys/watch/0.1`): one request, one host, one member. */
+  | {
+      op: "watch";
+      hostDid: string;
+      member: string;
+      rooms: { roomId: string; sinceVersion?: number }[];
+      leaseSeconds?: number;
+      cancel?: true;
+    };
 
 export interface OffscreenRoomsPageRequest {
   target: typeof OFFSCREEN_TARGET;

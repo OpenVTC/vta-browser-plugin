@@ -660,3 +660,37 @@ export function assembleRoomRecords(inputs: readonly RecordInput[], opts: { now:
     nameRecords,
   };
 }
+
+/** One of the member's own reactions, as the room's records show it now. */
+export interface OwnReaction {
+  key: string;
+  version: number;
+  target: RecordReference;
+}
+
+/**
+ * The member's own reactions with `value` on the record at `target`, as the
+ * records read now show them: each a record of kind `reaction` whose current
+ * version is readable, is by `author`, names `target` and carries `value` once
+ * normalised (*A reaction's value*). What a withdrawal is written over — every
+ * one of them, since each counts until it is withdrawn. An empty (withdrawn)
+ * one is not among them.
+ */
+export function ownReactions(
+  inputs: readonly RecordInput[],
+  match: { author: string; target: string; value: string },
+): OwnReaction[] {
+  const wanted = reactionValue(match.value);
+  if (wanted.kind !== "value") return [];
+  const out: OwnReaction[] = [];
+  for (const input of inputs) {
+    if (input.reading.state !== "read") continue;
+    const c = input.reading.content;
+    if (c.kind !== "reaction" || c.author !== match.author || c.inReplyTo?.key !== match.target) continue;
+    const v = reactionValue(c.body);
+    if (v.kind === "value" && v.normalised === wanted.normalised) {
+      out.push({ key: input.key, version: input.version, target: { ...c.inReplyTo } });
+    }
+  }
+  return out;
+}

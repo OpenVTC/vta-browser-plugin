@@ -15,6 +15,17 @@ For history before this file, see `git log` on `packages/core`.
   room's profile lists them (`MESSAGE_KIND`). A room listing neither takes it
   as an untitled record, which readers show as a message. Sealed on
   `attributed` / `private`, in the clear on `open`; create-only.
+- **Replies and reactions, written as the member.** `writeMessageAsMember`
+  takes `replyTo` (written as `inReplyTo`); `writeReactionAsMember` writes a
+  record of kind `reaction` (`REACTION_KIND`) — the value as its `body`, naming
+  the record it reacts to — and `withdrawReactionAsMember` takes one back with
+  an empty version of the member's own record, over the version read.
+  `ownReactions` finds the member's live reactions with a value on a record,
+  by the reading rules. A room whose profile does not list what a write needs
+  (`inReplyTo`; `kind` and `inReplyTo`) refuses it before anything is sealed or
+  sent: `RecordWriteRefused` with `code: "recordMembersNotListed"`
+  (`recordMembersRefusal`). `UnsignedRecordBody` and `putCleartextAsMember`
+  carry `inReplyTo`.
 
 ### Changed
 

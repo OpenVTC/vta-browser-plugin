@@ -17,6 +17,7 @@ import { requestOriginPermission } from "./host-permissions.js";
 import {
   ROOM_CONSENT_PREFIX,
   type RoomShareConsentView,
+  type RecordGlimpse,
   type RoomShareRow,
   type RoomWriteConsentView,
   shareButtonWords,
@@ -217,14 +218,34 @@ function Share({
   );
 }
 
+/** The record a reply or a reaction is about, as the wallet read it. */
+function Glimpse({ of }: { of: RecordGlimpse }) {
+  return (
+    <div style={{ ...card, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+      {of.author ? (
+        <div style={{ fontSize: 11, color: "var(--w-muted)", marginBottom: 4 }}>
+          By <Did value={of.author} />
+        </div>
+      ) : null}
+      {of.excerpt || <span style={{ color: "var(--w-muted)" }}>(nothing to show)</span>}
+    </div>
+  );
+}
+
 function Write({ view, decide }: { view: RoomWriteConsentView; decide: (approved: boolean) => void }) {
+  if ("reaction" in view.what) return <React view={view} what={view.what} decide={decide} />;
   const isFile = "file" in view.what;
   const isMessage = "message" in view.what;
-  const thing = isFile ? "file" : isMessage ? "message" : "note";
+  const replyingTo = "message" in view.what ? view.what.replyingTo : undefined;
+  const thing = isFile ? "file" : isMessage ? (replyingTo ? "reply" : "message") : "note";
   return (
     <>
       <strong style={{ fontSize: 14 }}>
-        {isMessage ? "Send this message to the room as you?" : `Add a ${thing} to this room as you?`}
+        {isMessage
+          ? replyingTo
+            ? "Send this reply to the room as you?"
+            : "Send this message to the room as you?"
+          : `Add a ${thing} to this room as you?`}
       </strong>
       <div style={{ color: "var(--w-muted)", lineHeight: 1.45 }}>
         {originHost(view.origin)} asks to write to a room, signed as you. Every member of the room will read it as
@@ -251,6 +272,12 @@ function Write({ view, decide }: { view: RoomWriteConsentView; decide: (approved
           <Did value={view.member} />
         </div>
       </div>
+      {replyingTo ? (
+        <div>
+          <div style={label}>In reply to</div>
+          <Glimpse of={replyingTo} />
+        </div>
+      ) : null}
       <div>
         <div style={label}>What will be written</div>
         <div style={{ ...card, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
@@ -282,7 +309,45 @@ function Write({ view, decide }: { view: RoomWriteConsentView; decide: (approved
         <button autoFocus onClick={() => decide(false)} style={{ padding: "8px 16px", fontSize: 13 }}>
           Deny
         </button>
-        <Primary onClick={() => decide(true)}>{isMessage ? "Send message" : `Add ${thing}`}</Primary>
+        <Primary onClick={() => decide(true)}>{isMessage ? (replyingTo ? "Send reply" : "Send message") : `Add ${thing}`}</Primary>
+      </div>
+    </>
+  );
+}
+
+/** A reaction, or taking one back: short, since it is one value on one record. */
+function React({
+  view,
+  what,
+  decide,
+}: {
+  view: RoomWriteConsentView;
+  what: Extract<RoomWriteConsentView["what"], { reaction: true }>;
+  decide: (approved: boolean) => void;
+}) {
+  return (
+    <>
+      <strong style={{ fontSize: 14 }}>
+        {what.withdraw ? "Take back your reaction" : "React"} <span style={{ fontSize: 18 }}>{what.value}</span>{" "}
+        {what.withdraw ? "from" : "to"} this, as you?
+      </strong>
+      <div style={{ color: "var(--w-muted)", lineHeight: 1.45 }}>
+        {originHost(view.origin)} asks to {what.withdraw ? "take back a reaction you made" : "add a reaction"} in a room,
+        signed as you. Every member of the room will see it as yours.
+        {view.visibility === "open" ? " This room is open: its host can see it too." : ""}
+      </div>
+      <Glimpse of={what.on} />
+      <div>
+        <div style={label}>Signed as</div>
+        <div style={card}>
+          <Did value={view.member} />
+        </div>
+      </div>
+      <div style={buttons}>
+        <button autoFocus onClick={() => decide(false)} style={{ padding: "8px 16px", fontSize: 13 }}>
+          Deny
+        </button>
+        <Primary onClick={() => decide(true)}>{what.withdraw ? "Take back" : "React"}</Primary>
       </div>
     </>
   );
