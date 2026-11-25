@@ -38,7 +38,7 @@ export default defineConfig({
     // top-level-await plugin's destructuring to vite's default targets.
     target: "es2022",
     rollupOptions: {
-      input: { manager: resolve(__dirname, "manager.html") },
+      input: { manager: resolve(import.meta.dirname, "manager.html") },
       output: {
         entryFileNames: "manager.js",
         // Named so the guard can address it, and so a stray second chunk is
