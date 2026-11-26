@@ -24,6 +24,7 @@ import {
   type RoomWriteConsentView,
   shareButtonWords,
   toggleShareRow,
+  type SessionGrantOffer,
 } from "./room-page-policy.js";
 import { Did } from "./ui.js";
 import { OfferConsent } from "./room-offer-consent.js";
@@ -88,7 +89,7 @@ export function RoomConsent({
   decide,
 }: {
   consentId: string;
-  decide: (approved: boolean, selectedRooms?: string[], reactionGrant?: boolean) => void;
+  decide: (approved: boolean, selectedRooms?: string[], reactionGrant?: boolean, sessionGrant?: boolean) => void;
 }) {
   const [view, setView] = useState<RoomShareConsentView | RoomWriteConsentView | RoomOfferConsentView | null>(null);
   useEffect(() => {
@@ -106,7 +107,10 @@ export function RoomConsent({
       ) : view.kind === "offer" ? (
         <OfferConsent view={view} decide={decide} />
       ) : (
-        <Write view={view} decide={(ok, reactionGrant) => decide(ok, undefined, reactionGrant)} />
+        <Write
+          view={view}
+          decide={(ok, reactionGrant, sessionGrant) => decide(ok, undefined, reactionGrant, sessionGrant)}
+        />
       )}
     </div>
   );
@@ -234,14 +238,47 @@ function Glimpse({ of }: { of: RecordGlimpse }) {
   );
 }
 
+/**
+ * The "while this room is open" box a message or reaction prompt may offer: one
+ * room, the one open page, messages and reactions only, never notes or files.
+ */
+function SessionBox({
+  view,
+  offer,
+  checked,
+  onChange,
+}: {
+  view: RoomWriteConsentView;
+  offer: SessionGrantOffer;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  const boxId = useId();
+  const room = offer.roomLabel ? `“${offer.roomLabel}”` : "this room";
+  return (
+    <label htmlFor={boxId} style={{ display: "flex", gap: 8, alignItems: "flex-start", ...card }}>
+      <input id={boxId} type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span style={{ lineHeight: 1.4 }}>
+        Send messages and reactions in {room} without asking while this room is open in {originHost(view.origin)}.
+        <span style={{ display: "block", fontSize: 11, color: "var(--w-muted)" }}>
+          Ends when you leave the room or close the tab, after 30 minutes without a message, or after 8 hours. Notes
+          and files are always asked. The wallet's icon shows LIVE meanwhile; stop it any time from Communities.
+        </span>
+      </span>
+    </label>
+  );
+}
+
 function Write({
   view,
   decide,
 }: {
   view: RoomWriteConsentView;
-  decide: (approved: boolean, reactionGrant?: boolean) => void;
+  decide: (approved: boolean, reactionGrant?: boolean, sessionGrant?: boolean) => void;
 }) {
+  const [session, setSession] = useState(false);
   if ("reaction" in view.what) return <React view={view} what={view.what} decide={decide} />;
+  const offer = "message" in view.what ? view.what.session : undefined;
   const isFile = "file" in view.what;
   const isMessage = "message" in view.what;
   const replyingTo = "message" in view.what ? view.what.replyingTo : undefined;
@@ -313,11 +350,14 @@ function Write({
           )}
         </div>
       </div>
+      {offer ? <SessionBox view={view} offer={offer} checked={session} onChange={setSession} /> : null}
       <div style={buttons}>
         <button autoFocus onClick={() => decide(false)} style={{ padding: "8px 16px", fontSize: 13 }}>
           Deny
         </button>
-        <Primary onClick={() => decide(true)}>{isMessage ? (replyingTo ? "Send reply" : "Send message") : `Add ${thing}`}</Primary>
+        <Primary onClick={() => decide(true, undefined, offer ? session : undefined)}>
+          {isMessage ? (replyingTo ? "Send reply" : "Send message") : `Add ${thing}`}
+        </Primary>
       </div>
     </>
   );
@@ -336,9 +376,10 @@ function React({
 }: {
   view: RoomWriteConsentView;
   what: Extract<RoomWriteConsentView["what"], { reaction: true }>;
-  decide: (approved: boolean, reactionGrant?: boolean) => void;
+  decide: (approved: boolean, reactionGrant?: boolean, sessionGrant?: boolean) => void;
 }) {
   const [grant, setGrant] = useState(false);
+  const [session, setSession] = useState(false);
   const boxId = useId();
   const room = what.grant?.roomLabel ? `“${what.grant.roomLabel}”` : "this room";
   return (
@@ -369,11 +410,12 @@ function React({
           </span>
         </label>
       )}
+      {what.session ? <SessionBox view={view} offer={what.session} checked={session} onChange={setSession} /> : null}
       <div style={{ ...buttons, marginTop: 4 }}>
         <button autoFocus onClick={() => decide(false)} style={{ padding: "8px 16px", fontSize: 13 }}>
           Deny
         </button>
-        <Primary onClick={() => decide(true, what.grant ? grant : undefined)}>{what.withdraw ? "Take back" : "React"}</Primary>
+        <Primary onClick={() => decide(true, what.grant ? grant : undefined, what.session ? session : undefined)}>{what.withdraw ? "Take back" : "React"}</Primary>
       </div>
     </>
   );

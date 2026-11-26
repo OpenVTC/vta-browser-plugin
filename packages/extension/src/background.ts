@@ -49,6 +49,7 @@ import {
 } from "./active-vta.js";
 import { checkOriginPin, pinOrigin, readOriginPin, type OriginPinStatus } from "./origin-pin.js";
 import { RoomPageGates, type PortLike } from "./room-page-background.js";
+import type { PageSession } from "./room-session-grant.js";
 import {
   DIRECTORY_CONSENT_PREFIX,
   DirectoryPageGates,
@@ -71,6 +72,7 @@ import {
   mergeRoomNames,
   roomNamesKey,
   ROOM_CONSENT_PREFIX,
+  ROOM_GRANTS_PREFIX,
   type RoomGrant,
   type RoomShareConsentView,
   type RoomWriteConsentView,
@@ -175,6 +177,9 @@ import {
   RUNTIME_ROOM_FILES_PREPARE,
   RUNTIME_ROOMS_PAGE,
   RUNTIME_ROOM_OFFERS,
+  RUNTIME_ROOM_SESSION_GRANTS,
+  type RuntimeRoomSessionGrantsRequest,
+  type RuntimeRoomSessionGrantsResponse,
   RUNTIME_NOTIFIED_ELECTION,
   type RuntimeNotifiedElectionRequest,
   type RuntimeNotifiedElectionResponse,
@@ -815,13 +820,34 @@ async function ensureOffscreenDocument(): Promise<void> {
 // Read from the same durable record the inbound path writes before it acks the
 // mediator (`pending.ts`), so the badge cannot claim a request the recipient
 // never durably held — nor miss one it did.
+/**
+ * The rooms a page may write to without asking right now ("while this room is
+ * open", `room-session-grant.ts`), by name where known. While any is, the
+ * action says so — a tooltip naming them always, and LIVE on the badge unless
+ * an approval is waiting.
+ */
+let liveSessionRooms: string[] = [];
+
 async function refreshPendingBadge(): Promise<void> {
   try {
+    await chrome.action.setTitle({
+      title:
+        liveSessionRooms.length > 0
+          ? `VTA Wallet — sending without asking while open in: ${liveSessionRooms.join(", ")}`
+          : "VTA Wallet",
+    });
     const pending = await listPendingInbound(new IndexedDBKVStore());
     const waiting = pending.filter((p: { isApprover: boolean }) => p.isApprover).length;
     if (waiting > 0) {
       await chrome.action.setBadgeText({ text: String(waiting) });
       await chrome.action.setBadgeBackgroundColor({ color: "#8B1A1A" });
+      return;
+    }
+    // Above an offer: writing without asking is the member's own standing
+    // choice, and they must be able to see it is on.
+    if (liveSessionRooms.length > 0) {
+      await chrome.action.setBadgeText({ text: "LIVE" });
+      await chrome.action.setBadgeBackgroundColor({ color: "#1E7B3A" });
       return;
     }
     // Below an approval, never beside it: a room offer waits for the member,
@@ -869,16 +895,19 @@ void refreshPendingBadge();
 /** Raise a room prompt (share, write or accept an offer) and wait. Closed or unopened is a denial. */
 async function requestRoomConsent(
   view: RoomShareConsentView | RoomWriteConsentView | RoomOfferConsentView,
-): Promise<{ approved: boolean; selectedRooms?: string[]; reactionGrant?: boolean }> {
+): Promise<{ approved: boolean; selectedRooms?: string[]; reactionGrant?: boolean; sessionGrant?: boolean }> {
   const consentId = crypto.randomUUID();
   await chrome.storage.session.set({ [`${ROOM_CONSENT_PREFIX}${consentId}`]: view });
   // A reaction grant is honoured only from a prompt that offered one.
   const offersGrant = view.kind === "write" && "reaction" in view.what && view.what.grant !== undefined;
+  // So is a session grant ("while this room is open").
+  const offersSession =
+    view.kind === "write" && ("message" in view.what || "reaction" in view.what) && view.what.session !== undefined;
   const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=room`;
   const bounds = await consentWindowBounds(view.kind === "share" ? 640 : 560);
   return new Promise((resolve) => {
     let settled = false;
-    const settle = (approved: boolean, selectedRooms?: string[], reactionGrant?: boolean) => {
+    const settle = (approved: boolean, selectedRooms?: string[], reactionGrant?: boolean, sessionGrant?: boolean) => {
       if (settled) return;
       settled = true;
       pendingConsents.delete(consentId);
@@ -889,12 +918,15 @@ async function requestRoomConsent(
               approved: true,
               ...(selectedRooms ? { selectedRooms } : {}),
               ...(offersGrant && reactionGrant === true ? { reactionGrant: true } : {}),
+              ...(offersSession && sessionGrant === true ? { sessionGrant: true } : {}),
             }
           : { approved: false },
       );
     };
-    pendingConsents.set(consentId, (approved, _remember, _prf, _did, selectedRooms, _credential, _ballot, reactionGrant) =>
-      settle(approved, selectedRooms, reactionGrant),
+    pendingConsents.set(
+      consentId,
+      (approved, _remember, _prf, _did, selectedRooms, _credential, _ballot, reactionGrant, sessionGrant) =>
+        settle(approved, selectedRooms, reactionGrant, sessionGrant),
     );
     openConsentWindow({ url, bounds, deny: () => settle(false), tag: "[pnm rooms]", what: "room window" });
   });
@@ -1000,7 +1032,31 @@ const roomPageGates = new RoomPageGates({
     await ensureOffscreenDocument();
     return chrome.runtime.connect({ name: ROOM_FILES_PORT }) as unknown as PortLike;
   },
+  sessionsChanged(rows) {
+    liveSessionRooms = rows.map((r) => r.roomLabel ?? r.roomId);
+    void refreshPendingBadge();
+  },
   now: () => Date.now(),
+});
+
+/**
+ * The document a page call or port came from, as the browser reports it. Only a
+ * tab's document with an id can hold a session grant ("while this room is open").
+ */
+function pageSessionOf(sender: chrome.runtime.MessageSender | undefined): PageSession | undefined {
+  const tabId = sender?.tab?.id;
+  const documentId = (sender as { documentId?: unknown } | undefined)?.documentId;
+  return typeof tabId === "number" && typeof documentId === "string" && documentId.length > 0
+    ? { tabId, documentId }
+    : undefined;
+}
+
+// A tab closing ends its session grants at once, whatever its ports do.
+chrome.tabs.onRemoved.addListener((tabId) => roomPageGates.sessions.endForTab(tabId));
+// A share revoked, forgotten or replaced ends the session grants that rode on it.
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  if (Object.keys(changes).some((k) => k.startsWith(ROOM_GRANTS_PREFIX))) void roomPageGates.reviewSessionGrants();
 });
 
 // ── A page's `window.vtaWallet.directory` ───────────────────────────────────
@@ -1268,7 +1324,7 @@ chrome.runtime.onConnect.addListener((port) => {
     port.disconnect();
     return;
   }
-  roomPageGates.serveWatchPort(port as unknown as PortLike, origin);
+  roomPageGates.serveWatchPort(port as unknown as PortLike, origin, pageSessionOf(port.sender));
 });
 
 // A watched room moved (`rooms/keys/changed/0.1`), as the offscreen document
@@ -4275,7 +4331,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const req = message as RuntimeRoomsPageRequest;
     // `origin` was overwritten above with the browser-attested one.
     roomPageGates
-      .handle(req.origin, req.params)
+      .handle(req.origin, req.params, pageSessionOf(sender))
       .then(sendResponse)
       .catch((e: unknown) => sendResponse(pageFailure(e)));
     return true; // async sendResponse
@@ -4563,6 +4619,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
 
+  if ((message as { type?: string })?.type === RUNTIME_ROOM_SESSION_GRANTS) {
+    // Console only: a page can neither see nor stop a grant.
+    if (!isExtensionPageSender(sender)) {
+      sendResponse({ ok: false, error: "session grants are not page-reachable" } satisfies RuntimeRoomSessionGrantsResponse);
+      return false;
+    }
+    const { params } = message as RuntimeRoomSessionGrantsRequest;
+    if (params?.op === "stop" && typeof params.id === "string") roomPageGates.sessions.stop(params.id);
+    sendResponse({ ok: true, result: roomPageGates.sessions.list() } satisfies RuntimeRoomSessionGrantsResponse);
+    return false;
+  }
+
   if ((message as { type?: string })?.type === RUNTIME_ROOM_OFFERS) {
     // Console only. A portal reaches its own community's offers through
     // `window.vtaWallet.rooms`, whose gates hold it to that community.
@@ -4803,6 +4871,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if ((message as { type?: string })?.type === RUNTIME_LOCK_WALLET) {
     // SW-side lock — clears this context's key cache.
     WebAuthnPrfSecretWrap.lock();
+    // A locked wallet sends nothing without asking: every session grant ends.
+    roomPageGates.sessions.endAll();
     // Forward to the offscreen doc (if running) so its cache
     // is flushed too. The offscreen path is fire-and-forget;
     // a missing offscreen doc is fine (it'll mint a fresh

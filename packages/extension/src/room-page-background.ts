@@ -11,10 +11,13 @@
 //      except for `list`, `choose` and `forget`, which manage the shares.
 //
 // Writes take a fourth: the member confirms that one write, in the wallet's
-// own window, seeing the room, who will sign and what will be written. The one
-// exception is a reaction under a live reaction grant (`reactionGrantLive`):
-// the member ticked, in a reaction's own confirm, "let this portal react in this
-// room for 30 minutes". Gates 1–3 and the record-members check still apply.
+// own window, seeing the room, who will sign and what will be written. Two
+// bounded exceptions, each granted only by a box the member ticked in a confirm:
+// a reaction under a live reaction grant (`reactionGrantLive`: "let this portal
+// react in this room for 30 minutes"), and a message or reaction under a live
+// session grant (`room-session-grant.ts`: "send messages and reactions in this
+// room without asking while this room is open" — bound to the one page document
+// holding the room open). Gates 1–3 and the record-members check still apply.
 //
 // What goes back is a view the offscreen document built; an error is a
 // sentence, never the agent's or the host's `code` and `details`.
@@ -66,6 +69,7 @@ import {
   reactionGrantLive,
   withReactionGrant,
 } from "./room-page-policy.js";
+import { RoomSessionGrants, type PageSession, type SessionGrantRow, type SessionGrantScope } from "./room-session-grant.js";
 
 /** One entry of the VTA's listing, as the offscreen document reports it — or an
  *  open room the member is in (`openRooms`), which has no epoch. */
@@ -100,10 +104,13 @@ export interface RoomPageBackgroundDeps {
   loadGrants(origin: string, vtaDid: string): Promise<RoomGrant[]>;
   saveGrants(origin: string, vtaDid: string, grants: RoomGrant[]): Promise<void>;
   /** Raise a room prompt and wait. A closed window is a denial. `reactionGrant`: the
-   *  member ticked a reaction prompt's grant box (only ever from a prompt offering one). */
+   *  member ticked a reaction prompt's grant box; `sessionGrant`: a prompt's "while
+   *  this room is open" box (each only ever from a prompt offering it). */
   prompt(
     view: RoomShareConsentView | RoomWriteConsentView,
-  ): Promise<{ approved: boolean; selectedRooms?: string[]; reactionGrant?: boolean }>;
+  ): Promise<{ approved: boolean; selectedRooms?: string[]; reactionGrant?: boolean; sessionGrant?: boolean }>;
+  /** Told the live session grants whenever they may have changed (the action badge). */
+  sessionsChanged?(rows: SessionGrantRow[]): void;
   /** Open a transfer with the offscreen document (`ROOM_FILES_PORT`). */
   openTransfer(): Promise<PortLike>;
   /** The community's offers of its rooms (`room-offers-background.ts`). Absent: the portal sees none. */
@@ -183,7 +190,42 @@ export class RoomPageGates {
   /** Each page port's signal handler, by watch id. */
   private readonly watchers = new Map<string, Set<(latestVersion: number) => void>>();
 
-  constructor(private readonly deps: RoomPageBackgroundDeps) {}
+  /** The live "while this room is open" grants, in memory only. */
+  readonly sessions: RoomSessionGrants;
+
+  constructor(private readonly deps: RoomPageBackgroundDeps) {
+    this.sessions = new RoomSessionGrants(
+      () => this.deps.now(),
+      () => this.sessionsChanged(),
+    );
+  }
+
+  /** Tell the background, and wake when the next grant runs out, so the badge clears on time. */
+  private sessionsChanged(): void {
+    const rows = this.sessions.list();
+    this.deps.sessionsChanged?.(rows);
+    if (rows.length === 0) return;
+    const next = Math.min(...rows.map((r) => r.endsBy)) - this.deps.now();
+    const timer = this.deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
+    // Listing prunes what ran out, and a pruned grant calls back here.
+    timer(() => void this.sessions.list(), Math.max(1000, next + 1));
+  }
+
+  /** End the session grants whose share has gone (revoked, forgotten, lapsed). */
+  async reviewSessionGrants(): Promise<void> {
+    const rows = this.sessions.list();
+    const live = new Set<string>();
+    for (const r of rows) {
+      try {
+        const grants = await this.deps.loadGrants(r.origin, r.vtaDid);
+        const g = roomGrant(grants, { origin: r.origin, hostDid: r.hostDid, vtaDid: r.vtaDid }, r.roomId, this.deps.now());
+        if (g.ok && g.grant.member === r.member) live.add(r.id);
+      } catch {
+        // Unreadable: treated as gone.
+      }
+    }
+    this.sessions.endUnshared((scope) => rows.some((r) => live.has(r.id) && sameScopeRow(r, scope)));
+  }
 
   /** `hostDid`'s portal and endpoint, resolved through the offscreen document and cached briefly. */
   private async portal(vta: ActiveVta, hostDid: string): Promise<{ portalOrigin: string; endpoint: string }> {
@@ -287,18 +329,27 @@ export class RoomPageGates {
     return res.result;
   }
 
-  /** One `rooms.*` call from a page at `origin` (browser-attested). */
-  async handle(origin: string, raw: unknown): Promise<RuntimeRoomsPageResponse> {
+  /**
+   * One `rooms.*` call from a page at `origin` (browser-attested). `session`: the
+   * document it came from, as the browser reports it — only a call that names one
+   * can be covered by, or offer, a session grant.
+   */
+  async handle(origin: string, raw: unknown, session?: PageSession): Promise<RuntimeRoomsPageResponse> {
     try {
       const malformed = roomsPageParamsRefusal(raw);
       if (malformed) return { ok: false, error: malformed, code: "invalidCall" };
-      return { ok: true, result: await this.run(origin, raw as RoomsPageOp) };
+      return { ok: true, result: await this.run(origin, raw as RoomsPageOp, session) };
     } catch (e) {
       return pageFailure(e);
     }
   }
 
-  private async run(origin: string, p: RoomsPageOp): Promise<unknown> {
+  /** Whether a session grant may be offered on this prompt: the room is open in this document. */
+  private sessionOffer(session: PageSession | undefined, origin: string, hostDid: string, roomId: string): boolean {
+    return session !== undefined && this.sessions.isOpen(session, origin, hostDid, roomId);
+  }
+
+  private async run(origin: string, p: RoomsPageOp, session?: PageSession): Promise<unknown> {
     switch (p.op) {
       case "list": {
         const { vta } = await this.atPortal(origin, p.hostDid, { needReach: false });
@@ -398,24 +449,35 @@ export class RoomPageGates {
         // A reply is refused before the member is asked where the room takes none:
         // never sent without what makes it one.
         if (p.replyTo !== undefined) await this.needsRecordMembers(vta, at, ["inReplyTo"], "replies");
-        const info = (await this.offscreen(vta, { op: "info", ...at })) as PageRoomInfoView;
-        const replyingTo = p.replyTo !== undefined ? await this.glimpse(vta, at, p.replyTo.key) : undefined;
-        const decision = await this.deps.prompt({
-          kind: "write",
-          origin,
-          hostDid: p.hostDid,
-          roomId: p.roomId,
-          member: info.member,
-          visibility: info.visibility,
-          what: {
-            message: true,
-            excerpt: excerpt(p.body),
-            bodyChars: [...p.body].length,
-            ...(replyingTo !== undefined ? { replyingTo } : {}),
-          },
-        });
-        if (!decision.approved) throw new RoomPageRefusal("the member declined to send this message", "declined");
-        return this.offscreen(vta, {
+        const scope: SessionGrantScope = { origin, hostDid: p.hostDid, vtaDid: vta.vtaDid, roomId: p.roomId, member };
+        const chars = [...p.body].length;
+        // Under a live session grant — this document, holding this room open, for
+        // this share — no window. Too fast, or too long, and the window is asked.
+        const cover = this.sessions.cover(scope, session, { messageChars: chars });
+        if (cover !== "covered") {
+          const info = (await this.offscreen(vta, { op: "info", ...at })) as PageRoomInfoView;
+          const replyingTo = p.replyTo !== undefined ? await this.glimpse(vta, at, p.replyTo.key) : undefined;
+          const offerSession = cover === "none" && this.sessionOffer(session, origin, p.hostDid, p.roomId);
+          const roomLabel = offerSession ? await this.roomLabel(vta, p.hostDid, p.roomId, member) : undefined;
+          const decision = await this.deps.prompt({
+            kind: "write",
+            origin,
+            hostDid: p.hostDid,
+            roomId: p.roomId,
+            member: info.member,
+            visibility: info.visibility,
+            what: {
+              message: true,
+              excerpt: excerpt(p.body),
+              bodyChars: chars,
+              ...(replyingTo !== undefined ? { replyingTo } : {}),
+              ...(offerSession ? { session: { ...(roomLabel ? { roomLabel } : {}) } } : {}),
+            },
+          });
+          if (!decision.approved) throw new RoomPageRefusal("the member declined to send this message", "declined");
+          if (offerSession && decision.sessionGrant === true) this.sessions.grant(scope, session!, roomLabel);
+        }
+        const sent = await this.offscreen(vta, {
           op: "putMessage",
           ...at,
           body: p.body,
@@ -423,6 +485,8 @@ export class RoomPageGates {
             ? { replyTo: { key: p.replyTo.key, ...(p.replyTo.version !== undefined ? { version: p.replyTo.version } : {}) } }
             : {}),
         });
+        this.sessions.used(scope, session);
+        return sent;
       }
       case "react":
       case "unreact": {
@@ -432,10 +496,14 @@ export class RoomPageGates {
         const at = { hostDid: p.hostDid, roomId: p.roomId, member };
         await this.needsRecordMembers(vta, at, ["kind", "inReplyTo"], "reactions");
         const withdraw = p.op === "unreact";
-        // Under a live reaction grant — this origin, this community, this VTA,
-        // this room, as this member: the share it rides on — no window. Nothing
-        // else is waived, and nothing extends the grant.
-        if (!reactionGrantLive(share, this.deps.now())) {
+        const scope: SessionGrantScope = { origin, hostDid: p.hostDid, vtaDid: vta.vtaDid, roomId: p.roomId, member };
+        const cover = this.sessions.cover(scope, session);
+        // Under a live session grant (this document, holding this room open), or a
+        // live reaction grant — this origin, this community, this VTA, this room,
+        // as this member: the share it rides on — no window. Nothing else is
+        // waived, and nothing extends either grant.
+        if (cover !== "covered" && !reactionGrantLive(share, this.deps.now())) {
+          const offerSession = cover === "none" && this.sessionOffer(session, origin, p.hostDid, p.roomId);
           const info = (await this.offscreen(vta, { op: "info", ...at })) as PageRoomInfoView;
           const on = await this.glimpse(vta, at, p.key);
           const roomLabel = await this.roomLabel(vta, p.hostDid, p.roomId, member);
@@ -452,6 +520,7 @@ export class RoomPageGates {
               on,
               ...(withdraw ? { withdraw: true as const } : {}),
               grant: { minutes: REACTION_GRANT_TTL_MS / 60_000, ...(roomLabel ? { roomLabel } : {}) },
+              ...(offerSession ? { session: { ...(roomLabel ? { roomLabel } : {}) } } : {}),
             },
           });
           if (!decision.approved) {
@@ -461,15 +530,18 @@ export class RoomPageGates {
             );
           }
           if (decision.reactionGrant === true) await this.grantReactions(origin, p.hostDid, vta, p.roomId, member);
+          if (offerSession && decision.sessionGrant === true) this.sessions.grant(scope, session!, roomLabel);
         }
-        return withdraw
-          ? this.offscreen(vta, { op: "unreact", ...at, target: p.key, value: p.value })
-          : this.offscreen(vta, {
+        const done = withdraw
+          ? await this.offscreen(vta, { op: "unreact", ...at, target: p.key, value: p.value })
+          : await this.offscreen(vta, {
               op: "react",
               ...at,
               target: { key: p.key, ...(p.version !== undefined ? { version: p.version } : {}) },
               value: p.value,
             });
+        this.sessions.used(scope, session);
+        return done;
       }
     }
   }
@@ -742,9 +814,12 @@ export class RoomPageGates {
    * version, nothing else — and the watch is cancelled when the port closes.
    * The share is checked again before every signal is passed on.
    */
-  serveWatchPort(page: PortLike, origin: string): void {
+  serveWatchPort(page: PortLike, origin: string, session?: PageSession): void {
     let open = true;
     let held: { key: RoomWatchKey; release: () => void } | undefined;
+    // While this port holds the room, the room is open in this document: a
+    // session grant lives exactly that long.
+    let roomClosed: (() => void) | undefined;
     const post = (m: RoomWatchPageEvent) => {
       if (!open) return;
       try {
@@ -758,6 +833,8 @@ export class RoomPageGates {
       open = false;
       held?.release();
       held = undefined;
+      roomClosed?.();
+      roomClosed = undefined;
     };
     const fail = (e: unknown) => {
       post({ kind: "failed", ...failedOf(e) });
@@ -777,8 +854,12 @@ export class RoomPageGates {
         started = true;
         void this.startWatch(origin, raw, post, fail).then((h) => {
           if (!h) return;
-          if (open) held = h;
-          else h.release();
+          if (!open) {
+            h.release();
+            return;
+          }
+          held = h;
+          if (session) roomClosed = this.sessions.roomOpened(session, origin, h.key.host, h.key.roomId);
         });
         return;
       }
@@ -1060,4 +1141,8 @@ export function withProfiles(
     }
   }
   return out;
+}
+
+function sameScopeRow(r: SessionGrantRow, s: SessionGrantScope): boolean {
+  return r.origin === s.origin && r.hostDid === s.hostDid && r.vtaDid === s.vtaDid && r.roomId === s.roomId && r.member === s.member;
 }

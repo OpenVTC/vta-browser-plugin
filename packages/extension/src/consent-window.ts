@@ -51,6 +51,7 @@ export type ConsentDecision = (
   selectedCredential?: string,
   ballot?: unknown,
   reactionGrant?: boolean,
+  sessionGrant?: boolean,
 ) => void;
 
 /** The subset of `chrome.windows` this file drives — narrow so a test can
@@ -166,6 +167,7 @@ export function deliverConsentResult(
     selectedCredential?: string;
     ballot?: unknown;
     reactionGrant?: boolean;
+    sessionGrant?: boolean;
   },
 ): boolean {
   const decision = pending.get(result.consentId);
@@ -188,6 +190,7 @@ export function deliverConsentResult(
     credential,
     ballot,
     result.approved && result.reactionGrant === true,
+    result.approved && result.sessionGrant === true,
   );
   return true;
 }

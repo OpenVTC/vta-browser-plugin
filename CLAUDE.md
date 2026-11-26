@@ -1079,7 +1079,8 @@ that DID document's first usable `SignInPortal`, resolved and verified as the
 trigger-link sign-in does (domain-linked contacts also need their DID
 Configuration); host requests go to the same document's `TrustTaskHTTPS`. (3)
 The member shared the room with that origin. (4) A write is confirmed — the
-one exception is a reaction under a live reaction grant (below).
+two exceptions are a reaction under a live reaction grant, and a message or
+reaction under a live session grant (both below).
 
 **Rooms are shared by the member, one by one, because nothing else can say
 which rooms a community hosts.** A room's DID names no host (deliberately: a
@@ -1143,7 +1144,31 @@ the value checks and `recordMembersNotListed` still apply. It is never extended
 by use, never set by anything but that box on an approval (`deliverConsentResult`
 passes it only with `approved`, and `requestRoomConsent` only from a prompt that
 offered it), and the console's Communities tab lists it with the minutes left
-and a Stop. Messages, notes and files are always confirmed.
+and a Stop. Notes and files are always confirmed; messages are, except under a
+session grant.
+
+**A session grant: "send messages and reactions in <room> without asking while
+this room is open"** (`room-session-grant.ts`). The second bounded exception,
+offered as an **unticked** box on a message's or a reaction's confirm, and only
+while the asking document holds that room open. It is bound to **one page
+document** — the tab and the browser's `documentId` (`pageSessionOf`, from the
+call's and the watch port's `sender`), which a reload or navigation replaces —
+and lives only while that document holds a `ROOM_WATCH_PAGE_PORT` on that room
+(`roomOpened`: the last such port closing ends it). It covers `putMessage`
+(a reply included), `react` and `unreact` for that origin, community, VTA,
+room and member — never a note, a file or any other write — and gates 1–3,
+`recordMembersNotListed` and the value checks still apply. It ends at the
+earliest of: the port closing (leaving the room, reload, navigation, the tab
+closing, the worker sleeping), `tabs.onRemoved`, the share ending
+(`reviewSessionGrants` on any share change), 30 minutes with no write under it,
+8 hours from the confirm however used, the wallet locking, or Stop in the
+Communities tab ("Sends without asking while open"). More than 10 writes under
+it in a rolling minute, or a message over 4,000 characters, is confirmed as
+usual (the grant stays). It is held in the background's memory only — never
+stored — and while any is live the action's tooltip names the rooms and its
+badge reads LIVE (below a waiting approval, above an offer). The page can
+neither ask for, see, nor extend one; `sessionGrant` crosses the consent window
+only with an approval, from a prompt that offered it.
 
 **A page learns a shared room moved over a port, never a broadcast.**
 `rooms.watch` opens one `ROOM_WATCH_PAGE_PORT` per watch (the content script
@@ -1256,7 +1281,9 @@ signed in.
 **Reads ride the share; every write is confirmed**, in a window naming the
 room, the persona that will sign and what will be written (title and excerpt,
 or file name and size), with no "remember" — except the bounded, revocable
-reaction grant (≤30 min, one room, reactions only). A file's bytes reach the page only
+reaction grant (≤30 min, one room, reactions only) and the session grant (one
+room, one open page document, messages and reactions only, 30 min idle / 8 h
+cap, rate-limited, revocable, shown by the LIVE badge). A file's bytes reach the page only
 after the whole file verified against its author's digest: the background holds
 the offscreen document's provisional pieces and releases them on `got`, and
 drops them on anything else.
@@ -1267,7 +1294,12 @@ for a room it was not shared; passing a VTA or host reply to the page as is
 (views are built member by member); a share prompt that the page can
 pre-approve, or a write with a "remember" box (the reaction grant is the one
 exception, and widening it — beyond reactions, beyond one room, beyond 30
-minutes, or renewing it without a fresh confirm's box — breaks it too); posting a provisional download
+minutes, or renewing it without a fresh confirm's box — breaks it too; so does
+widening the session grant to notes, files or any other write, letting it
+outlive the one document holding the room open (storing it, keying it by tab
+alone, keeping it past the port), lifting its idle limit, cap or rate limit,
+removing the LIVE badge or tooltip, or renewing it without a fresh confirm's
+box); posting a provisional download
 byte; offering a room as the community's own DID, or as any identity the
 member does not use at that community; sending a room request for a page or a
 console row without naming its member (the VTA refuses, and it must); keying a
