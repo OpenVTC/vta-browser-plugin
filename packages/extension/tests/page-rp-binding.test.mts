@@ -33,9 +33,12 @@ Object.defineProperty(globalThis, "chrome", {
 });
 
 const { checkOriginPin, pinOrigin, readOriginPin } = await import("../src/origin-pin.ts");
-const { normalizeBaseUrl, pageSignBindingRefusal, pageStepUpBindingRefusal } = await import(
-  "../src/page-task-policy.ts"
-);
+const {
+  normalizeBaseUrl,
+  pageSignBindingRefusal,
+  pageStepUpBindingRefusal,
+  rpStepUpExecutorDids,
+} = await import("../src/page-task-policy.ts");
 
 const ORIGIN = "https://rp.example";
 const RP = "did:webvh:QmExampleScid:rp.example";
@@ -159,4 +162,24 @@ test("base URLs normalize to one spelling, and refuse what is not a plain base",
   assert.equal(normalizeBaseUrl("https://a:b@api.rp.example"), null);
   assert.equal(normalizeBaseUrl("https://api.rp.example/#x"), null);
   assert.equal(normalizeBaseUrl("nope"), null);
+});
+
+// Signing in enrolls the RP for its own step-ups: without this, a holder who
+// signed in to a control plane was refused "not an executor this wallet is
+// enrolled with" on the first step-up, and the fix was a settings field.
+
+test("the RP an origin signed in to counts as the step-up's executor", () => {
+  const VTA = "did:example:vta";
+  assert.deepEqual(rpStepUpExecutorDids([VTA], RP, RP).sort(), [RP, VTA].sort());
+});
+
+test("the signed-in RP is not added for a step-up naming another RP", () => {
+  const VTA = "did:example:vta";
+  assert.deepEqual(rpStepUpExecutorDids([VTA], RP, OTHER_RP), [VTA]);
+});
+
+test("with no sign-in pin the enrolled set is unchanged", () => {
+  const VTA = "did:example:vta";
+  assert.deepEqual(rpStepUpExecutorDids([VTA], undefined, RP), [VTA]);
+  assert.deepEqual(rpStepUpExecutorDids([VTA, RP], undefined, RP), [VTA, RP]);
 });

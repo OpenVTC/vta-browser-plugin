@@ -2133,6 +2133,11 @@ export interface OffscreenApproveSessionStepUpRequest {
   /** The RP page's origin — threaded through so the mid-flow consent prompt
    *  can show it (and honour per-origin trust). Display only, never auth. */
   origin: string;
+  /** The RP DID `origin` is pinned to by an approved sign-in, as the
+   *  background read it when it checked `params.rpDid` against the pin. Set
+   *  by the background, never by the page; the offscreen counts it as an
+   *  enrolled executor for this step-up (`rpStepUpExecutorDids`). */
+  signedInRpDid?: string;
 }
 
 /** offscreen → background: raise the step-up consent prompt for a VERIFIED
