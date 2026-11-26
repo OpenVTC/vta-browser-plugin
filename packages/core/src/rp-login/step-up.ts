@@ -18,9 +18,9 @@
 // holder's signature over the RP's challenge is the one thing only the wallet
 // can contribute.
 
-import type { SigningIdentity } from "../siop/self-issued.js";
 import { VtaClientError } from "../vta/errors.js";
 import type { TrustTask } from "../vta/protocol.js";
+import type { ChannelSigner } from "../vta/trust-task.js";
 import {
   buildStepUpApproval,
   verifyStepUpApproveRequest,
@@ -34,8 +34,11 @@ export interface RpStepUpRequestArgs {
   /** The RP's signed `approve-request/0.5`, exactly as the page received it
    *  in the RP's `auth/step-up/start/0.2` reply. Untrusted until verified. */
   approveRequest: Record<string, unknown> | undefined;
-  /** The wallet's signing identity — the DID the RP session authenticated as. */
-  signing: SigningIdentity;
+  /** The DID the RP session authenticated as, and how to sign as it: the
+   *  wallet's own key, or a persona's `TaskSigner` (signed through the VTA)
+   *  when the site was signed in to as that persona. The approve-request must
+   *  be addressed to, and name as its subject, this `did`. */
+  signing: ChannelSigner;
   /** The RP's DID: the approve-request must be signed by it, and the
    *  approve-response is addressed to it. */
   rpDid: string;

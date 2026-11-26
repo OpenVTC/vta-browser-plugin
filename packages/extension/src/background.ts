@@ -2031,6 +2031,31 @@ async function resolveLoginIdentity(
   return { ok: true, entryId: bound.entryId, did: chosen.selectedDid, bound: true };
 }
 
+/**
+ * The identity a session step-up at `origin` is answered as: the persona the
+ * origin is bound to (its vault entry), else the wallet's own key.
+ *
+ * The same `decideSiteIdentity` sign-in uses, so the step-up is signed by the
+ * DID the session authenticated as. It never raises the picker: `ask` — no
+ * persona and no recorded choice — is the wallet's own key, which is what a
+ * sign-in that predates personas used.
+ */
+async function stepUpIdentity(
+  origin: string,
+): Promise<{ ok: true; entryId?: string } | { ok: false; error: string }> {
+  const listed = await handleVaultList({
+    type: RUNTIME_VAULT_LIST,
+    filter: { secretKind: PROFILE_SECRET_KIND, targetOriginPrefix: origin },
+  });
+  if (!listed.ok) return { ok: false, error: listed.error };
+  const decision = decideSiteIdentity(
+    listed.result.entries,
+    origin,
+    await prefersHolderIdentity(origin),
+  );
+  return decision.kind === "persona" ? { ok: true, entryId: decision.entryId } : { ok: true };
+}
+
 async function handleLoginDidcomm(
   req: RuntimeLoginDidcommRequest,
 ): Promise<RuntimeLoginResponse> {
@@ -2124,6 +2149,12 @@ async function handleApproveSessionStepUp(
   if (bindingRefusal) return { ok: false, error: bindingRefusal };
   const active = await readActiveConnection();
   if (!active.ok) return { ok: false, error: active.error };
+  // The session's subject is whoever signed in: the persona this origin is
+  // bound to, when it has one. The step-up must be answered by that same
+  // identity, so it is decided the way sign-in decides it — without a
+  // picker, which belongs to sign-in alone.
+  const identity = await stepUpIdentity(req.origin);
+  if (!identity.ok) return { ok: false, error: identity.error };
   await ensureOffscreenDocument();
   const offscreenRequest: OffscreenApproveSessionStepUpRequest = {
     target: OFFSCREEN_TARGET,
@@ -2134,6 +2165,8 @@ async function handleApproveSessionStepUp(
     // The sign-in that pinned this origin is what enrolls its RP as the
     // step-up's executor; the binding check above has just matched it.
     ...(pin ? { signedInRpDid: pin.rpDid } : {}),
+    ...(identity.entryId ? { entryId: identity.entryId } : {}),
+    ...(active.conn.restBaseUrl ? { restBaseUrl: active.conn.restBaseUrl } : {}),
   };
   return (await chrome.runtime.sendMessage(
     offscreenRequest,

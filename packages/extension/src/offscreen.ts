@@ -4888,8 +4888,13 @@ async function doApproveSessionStepUp(
   // Same IndexedDB-backed holder the popup/background use, so the DID is
   // identical to the base-login path being elevated.
   const sw = createStopwatch();
-  const { signing } = await loadHolder(req.vtaDid);
+  const { signing: holderSigning } = await loadHolder(req.vtaDid);
   sw.mark("load holder");
+  // Answer as the identity that signed in: a persona signs through the VTA,
+  // the only place its key exists; otherwise the wallet's own key.
+  const signing = req.entryId
+    ? await personaTaskSigner(req.vtaDid, req.restBaseUrl, req.entryId)
+    : holderSigning;
 
   // The flow itself — verify → consent → sign, in that enforced order — lives
   // in core (`performRpStepUp`), where it is unit tested. This function

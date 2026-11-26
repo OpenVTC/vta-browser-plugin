@@ -16,10 +16,9 @@
 // Everything a human is shown, and everything the wallet signs over, comes out
 // of the verified payload.
 
-import { signTrustTask } from "../trust-tasks/sign.js";
 import { verifyTrustTaskProof } from "../trust-tasks/verify.js";
-import type { SigningIdentity } from "../siop/self-issued.js";
 import type { TrustTask } from "./protocol.js";
+import { asTaskSigner, type ChannelSigner } from "./trust-task.js";
 
 import { TYPE_URI as MSG_APPROVE_RESPONSE } from "../specs/auth/step-up/approve-response/0.7/payload.js";
 import { TYPE_URI as APPROVE_REQUEST } from "../specs/auth/step-up/approve-request/0.5/payload.js";
@@ -173,10 +172,12 @@ export interface StepUpApproveResponsePayload {
 }
 
 export interface BuildStepUpApprovalArgs {
-  /** The wallet's Ed25519 signing identity — its `did` is the response
-   *  `subject`/`issuer` and its `kid` the proof's `verificationMethod`. It
-   *  MUST be the DID the RP session authenticated as. */
-  signing: SigningIdentity;
+  /** Who answers — its `did` is the response `issuer`. It MUST be the DID
+   *  the RP session authenticated as: the wallet's own key, or, for a site
+   *  signed in to as a persona, a `TaskSigner` that signs through the VTA
+   *  (which holds that persona's key and signs this type for
+   *  `assertionMethod`, by the same rule as below). */
+  signing: ChannelSigner;
   /** The RP's DID — bound in-band as `recipient` so the signed proof commits
    *  to this audience (SPEC §4.8.2). */
   rpDid: string;
@@ -216,9 +217,7 @@ export async function buildStepUpApproval(
     payload,
   };
 
-  await signTrustTask({
-    envelope: document as unknown as Record<string, unknown> & { proof?: unknown },
-    signing: args.signing,
+  await asTaskSigner(args.signing).sign(document as TrustTask<unknown>, {
     proofPurpose: "assertionMethod",
   });
   return document;
