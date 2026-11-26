@@ -350,3 +350,30 @@ export function pageStepUpBindingRefusal(
   }
   return null;
 }
+
+/**
+ * The executors whose approve-request a page's session step-up may be signed
+ * by: the wallet's `enrolled` set, plus the relying party this origin was
+ * pinned to by an approved sign-in — but only when that is the `rpDid` the
+ * step-up names.
+ *
+ * Signing in already enrolled that RP for this purpose: the login prompt is
+ * where the human saw and confirmed the RP DID, and the pin records it. An
+ * RP step-up is that same RP asking the holder to approve elevating *its own*
+ * session — the approve-request must be signed by `rpDid`, and the
+ * approve-response is addressed to it and bound to its single-use challenge —
+ * so requiring the operator to also list the RP under "Enrolled executor
+ * DIDs" added no protection, only a refusal the human could not act on.
+ *
+ * Only this flow widens. Executor-initiated pushes (task consent, disclosure
+ * step-up) arrive unsolicited from no origin and keep the enrolled set alone.
+ */
+export function rpStepUpExecutorDids(
+  enrolled: readonly string[],
+  pinnedRpDid: string | undefined,
+  rpDid: unknown,
+): string[] {
+  const set = new Set(enrolled);
+  if (pinnedRpDid && pinnedRpDid === rpDid) set.add(pinnedRpDid);
+  return [...set];
+}

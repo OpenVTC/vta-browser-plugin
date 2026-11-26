@@ -104,6 +104,7 @@ import { forgetInbox, getSettings, inboxFor, inboxToAdopt, setInbox } from "./co
 import { walletNetPolicy } from "./net-policy.js";
 import { isReusable, isSuperseded, retireConnection, startWakeWatch } from "./warm-session-health.js";
 import { loadHolder } from "./holder.js";
+import { rpStepUpExecutorDids } from "./page-task-policy.js";
 import { WebAuthnPrfSecretWrap } from "./webauthn-prf-wrap.js";
 import type { Transport, TransportHealth, TransportObservation } from "./transports.js";
 import {
@@ -4907,7 +4908,13 @@ async function doApproveSessionStepUp(
     approveRequest: req.params.approveRequest,
     signing,
     rpDid: req.params.rpDid,
-    enrolledExecutorDids: await enrolledExecutorDids(req.vtaDid),
+    // The enrolled set plus the RP this origin signed in to: signing in is
+    // what enrolls an RP for its own step-ups (`rpStepUpExecutorDids`).
+    enrolledExecutorDids: rpStepUpExecutorDids(
+      await enrolledExecutorDids(req.vtaDid),
+      req.signedInRpDid,
+      req.params.rpDid,
+    ),
     onMark: (label) => sw.mark(label),
     requestConsent: async (ctx) => {
       const ask: RuntimeStepUpConsentRequest = {

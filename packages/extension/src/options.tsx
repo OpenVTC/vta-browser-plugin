@@ -346,7 +346,8 @@ export function AdvancedPane() {
       <small style={{ color: "var(--w-muted)", marginTop: 4 }}>
         Executors beyond your onboarded VTA(s) whose signed approval requests (task consent,
         step-up) this wallet will render. Requests signed by anyone not enrolled are dropped
-        without prompting.
+        without prompting. A site you sign in to is enrolled for its own session step-ups
+        automatically — list a DID here only when it pushes requests to this wallet.
       </small>
 
       <label style={labelStyle}>Push gateway URL (optional — Web Push test)</label>

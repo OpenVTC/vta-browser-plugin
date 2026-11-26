@@ -2063,11 +2063,8 @@ async function handleApproveSessionStepUp(
   // Refused before anything is verified or prompted: the page may only have a
   // step-up approved for the RP DID its origin is pinned to by an approved
   // login. See `pageStepUpBindingRefusal`.
-  const bindingRefusal = pageStepUpBindingRefusal(
-    req.origin,
-    await readOriginPin(req.origin),
-    req.params?.rpDid,
-  );
+  const pin = await readOriginPin(req.origin);
+  const bindingRefusal = pageStepUpBindingRefusal(req.origin, pin, req.params?.rpDid);
   if (bindingRefusal) return { ok: false, error: bindingRefusal };
   const active = await readActiveConnection();
   if (!active.ok) return { ok: false, error: active.error };
@@ -2078,6 +2075,9 @@ async function handleApproveSessionStepUp(
     vtaDid: active.conn.vtaDid,
     params: req.params,
     origin: req.origin,
+    // The sign-in that pinned this origin is what enrolls its RP as the
+    // step-up's executor; the binding check above has just matched it.
+    ...(pin ? { signedInRpDid: pin.rpDid } : {}),
   };
   return (await chrome.runtime.sendMessage(
     offscreenRequest,

@@ -266,6 +266,18 @@ the VTA, the VTC and the did-hosting RP sign them for. The one opt-out is the
 Mediator Lens (`replyProofPurpose: "any"`): a mediator is none of those, and
 signs its `messaging/*` replies for a purpose of its own.
 
+**Signing in enrolls the RP for its own step-ups, and nothing else.** An RP
+session step-up's approve-request must be signed by an enrolled executor; the
+set for that one flow is the enrolled set plus the RP DID the page's origin is
+pinned to by an approved sign-in, when it is the `rpDid` the step-up names
+(`rpStepUpExecutorDids`, fed `signedInRpDid` by the background after
+`pageStepUpBindingRefusal` passes). The human confirmed that RP at the login
+prompt, and the approve-response only elevates that RP's own session, so
+making them also list it under "Enrolled executor DIDs" protected nothing.
+**What breaks it:** letting the page supply `signedInRpDid`, or widening
+executor-initiated pushes (task consent, disclosure step-up) with sign-in
+pins — those arrive from no origin and keep the enrolled set alone.
+
 **What is deliberately NOT signed by a channel:** `provision/integration`,
 which signs its own document with an `authentication`-purpose proof in
 `provision/request.ts` and sends outside the channels. Routing it through one
