@@ -1488,8 +1488,13 @@ if (root) {
       ) : isRoomConsent ? (
         <RoomConsent
           consentId={consentId}
-          decide={(ok, rooms) =>
-            void sendConsentResult({ approved: ok, remember: false, ...(ok && rooms ? { selectedRooms: rooms } : {}) })
+          decide={(ok, rooms, reactionGrant) =>
+            void sendConsentResult({
+              approved: ok,
+              remember: false,
+              ...(ok && rooms ? { selectedRooms: rooms } : {}),
+              ...(ok && reactionGrant === true ? { reactionGrant: true } : {}),
+            })
           }
         />
       ) : isStepUpApproverConsent ? (

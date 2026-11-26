@@ -677,6 +677,10 @@ export interface RuntimeConsentResult {
    *  window (`voting/ballot/cast` `Ballot`). Checked again by the background
    *  against the election before anything is built. Ignored on a denial. */
   ballot?: unknown;
+  /** Reaction prompt only: the member ticked "let this portal add and remove
+   *  your reactions in this room for 30 minutes". Ignored on a denial, and on
+   *  any prompt that did not offer it. */
+  reactionGrant?: boolean;
 }
 
 /** confirm popup → background: resolve + verify an RP DID. */

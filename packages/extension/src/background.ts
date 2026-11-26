@@ -869,21 +869,33 @@ void refreshPendingBadge();
 /** Raise a room prompt (share, write or accept an offer) and wait. Closed or unopened is a denial. */
 async function requestRoomConsent(
   view: RoomShareConsentView | RoomWriteConsentView | RoomOfferConsentView,
-): Promise<{ approved: boolean; selectedRooms?: string[] }> {
+): Promise<{ approved: boolean; selectedRooms?: string[]; reactionGrant?: boolean }> {
   const consentId = crypto.randomUUID();
   await chrome.storage.session.set({ [`${ROOM_CONSENT_PREFIX}${consentId}`]: view });
+  // A reaction grant is honoured only from a prompt that offered one.
+  const offersGrant = view.kind === "write" && "reaction" in view.what && view.what.grant !== undefined;
   const url = `${chrome.runtime.getURL("confirm.html")}?cid=${consentId}&kind=room`;
   const bounds = await consentWindowBounds(view.kind === "share" ? 640 : 560);
   return new Promise((resolve) => {
     let settled = false;
-    const settle = (approved: boolean, selectedRooms?: string[]) => {
+    const settle = (approved: boolean, selectedRooms?: string[], reactionGrant?: boolean) => {
       if (settled) return;
       settled = true;
       pendingConsents.delete(consentId);
       void chrome.storage.session.remove(`${ROOM_CONSENT_PREFIX}${consentId}`);
-      resolve(approved ? { approved: true, ...(selectedRooms ? { selectedRooms } : {}) } : { approved: false });
+      resolve(
+        approved
+          ? {
+              approved: true,
+              ...(selectedRooms ? { selectedRooms } : {}),
+              ...(offersGrant && reactionGrant === true ? { reactionGrant: true } : {}),
+            }
+          : { approved: false },
+      );
     };
-    pendingConsents.set(consentId, (approved, _remember, _prf, _did, selectedRooms) => settle(approved, selectedRooms));
+    pendingConsents.set(consentId, (approved, _remember, _prf, _did, selectedRooms, _credential, _ballot, reactionGrant) =>
+      settle(approved, selectedRooms, reactionGrant),
+    );
     openConsentWindow({ url, bounds, deny: () => settle(false), tag: "[pnm rooms]", what: "room window" });
   });
 }

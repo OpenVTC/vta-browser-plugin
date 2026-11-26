@@ -9,9 +9,11 @@
 //     is shared here afterwards. A page cannot see this list, only what it is
 //     given.
 //   - **Write**: one note or one file, in one room, signed as the member. The
-//     prompt says what will be written, and there is no "remember".
+//     prompt says what will be written, and there is no "remember" — except on a
+//     reaction, which may offer one bounded, revocable grant: this portal may add
+//     and take back the member's reactions in this one room for 30 minutes.
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { requestOriginPermission } from "./host-permissions.js";
 import {
@@ -86,7 +88,7 @@ export function RoomConsent({
   decide,
 }: {
   consentId: string;
-  decide: (approved: boolean, selectedRooms?: string[]) => void;
+  decide: (approved: boolean, selectedRooms?: string[], reactionGrant?: boolean) => void;
 }) {
   const [view, setView] = useState<RoomShareConsentView | RoomWriteConsentView | RoomOfferConsentView | null>(null);
   useEffect(() => {
@@ -104,7 +106,7 @@ export function RoomConsent({
       ) : view.kind === "offer" ? (
         <OfferConsent view={view} decide={decide} />
       ) : (
-        <Write view={view} decide={decide} />
+        <Write view={view} decide={(ok, reactionGrant) => decide(ok, undefined, reactionGrant)} />
       )}
     </div>
   );
@@ -232,7 +234,13 @@ function Glimpse({ of }: { of: RecordGlimpse }) {
   );
 }
 
-function Write({ view, decide }: { view: RoomWriteConsentView; decide: (approved: boolean) => void }) {
+function Write({
+  view,
+  decide,
+}: {
+  view: RoomWriteConsentView;
+  decide: (approved: boolean, reactionGrant?: boolean) => void;
+}) {
   if ("reaction" in view.what) return <React view={view} what={view.what} decide={decide} />;
   const isFile = "file" in view.what;
   const isMessage = "message" in view.what;
@@ -315,7 +323,12 @@ function Write({ view, decide }: { view: RoomWriteConsentView; decide: (approved
   );
 }
 
-/** A reaction, or taking one back: short, since it is one value on one record. */
+/**
+ * A reaction, or taking one back: compact, since it is one value on one record.
+ * Where the background offers it, one unticked box lets this portal add and take
+ * back the member's reactions in this one room for a bounded time — never
+ * messages, notes or files, never another room, never renewed without this box.
+ */
 function React({
   view,
   what,
@@ -323,31 +336,44 @@ function React({
 }: {
   view: RoomWriteConsentView;
   what: Extract<RoomWriteConsentView["what"], { reaction: true }>;
-  decide: (approved: boolean) => void;
+  decide: (approved: boolean, reactionGrant?: boolean) => void;
 }) {
+  const [grant, setGrant] = useState(false);
+  const boxId = useId();
+  const room = what.grant?.roomLabel ? `“${what.grant.roomLabel}”` : "this room";
   return (
     <>
-      <strong style={{ fontSize: 14 }}>
-        {what.withdraw ? "Take back your reaction" : "React"} <span style={{ fontSize: 18 }}>{what.value}</span>{" "}
-        {what.withdraw ? "from" : "to"} this, as you?
+      <strong style={{ fontSize: 14, display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 22 }} aria-hidden="true">
+          {what.value}
+        </span>
+        <span>
+          {what.withdraw ? "Take back your reaction" : `React ${what.value}`} as you?
+        </span>
       </strong>
-      <div style={{ color: "var(--w-muted)", lineHeight: 1.45 }}>
-        {originHost(view.origin)} asks to {what.withdraw ? "take back a reaction you made" : "add a reaction"} in a room,
-        signed as you. Every member of the room will see it as yours.
+      <Glimpse of={what.on} />
+      <div style={{ color: "var(--w-muted)", lineHeight: 1.45, fontSize: 12 }}>
+        Asked by {originHost(view.origin)}. Every member of the room sees it as yours, signed as{" "}
+        <Did value={view.member} />.
         {view.visibility === "open" ? " This room is open: its host can see it too." : ""}
       </div>
-      <Glimpse of={what.on} />
-      <div>
-        <div style={label}>Signed as</div>
-        <div style={card}>
-          <Did value={view.member} />
-        </div>
-      </div>
-      <div style={buttons}>
+      {what.grant && (
+        <label htmlFor={boxId} style={{ display: "flex", gap: 8, alignItems: "flex-start", ...card }}>
+          <input id={boxId} type="checkbox" checked={grant} onChange={(e) => setGrant(e.target.checked)} />
+          <span style={{ lineHeight: 1.4 }}>
+            Let {originHost(view.origin)} add and remove your reactions in {room} for {what.grant.minutes} minutes
+            without asking.
+            <span style={{ display: "block", fontSize: 11, color: "var(--w-muted)" }}>
+              Reactions only — messages, notes and files are always asked. Stop it any time from Communities.
+            </span>
+          </span>
+        </label>
+      )}
+      <div style={{ ...buttons, marginTop: 4 }}>
         <button autoFocus onClick={() => decide(false)} style={{ padding: "8px 16px", fontSize: 13 }}>
           Deny
         </button>
-        <Primary onClick={() => decide(true)}>{what.withdraw ? "Take back" : "React"}</Primary>
+        <Primary onClick={() => decide(true, what.grant ? grant : undefined)}>{what.withdraw ? "Take back" : "React"}</Primary>
       </div>
     </>
   );
