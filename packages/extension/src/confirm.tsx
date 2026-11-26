@@ -1488,12 +1488,13 @@ if (root) {
       ) : isRoomConsent ? (
         <RoomConsent
           consentId={consentId}
-          decide={(ok, rooms, reactionGrant) =>
+          decide={(ok, rooms, reactionGrant, sessionGrant) =>
             void sendConsentResult({
               approved: ok,
               remember: false,
               ...(ok && rooms ? { selectedRooms: rooms } : {}),
               ...(ok && reactionGrant === true ? { reactionGrant: true } : {}),
+              ...(ok && sessionGrant === true ? { sessionGrant: true } : {}),
             })
           }
         />

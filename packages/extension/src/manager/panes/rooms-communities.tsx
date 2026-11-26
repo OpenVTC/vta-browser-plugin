@@ -34,7 +34,7 @@ import type { KnownRoomHost } from "../room-hosts.js";
 import { mostReadable } from "../room-groups.js";
 import { placeWord, shortDid, standing } from "../room-words.js";
 import { day, host, offerKey, type RoomOffersState } from "./rooms-offers.js";
-import type { RoomSharesState, ShareRow } from "./rooms-shares.js";
+import { sessionFor, type RoomSharesState, type ShareRow } from "./rooms-shares.js";
 import { roomDisplayName } from "./rooms-profile.js";
 
 /**
@@ -233,8 +233,20 @@ function websiteStep(row: LaneRow, shares: RoomSharesState): Step {
             </span>,
           ]
         : [];
+      const live = sessionFor(shares.sessions, s.grant);
+      const session = live
+        ? [
+            <span>
+              Sends without asking while open ·{" "}
+              <button onClick={() => void shares.stopSession(live.id)} style={linkButton}>
+                Stop
+              </button>
+            </span>,
+          ]
+        : [];
       return [
         `${host(s.grant.origin)} · until ${new Date(s.grant.expiresAt).toLocaleDateString()}`,
+        ...session,
         ...reactions,
         <button onClick={() => void shares.revoke(s)} style={linkButton}>
           Stop sharing

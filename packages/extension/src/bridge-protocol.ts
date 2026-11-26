@@ -681,6 +681,10 @@ export interface RuntimeConsentResult {
    *  your reactions in this room for 30 minutes". Ignored on a denial, and on
    *  any prompt that did not offer it. */
   reactionGrant?: boolean;
+  /** Message or reaction prompt only: the member ticked "send messages and
+   *  reactions in this room without asking while this room is open". Ignored on a
+   *  denial, and on any prompt that did not offer it. */
+  sessionGrant?: boolean;
 }
 
 /** confirm popup → background: resolve + verify an RP DID. */
@@ -4024,6 +4028,24 @@ export type RoomFilesMessage =
 
 /** console → background: list offers, or accept one. Extension pages only. */
 export const RUNTIME_ROOM_OFFERS = "vta-wallet/room-offers" as const;
+
+/**
+ * console → background: the live "while this room is open" grants
+ * (`room-session-grant.ts`), or Stop one. Extension pages only: they live in the
+ * worker's memory, never in storage.
+ */
+export const RUNTIME_ROOM_SESSION_GRANTS = "vta-wallet/room-session-grants" as const;
+
+export type RoomSessionGrantsOp = { op: "list" } | { op: "stop"; id: string };
+
+export interface RuntimeRoomSessionGrantsRequest {
+  type: typeof RUNTIME_ROOM_SESSION_GRANTS;
+  params: RoomSessionGrantsOp;
+}
+
+export type RuntimeRoomSessionGrantsResponse =
+  | { ok: true; result: import("./room-session-grant.js").SessionGrantRow[] }
+  | { ok: false; error: string };
 
 export type RoomOffersConsoleOp =
   /** Every community the member signs in to, and its offers to each identity used there. `force` reads afresh. */

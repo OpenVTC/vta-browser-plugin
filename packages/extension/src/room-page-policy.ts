@@ -576,6 +576,8 @@ export interface RoomWriteConsentView {
         bodyChars: number;
         /** The record the message answers, as the wallet read it — never the page's word. */
         replyingTo?: RecordGlimpse;
+        /** The prompt may offer "send messages and reactions here without asking while this room is open". */
+        session?: SessionGrantOffer;
       }
     /**
      * A reaction, or (`withdraw`) taking one back, on the record the wallet read.
@@ -588,8 +590,19 @@ export interface RoomWriteConsentView {
         withdraw?: true;
         on: RecordGlimpse;
         grant?: { minutes: number; roomLabel?: string };
+        /** The prompt may offer "send messages and reactions here without asking while this room is open". */
+        session?: SessionGrantOffer;
       }
     | { file: true; name: string; size: number; mediaType?: string; title?: string };
+}
+
+/**
+ * A session grant a write prompt offers (`room-session-grant.ts`): offered only
+ * while the asking document holds the room open, naming the room by `roomLabel`
+ * where the wallet knows it.
+ */
+export interface SessionGrantOffer {
+  roomLabel?: string;
 }
 
 /** Another record, as a write prompt names it: who wrote it and how it starts. Read by the wallet. */
