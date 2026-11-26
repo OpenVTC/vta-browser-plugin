@@ -4,11 +4,13 @@
 // asks (`window.vtaWallet.rooms.choose`), and lasts 30 days. This reads every
 // live one and revokes any of them; `rooms-communities.tsx` draws each beside
 // the room it shares. Revoking stops the page reading the room at once; it
-// cannot recall what the page was already shown.
+// cannot recall what the page was already shown. A share may carry a reaction
+// grant (`reactionsUntil`, at most 30 minutes): listed with its time left and
+// stopped on its own, and gone with the share.
 
 import { useCallback, useEffect, useState } from "react";
 
-import { ROOM_GRANTS_PREFIX, type RoomGrant } from "../../room-page-policy.js";
+import { ROOM_GRANTS_PREFIX, withoutReactionGrant, type RoomGrant } from "../../room-page-policy.js";
 
 /** One live share, and the storage key it sits under. */
 export interface ShareRow {
@@ -20,6 +22,8 @@ export interface RoomSharesState {
   /** `null` while reading. */
   shares: ShareRow[] | null;
   revoke: (row: ShareRow) => Promise<void>;
+  /** Stop the share's reaction grant, keeping the share. */
+  stopReactions: (row: ShareRow) => Promise<void>;
 }
 
 async function readLive(now: number): Promise<ShareRow[]> {
@@ -56,5 +60,15 @@ export function useRoomShares(): RoomSharesState {
     [load],
   );
 
-  return { shares, revoke };
+  const stopReactions = useCallback(
+    async ({ key, grant }: ShareRow) => {
+      const current = (await chrome.storage.local.get(key))[key];
+      const next = withoutReactionGrant(Array.isArray(current) ? (current as RoomGrant[]) : [], grant, grant.roomId);
+      await chrome.storage.local.set({ [key]: next });
+      await load();
+    },
+    [load],
+  );
+
+  return { shares, revoke, stopReactions };
 }

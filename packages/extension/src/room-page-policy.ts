@@ -67,6 +67,64 @@ export interface RoomGrant {
   member: string;
   grantedAt: number;
   expiresAt: number;
+  /**
+   * Until when this page may add and take back the member's reactions in this
+   * room without a window (`REACTION_GRANT_TTL_MS` from the confirm that granted
+   * it). Set only by the member ticking the box in a reaction's own confirm,
+   * never renewed by use, and gone with the share: revoking, re-sharing or the
+   * share lapsing ends it. Reactions only — every other write still confirms.
+   */
+  reactionsUntil?: number;
+}
+
+/** How long a reaction grant lasts. Never longer, never extended by use. */
+export const REACTION_GRANT_TTL_MS = 30 * 60 * 1000;
+
+/** Whether `grant` lets its page react without a window now. */
+export function reactionGrantLive(grant: Pick<RoomGrant, "reactionsUntil" | "expiresAt">, now: number): boolean {
+  const until = grant.reactionsUntil;
+  return (
+    typeof until === "number" &&
+    until > now &&
+    // Never beyond the share, and never more than one grant's length ahead:
+    // a stored value from anything but `withReactionGrant` grants nothing.
+    until <= grant.expiresAt &&
+    until - now <= REACTION_GRANT_TTL_MS
+  );
+}
+
+/**
+ * `grants` with the share of `roomId` to `at`, as `member`, granted reactions
+ * for {@link REACTION_GRANT_TTL_MS} from `now` — the member's explicit choice in
+ * a reaction's confirm. No share, or a share as another member: unchanged.
+ */
+export function withReactionGrant(
+  grants: readonly RoomGrant[],
+  at: { origin: string; hostDid: string; vtaDid: string },
+  roomId: string,
+  member: string,
+  now: number,
+): RoomGrant[] {
+  return grants.map((g) =>
+    g.origin === at.origin && g.hostDid === at.hostDid && g.vtaDid === at.vtaDid && g.roomId === roomId && g.member === member
+      ? { ...g, reactionsUntil: Math.min(now + REACTION_GRANT_TTL_MS, g.expiresAt) }
+      : g,
+  );
+}
+
+/** `grants` with the share of `roomId` to `at` keeping its share but no reaction grant. */
+export function withoutReactionGrant(
+  grants: readonly RoomGrant[],
+  at: { origin: string; hostDid: string; vtaDid?: string },
+  roomId: string,
+): RoomGrant[] {
+  return grants.map((g) => {
+    if (!(g.origin === at.origin && g.hostDid === at.hostDid && (at.vtaDid === undefined || g.vtaDid === at.vtaDid) && g.roomId === roomId)) {
+      return g;
+    }
+    const { reactionsUntil: _gone, ...rest } = g;
+    return rest;
+  });
 }
 
 // ── The names of a community's rooms ───────────────────────────────────────
@@ -519,8 +577,18 @@ export interface RoomWriteConsentView {
         /** The record the message answers, as the wallet read it — never the page's word. */
         replyingTo?: RecordGlimpse;
       }
-    /** A reaction, or (`withdraw`) taking one back, on the record the wallet read. */
-    | { reaction: true; value: string; withdraw?: true; on: RecordGlimpse }
+    /**
+     * A reaction, or (`withdraw`) taking one back, on the record the wallet read.
+     * `grant`: the prompt may offer to let this page react in this room without
+     * asking for `minutes`, naming the room by `roomLabel` where the wallet knows it.
+     */
+    | {
+        reaction: true;
+        value: string;
+        withdraw?: true;
+        on: RecordGlimpse;
+        grant?: { minutes: number; roomLabel?: string };
+      }
     | { file: true; name: string; size: number; mediaType?: string; title?: string };
 }
 

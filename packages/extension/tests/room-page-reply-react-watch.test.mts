@@ -202,6 +202,7 @@ test("a reaction is confirmed — the value and the record it is on — and only
     reaction: true,
     value: "👍",
     on: { author: BOB, excerpt: "Lunch at one?" },
+    grant: { minutes: 30 },
   });
 
   h.answer = { approved: true };
@@ -230,6 +231,7 @@ test("taking a reaction back is confirmed as that, and names the record and the 
     value: "👍",
     on: { author: BOB, excerpt: "Lunch at one?" },
     withdraw: true,
+    grant: { minutes: 30 },
   });
   assert.deepEqual(writes(h)[0], { op: "unreact", hostDid: HOST, roomId: ROOM, member: MEMBER, target: "m1", value: "👍" });
 });

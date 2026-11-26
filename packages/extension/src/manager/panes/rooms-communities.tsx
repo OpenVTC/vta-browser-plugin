@@ -20,11 +20,12 @@
 // share stops the portal reading the room at once and cannot recall what it was
 // already shown.
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { RoomProfileView } from "@openvtc/pnm-core/rooms";
 import { displayAgentName, type AgentName } from "../../agent-name.js";
 import { didHost } from "../../did-display.js";
 import { isActionable, type OfferView } from "../../room-offers-policy.js";
+import { reactionGrantLive } from "../../room-page-policy.js";
 import { Button, Did, Note, Pill } from "../../ui.js";
 import { c, t } from "../../theme.js";
 import { communityLanes, joinedOpen, rowStage, type Lane, type LaneRow } from "../community-lanes.js";
@@ -197,6 +198,22 @@ const WEBSITE_HINT =
   "The community's member site can list and read this room while you are signed in there. " +
   "Anything it asks to write is still confirmed in the wallet's own window.";
 
+const linkButton: CSSProperties = {
+  font: "inherit",
+  fontSize: t.xs,
+  fontWeight: 600,
+  padding: 0,
+  border: "none",
+  background: "transparent",
+  color: c.danger,
+  cursor: "pointer",
+};
+
+/** Whole minutes left until `until`, at least 1 while it is live. */
+export function minutesLeft(until: number, now: number): number {
+  return Math.max(1, Math.ceil((until - now) / 60_000));
+}
+
 function websiteStep(row: LaneRow, shares: RoomSharesState): Step {
   if (row.shares.length === 0) {
     return { label: "On its website", hint: WEBSITE_HINT, state: "todo", lines: ["not shared"] };
@@ -205,15 +222,25 @@ function websiteStep(row: LaneRow, shares: RoomSharesState): Step {
     label: "On its website",
     hint: WEBSITE_HINT,
     state: "done",
-    lines: row.shares.flatMap((s: ShareRow) => [
-      `${host(s.grant.origin)} · until ${new Date(s.grant.expiresAt).toLocaleDateString()}`,
-      <button
-        onClick={() => void shares.revoke(s)}
-        style={{ font: "inherit", fontSize: t.xs, fontWeight: 600, padding: 0, border: "none", background: "transparent", color: c.danger, cursor: "pointer" }}
-      >
-        Stop sharing
-      </button>,
-    ]),
+    lines: row.shares.flatMap((s: ShareRow) => {
+      const reactions = reactionGrantLive(s.grant, Date.now())
+        ? [
+            <span>
+              Reacts without asking for {minutesLeft(s.grant.reactionsUntil!, Date.now())} more min ·{" "}
+              <button onClick={() => void shares.stopReactions(s)} style={linkButton}>
+                Stop
+              </button>
+            </span>,
+          ]
+        : [];
+      return [
+        `${host(s.grant.origin)} · until ${new Date(s.grant.expiresAt).toLocaleDateString()}`,
+        ...reactions,
+        <button onClick={() => void shares.revoke(s)} style={linkButton}>
+          Stop sharing
+        </button>,
+      ];
+    }),
   };
 }
 

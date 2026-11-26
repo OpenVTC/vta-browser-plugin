@@ -1066,7 +1066,8 @@ call is well formed. (2) The page is the community's portal: every call names
 that DID document's first usable `SignInPortal`, resolved and verified as the
 trigger-link sign-in does (domain-linked contacts also need their DID
 Configuration); host requests go to the same document's `TrustTaskHTTPS`. (3)
-The member shared the room with that origin. (4) A write is confirmed.
+The member shared the room with that origin. (4) A write is confirmed — the
+one exception is a reaction under a live reaction grant (below).
 
 **Rooms are shared by the member, one by one, because nothing else can say
 which rooms a community hosts.** A room's DID names no host (deliberately: a
@@ -1118,7 +1119,19 @@ refuses with `recordMembersNotListed` where it does not list what the write
 needs — a reply is never sent without `inReplyTo`, a reaction never as a
 message. The confirm window shows the record answered or reacted to **as the
 wallet read it** (`rooms/keys/read`, `glimpseOf`), never anything the page
-said about it. Each reaction is confirmed like any write: no "remember".
+said about it. Each reaction is confirmed like any write, with one bounded,
+revocable exception: the reaction prompt offers an **unticked** box, "let this
+portal add and remove your reactions in <room> for 30 minutes"
+(`REACTION_GRANT_TTL_MS`). Ticking it sets `reactionsUntil` on the share itself
+(`withReactionGrant`), so it is keyed exactly as the share is — origin,
+community, VTA, room and member — and ends with it (`Stop sharing`, the page's
+`forget`, a fresh `choose`, the share lapsing). While `reactionGrantLive`, a
+`react`/`unreact` from that origin for that room runs with no window; gates 1–3,
+the value checks and `recordMembersNotListed` still apply. It is never extended
+by use, never set by anything but that box on an approval (`deliverConsentResult`
+passes it only with `approved`, and `requestRoomConsent` only from a prompt that
+offered it), and the console's Communities tab lists it with the minutes left
+and a Stop. Messages, notes and files are always confirmed.
 
 **A page learns a shared room moved over a port, never a broadcast.**
 `rooms.watch` opens one `ROOM_WATCH_PAGE_PORT` per watch (the content script
@@ -1230,7 +1243,8 @@ signed in.
 
 **Reads ride the share; every write is confirmed**, in a window naming the
 room, the persona that will sign and what will be written (title and excerpt,
-or file name and size), with no "remember". A file's bytes reach the page only
+or file name and size), with no "remember" — except the bounded, revocable
+reaction grant (≤30 min, one room, reactions only). A file's bytes reach the page only
 after the whole file verified against its author's digest: the background holds
 the offscreen document's provisional pieces and releases them on `got`, and
 drops them on anything else.
@@ -1239,7 +1253,9 @@ drops them on anything else.
 DID document, or comparing origins loosely; letting a page name a room's host
 for a room it was not shared; passing a VTA or host reply to the page as is
 (views are built member by member); a share prompt that the page can
-pre-approve, or a write with a "remember" box; posting a provisional download
+pre-approve, or a write with a "remember" box (the reaction grant is the one
+exception, and widening it — beyond reactions, beyond one room, beyond 30
+minutes, or renewing it without a fresh confirm's box — breaks it too); posting a provisional download
 byte; offering a room as the community's own DID, or as any identity the
 member does not use at that community; sending a room request for a page or a
 console row without naming its member (the VTA refuses, and it must); keying a

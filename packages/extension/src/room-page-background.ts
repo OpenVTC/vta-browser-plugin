@@ -11,7 +11,10 @@
 //      except for `list`, `choose` and `forget`, which manage the shares.
 //
 // Writes take a fourth: the member confirms that one write, in the wallet's
-// own window, seeing the room, who will sign and what will be written.
+// own window, seeing the room, who will sign and what will be written. The one
+// exception is a reaction under a live reaction grant (`reactionGrantLive`):
+// the member ticked, in a reaction's own confirm, "let this portal react in this
+// room for 30 minutes". Gates 1–3 and the record-members check still apply.
 //
 // What goes back is a view the offscreen document built; an error is a
 // sentence, never the agent's or the host's `code` and `details`.
@@ -59,6 +62,9 @@ import {
   type RecordGlimpse,
   type RoomShareConsentView,
   type RoomWriteConsentView,
+  REACTION_GRANT_TTL_MS,
+  reactionGrantLive,
+  withReactionGrant,
 } from "./room-page-policy.js";
 
 /** One entry of the VTA's listing, as the offscreen document reports it — or an
@@ -93,8 +99,11 @@ export interface RoomPageBackgroundDeps {
   canReach(url: string): Promise<boolean>;
   loadGrants(origin: string, vtaDid: string): Promise<RoomGrant[]>;
   saveGrants(origin: string, vtaDid: string, grants: RoomGrant[]): Promise<void>;
-  /** Raise a room prompt and wait. A closed window is a denial. */
-  prompt(view: RoomShareConsentView | RoomWriteConsentView): Promise<{ approved: boolean; selectedRooms?: string[] }>;
+  /** Raise a room prompt and wait. A closed window is a denial. `reactionGrant`: the
+   *  member ticked a reaction prompt's grant box (only ever from a prompt offering one). */
+  prompt(
+    view: RoomShareConsentView | RoomWriteConsentView,
+  ): Promise<{ approved: boolean; selectedRooms?: string[]; reactionGrant?: boolean }>;
   /** Open a transfer with the offscreen document (`ROOM_FILES_PORT`). */
   openTransfer(): Promise<PortLike>;
   /** The community's offers of its rooms (`room-offers-background.ts`). Absent: the portal sees none. */
@@ -211,10 +220,34 @@ export class RoomPageGates {
 
   /** Gate 3. Returns the member the share acts as: every request for the page names it. */
   private async granted(origin: string, hostDid: string, vta: ActiveVta, roomId: string): Promise<string> {
+    return (await this.share(origin, hostDid, vta, roomId)).member;
+  }
+
+  /** Gate 3, answering the share itself. */
+  private async share(origin: string, hostDid: string, vta: ActiveVta, roomId: string): Promise<RoomGrant> {
     const grants = await this.deps.loadGrants(origin, vta.vtaDid);
     const r = roomGrant(grants, { origin, hostDid, vtaDid: vta.vtaDid }, roomId, this.deps.now());
     if (!r.ok) throw new RoomPageRefusal(r.error, "notShared");
-    return r.grant.member;
+    return r.grant;
+  }
+
+  /** The member's explicit reaction grant, recorded on the share it rides on. */
+  private async grantReactions(origin: string, hostDid: string, vta: ActiveVta, roomId: string, member: string): Promise<void> {
+    const grants = await this.deps.loadGrants(origin, vta.vtaDid);
+    await this.deps.saveGrants(
+      origin,
+      vta.vtaDid,
+      withReactionGrant(grants, { origin, hostDid, vtaDid: vta.vtaDid }, roomId, member, this.deps.now()),
+    );
+  }
+
+  /** The room's name for a prompt, where the wallet knows one. Never throws. */
+  private async roomLabel(vta: ActiveVta, hostDid: string, roomId: string, member: string): Promise<string | undefined> {
+    try {
+      return (await this.displayNames(vta, hostDid, [member], [{ roomId, member }]))[roomId]?.label;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -394,26 +427,40 @@ export class RoomPageGates {
       case "react":
       case "unreact": {
         const { vta } = await this.atPortal(origin, p.hostDid, { needReach: true });
-        const member = await this.granted(origin, p.hostDid, vta, p.roomId);
+        const share = await this.share(origin, p.hostDid, vta, p.roomId);
+        const member = share.member;
         const at = { hostDid: p.hostDid, roomId: p.roomId, member };
         await this.needsRecordMembers(vta, at, ["kind", "inReplyTo"], "reactions");
-        const info = (await this.offscreen(vta, { op: "info", ...at })) as PageRoomInfoView;
-        const on = await this.glimpse(vta, at, p.key);
         const withdraw = p.op === "unreact";
-        const decision = await this.deps.prompt({
-          kind: "write",
-          origin,
-          hostDid: p.hostDid,
-          roomId: p.roomId,
-          member: info.member,
-          visibility: info.visibility,
-          what: { reaction: true, value: p.value, on, ...(withdraw ? { withdraw: true as const } : {}) },
-        });
-        if (!decision.approved) {
-          throw new RoomPageRefusal(
-            withdraw ? "the member declined to take back this reaction" : "the member declined to react",
-            "declined",
-          );
+        // Under a live reaction grant — this origin, this community, this VTA,
+        // this room, as this member: the share it rides on — no window. Nothing
+        // else is waived, and nothing extends the grant.
+        if (!reactionGrantLive(share, this.deps.now())) {
+          const info = (await this.offscreen(vta, { op: "info", ...at })) as PageRoomInfoView;
+          const on = await this.glimpse(vta, at, p.key);
+          const roomLabel = await this.roomLabel(vta, p.hostDid, p.roomId, member);
+          const decision = await this.deps.prompt({
+            kind: "write",
+            origin,
+            hostDid: p.hostDid,
+            roomId: p.roomId,
+            member: info.member,
+            visibility: info.visibility,
+            what: {
+              reaction: true,
+              value: p.value,
+              on,
+              ...(withdraw ? { withdraw: true as const } : {}),
+              grant: { minutes: REACTION_GRANT_TTL_MS / 60_000, ...(roomLabel ? { roomLabel } : {}) },
+            },
+          });
+          if (!decision.approved) {
+            throw new RoomPageRefusal(
+              withdraw ? "the member declined to take back this reaction" : "the member declined to react",
+              "declined",
+            );
+          }
+          if (decision.reactionGrant === true) await this.grantReactions(origin, p.hostDid, vta, p.roomId, member);
         }
         return withdraw
           ? this.offscreen(vta, { op: "unreact", ...at, target: p.key, value: p.value })

@@ -50,6 +50,7 @@ export type ConsentDecision = (
   selectedRooms?: string[],
   selectedCredential?: string,
   ballot?: unknown,
+  reactionGrant?: boolean,
 ) => void;
 
 /** The subset of `chrome.windows` this file drives — narrow so a test can
@@ -164,6 +165,7 @@ export function deliverConsentResult(
     selectedRooms?: string[];
     selectedCredential?: string;
     ballot?: unknown;
+    reactionGrant?: boolean;
   },
 ): boolean {
   const decision = pending.get(result.consentId);
@@ -176,6 +178,16 @@ export function deliverConsentResult(
   // against the election by the gate that asked for it.
   const ballot =
     result.ballot !== null && typeof result.ballot === "object" && !Array.isArray(result.ballot) ? result.ballot : undefined;
-  decision(result.approved, !!result.remember, result.prfOutputB64u, result.selectedDid, rooms, credential, ballot);
+  // Only an explicit `true` from the reaction prompt's own box grants anything.
+  decision(
+    result.approved,
+    !!result.remember,
+    result.prfOutputB64u,
+    result.selectedDid,
+    rooms,
+    credential,
+    ballot,
+    result.approved && result.reactionGrant === true,
+  );
   return true;
 }
