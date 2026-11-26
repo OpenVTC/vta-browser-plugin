@@ -287,3 +287,56 @@ test("performRpStepUp: a refused approve-request never reaches the human", async
   assert.match(res.error, /not an executor/);
   assert.equal(prompted, false);
 });
+
+// ── A persona session: the step-up is answered as the persona ──────────────
+//
+// A site signed in to as a per-site persona has that persona as the session's
+// subject; the control plane addresses the approve-request to it and accepts
+// an answer only from it. Its key lives at the VTA, so the wallet answers
+// through a `TaskSigner` — stood in for here by one over a local key, which
+// records the purpose it was asked for.
+
+function personaSigner(persona, asked) {
+  return {
+    did: persona.did,
+    sign: async (envelope, opts) => {
+      asked.push(opts?.proofPurpose);
+      await signTrustTask({ envelope, signing: persona, proofPurpose: opts.proofPurpose });
+    },
+  };
+}
+
+test("performRpStepUp: a persona session is answered by the persona, for assertionMethod", async () => {
+  const persona = generateSigningIdentity();
+  const asked = [];
+  const res = await performRpStepUp({
+    ...args(persona, await approveRequest(persona)),
+    signing: personaSigner(persona, asked),
+    requestConsent: async () => true,
+  });
+
+  assert.equal(res.ok, true, res.ok ? undefined : res.error);
+  assert.deepEqual(asked, ["assertionMethod"]);
+  const doc = res.approveResponse;
+  assert.equal(doc.issuer, persona.did);
+  assert.equal(doc.payload.subject, persona.did);
+  const proof = await verifyTrustTaskProof(doc, { expectedProofPurpose: "assertionMethod" });
+  assert.equal(proof.verified, true, proof.reason);
+  assert.equal(proof.signer, persona.did);
+});
+
+test("performRpStepUp: the wallet's own key cannot answer a persona session's step-up", async () => {
+  const persona = generateSigningIdentity();
+  const holder = generateSigningIdentity();
+  let prompted = false;
+  const res = await performRpStepUp({
+    ...args(holder, await approveRequest(persona)),
+    requestConsent: async () => {
+      prompted = true;
+      return true;
+    },
+  });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /not this wallet/);
+  assert.equal(prompted, false);
+});

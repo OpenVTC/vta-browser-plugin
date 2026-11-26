@@ -2142,6 +2142,14 @@ export interface OffscreenApproveSessionStepUpRequest {
    *  by the background, never by the page; the offscreen counts it as an
    *  enrolled executor for this step-up (`rpStepUpExecutorDids`). */
   signedInRpDid?: string;
+  /** The vault entry (persona) this origin signs in as, when it has one —
+   *  decided by the background exactly as sign-in decides it, never named by
+   *  the page. The approve-response is then signed as that persona, through
+   *  the VTA, because that persona is the session's subject. Absent: the
+   *  wallet's own key signs, as it signed the login. */
+  entryId?: string;
+  /** The active connection's REST base URL, for the persona's VTA signing. */
+  restBaseUrl?: string;
 }
 
 /** offscreen → background: raise the step-up consent prompt for a VERIFIED

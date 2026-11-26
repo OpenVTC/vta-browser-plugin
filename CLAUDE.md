@@ -278,6 +278,17 @@ making them also list it under "Enrolled executor DIDs" protected nothing.
 executor-initiated pushes (task consent, disclosure step-up) with sign-in
 pins — those arrive from no origin and keep the enrolled set alone.
 
+**An RP step-up is answered by the identity that signed in.** The control
+plane addresses the approve-request to the session's subject and accepts an
+answer only from it. A site signed in to as a per-site persona has the persona
+as its subject, so `handleApproveSessionStepUp` decides the identity the way
+sign-in does (`stepUpIdentity` → `decideSiteIdentity`, never the picker) and
+the offscreen signs the approve-response as that persona through the VTA
+(`personaTaskSigner`; `vault/sign-trust-task` signs this type for
+`assertionMethod`). **What breaks it:** signing every step-up with the holder
+key (a persona session's step-up is then refused "addressed to …, not this
+wallet"), or letting the page name the entry.
+
 **What is deliberately NOT signed by a channel:** `provision/integration`,
 which signs its own document with an `authentication`-purpose proof in
 `provision/request.ts` and sends outside the channels. Routing it through one
