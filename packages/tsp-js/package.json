@@ -47,7 +47,7 @@
   "license": "Apache-2.0",
   "devDependencies": {
     "@hpke/chacha20poly1305": "^1.8.1",
-    "@hpke/core": "^1.9.0",
+    "@hpke/core": "^1.10.1",
     "typescript": "^7.0.2"
   }
 }
